@@ -40,6 +40,7 @@ const relay = (events: readonly Stored[]) => {
 const all: Stream = {
   key: "k",
   slug: "watch/all",
+  kinds: [9],
   since: 1,
   enabled: true,
 };

@@ -1,7 +1,7 @@
-// Saved catch-up progress for event watches of kind 9 only, as Janet keeps it:
-// one stream for each watch and channel. Each window of missed events is read
-// whole, newest page first, within a bound, and then delivered oldest first.
-// Only the progress is saved, never an event.
+// Saved catch-up progress for event watches, as Janet keeps it: one stream
+// for each watch and channel, which reads the watch's own kinds. Each window
+// of missed events is read whole, newest page first, within a bound, and then
+// delivered oldest first. Only the progress is saved, never an event.
 import type { Agent } from "./service";
 import type { EventData, ReadFilter } from "../relay/events";
 import type { AgentStore } from "./store";
@@ -15,13 +15,13 @@ export const CATCH_UP_PAGE = 16;
 export const CATCH_UP_PAGES = 256;
 export const CATCH_UP_BYTES = 8 * 1024 * 1024;
 
-/** Every kind 9 event of the stream created at or before `through` was
- * delivered or skipped. While a window (`through`, `upper`] is being
- * delivered, `after` is the last event delivered of it, in delivery order:
- * oldest first, ties by id. A restart goes on after it, up to `upper`.
- * `heard` are later ones already heard live, which catch-up skips too.
- * `hidden` marks one moved while no plugin showed Attention: once one does,
- * even after a restart, it starts from then. */
+/** Every event of the stream created at or before `through` was delivered
+ * or skipped. While a window (`through`, `upper`] is being delivered, `after`
+ * is the last event delivered of it, in delivery order: oldest first, ties by
+ * id. A restart goes on after it, up to `upper`. `heard` are later ones
+ * already heard live, which catch-up skips too. `hidden` marks one moved
+ * while no plugin showed Attention: once one does, even after a restart, it
+ * starts from then. */
 export type Checkpoint = Readonly<{
   through: number;
   upper?: number;
@@ -39,6 +39,7 @@ export type Stream = Readonly<{
   key: string;
   slug: string;
   channel?: string;
+  kinds: readonly number[];
   since: number;
   enabled: boolean;
 }>;
@@ -51,6 +52,15 @@ const ID = /^[0-9a-f]{64}$/;
 export const oldestFirst = (a: Position, b: Position) =>
   a.created_at - b.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+/** Whether `event` is of the stream's kinds, where none is every kind as for
+ * its watch, and of its channel. */
+export const inStream = (
+  stream: Pick<Stream, "kinds" | "channel">,
+  event: Pick<EventData, "kind" | "tags">,
+) =>
+  (!stream.kinds.length || stream.kinds.includes(event.kind)) &&
+  (stream.channel === undefined ||
+    event.tags.some(([key, value]) => key === "h" && value === stream.channel));
 /** The key of a membership's watch's stream in one channel, or in every
  * channel. */
 export const streamKey = (agent: AgentKey, slug: string, channel?: string) =>
@@ -228,14 +238,12 @@ export async function splitLegacyCheckpoints(storage: AgentStore) {
   }
 }
 
-/** The agent's streams: one for each channel of each event watch whose kinds
- * are exactly [9], enabled or not. Other kinds have reconnect replay only, as
- * in Janet. */
+/** The agent's streams: one for each channel of each event watch, enabled or
+ * not. */
 export function streamsOf(agent: Pick<Agent, "key" | "attention">) {
   const streams: Stream[] = [];
   for (const { slug, value } of Object.values(agent.attention)) {
     if (value.type !== "event") continue;
-    if (value.kinds.length !== 1 || value.kinds[0] !== 9) continue;
     for (const channel of value.channels === "all"
       ? [undefined]
       : value.channels)
@@ -243,6 +251,7 @@ export function streamsOf(agent: Pick<Agent, "key" | "attention">) {
         key: streamKey(agent.key, slug, channel),
         slug,
         ...(channel ? { channel } : {}),
+        kinds: value.kinds,
         since: value.since,
         enabled: value.enabled,
       });
@@ -295,7 +304,7 @@ export async function readWindow<Event extends Position>(
   for (let pages = 0; ; pages++) {
     const bounded = pages === CATCH_UP_PAGES || bytes > CATCH_UP_BYTES;
     const filter: ReadFilter = {
-      kinds: [9],
+      ...(stream.kinds.length ? { kinds: [...stream.kinds] } : {}),
       ...(stream.channel ? { "#h": [stream.channel] } : {}),
       since: floor,
       until: cursor?.created_at ?? window,

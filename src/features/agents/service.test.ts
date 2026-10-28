@@ -7550,7 +7550,7 @@ it("does not catch up after a restart on a message it already heard live", async
   }
 });
 
-it("wakes a kind 9 watch added since for nothing older, though an overlapping watch catches up on it", async () => {
+it("wakes a watch added since for nothing older, though an overlapping watch catches up on it", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     const { service, run, history, recover } = await setup({
@@ -7567,7 +7567,7 @@ it("wakes a kind 9 watch added since for nothing older, though an overlapping wa
     history.push(posted("missed", now + 30));
     vi.setSystemTime((now + 60) * 1000);
     // Added after the message: a stream for its channel, one for all
-    // channels, and a watch of every kind, which has none.
+    // channels, and one of every kind.
     await service.save(bot, {
       attention: {
         "watch/chat2": watch,
@@ -7578,15 +7578,68 @@ it("wakes a kind 9 watch added since for nothing older, though an overlapping wa
     await settle();
     vi.setSystemTime((now + 90) * 1000);
     recover();
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     await settle();
     await settle();
-    // Only the watch of other kinds too, which hears what the app missed
-    // since it listened, as a reconnect replay would give it.
-    expect(turns(run).sort()).toEqual([
+    expect(turns(run)).toEqual(["catch-up watch/chat 1"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("catches up a watch of other kinds, or of every kind, on what it missed", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const { service, run, history, recover, session } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    const watch = chat["watch/chat"];
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/likes": { ...watch, kinds: [7] },
+        "watch/any": { ...watch, kinds: [] },
+      },
+    });
+    await settle();
+    vi.setSystemTime((now + 60) * 1000);
+    history.push(
+      posted("missed", now + 30),
+      eventDto(
+        signed(author, {
+          kind: 7,
+          content: "+",
+          created_at: now + 31,
+          tags: [
+            ["h", channel],
+            ["e", "a".repeat(64)],
+          ],
+        }),
+      ),
+    );
+    recover();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    await settle();
+    await settle();
+    // The reaction read for the likes watch goes to each watch it matches;
+    // the read for every kind then gives only the message.
+    expect(turns(run)).toEqual([
+      "catch-up watch/likes 1",
       "catch-up watch/any 1",
-      "catch-up watch/chat 1",
+      "catch-up watch/any 1",
     ]);
+    expect(heard(run)).toEqual(["+", "+", "missed"]);
+    // Each reads its watch's own kinds, and one of every kind names none.
+    const reads = vi
+      .mocked(session.read)
+      .mock.calls.map(([filters]) => filters[0] as ReadFilter)
+      .filter((filter) => filter.until !== undefined);
+    expect(reads.map((filter) => filter.kinds ?? "every")).toEqual(
+      expect.arrayContaining([[7], "every"]),
+    );
   } finally {
     vi.useRealTimers();
   }
@@ -9921,13 +9974,13 @@ it("wakes nothing from the time no plugin showed its attention when it is shown 
   }
 });
 
-it("wakes only a watch with no hidden stream for an event heard while Attention was off", async () => {
+it("wakes no watch, whatever kinds it watches, for an event heard while Attention was off", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     const start = nowSeconds();
     const storage = memoryStorage();
-    // A second watch on several kinds has no catch-up stream, so no record
-    // that Attention was hidden.
+    // A watch on several kinds has a catch-up stream too, so a record that
+    // Attention was hidden.
     const attention = {
       ...chat,
       "watch/any": { ...chat["watch/chat"], kinds: [9, 7] },
@@ -9949,13 +10002,11 @@ it("wakes only a watch with no hidden stream for an event heard while Attention 
     second.emit({ events: [posted("live while hidden", start + 20)] });
     await settle();
     await showAttention(second.ctx, "two");
-    await vi.waitFor(() => expect(second.run).toHaveBeenCalled());
+    vi.setSystemTime((start + 30) * 1000);
+    second.emit({ events: [posted("after", start + 30)] });
+    await vi.waitFor(() => expect(second.run).toHaveBeenCalledTimes(2));
     await settle();
-    expect(
-      second.run.mock.calls.map(([{ trigger }]) =>
-        trigger.type === "watch" ? trigger.slug : trigger.type,
-      ),
-    ).toEqual(["watch/any"]);
+    expect(heard(second.run)).toEqual(["after", "after"]);
   } finally {
     vi.useRealTimers();
   }

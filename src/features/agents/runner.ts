@@ -79,6 +79,7 @@ import {
   CATCH_UP_PAGES,
   delivered,
   HEARD_LIMIT,
+  inStream,
   oldestFirst,
   readWindow,
   streamKey,
@@ -228,19 +229,12 @@ function conversationWake(
 }
 const channelOf = (event: RelayEvent) =>
   event.tags.find(([key]) => key === "h")?.[1];
-/** The key of the catch-up stream that `trigger`'s event is in, for a kind 9
- * watch; others have none. */
+/** The key of the catch-up stream that `trigger`'s event is in. */
 const streamOf = (
   key: AgentKey,
   { watch, slug, event }: Pick<WatchTrigger, "watch" | "slug" | "event">,
 ) =>
-  watch.kinds.length === 1 && watch.kinds[0] === 9
-    ? streamKey(
-        key,
-        slug,
-        watch.channels === "all" ? undefined : channelOf(event),
-      )
-    : undefined;
+  streamKey(key, slug, watch.channels === "all" ? undefined : channelOf(event));
 /** Classifier calls a trigger's job makes before it queues. */
 const classifications = (trigger: Trigger) =>
   trigger.type === "watch" && trigger.watch.classifier
@@ -542,7 +536,7 @@ export class AgentRunners {
   private readonly custody = new Map<string, Promise<void>>();
   /** Agents whose community was live at the last resume. */
   private connected = new Set<string>();
-  /** Catch-up progress of each kind 9 watch stream, as saved. */
+  /** Catch-up progress of each watch stream, as saved. */
   private checkpoints: Readonly<Record<string, Checkpoint>>;
   /** By agent, its catch-up running or last run. */
   private passes = new Map<string, Pass>();
@@ -1081,14 +1075,9 @@ export class AgentRunners {
     event: RelayEvent,
     done?: ReadonlySet<string>,
   ) {
-    if (event.kind !== 9) return;
-    const channel = channelOf(event);
     let changed = false;
     for (const stream of streamsOf(agent))
-      if (
-        (!done || done.has(stream.slug)) &&
-        (stream.channel === undefined || stream.channel === channel)
-      )
+      if ((!done || done.has(stream.slug)) && inStream(stream, event))
         changed = this.heardIn(stream.key, event) || changed;
     if (changed) this.saveCheckpoints();
   }
@@ -1118,7 +1107,7 @@ export class AgentRunners {
     };
   }
   /** Keeps each agent's catch-up going: on start, and after each connect, its
-   * kind 9 watches read the events they missed from their saved checkpoints,
+   * event watches read the events they missed from their saved checkpoints,
    * up to the connect. From then on live events cover them, so while the
    * connection stays up a `tick` moves their checkpoints to now; a quit or a
    * drop leaves the checkpoint where the next catch-up starts. */
@@ -1339,7 +1328,9 @@ export class AgentRunners {
                 `Agent ${name()} skipped the oldest events ${slug} missed: catch-up reads at most ${CATCH_UP_PAGES} pages`,
               );
             progress(stream.key, window.checkpoint);
-            const events = window.events.filter((event) => event.kind === 9);
+            const events = window.events.filter((event) =>
+              inStream(stream, event),
+            );
             let skipped = window.skipped;
             for (let index = 0; index < events.length; ) {
               const taken = await this.caughtUp(
@@ -1442,8 +1433,7 @@ export class AgentRunners {
       const listened = event.created_at >= pass.community.connection.start;
       const triggers = heard.triggers.filter((trigger) =>
         trigger.type === "watch"
-          ? !fanning?.done.has(trigger.slug) &&
-            this.missed(runner, trigger, listened)
+          ? !fanning?.done.has(trigger.slug) && this.missed(runner, trigger)
           : !fanning && listened,
       );
       if (heard.held) {
@@ -1540,8 +1530,9 @@ export class AgentRunners {
     // does not give it to these again.
     let changed = false;
     for (const [trigger] of watches.values()) {
-      const stream = streamOf(runner.key, trigger as WatchTrigger);
-      if (stream) changed = this.heardIn(stream, event) || changed;
+      changed =
+        this.heardIn(streamOf(runner.key, trigger as WatchTrigger), event) ||
+        changed;
     }
     if (changed) this.saveCheckpoints();
     const done = runner.fanning?.id === event.id ? runner.fanning.done : [];
@@ -1584,13 +1575,10 @@ export class AgentRunners {
     }
   }
   /** Whether a catch-up event read for one watch is also one `trigger`'s
-   * watch missed. One with its own stream missed it while it is past that
-   * stream's checkpoint, so a watch added or widened since wakes for nothing
-   * older; one with none has replay only, from when the app listened. */
-  private missed(runner: Runner, trigger: WatchTrigger, listened: boolean) {
-    const stream = streamOf(runner.key, trigger);
-    if (!stream) return listened;
-    const checkpoint = this.checkpoints[stream];
+   * watch missed: it is past that watch's stream's checkpoint, so a watch
+   * added or widened since wakes for nothing older. */
+  private missed(runner: Runner, trigger: WatchTrigger) {
+    const checkpoint = this.checkpoints[streamOf(runner.key, trigger)];
     return !!checkpoint && undelivered(checkpoint, trigger.event);
   }
   /** Saves the checkpoints of watches that still exist. Unsaved, catch-up
