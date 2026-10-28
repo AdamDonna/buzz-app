@@ -21,7 +21,8 @@ Terms:
 | Interests that run at the same time | 8 | 8, beside the mention lane | Same |
 | Jobs that wait for one Interest | 8 | 8 (32 in total for watch work) | Same |
 | Live events of a watch wait while that watch catches up | Yes | Yes. At most 512 events or 4 MiB wait. | Same |
-| Kinds catch-up reads | Kind 9 only. Other kinds get only the recent replay that a reconnect sends. | Each watch's own kinds, or every kind for a watch that names none | Intended difference |
+| Kinds catch-up reads | Kind 9 only. Other kinds get only the recent replay that a reconnect sends. | Each watch's own kinds. A watch that names none reads the kinds live hears, as a relay read must name its kinds. | Intended difference |
+| Catch-up while connected | — | A tick moves a stream's checkpoint to now only when live covers it: one channel whose route is live, and kinds live hears. Any other stream, a watch on every channel included, is read again about every 30 s, up to 10 s before now. | Intended difference |
 | Catch-up page limit | 256 pages or 8 MiB for a named channel; none for `channels: "all"` | 256 pages or 8 MiB for both | Intended difference |
 | Author and reply selection | A `filter` expression (`author ==`, `content ==`, `is_reply`, `!`, `&&`, `||`). A lone `root` tag or an unmarked `e` tag counts as a reply. | The relay spec's fields `authors`, `exclude_authors` and `is_reply`. Only a NIP-10 `reply` marker makes a reply, as in relay ingest and thread display. Startup converts a stored `filter` once; `content ==`, `false` and mixed `||` cannot be converted, so such a watch is skipped and shown for repair. | Intended difference |
 | Watch tags are sent in the catch-up read | Yes | No. The relay applies most tag filters after its page limit, so a tagged read can return an empty page while older matches remain. The watch's own match still checks the tags, so results are the same. | Intended difference |

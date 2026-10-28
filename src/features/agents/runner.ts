@@ -31,7 +31,11 @@ import {
 import { STANDALONE_DEADLINE_MS } from "../agent-harness/standalone";
 import { EFFORT_TAG, MODEL_TAG } from "../relay/messages";
 import type { LiveBatch } from "../relay/incoming";
-import { LIVE_REPLAY_LIMIT } from "../relay/live";
+import {
+  CHANNEL_KINDS,
+  LIVE_REPLAY_LIMIT,
+  type LiveSnapshot,
+} from "../relay/live";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
 import {
@@ -131,6 +135,10 @@ const WAITING_LIMIT = 512;
 const WAITING_BYTES = 4 * 1024 * 1024;
 /** How long a failed catch-up waits before it is tried again. */
 const CATCH_UP_RETRY_MS = 30_000;
+/** How often a stream live does not cover is read again, and how many
+ * seconds that read stays behind now, for events the relay stores late. */
+const CATCH_UP_POLL_MS = 30_000;
+const CATCH_UP_POLL_LAG = 10;
 
 /** Classifier calls in flight per agent. */
 const CLASSIFY_LIMIT = 32;
@@ -342,7 +350,7 @@ export type Connection = {
 /** An agent's community while it is live: one object for as long as its
  * session lasts. */
 export type LiveCommunity = {
-  readonly session: Pick<RelaySession, "read" | "readRemote">;
+  readonly session: Pick<RelaySession, "read" | "readRemote" | "live">;
   /** Aborts when the session is replaced, so no work outlives it. */
   readonly controller: AbortController;
   readonly connection: Connection;
@@ -355,8 +363,21 @@ type Pass = {
   epoch: number;
   controller: AbortController;
   done?: boolean;
+  /** When it was done, so a stream live does not cover is read again. */
+  doneAt?: number;
   failedAt?: number;
 };
+
+/** Whether live events cover `stream` now: it names one channel, whose route
+ * is live, and live hears all of its kinds. A tick moves only such a stream's
+ * checkpoint; any other is read again, or no event live never heard could be
+ * passed over. A route that comes back first replays what it missed. */
+const covered = (stream: Stream, live: LiveSnapshot) =>
+  stream.channel !== undefined &&
+  stream.kinds.every((kind) => CHANNEL_KINDS.includes(kind)) &&
+  live.routes.some(
+    (route) => route.channelId === stream.channel && route.status === "live",
+  );
 
 const seconds = () => Math.floor(Date.now() / 1000);
 const message = (error: unknown) =>
@@ -1108,9 +1129,11 @@ export class AgentRunners {
   }
   /** Keeps each agent's catch-up going: on start, and after each connect, its
    * event watches read the events they missed from their saved checkpoints,
-   * up to the connect. From then on live events cover them, so while the
-   * connection stays up a `tick` moves their checkpoints to now; a quit or a
-   * drop leaves the checkpoint where the next catch-up starts. */
+   * up to the connect. From then on live events cover a stream whose channel
+   * is live, of kinds live hears, so while the connection stays up a `tick`
+   * moves its checkpoint to now; a quit or a drop leaves the checkpoint where
+   * the next catch-up starts. Any other stream, and one whose checkpoint is
+   * still before the connect, is read again, up to a little before now. */
   catchUp(tick: boolean) {
     const now = seconds();
     let changed = false;
@@ -1165,12 +1188,41 @@ export class AgentRunners {
         pass.epoch === community.connection.epoch &&
         !(pass.failedAt && Date.now() - pass.failedAt >= CATCH_UP_RETRY_MS)
       ) {
-        if (pass.done && tick)
-          for (const { key } of reading) {
-            const checkpoint = this.checkpoints[key];
+        if (!pass.done) continue;
+        const live = community.session.live.snapshot();
+        // Only a checkpoint read through the connect, as live covers it after.
+        const ticks = (stream: Stream) =>
+          covered(stream, live) &&
+          (this.checkpoints[stream.key]?.through ?? 0) >= since;
+        if (tick)
+          for (const stream of reading.filter(ticks)) {
+            const checkpoint = this.checkpoints[stream.key];
             if (checkpoint && !checkpoint.upper && checkpoint.through < now)
-              move(key, { through: now });
+              move(stream.key, { through: now });
           }
+        const behind = reading.filter(
+          (stream) => (this.checkpoints[stream.key]?.through ?? 0) < since,
+        );
+        const polled = reading.filter((stream) => !ticks(stream));
+        if (
+          !behind.length &&
+          !(
+            polled.length && Date.now() - (pass.doneAt ?? 0) >= CATCH_UP_POLL_MS
+          )
+        )
+          continue;
+        const next: Pass = { ...pass, controller: new AbortController() };
+        delete next.done;
+        delete next.doneAt;
+        this.passes.set(runner.key, next);
+        // Only one behind holds its live events back, to go on in order.
+        this.setCatching(runner, new Set(behind.map(({ slug }) => slug)));
+        void this.readMissed(
+          runner,
+          next,
+          polled,
+          Math.max(since, now - CATCH_UP_POLL_LAG),
+        );
         continue;
       }
       pass?.controller.abort();
@@ -1354,6 +1406,7 @@ export class AgentRunners {
         this.setCatching(runner, catching);
       }
       pass.done = true;
+      pass.doneAt = Date.now();
     } catch (error) {
       if (signal.aborted) return;
       pass.failedAt = Date.now();

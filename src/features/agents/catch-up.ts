@@ -6,6 +6,7 @@ import type { Agent } from "./service";
 import type { EventData, ReadFilter } from "../relay/events";
 import type { AgentStore } from "./store";
 import { AGENT_KEY, type AgentKey } from "./membership";
+import { CHANNEL_KINDS } from "../relay/live";
 
 export const CATCH_UP_KEY = "buzz.agents.catch-up.v1";
 /** Events in one read, as Janet's catch-up pages are. */
@@ -39,6 +40,8 @@ export type Stream = Readonly<{
   key: string;
   slug: string;
   channel?: string;
+  /** The watch's kinds; a watch of every kind reads those live hears, as a
+   * relay read must name its kinds. */
   kinds: readonly number[];
   since: number;
   enabled: boolean;
@@ -52,13 +55,12 @@ const ID = /^[0-9a-f]{64}$/;
 export const oldestFirst = (a: Position, b: Position) =>
   a.created_at - b.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
-/** Whether `event` is of the stream's kinds, where none is every kind as for
- * its watch, and of its channel. */
+/** Whether `event` is of the stream's kinds and of its channel. */
 export const inStream = (
   stream: Pick<Stream, "kinds" | "channel">,
   event: Pick<EventData, "kind" | "tags">,
 ) =>
-  (!stream.kinds.length || stream.kinds.includes(event.kind)) &&
+  stream.kinds.includes(event.kind) &&
   (stream.channel === undefined ||
     event.tags.some(([key, value]) => key === "h" && value === stream.channel));
 /** The key of a membership's watch's stream in one channel, or in every
@@ -251,7 +253,7 @@ export function streamsOf(agent: Pick<Agent, "key" | "attention">) {
         key: streamKey(agent.key, slug, channel),
         slug,
         ...(channel ? { channel } : {}),
-        kinds: value.kinds,
+        kinds: value.kinds.length ? value.kinds : CHANNEL_KINDS,
         since: value.since,
         enabled: value.enabled,
       });
@@ -304,7 +306,7 @@ export async function readWindow<Event extends Position>(
   for (let pages = 0; ; pages++) {
     const bounded = pages === CATCH_UP_PAGES || bytes > CATCH_UP_BYTES;
     const filter: ReadFilter = {
-      ...(stream.kinds.length ? { kinds: [...stream.kinds] } : {}),
+      kinds: [...stream.kinds],
       ...(stream.channel ? { "#h": [stream.channel] } : {}),
       since: floor,
       until: cursor?.created_at ?? window,

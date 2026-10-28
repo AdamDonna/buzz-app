@@ -65,6 +65,7 @@ import {
 import { TypeSafeKey } from "../../bundled/typesafe/key";
 import { typesafeProvider } from "../../bundled/typesafe";
 import { CATCH_UP_PREFIX, readCheckpoints } from "./catch-up";
+import { CHANNEL_KINDS } from "../relay/live";
 import { fileStore, type AgentStore } from "./state";
 import { readInterrupted, writeInterrupted } from "./interrupted";
 import { memoryStorage } from "./test-fakes";
@@ -321,6 +322,7 @@ async function setup({
     relay: fake.relay,
     reconnecting: fake.reconnecting,
     recover: fake.recover,
+    unrouted: fake.unrouted,
     memories: fake.memories,
     archives: fake.archives,
     session: fake.session,
@@ -7632,18 +7634,73 @@ it("catches up a watch of other kinds, or of every kind, on what it missed", asy
       "catch-up watch/any 1",
     ]);
     expect(heard(run)).toEqual(["+", "+", "missed"]);
-    // Each reads its watch's own kinds, and one of every kind names none.
+    // Each reads its watch's own kinds; one of every kind, those live hears,
+    // as a read must name its kinds.
     const reads = vi
       .mocked(session.read)
       .mock.calls.map(([filters]) => filters[0] as ReadFilter)
       .filter((filter) => filter.until !== undefined);
-    expect(reads.map((filter) => filter.kinds ?? "every")).toEqual(
-      expect.arrayContaining([[7], "every"]),
+    expect(reads.map((filter) => filter.kinds)).toEqual(
+      expect.arrayContaining([[7], CHANNEL_KINDS]),
     );
   } finally {
     vi.useRealTimers();
   }
 });
+
+it.each([
+  { case: "a kind live does not hear", kind: 30023, unroute: false },
+  { case: "a channel live does not route", kind: 9, unroute: true },
+])(
+  "reads again what live does not hear while it stays connected, rather than pass over it: $case",
+  async ({ kind, unroute }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const { service, run, history, recover, storage, unrouted } = await setup(
+        { identities: [echo] },
+      );
+      const now = nowSeconds();
+      vi.setSystemTime(now * 1000);
+      await service.save(bot, {
+        attentionEnabled: true,
+        attention: {
+          "watch/channel": null,
+          "watch/quiet": { ...chat["watch/chat"], kinds: [kind] },
+        },
+      });
+      await settle();
+      vi.setSystemTime((now + 1) * 1000);
+      if (unroute) unrouted.add(channel);
+      recover();
+      await settle();
+      // It does not come live, though the connection stays up.
+      history.push(
+        eventDto(
+          signed(author, {
+            kind,
+            content: "while connected",
+            created_at: now + 2,
+            tags: [["h", channel]],
+          }),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await settle();
+      // Ticks do not pass over it.
+      expect(
+        Object.values(readCheckpoints(storage)).map(({ through }) => through),
+      ).toEqual([now + 1]);
+      expect(heard(run)).toEqual([]);
+      // A read a little behind now gives it, with no reconnect.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await settle();
+      await settle();
+      expect(heard(run)).toEqual(["while connected"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 describe("catch-up lane capacity", () => {
   let now: number;
@@ -7907,9 +7964,12 @@ it("waits for a confirmed roster before catching up, saving no progress past wha
     confirm("saved", [viewer, bot]);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(heard(run)).toEqual(missed);
-    // 64 to a turn.
+    // 64 to a turn. The window is not read again; later reads, as live does
+    // not cover every channel, start past it.
     expect(run).toHaveBeenCalledTimes(5);
-    expect(catchUpReads(session)).toHaveLength(reads);
+    expect(
+      catchUpReads(session).filter(({ since }) => (since ?? 0) <= now + 400),
+    ).toHaveLength(reads);
   } finally {
     vi.useRealTimers();
   }
