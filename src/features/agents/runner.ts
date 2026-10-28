@@ -31,11 +31,7 @@ import {
 import { STANDALONE_DEADLINE_MS } from "../agent-harness/standalone";
 import { EFFORT_TAG, MODEL_TAG } from "../relay/messages";
 import type { LiveBatch } from "../relay/incoming";
-import {
-  CHANNEL_KINDS,
-  LIVE_REPLAY_LIMIT,
-  type LiveSnapshot,
-} from "../relay/live";
+import { CHANNEL_KINDS, LIVE_REPLAY_LIMIT } from "../relay/live";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
 import {
@@ -368,16 +364,16 @@ type Pass = {
   failedAt?: number;
 };
 
-/** Whether live events cover `stream` now: it names one channel, whose route
- * is live, and live hears all of its kinds. A tick moves only such a stream's
- * checkpoint; any other is read again, or no event live never heard could be
- * passed over. A route that comes back first replays what it missed. */
-const covered = (stream: Stream, live: LiveSnapshot) =>
+/** Since when live events have covered `stream`, or undefined when they do
+ * not: it names one channel, whose route is live, and live hears all of its
+ * kinds. A tick moves only such a stream's checkpoint, once it was read up to
+ * then; any other is read again, or an event live never heard could be
+ * passed over. */
+const coveredSince = (stream: Stream, live: ReadonlyMap<string, number>) =>
   stream.channel !== undefined &&
-  stream.kinds.every((kind) => CHANNEL_KINDS.includes(kind)) &&
-  live.routes.some(
-    (route) => route.channelId === stream.channel && route.status === "live",
-  );
+  stream.kinds.every((kind) => CHANNEL_KINDS.includes(kind))
+    ? live.get(stream.channel)
+    : undefined;
 
 const seconds = () => Math.floor(Date.now() / 1000);
 const message = (error: unknown) =>
@@ -561,6 +557,13 @@ export class AgentRunners {
   private checkpoints: Readonly<Record<string, Checkpoint>>;
   /** By agent, its catch-up running or last run. */
   private passes = new Map<string, Pass>();
+  /** By community, for its connect, when each channel's route was first seen
+   * live since it last was not. A route that comes back covers only what is
+   * sent after that, not what it missed while down. */
+  private liveSince = new WeakMap<
+    LiveCommunity,
+    { epoch: number; channels: Map<string, number> }
+  >();
   /** Streams seen off (their watch disabled or the agent's attention off)
    * since the host started. One turned on starts from then, so it wakes
    * nothing from the time it was off; across a restart, its saved
@@ -1133,10 +1136,38 @@ export class AgentRunners {
    * is live, of kinds live hears, so while the connection stays up a `tick`
    * moves its checkpoint to now; a quit or a drop leaves the checkpoint where
    * the next catch-up starts. Any other stream, and one whose checkpoint is
-   * still before the connect, is read again, up to a little before now. */
+   * still before the connect or before its route came back, is read again,
+   * up to a little before now. */
   catchUp(tick: boolean) {
     const now = seconds();
     let changed = false;
+    const observed = new Set<LiveCommunity>();
+    /** The community's live channels, each with when it was first seen live. */
+    const liveOf = (community: LiveCommunity) => {
+      const { epoch } = community.connection;
+      let seen = this.liveSince.get(community);
+      if (seen?.epoch !== epoch) {
+        seen = { epoch, channels: new Map() };
+        this.liveSince.set(community, seen);
+      }
+      if (!observed.has(community)) {
+        observed.add(community);
+        const live = new Set(
+          community.session.live
+            .snapshot()
+            .routes.flatMap((route) =>
+              route.status === "live" && route.channelId
+                ? [route.channelId]
+                : [],
+            ),
+        );
+        for (const id of seen.channels.keys())
+          if (!live.has(id)) seen.channels.delete(id);
+        for (const id of live)
+          if (!seen.channels.has(id)) seen.channels.set(id, now);
+      }
+      return seen.channels;
+    };
     const move = (key: string, checkpoint: Checkpoint) => {
       this.setCheckpoint(key, checkpoint);
       changed = true;
@@ -1176,6 +1207,10 @@ export class AgentRunners {
       }
       const pass = this.passes.get(runner.key);
       const since = community?.connection.since;
+      // Seen on every call, so a route that drops and comes back between
+      // ticks is not taken as live all along.
+      const live =
+        community && since !== undefined ? liveOf(community) : undefined;
       if (!agent || !community || since === undefined || !reading.length) {
         pass?.controller.abort();
         this.passes.delete(runner.key);
@@ -1189,11 +1224,15 @@ export class AgentRunners {
         !(pass.failedAt && Date.now() - pass.failedAt >= CATCH_UP_RETRY_MS)
       ) {
         if (!pass.done) continue;
-        const live = community.session.live.snapshot();
-        // Only a checkpoint read through the connect, as live covers it after.
+        const channels = live ?? new Map<string, number>();
+        // Read up to the connect, and to when live began to cover it.
+        const due = (stream: Stream) =>
+          Math.max(since, coveredSince(stream, channels) ?? since);
+        const through = (stream: Stream) =>
+          this.checkpoints[stream.key]?.through ?? 0;
         const ticks = (stream: Stream) =>
-          covered(stream, live) &&
-          (this.checkpoints[stream.key]?.through ?? 0) >= since;
+          coveredSince(stream, channels) !== undefined &&
+          through(stream) >= due(stream);
         if (tick)
           for (const stream of reading.filter(ticks)) {
             const checkpoint = this.checkpoints[stream.key];
@@ -1201,7 +1240,7 @@ export class AgentRunners {
               move(stream.key, { through: now });
           }
         const behind = reading.filter(
-          (stream) => (this.checkpoints[stream.key]?.through ?? 0) < since,
+          (stream) => through(stream) < due(stream),
         );
         const polled = reading.filter((stream) => !ticks(stream));
         if (
@@ -1221,7 +1260,7 @@ export class AgentRunners {
           runner,
           next,
           polled,
-          Math.max(since, now - CATCH_UP_POLL_LAG),
+          Math.max(now - CATCH_UP_POLL_LAG, ...behind.map(due), since),
         );
         continue;
       }
