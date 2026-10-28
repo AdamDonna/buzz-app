@@ -7705,14 +7705,26 @@ it.each([
 it("reads what a route missed while it was down, though it comes back between reads", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
-    const { service, run, history, recover, storage, unrouted } = await setup({
-      identities: [echo],
-    });
+    const { service, run, history, recover, storage, unrouted, session } =
+      await setup({ identities: [echo] });
     const now = nowSeconds();
     vi.setSystemTime(now * 1000);
+    // When each read of a kind live does not hear reads up to, and when.
+    const notes: { until?: number | undefined; at: number }[] = [];
+    const read = vi.mocked(session.read);
+    const original = read.getMockImplementation();
+    read.mockImplementation((filters, options) => {
+      if (filters[0]?.kinds?.includes(30023))
+        notes.push({ until: filters[0].until, at: nowSeconds() });
+      return original ? original(filters, options) : Promise.resolve([]);
+    });
     await service.save(bot, {
       attentionEnabled: true,
-      attention: { ...chat, "watch/channel": null },
+      attention: {
+        ...chat,
+        "watch/channel": null,
+        "watch/notes": { ...chat["watch/chat"], kinds: [30023] },
+      },
     });
     await settle();
     vi.setSystemTime((now + 1) * 1000);
@@ -7728,11 +7740,15 @@ it("reads what a route missed while it was down, though it comes back between re
     await settle();
     await settle();
     expect(heard(run)).toEqual(["while the route was down"]);
-    expect(
-      Object.values(readCheckpoints(storage)).every(
-        ({ through }) => through >= now + 8,
-      ),
-    ).toBe(true);
+    const chats = Object.entries(readCheckpoints(storage)).filter(([key]) =>
+      key.includes("watch/chat"),
+    );
+    expect(chats.map(([, { through }]) => through >= now + 8)).toEqual([true]);
+    // Reading the stream that came back up to now does not take the others
+    // past their lag behind now.
+    expect(notes.length).toBeGreaterThan(0);
+    for (const { until, at } of notes)
+      expect(until).toBeLessThanOrEqual(Math.max(now + 1, at - 10));
   } finally {
     vi.useRealTimers();
   }
