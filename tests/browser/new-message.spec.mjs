@@ -19,6 +19,7 @@ const test = base.extend({
   companionFixture: [false, { scope: "worker" }],
   pairingFixture: [false, { scope: "worker" }],
   localAgentActivity: [false, { scope: "worker" }],
+  relayPolicy: [undefined, { scope: "worker" }],
   compiledApp: [buildApp, { scope: "worker" }],
   directorySize: [35, { option: true }],
   app: async ({ compiledApp, page, context, directorySize }, use) => {
