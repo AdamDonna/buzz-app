@@ -133,8 +133,6 @@ export function createThreadView({
   let disposed = false;
   let rootId: string | undefined;
   let rootUnavailable = false;
-  // Retained target reactions came from a full page; more may exist.
-  let reactionsCapped = false;
   let targetStatus: ThreadSnapshot["targetStatus"] = exact
     ? "loading"
     : undefined;
@@ -243,7 +241,6 @@ export function createThreadView({
     emit({
       ...snapshot,
       ...patch,
-      ...(reactionsCapped ? { limited: true } : {}),
       ...(exact
         ? {
             target: targetStatus === "ready" ? snapshot.target : undefined,
@@ -325,7 +322,6 @@ export function createThreadView({
     emit({
       ...snapshot,
       ...patch,
-      ...(reactionsCapped ? { limited: true } : {}),
       root: !rootUnavailable
         ? readable.find((row) => row.id === rootId)
         : undefined,
@@ -340,7 +336,6 @@ export function createThreadView({
       selectionController?.abort();
       selectionStaged = [];
       remote = [];
-      reactionsCapped = false;
       staged = [];
       rootId = undefined;
       cursor = undefined;
@@ -385,7 +380,6 @@ export function createThreadView({
     if (exact) targetStatus = "loading";
     if (clear || !canAccess()) {
       remote = [];
-      reactionsCapped = false;
       staged = [];
       rootId = undefined;
       cursor = undefined;
@@ -443,13 +437,12 @@ export function createThreadView({
       [
         { kinds: [5, 9005, 40003, 39005], "#e": [id], limit: 500 },
         // Reactions cannot hide or change the target, so a full page is a
-        // limited supplement rather than incomplete safety evidence.
+        // lower bound rather than incomplete safety evidence.
         { kinds: [7], "#e": [id], limit: 500 },
       ],
       { signal: owned.signal },
     );
     if (!active()) return "cancelled";
-    const capped = overlays.filter((event) => event.kind === 7).length >= 500;
     if (!stage(union(pending, related(overlays, id)))) return "error";
     const ids = union(remote, pending)
       .filter(
@@ -491,7 +484,6 @@ export function createThreadView({
     if (!expectedRoot) rootId = resolvedRoot;
     const combined = union(remote, related(accepted, id));
     if (!retain(combined)) return "error";
-    reactionsCapped ||= capped;
     stage([]);
     if (
       expectedRoot &&
@@ -562,7 +554,6 @@ export function createThreadView({
       purge();
       return;
     }
-    // Capped target reactions leave older replies loadable.
     if (!replace && !snapshot.canLoadMore) return;
     const owned = new AbortController();
     controller = owned;
