@@ -182,7 +182,11 @@ it("recovers retained demand after establishment and stops recovery when demand 
     const release = owner.session.agentLibrary.retain();
     await owner.session.agentLibrary.refresh();
     callbacks.state({ status: "connecting", routes: [] });
-    expect(owner.session.agentLibrary.snapshot().identities).toEqual([]);
+    // A disconnect keeps the inventory for display, stale until reread.
+    expect(owner.session.agentLibrary.snapshot()).toMatchObject({
+      status: "idle",
+      identities: [{ pubkey: "a".repeat(64) }],
+    });
     callbacks.state({ status: "connected", routes: [] });
     callbacks.established();
     await vi.waitFor(() =>

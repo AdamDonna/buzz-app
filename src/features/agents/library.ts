@@ -97,11 +97,18 @@ export function createAgentLibrary(
       .then(() => (controller !== owned && pending ? pending : undefined));
     return pending;
   }
-  function clear() {
+  /** `stale` keeps the last inventory for display, unread, so the next demand
+   * or reconnect rereads it; otherwise the inventory is emptied. */
+  function clear(stale = false) {
     controller?.abort();
     controller = undefined;
     pending = undefined;
-    publish({ ...empty, status: closed || !read ? "unavailable" : "idle" });
+    const { definitions, identities } = stale ? snapshot : empty;
+    publish({
+      definitions,
+      identities,
+      status: closed || !read ? "unavailable" : "idle",
+    });
   }
   return {
     queries: Object.freeze({
@@ -123,10 +130,11 @@ export function createAgentLibrary(
         };
       },
     }),
-    clear,
+    clear: () => clear(),
+    stale: () => clear(true),
     reconnect() {
       // Initial establishment can follow a completed activation read. A real
-      // disconnect clears this snapshot; only then is fresh inventory needed.
+      // disconnect marks this snapshot stale; only then is fresh inventory needed.
       if (demands.size && snapshot.status !== "ready") void refresh();
     },
     dispose() {

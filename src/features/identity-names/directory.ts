@@ -50,24 +50,22 @@ export function createNameProvider(
     if (base && inputs.every((input, index) => input === base?.inputs[index]))
       return base;
     const names = new Map<string, string>();
-    if (library.status === "ready") {
-      for (const row of library.identities) {
-        const key = row.pubkey.toLowerCase();
-        if (!names.has(key)) {
-          const profile = profiles.get(key);
-          const profileName = profile?.nameIsFallback
-            ? undefined
-            : profile?.name.trim();
-          names.set(
-            key,
-            // A signed public agent profile is the cross-client name source. The
-            // host's saved-library alias remains a fallback; same-community
-            // native settings still override it below.
-            profile?.isAgent && profileName
-              ? profileName
-              : row.name.trim() || profileName || "Agent",
-          );
-        }
+    for (const row of library.identities) {
+      const key = row.pubkey.toLowerCase();
+      if (!names.has(key)) {
+        const profile = profiles.get(key);
+        const profileName = profile?.nameIsFallback
+          ? undefined
+          : profile?.name.trim();
+        names.set(
+          key,
+          // A signed public agent profile is the cross-client name source. The
+          // host's saved-library alias remains a fallback; same-community
+          // native settings still override it below.
+          profile?.isAgent && profileName
+            ? profileName
+            : row.name.trim() || profileName || "Agent",
+        );
       }
     }
     if (relayUrl && native?.status === "ready") {

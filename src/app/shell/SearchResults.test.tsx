@@ -4251,6 +4251,89 @@ it("keeps the directory's order for tied people, as New message does", async () 
   }
 });
 
+it.each([true, false])(
+  "waits for agents still loading before refusing an agent's DM: managed=%s",
+  async (managed) => {
+    const relay = keypair(),
+      viewer = keypair(),
+      scout = keypair();
+    const owner = createRelaySession({
+      ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+      async query() {
+        return [];
+      },
+    });
+    const t = peopleSession(
+      owner.session,
+      [],
+      [{ pubkey: scout.pubkey, name: "Scout", managed: true }],
+    );
+    const ready = t.session.agentChoices.snapshot();
+    const loading = { ...ready, identities: [], pending: true };
+    const loaded = managed ? ready : { ...loading, pending: false };
+    let current = ready;
+    let finish!: () => void;
+    const refresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            current = loaded;
+            resolve();
+          };
+        }),
+    );
+    const session = {
+      ...t.session,
+      agentChoices: {
+        ...t.session.agentChoices,
+        snapshot: () => current,
+        refresh,
+      },
+    } as typeof t.session;
+    try {
+      render(
+        <SearchResults
+          session={session}
+          query="scout"
+          onQueryChange={() => {}}
+          input={createRef()}
+          pages={[]}
+          openConversation={() => {}}
+        />,
+      );
+      await waitFor(() =>
+        expect(owner.session.channels.list().status).toBe("ready"),
+      );
+      const option = await screen.findByRole("option", { name: /Scout/ });
+      // Agent controls are reloading, as at launch, when the row is chosen.
+      current = loading;
+      fireEvent.click(option);
+      await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+      expect(
+        screen.getByText("Opening your conversation with Scout…"),
+      ).toBeVisible();
+      expect(t.open).not.toHaveBeenCalled();
+      await act(async () => finish());
+      if (managed)
+        await waitFor(() =>
+          expect(t.open).toHaveBeenCalledExactlyOnceWith(
+            [scout.pubkey],
+            expect.any(AbortSignal),
+          ),
+        );
+      else {
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+          "This agent is not ready to message in this community.",
+        );
+        expect(t.open).not.toHaveBeenCalled();
+      }
+    } finally {
+      cleanup();
+      owner.dispose();
+    }
+  },
+);
+
 it("finds a person by username and starts a DM with them", async () => {
   const relay = keypair(),
     viewer = keypair(),

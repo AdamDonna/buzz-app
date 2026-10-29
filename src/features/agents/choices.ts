@@ -121,9 +121,10 @@ export function createAgentChoices({
     )
       return cached.value;
     const choices = new Map<string, Choice>();
-    if (legacy.status === "ready")
-      for (const row of legacy.identities)
-        choices.set(row.pubkey, { ...row, managed: false });
+    // The last library read stays usable while it refreshes, fails or is stale;
+    // `pending` and `complete` say it is partial.
+    for (const row of legacy.identities)
+      choices.set(row.pubkey, { ...row, managed: false });
     if (local?.status === "ready")
       for (const row of sameCommunityAgents(local.hosted ?? [], scope)) {
         choices.set(row.pubkey, {
@@ -158,7 +159,11 @@ export function createAgentChoices({
     const templates: TemplateChoices = {
       status: templateSource.status,
       identities: [...choices.values()]
-        .filter((agent) => templateSource === legacy || agent.managed)
+        .filter(
+          (agent) =>
+            (templateSource === legacy && legacy.status === "ready") ||
+            agent.managed,
+        )
         .map((agent) => ({ ...agent, name: agent.managedName ?? agent.name })),
       complete: templateSource.status === "ready" && !templateSource.error,
       pending:
@@ -186,7 +191,7 @@ export function createAgentChoices({
         legacy.status === "ready" &&
         !legacy.error &&
         (!local || local.status === "ready" || local.status === "unavailable"),
-      definitions: legacy.status === "ready" ? legacy.definitions : [],
+      definitions: legacy.definitions,
       identities: [...choices.values()],
       selectable: [...choices.values()].filter(
         (agent) => !archiveHides(archives, agent.pubkey, viewer),

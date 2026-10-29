@@ -59,25 +59,33 @@ export function AgentMessageButton({
     setError("");
     try {
       const session = connection.session;
-      if (refresh) await session.agentChoices.refresh();
+      const { agentChoices } = session;
+      const existing = () =>
+        session.channels
+          .list()
+          .channels.some(
+            (channel) =>
+              channel.channelType === "dm" &&
+              !channel.archived &&
+              channel.participants?.length === 1 &&
+              channel.participants[0] === pubkey,
+          );
+      const messageable = () =>
+        agentChoices
+          .snapshot()
+          .identities.some(
+            (agent) => canMessageAgent(agent) && agent.pubkey === pubkey,
+          );
+      // Agents still loading are not missing: wait for the list first.
+      if (
+        refresh ||
+        (agentChoices.snapshot().pending && !existing() && !messageable())
+      )
+        await agentChoices.refresh();
       controller.signal.throwIfAborted();
       if (relay.snapshot().session !== session) return;
-      const existing = session.channels
-        .list()
-        .channels.some(
-          (channel) =>
-            channel.channelType === "dm" &&
-            !channel.archived &&
-            channel.participants?.length === 1 &&
-            channel.participants[0] === pubkey,
-        );
-      const choices = session.agentChoices.snapshot();
-      if (
-        !existing &&
-        !choices.identities.some(
-          (agent) => canMessageAgent(agent) && agent.pubkey === pubkey,
-        )
-      )
+      const choices = agentChoices.snapshot();
+      if (!existing() && !messageable())
         throw new Error(
           choices.error ??
             (choices.pending

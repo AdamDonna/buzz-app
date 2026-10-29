@@ -360,6 +360,50 @@ it("a read begun before the delete can't bring the deleted main agent back", asy
   expect(screen.getByLabelText("main")).toHaveTextContent("A");
 });
 
+it("keeps a chosen library agent through a refresh, and no fallback stands in until it completes", async () => {
+  const a = { pubkey: "a".repeat(64), name: "A" };
+  const b = { pubkey: "b".repeat(64), name: "B" };
+  let release: (() => void) | undefined;
+  let hold = false;
+  const library = createAgentLibrary(async () => {
+    if (hold) await new Promise<void>((resolve) => (release = resolve));
+    return { definitions: [], identities: [a, b] };
+  });
+  const agentChoices = createAgentChoices({
+    scope: `https://relay.example.test:${"f".repeat(64)}`,
+    library: library.queries,
+    signal: new AbortController().signal,
+  });
+  await library.queries.refresh();
+  const session = { agentChoices } as unknown as RelaySession;
+  function Selection() {
+    return (
+      <output aria-label="main">
+        {useDefaultAgent(session, "refreshing")?.name}
+      </output>
+    );
+  }
+  render(<Selection />);
+  act(() => {
+    setDefaultAgent("refreshing", b.pubkey);
+  });
+  hold = true;
+  const read = library.queries.refresh();
+  await act(async () => {});
+  expect(agentChoices.snapshot().pending).toBe(true);
+  expect(screen.getByLabelText("main")).toHaveTextContent("B");
+  // A choice missing from the partial list waits rather than being replaced.
+  act(() => {
+    setDefaultAgent("refreshing", "d".repeat(64));
+  });
+  expect(screen.getByLabelText("main")).toBeEmptyDOMElement();
+  await act(async () => {
+    release?.();
+    await read;
+  });
+  expect(screen.getByLabelText("main")).toHaveTextContent("A");
+});
+
 function accountSession(
   saved: string | undefined,
   archived: string[] = [],

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createLocalAgents } from "./local";
 import { localAgentsFixture } from "./local-testing";
 import { createAgentLibrary } from "./library";
@@ -258,6 +258,64 @@ it.each(["loading", "failed", "partial"])(
     library.dispose();
   },
 );
+
+it("keeps the last library inventory usable but incomplete while it refreshes, fails or is stale", async () => {
+  const legacy = { pubkey: "cd".repeat(32), name: "Library agent" };
+  const definition = { id: "brain", name: "Brain" };
+  const reads: (() => void)[] = [];
+  let fail = false;
+  const library = createAgentLibrary(async () => {
+    await new Promise<void>((resolve) => reads.push(resolve));
+    if (fail) throw new Error("offline");
+    return { definitions: [definition], identities: [legacy] };
+  });
+  const lifetime = new AbortController();
+  const choices = createAgentChoices({
+    scope,
+    library: library.queries,
+    archives: archiveFixture(),
+    signal: lifetime.signal,
+  });
+  const channels = {
+    status: "ready" as const,
+    channels: [{ id: "test", name: "Test", members: [legacy.pubkey] }],
+  };
+  const read = async () => {
+    const done = choices.refresh();
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    return () => {
+      reads.shift()?.();
+      return done;
+    };
+  };
+  await (await read())();
+  expect(templateAgentChoices(choices.snapshot(), channels)).toHaveLength(1);
+  const usable = expect.objectContaining({
+    identities: [{ ...legacy, managed: false }],
+    selectable: [{ ...legacy, managed: false }],
+    definitions: [definition],
+    complete: false,
+  });
+
+  const settle = await read();
+  expect(choices.snapshot()).toEqual(usable);
+  expect(choices.snapshot().pending).toBe(true);
+  // Templates still need a verified read.
+  expect(templateAgentChoices(choices.snapshot(), channels)).toEqual([]);
+  fail = true;
+  await settle();
+  expect(choices.snapshot()).toEqual(usable);
+  expect(choices.snapshot().error).toContain("Could not read");
+
+  library.stale();
+  expect(choices.snapshot()).toEqual(usable);
+  expect(choices.snapshot().pending).toBe(true);
+  expect(templateAgentChoices(choices.snapshot(), channels)).toEqual([]);
+  library.clear();
+  expect(choices.snapshot().identities).toEqual([]);
+  lifetime.abort();
+  library.dispose();
+});
 
 it("shows a local agent's own picture, over older library artwork", async () => {
   const pictured = { ...agent, picture: "https://cdn.example.test/new.png" };

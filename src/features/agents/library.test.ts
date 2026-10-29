@@ -24,6 +24,8 @@ it("lazy fresh reads replace, fail visibly, retry, and fence late results", asyn
   read.mockRejectedValueOnce(new Error("private error"));
   await owner.queries.refresh();
   expect(owner.queries.snapshot().status).toBe("error");
+  // A failed read keeps the last inventory; consumers see it as partial.
+  expect(owner.queries.snapshot().identities).toHaveLength(4);
   expect(JSON.stringify(owner.queries.snapshot())).not.toContain(
     "private error",
   );
@@ -106,8 +108,13 @@ it.each([false, true])(
         combineInventory(library, { definitions: [], identities: [] })
           .identities,
       );
+      // A disconnect marks the inventory stale for display, not empty.
+      const identities = owner.session.agentLibrary.snapshot().identities;
       live.state({ status: "retrying", routes: [] });
-      expect(owner.session.agentLibrary.snapshot().status).toBe("idle");
+      expect(owner.session.agentLibrary.snapshot()).toMatchObject({
+        status: "idle",
+        identities,
+      });
       live.state({ status: "connected", routes: [] });
       live.established();
       await vi.advanceTimersByTimeAsync(0);

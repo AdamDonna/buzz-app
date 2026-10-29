@@ -1151,6 +1151,38 @@ it("filters the completed directory immediately without loading or searching aga
   expect(t.directMessages.people).toHaveBeenCalledTimes(requests);
 });
 
+it("keeps directory agents and holds Space and an empty result while local agents load", async () => {
+  const t = setup();
+  const agent = people[1];
+  if (!agent) throw new Error("Missing fixture agent");
+  const human = { pubkey: "a".repeat(64), name: agent.name };
+  t.directMessages.people.mockResolvedValue({
+    people: [human, agent],
+    hasMore: false,
+  });
+  const ready = t.control.snapshot();
+  // As at launch, before agent controls first list this community's agents.
+  t.updateControl({ status: "loading", agents: [] });
+  t.mount();
+  await waitFor(() =>
+    expect(screen.getAllByRole("option", { name: /Person 2/ })).toHaveLength(2),
+  );
+  // The agent that loads could be a namesake, so Space waits.
+  await t.user.type(recipient(), "person 2");
+  await t.user.keyboard(" ");
+  expect(recipient()).toHaveValue("person 2 ");
+  expect(
+    screen.queryByRole("button", { name: /^Remove / }),
+  ).not.toBeInTheDocument();
+  fireEvent.change(recipient(), { target: { value: "Nobody" } });
+  expect(
+    screen.queryByRole("status", { name: "Loading people" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("No matching people.")).not.toBeInTheDocument();
+  t.updateControl(ready);
+  expect(screen.getByText("No matching people.")).toBeVisible();
+});
+
 it("searches again for people added after a completed directory when New message reopens", async () => {
   const t = setup();
   const view = t.mount();
@@ -1513,6 +1545,40 @@ it("checks local agents again after opening and leaves queued retries alone", as
   await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
   expect(t.messages.send).toHaveBeenCalledOnce();
 });
+
+it.each([true, false])(
+  "waits for agents still loading before refusing an agent recipient: managed=%s",
+  async (managed) => {
+    const t = setup();
+    t.mount();
+    await t.user.click(
+      await screen.findByRole("option", { name: "Person 2, Agent" }),
+    );
+    await t.user.type(screen.getByRole("textbox"), "Hello");
+    const ready = t.control.snapshot();
+    // As at launch, before agent controls first list this community's agents.
+    t.updateControl({ status: "loading", agents: [] });
+    let finish!: () => void;
+    const refresh = vi.fn(
+      () => new Promise<void>((resolve) => (finish = resolve)),
+    );
+    t.control.refresh = refresh;
+    await t.user.click(send());
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(t.directMessages.open).not.toHaveBeenCalled();
+    t.updateControl(managed ? ready : { ...ready, agents: [] });
+    await act(async () => finish());
+    if (managed)
+      await waitFor(() => expect(t.messages.send).toHaveBeenCalledOnce());
+    else {
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "no longer available",
+      );
+      expect(t.directMessages.open).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it("distinguishes namesake options and chips without pictures", async () => {
   const t = setup();

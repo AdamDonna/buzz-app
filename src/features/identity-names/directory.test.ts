@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { LocalAgent, LocalAgentsSnapshot } from "../agents/local";
+import type { AgentLibrarySnapshot } from "../agents/library";
 import { bindNames, type NameSource } from "./service";
 import { npubEncode } from "nostr-tools/nip19";
 import {
@@ -33,6 +34,11 @@ it("scopes local agent names to the session community and follows edits and disp
     },
     refresh: async () => {},
   });
+  let library: AgentLibrarySnapshot = {
+    status: "ready",
+    definitions: [],
+    identities: [{ pubkey: key, name: "Legacy" }],
+  };
   const source: NameSource = {
     relayUrl: "https://here.example",
     profiles: {
@@ -41,11 +47,7 @@ it("scopes local agent names to the session community and follows edits and disp
       ensure: async () => {},
     },
     agentLibrary: {
-      snapshot: () => ({
-        status: "ready",
-        definitions: [],
-        identities: [{ pubkey: key, name: "Legacy" }],
-      }),
+      snapshot: () => library,
       subscribe: () => () => {},
       refresh: async () => {},
       retain: () => () => {},
@@ -73,6 +75,11 @@ it("scopes local agent names to the session community and follows edits and disp
   ).toBe("Legacy");
   state = { ...state, status: "error" };
   expect(names.resolve(key)).toBe("Legacy");
+  // The alias survives a refresh, a failed read and a disconnect's stale marker.
+  for (const status of ["loading", "error", "idle"] as const) {
+    library = { ...library, status };
+    expect(names.resolve(key)).toBe("Legacy");
+  }
   names.dispose();
   expect(listeners.size).toBe(0);
 });
