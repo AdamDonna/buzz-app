@@ -4,7 +4,10 @@ import type { UploadProgress } from "../relay/attachments";
 import { nativeIdentityEnabled } from "../identity/service";
 import { nativeMediaUrl } from "../relay/native";
 import { connectCommunityTransport } from "../communities/connection";
-import { communityDestination } from "../communities/destination";
+import {
+  communityDestination,
+  RelayPolicyError,
+} from "../communities/destination";
 import { avatarSource } from "../../shared/avatar-source";
 
 /** Shared save policy; display-only inherited artwork may still fail validation. */
@@ -24,7 +27,12 @@ export function avatarPreview(
 ): string | undefined {
   const source = avatarSource(value);
   if (!source || !community || source.startsWith("data:")) return source;
-  return communityMedia(community)(source, size);
+  try {
+    return communityMedia(community)(source, size);
+  } catch (error) {
+    if (error instanceof RelayPolicyError) return undefined;
+    throw error;
+  }
 }
 
 /** Relay-hosted media of one community through the host's media adapter. */

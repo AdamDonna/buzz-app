@@ -3918,6 +3918,7 @@ export class AgentsService extends Service implements Agents {
     );
     const shown = new Map<string, Agent>();
     for (const member of this.liveRows()) {
+      if (!originOf(member.relay)) continue;
       const { pubkey } = member;
       if (here.has(pubkey) || member.deleting || !ownedBy(member, binding))
         continue;

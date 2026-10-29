@@ -46,6 +46,10 @@ import {
   PopoverPopup,
 } from "../../shared/design-system/ui/Popover";
 import type { CommunityReader } from "../../features/communities/service";
+import {
+  communityDestination,
+  RelayPolicyError,
+} from "../../features/communities/destination";
 import { communityPresentation } from "../../features/communities/community-icon";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -630,7 +634,16 @@ function SharedSettingsNotice({
   );
   const memberships = agents
     .memberships(agent.pubkey)
-    .filter((membership) => !membership.deleting)
+    .filter((membership) => {
+      if (membership.deleting) return false;
+      try {
+        communityDestination(membership.origin);
+        return true;
+      } catch (error) {
+        if (error instanceof RelayPolicyError) return false;
+        throw error;
+      }
+    })
     .sort((a, b) => Number(b.key === agent.key) - Number(a.key === agent.key));
   if (memberships.length < 2) return null;
   const items = memberships.map(({ origin }) => ({
