@@ -18,6 +18,7 @@ export async function buildApp(
     companionFixture,
     localAgentActivity,
     pairingFixture,
+    relayPolicy,
   },
   use,
 ) {
@@ -76,6 +77,8 @@ export async function buildApp(
                 '"https://app.builderlab.xyz"',
             }
           : {}),
+        "import.meta.env.VITE_BUZZ_RELAY_POLICY":
+          JSON.stringify(relayPolicy) ?? "undefined",
         ...(developmentReact ? { "import.meta.env.DEV": "true" } : {}),
         "import.meta.env.VITE_BUZZ_LIVE": '"1"',
         "import.meta.env.VITE_BUZZ_COMMUNITY_ALIASES":

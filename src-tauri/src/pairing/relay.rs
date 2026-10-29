@@ -24,6 +24,7 @@ pub(super) fn tls_connector() -> Result<tokio_tungstenite::Connector, String> {
 }
 
 pub(super) fn community(input: &str) -> Result<Url, String> {
+    crate::relay_policy::allowed(input)?;
     let mut url = Url::parse(input).map_err(|_| "Enter a secure community URL.")?;
     if input.len() > 2048
         || !matches!(url.scheme(), "https" | "wss")

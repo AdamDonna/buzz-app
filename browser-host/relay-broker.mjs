@@ -122,6 +122,9 @@ import {
 } from "../src/features/relay/live.ts";
 import {
   communityDestination,
+  parseRelayPolicy,
+  assertRelayAllowed,
+  assertRelayRemovable,
   parseCommunityAliases,
   relayOrigin,
 } from "../src/features/communities/destination.ts";
@@ -812,6 +815,7 @@ export function relayBrokerPlugin({
   authorizedViewer,
   relayUrl,
   communityAliases,
+  relayPolicy,
   identity = () => loadIdentity(authorizedViewer),
   authority = relayAuthority,
   upstreamFetch,
@@ -823,6 +827,7 @@ export function relayBrokerPlugin({
   liveSetupTimeoutMs,
 } = {}) {
   const aliases = parseCommunityAliases(communityAliases);
+  const trust = parseRelayPolicy(relayPolicy);
   const defaultRelay = relayUrl?.trim() ? relayOrigin(relayUrl) : undefined;
   return {
     name: "buzz-relay-broker",
@@ -1071,7 +1076,7 @@ export function relayBrokerPlugin({
               const value = JSON.parse(raw).url;
               if (typeof value !== "string")
                 throw new Error("Enter a relay URL");
-              const destination = communityDestination(value, aliases);
+              const destination = communityDestination(value, aliases, trust);
               registered.set(destination.id, destination.url);
               return json(res, 200, destination);
             } catch (error) {
@@ -1137,7 +1142,11 @@ export function relayBrokerPlugin({
           let id;
           try {
             id = scoped
-              ? communityDestination(decodeURIComponent(parts[2]), aliases).id
+              ? communityDestination(
+                  decodeURIComponent(parts[2]),
+                  aliases,
+                  trust,
+                ).id
               : undefined;
           } catch {
             return json(res, 400, { error: "Invalid community" });
@@ -1149,6 +1158,11 @@ export function relayBrokerPlugin({
                 ? "Register this community first"
                 : "Select a community or configure BUZZ_RELAY_URL for unscoped requests",
             });
+          try {
+            assertRelayAllowed(relay, trust);
+          } catch (error) {
+            return json(res, 403, { error: error.message });
+          }
           const route = scoped ? `/api/relay/${parts[3]}` : url.pathname;
           if (route === "/api/relay/identity" && req.method === "GET")
             return json(res, 200, { viewer });
@@ -2634,6 +2648,7 @@ export function relayBrokerPlugin({
             if (!scoped)
               return json(res, 400, { error: "Select a community first" });
             try {
+              if (leave) assertRelayRemovable(relay, trust);
               // The viewer's own leave request has one shape; the body carries nothing.
               filters = invite
                 ? inviteRequest(filters)

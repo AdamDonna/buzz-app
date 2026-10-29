@@ -5,6 +5,10 @@ import {
   type VerifiedProfileSink,
 } from "./verified-profile.ts";
 import { getLogger } from "../developer/logging.ts";
+import {
+  communityDestination,
+  configuredRelayPolicy,
+} from "../communities/destination.ts";
 import { logSocketFrame, relayLabel } from "../developer/traffic.ts";
 
 import {
@@ -373,6 +377,7 @@ export function subscribeRelayTraffic(
     throw new Error("Invalid channel batch size");
   const replaySlots =
     channelBatchSize > REPLAY_BATCH_SIZE ? setupConcurrency : 0;
+  if (configuredRelayPolicy) communityDestination(url);
   const log = getLogger("relay-ws");
   const peer = relayLabel(url);
   let closed = false;

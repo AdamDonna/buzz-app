@@ -10,6 +10,8 @@ import {
   communityDestination,
   isCommunityAlias,
   relayAddress,
+  configuredRelayPolicy,
+  assertRelayRemovable,
 } from "./destination";
 import { purgeCommunityDeviceState, type PurgeFailure } from "./device-state";
 import { fetchCommunityPresentation } from "./community-icon";
@@ -251,8 +253,11 @@ export function createCommunities(
         if (disposed) return;
         let saved = empty();
         let seeded = false;
+        let hadRecord = false;
+        let hadSelection = false;
         try {
           const stored = localStorage.getItem(`buzz-client.v1:${viewer}`);
+          hadRecord = stored !== null;
           const raw = JSON.parse(stored ?? "null");
           if (raw)
             saved = {
@@ -321,6 +326,7 @@ export function createCommunities(
             seeded = true;
           }
           if (typeof raw?.selected === "string") {
+            hadSelection = true;
             try {
               saved.selected = communityDestination(raw.selected).id;
             } catch {
@@ -333,6 +339,17 @@ export function createCommunities(
         }
         if (!saved.memberships.some((m) => m.id === saved.selected))
           saved.selected = null;
+        if (configuredRelayPolicy) {
+          const pinned = communityDestination(configuredRelayPolicy.pinned);
+          if (!saved.memberships.some((m) => m.id === pinned.id)) {
+            saved.memberships.unshift({ id: pinned.id, name: pinned.name });
+            seeded = true;
+          }
+          // Preserve a deliberate Personal space selection; replace a blocked
+          // startup destination (or a fresh install) with the pinned relay.
+          if (!saved.selected && (!hadRecord || hadSelection))
+            saved.selected = pinned.id;
+        }
         presenceActivity.setViewer(viewer);
         if (saved.selected) acquire(saved.selected, viewer);
         saved.memberships = saved.memberships.map((membership) => ({
@@ -557,6 +574,7 @@ export function createCommunities(
       id: string,
       { purge = true }: { purge?: boolean } = {},
     ): Promise<PurgeFailure[]> {
+      assertRelayRemovable(id);
       id = communityDestination(id).id;
       if (!state.memberships.some((m) => m.id === id)) return [];
       const { viewer } = state;

@@ -108,7 +108,7 @@ const REFUSED: &str = "The admin host resolves to a private or local address";
 /// (no credentials, path, query or fragment), not a local name, and not a
 /// non-public literal address.
 pub(super) fn admin_origin(value: &str) -> Result<Url, String> {
-    let url = crate::relay::origin(value)?;
+    let url = crate::relay::parse_origin(value)?;
     match url.host() {
         Some(Host::Domain(name)) => {
             let name = name.trim_end_matches('.');

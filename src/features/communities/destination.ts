@@ -17,6 +17,8 @@ export function relayOrigin(input: string): string {
     );
   }
   url.protocol = "https:";
+  if (url.hostname === "." || url.hostname.endsWith(".."))
+    throw new Error("Enter a valid relay URL.");
   // DNS treats the final dot as the same host; keep storage and routing identical too.
   if (url.hostname.endsWith(".")) url.hostname = url.hostname.slice(0, -1);
   return url.origin;
@@ -71,12 +73,80 @@ const configuredAliases = parseCommunityAliases(
   import.meta.env?.VITE_BUZZ_COMMUNITY_ALIASES,
 );
 
+export type RelayPolicy = Readonly<{
+  pinned: string;
+  allowlist: readonly string[];
+}>;
+
+export class RelayPolicyError extends Error {}
+
+/** Deployment policy is compiled configuration, never a saved user preference. */
+export function parseRelayPolicy(raw?: string): RelayPolicy | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      Object.keys(value).length !== 2 ||
+      !("pinned" in value) ||
+      typeof value.pinned !== "string" ||
+      !("allowlist" in value) ||
+      !Array.isArray(value.allowlist)
+    )
+      throw new Error();
+    const pinned = relayOrigin(value.pinned);
+    const allowlist = value.allowlist.map((entry: unknown) => {
+      if (typeof entry !== "string") throw new Error();
+      return relayOrigin(entry);
+    });
+    return Object.freeze({
+      pinned,
+      allowlist: Object.freeze([...new Set(allowlist)]),
+    });
+  } catch {
+    throw new Error(
+      "BUZZ_BUILD_RELAY_POLICY must be a JSON object with a secure pinned relay URL and an allowlist array of secure relay URLs.",
+    );
+  }
+}
+
+export const configuredRelayPolicy = parseRelayPolicy(
+  import.meta.env?.VITE_BUZZ_RELAY_POLICY,
+);
+
+export function assertRelayAllowed(
+  url: string,
+  policy = configuredRelayPolicy,
+) {
+  if (policy && url !== policy.pinned && !policy.allowlist.includes(url))
+    throw new RelayPolicyError(
+      "This relay is not allowed by this build's relay policy.",
+    );
+}
+
+export function assertRelayRemovable(
+  value: string,
+  policy = configuredRelayPolicy,
+) {
+  if (
+    policy &&
+    communityDestination(value, configuredAliases, policy).url === policy.pinned
+  )
+    throw new RelayPolicyError(
+      "The pinned relay cannot be removed from this build.",
+    );
+}
+
 export function communityDestination(
   value: string,
   aliases = configuredAliases,
+  policy = configuredRelayPolicy,
 ) {
   const legacy = Object.hasOwn(aliases, value) ? aliases[value] : undefined;
   const url = legacy ?? relayOrigin(value);
+  assertRelayAllowed(url, policy);
   const id = Object.keys(aliases).find((key) => aliases[key] === url) ?? url;
   return { id, url, name: new URL(url).host };
 }

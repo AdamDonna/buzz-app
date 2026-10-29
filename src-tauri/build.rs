@@ -11,8 +11,25 @@ mod enterprise_relay_url;
 mod federated_identity_config;
 #[path = "src/nsec_backup_config.rs"]
 mod nsec_backup_config;
+#[allow(dead_code)]
+#[path = "src/relay_policy.rs"]
+mod relay_policy;
 
 fn main() {
+    const POLICY: &str = "BUZZ_BUILD_RELAY_POLICY";
+    println!("cargo:rerun-if-env-changed={POLICY}");
+    let policy = match std::env::var(POLICY) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(_) => panic!("BUZZ_BUILD_RELAY_POLICY must be valid UTF-8"),
+    };
+    relay_policy::RelayPolicy::parse(policy.as_deref()).unwrap_or_else(|error| panic!("{error}"));
+    if let Some(policy) = policy {
+        // Cargo directives occupy one line even when the input JSON is formatted.
+        let value: serde_json::Value =
+            serde_json::from_str(&policy).expect("Validated relay policy");
+        println!("cargo:rustc-env={POLICY}={value}");
+    }
     configure_nsec_backup();
     configure_federated_identity();
     configure_enterprise_auth();

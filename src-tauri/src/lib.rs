@@ -75,6 +75,7 @@ use repositories_folder::repositories_folder_validate;
 mod relaunch;
 mod relay;
 mod relay_admin;
+mod relay_policy;
 mod sign_out;
 use identity::{
     identity_create, identity_export, identity_import, identity_import_legacy,

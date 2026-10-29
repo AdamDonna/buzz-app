@@ -40,7 +40,8 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
-async function startup(relayUrl = "", aliases = "") {
+async function startup(relayUrl = "", aliases = "", relayPolicy?: string) {
+  vi.stubEnv("BUZZ_BUILD_RELAY_POLICY", relayPolicy);
   vi.stubEnv("BUZZ_RELAY_URL", relayUrl);
   vi.stubEnv("BUZZ_COMMUNITY_ALIASES", aliases);
   vi.stubEnv("BUZZ_DEV_VIEWER", viewer);
@@ -80,6 +81,81 @@ async function startup(relayUrl = "", aliases = "") {
     get: (path: string) => fetch(`${base}/api/relay/${path}`),
   };
 }
+
+it("enforces build policy at broker registration, alias routing, unscoped access and pinned leave", async () => {
+  upstream.mockImplementation(
+    async () => Response.json({ self: viewer }) as never,
+  );
+  const policy = JSON.stringify({
+    pinned: "wss://primary.example",
+    allowlist: ["https://allowed.example:8443"],
+  });
+  const app = await startup(
+    "https://blocked.example",
+    '{"saved":"https://blocked.example","pin":"https://primary.example"}',
+    policy,
+  );
+  const post = (path: string, value: unknown) =>
+    fetch(`${app.base}/api/relay/${path}`, {
+      method: "POST",
+      headers: { Origin: app.base, "Content-Type": "application/json" },
+      body: JSON.stringify(value),
+    });
+  expect(
+    (await post("register", { url: "wss://blocked.example" })).status,
+  ).toBe(400);
+  expect((await app.get("saved/session")).status).toBe(400);
+  expect((await app.get("session")).status).toBe(403);
+  const leave = await post("pin/leave", {});
+  expect(leave.status).toBe(400);
+  expect(await leave.json()).toMatchObject({
+    error: expect.stringContaining("pinned relay"),
+    sent: false,
+  });
+  expect(upstream).not.toHaveBeenCalled();
+  expect(
+    (await post("register", { url: " WSS://ALLOWED.example:8443/ " })).status,
+  ).toBe(200);
+  expect(
+    (
+      await app.get(
+        `${encodeURIComponent("https://allowed.example:8443")}/session`,
+      )
+    ).status,
+  ).toBe(200);
+  expect((await app.get("pin/session")).status).toBe(200);
+  expect(upstream.mock.calls.map(([url]) => String(url))).toEqual([
+    "https://allowed.example:8443",
+    "https://primary.example",
+  ]);
+  expect(app.resolved.define?.["import.meta.env.VITE_BUZZ_RELAY_POLICY"]).toBe(
+    JSON.stringify(policy),
+  );
+});
+
+it.each([
+  "",
+  "null",
+  "{}",
+  "bad-json",
+  '{"pinned":"http://relay.example","allowlist":[]}',
+])(
+  "rejects invalid policy before credential access in both Vite modes (%#)",
+  async (relayPolicy) => {
+    vi.stubEnv("BUZZ_BUILD_RELAY_POLICY", relayPolicy);
+    vi.stubEnv("BUZZ_RELAY_URL", "");
+    vi.stubEnv("BUZZ_COMMUNITY_ALIASES", "");
+    for (const command of ["serve", "build"] as const)
+      await expect(config({ command, mode: "production" })).rejects.toThrow(
+        "BUZZ_BUILD_RELAY_POLICY",
+      );
+    expect(() => relayBrokerPlugin({ relayPolicy })).toThrow(
+      "BUZZ_BUILD_RELAY_POLICY",
+    );
+    expect(readCredential).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  },
+);
 
 it("serves identity with no configured communities and rejects unscoped relay access without networking", async () => {
   const app = await startup();

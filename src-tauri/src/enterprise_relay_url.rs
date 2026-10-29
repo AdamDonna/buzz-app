@@ -61,7 +61,7 @@ pub(crate) fn canonical_enterprise_relay_url(raw: &str) -> Result<String, String
         _ => None,
     };
     if let Some(host) = dotted_host {
-        if host.is_empty() {
+        if host.is_empty() || host.ends_with('.') {
             return Err("Enterprise relay URL has an invalid host".into());
         }
         url.set_host(Some(&host))

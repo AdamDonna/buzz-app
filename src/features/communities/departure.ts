@@ -1,4 +1,5 @@
 import { requestLeave, type LeaveOutcome } from "./api";
+import { RelayPolicyError } from "./destination";
 import type { PurgeFailure } from "./device-state";
 import type { Communities, Membership } from "./service";
 
@@ -178,11 +179,13 @@ export function leaveUnsettled(error: unknown) {
   return (
     error instanceof CommunityDepartureError &&
     error.phase === "relay" &&
+    !(error.reason instanceof RelayPolicyError) &&
     error.message !== OWNER_REFUSAL
   );
 }
 
 export function leaveCommunityFailureText(name: string, error: unknown) {
+  if (error instanceof RelayPolicyError) return error.message;
   const reason = error instanceof Error ? error.message : "";
   if (reason === OWNER_REFUSAL) return `The relay owner can’t leave ${name}.`;
   return `Couldn’t leave ${name}. Check your connection and try again.`;

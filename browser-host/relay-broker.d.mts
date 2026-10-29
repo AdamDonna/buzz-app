@@ -7,6 +7,7 @@ export function relayBrokerPlugin(options?: {
   >;
   relayUrl?: string | undefined;
   communityAliases?: string | undefined;
+  relayPolicy?: string | undefined;
   identity?: () => Uint8Array;
   authority?: (
     fetch: typeof globalThis.fetch,

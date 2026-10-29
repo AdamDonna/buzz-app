@@ -3,6 +3,82 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 
 #[test]
+fn compiled_policy_enforces_native_ipc_before_signing_or_network() {
+    let Some(raw) = option_env!("BUZZ_BUILD_RELAY_POLICY") else {
+        assert!(origin("https://arbitrary.example").is_ok());
+        return;
+    };
+    let policy: serde_json::Value = serde_json::from_str(raw).unwrap();
+    let mut pinned = Url::parse(policy["pinned"].as_str().unwrap().trim()).unwrap();
+    pinned.set_scheme("https").unwrap();
+    let pinned = pinned.origin().ascii_serialization();
+    let blocked = "https://outside-policy.invalid";
+    assert!(crate::relay_policy::allowed(blocked).is_err());
+    use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
+    let app = mock_builder()
+        .manage(IdentityHost::fixture())
+        .invoke_handler(crate::commands())
+        .build(crate::app_context())
+        .unwrap();
+    let view = tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+        .build()
+        .unwrap();
+    let invoke = |cmd: &str, body: serde_json::Value| {
+        get_ipc_response(
+            &view,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: view.url().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+        )
+        .map(|body| body.deserialize::<serde_json::Value>().unwrap())
+    };
+    let pulse =
+        serde_json::json!({"kind":20002,"created_at":1,"content":"","tags":[["h","channel"]]});
+    assert!(invoke(
+        "relay_sign",
+        serde_json::json!({"community": pinned,"event":pulse})
+    )
+    .is_ok());
+    for (command, body) in [
+        (
+            "relay_sign",
+            serde_json::json!({"community":blocked,"event":pulse}),
+        ),
+        (
+            "relay_http",
+            serde_json::json!({"community":blocked,"path":"/","method":"GET"}),
+        ),
+    ] {
+        assert!(invoke(command, body)
+            .unwrap_err()
+            .to_string()
+            .contains("not allowed"));
+    }
+    let leave = serde_json::json!({"kind":28936,"created_at":1,"content":"","tags":[["-"]]});
+    for (command, body) in [
+        (
+            "relay_sign",
+            serde_json::json!({"community":pinned,"event":leave}),
+        ),
+        (
+            "relay_http",
+            serde_json::json!({"community":pinned,"path":"/events","method":"POST","body":leave.to_string()}),
+        ),
+    ] {
+        assert!(invoke(command, body)
+            .unwrap_err()
+            .to_string()
+            .contains("pinned relay"));
+    }
+}
+
+#[test]
 fn routes_cannot_retarget_credentials_or_expand_http_access() {
     for community in [
         "http://relay.test",

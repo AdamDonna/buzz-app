@@ -308,6 +308,7 @@ impl AppAgentHost {
     /// The agent in the community at `relay`, if it still has its key there.
     /// One deleted elsewhere loses its cached key.
     async fn agent(&self, pubkey: String, relay: String) -> Result<AppAgent, String> {
+        crate::relay_policy::allowed(&relay)?;
         let host = self.clone();
         blocking(move || {
             let agent = host.agents.clone()?.get(&pubkey, &relay);
@@ -533,7 +534,15 @@ pub(crate) async fn app_agent_list(
     state: tauri::State<'_, AppAgentHost>,
 ) -> Result<Vec<AppAgentSummary>, String> {
     let agents = state.agents.clone()?;
-    blocking(move || Ok(agents.list()?.into_iter().map(Into::into).collect())).await
+    blocking(move || {
+        Ok(agents
+            .list()?
+            .into_iter()
+            .filter(|agent| crate::relay_policy::allowed(&agent.relay).is_ok())
+            .map(Into::into)
+            .collect())
+    })
+    .await
 }
 
 /// Generates a key for `owner` in `destination`, has the signed-in owner attest
@@ -547,6 +556,7 @@ pub(crate) async fn app_agent_create(
     agent_type: String,
     name: String,
 ) -> Result<AppAgentSummary, String> {
+    crate::relay_policy::allowed(&destination)?;
     let agents = state.agents.clone()?;
     let prepared = AppAgents::prepare(&destination, &owner, &agent_type, &name)?;
     let auth = identity
@@ -634,6 +644,7 @@ pub(crate) async fn app_agent_port(
     owner: String,
     agent_type: String,
 ) -> Result<Ported, String> {
+    crate::relay_policy::allowed(&destination)?;
     // Unavailable storage refuses before the old store gives up its key.
     state.agents.clone()?;
     let old = state.old.clone()?;
@@ -740,6 +751,8 @@ pub(crate) async fn app_agent_join(
     destination: String,
     picture: Option<String>,
 ) -> Result<AppAgentSummary, String> {
+    crate::relay_policy::allowed(&from)?;
+    crate::relay_policy::allowed(&destination)?;
     let host = state.inner().clone();
     blocking(move || {
         // Held so no first key read meets this write in the credential store.
