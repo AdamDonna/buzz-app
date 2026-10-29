@@ -3,8 +3,8 @@ import { test, expect } from "./fixture.mjs";
 test.use({
   productionBroker: true,
   relayPolicy: JSON.stringify({
-    pinned: "wss://primary.example",
-    allowlist: ["wss://secondary.example"],
+    pinned: "primary.example",
+    allowlist: ["secondary.example"],
   }),
   historyCounts: { alpha: 2, beta: 1 },
 });

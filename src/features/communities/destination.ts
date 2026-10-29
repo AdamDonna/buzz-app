@@ -80,6 +80,12 @@ export type RelayPolicy = Readonly<{
 
 export class RelayPolicyError extends Error {}
 
+/** A policy entry is `host` or `host:port`; it matches both `wss://` and `https://`. */
+function hostOrigin(entry: unknown): string {
+  if (typeof entry !== "string" || entry.includes("/")) throw new Error();
+  return relayOrigin(`https://${entry}`);
+}
+
 /** Deployment policy is compiled configuration, never a saved user preference. */
 export function parseRelayPolicy(raw?: string): RelayPolicy | undefined {
   if (raw === undefined) return undefined;
@@ -91,23 +97,19 @@ export function parseRelayPolicy(raw?: string): RelayPolicy | undefined {
       Array.isArray(value) ||
       Object.keys(value).length !== 2 ||
       !("pinned" in value) ||
-      typeof value.pinned !== "string" ||
       !("allowlist" in value) ||
       !Array.isArray(value.allowlist)
     )
       throw new Error();
-    const pinned = relayOrigin(value.pinned);
-    const allowlist = value.allowlist.map((entry: unknown) => {
-      if (typeof entry !== "string") throw new Error();
-      return relayOrigin(entry);
-    });
+    const pinned = hostOrigin(value.pinned);
+    const allowlist = value.allowlist.map(hostOrigin);
     return Object.freeze({
       pinned,
       allowlist: Object.freeze([...new Set(allowlist)]),
     });
   } catch {
     throw new Error(
-      "BUZZ_BUILD_RELAY_POLICY must be a JSON object with a secure pinned relay URL and an allowlist array of secure relay URLs.",
+      "BUZZ_BUILD_RELAY_POLICY must be a JSON object with a pinned relay host and an allowlist array of relay hosts, each as host or host:port.",
     );
   }
 }

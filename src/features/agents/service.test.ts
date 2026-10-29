@@ -5166,8 +5166,8 @@ it("preserves blocked agents' settings and teams without binding or publishing t
   const resolve = destinations.communityDestination;
   const policy = destinations.parseRelayPolicy(
     JSON.stringify({
-      pinned: "wss://relay.example.test",
-      allowlist: ["wss://other.example.test"],
+      pinned: "relay.example.test",
+      allowlist: ["other.example.test"],
     }),
   );
   const gate = vi

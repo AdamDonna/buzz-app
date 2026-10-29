@@ -48,7 +48,7 @@ and Settings hides External apps there. Normal agent MCP servers are unchanged.
 Packagers can require one community and explicitly permit additional relays:
 
 ```sh
-export BUZZ_BUILD_RELAY_POLICY='{"pinned":"wss://relay.example.com","allowlist":["https://other.example.com:8443"]}'
+export BUZZ_BUILD_RELAY_POLICY='{"pinned":"relay.example.com","allowlist":["other.example.com:8443"]}'
 bin/pnpm tauri build
 ```
 
@@ -61,22 +61,22 @@ override it. Rebuild both artifacts to change a packaged policy. No relay policy
 or relay addresses are supplied by OSS defaults.
 
 - Absent: existing unrestricted community behavior.
-- Present: a JSON object with exactly `pinned` (a URL string) and `allowlist`
-  (an array of URL strings). The pin is always permitted. An empty array permits
+- Present: a JSON object with exactly `pinned` (a host string) and `allowlist`
+  (an array of host strings). The pin is always permitted. An empty array permits
   only the pin; additional entries permit optional communities, without joining
-  them automatically. Equivalent duplicate URLs have the same effect as one.
+  them automatically. Equivalent duplicate hosts have the same effect as one.
 - Empty/whitespace input, invalid JSON, `null`, missing/unknown fields, wrong
-  types, empty URLs and invalid URLs fail the build or dev-server startup with
+  types, empty hosts and invalid hosts fail the build or dev-server startup with
   a `BUZZ_BUILD_RELAY_POLICY` error. Invalid values never enable unrestricted
   operation. Errors do not echo the configured values.
 
-URLs use the existing secure community-origin rules: `wss://` and `https://`,
-surrounding whitespace permitted, without credentials, non-root paths, query or
-fragment. A single root slash, host case, final DNS dot and default port 443
-normalize away. IDNs use their ASCII form and IPv6 literals normalize through
-the URL parser. Matching uses the complete canonical origin, including any
-non-default port. Subdomains, suffixes and different ports are separate relays;
-there are no wildcards. Aliases resolve to an origin before policy checking.
+Each entry is `host` or `host:port`, without a scheme, credentials, path, query
+or fragment. An entry permits that host over both `wss://` and `https://`. A bare
+host means port 443; `host:port` permits only that port. Host case and a final
+DNS dot normalize away. IDNs use their ASCII form and IPv6 literals use brackets,
+such as `[2001:db8::1]:8443`. Subdomains, suffixes and different ports are
+separate relays; there are no wildcards. Aliases resolve to an origin before
+policy checking.
 
 After identity restoration the pin is present in the saved community inventory.
 A fresh identity starts there. An allowed saved selection or Personal space

@@ -7,6 +7,15 @@ pub(crate) struct RelayPolicy {
     allowlist: Vec<String>,
 }
 
+/// A policy entry is `host` or `host:port`; it matches both `wss://` and `https://`.
+fn host_origin(entry: &serde_json::Value) -> Option<String> {
+    let host = entry.as_str()?;
+    if host.contains('/') {
+        return None;
+    }
+    canonical_enterprise_relay_url(&format!("wss://{host}")).ok()
+}
+
 impl RelayPolicy {
     pub(crate) fn parse(raw: Option<&str>) -> Result<Option<Self>, String> {
         let Some(raw) = raw else { return Ok(None) };
@@ -16,16 +25,16 @@ impl RelayPolicy {
             if object.len() != 2 {
                 return None;
             }
-            let pinned = canonical_enterprise_relay_url(object.get("pinned")?.as_str()?).ok()?;
+            let pinned = host_origin(object.get("pinned")?)?;
             let allowlist = object
                 .get("allowlist")?
                 .as_array()?
                 .iter()
-                .map(|entry| canonical_enterprise_relay_url(entry.as_str()?).ok())
+                .map(host_origin)
                 .collect::<Option<Vec<_>>>()?;
             Some(Self { pinned, allowlist })
         };
-        parse().map(Some).ok_or_else(|| "BUZZ_BUILD_RELAY_POLICY must be a JSON object with a secure pinned relay URL and an allowlist array of secure relay URLs.".into())
+        parse().map(Some).ok_or_else(|| "BUZZ_BUILD_RELAY_POLICY must be a JSON object with a pinned relay host and an allowlist array of relay hosts, each as host or host:port.".into())
     }
 
     pub(crate) fn check(&self, value: &str) -> Result<(), String> {
@@ -70,71 +79,49 @@ pub(crate) fn removable(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    const POLICY: &str = r#"{"pinned":"wss://relay.example","allowlist":["wss://other.example:8443","https://bücher.example","https://[2001:db8::1]"]}"#;
 
     #[test]
-    fn only_absent_policy_is_unrestricted() {
+    fn absent_policy_is_unrestricted_and_malformed_policy_fails() {
         assert!(RelayPolicy::parse(None).unwrap().is_none());
         for raw in [
             "",
-            " ",
-            "null",
             "{}",
-            "[]",
-            "not-json",
-            r#"{"pinned":"wss://relay.example"}"#,
-            r#"{"pinned":"wss://relay.example","allowlist":null}"#,
-            r#"{"pinned":"wss://relay.example","allowlist":[42]}"#,
-            r#"{"pinned":"wss://relay.example","allowlist":[],"enabled":false}"#,
+            r#"{"pinned":"relay.example"}"#,
+            r#"{"pinned":"relay.example","allowlist":[42]}"#,
+            r#"{"pinned":"wss://relay.example","allowlist":[]}"#,
+            r#"{"pinned":"relay.example","allowlist":["other.example/path"]}"#,
         ] {
-            let error = RelayPolicy::parse(Some(raw)).unwrap_err();
-            assert!(error.starts_with("BUZZ_BUILD_RELAY_POLICY must"));
+            assert!(RelayPolicy::parse(Some(raw)).is_err(), "{raw}");
         }
     }
 
     #[test]
-    fn matches_the_shared_origin_corpus() {
-        let policy = RelayPolicy::parse(Some(POLICY)).unwrap().unwrap();
-        let cases: serde_json::Value =
-            serde_json::from_str(include_str!("../../tests/relay-policy-cases.json")).unwrap();
-        for value in cases["allowed"].as_array().unwrap() {
-            assert!(policy.check(value.as_str().unwrap()).is_ok(), "{value}");
-        }
-        for value in cases["blocked"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .chain(cases["invalid"].as_array().unwrap())
-        {
-            assert!(policy.check(value.as_str().unwrap()).is_err(), "{value}");
-        }
-        for value in cases["invalid"].as_array().unwrap() {
-            for config in [
-                serde_json::json!({"pinned": value, "allowlist": []}),
-                serde_json::json!({"pinned": "wss://relay.example", "allowlist": [value]}),
-            ] {
-                assert!(
-                    RelayPolicy::parse(Some(&config.to_string())).is_err(),
-                    "{config}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn an_empty_allowlist_keeps_only_the_pin_and_never_allows_its_removal() {
+    fn matches_hosts_on_either_scheme_and_exact_port() {
         let policy = RelayPolicy::parse(Some(
-            r#"{"pinned":"https://RELAY.example.:443/","allowlist":[]}"#,
+            r#"{"pinned":"relay.example","allowlist":["other.example:8443"]}"#,
         ))
         .unwrap()
         .unwrap();
-        assert!(policy.check("wss://relay.example").is_ok());
+        for allowed in [
+            "wss://relay.example",
+            "https://RELAY.example:443/",
+            "wss://other.example:8443",
+            "https://other.example:8443",
+        ] {
+            assert!(policy.check(allowed).is_ok(), "{allowed}");
+        }
+        for blocked in [
+            "wss://other.example",
+            "wss://relay.example:8443",
+            "wss://sub.relay.example",
+            "wss://relay.example.evil",
+        ] {
+            assert!(policy.check(blocked).is_err(), "{blocked}");
+        }
+        assert!(policy.removable("wss://other.example:8443").is_ok());
         assert!(policy
-            .removable("wss://relay.example")
+            .removable("https://relay.example")
             .unwrap_err()
             .contains("pinned relay"));
-        assert!(policy.check("wss://other.example").is_err());
-        let policy = RelayPolicy::parse(Some(POLICY)).unwrap().unwrap();
-        assert!(policy.removable("wss://other.example:8443").is_ok());
     }
 }

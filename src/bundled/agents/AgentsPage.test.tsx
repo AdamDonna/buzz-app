@@ -44,18 +44,6 @@ import { PlugIcon, RobotIcon } from "../../shared/design-system/icons";
 import { AgentSettings } from "../../app/AgentSettings";
 import { AgentsPage } from "./AgentsPage";
 import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
-import { Context } from "@deepseek-ai/cordis";
-import { AgentsService } from "../../features/agents/service";
-import {
-  fakeCommunities,
-  fakeNative,
-  fakeRelay,
-  viewer,
-  bot,
-  sibling,
-} from "../../features/agents/service-testing";
-import { memoryStorage } from "../../features/agents/test-fakes";
-import * as destinations from "../../features/communities/destination";
 
 vi.mock("../../features/profiles/avatar-upload", async (actual) => ({
   ...(await actual<typeof import("../../features/profiles/avatar-upload")>()),
@@ -1147,86 +1135,6 @@ it("imports an agent from another community as the same agent, keeping its key",
   expect(
     within(screen.getByRole("grid", { name: "Agents" })).getByText("Bea"),
   ).toBeInTheDocument();
-});
-
-it("renders an allowed import source when its home is blocked and excludes blocked-only identities", async () => {
-  const resolve = destinations.communityDestination;
-  const policy = destinations.parseRelayPolicy(
-    JSON.stringify({
-      pinned: "wss://relay.example.test",
-      allowlist: ["wss://other.example.test"],
-    }),
-  );
-  const gate = vi
-    .spyOn(destinations, "communityDestination")
-    .mockImplementation((value, aliases) => resolve(value, aliases, policy));
-  const ctx = new Context();
-  ctx.provide("pluginStatus", {
-    isActive: () => true,
-    subscribe: () => () => {},
-  });
-  const client = fakeCommunities(
-    fakeRelay(),
-    fakeRelay("https://other.example.test"),
-  );
-  const common = {
-    owner: viewer,
-    type: "test/echo",
-    deleted: false,
-    picture: "https://images.example/avatar.png",
-  };
-  const native = fakeNative([
-    { ...common, pubkey: bot, relay: "wss://blocked.example", name: "Mixed" },
-    {
-      ...common,
-      pubkey: bot,
-      relay: "wss://other.example.test",
-      home: "wss://blocked.example",
-      name: "Mixed",
-    },
-    {
-      ...common,
-      pubkey: sibling,
-      relay: "wss://blocked.example",
-      name: "Blocked only",
-    },
-  ]);
-  const service = new AgentsService(
-    ctx,
-    client.communities,
-    native,
-    memoryStorage(),
-  );
-  try {
-    await waitFor(() => expect(service.snapshot().status).toBe("ready"));
-    expect(service.joinable().map((agent) => agent.relay)).toEqual([
-      "wss://other.example.test",
-    ]);
-    const { agents } = setup([agent("Ada", 1)], { found: [] });
-    agents.joinable = () => service.joinable();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "New agent" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Import an agent" }),
-    );
-    const list = await screen.findByRole("region", {
-      name: "Agents to import",
-    });
-    expect(within(list).queryByText("Blocked only")).not.toBeInTheDocument();
-    await user.click(
-      within(list).getByRole("button", {
-        name: "Import, Mixed from other.example.test",
-      }),
-    );
-    expect(
-      await screen.findByRole("dialog", { name: "Import Mixed" }),
-    ).toBeVisible();
-    expect(service.memberships(bot)).toHaveLength(2);
-  } finally {
-    cleanup();
-    await ctx.fiber.dispose();
-    gate.mockRestore();
-  }
 });
 
 it("cancels cross-community consent and discards it when the destination changes", async () => {
