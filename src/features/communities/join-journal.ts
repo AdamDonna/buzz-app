@@ -1,4 +1,8 @@
-import { communityDestination, isCommunityAlias } from "./destination";
+import {
+  communityDestination,
+  isCommunityAlias,
+  RelayPolicyError,
+} from "./destination";
 import type { PersonalProfile } from "./service";
 
 export type PendingJoin = {
@@ -33,8 +37,13 @@ export function createJoinJournal(viewer: string) {
         try {
           entry.community = communityDestination(entry.community).url;
         } catch (reason) {
-          // Retain legacy aliases until their deployment mapping is restored.
-          if (!isCommunityAlias(entry.community)) throw reason;
+          // Keep unavailable destinations for a later build without blocking
+          // recovery or setup in communities this build can access.
+          if (
+            !(reason instanceof RelayPolicyError) &&
+            !isCommunityAlias(entry.community)
+          )
+            throw reason;
         }
       }
       return entries;
@@ -56,7 +65,14 @@ export function createJoinJournal(viewer: string) {
   return {
     latest: () =>
       read()
-        .filter((entry) => !isCommunityAlias(entry.community))
+        .filter((entry) => {
+          try {
+            communityDestination(entry.community);
+            return true;
+          } catch {
+            return false;
+          }
+        })
         .at(-1),
     get(community: string) {
       const origin = communityDestination(community).url;

@@ -15,8 +15,25 @@ fn compiled_policy_enforces_native_ipc_before_signing_or_network() {
     let blocked = "https://outside-policy.invalid";
     assert!(crate::relay_policy::allowed(blocked).is_err());
     use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
+    let directory = tempfile::tempdir().unwrap();
+    let identities = directory.path().join("identities.json");
+    let pubkey = "ab".repeat(32);
+    std::fs::write(
+        &identities,
+        serde_json::json!([{
+            "pubkey":pubkey,"relay":"wss://outside-policy.invalid","owner":"cd".repeat(32),
+            "auth":"[]","type":"example/echo","name":"Blocked agent"
+        }])
+        .to_string(),
+    )
+    .unwrap();
     let app = mock_builder()
         .manage(IdentityHost::fixture())
+        .manage(crate::app_agents::AppAgentHost::new(
+            Ok(identities),
+            Err("unused".into()),
+            false,
+        ))
         .invoke_handler(crate::commands())
         .build(crate::app_context())
         .unwrap();
@@ -40,6 +57,11 @@ fn compiled_policy_enforces_native_ipc_before_signing_or_network() {
     };
     let pulse =
         serde_json::json!({"kind":20002,"created_at":1,"content":"","tags":[["h","channel"]]});
+    // Reconciliation needs every saved identity, including blocked ones.
+    let rows = invoke("app_agent_list", serde_json::json!({})).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["pubkey"], pubkey);
+    assert!(invoke("app_agent_query", serde_json::json!({"pubkey":pubkey,"relay":"wss://outside-policy.invalid","filters":[{"kinds":[0]}]})).unwrap_err().to_string().contains("not allowed"));
     assert!(invoke(
         "relay_sign",
         serde_json::json!({"community": pinned,"event":pulse})

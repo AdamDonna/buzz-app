@@ -134,6 +134,10 @@ jobs:
         run: ./bin/node scripts/test-buzz-cli.mjs
       - name: All Node integration tests
         run: ./bin/node --test tests/integration/*.test.mjs
+      - name: Compiled relay policy IPC
+        env:
+          BUZZ_BUILD_RELAY_POLICY: '{"pinned":"wss://relay.example","allowlist":["wss://other.example"]}'
+        run: ./bin/cargo test -p Buzz --lib --locked relay::tests::compiled_policy_enforces_native_ipc_before_signing_or_network -- --exact
 
   windows-native:
     if: github.event_name == 'workflow_dispatch'

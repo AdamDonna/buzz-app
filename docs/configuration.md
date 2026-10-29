@@ -86,6 +86,10 @@ background agent startup, and omitted on the next community-record write.
 Their remote memberships and relay-scoped device data are retained. A failed
 preference write does not disable policy enforcement. Account sync, legacy
 import, invites and deep links pass through the same destination gate.
+Saved agent identities remain in the reconciliation inventory so their settings
+and teams survive policy changes; blocked relays acquire no agent sessions or
+profile publications. Unfinished joins to blocked relays remain stored and are
+excluded from recovery candidates while allowed joins remain usable.
 
 Shared community mutation and transport boundaries enforce the policy; the
 development broker independently checks registration and every routed request.

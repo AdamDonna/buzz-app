@@ -534,15 +534,7 @@ pub(crate) async fn app_agent_list(
     state: tauri::State<'_, AppAgentHost>,
 ) -> Result<Vec<AppAgentSummary>, String> {
     let agents = state.agents.clone()?;
-    blocking(move || {
-        Ok(agents
-            .list()?
-            .into_iter()
-            .filter(|agent| crate::relay_policy::allowed(&agent.relay).is_ok())
-            .map(Into::into)
-            .collect())
-    })
-    .await
+    blocking(move || Ok(agents.list()?.into_iter().map(Into::into).collect())).await
 }
 
 /// Generates a key for `owner` in `destination`, has the signed-in owner attest

@@ -227,6 +227,41 @@ it("reports pinned leave policy failures without offering device removal", async
   expect(departureFailureText("Pinned", "leave", error)).toBe(
     "The pinned relay cannot be removed from this build.",
   );
+  const { removeCommunityFromDevice } = await import("./departure");
+  const removal = await removeCommunityFromDevice(client, pinned).catch(
+    (error: unknown) => error,
+  );
+  expect(departureFailureText("Pinned", "remove", removal)).toBe(
+    "The pinned relay cannot be removed from this build.",
+  );
+});
+
+it("retains blocked unfinished joins while allowed recovery and new joins remain usable", async () => {
+  await startup({ memberships: [], selected: null });
+  const { createJoinJournal } = await import("./join-journal");
+  const key = `buzz-community-joins.v1:${"a".repeat(64)}`;
+  const blocked = {
+    id: "blocked",
+    community: "https://evil.example",
+    profile: { name: "Keep draft", picture: "" },
+  };
+  const allowed = { id: "allowed", community: "https://relay.example" };
+  localStorage.setItem(key, JSON.stringify([allowed, blocked]));
+  const journal = createJoinJournal("a".repeat(64));
+  expect(journal.latest()).toEqual(allowed);
+  expect(journal.get("https://relay.example")).toEqual(allowed);
+  const next = journal.begin("https://other.example:8443");
+  expect(journal.current(next)).toBe(true);
+  journal.finish(allowed);
+  journal.finish(next);
+  expect(journal.latest()).toBeUndefined();
+  expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual([blocked]);
+  expect(() => journal.begin("https://evil.example")).toThrow(/not allowed/);
+  localStorage.setItem(key, "corrupt");
+  expect(() => journal.begin("https://relay.example")).toThrow(
+    /Could not read unfinished/,
+  );
+  expect(localStorage.getItem(key)).toBe("corrupt");
 });
 
 it("retains an allowed saved selection and checks account-sync additions", async () => {

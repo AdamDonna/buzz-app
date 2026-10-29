@@ -149,6 +149,7 @@ export function leftCommunityText(
 }
 
 export function deviceRemovalFailureText(name: string, error: unknown) {
+  if (error instanceof RelayPolicyError) return error.message;
   const reason =
     wordsOf(error instanceof Error ? error.cause : undefined) || wordsOf(error);
   return `Couldn’t remove ${name} from this device${reason ? ` (${reason.replace(/\.$/, "")})` : ""}. Try again.`;

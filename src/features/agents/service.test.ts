@@ -1,6 +1,7 @@
 import { registerAttention } from "./attention-command";
 import { canMessageAgent, createAgentChoices } from "./choices";
 import { createAgentLibrary } from "./library";
+import * as destinations from "../communities/destination";
 import type { AttentionSource } from "./attention-sources";
 import { appClient } from "../../buzz-mcp/app-client";
 import { callAttentionTool } from "../../buzz-mcp/attention";
@@ -5159,6 +5160,77 @@ it("forgets records whose key is gone when identities load", async () => {
   expect(storage.getItem("buzz.agents.v1")).toBeNull();
   expect(storage.getItem(`buzz.agent.v1:${sibling}`)).toBeNull();
   expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain(bot);
+});
+
+it("preserves blocked agents' settings and teams without binding or publishing to their relays", async () => {
+  const resolve = destinations.communityDestination;
+  const policy = destinations.parseRelayPolicy(
+    JSON.stringify({
+      pinned: "wss://relay.example.test",
+      allowlist: ["wss://other.example.test"],
+    }),
+  );
+  const gate = vi
+    .spyOn(destinations, "communityDestination")
+    .mockImplementation((value) => resolve(value, undefined, policy));
+  const storage = memoryStorage();
+  const saved = JSON.stringify({
+    pubkey: bot,
+    attention: {},
+    timers: {},
+    config: { reply: "saved" },
+  });
+  storage.setItem(`buzz.agent.v1:${bot}`, saved);
+  const teams = [
+    {
+      id: "kept",
+      name: "Kept",
+      instructions: "Keep settings",
+      members: [bot, sibling],
+    },
+  ];
+  await writeTeams(storage, teams);
+  const fixture = await setup({
+    storage,
+    identities: [
+      {
+        pubkey: bot,
+        relay: "wss://blocked.example",
+        owner: viewer,
+        type: "example/echo",
+        name: "Blocked",
+        deleted: false,
+      },
+      {
+        pubkey: sibling,
+        relay: "wss://other.example.test",
+        home: "wss://blocked.example",
+        owner: viewer,
+        type: "example/echo",
+        name: "Allowed membership",
+        deleted: false,
+      },
+    ],
+  });
+  try {
+    await fixture.service.refresh();
+    expect(storage.getItem(`buzz.agent.v1:${bot}`)).toBe(saved);
+    expect(readTeams(storage)).toEqual(teams);
+    expect(fixture.communities.open).not.toHaveBeenCalledWith(
+      "https://blocked.example",
+    );
+    expect(fixture.communities.open).not.toHaveBeenCalledWith(
+      "wss://blocked.example",
+    );
+    expect(
+      fixture.native.publishProfile.mock.calls.every(
+        ([row]) => row.relay !== "wss://blocked.example",
+      ),
+    ).toBe(true);
+  } finally {
+    await fixture.ctx.fiber.dispose();
+    gate.mockRestore();
+  }
 });
 
 it("starts with the old shared records when a full store refuses their move", async () => {
