@@ -542,7 +542,7 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   const wire = scriptedTransport(alice.pubkey, relay.pubkey);
   let live: import("./live").LiveCallbacks | undefined;
   let sink: VerifiedProfileSink | undefined;
-  let requests = 0;
+  const subjects = new Set<string>();
   const refresh = vi.fn(async () => null);
   const owner = createRelaySession({
     ...wire.transport,
@@ -555,8 +555,8 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
         update() {},
         retry() {},
         dispose() {},
-        syncVerifiedProfiles(_filter, next) {
-          requests++;
+        syncVerifiedProfiles(filter, next) {
+          for (const subject of filter["#d"]) subjects.add(subject);
           sink = next;
           return () => {};
         },
@@ -566,16 +566,13 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   try {
     assert(live);
     live.state({ status: "connected", routes: [] });
-    // An over-budget request is rejected before it reaches verification.
-    await expect(
-      owner.session.profiles.ensure(
-        Array.from({ length: 1025 }, (_, index) =>
-          index.toString(16).padStart(64, "0"),
-        ),
-      ),
-    ).rejects.toThrow("budget");
+    // An over-budget request verifies only the identities that fit.
+    const ids = Array.from({ length: 1025 }, (_, index) =>
+      index.toString(16).padStart(64, "0"),
+    );
+    await owner.session.profiles.ensure(ids);
     await Promise.resolve();
-    expect(requests).toBe(0);
+    expect(subjects).toEqual(new Set(ids.slice(0, 1024)));
     await owner.session.profiles.ensure([alice.pubkey]);
     assert(sink);
     sink.event(projection());

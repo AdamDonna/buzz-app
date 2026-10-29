@@ -151,6 +151,7 @@ function Members({
   const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
     void profileGeneration;
+    // Names are optional: members without one keep their public-key label.
     if (members)
       void session.profiles
         .ensure(members.map((member) => member.pubkey))
