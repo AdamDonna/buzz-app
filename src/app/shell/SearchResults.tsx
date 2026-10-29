@@ -878,8 +878,8 @@ export function SearchResults({
     try {
       if (agent && !existing && !controlled()) {
         // Agents still loading are not missing: wait for the list first.
-        if (session.agentChoices.snapshot().pending)
-          await session.agentChoices.refresh();
+        if (session.agentChoices.snapshot().managedPending)
+          await session.agentChoices.refresh(false);
         if (!controlled())
           throw new Error(
             "This agent is not ready to message in this community.",

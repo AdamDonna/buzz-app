@@ -4,6 +4,7 @@ import { PublishRejected } from "./outbox";
 import { keypair, roster, signed } from "./testing";
 import { matchesEvent } from "./projection";
 import type { RelayEvent } from "./events";
+import type { LiveCallbacks } from "./live";
 import { SOLO_LABEL } from "../solo/labels";
 
 function setup() {
@@ -18,6 +19,9 @@ function setup() {
   let denied = false;
   let foreignRoster = false;
   let libraryFailure = false;
+  let libraryReads = 0;
+  let holdLibrary: Promise<void> | undefined;
+  let live!: LiveCallbacks;
   let afterPublish = () => {};
   let omitMembership = false;
   const archived: string[] = [];
@@ -59,7 +63,13 @@ function setup() {
       relayAuthor: relay.pubkey,
       archiveAuthority: relay.pubkey,
       media: () => undefined,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
       readAgentLibrary: async () => {
+        libraryReads++;
+        await holdLibrary;
         if (libraryFailure) throw new Error("Fixture library unavailable");
         return {
           definitions: [],
@@ -126,9 +136,20 @@ function setup() {
     returnForeignRoster: () => {
       foreignRoster = true;
     },
-    failLibraryRefresh: () => {
-      libraryFailure = true;
+    failLibraryRefresh: (fail = true) => {
+      libraryFailure = fail;
     },
+    libraryReads: () => libraryReads,
+    /** Holds library reads until the returned release runs. */
+    holdLibrary: () => {
+      let release!: () => void;
+      holdLibrary = new Promise<void>((resolve) => (release = resolve));
+      return () => {
+        holdLibrary = undefined;
+        release();
+      };
+    },
+    live: () => live,
     afterPublish: (callback: () => void) => {
       afterPublish = callback;
     },
@@ -325,6 +346,61 @@ it("rejects a stale cached identity after the current library refresh fails", as
     test.owner.dispose();
   }
 });
+
+it.each([
+  ["loading", true],
+  ["loading", false],
+  ["error", true],
+  ["error", false],
+  ["stale", true],
+  ["stale", false],
+] as const)(
+  "reads a %s library once before admitting a library-only agent: read succeeds=%s",
+  async (state, succeeds) => {
+    const test = setup();
+    try {
+      await test.ready();
+      const library = test.owner.session.agentLibrary;
+      let release = () => {};
+      if (state === "loading") {
+        release = test.holdLibrary();
+        const before = test.libraryReads();
+        void library.refresh();
+        await vi.waitFor(() => expect(test.libraryReads()).toBe(before + 1));
+      } else if (state === "error") {
+        test.failLibraryRefresh();
+        await library.refresh();
+      } else {
+        test.live().state({ status: "connected", routes: [] });
+        test.live().state({ status: "connecting", routes: [] });
+      }
+      // The last read's rows are still listed, but cannot admit on their own.
+      expect(library.snapshot().status).toBe(
+        state === "stale" ? "idle" : state,
+      );
+      expect(library.snapshot().identities.map((row) => row.pubkey)).toContain(
+        test.agent,
+      );
+      const reads = test.libraryReads();
+      test.failLibraryRefresh(!succeeds);
+      const adding = test.owner.session.channelWrites.addAgents(test.parent, [
+        test.agent,
+      ]);
+      release();
+      if (succeeds) {
+        await adding;
+        expect(test.publish).toHaveBeenCalledOnce();
+      } else {
+        await expect(adding).rejects.toThrow(/agent library/);
+        expect(test.publish).not.toHaveBeenCalled();
+      }
+      // A read in flight is joined, not repeated.
+      expect(test.libraryReads()).toBe(reads + (state === "loading" ? 0 : 1));
+    } finally {
+      test.owner.dispose();
+    }
+  },
+);
 
 it("stops additional invitations when the composing view closes during admission", async () => {
   const test = setup();

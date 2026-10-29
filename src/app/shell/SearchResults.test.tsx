@@ -4269,8 +4269,8 @@ it.each([true, false])(
       [{ pubkey: scout.pubkey, name: "Scout", managed: true }],
     );
     const ready = t.session.agentChoices.snapshot();
-    const loading = { ...ready, identities: [], pending: true };
-    const loaded = managed ? ready : { ...loading, pending: false };
+    const loading = { ...ready, identities: [], managedPending: true };
+    const loaded = managed ? ready : { ...loading, managedPending: false };
     let current = ready;
     let finish!: () => void;
     const refresh = vi.fn(
@@ -4308,7 +4308,9 @@ it.each([true, false])(
       // Agent controls are reloading, as at launch, when the row is chosen.
       current = loading;
       fireEvent.click(option);
-      await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+      await waitFor(() =>
+        expect(refresh).toHaveBeenCalledExactlyOnceWith(false),
+      );
       expect(
         screen.getByText("Opening your conversation with Scout…"),
       ).toBeVisible();

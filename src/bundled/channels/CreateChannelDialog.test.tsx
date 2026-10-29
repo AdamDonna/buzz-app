@@ -709,6 +709,7 @@ function agentChoices(state: {
     definitions: [],
     complete: state.status === "ready",
     pending: state.status === "loading",
+    managedPending: state.status === "loading",
     ...error,
   };
 }

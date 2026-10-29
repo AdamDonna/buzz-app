@@ -58,6 +58,8 @@ export type AgentChoicesSnapshot = Omit<AgentLibrarySnapshot, "identities"> & {
   /** Usable candidates do not imply complete evidence for automatic recipients. */
   complete: boolean;
   pending: boolean;
+  /** Native agents are loading; only they can make an agent `managed`. */
+  managedPending: boolean;
 };
 
 /** One read-only projection of existing sources. No directory scan, timer, runner
@@ -100,6 +102,7 @@ export function createAgentChoices({
     identities: [],
     complete: false,
     pending: false,
+    managedPending: false,
   };
   let cached:
     | {
@@ -187,6 +190,7 @@ export function createAgentChoices({
         legacy.status === "idle" ||
         legacy.status === "loading" ||
         local?.status === "loading",
+      managedPending: local?.status === "loading",
       complete:
         legacy.status === "ready" &&
         !legacy.error &&

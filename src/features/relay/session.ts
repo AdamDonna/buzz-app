@@ -1538,6 +1538,10 @@ export function createRelaySession(
           .map((agent) => agent.pubkey),
       archived: (pubkey) =>
         archiveHides(archives.queries, pubkey, transport?.viewer),
+      refresh: async () => {
+        if (agentLibrary.queries.snapshot().status !== "ready")
+          await agentChoices.refresh();
+      },
     },
     transport?.relayAuthor,
     { read: (filters, settings) => readVerified(filters, settings, false) },

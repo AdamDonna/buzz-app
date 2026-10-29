@@ -146,7 +146,9 @@ export function RecipientPicker({
         person.pubkey !== viewer &&
         !excludedPubkeys.includes(person.pubkey) &&
         // Agents still loading are not yet known to be uncontrolled.
-        (!person.isAgent || controlled.has(person.pubkey) || agents.pending) &&
+        (!person.isAgent ||
+          controlled.has(person.pubkey) ||
+          agents.managedPending) &&
         !selected.some((item) => item.pubkey === person.pubkey),
     );
     const picked = usage.pick(
@@ -211,7 +213,7 @@ export function RecipientPicker({
     };
   }, [
     agents.identities,
-    agents.pending,
+    agents.managedPending,
     channels,
     profiles,
     people,
@@ -246,7 +248,7 @@ export function RecipientPicker({
     !directory.loading &&
     !directory.error &&
     !directory.tooShort &&
-    !agents.pending
+    !agents.managedPending
       ? exactName(eligible, namesOf, query)
       : undefined;
   const loadingRows = useRef(10);
@@ -273,7 +275,9 @@ export function RecipientPicker({
       selection.current.length >= 8 ||
       person.pubkey === session.viewer ||
       excludedPubkeys.includes(person.pubkey) ||
-      (person.isAgent && !controlled.has(person.pubkey) && !agents.pending) ||
+      (person.isAgent &&
+        !controlled.has(person.pubkey) &&
+        !agents.managedPending) ||
       selection.current.some((item) => item.pubkey === person.pubkey)
     )
       return;
@@ -568,7 +572,7 @@ export function RecipientPicker({
                   </Virtualizer>
                   {!directory.loading &&
                     !directory.error &&
-                    !agents.pending &&
+                    !agents.managedPending &&
                     !candidates.length && (
                       <p>
                         {directory.tooShort

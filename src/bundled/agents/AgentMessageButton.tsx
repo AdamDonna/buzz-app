@@ -76,12 +76,14 @@ export function AgentMessageButton({
           .identities.some(
             (agent) => canMessageAgent(agent) && agent.pubkey === pubkey,
           );
-      // Agents still loading are not missing: wait for the list first.
-      if (
-        refresh ||
-        (agentChoices.snapshot().pending && !existing() && !messageable())
+      // Agents still loading are not missing: wait for the native list first.
+      if (refresh) await agentChoices.refresh();
+      else if (
+        agentChoices.snapshot().managedPending &&
+        !existing() &&
+        !messageable()
       )
-        await agentChoices.refresh();
+        await agentChoices.refresh(false);
       controller.signal.throwIfAborted();
       if (relay.snapshot().session !== session) return;
       const choices = agentChoices.snapshot();

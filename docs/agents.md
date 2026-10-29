@@ -437,15 +437,19 @@ alone does not grant DM eligibility. Existing DMs can reopen without agent-contr
 evidence, through the normal relay-confirmed DM open.
 
 A snapshot exposes `identities`, `selectable`, `archives`, `definitions`, `status`,
-`pending`, `complete` and a separate `templates` projection. `status: ready` means
-usable, not complete: automatic-recipient inference must honor `complete`, which
-requires a ready, error-free library and a local source that is ready or
-unavailable. The library's last read stays in `identities` and `selectable` while
+`pending`, `managedPending`, `complete` and a separate `templates` projection.
+`status: ready` means usable, not complete: automatic-recipient inference must
+honor `complete`, which requires a ready, error-free library and a local source
+that is ready or unavailable. The library's last read stays in `identities` and `selectable` while
 it refreshes, fails or is stale after a disconnect, with `pending` or an error and
 `complete` false; only `complete` certifies the evidence. A failed local source
 contributes no candidates. Partial failures are surfaced through Retry. An explicit
-action that finds its agent missing while `pending` awaits `refresh()` before
-refusing, rather than treating loading as absent.
+action that finds its agent missing awaits the source that could supply it before
+refusing, rather than treating loading as absent: an action that needs a `managed`
+agent waits only while `managedPending`, through `refresh(false)`, since a library
+read cannot make an agent managed. Channel admission rereads a library that is not
+ready once before refusing a library-only agent; stale rows never admit on their
+own.
 
 Do not build another agent inventory in a plugin. `useAgentChoices(session,
 includeLegacy, archive)` retains the projection while mounted, which preserves

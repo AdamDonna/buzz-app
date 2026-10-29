@@ -39,6 +39,8 @@ export function createChannelWrites(
   agents?: {
     selectable: () => readonly string[];
     archived: (pubkey: string) => boolean;
+    /** Reads choices not yet current, before an unknown key is refused. */
+    refresh?: () => Promise<void>;
   },
   relayAuthor?: string,
   /** Signed roster discovery, including channels this viewer cannot open. */
@@ -466,15 +468,23 @@ export function createChannelWrites(
       !["stream", "forum", "solo"].includes(original.channelType ?? "")
     )
       throw new Error("Refresh the channel before adding agents.");
+    const unknown = () => {
+      const known = new Set(agents?.selectable() ?? []);
+      return unique.some(
+        (key) => !original.members?.includes(key) && !known.has(key),
+      );
+    };
+    // Agents still loading are not missing: read them once before refusing.
+    if (unknown() && agents?.refresh) {
+      await agents.refresh();
+      if (active?.() === false)
+        throw new DOMException("Channel addition cancelled", "AbortError");
+    }
     // Archive state applies to every new admission, even for current members;
     // unknown archive state fails open to the library/member rule.
     if (unique.some((key) => agents?.archived(key)))
       throw new Error("This agent is archived. Choose another agent.");
-    const known = new Set(agents?.selectable() ?? []);
-    if (
-      unique.some((key) => !original.members?.includes(key) && !known.has(key))
-    )
-      throw new Error("Choose an agent from your agent library.");
+    if (unknown()) throw new Error("Choose an agent from your agent library.");
     // Additions are published and acknowledged in turn; the roster is then
     // confirmed with one exact read rather than a gate after every command.
     const added: string[] = [];

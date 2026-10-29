@@ -95,6 +95,7 @@ function setup() {
   const profiles = new Map();
   const channels: { channels: ChannelSummary[] } = { channels: [] };
   const agents = { status: "ready", identities: empty };
+  const libraryRefresh = vi.fn(async () => {});
   const directMessages = {
     available: true,
     people: vi.fn<RelaySession["directMessages"]["people"]>(async () => ({
@@ -169,7 +170,7 @@ function setup() {
     agentLibrary: {
       snapshot: () => agents,
       subscribe: () => () => {},
-      refresh: async () => {},
+      refresh: libraryRefresh,
     },
     emoji: {
       snapshot: () => emoji,
@@ -241,6 +242,7 @@ function setup() {
     onStarted,
     mount,
     control,
+    libraryRefresh,
     updateControl(next: LocalAgentsSnapshot) {
       controlState = next;
       act(() => {
@@ -1183,6 +1185,29 @@ it("keeps directory agents and holds Space and an empty result while local agent
   expect(screen.getByText("No matching people.")).toBeVisible();
 });
 
+it("keeps uncontrolled agents hidden while only the agent library loads", async () => {
+  const t = setup();
+  const foreign = {
+    pubkey: "a".repeat(64),
+    name: "Other agent",
+    isAgent: true as const,
+  };
+  t.directMessages.people.mockResolvedValue({
+    people: [...people, foreign],
+    hasMore: false,
+  });
+  // A library read cannot make an agent controlled, so it holds nothing back.
+  const loading = { status: "loading", identities: [], definitions: [] };
+  Object.assign(t.session.agentLibrary, { snapshot: () => loading });
+  t.mount();
+  await screen.findByRole("option", { name: "Person 2, Agent" });
+  expect(
+    screen.queryByRole("option", { name: "Other agent, Agent" }),
+  ).not.toBeInTheDocument();
+  await t.user.type(recipient(), "Other agent");
+  expect(await screen.findByText("No matching people.")).toBeVisible();
+});
+
 it("searches again for people added after a completed directory when New message reopens", async () => {
   const t = setup();
   const view = t.mount();
@@ -1565,6 +1590,7 @@ it.each([true, false])(
     t.control.refresh = refresh;
     await t.user.click(send());
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(t.libraryRefresh).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(t.directMessages.open).not.toHaveBeenCalled();
     t.updateControl(managed ? ready : { ...ready, agents: [] });
