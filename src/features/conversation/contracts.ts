@@ -250,6 +250,29 @@ export type ComposerObservation = Readonly<{
 export type CompletionContext = Pick<
   ComposerToolProps,
   "session" | "scope" | "channelId" | "threadRootId" | "inviteAgents"
+> &
+  Readonly<{
+    draft?: Readonly<{ mode: "task"; region: string; revision: number }>;
+    channelRegion?: string;
+  }>;
+/** Semantic editor atoms are separate from notification recipients. Extra JSON
+ * fields belong to the provider and round-trip without host interpretation. */
+export type ComposerToken = Readonly<
+  (
+    | { kind: "nexus.project"; id: string; label: string }
+    | {
+        kind: "nexus.repository";
+        id: string;
+        label: string;
+        verified: boolean;
+        alias?: string;
+      }
+    | { kind: "nexus.skill"; id: string; label: string; target: string }
+  ) & {
+    readonly [key: string]:
+      | import("../navigation/targets").JsonValue
+      | undefined;
+  }
 >;
 export type CompletionQuery = Readonly<{
   start: number;
@@ -278,22 +301,33 @@ export type CompletionEdit =
       mention?: never;
       mentions?: never;
       pending?: never;
+      token?: never;
     }>
   | Readonly<{
       mention: Readonly<{ pubkey: string; name: string }>;
       text?: never;
       mentions?: never;
+      token?: never;
       pending?: never;
     }>
   | Readonly<{
       mentions: readonly Readonly<{ pubkey: string; name: string }>[];
       text?: never;
       mention?: never;
+      token?: never;
+      pending?: never;
+    }>
+  | Readonly<{
+      token: ComposerToken;
+      text?: never;
+      mention?: never;
+      mentions?: never;
       pending?: never;
     }>
   /** Host-only: the terminator typed over an undecided name. Never a suggestion's edit. */
   | Readonly<{
       pending: CompletionPending;
+      token?: never;
       text?: never;
       mention?: never;
       mentions?: never;
@@ -333,6 +367,12 @@ export type ComposerCompletion = Readonly<{
   id: string;
   title: string;
   order?: number;
+  /** A scoped provider never competes outside this region's task editor. */
+  scope?: Readonly<{
+    region: string;
+    modes: readonly "task"[];
+    channels?: boolean;
+  }>;
   /** Pure syntax matcher. Host prefers the closest trigger; order/key break ties. */
   match(
     observation: ComposerObservation,

@@ -19,6 +19,69 @@ const provider = (
   match: () => ({ start, end, query: "hi" }),
   component: () => null,
 });
+it("scopes task providers before matching and leaves ordinary providers available", () => {
+  let calls = 0;
+  const task = {
+    ...provider("task", 0, 3, -1),
+    scope: { region: "nexus", modes: ["task"] as const, channels: true },
+    match: () => {
+      calls++;
+      return { start: 0, end: 3, query: "hi" };
+    },
+  };
+  const normal = provider("ordinary", 0, 3);
+  expect(
+    matchCompletion([task, normal], observation, context)?.provider.id,
+  ).toBe("ordinary");
+  expect(calls).toBe(0);
+  expect(
+    matchCompletion([task, normal], observation, {
+      ...context,
+      draft: { mode: "task", region: "nexus", revision: 1 },
+    })?.provider.id,
+  ).toBe("task");
+  expect(
+    matchCompletion([task, normal], observation, {
+      ...context,
+      channelRegion: "nexus",
+    })?.provider.id,
+  ).toBe("task");
+  expect(
+    matchCompletion([task, normal], observation, {
+      ...context,
+      channelRegion: "other",
+    })?.provider.id,
+  ).toBe("ordinary");
+});
+
+it("snapshots semantic tokens separately from recipients and rejects malformed tokens", () => {
+  const token = {
+    kind: "nexus.skill" as const,
+    id: "skill:path",
+    label: "/review",
+    target: "a".repeat(64),
+    extra: { path: "/repo/SKILL.md" },
+  };
+  const result = completionResult({
+    items: [{ id: "skill", label: "review", edit: { token } }],
+  });
+  token.extra.path = "/changed";
+  expect(result.items[0]?.edit.token?.extra).toEqual({
+    path: "/repo/SKILL.md",
+  });
+  expect(Object.isFrozen(result.items[0]?.edit.token?.extra)).toBe(true);
+  expect(
+    completionResult({
+      items: [
+        {
+          id: "bad",
+          label: "review",
+          edit: { token: { ...token, target: "bad" } },
+        },
+      ],
+    }).items,
+  ).toEqual([]);
+});
 it("validates and deterministically arbitrates optional provider ranges", () => {
   expect(
     matchCompletion(

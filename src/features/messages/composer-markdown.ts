@@ -12,7 +12,11 @@ import {
 import { gfmStrikethrough } from "micromark-extension-gfm-strikethrough";
 import type { Emphasis, PhrasingContent, Root, Text } from "mdast";
 import type { MentionDraft } from "./mention-draft";
-import type { Node as EditorNode, NodeType } from "prosemirror-model";
+import {
+  Fragment,
+  type Node as EditorNode,
+  type NodeType,
+} from "prosemirror-model";
 import {
   composerSchema,
   readComposerDocument,
@@ -44,7 +48,20 @@ strike.peek = () => "~";
  * their source verbatim avoids normalizing formats this slice does not edit.
  * Marked content uses CommonMark/GFM delimiter escaping and flanking rules. */
 export function composerMarkdown(draft: MentionDraft): string {
-  const doc = readComposerDocument(draft, []);
+  const stripTokens = (node: EditorNode): EditorNode =>
+    node.isLeaf
+      ? node
+      : node.copy(
+          Fragment.fromArray(
+            node.content.content
+              .filter(
+                (child) =>
+                  !(child.type.name === "token" && child.attrs.semantic),
+              )
+              .map(stripTokens),
+          ),
+        );
+  const doc = stripTokens(readComposerDocument(draft, []));
   return [
     ...(draft.chatCards ?? []),
     blocksMarkdown(doc),

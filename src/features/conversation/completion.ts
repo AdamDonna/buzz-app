@@ -1,4 +1,5 @@
 import type { MentionRecipient } from "../messages/mention-draft";
+import { composerToken } from "../messages/composer-token";
 import type { Contribution } from "../../plugins/contributions";
 import type {
   ComposerCompletion,
@@ -24,6 +25,16 @@ export function matchCompletion(
     (a, b) => order(a) - order(b) || a.key.localeCompare(b.key),
   )) {
     try {
+      const scope = provider.scope;
+      if (
+        scope &&
+        !(
+          (context.draft?.region === scope.region &&
+            scope.modes.includes(context.draft.mode)) ||
+          (scope.channels && context.channelRegion === scope.region)
+        )
+      )
+        continue;
       const query = provider.match(observation, context);
       // A later trigger owns the caret over a broad earlier query (e.g.
       // @Mary Jane :smile). Order/key resolve providers claiming the same start.
@@ -83,7 +94,10 @@ export function completionResult(result: CompletionResult): CompletionResult {
     )
       continue;
     const edit = item.edit;
-    if ("mentions" in edit) {
+    const token = "token" in edit ? composerToken(edit.token) : undefined;
+    if ("token" in edit) {
+      if (!token) continue;
+    } else if ("mentions" in edit) {
       if (
         !Array.isArray(edit.mentions) ||
         !edit.mentions.length ||
@@ -122,17 +136,22 @@ export function completionResult(result: CompletionResult): CompletionResult {
           ? { canSelect: item.canSelect }
           : {}),
         edit: Object.freeze(
-          "mentions" in edit && edit.mentions
-            ? {
-                mentions: Object.freeze(
-                  edit.mentions.map((person: MentionRecipient) =>
-                    Object.freeze({ pubkey: person.pubkey, name: person.name }),
+          token
+            ? { token }
+            : "mentions" in edit && edit.mentions
+              ? {
+                  mentions: Object.freeze(
+                    edit.mentions.map((person: MentionRecipient) =>
+                      Object.freeze({
+                        pubkey: person.pubkey,
+                        name: person.name,
+                      }),
+                    ),
                   ),
-                ),
-              }
-            : "mention" in edit
-              ? { mention: Object.freeze({ ...edit.mention }) }
-              : { text: edit.text },
+                }
+              : "mention" in edit
+                ? { mention: Object.freeze({ ...edit.mention }) }
+                : { text: edit.text },
         ),
       }),
     );

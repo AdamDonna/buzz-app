@@ -1,4 +1,5 @@
 import { canonicalChatCard } from "./chat-cards";
+import type { ComposerToken } from "../conversation/contracts";
 import {
   projectComposerDocument,
   readComposerSnapshot,
@@ -24,6 +25,11 @@ export type MentionDraft = {
   /** GIF image Markdown staged in the attachment row; sent after the caption. */
   gifs?: readonly string[];
   recipients: readonly DraftRecipient[];
+  tokens?: readonly Readonly<{
+    token: ComposerToken;
+    start: number;
+    end: number;
+  }>[];
   /** Projection of the live document only; `mentionDraft()` never restores one. */
   pending?: readonly PendingMention[];
   document?: ComposerSnapshot;
@@ -49,7 +55,7 @@ export function mentionDraft(value: unknown): MentionDraft {
   if (!value || typeof value !== "object") return { text: "", recipients: [] };
   const record = value as Record<string, unknown>;
   const doc = readComposerSnapshot(record.document);
-  const { text, recipients, document } = doc
+  const { text, recipients, document, tokens } = doc
     ? projectComposerDocument(doc).draft
     : record;
   if (typeof text !== "string") return { text: "", recipients: [] };
@@ -93,6 +99,7 @@ export function mentionDraft(value: unknown): MentionDraft {
         }
       : {}),
     ...(doc ? { document: document as ComposerSnapshot } : {}),
+    ...(doc && Array.isArray(tokens) && tokens.length ? { tokens } : {}),
     recipients: safe
       .slice(0, 32)
       .map(({ pubkey, name, start, end }) => ({ pubkey, name, start, end })),
