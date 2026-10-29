@@ -1187,7 +1187,9 @@ The port retains the prepared-store implementation and its behavior tests:
   and request-warmed avatars (fetched and decoded, nothing retained; disabled
   under the Save-Data preference). Signature verification yields in batches.
   A request for more identities than the budget holds names those that fit
-  instead of failing.
+  instead of failing. A batch whose response exceeds the 8 MiB read budget,
+  such as one heavy with legacy inline avatars, still loads no names; reading
+  only the rendered rows is a follow-up.
 - Account/relay-scoped IndexedDB: 64 records / 8 MiB global disk budget, 24-hour
   expiry. Signed cached events are reverified before display. The same database
   stores account/relay-scoped startup discovery and sidebar organization (a separate
