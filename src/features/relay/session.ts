@@ -3632,7 +3632,7 @@ export function createRelaySession(
         for (const clear of views.values()) clear(true);
         for (const view of artifactSyncs) view.restart();
         recent.clear();
-        unread.clear();
+        const unreadWiped = unread.clear();
         inboxFeed.clear();
         requests.invalidate();
         retireBackoffs();
@@ -3643,7 +3643,10 @@ export function createRelaySession(
         agentLibrary.clear();
         archives.clear();
         workflows.clear();
-        const results = await Promise.allSettled([channels.clearCache()]);
+        const results = await Promise.allSettled([
+          channels.clearCache(),
+          unreadWiped,
+        ]);
         updateInterests();
         const failed = results.find((result) => result.status === "rejected");
         if (failed?.status === "rejected") throw failed.reason;
