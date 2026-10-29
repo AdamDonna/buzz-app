@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Context } from "@deepseek-ai/cordis";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import type { LocalAgents } from "../features/agents/local";
 import type { Host } from "../features/host/service";
 import { createServices, type AppServices } from "./services";
 
@@ -17,6 +18,22 @@ vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
     onmessage = () => {};
   },
 }));
+// Capture the app's real local-agents bridge so its Agents binding is observable.
+const local = vi.hoisted(() => ({
+  agents: undefined as LocalAgents | undefined,
+}));
+vi.mock("../features/agents/local", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../features/agents/local")>();
+  return {
+    ...actual,
+    createLocalAgents() {
+      const created = actual.createLocalAgents();
+      local.agents = created.agents;
+      return created;
+    },
+  };
+});
 // Only the plugin module is a fixture. Exercise the real app composition,
 // manager, runtime, Cordis root and community/relay services.
 vi.mock("../bundled", () => ({
@@ -170,6 +187,14 @@ it("provides the host command service to plugins", async () => {
     revision: expect.any(String),
     commandId: "token",
   });
+});
+
+it("binds local-agent reads to Agents, joining unless fresh", async () => {
+  await vi.advanceTimersByTimeAsync(0);
+  const refresh = vi.spyOn(services.agents, "refresh").mockResolvedValue();
+  await local.agents?.refresh({ fresh: true });
+  await local.agents?.refresh();
+  expect(refresh.mock.calls).toEqual([[{ join: false }], [{ join: true }]]);
 });
 
 it.each([

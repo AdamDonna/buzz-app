@@ -308,16 +308,16 @@ export function SoloDraft({
       const members = [...new Set([...recipients, ...(setup?.agents ?? [])])];
       // The agents already admissible decide at once; an unknown one, or a
       // library row not yet reread, waits for a fresh list.
-      const selectable = () =>
+      const admissible = () =>
         members.every((key) =>
           session.agentChoices
             .snapshot()
             .admissible.some((agent) => agent.pubkey === key),
         );
-      if (!selectable()) {
+      if (!admissible()) {
         await session.agentChoices.refresh();
         if (!mounted.current) return;
-        if (!selectable())
+        if (!admissible())
           throw new Error(
             "Solo chats can only use your available agents. Check mentions and workspace defaults.",
           );
