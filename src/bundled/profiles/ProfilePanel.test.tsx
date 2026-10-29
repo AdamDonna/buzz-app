@@ -230,7 +230,9 @@ it("recovers provider-owned names in the same live session and releases demand w
     );
     act(() => live.state({ status: "connected", routes: [] }));
     act(() => live.state({ status: "retrying", routes: [] }));
-    expect(screen.getByRole("heading", { name: "Public Carl" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Configured Carl" }),
+    ).toBeTruthy();
     expect(owner.session.agentLibrary.snapshot().status).toBe("idle");
     expect(read).toHaveBeenCalledTimes(1);
     act(() => {
