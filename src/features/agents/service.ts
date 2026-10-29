@@ -1544,6 +1544,8 @@ export class AgentsService extends Service implements Agents {
   private readonly coreMemory: CoreMemoryCache;
   /** Counts list requests, so only the latest one is applied. */
   private listed = 0;
+  /** The newest list being read, for callers that join it. */
+  private listRead: Promise<void> | undefined;
   /** Each running cleanup of a deleted membership, by key, how to stop it,
    * and whether it finished. */
   private cleaning = new Map<
@@ -4864,8 +4866,20 @@ export class AgentsService extends Service implements Agents {
   }
 
   /** Reads the agent list from native. Every change is made there first and
-   * then read back here, so the list has one source; Retry reads it again. */
-  async refresh() {
+   * then read back here, so the list has one source; Retry reads it again.
+   * `join` waits on a list in flight instead of discarding it: only for
+   * callers with no change of their own to read back. */
+  refresh({ join = false } = {}): Promise<void> {
+    if (join && this.listRead) return this.listRead;
+    const read = this.readList();
+    this.listRead = read;
+    const done = () => {
+      if (this.listRead === read) this.listRead = undefined;
+    };
+    read.then(done, done);
+    return read;
+  }
+  private async readList() {
     if (!this.native) return;
     const turn = ++this.listed;
     try {

@@ -5243,6 +5243,38 @@ it("keeps an agent created while identities are still loading", async () => {
   expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain(bot);
 });
 
+it("lets a refresh with no change of its own join the launch read", async () => {
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const native = fakeNative();
+  let release: (value: AgentIdentity[]) => void = () => {};
+  native.list.mockImplementationOnce(
+    () => new Promise<AgentIdentity[]>((resolve) => (release = resolve)),
+  );
+  const service = new AgentsService(
+    ctx,
+    fakeCommunities(fakeRelay()).communities,
+    native,
+    memoryStorage(),
+  );
+  await vi.waitFor(() => expect(native.list).toHaveBeenCalledOnce());
+  let joined = false;
+  const join = service.refresh({ join: true }).then(() => (joined = true));
+  await settle();
+  // It waits on the launch read rather than discarding it for another.
+  expect(native.list).toHaveBeenCalledOnce();
+  expect(joined).toBe(false);
+  release([]);
+  await join;
+  expect(service.snapshot().status).toBe("ready");
+  // With nothing in flight, it reads again.
+  await service.refresh({ join: true });
+  expect(native.list).toHaveBeenCalledTimes(2);
+});
+
 it("reads the list again on refresh and clears the error a failed read left", async () => {
   const ctx = new Context();
   ctx.provide("pluginStatus", {

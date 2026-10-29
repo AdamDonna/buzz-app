@@ -5838,6 +5838,45 @@ it.each(["send", "unmount", "disabled", "denied"])(
   },
 );
 
+it("refuses a library row that its own reread cannot confirm", async () => {
+  const view = mount();
+  const channel = { id: "channel", channelType: "solo", members: [] };
+  const list = { status: "ready", channels: [channel] };
+  // Shown from the last read, which the send's reread cannot renew.
+  const library = {
+    status: "error",
+    error: "offline",
+    definitions: [],
+    identities: [first],
+  };
+  const refresh = vi.fn(async () => {});
+  const addAgents = vi.fn(async () => {});
+  const session = {
+    ...view.session,
+    channels: { list: () => list, subscribeList: () => () => {} },
+    agentLibrary: {
+      snapshot: () => library,
+      subscribe: () => () => {},
+      refresh,
+      retain: () => () => {},
+    },
+    channelWrites: {
+      addAgents,
+      refreshMembership: vi.fn(async () => channel),
+    },
+  } as unknown as RelaySession;
+  view.retarget({ session, soloConversation: true });
+  await view.user.click(screen.getByRole("button", { name: "First Honey" }));
+  view.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Tag a person already in this chat or one of your available agents.",
+  );
+  // Admission would only read again; the send's own read decides.
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(addAgents).not.toHaveBeenCalled();
+  expect(view.messages.send).not.toHaveBeenCalled();
+});
+
 it.each(
   [undefined, "root"].flatMap((root) =>
     [false, true].map((removeMention) => ({ root, removeMention })),

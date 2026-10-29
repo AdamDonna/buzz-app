@@ -230,6 +230,8 @@ it.each(["loading", "failed", "partial"])(
     const profiles = new Map([[unknownLegacy, { name: "Legacy B" }]]);
     expect(state.status).toBe("ready");
     expect(state.complete).toBe(false);
+    // Native control admits without a current library read.
+    expect(state.admissible.map((a) => a.pubkey)).toEqual([agent.pubkey]);
     expect(state.templates).toMatchObject({
       status: "ready",
       complete: true,
@@ -282,7 +284,7 @@ it("keeps the last library inventory usable but incomplete while it refreshes, f
   };
   const read = async () => {
     const done = choices.refresh();
-    await vi.waitFor(() => expect(reads).toHaveLength(1));
+    await vi.waitFor(() => expect(reads).toHaveLength(1), { interval: 0 });
     return () => {
       reads.shift()?.();
       return done;
@@ -290,9 +292,14 @@ it("keeps the last library inventory usable but incomplete while it refreshes, f
   };
   await (await read())();
   expect(templateAgentChoices(choices.snapshot(), channels)).toHaveLength(1);
+  expect(choices.snapshot().admissible).toEqual([
+    { ...legacy, managed: false },
+  ]);
   const usable = expect.objectContaining({
     identities: [{ ...legacy, managed: false }],
     selectable: [{ ...legacy, managed: false }],
+    // Shown, but only a current read admits it to a channel.
+    admissible: [],
     definitions: [definition],
     complete: false,
   });
@@ -315,6 +322,26 @@ it("keeps the last library inventory usable but incomplete while it refreshes, f
   expect(choices.snapshot().identities).toEqual([]);
   lifetime.abort();
   library.dispose();
+});
+
+it("joins a native read in flight unless the refresh is fresh", async () => {
+  const native = localAgentsFixture([agent]);
+  const refresh = vi.spyOn(native, "refresh");
+  const lifetime = new AbortController();
+  const choices = createAgentChoices({
+    scope,
+    library: createAgentLibrary(async () => ({
+      definitions: [],
+      identities: [],
+    })).queries,
+    native,
+    signal: lifetime.signal,
+  });
+  await choices.refresh(false);
+  expect(refresh).toHaveBeenLastCalledWith({ fresh: false });
+  await choices.refresh(true, { fresh: true });
+  expect(refresh).toHaveBeenLastCalledWith({ fresh: true });
+  lifetime.abort();
 });
 
 it("shows a local agent's own picture, over older library artwork", async () => {

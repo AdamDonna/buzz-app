@@ -2163,7 +2163,8 @@ function Composer({
     }
     const missing = recipients.filter((key) => !channel.members?.includes(key));
     if (missing.length) {
-      // Classification no longer depends on inventory; refresh before admission.
+      // Classification no longer depends on inventory; refresh before admission,
+      // which applies the same `admissible` rule without reading again.
       await session.agentChoices.refresh();
       if (!currentAdmission())
         throw new Error("The session changed. Review its channel and retry.");
@@ -2172,7 +2173,7 @@ function Composer({
           (key) =>
             !session.agentChoices
               .snapshot()
-              .selectable.some((agent) => agent.pubkey === key),
+              .admissible.some((agent) => agent.pubkey === key),
         )
       )
         throw new Error(

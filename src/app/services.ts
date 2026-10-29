@@ -121,7 +121,7 @@ export function createServices() {
     localAgents.bind({
       snapshot: agents.local,
       subscribe: agents.subscribe,
-      refresh: () => agents.refresh(),
+      refresh: ({ fresh = false } = {}) => agents.refresh({ join: !fresh }),
     }),
   );
   const notifications = new NotificationsService(

@@ -436,7 +436,7 @@ never gain local custody or template-management status from it. Library presence
 alone does not grant DM eligibility. Existing DMs can reopen without agent-control
 evidence, through the normal relay-confirmed DM open.
 
-A snapshot exposes `identities`, `selectable`, `archives`, `definitions`, `status`,
+A snapshot exposes `identities`, `selectable`, `admissible`, `archives`, `definitions`, `status`,
 `pending`, `managedPending`, `complete` and a separate `templates` projection.
 `status: ready` means usable, not complete: automatic-recipient inference must
 honor `complete`, which requires a ready, error-free library and a local source
@@ -447,9 +447,10 @@ contributes no candidates. Partial failures are surfaced through Retry. An expli
 action that finds its agent missing awaits the source that could supply it before
 refusing, rather than treating loading as absent: an action that needs a `managed`
 agent waits only while `managedPending`, through `refresh(false)`, since a library
-read cannot make an agent managed. Channel admission rereads a library that is not
-ready once before refusing a library-only agent; stale rows never admit on their
-own.
+read cannot make an agent managed. A refresh that is not `fresh` joins a native list
+already in flight. `admissible` is `selectable` limited to `managed` agents unless the
+library is ready: channel admission, Solo chat start and tagged sends admit from it,
+rereading once before refusing, so stale rows never admit on their own.
 
 Do not build another agent inventory in a plugin. `useAgentChoices(session,
 includeLegacy, archive)` retains the projection while mounted, which preserves

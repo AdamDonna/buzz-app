@@ -122,6 +122,7 @@ function setup(available = true) {
     complete: true,
     identities: rows,
     selectable: rows,
+    admissible: rows,
     archives: { status: "unavailable" as const, archived: [] },
   };
   const emoji = { status: "ready", entries: [] };
@@ -260,6 +261,51 @@ it("uses restored explicit mentions, not a separate picker", async () => {
     "b".repeat(64),
   ]);
 });
+it.each([
+  { reread: false, starts: false },
+  { reread: true, starts: true },
+])(
+  "rereads a stale library row before it joins a new chat (reread: $reread)",
+  async ({ reread, starts }) => {
+    const test = setup(),
+      onStarted = vi.fn(),
+      user = userEvent.setup();
+    // The library row is shown, but its last read is not current.
+    const shown = test.session.agentChoices.snapshot();
+    let current: typeof shown = {
+      ...shown,
+      admissible: shown.selectable.filter(
+        (agent) => agent.pubkey !== "b".repeat(64),
+      ),
+    };
+    const refresh = vi.fn(async () => {
+      if (reread) current = { ...current, admissible: shown.selectable };
+    });
+    Object.assign(test.session, {
+      agentChoices: {
+        ...test.session.agentChoices,
+        snapshot: () => current,
+        refresh,
+      },
+    });
+    writeView(
+      "test",
+      "solo:new-draft",
+      taggedDraft("Help", "b".repeat(64), "Outside agent"),
+    );
+    render(
+      <SoloDraft session={test.session} scope="test" onStarted={onStarted} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    if (starts) await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+    else
+      await screen.findByText(
+        "Solo chats can only use your available agents. Check mentions and workspace defaults.",
+      );
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(test.channelWrites.start).toHaveBeenCalledTimes(starts ? 1 : 0);
+  },
+);
 type User = ReturnType<typeof userEvent.setup>;
 it.each([
   {
@@ -1747,6 +1793,7 @@ it.each([false, true])(
     const eligible = {
       ...h.session.agentChoices.snapshot(),
       selectable: [{ pubkey: viewer.pubkey, name: "Viewer", managed: true }],
+      admissible: [{ pubkey: viewer.pubkey, name: "Viewer", managed: true }],
     };
     const session = {
       ...h.session,
