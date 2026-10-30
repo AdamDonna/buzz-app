@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
 import { readView, writeView } from "../../shared/view-state";
+import { setDefaultAgent } from "../../features/solo/default-agent";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
 import { validateObject } from "../../features/agents/attention";
@@ -702,6 +703,20 @@ it("shows no Former Bestie tab while the account's choice is unread or unreadabl
   await act(async () => {});
   expect(former.when?.(remembering)).toBe(false);
   stop?.();
+});
+
+it("offers no Remove without an account to save none to", async () => {
+  const { relay } = community(undefined);
+  // A device-only session would pick another agent at once.
+  delete (relay.snapshot() as { session: { mainAgent?: unknown } }).session
+    .mainAgent;
+  setDefaultAgent(SCOPE, ada.pubkey);
+  const Tab = bestieTab(relay, host().agents).component;
+  await act(async () => {
+    render(<Tab agent={ada} />);
+  });
+  expect(screen.getByRole("button", { name: "Change" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
 });
 
 it("lets a former Bestie's leftover check-in be turned off", async () => {

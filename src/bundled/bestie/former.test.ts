@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import type { Agent, Agents } from "../../features/agents/service";
+import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData, RelaySnapshot } from "../../features/relay/service";
+import type { RelaySession } from "../../features/relay/session";
+import { chooseDefaultAgent } from "../../features/solo/default-agent";
 import { checkinHourly, memory, withFeature } from "./features";
 import {
   formerWithSettings,
@@ -169,6 +171,39 @@ it("stops every agent's check-ins once the account is read to have no Bestie", a
   expect(save).toHaveBeenCalledWith(cara.key, {
     config: { instructions: withFeature("Be brief.\n", memory, true) },
   });
+  stop();
+});
+
+it("keeps the check-ins of an agent made Bestie while the account is read, or while none is stopped", async () => {
+  const none = community();
+  const cara = agent("c", checkingIn, TIMER);
+  const dara = agent("d");
+  const { agents, save } = host([ada, bea, cara, dara]);
+  const session = none.relay.snapshot().session as unknown as RelaySession;
+  const stop = stopFormerCheckIns(none.relay, agents);
+  // Chosen before the read settles: the read's none isn't known.
+  void none.settle(undefined);
+  await chooseDefaultAgent(session, SCOPE, cara.pubkey);
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(new Set(save.mock.calls.map(([key]) => key))).toEqual(
+    new Set([ada.key]),
+  );
+
+  // Chosen as Dara's check-in is about to be stopped.
+  save.mockClear();
+  void agents.save(dara.key, {
+    config: { instructions: checkingIn },
+    attention: TIMER,
+  } as unknown as AgentChange);
+  await chooseDefaultAgent(session, SCOPE, dara.pubkey);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Only Cara, now former, is stopped; Dara keeps its check-in.
+  expect(save.mock.calls.map(([key]) => key)).toEqual([
+    dara.key,
+    cara.key,
+    cara.key,
+  ]);
   stop();
 });
 

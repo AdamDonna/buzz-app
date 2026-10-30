@@ -179,7 +179,9 @@ function BestieTab({
             }
           />
         )}
-        {!former && (
+        {/* Without an account to save none to, this device would pick
+            another agent at once. */}
+        {!former && session.mainAgent && (
           <PreferenceRow
             title="Remove as Bestie"
             subtitle="Have no Bestie until you make one again."
