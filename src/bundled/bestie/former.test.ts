@@ -50,11 +50,10 @@ function community(channels: readonly ChannelSummary[] = [], account = true) {
     settle = resolve;
     fail = reject;
   });
+  const write = vi.fn(async (_agent: string | null) => {});
   const session = {
     viewer: OWNER,
-    ...(account && {
-      mainAgent: { read: () => read, write: vi.fn(async () => {}) },
-    }),
+    ...(account && { mainAgent: { read: () => read, write } }),
     channels: {
       list: () => ({ channels }),
       subscribeList: () => () => {},
@@ -68,6 +67,7 @@ function community(channels: readonly ChannelSummary[] = [], account = true) {
   } as unknown as RelayData;
   return {
     relay,
+    write,
     snapshot: snapshot as unknown as RelaySnapshot,
     settle: async (pubkey: string | undefined) => {
       settle(pubkey);
@@ -201,6 +201,24 @@ it("keeps the check-ins of an agent made Bestie while the account is read, or wh
   // Only Cara, now former, is stopped; Dara keeps its check-in.
   expect(save.mock.calls.map(([key]) => key)).toEqual([
     dara.key,
+    cara.key,
+    cara.key,
+  ]);
+
+  // Made Bestie again as Cara's check-in is about to be stopped, then not:
+  // Cara is stopped once the choice is known.
+  save.mockClear();
+  void agents.save(cara.key, {
+    config: { instructions: withFeature("Be brief.\n", checkinHourly, true) },
+    attention: TIMER,
+  } as unknown as AgentChange);
+  none.write.mockRejectedValueOnce(new Error("offline"));
+  await expect(
+    chooseDefaultAgent(session, SCOPE, cara.pubkey),
+  ).rejects.toThrow();
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+  expect(save.mock.calls.map(([key]) => key)).toEqual([
+    cara.key,
     cara.key,
     cara.key,
   ]);
