@@ -182,8 +182,10 @@ export function nativeSidebar(transport: ReadTransport) {
       const current = await head("main-agent", signal);
       return current.createdAt ? mainAgent(current.payload) : undefined;
     },
-    async writeMainAgent(agent: string, signal: AbortSignal) {
-      if (!agentKey.test(agent)) throw new Error("Invalid main agent intent");
+    /** Saves the main agent the viewer chose, or none for null. */
+    async writeMainAgent(agent: string | null, signal: AbortSignal) {
+      if (agent !== null && !agentKey.test(agent))
+        throw new Error("Invalid main agent intent");
       await mutate(
         "main-agent",
         signal,

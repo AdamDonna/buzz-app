@@ -186,6 +186,15 @@ it("reads a cleared main agent from development builds as none, and replaces it"
   expect(await transport.readMainAgent?.(signal)).toBe("b".repeat(64));
 });
 
+it("saves none as the account's main agent, and reads it back as none", async () => {
+  const transport = await connectNativeTransport(community);
+  await transport.writeMainAgent?.("a".repeat(64), signal);
+  await transport.writeMainAgent?.(null, signal);
+  expect(await transport.readMainAgent?.(signal)).toBeUndefined();
+  await transport.writeMainAgent?.("b".repeat(64), signal);
+  expect(await transport.readMainAgent?.(signal)).toBe("b".repeat(64));
+});
+
 it("prepends a drag-created section through native encrypted readback", async () => {
   const transport = await connectNativeTransport(community);
   const existing = "11111111-1111-1111-1111-111111111111";

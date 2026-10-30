@@ -1557,7 +1557,8 @@ export function createRelaySession(
     return read && write
       ? Object.freeze({
           read: () => read(bounded(10_000)),
-          write: (agent: string) => queue(() => write(agent, bounded(20_000))),
+          write: (agent: string | null) =>
+            queue(() => write(agent, bounded(20_000))),
         })
       : undefined;
   })();

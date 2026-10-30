@@ -30,6 +30,8 @@ const readErrors = new WeakMap<Account, string>();
 const readValues = new WeakMap<Account, string | undefined>();
 const readFailures = new WeakMap<Account, string>();
 const failedChoices = new WeakSet<Account>();
+// Accounts whose saved choice is known: read, or confirmed by a save here.
+const known = new WeakSet<Account>();
 const listeners = new Set<() => void>();
 function notifySaved() {
   for (const listener of listeners) listener();
@@ -111,7 +113,31 @@ export async function chooseDefaultAgent(
     );
   }
   failedChoices.delete(account);
+  known.add(account);
   remember(account, pubkey);
+}
+
+/** The viewer's choice of no main agent: cleared here, then saved to their
+ * account as none. If the account's save fails, this device's choice comes
+ * back, unless another was made meanwhile. This device may still pick one
+ * automatically, as without a choice. */
+export async function clearDefaultAgent(session: RelaySession, scope: string) {
+  const account = session.mainAgent;
+  if (account) explicit.add(account);
+  const previous = chosenAgent(scope);
+  cache(scope, null);
+  if (!account) return;
+  try {
+    await account.write(null);
+  } catch {
+    if (previous && chosenAgent(scope) === undefined)
+      setDefaultAgent(scope, previous);
+    throw new Error(
+      "Removing your bestie couldn't be saved to your account. Try again.",
+    );
+  }
+  known.add(account);
+  remember(account, undefined);
 }
 
 /** A deleted agent stops being the main agent everywhere it was chosen; the
@@ -140,6 +166,7 @@ function adopt(account: Account, scope: string) {
         }
         const adopts = !explicit.has(account);
         if (adopts && agent !== undefined) cache(scope, agent);
+        known.add(account);
         remember(account, adopts ? agent : (saved.get(account) ?? agent));
       },
       (cause) => {
@@ -226,6 +253,9 @@ export function savedAgentStore(session: RelaySession, scope: string) {
   const account = session.mainAgent;
   return Object.freeze({
     snapshot: () => (account ? saved.get(account) : chosenAgent(scope)),
+    /** Whether the account's choice is known, so an undefined snapshot means
+     * none was saved rather than not read yet, or unreadable. */
+    known: () => !!account && known.has(account),
     subscribe(listener: () => void) {
       if (account) void adopt(account, scope);
       // The device's choice is browser storage; without a window there is none
