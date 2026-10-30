@@ -323,7 +323,11 @@ agent-record migrations; blank per-agent values inherit them.
 A plugin, bundled or installed, can add a tab to the settings of every agent
 running on this device, whatever its type, with
 `ctx.agents.registerTab({ id, title, component })`. The component receives
-`{ agent }`; it reads and saves through the plugin's own `ctx.agents`. The tab
+`{ agent }`; it reads and saves through the plugin's own `ctx.agents`. An
+optional `when(agent)` limits the tab to the agents it returns true for, and an
+optional `subscribe(listener)` tells the host when `when` may answer
+differently, so the tab appears or goes without a reload. A `when` that throws
+hides only its own tab. The tab
 follows Activity and precedes History and Settings, in the agent's Build view and
 its profile panel, and is not offered for hosted or elsewhere agents. It is
 removed when the plugin is turned off or its scope ends. The bundled Agent

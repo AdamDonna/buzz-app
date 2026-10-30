@@ -35,6 +35,13 @@ DM remains recognizable without presenting a placeholder identity. Agent rows
 remain separate **New chat** actions; namesakes stay distinct by exact public key
 and use readable owner labels before abbreviated-key fallbacks.
 
+## The Bestie tab
+
+The agent you made your Bestie (with **Make my bestie** in Agents) gets a
+**Bestie** tab on its agent page while it runs on this device. **Change** picks
+another agent and asks before replacing your Bestie. The tab lists Bestie's
+settings, which are not set up yet.
+
 ### Hosted setup fallback
 
 The account choice is read before the page decides what to show. With a saved

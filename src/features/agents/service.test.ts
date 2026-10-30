@@ -8812,6 +8812,44 @@ it("adds a plugin's tab to every agent's settings until the plugin goes", async 
   expect(service.addedTabs()).toEqual([]);
 });
 
+it("renders a tab's views again when its `when` may answer differently", async () => {
+  const { service, ctx } = await setup();
+  const owner = ctx.extend({
+    pluginOwner: Object.freeze({ id: "buzz.bestie", revision: "bundled" }),
+  });
+  const listeners = new Set<() => void>();
+  const tab = {
+    id: "bestie",
+    title: "Bestie",
+    component: () => null,
+    when: () => true,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+  const plugin = owner.plugin({
+    inject: ["agents"],
+    apply: (child: Context) => child.agents.registerTab(tab),
+  });
+  await plugin;
+  expect(listeners.size).toBe(1);
+  const before = service.snapshot();
+  const listener = vi.fn();
+  service.subscribe(listener);
+  for (const changed of listeners) changed();
+  expect(service.snapshot()).not.toBe(before);
+  expect(listener).toHaveBeenCalled();
+  for (const bad of [
+    { ...tab, id: "other", when: true as never },
+    { ...tab, id: "other", subscribe: "soon" as never },
+  ])
+    expect(() => owner.agents.registerTab(bad)).toThrow(/Agent tabs need/);
+  // The host stops listening when the plugin goes.
+  await plugin.dispose();
+  expect(listeners.size).toBe(0);
+});
+
 it("refuses a hosted type that also runs here", async () => {
   const { plugin } = await setup();
   const { type } = cloud();

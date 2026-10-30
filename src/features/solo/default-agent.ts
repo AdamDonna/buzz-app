@@ -220,6 +220,24 @@ export function useSavedAgent(session: RelaySession, scope: string) {
   return useSavedAgentState(session, scope).agent;
 }
 
+/** `useSavedAgent` outside React. Subscribing starts the account's
+ * once-per-session read, as the hook does when it mounts. */
+export function savedAgentStore(session: RelaySession, scope: string) {
+  const account = session.mainAgent;
+  return Object.freeze({
+    snapshot: () => (account ? saved.get(account) : chosenAgent(scope)),
+    subscribe(listener: () => void) {
+      if (account) void adopt(account, scope);
+      const view = subscribeView(scope, listener);
+      const choices = subscribeSaved(listener);
+      return () => {
+        view();
+        choices();
+      };
+    },
+  });
+}
+
 function chosenAgent(scope: string) {
   const value = unsaved.has(scope)
     ? unsaved.get(scope)
