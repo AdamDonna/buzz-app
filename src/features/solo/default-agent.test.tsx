@@ -933,3 +933,61 @@ it("brings this device's choice back when none can't be saved to the account", a
   expect(account.saved()).toBe("b".repeat(64));
   expect(savedAgentStore(session, "unsaved-clear").known()).toBe(false);
 });
+
+it("doesn't know the account saved none while a save is pending or after one failed during its read", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const store = savedAgentStore(session, "pending-clear");
+  const stop = store.subscribe(() => {});
+  account.write.mockRejectedValueOnce(new Error("offline"));
+  const clearing = expect(
+    clearDefaultAgent(session, "pending-clear"),
+  ).rejects.toThrow();
+  await act(async () => account.resolve());
+  await clearing;
+  // The read named B, but a removal was asked for meanwhile, so neither is
+  // known.
+  expect(store.snapshot()).toBeUndefined();
+  expect(store.known()).toBe(false);
+
+  let save!: () => void;
+  account.write.mockImplementationOnce(
+    () => new Promise<void>((resolve) => (save = resolve)),
+  );
+  const retry = clearDefaultAgent(session, "pending-clear");
+  expect(store.known()).toBe(false);
+  await act(async () => {
+    save();
+    await retry;
+  });
+  expect(store.known()).toBe(true);
+  stop();
+});
+
+it("brings the removed Bestie back over an automatic pick, but not over a newer choice", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  setDefaultAgent("auto-clear", "b".repeat(64));
+  let fail!: () => void;
+  account.write.mockImplementationOnce(
+    () => new Promise<void>((_, reject) => (fail = () => reject(new Error()))),
+  );
+  const clearing = clearDefaultAgent(session, "auto-clear");
+  // A composer picks a fallback while the save is pending.
+  setDefaultAgent("auto-clear", "a".repeat(64));
+  fail();
+  await expect(clearing).rejects.toThrow();
+  expect(readView("auto-clear", "solo:default-agent", null)).toBe(
+    "b".repeat(64),
+  );
+
+  account.write.mockImplementationOnce(
+    () => new Promise<void>((_, reject) => (fail = () => reject(new Error()))),
+  );
+  const again = clearDefaultAgent(session, "auto-clear");
+  const choosing = chooseDefaultAgent(session, "auto-clear", "a".repeat(64));
+  fail();
+  await expect(again).rejects.toThrow();
+  await choosing;
+  expect(readView("auto-clear", "solo:default-agent", null)).toBe(
+    "a".repeat(64),
+  );
+});
