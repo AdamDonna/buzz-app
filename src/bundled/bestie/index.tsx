@@ -1,18 +1,12 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { PluginModule } from "../../plugins/api";
 import type { Navigation } from "../../features/navigation/controller";
 import type { PageNavigation } from "../../features/navigation/service";
-import { useAgentChoices } from "../../features/agents/use-choices";
-import { useAgents } from "../../features/agents/react";
-import {
-  chooseDefaultAgent,
-  useSavedAgentState,
-} from "../../features/solo/default-agent";
+import { useSavedAgentState } from "../../features/solo/default-agent";
 import type { ConversationExtensions } from "../../features/conversation/contracts";
 import type { ConversationHostServices } from "../../features/conversation/ConversationHost";
 import type { Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
-import type { RelaySession } from "../../features/relay/session";
 import { useRelayConnection } from "../../features/relay/react";
 import { BestieIcon } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -21,11 +15,10 @@ import {
   PanelHeader,
   PanelHeaderLabel,
 } from "../../shared/design-system/ui/PanelHeader";
-import { Select } from "../../shared/design-system/ui/Select";
-import { AgentCreateDialog } from "../agents/AgentCreateDialog";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
 import { rememberNewBestie, stopFormerCheckIns } from "./former";
+import { BestieChooser, type BestieChooserProps } from "./ChooseBestie";
 import { PinnedBestie } from "./PinnedBestie";
 import { bestieRoute } from "./routes";
 
@@ -136,6 +129,7 @@ function BestieDestination({
   return saved.agent ? (
     <PinnedBestie
       relay={relay}
+      agents={props.agents}
       host={props.host}
       extensions={props.extensions}
       navigator={props.navigation}
@@ -151,43 +145,7 @@ function BestieDestination({
   );
 }
 
-function ChooseBestie({
-  session,
-  scope,
-  community,
-  ...props
-}: {
-  session: RelaySession;
-  scope: string;
-  community?: string | undefined;
-  host: ConversationHostServices;
-  agents: Agents;
-}) {
-  const choices = useAgentChoices(session, true, true);
-  const { types } = useAgents(props.agents);
-  const [selecting, setSelecting] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const choose = async (pubkey: string) => {
-    if (
-      !session.agentChoices
-        .snapshot()
-        .selectable.some((agent) => agent.pubkey === pubkey)
-    ) {
-      setError("That agent is no longer available. Choose another.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      await chooseDefaultAgent(session, scope, pubkey);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setSaving(false);
-    }
-  };
+function ChooseBestie(props: BestieChooserProps) {
   return (
     <BestieStatus>
       <h2 className="m-0 text-heading">Choose your bestie</h2>
@@ -195,89 +153,7 @@ function ChooseBestie({
         Select or create an agent to be your bestie in Buzz. They’ll get special
         placement and extra capabilities throughout the app.
       </p>
-      {selecting ? (
-        <div className="flex w-full max-w-sm flex-col items-center gap-3">
-          <Select
-            label="Your agents"
-            variant="field"
-            value=""
-            placeholder={
-              choices.pending ? "Loading agents…" : "Choose your bestie"
-            }
-            disabled={saving || choices.pending || !choices.selectable.length}
-            groups={[
-              {
-                label: "Your agents",
-                options: choices.selectable.map((agent) => ({
-                  value: agent.pubkey,
-                  label: agent.managedName ?? agent.name,
-                })),
-              },
-            ]}
-            onValueChange={(pubkey) => void choose(pubkey)}
-          />
-          <Button
-            variant="link"
-            size="inline"
-            onClick={() => setCreating(true)}
-          >
-            New agent
-          </Button>
-          {choices.error && (
-            <>
-              <p className="m-0 text-body-sm text-danger" role="alert">
-                {choices.error}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setError("");
-                  void session.agentChoices
-                    .refresh(true, { fresh: true })
-                    .catch((reason) =>
-                      setError(
-                        reason instanceof Error
-                          ? reason.message
-                          : String(reason),
-                      ),
-                    );
-                }}
-              >
-                Try again
-              </Button>
-            </>
-          )}
-          {error && (
-            <p className="m-0 text-body-sm text-danger" role="alert">
-              {error}
-            </p>
-          )}
-        </div>
-      ) : (
-        <Button variant="prominent" onClick={() => setSelecting(true)}>
-          Choose your bestie
-        </Button>
-      )}
-      {creating && (
-        <AgentCreateDialog
-          agents={props.agents}
-          types={types}
-          community={community}
-          onClose={() => setCreating(false)}
-          onCreated={(agent) => {
-            setCreating(false);
-            void session.agentChoices
-              .refresh(true, { fresh: true })
-              .then(() => choose(agent.pubkey))
-              .catch((reason) =>
-                setError(
-                  reason instanceof Error ? reason.message : String(reason),
-                ),
-              );
-          }}
-        />
-      )}
+      <BestieChooser {...props} />
     </BestieStatus>
   );
 }

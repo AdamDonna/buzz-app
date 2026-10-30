@@ -30,6 +30,7 @@ import type { RelayEvent } from "../../features/relay/events";
 import { setDefaultAgent } from "../../features/solo/default-agent";
 import { readView, writeView } from "../../shared/view-state";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
+import type { Agents } from "../../features/agents/service";
 import { PinnedBestie } from "./PinnedBestie";
 import { bestieRoute } from "./routes";
 import { BestieNavigationProvider } from "../../app/shell/BestieNavigation";
@@ -85,6 +86,15 @@ function deferred() {
   });
   return { promise, resolve };
 }
+// No agent runs on this device in these tests; the chooser lists none.
+const noAgents = { agents: [], running: [] };
+const noTypes: never[] = [];
+const agents = {
+  snapshot: () => noAgents,
+  subscribe: () => () => {},
+  types: () => noTypes,
+} as unknown as Agents;
+
 async function fixture({
   failed = false,
   localFailed = false,
@@ -319,6 +329,7 @@ async function fixture({
       <ToastProvider>
         <PinnedBestie
           relay={relay}
+          agents={agents}
           host={host}
           extensions={extensions}
           navigator={renderedNavigator}
@@ -332,6 +343,7 @@ async function fixture({
         <ToastProvider>
           <PinnedBestie
             relay={relay}
+            agents={agents}
             host={host}
             extensions={extensions}
             navigator={navigator}
@@ -778,4 +790,18 @@ it("rechecks eligibility before retrying a failed DM open", async () => {
     ),
   ).toBeVisible();
   expect(f.open).toHaveBeenCalledTimes(attempts);
+});
+
+it("offers the chooser in place of a Bestie that is no longer here", async () => {
+  const f = await fixture();
+  f.makePollenIneligible();
+  f.choose(pollen);
+  f.mount();
+  expect(await screen.findByText("Pollen is no longer here")).toBeVisible();
+  expect(
+    screen.getByText("Choose another agent to be your bestie."),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "Choose your bestie" }),
+  ).toBeVisible();
 });

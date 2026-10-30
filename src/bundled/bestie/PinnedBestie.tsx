@@ -13,6 +13,7 @@ import type { PageNavigation } from "../../features/navigation/service";
 import { targetKey } from "../../features/navigation/targets";
 import { messageViewKey } from "../../features/messages/view-key";
 import { useAgentChoices } from "../../features/agents/use-choices";
+import type { Agents } from "../../features/agents/service";
 import { useChannelList, useRelayConnection } from "../../features/relay/react";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData } from "../../features/relay/service";
@@ -29,6 +30,7 @@ import {
   PanelHeaderLabel,
 } from "../../shared/design-system/ui/PanelHeader";
 import { bestieChat } from "./chat";
+import { BestieChooser } from "./ChooseBestie";
 import { bestieBaseTarget, bestieRoute, bestieThreadTarget } from "./routes";
 import styles from "./PinnedBestie.module.css";
 
@@ -36,12 +38,14 @@ import styles from "./PinnedBestie.module.css";
  * choice, the caller offers agents to choose from instead. */
 export function PinnedBestie({
   relay,
+  agents,
   host,
   extensions,
   navigator,
   navigation,
 }: {
   relay: RelayData;
+  agents: Agents;
   host: ConversationHostServices;
   extensions: ConversationExtensions;
   navigator: Navigation;
@@ -149,15 +153,21 @@ export function PinnedBestie({
               : `${name} is no longer here`
           }
           description={
-            choices.error ??
-            "Choose another bestie from an eligible agent’s actions menu."
+            choices.error ?? "Choose another agent to be your bestie."
           }
           action={
             choices.error ? (
               <Button onClick={() => void session.agentChoices.refresh()}>
                 Try again
               </Button>
-            ) : undefined
+            ) : (
+              <BestieChooser
+                session={session}
+                scope={scope}
+                community={connection.origin}
+                agents={agents}
+              />
+            )
           }
         />
       );

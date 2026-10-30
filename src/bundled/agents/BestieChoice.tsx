@@ -20,6 +20,16 @@ export function onBestieMade(listener: (pubkey: string) => void) {
   return () => void made.delete(listener);
 }
 
+/** Saves `pubkey` as the viewer's Bestie, then tells `onBestieMade`. */
+export async function chooseBestie(
+  session: RelaySession,
+  scope: string,
+  pubkey: string,
+) {
+  await chooseDefaultAgent(session, scope, pubkey);
+  for (const listener of made) listener(pubkey);
+}
+
 /** Why only some agents can be made Bestie: a remote one isn't set up for
  * it yet. */
 export const BESTIE_LOCAL_ONLY =
@@ -71,9 +81,8 @@ export function useBestieChoice(session: RelaySession, scope: string) {
     const choice = ++latest.current;
     setError("");
     setSavingBestie(true);
-    chooseDefaultAgent(session, scope, pubkey)
+    chooseBestie(session, scope, pubkey)
       .then(() => {
-        for (const listener of made) listener(pubkey);
         if (choice === latest.current) setReplacement(undefined);
       })
       .catch((failure: Error) => {

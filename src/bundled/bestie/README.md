@@ -113,8 +113,11 @@ Bestie, reconnecting, inventory failures and missing-agent states remain on the
 pinned destination with their own recovery; they never fall through to the
 chooser. A successful account read with no saved Bestie shows **Choose your
 bestie**, where the owner can select an eligible existing agent or open the
-shared **New agent** dialog. Choosing or creating an agent saves it through
-`main-agent`, then hands off to the canonical DM.
+shared **New agent** dialog. Only agents on this device are offered for now,
+and the chooser says so. Choosing or creating an agent saves it through
+`main-agent`, then hands off to the canonical DM; like **Make my bestie**, a
+choice here starts the agent with Remembers you on. When the saved Bestie is
+no longer here, the page shows the same chooser in its place.
 
 Builderlab no longer owns a separate Bestie setup, agent, Solo chat, or
 selection path.
