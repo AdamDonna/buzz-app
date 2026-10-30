@@ -106,23 +106,15 @@ a Bestie section, or, if this device saw it as Bestie, while it is in one of
 your private channels. The tab has the same switches, **Remove from all** for
 its channels, and **Make my Bestie again**.
 
-### Hosted setup fallback
+### Choosing a Bestie
 
 The account choice is read before the page decides what to show. With a saved
 Bestie, reconnecting, inventory failures and missing-agent states remain on the
-pinned destination with their own recovery; they never fall through to setup.
-Only a successful account read with no saved Bestie shows Riley's existing
-Builderlab setup. A failed read remains on the Bestie page with Retry. Setup
-creates a hosted agent, gives it the instructions in `prompt.ts`, creates its
-private Solo home and sends the introduction.
+pinned destination with their own recovery; they never fall through to the
+chooser. A successful account read with no saved Bestie shows **Choose your
+bestie**, where the owner can select an eligible existing agent or open the
+shared **New agent** dialog. Choosing or creating an agent saves it through
+`main-agent`, then hands off to the canonical DM.
 
-Builderlab setup does **not** yet write that agent to `main-agent` or hand off to
-the canonical DM. Connecting hosted setup to the shared selection owner is a
-separate follow-up; until then, setup and an explicitly account-saved Bestie are
-parallel entry paths.
-
-### Changing hosted Bestie's instructions
-
-When `prompt.ts` differs from the instructions on a set-up hosted Bestie, the
-setup page offers **Update Bestie's instructions**. **Bestie's instructions** on
-that page shows the current text.
+Builderlab no longer owns a separate Bestie setup, agent, Solo chat, or
+selection path.

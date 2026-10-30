@@ -32,8 +32,8 @@ import { bestieChat } from "./chat";
 import { bestieBaseTarget, bestieRoute, bestieThreadTarget } from "./routes";
 import styles from "./PinnedBestie.module.css";
 
-/** Account-saved Besties use their canonical verified DM. No saved choice means
- * the caller keeps Riley's hosted setup page. */
+/** Account-saved Besties use their canonical verified DM. With no saved
+ * choice, the caller offers agents to choose from instead. */
 export function PinnedBestie({
   relay,
   host,
