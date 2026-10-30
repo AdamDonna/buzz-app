@@ -465,10 +465,10 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     target: "guest-1",
     workspace: "/work/task",
   });
-  expect(() => adapter.agents.execution(agent.key)).toThrow(
+  await expect(adapter.agents.execution(agent.key)).rejects.toThrow(
     "Only the native harness",
   );
-  expect(plugin.agents.execution(agent.key)?.binding.workspace).toBe(
+  expect((await plugin.agents.execution(agent.key))?.binding.workspace).toBe(
     "/work/task",
   );
   await expect(service.retype(agent.key, "example/echo")).rejects.toThrow(

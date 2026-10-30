@@ -197,6 +197,7 @@ export function createTabs({
   setup: PiSetup;
   runtime: Pick<
     PiRuntime,
+    | "setupFor"
     | "places"
     | "working"
     | "transcript"
@@ -210,12 +211,14 @@ export function createTabs({
    * `ProviderSetup`'s. `listing` is the surface's own read, so what it gates
    * agrees with this. */
   function ProviderFields({
+    setup: source = setup,
     value,
     onChange,
     listing,
     reload,
     rows = false,
   }: Readonly<{
+    setup?: PiSetup;
     value: Choice;
     onChange(value: Choice): void;
     listing: Read<Providers>;
@@ -227,7 +230,7 @@ export function createTabs({
     const id = value.provider || fallback || "";
     const provider = providers?.providers.find((item) => item.id === id);
     const [models] = useRead(
-      () => (id ? setup.models(id) : Promise.resolve([] as PiModel[])),
+      () => (id ? source.models(id) : Promise.resolve([] as PiModel[])),
       id,
     );
     const named = (key: string | undefined) =>
@@ -289,7 +292,12 @@ export function createTabs({
           </div>
         )}
         {!rows && provider && (
-          <ProviderKey key={provider.id} provider={provider} onSaved={reload} />
+          <ProviderKey
+            setup={source}
+            key={provider.id}
+            provider={provider}
+            onSaved={reload}
+          />
         )}
         <ModelPicker
           allowCustomModel={false}
@@ -311,6 +319,7 @@ export function createTabs({
         />
         {!rows && (
           <TestConnection
+            setup={source}
             choice={value}
             disabled={unusable(value, providers)}
           />
@@ -321,10 +330,12 @@ export function createTabs({
 
   /** The agent's provider's key, and a test that it answers. */
   function ProviderSetup({
+    setup: source = setup,
     choice,
     listing,
     reload,
   }: Readonly<{
+    setup?: PiSetup;
     choice: Choice;
     listing: Read<Providers>;
     reload(): void;
@@ -342,9 +353,15 @@ export function createTabs({
           </div>
         )}
         {provider && (
-          <ProviderKey key={provider.id} provider={provider} onSaved={reload} />
+          <ProviderKey
+            setup={source}
+            key={provider.id}
+            provider={provider}
+            onSaved={reload}
+          />
         )}
         <TestConnection
+          setup={source}
           choice={choice}
           disabled={unusable(choice, listing.value)}
         />
@@ -354,9 +371,14 @@ export function createTabs({
 
   /** Asks the provider and model for one short reply. */
   function TestConnection({
+    setup: source = setup,
     choice,
     disabled,
-  }: Readonly<{ choice: Choice; disabled: boolean }>) {
+  }: Readonly<{
+    setup?: PiSetup;
+    choice: Choice;
+    disabled: boolean;
+  }>) {
     // A result belongs to the choice it tested.
     const key = `${choice.provider}\u0000${choice.model}`;
     const [result, setResult] = useState<{
@@ -373,7 +395,7 @@ export function createTabs({
             setResult({ key, tested: "testing" });
             setResult({
               key,
-              tested: await setup.test(choice).catch((error: unknown) => ({
+              tested: await source.test(choice).catch((error: unknown) => ({
                 ok: false,
                 message: errorText(error),
               })),
@@ -397,9 +419,14 @@ export function createTabs({
   /** A provider's API key, saved with Pi's login. One that signs in without
    * a key is set up with the `pi` command. */
   function ProviderKey({
+    setup: source = setup,
     provider,
     onSaved,
-  }: Readonly<{ provider: Provider; onSaved(): void }>) {
+  }: Readonly<{
+    setup?: PiSetup;
+    provider: Provider;
+    onSaved(): void;
+  }>) {
     const [key, setKey] = useState("");
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
@@ -408,7 +435,7 @@ export function createTabs({
       setSaving(true);
       setError("");
       try {
-        await setup.login(provider.id, key.trim());
+        await source.login(provider.id, key.trim());
         setKey("");
         setChanging(false);
         onSaved();
@@ -870,6 +897,7 @@ export function createTabs({
     settingsSection,
     settingsContent,
   }: AgentViewProps<Config>) {
+    const source = runtime.setupFor(agent.key);
     const form = useId();
     const saved = readConfig(agent.config);
     const [draft, setDraft] = useState(saved);
@@ -880,7 +908,7 @@ export function createTabs({
       if (error) saveErrorRef.current?.focus();
     }, [error]);
     const [listing, reload] = useRead(
-      () => setup.providers(),
+      () => source.providers(),
       "providers",
       // Signing in or choosing defaults with the `pi` command changes them.
       "providers",
@@ -889,7 +917,7 @@ export function createTabs({
     const defaults = listing.value?.defaults;
     const id = draft.provider || defaults?.provider || "";
     const [models] = useRead(
-      () => (id ? setup.models(id) : Promise.resolve([] as PiModel[])),
+      () => (id ? source.models(id) : Promise.resolve([] as PiModel[])),
       id,
     );
     const configChanged = JSON.stringify(draft) !== JSON.stringify(saved);
@@ -951,6 +979,7 @@ export function createTabs({
             <SettingsGroup>
               {settingsHost?.typeControl?.(configChanged)}
               <ProviderFields
+                setup={source}
                 rows
                 value={draft}
                 onChange={(choice) =>
@@ -981,7 +1010,12 @@ export function createTabs({
         )}
         {settingsSection !== "identity" && (
           <>
-            <ProviderSetup choice={draft} listing={listing} reload={reload} />
+            <ProviderSetup
+              setup={source}
+              choice={draft}
+              listing={listing}
+              reload={reload}
+            />
             <Field
               label="Workspace"
               description="The folder Pi works in. Use ~/ for your home folder."

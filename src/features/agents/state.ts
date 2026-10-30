@@ -36,6 +36,7 @@ export function isAgentKey(key: string) {
     key.startsWith(CATCH_UP_PREFIX) ||
     key.startsWith(INTERRUPTED_PREFIX) ||
     key.startsWith(RECORD_PREFIX) ||
+    key.startsWith("buzz.agent.execution.v1:") ||
     // The sessions the bundled agent types save.
     key.startsWith("buzz.claude-code.sessions.") ||
     key.startsWith("buzz.codex.sessions.") ||
@@ -57,6 +58,20 @@ let loaded: AgentStore | undefined;
  * that, and outside the desktop app. */
 export function agentStorage(): AgentStore {
   return loaded ?? localStore();
+}
+
+/** A window without native storage cannot know which agents are bound. */
+export function executionStorage(fallback: AgentStore): AgentStore {
+  if (!isTauri()) return fallback;
+  if (loaded) return loaded;
+  return Object.freeze({
+    ...fallback,
+    add: async () => {
+      throw new Error(
+        "Native agent storage is unavailable. Restart Buzz before running agents.",
+      );
+    },
+  });
 }
 
 type Native = Readonly<{
@@ -94,6 +109,7 @@ export async function loadAgentStorage(
   files: Native | undefined = isTauri() ? native : undefined,
   timeoutMs = 15_000,
 ): Promise<AgentStore> {
+  loaded = undefined;
   if (!files) return localStore(local);
   let late = false;
   const move = async () => {
@@ -210,7 +226,10 @@ export function fileStore(
     },
     add: async (key: string, value: string) => {
       const held = items.get(key);
-      if (held !== undefined) return held;
+      if (held !== undefined) {
+        await pending.get(key);
+        return durable.get(key) ?? held;
+      }
       items.set(key, value);
       return (await write(key, value, true)) ?? value;
     },

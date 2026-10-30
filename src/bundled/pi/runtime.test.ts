@@ -135,7 +135,7 @@ function setup(
         : undefined,
     hook,
     undefined,
-    execution,
+    execution ? async (key) => execution(key) : undefined,
   );
   const published: { kind: number; content: string; tags: string[][] }[] = [];
   const agent = {
@@ -262,131 +262,197 @@ it("hands an owner's mention to its thread's Pi conversation", async () => {
   expect(published).toEqual([]);
 });
 
-it("runs a bound Pi conversation with remote files, native Buzz tools and Stop", async () => {
-  const answered = deferred<object>();
-  const remote = fakeHost({
-    deliver: () => ({ submission: 1, conversation: CONVERSATION }),
-    place: () => ({ seen: 0 }),
-    unfinished: () => ({ submissions: [] }),
-    wait: () => answered.promise,
-    session: () => {
-      answered.resolve({ status: "unanswered", reason: "aborted" });
-    },
-  });
-  const lifetime = new AbortController();
-  const execution: AgentExecution = {
-    binding: {
-      provider: "internal/remote",
-      target: "guest-1",
-      workspace: "/remote/task",
-    },
-    signal: lifetime.signal,
-    spawn: remote.spawn,
-    readFile: vi.fn(async () => new Uint8Array([42])),
-    resolveDirectory: vi.fn(async (path) => path),
-    dispose: vi.fn(async () => {}),
-  };
-  const file: AddedTool = {
-    name: "test_file",
-    description: "Read a task file",
-    inputSchema: { type: "object" },
-    call: async (client) => {
-      if (!client.read) throw new Error("Missing file reader");
-      return String((await client.read("result"))[0]);
-    },
-  };
-  const hook = vi.fn(async () => ({ block: true }));
-  const f = setup({}, [file], undefined, undefined, () => execution, hook);
-  const turn = f.deliver({ type: "mention", event: reply("2", "@Pi look") });
-  try {
-    await turn.run;
-    expect(f.host.processes).toHaveLength(0);
-    const process = remote.processes[0];
-    if (!process) throw new Error("Missing remote process");
-    expect(remote.processes[0]?.id).toBe("node");
-    expect(remote.processes[0]?.options.cwd).toBe("/remote/task");
-    expect(remote.processes[0]?.options.args?.slice(0, 2)).toEqual([
-      "--input-type=module",
-      "-e",
-    ]);
-    expect(remote.requests("deliver")[0]?.params.cwd).toBe("/remote/task");
-    const callback = {
-      agent: self,
-      conversation: CONVERSATION,
-      context: { channel, root: root.id },
-      name: "send",
-      arguments: { text: "Remote reply", audience: "everyone" },
-    };
-    await expect(
-      process.tool({ ...callback, agent: bob }),
-    ).resolves.toMatchObject({ error: "Pi callback names another agent" });
-    await expect(
-      process.tool(
-        { agent: self, conversation: 999, event: "beforeTool", input: {} },
-        "hook",
-      ),
-    ).resolves.toMatchObject({
-      error: "Pi callback names another conversation",
-    });
-    await expect(
-      process.tool({ ...callback, conversation: 999 }),
-    ).resolves.toMatchObject({
-      error: "Pi callback names another conversation",
-    });
-    await expect(
-      process.tool({ ...callback, context: { channel: "other" } }),
-    ).resolves.toMatchObject({
-      error: "Pi callback changes its conversation scope",
-    });
-    await expect(process.tool(callback)).resolves.toMatchObject({
-      result: { content: expect.any(Array) },
-    });
-    expect(f.published[0]?.content).toBe("Remote reply");
-    await expect(
-      process.tool(
-        {
+it.each(["Stop", "adapter unload"] as const)(
+  "runs a bound Pi conversation with remote files, native Buzz tools and %s",
+  async (ending) => {
+    const answered = deferred<object>();
+    let early: unknown;
+    const remote = fakeHost({
+      deliver: async ({ request }, process) => {
+        process.send({
+          method: "event",
+          params: {
+            type: "placed",
+            agent: self,
+            request,
+            conversation: CONVERSATION,
+            entry: 1,
+          },
+        });
+        early = await process.tool({
           agent: self,
           conversation: CONVERSATION,
-          event: "beforeTool",
-          input: { toolName: "bash" },
+          context: { channel, root: root.id },
+          name: "test_file",
+          arguments: {},
+        });
+        return { submission: 1, conversation: CONVERSATION };
+      },
+      place: () => ({ seen: 0 }),
+      unfinished: () => ({ submissions: [] }),
+      wait: () => answered.promise,
+      session: () => {
+        answered.resolve({ status: "unanswered", reason: "aborted" });
+      },
+    });
+    const lifetime = new AbortController();
+    const execution: AgentExecution = {
+      binding: {
+        provider: "internal/remote",
+        target: "guest-1",
+        workspace: "/remote/task",
+      },
+      signal: lifetime.signal,
+      spawn: remote.spawn,
+      readFile: vi.fn(async () => new Uint8Array([42])),
+      resolveDirectory: vi.fn(async (path) => path),
+      dispose: vi.fn(async () => {}),
+    };
+    const file: AddedTool = {
+      name: "test_file",
+      description: "Read a task file",
+      inputSchema: { type: "object" },
+      call: async (client) => {
+        if (!client.read) throw new Error("Missing file reader");
+        return String((await client.read("result"))[0]);
+      },
+    };
+    const hook = vi.fn(async () => ({ block: true }));
+    const media: AddedTool = {
+      name: "test_media",
+      description: "Download media",
+      inputSchema: { type: "object" },
+      call: async (client) =>
+        JSON.stringify(await client.media("https://example.test/image")),
+    };
+    const f = setup(
+      {},
+      [file, media],
+      undefined,
+      undefined,
+      () => execution,
+      hook,
+    );
+    const turn = f.deliver({ type: "mention", event: reply("2", "@Pi look") });
+    try {
+      await turn.run;
+      expect(early).toMatchObject({
+        result: { content: [{ type: "text", text: "42" }] },
+      });
+      expect(f.host.processes).toHaveLength(0);
+      const process = remote.processes[0];
+      if (!process) throw new Error("Missing remote process");
+      expect(remote.processes[0]?.id).toBe("node");
+      expect(remote.processes[0]?.options.cwd).toBe("/remote/task");
+      expect(remote.processes[0]?.options.args?.slice(0, 2)).toEqual([
+        "--input-type=module",
+        "-e",
+      ]);
+      expect(remote.requests("deliver")[0]?.params.cwd).toBe("/remote/task");
+      const callback = {
+        agent: self,
+        conversation: CONVERSATION,
+        context: { channel, root: root.id },
+        name: "send",
+        arguments: { text: "Remote reply", audience: "everyone" },
+      };
+      await expect(
+        process.tool({ ...callback, conversation: undefined }),
+      ).resolves.toMatchObject({
+        error: "Pi callback needs a conversation ID",
+      });
+      await expect(
+        process.tool({ ...callback, agent: bob }),
+      ).resolves.toMatchObject({ error: "Pi callback names another agent" });
+      await expect(
+        process.tool(
+          { agent: self, conversation: 999, event: "beforeTool", input: {} },
+          "hook",
+        ),
+      ).resolves.toMatchObject({
+        error: "Pi callback names another conversation",
+      });
+      await expect(
+        process.tool({ ...callback, conversation: 999 }),
+      ).resolves.toMatchObject({
+        error: "Pi callback names another conversation",
+      });
+      await expect(
+        process.tool({ ...callback, context: { channel: "other" } }),
+      ).resolves.toMatchObject({
+        error: "Pi callback changes its conversation scope",
+      });
+      await expect(
+        process.tool({ ...callback, name: "test_media", arguments: {} }),
+      ).resolves.toMatchObject({
+        result: {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "Media download is unavailable for remote Pi agents.",
+            },
+          ],
         },
-        "hook",
-      ),
-    ).resolves.toMatchObject({ result: { block: true } });
-    expect(hook).toHaveBeenCalledWith(
-      self,
-      String(CONVERSATION),
-      "beforeTool",
-      { toolName: "bash" },
-    );
-    await expect(
-      process.tool({
-        ...callback,
-        name: "test_file",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({
-      result: { content: [{ type: "text", text: "42" }] },
-    });
-    expect(execution.readFile).toHaveBeenCalledWith("result", {
-      cwd: "/remote/task",
-    });
-    await f.runtime.session(
-      { key: self, config: DEFAULT_CONFIG } as Agent,
-      { channelId: channel, root: root.id },
-      "interrupt",
-    );
-    await expect(f.settled(turn)).resolves.toMatchObject({ ok: true });
-    expect(remote.requests("session")[0]?.params.action).toBe("interrupt");
-    await expect(process.tool(callback)).resolves.toMatchObject({
-      error: "Pi callback has no active run",
-    });
-  } finally {
-    answered.resolve({ status: "closed" });
-    f.runtime.dispose();
-    remote.processes[0]?.exit(0);
-  }
-});
+      });
+      expect(f.agent.media).not.toHaveBeenCalled();
+      await expect(process.tool(callback)).resolves.toMatchObject({
+        result: { content: expect.any(Array) },
+      });
+      expect(f.published[0]?.content).toBe("Remote reply");
+      await expect(
+        process.tool(
+          {
+            agent: self,
+            conversation: CONVERSATION,
+            event: "beforeTool",
+            input: { toolName: "bash" },
+          },
+          "hook",
+        ),
+      ).resolves.toMatchObject({ result: { block: true } });
+      expect(hook).toHaveBeenCalledWith(
+        self,
+        String(CONVERSATION),
+        "beforeTool",
+        { toolName: "bash" },
+      );
+      await expect(
+        process.tool({
+          ...callback,
+          name: "test_file",
+          arguments: {},
+        }),
+      ).resolves.toMatchObject({
+        result: { content: [{ type: "text", text: "42" }] },
+      });
+      expect(execution.readFile).toHaveBeenCalledWith("result", {
+        cwd: "/remote/task",
+      });
+      if (ending === "Stop") {
+        await f.runtime.session(
+          { key: self, config: DEFAULT_CONFIG } as Agent,
+          { channelId: channel, root: root.id },
+          "interrupt",
+        );
+        await expect(f.settled(turn)).resolves.toMatchObject({ ok: true });
+        expect(remote.requests("session")[0]?.params.action).toBe("interrupt");
+        await expect(process.tool(callback)).resolves.toMatchObject({
+          error: "Pi callback has no active run",
+        });
+      } else {
+        lifetime.abort(new Error("The adapter stopped"));
+        await expect(f.settled(turn)).resolves.toMatchObject({ ok: false });
+        expect(f.published).toHaveLength(2);
+        expect(f.published[1]?.content).toContain("stopped");
+      }
+    } finally {
+      answered.resolve({ status: "closed" });
+      f.runtime.dispose();
+      remote.processes[0]?.exit(0);
+    }
+  },
+);
 
 it("keeps one agent's two communities' storage apart, each under its membership's key", async () => {
   const other = `${self}@other.example`;

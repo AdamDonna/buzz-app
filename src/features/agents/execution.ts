@@ -34,6 +34,7 @@ export type AgentExecution = AgentExecutionTarget &
   }>;
 
 const PREFIX = "buzz.agent.execution.v1:";
+const LOCAL = '"local"';
 const ID = /^[a-z0-9][a-z0-9._-]*$/;
 const TYPE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 function validate(binding: AgentExecutionBinding) {
@@ -53,8 +54,11 @@ function validate(binding: AgentExecutionBinding) {
 
 export function createAgentExecutions(root: Context, storage: AgentStore) {
   const providers = createContributions<AgentExecutionProvider>(root);
-  const local = new Set<AgentKey>();
   const bindingInFlight = new Set<AgentKey>();
+  const selecting = new Map<
+    AgentKey,
+    Promise<AgentExecutionBinding | undefined>
+  >();
   const opened = new Map<
     AgentKey,
     { revision: string; execution: AgentExecution }
@@ -62,10 +66,29 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   const read = (agent: AgentKey): AgentExecutionBinding | undefined => {
     if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
     const text = storage.get(PREFIX + agent);
-    if (text === null) return;
+    if (text === null || text === LOCAL) return;
     const binding = JSON.parse(text) as AgentExecutionBinding;
     validate(binding);
     return Object.freeze(binding);
+  };
+  const binding = async (agent: AgentKey) => {
+    if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
+    if (bindingInFlight.has(agent))
+      throw new Error("The execution binding is being saved");
+    const pending = selecting.get(agent);
+    if (pending) return pending;
+    const selected = storage.add(PREFIX + agent, LOCAL).then((text) => {
+      if (text === LOCAL) return;
+      const value = JSON.parse(text) as AgentExecutionBinding;
+      validate(value);
+      return Object.freeze(value);
+    });
+    selecting.set(agent, selected);
+    try {
+      return await selected;
+    } finally {
+      if (selecting.get(agent) === selected) selecting.delete(agent);
+    }
   };
   const providerFor = (binding: AgentExecutionBinding, harness: string) => {
     const provider = providers
@@ -107,6 +130,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   });
   return {
     read,
+    binding,
     register(ctx: Context, provider: AgentExecutionProvider) {
       if (
         !ID.test(provider.id) ||
@@ -141,10 +165,6 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       providerFor(binding, harness);
       if (!AGENT_KEY.test(agent))
         throw new Error("Invalid agent membership key");
-      if (local.has(agent))
-        throw new Error(
-          "Bind execution before the agent first runs on this device",
-        );
       const text = JSON.stringify(binding);
       if (bindingInFlight.has(agent))
         throw new Error("The execution binding is being saved");
@@ -157,30 +177,25 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
         bindingInFlight.delete(agent);
       }
     },
-    check(agent: AgentKey, harness: string) {
-      if (bindingInFlight.has(agent))
-        throw new Error("The execution binding is being saved");
-      const binding = read(agent);
-      if (binding) providerFor(binding, harness);
+    async check(agent: AgentKey, harness: string) {
+      const saved = await binding(agent);
+      if (saved) providerFor(saved, harness);
     },
-    open(
+    async open(
       ctx: Context,
       agent: AgentKey,
       harness: string,
-    ): AgentExecution | undefined {
+    ): Promise<AgentExecution | undefined> {
       if (!ctx.pluginOwner || !harness.startsWith(`${ctx.pluginOwner.id}/`))
         throw new Error("Only the native harness can open its agent execution");
       if (bindingInFlight.has(agent))
         throw new Error("The execution binding is being saved");
-      const binding = read(agent);
-      if (!binding) {
-        local.add(agent);
-        return;
-      }
-      const provider = providerFor(binding, harness);
+      const saved = await binding(agent);
+      if (!saved) return;
+      const provider = providerFor(saved, harness);
       const held = opened.get(agent);
       if (held && !held.execution.signal.aborted) return held.execution;
-      const target = provider.connect(binding);
+      const target = provider.connect(saved);
       const lifetime = new AbortController();
       const processes = new Set<HostProcess>();
       const check = () => {
@@ -190,7 +205,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       };
       let disposed: Promise<void> | undefined;
       const execution: AgentExecution = Object.freeze({
-        binding,
+        binding: saved,
         signal: lifetime.signal,
         spawn: async (program, options) => {
           check();

@@ -95,11 +95,11 @@ it("keeps a write-once workspace binding across restarts and rejects another har
     target: "guest-1",
     workspace: "/work/task",
   });
-  expect(() => restarted.registry.check(agent, "buzz.codex/codex")).toThrow(
-    "does not support",
-  );
+  await expect(
+    restarted.registry.check(agent, "buzz.codex/codex"),
+  ).rejects.toThrow("does not support");
   expect(restarted.registry.read(agent)?.workspace).toBe("/work/task");
-  expect(() => f.registry.open(f.plugin, agent, harness)).toThrow(
+  await expect(f.registry.open(f.plugin, agent, harness)).rejects.toThrow(
     "Only the native harness",
   );
   expect(() =>
@@ -114,14 +114,14 @@ it("keeps a write-once workspace binding across restarts and rejects another har
 it("retires owned processes on adapter unload and never opens local execution for a saved binding", async () => {
   const f = await setup();
   await f.registry.bind(f.plugin, agent, harness, input);
-  const execution = f.registry.open(f.native, agent, harness);
+  const execution = await f.registry.open(f.native, agent, harness);
   if (!execution) throw new Error("Missing bound execution");
   const process = await execution.spawn("node");
   f.deactivate();
   expect(execution.signal.aborted).toBe(true);
   await expect(process.write("prompt")).rejects.toThrow("stopped");
   await expect(execution.readFile("result")).rejects.toThrow();
-  expect(() => f.registry.open(f.native, agent, harness)).toThrow(
+  await expect(f.registry.open(f.native, agent, harness)).rejects.toThrow(
     "unavailable",
   );
   await execution.dispose();
@@ -135,7 +135,7 @@ it("kills a process that finishes starting after its adapter unloads", async () 
   const starting = deferred<typeof f.process>();
   vi.mocked(f.target.spawn).mockReturnValueOnce(starting.promise);
   await f.registry.bind(f.plugin, agent, harness, input);
-  const execution = f.registry.open(f.native, agent, harness);
+  const execution = await f.registry.open(f.native, agent, harness);
   if (!execution) throw new Error("Missing bound execution");
   const spawned = execution.spawn("node");
   f.deactivate();
@@ -149,14 +149,14 @@ it("blocks runtime access until the binding is saved and propagates a failed sav
   const disk = sharedFiles();
   const f = await setup(disk.open(saved.promise));
   const binding = f.registry.bind(f.plugin, agent, harness, input);
-  expect(() => f.registry.open(f.native, agent, harness)).toThrow(
+  await expect(f.registry.open(f.native, agent, harness)).rejects.toThrow(
     "being saved",
   );
   saved.resolve();
   await binding;
-  expect(f.registry.open(f.native, agent, harness)?.binding.target).toBe(
-    "guest-1",
-  );
+  expect(
+    (await f.registry.open(f.native, agent, harness))?.binding.target,
+  ).toBe("guest-1");
 
   const failed = await setup({
     ...memoryStorage(),
@@ -172,9 +172,62 @@ it("blocks runtime access until the binding is saved and propagates a failed sav
 
 it("refuses to redirect an agent whose local runtime is already open", async () => {
   const f = await setup();
-  expect(f.registry.open(f.native, agent, harness)).toBeUndefined();
+  expect(await f.registry.open(f.native, agent, harness)).toBeUndefined();
   await expect(
     f.registry.bind(f.plugin, agent, harness, input),
-  ).rejects.toThrow("before the agent first runs");
+  ).rejects.toThrow("another execution binding");
   expect(f.registry.read(agent)).toBeUndefined();
+});
+
+it("reads a binding saved after another window loads, and keeps local selection after restart", async () => {
+  const disk = sharedFiles();
+  const stale = await setup(disk.open());
+  const writer = await setup(disk.open());
+  await writer.registry.bind(writer.plugin, agent, harness, input);
+  expect(
+    (await stale.registry.open(stale.native, agent, harness))?.binding
+      .workspace,
+  ).toBe(input.workspace);
+
+  const localAgent = "b".repeat(64);
+  expect(
+    await stale.registry.open(stale.native, localAgent, harness),
+  ).toBeUndefined();
+  const restarted = await setup(disk.open());
+  await expect(
+    restarted.registry.bind(restarted.plugin, localAgent, harness, input),
+  ).rejects.toThrow("another execution binding");
+});
+
+it("does not start local work while its durable claim is pending or failed", async () => {
+  const saved = deferred<void>();
+  const disk = sharedFiles();
+  const f = await setup(disk.open(saved.promise));
+  const first = f.registry.open(f.native, agent, harness);
+  const otherRegistry = await setup(f.storage);
+  const second = otherRegistry.registry.open(
+    otherRegistry.native,
+    agent,
+    harness,
+  );
+  let completed = false;
+  void second.then(() => {
+    completed = true;
+  });
+  await Promise.resolve();
+  expect(completed).toBe(false);
+  saved.resolve();
+  await expect(first).resolves.toBeUndefined();
+  await expect(second).resolves.toBeUndefined();
+
+  const failed = await setup({
+    ...memoryStorage(),
+    add: async () => {
+      throw new Error("disk full");
+    },
+  });
+  await expect(
+    failed.registry.open(failed.native, agent, harness),
+  ).rejects.toThrow("disk full");
+  expect(failed.target.spawn).not.toHaveBeenCalled();
 });

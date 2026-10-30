@@ -436,7 +436,7 @@ export type RunnerHost = {
   /** The team sections of its prompt; empty without a team. */
   team(key: AgentKey): string;
   /** What its next run starts with, from this device's storage only. */
-  start(agent: Agent): Start<unknown>;
+  start(agent: Agent): Start<unknown> | Promise<Start<unknown>>;
   protection?(agent: Agent): AgentHandle["protection"];
   agentTypes(): ReturnType<NonNullable<AgentHandle["agentTypes"]>>;
   createAgent(
@@ -2305,7 +2305,7 @@ export class AgentRunners {
         handle.protection.assertAvailable();
       }
       const pick = await pickFor(job.trigger, agent, type);
-      const start = this.host.start(agent);
+      const start = await this.host.start(agent);
       if (!start.ok) throw new Error(start.reason);
       const team = this.host.team(agent.key);
       signal.throwIfAborted();

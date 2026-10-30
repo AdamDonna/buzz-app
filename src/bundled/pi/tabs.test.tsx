@@ -99,7 +99,7 @@ function fakePi(
 
 /** The runtime's conversations: a thread Pi works in, in a channel the
  * community lists, and a channel it does not. */
-function fakeRuntime() {
+function fakeRuntime(source = new PiSetup(fakePi())) {
   const places: Place[] = [
     {
       key: "chan/root",
@@ -116,6 +116,7 @@ function fakeRuntime() {
   const listeners = new Set<() => void>();
   const working = [1];
   return {
+    setupFor: vi.fn(() => source),
     places: vi.fn(async () => places),
     working: () => working,
     subscribe: () => () => {},
@@ -519,9 +520,10 @@ it("shows the provider, model and thinking level in Identity, and the provider's
 
 it("saves a key on Enter without saving the agent's settings", async () => {
   const pi = fakePi();
+  const desktop = fakePi();
   const { SettingsTab } = createTabs({
-    setup: new PiSetup(pi),
-    runtime: fakeRuntime(),
+    setup: new PiSetup(desktop),
+    runtime: fakeRuntime(new PiSetup(pi)),
   });
   const save = vi.fn();
   render(<SettingsTab agent={AGENT} save={save} />);
@@ -537,6 +539,7 @@ it("saves a key on Enter without saving the agent's settings", async () => {
     key: "sk-test",
   });
   expect(save).not.toHaveBeenCalled();
+  expect(desktop.calls).not.toHaveBeenCalled();
 });
 
 it("settles a transcript request without opening it once Pi's late listing arrives", async () => {

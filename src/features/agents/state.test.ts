@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { fileStore, loadAgentStorage, MOVED_KEY } from "./state";
+import {
+  executionStorage,
+  fileStore,
+  loadAgentStorage,
+  MOVED_KEY,
+} from "./state";
 import { memoryStorage } from "./test-fakes";
 import { SyncedTeams, teamSources } from "./team-config";
 
@@ -26,6 +31,7 @@ it("moves agent state from localStorage, which replaces what agent storage has",
   local.setItem("buzz.agents.archive-unchecked.v1", "unchecked");
   local.setItem("buzz.agents.catch-up.v1", "checkpoints");
   local.setItem("buzz.agents.catch-up.v1:aa", "agent checkpoints");
+  local.setItem("buzz.agent.execution.v1:aa", "binding");
   local.setItem("buzz.theme", "dark");
   const native = files({
     "buzz.agents.teams.v1": "stale teams",
@@ -43,6 +49,7 @@ it("moves agent state from localStorage, which replaces what agent storage has",
     "buzz.agents.archive-unchecked.v1": "unchecked",
     "buzz.agents.catch-up.v1": "checkpoints",
     "buzz.agents.catch-up.v1:aa": "agent checkpoints",
+    "buzz.agent.execution.v1:aa": "binding",
     [MOVED_KEY]: "1",
   });
   expect(storage.get("buzz.agents.teams.v1")).toBe("new teams");
@@ -213,4 +220,21 @@ it("puts back a key whose write failed, so it is not taken as saved and can be s
   await storage.set("a", "new");
   expect(native.saved.get("a")).toBe("new");
   expect(storage.get("a")).toBe("new");
+});
+
+it("rejects native execution when native state cannot be read", async () => {
+  vi.stubGlobal("isTauri", true);
+  const local = memoryStorage();
+  const native = files();
+  native.load.mockRejectedValueOnce(new Error("denied"));
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const fallback = await loadAgentStorage(local, native);
+    await expect(
+      executionStorage(fallback).add("buzz.agent.execution.v1:aa", '"local"'),
+    ).rejects.toThrow("Native agent storage is unavailable");
+  } finally {
+    error.mockRestore();
+    vi.unstubAllGlobals();
+  }
 });

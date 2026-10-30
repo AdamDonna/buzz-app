@@ -80,7 +80,7 @@ applies to every conversation for that agent. It is separate from provider
 settings and session IDs. A saved binding cannot be replaced. There is no move
 or release operation in this interface.
 
-The Pi harness opens the target through `agents.execution(agent.key)`. Each
+The Pi harness awaits `agents.execution(agent.key)` to open the target. Each
 bound agent has its own Pi process. Buzz keeps identity keys, native context,
 memory, tools, hooks, and session controls in their existing owners. Tool and
 hook callbacks must name the current agent and conversation. Tool defaults must
@@ -90,7 +90,7 @@ local execution for it. An unsupported provider change fails before it changes
 the agent or its binding.
 
 This preview supports Pi on a target with Node.js. It does not supply native
-containment or an HTTP MCP tunnel. Protected agents cannot use it. Pi's coding
+containment, an HTTP MCP tunnel, or media download to the target. Protected agents cannot use it. Pi's coding
 tools retain their [existing approval limits](../src/bundled/pi/README.md#limits).
 
 Harness plugins register agent types with the Agents service. An agent type owns

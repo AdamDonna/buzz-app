@@ -400,7 +400,7 @@ function setup(
     registerExecution: () => {},
     bindExecution: async () => {},
     executionBinding: () => undefined,
-    execution: () => undefined,
+    execution: async () => undefined,
   } satisfies Agents;
   const disconnected = { status: "disconnected", generation: 0 };
   const relay = {

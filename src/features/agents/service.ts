@@ -77,7 +77,7 @@ import { ownerReads } from "./reads";
 import { migrateAgentStorage } from "./migrate-storage";
 import { migrateWatchFilters } from "./migrate-filter";
 import { migrateWatchKeywords } from "./migrate-keywords";
-import { agentStorage, type AgentStore } from "./state";
+import { agentStorage, executionStorage, type AgentStore } from "./state";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import { npubEncode } from "nostr-tools/nip19";
 import { bytesToHex } from "nostr-tools/utils";
@@ -1016,7 +1016,7 @@ export type Agents = {
   ): Promise<void>;
   executionBinding(agent: AgentKey): AgentExecutionBinding | undefined;
   /** Only the agent's native harness can open its bound target. */
-  execution(agent: AgentKey): AgentExecution | undefined;
+  execution(agent: AgentKey): Promise<AgentExecution | undefined>;
   registerHook(hook: AgentHook): void;
   /** Dispatches hooks for this plugin's agent types in contribution order. */
   dispatchHook(
@@ -1483,13 +1483,18 @@ const wssOf = (origin: string) =>
 
 export class AgentsService extends Service implements Agents {
   private readonly executions;
-  private checkExecution(key: AgentKey, type: string) {
-    if (!this.executions.read(key)) return;
+  private async checkExecution(key: AgentKey, type: string) {
+    if (!(await this.executions.binding(key))) return;
     if (!this.types().find((kind) => kind.key === type)?.execution)
       throw new Error(
         "This runtime does not support the saved execution binding",
       );
-    this.executions.check(key, type);
+    await this.executions.check(key, type);
+  }
+  private async checkExecutionType(pubkey: string, type: string) {
+    for (const member of this.identities)
+      if (member.pubkey === pubkey && !member.deleted)
+        await this.checkExecution(member.key, type);
   }
 
   registerExecution(provider: AgentExecutionProvider) {
@@ -1507,16 +1512,20 @@ export class AgentsService extends Service implements Agents {
       throw new Error("This agent does not support plugin execution");
     if (member.protection)
       throw new Error("Plugin execution does not support protected agents");
-    await this.executions.bind(this.ctx, key, member.type, binding);
+    await this.runners.retype(key, member.name, () =>
+      this.typeChange(member, async () => {
+        await this.executions.bind(this.ctx, key, member.type, binding);
+      }),
+    );
   }
   executionBinding(key: AgentKey) {
     if (!this.liveMember(key)) throw new Error("No such agent on this device");
     return this.executions.read(key);
   }
-  execution(key: AgentKey) {
+  async execution(key: AgentKey) {
     const member = this.liveMember(key);
     if (!member) throw new Error("No such agent on this device");
-    if (member.protection && this.executions.read(key))
+    if (member.protection && (await this.executions.binding(key)))
       throw new Error("Plugin execution does not support protected agents");
     return this.executions.open(this.ctx, key, member.type);
   }
@@ -1664,7 +1673,7 @@ export class AgentsService extends Service implements Agents {
     private readonly bindingFor?: (agent: Agent) => ConfigBinding,
   ) {
     super(ctx, "agents");
-    this.executions = createAgentExecutions(ctx, storage);
+    this.executions = createAgentExecutions(ctx, executionStorage(storage));
     this.contributions = createContributions<AgentType>(ctx);
     this.hookContributions = createAgentHooks(ctx);
     this.tabContributions = createContributions<AgentAddedTab>(ctx);
@@ -1802,8 +1811,8 @@ export class AgentsService extends Service implements Agents {
       changing: (key) => this.changing.has(key),
       timers: (key) => this.timersOf(key),
       progress: (key, ran) => this.progress(key, ran),
-      start: (agent) => {
-        this.checkExecution(agent.key, agent.type);
+      start: async (agent) => {
+        await this.checkExecution(agent.key, agent.type);
         return this.resolve(
           agent,
           (this.records[agent.pubkey] ?? agent).config,
@@ -2103,8 +2112,8 @@ export class AgentsService extends Service implements Agents {
     this.contributions.register(this.ctx, {
       ...type,
       ...(models && {
-        models: (agent: Agent<Config>) => {
-          this.checkExecution(agent.key, agent.type);
+        models: async (agent: Agent<Config>) => {
+          await this.checkExecution(agent.key, agent.type);
           return models(agent);
         },
       }),
@@ -3454,7 +3463,7 @@ export class AgentsService extends Service implements Agents {
     if (!kind) throw new Error("That agent type is not available");
     if (kind.remote)
       throw new Error("A hosted provider cannot take over a local agent key");
-    this.checkExecution(key, type);
+    await this.checkExecutionType(identity.pubkey, type);
     if (type === identity.type) return [];
     this.refuseWhileMoving(identity);
     const retyped = async () => {
@@ -3515,6 +3524,7 @@ export class AgentsService extends Service implements Agents {
     type: string,
     config: object,
   ) {
+    await this.checkExecutionType(identity.pubkey, type);
     const settings = this.configBinding(identity).settings;
     if (!settings || !isSynced(this.configStore, settings)) return;
     const head = this.configStore.state(settings.subject).head;
@@ -3540,6 +3550,7 @@ export class AgentsService extends Service implements Agents {
     type: string,
     config: unknown,
   ) {
+    await this.checkExecutionType(identity.pubkey, type);
     const native = this.native;
     if (!native) throw new Error("No such agent on this device");
     const { pubkey } = identity;

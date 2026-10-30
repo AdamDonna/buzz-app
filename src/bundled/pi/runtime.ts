@@ -164,7 +164,8 @@ type Entry = {
   receipts: Map<string, Receipt>;
   /** Requests waited for here without a receipt: standalone turns handed to
    * Pi and not settled, and plugin wakes a left run continues. */
-  standalone: Map<string, number | undefined>;
+  standalone: Map<string, { conversation?: number; context: Context }>;
+  executionStopped?: true;
   /** The request each conversation's activity shows, by its scope. */
   active: Map<number, Map<string, Receipt>>;
   /** The latest taking-on of the runs Pi's storage holds that nothing here
@@ -196,10 +197,23 @@ export class PiRuntime {
   /** The Pi host every agent of this type runs in, started when needed. */
   private readonly pi: Pi;
   readonly setup: PiSetup;
+  private readonly scopedSetups = new Map<AgentKey, PiSetup>();
   private readonly remote = new Map<
     AgentKey,
     { execution: AgentExecution; pi: Pi; setup: PiSetup }
   >();
+
+  setupFor(agent: AgentKey) {
+    let setup = this.scopedSetups.get(agent);
+    if (!setup) {
+      setup = new PiSetup({
+        request: async <T>(method: string, params: object = {}) =>
+          (await this.connection(agent)).pi.request<T>(method, params),
+      });
+      this.scopedSetups.set(agent, setup);
+    }
+    return setup;
+  }
 
   constructor(
     private readonly host: Pick<Host, "spawn" | "readFile">,
@@ -227,7 +241,9 @@ export class PiRuntime {
       key: AgentKey,
       listener: () => void,
     ) => () => void = () => () => {},
-    private readonly execution?: (key: AgentKey) => AgentExecution | undefined,
+    private readonly execution?: (
+      key: AgentKey,
+    ) => Promise<AgentExecution | undefined>,
   ) {
     this.pi = this.createPi(() => this.spawn);
     this.setup = new PiSetup(this.pi);
@@ -254,7 +270,9 @@ export class PiRuntime {
         ![...entry.receipts.values()].some(
           (receipt) => receipt.conversation === conversation,
         ) &&
-        ![...entry.standalone.values()].includes(conversation)
+        ![...entry.standalone.values()].some(
+          (value) => value.conversation === conversation,
+        )
       )
         throw new Error("Pi callback names another conversation");
     };
@@ -262,13 +280,23 @@ export class PiRuntime {
       spawn,
       {
         tool: (call) => {
+          if (
+            bound &&
+            (!Number.isSafeInteger(call.conversation) || call.conversation < 1)
+          )
+            throw new Error("Pi callback needs a conversation ID");
           check(call.agent, call.conversation);
           if (bound) {
             const entry = this.agents.get(call.agent);
             const receipt = [...(entry?.receipts.values() ?? [])].find(
               (item) => item.conversation === call.conversation,
             );
-            const expected = receipt?.context ?? {};
+            const expected =
+              receipt?.context ??
+              [...(entry?.standalone.values() ?? [])].find(
+                (value) => value.conversation === call.conversation,
+              )?.context ??
+              {};
             if (
               ["channel", "root", "topLevel", "wholeChannel"].some(
                 (key) =>
@@ -278,9 +306,14 @@ export class PiRuntime {
             )
               throw new Error("Pi callback changes its conversation scope");
           }
-          return this.tool(call);
+          return this.tool(call, bound?.execution);
         },
         hook: (call) => {
+          if (
+            bound &&
+            (!Number.isSafeInteger(call.conversation) || call.conversation < 1)
+          )
+            throw new Error("Pi callback needs a conversation ID");
           check(call.agent, call.conversation);
           if (!this.agents.has(call.agent))
             throw new Error("Pi hook agent is no longer active");
@@ -313,8 +346,14 @@ export class PiRuntime {
     );
   }
 
-  private connection(agent: AgentKey) {
-    const execution = this.execution?.(agent);
+  private disposed = false;
+  private async connection(agent: AgentKey) {
+    if (this.disposed) throw new Error("Pi runtime is disposed");
+    const execution = await this.execution?.(agent);
+    if (this.disposed) {
+      await execution?.dispose();
+      throw new Error("Pi runtime is disposed");
+    }
     if (!execution) return { pi: this.pi, setup: this.setup };
     const held = this.remote.get(agent);
     if (held?.execution === execution) return held;
@@ -336,6 +375,7 @@ export class PiRuntime {
         const entry = this.agents.get(agent);
         if (entry) {
           entry.closed = true;
+          entry.executionStopped = true;
           delete entry.handle;
           this.agents.delete(agent);
         }
@@ -375,7 +415,7 @@ export class PiRuntime {
    * Without a pick, a turn runs the configured model and level. */
   async models(agent: Agent<Config>): Promise<Models> {
     const { provider, model, effort } = config(agent.config);
-    const setup = this.connection(agent.key).setup;
+    const setup = this.setupFor(agent.key);
     const defaults = await setup.defaults();
     const id = provider || defaults.provider;
     if (!id) return { current: "", models: [] };
@@ -395,7 +435,7 @@ export class PiRuntime {
 
   /** The agent's Buzz conversations, most recently active first. */
   async places(agent: AgentKey): Promise<Place[]> {
-    const { places } = await this.connection(agent).pi.request<{
+    const { places } = await (await this.connection(agent)).pi.request<{
       places: { key: string; conversation: number; seen: number }[];
     }>("places", { agent });
     if (!this.known.has(agent)) this.known.set(agent, new Map());
@@ -479,7 +519,7 @@ export class PiRuntime {
     // Reading opens its storage, which only an agent running here may hold.
     if (!this.running.has(agent)) return [];
     return readUsage(
-      this.connection(agent).pi,
+      (await this.connection(agent)).pi,
       agent,
       await this.places(agent),
       since,
@@ -495,14 +535,14 @@ export class PiRuntime {
     }
     return view;
   }
-  transcript(
+  async transcript(
     agent: AgentKey,
     place: Place,
     working: boolean,
     signal: AbortSignal,
   ) {
     return readTranscript(
-      this.connection(agent).pi,
+      (await this.connection(agent)).pi,
       agent,
       place,
       working,
@@ -557,7 +597,7 @@ export class PiRuntime {
         if ([...entry.receipts.values()].some((taken) => taken.key === key))
           throw new Error("Wait for the active turn to finish first.");
       }
-      await this.connection(agent.key).pi.request("session", {
+      await (await this.connection(agent.key)).pi.request("session", {
         agent: agent.key,
         key,
         action,
@@ -577,6 +617,7 @@ export class PiRuntime {
   }
 
   dispose() {
+    this.disposed = true;
     for (const entry of this.agents.values()) entry.closed = true;
     this.agents.clear();
     void this.pi.dispose();
@@ -677,7 +718,7 @@ export class PiRuntime {
       );
       this.live(entry, agent.key);
       if (interrupted || (wake && current && !current())) return;
-      const { seen } = await this.connection(agent.key).pi.request<{
+      const { seen } = await (await this.connection(agent.key)).pi.request<{
         seen: number;
       }>("place", {
         agent: agent.key,
@@ -753,7 +794,14 @@ export class PiRuntime {
       );
       if (!submitted) return;
       const receipt = entry.receipts.get(request);
-      if (receipt) receipt.conversation = submitted.conversation;
+      if (receipt) {
+        if (
+          receipt.conversation !== undefined &&
+          receipt.conversation !== submitted.conversation
+        )
+          throw new Error("Pi changed its admitted conversation");
+        receipt.conversation = submitted.conversation;
+      }
       if (
         this.remember(agent.key, key, submitted.conversation, event.created_at)
       )
@@ -788,7 +836,7 @@ export class PiRuntime {
       .then((result) => {
         this.forget(entry, request);
         // A removed agent's turn continues when it is back.
-        return entry.closed ? { ok: true } : result;
+        return entry.closed && !entry.executionStopped ? { ok: true } : result;
       });
     const policy = {
       topLevel,
@@ -814,7 +862,7 @@ export class PiRuntime {
     interruptible?.(async () => {
       await handed;
       if (!submitted) return;
-      await this.connection(agent.key).pi.request("abort", {
+      await (await this.connection(agent.key)).pi.request("abort", {
         agent: agent.key,
         conversation: submitted.conversation,
       });
@@ -853,19 +901,26 @@ export class PiRuntime {
       signal.throwIfAborted();
       if (delivery.current && !delivery.current()) return { ok: true };
       request = `${key}/${crypto.randomUUID()}`;
-      entry.standalone.set(request, undefined);
-      const { submission, conversation } = await this.connection(
-        agent.key,
+      entry.standalone.set(request, { context: {} });
+      const { submission, conversation } = await (
+        await this.connection(agent.key)
       ).pi.request<{
         submission: number;
         conversation: number;
       }>("once", { agent: agent.key, text, request, ...turn });
-      entry.standalone.set(request, conversation);
+      const admitted = entry.standalone.get(request);
+      if (
+        admitted?.conversation !== undefined &&
+        admitted.conversation !== conversation
+      )
+        throw new Error("Pi changed its admitted conversation");
+      entry.standalone.set(request, { conversation, context: {} });
       // A removed agent's storage is closed, and stays so.
+      const pi = (await this.connection(agent.key)).pi;
       stop = () => {
         if (!entry.closed)
-          void this.connection(agent.key)
-            .pi.request("abort", { agent: agent.key, conversation })
+          void pi
+            .request("abort", { agent: agent.key, conversation })
             .catch(() => undefined);
       };
       signal.addEventListener("abort", stop, { once: true });
@@ -885,7 +940,7 @@ export class PiRuntime {
   }
 
   /** Runs a Buzz tool for Pi, for the conversation that called it. */
-  async tool(call: ToolCall): Promise<ToolResult> {
+  async tool(call: ToolCall, execution?: AgentExecution): Promise<ToolResult> {
     const entry = this.agents.get(call.agent);
     const client =
       entry?.handle &&
@@ -893,18 +948,27 @@ export class PiRuntime {
         relayAuthor: this.reads(call.agent)?.relayAuthor?.(),
         signingAuthority: this.reads(call.agent)?.workflowAuthority(),
         read: (path) => {
-          const execution = this.execution?.(call.agent);
           return execution
             ? execution.readFile(path, { cwd: execution.binding.workspace })
             : this.readFile(path, { cwd: entry.config.workspace });
         },
-        check: () => this.execution?.(call.agent)?.signal.throwIfAborted(),
+        check: () => execution?.signal.throwIfAborted(),
         memories: (slug) => this.memories(call.agent, slug),
         remembered: () => this.forgetMemory(call.agent),
       });
     try {
       const reply = await callSessionTool(
-        client,
+        client && execution
+          ? {
+              ...client,
+              media: async () => {
+                execution.signal.throwIfAborted();
+                throw new Error(
+                  "Media download is unavailable for remote Pi agents.",
+                );
+              },
+            }
+          : client,
         call.context,
         call.name,
         call.arguments,
@@ -930,7 +994,13 @@ export class PiRuntime {
     let active = entry.active.get(event.conversation);
     if (event.type === "placed") {
       const receipt = entry.receipts.get(event.request);
+      const standalone = entry.standalone.get(event.request);
+      if (standalone && standalone.conversation === undefined)
+        standalone.conversation = event.conversation;
       if (!receipt) return;
+      if (receipt.conversation === undefined)
+        receipt.conversation = event.conversation;
+      if (receipt.conversation !== event.conversation) return;
       active ??= new Map();
       entry.active.set(event.conversation, active);
       const before = active.get(receipt.scope);
@@ -1001,13 +1071,16 @@ export class PiRuntime {
     current: () => boolean,
   ): Promise<{ submission: number; conversation: number } | false | undefined> {
     try {
-      return await this.connection(agent).pi.request("deliver", params);
+      return await (await this.connection(agent)).pi.request("deliver", params);
     } catch (error) {
       if (!(error instanceof PiStopped) || entry.closed) throw error;
       try {
         await this.reopen(entry, agent);
         if (!current()) return;
-        return await this.connection(agent).pi.request("deliver", params);
+        return await (await this.connection(agent)).pi.request(
+          "deliver",
+          params,
+        );
       } catch (again) {
         // The stopped host may have taken it, and nothing waits for it now.
         entry.abandoned = true;
@@ -1046,8 +1119,8 @@ export class PiRuntime {
    * would continue them. `current` is the request being delivered,
    * which its own run waits for. */
   private async adopt(entry: Entry, agent: AgentKey, current?: string) {
-    const { submissions: unfinished } = await this.connection(
-      agent,
+    const { submissions: unfinished } = await (
+      await this.connection(agent)
     ).pi.request<{
       submissions: readonly {
         submission: number;
@@ -1094,7 +1167,10 @@ export class PiRuntime {
           aborted.add(conversation);
         } else
           waits.push(async () => {
-            entry.standalone.set(request, conversation);
+            entry.standalone.set(request, {
+              conversation,
+              context: context ?? {},
+            });
             try {
               await this.settle(entry, agent, submission);
             } catch {
@@ -1167,7 +1243,7 @@ export class PiRuntime {
     // Ending the others continues none; until they are ended, nothing waits.
     if (dropped.length)
       try {
-        await this.connection(agent).pi.request("drop", {
+        await (await this.connection(agent)).pi.request("drop", {
           agent,
           submissions: dropped,
         });
@@ -1183,7 +1259,7 @@ export class PiRuntime {
     // when an abort fails: how they end meanwhile is still reported.
     try {
       for (const conversation of aborted)
-        await this.connection(agent).pi.request("abort", {
+        await (await this.connection(agent)).pi.request("abort", {
           agent,
           conversation,
         });
@@ -1217,7 +1293,7 @@ export class PiRuntime {
   }
 
   private async open(agent: AgentKey) {
-    await this.connection(agent).pi.request("open", {
+    await (await this.connection(agent)).pi.request("open", {
       agent,
       tools: sessionTools(this.added()),
       hint: sessionHint(this.added()),
@@ -1242,7 +1318,7 @@ export class PiRuntime {
       let waited: Waited | { status: "reopen" };
       try {
         if (attempt) await this.reopen(entry, agent);
-        waited = await this.connection(agent).pi.request("wait", {
+        waited = await (await this.connection(agent)).pi.request("wait", {
           agent: agent,
           submission,
           ...(request ? { request } : {}),
@@ -1252,6 +1328,8 @@ export class PiRuntime {
           throw abandon(error);
         continue;
       }
+      if (entry.executionStopped)
+        throw new Error("The agent execution stopped");
       if (waited.status !== "reopen") return waited;
       if (attempt || entry.closed)
         throw abandon(new Error("Pi's storage for this agent keeps failing"));
@@ -1269,7 +1347,7 @@ export class PiRuntime {
     effort?: string,
   ) {
     const { instructions, scope } = entry.config;
-    const execution = this.execution?.(agent);
+    const execution = await this.execution?.(agent);
     const workspace = execution
       ? await execution.resolveDirectory(execution.binding.workspace)
       : entry.config.workspace;
@@ -1284,7 +1362,9 @@ export class PiRuntime {
       instructions: systemPrompt({
         scope,
         cwd: workspace,
-        repositories: this.repositories(this.reads(agent)?.scope),
+        repositories: execution
+          ? ""
+          : this.repositories(this.reads(agent)?.scope),
         ...(entry.name
           ? { agent: { name: entry.name, pubkey: pubkeyOf(agent) } }
           : {}),
