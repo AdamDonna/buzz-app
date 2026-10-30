@@ -98,7 +98,9 @@ function BestieTab({ relay, agent }: { relay: RelayData; agent: Agent }) {
     (choice) => choice.pubkey !== agent.pubkey,
   );
   return (
-    <>
+    // Its own size container: rows wrap their buttons to the panel's width,
+    // as each agent type's settings form does, and nothing widens the tab.
+    <div className="grid gap-6 [container-type:inline-size]">
       <SettingsGroup>
         <PreferenceRow
           icon={<BestieIcon size="1rem" />}
@@ -140,6 +142,6 @@ function BestieTab({ relay, agent }: { relay: RelayData; agent: Agent }) {
         />
       </SettingsGroup>
       {bestie.view}
-    </>
+    </div>
   );
 }
