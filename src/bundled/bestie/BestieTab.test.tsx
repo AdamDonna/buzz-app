@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import type { Agent, Agents } from "../../features/agents/service";
+import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
 import { readView, writeView } from "../../shared/view-state";
 import { bestieTab } from "./BestieTab";
@@ -369,15 +369,19 @@ it("checks in every hour only while memory is on, with a timer in the owner's DM
   rerender(<Tab agent={on} />);
   expect(hourly()).not.toBeChecked();
   await user.click(hourly());
-  const [, change] = save.mock.lastCall ?? [];
-  expect(change?.config).toEqual({
-    instructions: withFeature(remembering, checkinHourly, true),
+  // The timer first, then the instructions that say what it is for.
+  expect(save).toHaveBeenCalledTimes(2);
+  const [[, timers], [, instructions]] = save.mock.calls as [
+    [string, AgentChange],
+    [string, AgentChange],
+  ];
+  expect(instructions).toEqual({
+    config: { instructions: withFeature(remembering, checkinHourly, true) },
+    base,
   });
-  expect(change?.base).toBe(base);
   // Turning it on lets the agent's Attention run.
-  expect(change?.attentionEnabled).toBe(true);
-  const timer = change?.attention?.["watch/bestie-hourly-check-in"];
-  expect(timer).toMatchObject({
+  expect(timers.attentionEnabled).toBe(true);
+  expect(timers.attention?.["watch/bestie-hourly-check-in"]).toMatchObject({
     type: "timer",
     interest_id: "bestie-hourly-check-in",
     interval_secs: 3600,
@@ -387,7 +391,7 @@ it("checks in every hour only while memory is on, with a timer in the owner's DM
     enabled: true,
   });
   // The objects are ones Attention accepts.
-  for (const [slug, value] of Object.entries(change?.attention ?? {}))
+  for (const [slug, value] of Object.entries(timers.attention ?? {}))
     expect(validateObject(slug, value)).toBeUndefined();
 
   // On means the section and the timer are both there.
@@ -405,25 +409,41 @@ it("checks in every hour only while memory is on, with a timer in the owner's DM
   expect(hourly()).not.toBeChecked();
   rerender(<Tab agent={checking} />);
 
-  // Memory off takes check-ins with it, and leaves Attention's switch alone.
-  await user.click(screen.getByRole("switch", { name: "Remembers you" }));
-  expect(save).toHaveBeenLastCalledWith(ada.key, {
-    config: { instructions: "Be brief." },
-    base,
+  const removed = {
     attention: {
       "interest/bestie-hourly-check-in": null,
       "watch/bestie-hourly-check-in": null,
     },
-  });
+  };
+  // Memory off takes check-ins with it, and leaves Attention's switch alone.
+  save.mockClear();
+  await user.click(screen.getByRole("switch", { name: "Remembers you" }));
+  expect(save.mock.calls).toEqual([
+    [ada.key, removed],
+    [ada.key, { config: { instructions: "Be brief." }, base }],
+  ]);
 
   // Check-ins off removes only their section and timer.
+  save.mockClear();
   await user.click(hourly());
-  expect(save).toHaveBeenLastCalledWith(ada.key, {
-    config: { instructions: remembering.trimEnd() },
-    base,
-    attention: {
-      "interest/bestie-hourly-check-in": null,
-      "watch/bestie-hourly-check-in": null,
-    },
-  });
+  expect(save.mock.calls).toEqual([
+    [ada.key, removed],
+    [ada.key, { config: { instructions: remembering.trimEnd() }, base }],
+  ]);
+
+  // Left on after memory went some other way, it can still be turned off.
+  rerender(
+    <Tab
+      agent={
+        {
+          ...checking,
+          config: {
+            instructions: withFeature("Be brief.", checkinHourly, true),
+          },
+        } as Agent
+      }
+    />,
+  );
+  expect(hourly()).toBeChecked();
+  expect(hourly()).not.toHaveAttribute("aria-disabled", "true");
 });

@@ -54,7 +54,7 @@ export const checkinHourly: Feature = {
   id: "checkin.hourly",
   title: "Every hour",
   description:
-    "Bestie wakes once an hour while Buzz is open, to tidy its memory and tell you only what matters. Each wake uses your tokens. Turning this on also lets Bestie's other watches run on this device.",
+    "Bestie wakes once an hour while Buzz is open, to tidy its memory and tell you only what matters. Each wake uses your tokens. Turning this on also runs Bestie's other watches on this device.",
   version: 1,
   requires: "memory",
   timer: {
@@ -67,7 +67,7 @@ export const checkinHourly: Feature = {
   text: `# Hourly upkeep
 This runs only when your hourly check-in timer wakes you with "Hourly upkeep wake", in your DM with the owner. That wake is an internal maintenance wake, not a user message. A successful run may change nothing and send nothing. mem/heartbeat holds the machine state for upkeep; it is not for facts about the owner.
 
-1. LOAD. mem_get mem/heartbeat; if it is absent, create it with channels = [the DM the wake arrived in]. mem_get mem/user. For each channel in mem/heartbeat, read the messages since its last-processed created_at. Ignore upkeep wakes. If nothing is new, no follow-up is due, and the daily review is done for today (the owner's timezone from mem/user, else UTC), skip to 6.
+1. LOAD. mem_get mem/heartbeat; if it is absent, create it with channels = [the DM the wake arrived in]. mem_get mem/user. For each channel in mem/heartbeat, read the messages since its last-processed created_at, skipping any you already processed. If nothing is new, no follow-up is due, and the daily review is done for today (the owner's timezone from mem/user, else UTC), skip to 6.
 2. IDENTIFY WHAT MATTERS. Look for new durable facts or preferences, corrections, meaningful developments, and new, changed, resolved or declined open loops. Use the owner's own messages as evidence and keep their event ids.
 3. RECONCILE MEMORY. Facts, preferences and open loops go to mem/user. Significant developments are appended to mem/notes/<today>. Longer-term knowledge goes to mem/memory, only if it adds something mem/user does not.
 4. ONCE A DAY (the first run after midnight owner time). Re-read recent notes, mem/user and mem/memory. Remove duplication and superseded claims; keep unrelated valid facts and unresolved loops. Note what helped and what caused friction; save only a concrete, evidence-backed lesson to mem/memory. Never rewrite core or these instructions. Set last_daily_review.

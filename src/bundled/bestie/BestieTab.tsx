@@ -127,6 +127,8 @@ function BestieTab({
 }) {
   const { session, scope } = useRelayConnection(relay);
   const bestie = useBestieChoice(session, scope ?? "");
+  // One save at a time: each switch saves from the instructions it shows.
+  const [saving, setSaving] = useState(false);
   const others = bestie.choices.selectable.filter(
     (choice) => choice.pubkey !== agent.pubkey,
   );
@@ -171,6 +173,8 @@ function BestieTab({
             agent={agent}
             session={session}
             feature={feature}
+            saving={saving}
+            setSaving={setSaving}
           />
         ))}
       </SettingsGroup>
@@ -183,6 +187,8 @@ function BestieTab({
             agent={agent}
             session={session}
             feature={feature}
+            saving={saving}
+            setSaving={setSaving}
           />
         ))}
       </SettingsGroup>
@@ -211,13 +217,16 @@ function FeatureSwitch({
   agent,
   session,
   feature,
+  saving,
+  setSaving,
 }: {
   agents: TabAgents;
   agent: Agent;
   session: RelaySession;
   feature: Feature;
+  saving: boolean;
+  setSaving(saving: boolean): void;
 }) {
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   // A type without `adopt` has no instructions, as `updateKind` says.
   if (!agents.types().find(({ key }) => key === agent.type)?.adopt)
@@ -238,6 +247,7 @@ function FeatureSwitch({
     typeof config.instructions === "string" ? config.instructions : "";
   const required = FEATURES.find(({ id }) => id === feature.requires);
   const blocked = !!required && !featureOn(agent, instructions, required);
+  const checked = featureOn(agent, instructions, feature);
   const run = async (task: () => Promise<void>) => {
     setSaving(true);
     setError(undefined);
@@ -296,6 +306,15 @@ function FeatureSwitch({
           channel,
         };
       }
+      // Attention first: if the instructions then fail to save, the half left
+      // reads as off, and the switch can finish either way.
+      if (Object.keys(attention).length)
+        await agents.save(agent.key, {
+          attention,
+          // Its timer runs only while the agent's Attention is on. Off leaves
+          // it on: the agent's other watches may need it.
+          ...(timer && { attentionEnabled: true }),
+        });
       await agents.save(agent.key, {
         config: {
           ...config,
@@ -307,10 +326,6 @@ function FeatureSwitch({
               ),
         },
         ...(agent.configBase && { base: agent.configBase }),
-        ...(Object.keys(attention).length && { attention }),
-        // Its timer runs only while the agent's Attention is on. Off leaves
-        // it on: the agent's other watches may need it.
-        ...(timer && { attentionEnabled: true }),
       });
     });
   const alert = error && (
@@ -354,8 +369,9 @@ function FeatureSwitch({
             ? `Turn on ${required.title} first.`
             : feature.description
         }
-        checked={featureOn(agent, instructions, feature)}
-        disabled={saving || blocked}
+        checked={checked}
+        // A check-in left on without memory can still be turned off.
+        disabled={saving || (blocked && !checked)}
         onCheckedChange={(on) => void save(on)}
       />
       {alert}
