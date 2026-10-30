@@ -49,14 +49,18 @@ async function save(account: Account, agent: string | null) {
   for (const listener of listeners) listener();
   try {
     await account.write(agent);
+    // Known with its value, before it stops counting as pending.
+    saved.set(account, agent ?? undefined);
+    // A failed choice after this falls back to it, not to an older read.
+    readValues.set(account, agent ?? undefined);
     known.add(account);
   } finally {
     saving.set(account, (saving.get(account) ?? 1) - 1);
   }
 }
-// Explicit choices on this device, so a failed one gives way to a newer one
-// but not to an automatic pick.
-let turns = 0;
+// Explicit choices on this device by scope, so a failed one gives way to a
+// newer one but not to an automatic pick.
+const turns = new Map<string, number>();
 function subscribeSaved(listener: () => void) {
   listeners.add(listener);
   return () => void listeners.delete(listener);
@@ -99,7 +103,7 @@ export async function chooseDefaultAgent(
   if (account) {
     explicit.add(account);
   }
-  turns += 1;
+  turns.set(scope, (turns.get(scope) ?? 0) + 1);
   // A choice this device can't cache still applies here, so it is still saved
   // to the account.
   setDefaultAgent(scope, pubkey);
@@ -140,7 +144,8 @@ export async function chooseDefaultAgent(
 export async function clearDefaultAgent(session: RelaySession, scope: string) {
   const account = session.mainAgent;
   if (account) explicit.add(account);
-  const turn = ++turns;
+  const turn = (turns.get(scope) ?? 0) + 1;
+  turns.set(scope, turn);
   const previous = chosenAgent(scope);
   cache(scope, null);
   if (!account) return;
@@ -149,7 +154,7 @@ export async function clearDefaultAgent(session: RelaySession, scope: string) {
     await save(account, null);
   } catch {
     // Over an automatic pick made meanwhile, not a newer choice.
-    if (previous && turn === turns) setDefaultAgent(scope, previous);
+    if (previous && turn === turns.get(scope)) setDefaultAgent(scope, previous);
     remember(account, saved.get(account));
     throw new Error(
       "Removing your bestie couldn't be saved to your account. Try again.",

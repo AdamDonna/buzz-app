@@ -991,3 +991,20 @@ it("brings the removed Bestie back over an automatic pick, but not over a newer 
     "a".repeat(64),
   );
 });
+
+it("a choice in another community doesn't keep a failed removal from coming back", async () => {
+  const here = accountSession("b".repeat(64));
+  const there = accountSession("a".repeat(64));
+  setDefaultAgent("turn-here", "b".repeat(64));
+  let fail!: () => void;
+  here.account.write.mockImplementationOnce(
+    () => new Promise<void>((_, reject) => (fail = () => reject(new Error()))),
+  );
+  const clearing = clearDefaultAgent(here.session, "turn-here");
+  await chooseDefaultAgent(there.session, "turn-there", "a".repeat(64));
+  fail();
+  await expect(clearing).rejects.toThrow();
+  expect(readView("turn-here", "solo:default-agent", null)).toBe(
+    "b".repeat(64),
+  );
+});
