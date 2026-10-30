@@ -405,6 +405,10 @@ it("checks in every hour only while memory is on, with a timer in the owner's DM
   } as unknown as Agent;
   rerender(<Tab agent={checking} />);
   expect(hourly()).toBeChecked();
+  // With Attention not running here, as while Watching is off, it says so.
+  expect(screen.getByText(/^Paused: watches aren't running/)).toBeVisible();
+  rerender(<Tab agent={{ ...checking, attentionEnabled: true } as Agent} />);
+  expect(screen.queryByText(/^Paused/)).toBeNull();
   rerender(<Tab agent={{ ...checking, attention: {} } as Agent} />);
   expect(hourly()).not.toBeChecked();
   rerender(<Tab agent={checking} />);

@@ -74,7 +74,10 @@ instructions and an hourly Attention timer, `watch/bestie-hourly-check-in`,
 that wakes Bestie in your DM with it; it also turns on the agent's Attention,
 which the Watching tab shows. Off removes the section and the timer and leaves
 Attention on, since the agent's other watches may need it. The timer runs while
-Buzz is open; after a sleep it runs once, not once for each missed hour. Each
+Buzz is open and the Watching plugin is on: this plugin doesn't call
+`controlAttention()`, so turning Watching off still turns Attention off for
+every agent. While the timer can't run, the row says it is paused. After a
+sleep it runs once, not once for each missed hour. Each
 check-in is a feature in `features.ts`, so another kind is one more entry.
 
 ### Hosted setup fallback

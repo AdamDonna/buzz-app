@@ -73,9 +73,6 @@ export const apply: PluginModule["apply"] = (ctx) => {
     });
   });
   ctx.effect(() => () => listeners.clear());
-  // Check-ins are Attention timers, which run only while a plugin that
-  // controls Attention is on.
-  ctx.agents.controlAttention();
   ctx.agents.registerTab(bestieTab(ctx.relay, ctx.agents));
   ctx.pages.register({
     id: "bestie",

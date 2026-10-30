@@ -365,9 +365,13 @@ function FeatureSwitch({
       <SwitchPreferenceRow
         label={feature.title}
         description={
-          blocked && required
+          blocked && required && !checked
             ? `Turn on ${required.title} first.`
-            : feature.description
+            : // Attention reads off while no plugin shows it, as when the
+              // Watching plugin is off, or while the agent's switch is off.
+              checked && feature.timer && !agent.attentionEnabled
+              ? "Paused: watches aren't running on this device. Turn on the Watching plugin and its Run watches switch."
+              : feature.description
         }
         checked={checked}
         // A check-in left on without memory can still be turned off.
