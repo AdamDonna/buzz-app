@@ -3794,6 +3794,52 @@ it("offers Make my bestie from the card's actions button", async () => {
   expect(screen.getByRole("gridcell", { name: "Bea" })).toBeVisible();
 });
 
+it("offers Make my bestie only for an agent on this device, and says why", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const sky: Agent = { ...agent("Sky", 2), place: "hosted" };
+  const view = setup([ada, sky]);
+  const rows = [ada, sky].map((each) => ({
+    pubkey: each.pubkey,
+    name: each.name,
+    managed: true,
+  }));
+  const choices = {
+    status: "ready",
+    complete: true,
+    pending: false,
+    identities: rows,
+    selectable: rows,
+    archives: { status: "unavailable", archived: [] },
+  };
+  const connection = {
+    status: "ready",
+    scope: "local-only-bestie",
+    session: {
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe: () => () => {},
+        retain: () => () => {},
+      },
+    },
+  };
+  const relay = {
+    snapshot: () => connection,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
+  const card = await screen.findByRole("gridcell", { name: /^Sky/ });
+  await user.click(
+    within(card).getByRole("button", { name: "Actions for Sky" }),
+  );
+  expect(
+    await screen.findByRole("menuitem", { name: "Make my bestie" }),
+  ).toHaveAttribute("aria-disabled", "true");
+  expect(
+    screen.getByText("Only agents on this device can be your Bestie for now."),
+  ).toBeVisible();
+});
+
 it("keeps a failed Bestie replacement visible and retries the account save", async () => {
   const user = userEvent.setup();
   const ada = agent("Ada", 1);

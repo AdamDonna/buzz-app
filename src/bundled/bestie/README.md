@@ -39,7 +39,9 @@ and use readable owner labels before abbreviated-key fallbacks.
 
 The agent you made your Bestie (with **Make my bestie** in Agents) gets a
 **Bestie** tab on its agent page while it runs on this device. **Change** picks
-another agent and asks before replacing your Bestie. **Remove as Bestie** asks,
+another agent and asks before replacing your Bestie. Only agents on this device
+can be your Bestie for now, in Change, in **Make my bestie** and in **Make my
+Bestie again**: a remote one isn't set up for it yet. **Remove as Bestie** asks,
 then saves no Bestie to your account: the agent stays, its check-ins stop, and
 its memory section and private channels stay, which its Former Bestie tab can
 turn off.

@@ -61,7 +61,7 @@ import {
   type SharedDefinition,
 } from "../../features/agents/agent-share";
 import { useDefaultAgent } from "../../features/solo/default-agent";
-import { useBestieChoice } from "./BestieChoice";
+import { BESTIE_LOCAL_ONLY, useBestieChoice } from "./BestieChoice";
 import type { RelayData } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
 import { targetKey } from "../../features/navigation/targets";
@@ -92,6 +92,7 @@ import { Input } from "../../shared/design-system/ui/Input";
 import {
   ContextMenuRoot,
   ContextMenuTrigger,
+  MenuNote,
   MenuSeparator,
   MenuPopup,
   MenuItem,
@@ -1011,9 +1012,14 @@ function InventoryCard({
     <>
       {bestie && !bestie.selected && (
         <>
-          <MenuItem disabled={!bestie.available} onClick={bestie.onMake}>
+          {/* A remote agent isn't set up to be Bestie yet. */}
+          <MenuItem
+            disabled={!bestie.available || agent.place !== "here"}
+            onClick={bestie.onMake}
+          >
             Make my bestie
           </MenuItem>
+          {agent.place !== "here" && <MenuNote>{BESTIE_LOCAL_ONLY}</MenuNote>}
           <MenuSeparator />
         </>
       )}

@@ -80,9 +80,18 @@ const relay = {
   snapshot: () => connection,
   subscribe: () => () => {},
 } as unknown as RelayData;
+const here = {
+  agents: [
+    { pubkey: ADA, place: "here" },
+    { pubkey: BEA, place: "here" },
+  ],
+};
 const agents = {
   save: async () => {},
   types: () => [{ key: "claude-code", adopt: () => ({}) }],
+  // Both are on this device, so either can be made Bestie.
+  snapshot: () => here,
+  subscribe: () => () => {},
 };
 const agent = {
   key: ADA,

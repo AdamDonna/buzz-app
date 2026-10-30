@@ -20,6 +20,11 @@ export function onBestieMade(listener: (pubkey: string) => void) {
   return () => void made.delete(listener);
 }
 
+/** Why only some agents can be made Bestie: a remote one isn't set up for
+ * it yet. */
+export const BESTIE_LOCAL_ONLY =
+  "Only agents on this device can be your Bestie for now.";
+
 /** Making an agent Bestie, wherever it is offered: `make` asks before
  * replacing an explicitly saved Bestie, in the dialog `view` renders. */
 export function useBestieChoice(session: RelaySession, scope: string) {

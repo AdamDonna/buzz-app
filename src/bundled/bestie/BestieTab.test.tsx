@@ -35,13 +35,17 @@ const member = (name: string, digit: string): Agent =>
 const ada = member("Ada", "a");
 const bea = member("Bea", "b");
 
-/** Agents that save as a synced editor would: the agent's next config. */
-function host(types = ["test/echo"]) {
+/** Agents that save as a synced editor would: the agent's next config. The
+ * agents on this device are Ada and Bea. */
+function host(types = ["test/echo"], here: Agent[] = [ada, bea]) {
   const save = vi.fn<Agents["save"]>(async () => {});
+  const snapshot = { agents: here, running: here };
   const agents = {
     save,
     types: () => types.map((key) => ({ key, adopt: () => ({}) })),
-  } as unknown as Pick<Agents, "save" | "types">;
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+  } as unknown as Pick<Agents, "save" | "types" | "snapshot" | "subscribe">;
   return { agents, save };
 }
 
@@ -201,6 +205,22 @@ it("puts this device back when a Change still saving fails after the panel close
   stop?.();
 });
 
+it("offers only agents on this device in Change, and says why", async () => {
+  const user = userEvent.setup();
+  const cara = { ...member("Cara", "c"), place: "hosted" } as Agent;
+  const { relay } = community(ada.pubkey, [ada, bea, cara]);
+  const Tab = bestieTab(relay, host([], [ada, bea, cara]).agents).component;
+  await act(async () => {
+    render(<Tab agent={ada} />);
+  });
+  await user.click(screen.getByRole("button", { name: "Change" }));
+  expect(await screen.findByRole("menuitem", { name: "Bea" })).toBeVisible();
+  expect(screen.queryByRole("menuitem", { name: "Cara" })).toBeNull();
+  expect(
+    screen.getByText("Only agents on this device can be your Bestie for now."),
+  ).toBeVisible();
+});
+
 it("keeps Change unavailable while there is no other agent to choose", async () => {
   const { relay } = community(ada.pubkey, [ada]);
   const Tab = bestieTab(relay, host().agents).component;
@@ -208,6 +228,31 @@ it("keeps Change unavailable while there is no other agent to choose", async () 
     render(<Tab agent={ada} />);
   });
   expect(screen.getByRole("button", { name: "Change" })).toBeDisabled();
+  // The menu's note can't be opened, so the row says why instead.
+  expect(
+    screen.getByText(
+      "It's pinned at the top of Buzz, with your DM as its home. Only agents on this device can be your Bestie for now.",
+    ),
+  ).toBeVisible();
+});
+
+it("offers no way back to a former Bestie that isn't on this device, and says why", async () => {
+  const { relay } = community(bea.pubkey);
+  const remote = {
+    ...ada,
+    place: "hosted",
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  const Tab = formerBestieTab(relay, host([], [bea, remote]).agents).component;
+  await act(async () => {
+    render(<Tab agent={remote} />);
+  });
+  expect(
+    screen.getByRole("button", { name: "Make my Bestie again" }),
+  ).toBeDisabled();
+  expect(
+    screen.getByText("Only agents on this device can be your Bestie for now."),
+  ).toBeVisible();
 });
 
 it("tells the host only when the Bestie or its community changes", async () => {
