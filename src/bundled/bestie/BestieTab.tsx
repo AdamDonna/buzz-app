@@ -56,13 +56,23 @@ function savedBestie(relay: RelayData) {
   return {
     snapshot: () => store().snapshot(),
     subscribe(listener: () => void) {
+      // The saved choice's sources also change for unrelated view state, so
+      // only a different Bestie, or community, is passed on.
       let following = store();
-      let stop = following.subscribe(listener);
+      let last = following.snapshot();
+      const changed = () => {
+        const next = following.snapshot();
+        if (next === last) return;
+        last = next;
+        listener();
+      };
+      let stop = following.subscribe(changed);
       const stopRelay = relay.subscribe(() => {
         if (store() === following) return;
         stop();
         following = store();
-        stop = following.subscribe(listener);
+        last = following.snapshot();
+        stop = following.subscribe(changed);
         listener();
       });
       return () => {

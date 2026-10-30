@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Agent } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
+import { writeView } from "../../shared/view-state";
 import { bestieTab } from "./BestieTab";
 
 afterEach(() => {
@@ -60,11 +61,25 @@ function community(saved: string | undefined, agents = [ada, bea]) {
       },
     },
   };
+  let current: unknown = connection;
+  const relayListeners = new Set<() => void>();
   const relay = {
-    snapshot: () => connection,
-    subscribe: () => () => {},
+    snapshot: () => current,
+    subscribe: (listener: () => void) => {
+      relayListeners.add(listener);
+      return () => void relayListeners.delete(listener);
+    },
   } as unknown as RelayData;
-  return { relay, mainAgent };
+  /** Replaces the session, as a reconnection does. */
+  const reconnect = (scope: string) => {
+    current = {
+      ...connection,
+      scope,
+      session: { ...connection.session, mainAgent: { ...mainAgent } },
+    };
+    for (const listener of relayListeners) listener();
+  };
+  return { relay, mainAgent, reconnect };
 }
 
 it("shows on the saved Bestie only, and moves when Change picks another", async () => {
@@ -112,4 +127,21 @@ it("keeps Change unavailable while there is no other agent to choose", async () 
     render(<Tab agent={ada} />);
   });
   expect(screen.getByRole("button", { name: "Change" })).toBeDisabled();
+});
+
+it("tells the host only when the Bestie or its community changes", async () => {
+  const { relay, reconnect } = community(ada.pubkey);
+  const tab = bestieTab(relay);
+  const changed = vi.fn();
+  const stop = tab.subscribe?.(changed);
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(true));
+  changed.mockClear();
+  // Other view state in the community, such as a draft, isn't a change.
+  writeView(SCOPE, "composer:draft", "hello");
+  expect(changed).not.toHaveBeenCalled();
+  // A new session in another community is.
+  reconnect(`https://other.example:${OWNER}`);
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(tab.when?.(ada)).toBe(false);
+  stop?.();
 });
