@@ -8,6 +8,20 @@ import type { RelaySession } from "../../features/relay/session";
 import { onBestieMade } from "../agents/BestieChoice";
 import { BestieChooser } from "./ChooseBestie";
 
+// The New agent dialog creates hosted Cara at once.
+vi.mock("../agents/AgentCreateDialog", () => ({
+  AgentCreateDialog: ({ onCreated }: { onCreated(agent: unknown): void }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onCreated({ pubkey: "c".repeat(64), name: "Cara", place: "hosted" })
+      }
+    >
+      Create Cara
+    </button>
+  ),
+}));
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -85,4 +99,19 @@ it("saves the agent chosen here as Bestie, and tells the plugin", async () => {
   );
   await vi.waitFor(() => expect(made).toHaveBeenCalledWith(ada.pubkey));
   stop();
+});
+
+it("says a hosted agent created here can't be Bestie yet", async () => {
+  const user = userEvent.setup();
+  const { session, agents, mainAgent } = community();
+  render(<BestieChooser session={session} scope={SCOPE} agents={agents} />);
+  await user.click(screen.getByRole("button", { name: "Choose your bestie" }));
+  await user.click(screen.getByRole("button", { name: "New agent" }));
+  await user.click(screen.getByRole("button", { name: "Create Cara" }));
+  expect(
+    await screen.findByText(
+      "Cara was created. Only agents on this device can be your Bestie for now.",
+    ),
+  ).toBeVisible();
+  expect(mainAgent.write).not.toHaveBeenCalled();
 });

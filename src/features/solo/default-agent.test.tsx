@@ -1081,3 +1081,52 @@ it("keeps a choice made here while a deleted Bestie's account is read", async ()
   expect(account.saved()).toBe("a".repeat(64));
   stop();
 });
+
+it("says the choice is known again after clearing a deleted Bestie fails", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const store = savedAgentStore(session, "failed-clear");
+  const heard = vi.fn(() => store.known());
+  const stop = store.subscribe(() => heard());
+  await act(async () => account.resolve());
+  account.write.mockRejectedValueOnce(new Error("offline"));
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  forgetDefaultAgent("b".repeat(64));
+  await act(async () => account.resolve());
+  await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+  // The last thing listeners heard is that the account's choice is known.
+  expect(heard.mock.results.at(-1)?.value).toBe(true);
+  expect(account.saved()).toBe("b".repeat(64));
+  stop();
+});
+
+it("saves none when the account is read after its Bestie was deleted here", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const store = savedAgentStore(session, "deleted-unread");
+  const stop = store.subscribe(() => {});
+  // Deleted while the account's first read is pending.
+  forgetDefaultAgent("b".repeat(64));
+  await act(async () => account.resolve());
+  // It isn't cached on this device again, and the account is read once more.
+  expect(readView("deleted-unread", "solo:default-agent", null)).toBeNull();
+  await act(async () => account.resolve());
+  await vi.waitFor(() => expect(account.write).toHaveBeenLastCalledWith(null));
+  expect(store.snapshot()).toBeUndefined();
+  stop();
+});
+
+it("falls back to a saved choice, not an older read, when a later choice fails", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const store = savedAgentStore(session, "fallback");
+  const stop = store.subscribe(() => {});
+  // A choice saved while the first read is pending.
+  await act(() => chooseDefaultAgent(session, "fallback", "a".repeat(64)));
+  await act(async () => account.resolve());
+  account.write.mockRejectedValueOnce(new Error("offline"));
+  await act(() =>
+    expect(
+      chooseDefaultAgent(session, "fallback", "c".repeat(64)),
+    ).rejects.toThrow(),
+  );
+  expect(store.snapshot()).toBe("a".repeat(64));
+  stop();
+});

@@ -140,6 +140,12 @@ export function BestieChooser({
           onClose={() => setCreating(false)}
           onCreated={(agent) => {
             setCreating(false);
+            if (agent.place !== "here") {
+              setError(
+                `${agent.name || "Your agent"} was created. ${BESTIE_LOCAL_ONLY}`,
+              );
+              return;
+            }
             void session.agentChoices
               .refresh(true, { fresh: true })
               .then(() => choose(agent.pubkey))
