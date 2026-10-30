@@ -191,6 +191,8 @@ The **Desktop previews** workflow sets `BUZZ_BUILDERLAB_URL` for all platform
 builds, including candidate-only runs. It defaults to `https://app.builderlab.xyz`.
 To override it, set the repository's non-secret Actions variable
 `BUZZ_BUILDERLAB_URL`; an unset or empty variable uses the production default.
+When `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` is set, the workflow supplies an
+empty `BUZZ_BUILDERLAB_URL` instead, because FI builds reject the legacy origin.
 
 ### Signing
 

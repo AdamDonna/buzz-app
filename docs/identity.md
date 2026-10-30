@@ -349,8 +349,9 @@ the marker is kept and Buzz shows a native error and exits without opening a
 window, so nothing recreates wiped storage and the next launch retries. Without
 wipe, local data stays: it is already scoped by public key, so signing back in
 with the same key finds it. Native federated sessions are removed by the same
-sign-out owner across indexed profiles and configurations. Builderlab and hosted-community
-logins live only in memory and end with the restart. Kept agents start only while the signed-in key
+sign-out owner across indexed profiles and configurations. Without FI, Builderlab and
+hosted-community logins live only in memory and end with the restart; an FI build signs
+them in through the native FI session instead, which restores after it. Kept agents start only while the signed-in key
 matches the owner in their saved attestation, checked before their key is read.
 
 ## Automatic backup consent hooks
@@ -448,6 +449,19 @@ The `/v1/nip-fi/agent-grant` and `/v1/nip-fi/agent-assertion` routes and
 standard endpoints defined by NIP-FI/NIP-FA. NIP-FI defines the
 `nip-fi-agent+jwt` assertion class and owner checks; that does not establish
 interoperability with another adapter's enrollment endpoints.
+
+In an FI build, Builderlab's remote-agent, hosted-community, known-community,
+Apps viewer and backup calls go through the native FI session. The renderer
+names only the public session revision. For API calls, native checks the
+plugin's authority/operation grant, enabled artifact revision, live
+registration and that revision; the Apps viewer exchange and backup check only
+that the revision is current. Each sends the adapter session as
+`Authorization: Bearer` to the identity origin only. A 401 fails that call
+without ending the session; native then checks the adapter's `GET /v1/session`
+once and ends the session only if the adapter refuses it there. Builderlab's
+Settings card has no sign-out of its own in an FI build: it links to Identity →
+Organization sign-in, which ends the shared session. Builderlab
+Apps' agent tools still need the legacy login and are absent in FI builds.
 
 The Node development host retains its supported broker flow.
 

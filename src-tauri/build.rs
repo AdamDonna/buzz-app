@@ -92,6 +92,9 @@ fn main() {
             "federated_identity_sign_in",
             "federated_identity_cancel_sign_in",
             "federated_identity_sign_out",
+            "federated_identity_register",
+            "federated_identity_unregister",
+            "federated_identity_request",
             "relay_socket_connect",
             "relay_socket_start",
             "relay_socket_send",
@@ -265,10 +268,12 @@ fn configure_enterprise_auth() {
 fn configure_federated_identity() {
     const NAME: &str = "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
     println!("cargo:rerun-if-env-changed={NAME}");
+    println!("cargo:rerun-if-env-changed=BUZZ_BUILDERLAB_URL");
     if let Some(raw) = std::env::var(NAME).ok().filter(|raw| !raw.is_empty()) {
         let config = federated_identity_config::Config::parse(&raw)
             .unwrap_or_else(|error| panic!("{error}"));
         for legacy in [
+            "BUZZ_BUILDERLAB_URL",
             "BUZZ_BUILD_ENTERPRISE_AUTH_RELAYS",
             "BUZZ_BUILD_ENTERPRISE_AUTH_ADAPTER_BASE_URL",
         ] {

@@ -131,7 +131,7 @@ it("gives each sign-in a separate viewer lifetime and revokes only deliberate si
   const session = createOAuthSession(async () => credential, revoke);
   await session.signIn();
   const first = session.viewerSession();
-  expect(first.credential).toBe(credential.value);
+  expect(first).toMatchObject({ credential: credential.value });
   expect(JSON.stringify(session.snapshot())).not.toContain(credential.value);
   session.cancel();
   expect(first.signal.aborted).toBe(true);

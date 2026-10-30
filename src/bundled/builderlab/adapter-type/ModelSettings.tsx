@@ -24,7 +24,7 @@ import {
   type RemoteAgent,
   type RemoteAgentModel,
 } from "../agents/client";
-import type { OAuthSession } from "../oauth/session";
+import type { BuilderlabSession } from "../session";
 import { AccountRecoverySheet, SettingsErrorSheet } from "./SignInFooter";
 import { effortLabel, modelChoice } from "./models";
 
@@ -47,9 +47,11 @@ export function ModelSettings({
   session,
   settings,
   harnessControl,
+  openIdentity,
 }: {
   client: AgentClient;
-  session: OAuthSession;
+  session: BuilderlabSession;
+  openIdentity?: (() => void) | undefined;
   harnessControl?: ReactNode;
   settings:
     | { agent: RemoteAgent; subject: string; email?: string }
@@ -231,6 +233,7 @@ export function ModelSettings({
     >
       <AccountRecoverySheet
         session={session}
+        openIdentity={openIdentity}
         active={accountProblem}
         email={email}
         mismatch={mismatch}

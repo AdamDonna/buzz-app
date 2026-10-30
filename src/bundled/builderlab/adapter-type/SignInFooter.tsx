@@ -20,10 +20,10 @@ import { AgentSaveFooter } from "../../../features/agents/AgentSaveButton";
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Header } from "../../../shared/design-system/ui/Header";
 import { browserLoginAvailable, oauthTarget } from "../oauth/browser";
-import type { OAuthSession } from "../oauth/session";
+import { nativeBuilderlab, type BuilderlabSession } from "../session";
 
 /** Account status replaces profile actions; the pane footer owns sign-in. */
-export function createProfileActions(session: OAuthSession) {
+export function createProfileActions(session: BuilderlabSession) {
   return function ProfileActions({ children }: { children: ReactNode }) {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
     if (login.status === "signed-in") return children;
@@ -159,11 +159,13 @@ export function AccountRecoverySheet({
   active,
   email,
   mismatch,
+  openIdentity,
 }: {
-  session: OAuthSession;
+  session: BuilderlabSession;
   active: boolean;
   email?: string | undefined;
   mismatch: boolean;
+  openIdentity?: (() => void) | undefined;
 }) {
   return (
     <SettingsErrorSheet
@@ -180,27 +182,33 @@ export function AccountRecoverySheet({
           : "This account can’t access Builderlab agents."
       }
       action={{
-        label: "Use another account",
-        href: active ? new URL("/logout", oauthTarget()).href : undefined,
-        run: () => session.signOut(),
+        label: nativeBuilderlab()
+          ? "Identity → Organization sign-in"
+          : "Use another account",
+        disabled: nativeBuilderlab() && !openIdentity,
+        href:
+          active && !nativeBuilderlab()
+            ? new URL("/logout", oauthTarget()).href
+            : undefined,
+        run: () => (nativeBuilderlab() ? openIdentity?.() : session.signOut()),
       }}
     />
   );
 }
 
 /** One account prompt for the whole hosted agent, independent of its active tab. */
-export function createSignInFooter(session: OAuthSession) {
+export function createSignInFooter(session: BuilderlabSession) {
   return function SignInFooter() {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
     const [slow, setSlow] = useState(false);
     useEffect(() => {
       setSlow(false);
-      if (login.status !== "pending") return;
+      if (login.status !== "pending" || login.checking) return;
       const timer = setTimeout(() => setSlow(true), 3000);
       return () => clearTimeout(timer);
-    }, [login.status]);
+    }, [login.status, login.checking]);
     const pending = login.status === "pending";
-    const waiting = pending && slow;
+    const waiting = pending && !login.checking && slow;
     const available = browserLoginAvailable();
     return (
       <AnimatePresence>
@@ -210,9 +218,11 @@ export function createSignInFooter(session: OAuthSession) {
             title="Sign in to Builderlab"
             description={
               <span role="status">
-                {waiting
-                  ? "Finish signing in to Builderlab in your browser, then return to Buzz."
-                  : "Use your Builderlab account to access this agent."}
+                {login.checking
+                  ? "Checking your Builderlab sign-in…"
+                  : waiting
+                    ? "Finish signing in to Builderlab in your browser, then return to Buzz."
+                    : "Use your Builderlab account to access this agent."}
               </span>
             }
           >

@@ -113,6 +113,8 @@ it("clears a revealed key when leaving identity settings and starts masked on re
 // Methods that need their receiver, like the real service's class methods.
 function bound(service: FederatedIdentity): FederatedIdentity {
   const self: FederatedIdentity = {
+    apiAvailable: service.apiAvailable,
+    request: service.request,
     snapshot: service.snapshot,
     subscribe: service.subscribe,
     signIn() {

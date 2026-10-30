@@ -32,7 +32,7 @@ import { useRowProfiles } from "../relay/react";
 import { rowProfileIds } from "../relay/membership";
 import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
 import { continuesMessageGroup } from "./message-grouping";
-import { MessageComposer } from "./MessageComposer";
+import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
 import { ChannelJoinNotice } from "./ChannelJoinNotice";
 import { useListedChannel } from "../relay/listed-channel";
 import type { CSSProperties } from "react";
@@ -70,6 +70,8 @@ export type ThreadPanelProps = {
   replyRequest?: number | undefined;
   /** Each new value focuses the reply box, keeping its target. */
   focusRequest?: number | undefined;
+  /** A saved draft carries its cancellable target through a delayed root read. */
+  autoFocus?: MessageComposerProps["autoFocus"];
   /** Inline Inbox visit retains and reveals its exact selected message. */
   revealSelected?: boolean | undefined;
   /** With revealSelected: each new value reveals the selected message again. */
@@ -378,6 +380,7 @@ function OwnedThreadPanel({
   disabled,
   replyRequest,
   focusRequest,
+  autoFocus,
   active = true,
   revealSelected,
   requireReadyRoot,
@@ -450,6 +453,7 @@ function OwnedThreadPanel({
       messageId={messageId}
       replyRequest={replyRequest}
       focusRequest={focusRequest}
+      autoFocus={autoFocus}
       active={active}
       revealSelected={revealSelected}
       requireReadyRoot={requireReadyRoot}
@@ -479,6 +483,7 @@ function ThreadMessages({
   disabled,
   replyRequest,
   focusRequest,
+  autoFocus,
   active,
   revealSelected,
   revealRequest,
@@ -503,6 +508,7 @@ function ThreadMessages({
   view: ThreadView;
   replyRequest?: number | undefined;
   focusRequest?: number | undefined;
+  autoFocus?: ThreadPanelProps["autoFocus"];
   active?: boolean | undefined;
   revealSelected?: boolean | undefined;
   revealRequest?: number | undefined;
@@ -1728,6 +1734,7 @@ function ThreadMessages({
           }
           editMessages={rows}
           focusRequest={pendingReplyFocus ?? 0}
+          autoFocus={autoFocus ?? false}
           onOpenLink={onOpenLink}
           canOpenLink={canOpenLink}
           onDraftSaved={onDraftSaved}

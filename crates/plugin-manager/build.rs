@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 #[path = "../build_env.rs"]
 mod build_env;
 
+#[path = "../../src-tauri/src/federated_identity/config.rs"]
+#[allow(dead_code)]
+mod federated_identity_config;
+
 const BUILDERLAB_URL_KEY: &str = "BUZZ_BUILDERLAB_URL";
 const BUILDERLAB_APPS_DOMAIN_KEY: &str = "BUZZ_BUILDERLAB_APPS_DOMAIN";
 const BUILDERLAB_API_BASE_PATH_KEY: &str = "BUZZ_BUILDERLAB_API_BASE_PATH";
@@ -90,8 +94,39 @@ fn main() {
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => panic!("Native build inputs must be UTF-8"),
     };
-    let (origin, api_base_path) = builderlab_target(&local, process(BUILDERLAB_URL_KEY))
-        .expect("Invalid Builderlab build configuration");
+    const FI: &str = "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
+    println!("cargo:rerun-if-env-changed={FI}");
+    let fi = std::env::var(FI)
+        .ok()
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| {
+            federated_identity_config::Config::parse(&raw)
+                .expect("Invalid FI deployment descriptor")
+        });
+    println!(
+        "cargo:rustc-env={FI}={}",
+        fi.as_ref()
+            .map(|config| serde_json::to_string(config).expect("public FI descriptor"))
+            .unwrap_or_default()
+    );
+    // An FI build signs in to Builderlab through its NIP-FI identity origin.
+    let (origin, api_base_path) = match &fi {
+        Some(config) => {
+            let legacy = build_env::load(&local, &[BUILDERLAB_URL_KEY], |_| {
+                process(BUILDERLAB_URL_KEY)
+            })
+            .expect("Invalid Builderlab build configuration");
+            if legacy
+                .get(BUILDERLAB_URL_KEY)
+                .is_some_and(|url| !url.is_empty())
+            {
+                panic!("BUZZ_BUILDERLAB_URL must be removed when FI is configured");
+            }
+            (config.identity_origin.clone(), config.api_base_path.clone())
+        }
+        None => builderlab_target(&local, process(BUILDERLAB_URL_KEY))
+            .expect("Invalid Builderlab build configuration"),
+    };
     let apps_domain = builderlab_apps_domain(&local, &origin, process(BUILDERLAB_APPS_DOMAIN_KEY))
         .expect("Invalid Builderlab Apps build configuration");
     println!("cargo:rustc-env=BUZZ_BUILDERLAB_ORIGIN={origin}");

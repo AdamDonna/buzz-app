@@ -79,8 +79,11 @@ in repository-root `.env.local` for development, or in the process running
 BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz bin/pnpm tauri build
 ```
 
-The bundled Builderlab and Hosted Communities plugins keep their own login
-against this origin, with or without the federated identity input below.
+Without the federated identity input below, the bundled Builderlab plugin keeps
+its own in-memory login against this origin. With it, Builderlab is the FI
+identity origin with `apiBasePath` less its `/api/goose/` suffix (another API
+base leaves Builderlab unconfigured), sign-in uses the native FI session, and a
+nonempty `BUZZ_BUILDERLAB_URL` fails the build.
 
 ## Federated identity build input
 

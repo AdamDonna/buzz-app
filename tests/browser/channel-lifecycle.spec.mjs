@@ -125,9 +125,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
     name: "Archive channel: Lifecycle channel",
   });
   await expect(dialog).toBeVisible();
-  await expect(
-    dialog.getByRole("button", { name: "Archive channel" }),
-  ).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await dialog.screenshot({
     path: testInfo.outputPath("lifecycle-confirmation.png"),
   });

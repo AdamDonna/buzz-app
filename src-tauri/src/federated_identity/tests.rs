@@ -213,6 +213,45 @@ async fn local_expiry_retires_a_cached_session_without_sending_it_upstream() {
 }
 
 #[tokio::test]
+async fn a_401_recheck_ends_only_a_session_the_adapter_refuses() {
+    let (base, server) = adapter_with_status(vec![
+        (
+            200,
+            serde_json::json!({"expires_at":"2099-01-01T00:00:00Z"}),
+        ),
+        (401, serde_json::json!({"error":"session_expired"})),
+    ])
+    .await;
+    let store = Arc::new(Memory::default());
+    let host = at_adapter(store.clone(), base);
+    let session = record();
+    *store.raw.lock().unwrap() = Some(session.raw.clone());
+    {
+        let mut state = host.state();
+        state.snapshot.revision = session.record.revision.clone();
+        state.snapshot.status = Status::SignedIn;
+        state.session = Some(session.clone());
+        state.restored = true;
+    }
+    let revision = host.snapshot().revision;
+    // A stale revision asks nothing.
+    host.recheck("stale").await;
+    host.recheck(&revision).await;
+    assert!(host.current(&revision));
+    assert!(host.snapshot().status == Status::SignedIn);
+    host.recheck(&revision).await;
+    assert!(!host.current(&revision));
+    assert!(host.snapshot().status == Status::ReauthenticationRequired);
+    assert!(host.state().session.is_none());
+    assert!(store.raw.lock().unwrap().is_none());
+    let seen = server.await.unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen
+        .iter()
+        .all(|wire| wire.target == "GET /mount/v1/session HTTP/1.1"));
+}
+
+#[tokio::test]
 async fn account_changes_tell_expiry_and_refresh_from_sign_out_and_a_new_account() {
     let store = Arc::new(Memory::default());
     let host = host(store.clone());

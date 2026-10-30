@@ -32,6 +32,7 @@ import type { OAuthCallback } from "./oauth/browser";
 import { deferred } from "./test-helpers";
 import { communityFixture } from "./agents/community-testing";
 import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
+import { federatedFixture } from "../../features/federated-identity/testing";
 
 const native = vi.hoisted(() => ({ isTauri: () => true, invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => native);
@@ -457,6 +458,124 @@ it.each([
     }
   },
 );
+
+it("signs in through the native NIP-FI session in an FI build, with no OAuth or token in the renderer", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  vi.stubEnv("VITE_BUZZ_LIVE", "0");
+  const viewer = "01".repeat(32);
+  native.invoke.mockImplementation(async (command) => {
+    if (command === "nsec_backup_session" || command === "nsec_backup_retry")
+      return;
+    if (command === "identity_restore") return viewer;
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const identity = federatedFixture();
+  identity.request.mockImplementation(async ({ path }) => {
+    let result: unknown;
+    if (path.endsWith("/v1/auth/me"))
+      result = {
+        subject: "synthetic-account",
+        expires_at: "2030",
+        capabilities: {
+          can_use_remote_agents: true,
+          can_use_builderlab_decisions: true,
+        },
+      };
+    else if (path.endsWith("/list-agents")) result = { status: 1, agents: [] };
+    else if (path.endsWith("/v1/buzz/communities/list"))
+      result = { communities: [], can_create: true };
+    else if (path.endsWith("/nostr-identities/current"))
+      result = { identity: { pubkey_hex: viewer } };
+    else throw new Error(`Unexpected request ${path}`);
+    return { status: 200, headers: {}, body: JSON.stringify(result) };
+  });
+  const root = new Context();
+  // The build adds the service to `inject`; this module was loaded without it.
+  const runtime = new PluginRuntime(root, async () => ({
+    ...builderlab,
+    inject: [...builderlab.inject, "federatedIdentity"],
+  }));
+  new HostService(root);
+  provideApps(root);
+  const cards = new SettingsCardsService(root);
+  const decisions = new DecisionsService(root, localStorage);
+  const community = communityFixture(null);
+  root.provide("relay", community.relay as never);
+  root.provide("federatedIdentity", identity.service);
+  const navigation = { open: vi.fn(async () => ({ status: "opened" })) };
+  root.provide("navigation", navigation as never);
+  provideKnownCommunities(root, community.viewer);
+  provideAgents(root, community);
+  try {
+    runtime.reconcile([
+      {
+        manifest: { ...manifest, apiVersion: 1 },
+        source: "bundled",
+        revision: "bundled",
+        enabled: true,
+        previous: null,
+        reloadable: false,
+        error: null,
+      },
+    ]);
+    await waitFor(() => expect(cards.snapshot()).toHaveLength(1));
+    const Card = cards.snapshot()[0]?.component;
+    if (!Card) throw new Error("Missing Builderlab login card");
+    render(<Card active={() => true} />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Sign in with Builderlab" }),
+    );
+    expect(identity.service.signIn).toHaveBeenCalledOnce();
+    expect(
+      await screen.findByText("No hosted communities yet"),
+    ).toBeInTheDocument();
+    expect(identity.request).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/goose/v1/auth/me" }),
+    );
+    // Native `decide` has no FI credential to send, so none is offered.
+    expect(decisions.providers()).toEqual([]);
+    await waitFor(() =>
+      expect(native.invoke).toHaveBeenCalledWith("nsec_backup_session", {
+        source: "builderlab",
+        generation: expect.any(Number),
+        credential: null,
+        federated: "user:1",
+      }),
+    );
+    expect(
+      native.invoke.mock.calls.filter(
+        ([command]) =>
+          command.startsWith("oauth_") || command === "plugin_host_request",
+      ),
+    ).toEqual([]);
+    // The shared session ends only from Identity → Organization sign-in.
+    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Identity → Organization sign-in" }),
+    );
+    expect(navigation.open).toHaveBeenCalledExactlyOnceWith({
+      version: 1,
+      kind: "settings",
+      section: "identity",
+    });
+    await act(() => identity.service.signOut());
+    expect(
+      await screen.findByRole("button", { name: "Sign in with Builderlab" }),
+    ).toBeEnabled();
+    expect(native.invoke).toHaveBeenLastCalledWith("nsec_backup_session", {
+      source: "builderlab",
+      generation: expect.any(Number),
+      credential: null,
+      federated: null,
+    });
+  } finally {
+    cleanup();
+    await runtime.dispose();
+    await root.fiber.dispose();
+    await community.dispose();
+  }
+});
 
 it.each([
   "shared login and re-enable",

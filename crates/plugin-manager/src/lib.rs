@@ -52,6 +52,8 @@ pub struct Discovery {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostGrants {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub federated_identity: Option<FederatedIdentityGrant>,
     /// Hook callbacks may observe and influence these agent types.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_hooks: Vec<String>,
@@ -75,6 +77,19 @@ pub struct HostGrants {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub files: bool,
 }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FederatedIdentityGrant {
+    pub authority: String,
+    pub operations: Vec<AuthenticatedOperation>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticatedOperation {
+    pub method: String,
+    pub path: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HostCommand {
@@ -231,6 +246,33 @@ impl Manifest {
                     return Err("Duplicate agent execution type".into());
                 }
             }
+            if let Some(grant) = &host.federated_identity {
+                if grant.authority.is_empty()
+                    || grant.authority.len() > 64
+                    || !grant
+                        .authority
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                {
+                    return Err("Invalid authenticated authority".into());
+                }
+                if grant.operations.is_empty()
+                    || grant.operations.len() > 64
+                    || grant.operations.iter().any(|op| {
+                        !matches!(
+                            op.method.as_str(),
+                            "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"
+                        ) || op.path.len() > 2048
+                            || !op.path.starts_with('/')
+                            || op.path.contains(['%', '\\', '?', '#'])
+                            || op.path.contains("//")
+                            || op.path.chars().any(char::is_whitespace)
+                            || op.path.split('/').any(|part| matches!(part, "." | ".."))
+                    })
+                {
+                    return Err("Invalid authenticated authority operations".into());
+                }
+            }
             let mut command_ids = std::collections::HashSet::new();
             for command in &host.commands {
                 valid_id(&command.id)?;
@@ -304,6 +346,32 @@ pub fn apps_control_plane(origin: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+/// The Builderlab routes an FI build forwards with the native session.
+const BUILDERLAB_FI_ROUTES: &[&str] = &[
+    "v3/beekeeper/register-agent",
+    "v3/beekeeper/delete-agent",
+    "v3/beekeeper/update-agent",
+    "v3/beekeeper/update-agent-profile",
+    "v3/beekeeper/attest-agent",
+    "v3/beekeeper/list-agents",
+    "v3/beekeeper/get-model-catalog",
+    "v3/beekeeper/cancel-agent-turn",
+    "GET v1/auth/me",
+    "v1/buzz/nostr-identities/current",
+    "v1/buzz/nostr-identities/delete",
+    "v1/buzz/nostr-identities/challenge",
+    "v1/buzz/nostr-identities/verify",
+    "v1/buzz/communities/list",
+    "v1/buzz/communities/availability",
+    "v1/buzz/communities",
+    "v1/buzz/communities/archive",
+    "v1/buzz/communities/unarchive",
+    "v1/buzz/communities/delete",
+    "v1/buzz/communities/transfer",
+    "v1/buzz/known-communities/list",
+    "v1/buzz/known-communities/add",
+    "v1/buzz/known-communities/remove",
+];
 /// The matching Builderlab API base path, or empty when unconfigured.
 pub const BUILDERLAB_API_BASE_PATH: &str = env!("BUZZ_BUILDERLAB_API_BASE_PATH");
 pub fn bundled_manifests() -> Vec<Manifest> {
@@ -312,17 +380,43 @@ pub fn bundled_manifests() -> Vec<Manifest> {
     ))
     .expect("builderlab manifest");
     let origin = BUILDERLAB_ORIGIN;
-    builderlab.host = Some(HostGrants {
-        files: apps_control_plane(origin).is_some(),
-        network_origins: if origin.is_empty() {
-            vec![]
-        } else {
-            std::iter::once(origin)
-                .chain(apps_control_plane(origin))
-                .map(Into::into)
-                .collect()
-        },
-        ..HostGrants::default()
+    let descriptor = env!("BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG");
+    builderlab.host = Some(if descriptor.is_empty() {
+        HostGrants {
+            files: apps_control_plane(origin).is_some(),
+            network_origins: if origin.is_empty() {
+                vec![]
+            } else {
+                std::iter::once(origin)
+                    .chain(apps_control_plane(origin))
+                    .map(Into::into)
+                    .collect()
+            },
+            ..HostGrants::default()
+        }
+    } else {
+        // An FI build reaches Builderlab only through the native session
+        // forwarder: no renderer network or file access.
+        let config: serde_json::Value =
+            serde_json::from_str(descriptor).expect("validated FI descriptor");
+        let base = config["apiBasePath"].as_str().expect("API base");
+        HostGrants {
+            federated_identity: Some(FederatedIdentityGrant {
+                authority: config["id"].as_str().expect("authority").into(),
+                operations: BUILDERLAB_FI_ROUTES
+                    .iter()
+                    .map(|route| {
+                        // Routes are POST unless they name another method.
+                        let (method, route) = route.split_once(' ').unwrap_or(("POST", route));
+                        AuthenticatedOperation {
+                            method: method.into(),
+                            path: format!("{base}{route}"),
+                        }
+                    })
+                    .collect(),
+            }),
+            ..HostGrants::default()
+        }
     });
     vec![
         serde_json::from_str(include_str!("../../../src/bundled/huddles/manifest.json"))
@@ -2159,21 +2253,38 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let manager = Manager::open(Some(temp.path().into()), "test", false).unwrap();
         let grants = manager.host_grants("block.builderlab", "bundled").unwrap();
-        assert_eq!(
-            grants.files,
-            super::apps_control_plane(super::BUILDERLAB_ORIGIN).is_some()
-        );
-        assert_eq!(
-            grants.network_origins,
-            if env!("BUZZ_BUILDERLAB_ORIGIN").is_empty() {
-                vec![]
-            } else {
-                std::iter::once(env!("BUZZ_BUILDERLAB_ORIGIN"))
-                    .chain(super::apps_control_plane(env!("BUZZ_BUILDERLAB_ORIGIN")))
-                    .map(str::to_owned)
-                    .collect()
-            }
-        );
+        if env!("BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG").is_empty() {
+            assert_eq!(
+                grants.files,
+                super::apps_control_plane(super::BUILDERLAB_ORIGIN).is_some()
+            );
+            assert_eq!(
+                grants.network_origins,
+                if env!("BUZZ_BUILDERLAB_ORIGIN").is_empty() {
+                    vec![]
+                } else {
+                    std::iter::once(env!("BUZZ_BUILDERLAB_ORIGIN"))
+                        .chain(super::apps_control_plane(env!("BUZZ_BUILDERLAB_ORIGIN")))
+                        .map(str::to_owned)
+                        .collect()
+                }
+            );
+            assert_eq!(grants.federated_identity, None);
+        } else {
+            // An FI build grants only the native session's Builderlab routes.
+            assert!(!grants.files);
+            assert!(grants.network_origins.is_empty());
+            let grant = grants.federated_identity.clone().unwrap();
+            let base = super::BUILDERLAB_API_BASE_PATH;
+            let operations: Vec<_> = grant
+                .operations
+                .iter()
+                .map(|op| format!("{} {}", op.method, op.path))
+                .collect();
+            assert!(operations.contains(&format!("GET {base}v1/auth/me")));
+            assert!(operations.contains(&format!("POST {base}v3/beekeeper/register-agent")));
+            assert_eq!(operations.len(), super::BUILDERLAB_FI_ROUTES.len());
+        }
         assert!(grants.commands.is_empty());
         assert!(manager
             .host_grants("block.builderlab", "wrong-revision")

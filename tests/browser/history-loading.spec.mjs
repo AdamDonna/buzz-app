@@ -1,6 +1,13 @@
 import { openPage } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
-import { anchor, expectAnchor, open, settle, wheel } from "./timeline.mjs";
+import {
+  anchor,
+  expectAnchor,
+  open,
+  settle,
+  upper,
+  wheel,
+} from "./timeline.mjs";
 
 test.use({
   productionBroker: true,
@@ -636,8 +643,9 @@ test.describe("pages inside one second", () => {
   }) => {
     await open(page, app);
     app.relay.quotaNextOlder("alpha");
-    await history(page).hover();
-    await page.mouse.wheel(0, -100000);
+    // The failed load starts within the first pixels of upward scroll, so the
+    // alert does not prove the reader left the bottom. upper() does.
+    await upper(page);
     await expect(history(page).getByRole("alert")).toContainText(
       "rate-limited",
     );

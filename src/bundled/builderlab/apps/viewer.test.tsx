@@ -58,7 +58,7 @@ it("app links and apps_open use the Settings account and replace its guest lifet
   render(createElement(panel.component, { target: APP } as PanelProps));
   expect(screen.getByLabelText("App website")).toBeInTheDocument();
   const first = viewed.mock.lastCall?.[0].builderlab;
-  expect(first?.credential).toBe("first-private-token");
+  expect(first).toMatchObject({ credential: "first-private-token" });
   expect(viewed.mock.lastCall?.[0].url).toBe(APP);
   act(() => session.signOut());
   expect(first?.signal.aborted).toBe(true);
@@ -76,9 +76,9 @@ it("app links and apps_open use the Settings account and replace its guest lifet
     },
   });
   await act(() => session.signIn());
-  expect(viewed.mock.lastCall?.[0].builderlab?.credential).toBe(
-    "second-private-token",
-  );
+  expect(viewed.mock.lastCall?.[0].builderlab).toMatchObject({
+    credential: "second-private-token",
+  });
   expect(viewed.mock.lastCall?.[0].builderlab?.storage).not.toBe(
     first?.storage,
   );
@@ -136,7 +136,9 @@ it("closing an observing app panel does not cancel Settings' pending login", asy
     });
     await login;
   });
-  expect(viewed.mock.lastCall?.[0].builderlab?.credential).toBe("private");
+  expect(viewed.mock.lastCall?.[0].builderlab).toMatchObject({
+    credential: "private",
+  });
   second.unmount();
   session.dispose();
 });

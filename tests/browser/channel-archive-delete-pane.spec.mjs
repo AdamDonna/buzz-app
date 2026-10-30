@@ -129,7 +129,7 @@ for (const action of ["archive", "delete"]) {
       );
       await expect(
         dialog.getByRole("button", {
-          name: action === "delete" ? "Cancel" : label,
+          name: "Cancel",
           exact: true,
         }),
       ).toBeFocused();

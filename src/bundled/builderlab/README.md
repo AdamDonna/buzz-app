@@ -141,8 +141,16 @@ is confirmed. On another device, removal resolves the ID from the signed-in
 account's list; an unknown key is refused. Existing Settings-created
 agents are not migrated into this type.
 
+- `session.ts` is the `BuilderlabSession` consumers share. In an FI build it
+  projects the native NIP-FI session: native holds the token in OS secure
+  storage, so sign-in survives restart, and adds it as `Authorization: Bearer`
+  to this plugin's granted routes. Each session revision reads its account from
+  `/v1/auth/me`. A 401 refuses only that call; native then asks the adapter's
+  `GET /v1/session` once and ends the session only if the adapter refuses it.
+  Its sign-out lives in Identity → Organization sign-in, which `login/` links to,
+  because community sign-in shares the session.
 - `oauth/` owns browser handoff, code exchange, account verification, and the
-  plugin-lifetime session. `browserCredential()` returns a verified `Credential`;
+  legacy plugin-lifetime session. `browserCredential()` returns a verified `Credential`;
   `session.credential()` provides access to it. The session handles cancellation,
   sign-out, and disposal.
   `oauth/first-run.ts` lets the app's first-launch welcome screen run the same
@@ -171,8 +179,8 @@ agents are not migrated into this type.
 - `agents/` lists the signed-in account's remote agents beneath login, with
   refresh and retry. Settings directs people to the **Agents** tab to create,
   edit instructions and delete agents. Listing does not activate agents or
-  publish community registrations. Requests reuse the OAuth credential through
-  native host HTTP; sign-out and navigation discard late results.
+  publish community registrations. Requests go through `session.request`;
+  sign-out and navigation discard late results.
   The client also supplies the hosted adapter's Beekeeper operations. Pending
   registration UUIDs survive restart, scoped to server, verified account and
   name. Retry the same name after an uncertain failure within the server's
@@ -220,4 +228,5 @@ The plugin also offers Builderlab as a Decisions API provider. It reads
 Builderlab is not listed in Settings > Decisions API and no decision request
 goes to it. While it is registered, it answers unless the user chose another
 provider; when it goes away, TypeSafe answers. Sign out and back in to refresh
-this capability.
+this capability. An FI build does not offer it: native `decide` sends the
+legacy credential, which an FI build does not have.

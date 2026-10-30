@@ -542,23 +542,33 @@ async fn plugin_catalog(
 #[tauri::command]
 async fn plugin_change(
     manager: tauri::State<'_, PluginManager>,
+    registrations: tauri::State<'_, federated_identity::access::Registrations>,
     action: String,
     id: String,
 ) -> Result<InstallationResult, String> {
-    with_manager(manager, move |m| {
-        m.change(&action, &id).map(|catalog| ready(&m, catalog))
+    registrations.retire(&id);
+    let plugin = id.clone();
+    let result = with_manager(manager, move |m| {
+        m.change(&action, &plugin).map(|catalog| ready(&m, catalog))
     })
-    .await
+    .await;
+    registrations.retire(&id);
+    result
 }
 #[tauri::command]
 async fn plugin_reload(
     manager: tauri::State<'_, PluginManager>,
+    registrations: tauri::State<'_, federated_identity::access::Registrations>,
     id: String,
 ) -> Result<InstallationResult, String> {
-    with_manager(manager, move |m| {
-        m.reload(&id).map(|catalog| ready(&m, catalog))
+    registrations.retire(&id);
+    let plugin = id.clone();
+    let result = with_manager(manager, move |m| {
+        m.reload(&plugin).map(|catalog| ready(&m, catalog))
     })
-    .await
+    .await;
+    registrations.retire(&id);
+    result
 }
 #[tauri::command]
 async fn plugin_module(
@@ -571,8 +581,12 @@ async fn plugin_module(
 #[tauri::command]
 async fn plugin_recover(
     manager: tauri::State<'_, PluginManager>,
+    registrations: tauri::State<'_, federated_identity::access::Registrations>,
 ) -> Result<InstallationResult, String> {
-    with_manager(manager, |m| m.recover().map(|catalog| ready(&m, catalog))).await
+    registrations.clear();
+    let result = with_manager(manager, |m| m.recover().map(|catalog| ready(&m, catalog))).await;
+    registrations.clear();
+    result
 }
 #[tauri::command]
 async fn update_restart<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
@@ -610,6 +624,9 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         federated_identity::federated_identity_sign_in,
         federated_identity::federated_identity_cancel_sign_in,
         federated_identity::federated_identity_sign_out,
+        federated_identity::access::federated_identity_register,
+        federated_identity::access::federated_identity_unregister,
+        federated_identity::access::federated_identity_request,
         federated_identity::socket::relay_socket_connect,
         federated_identity::socket::relay_socket_start,
         federated_identity::socket::relay_socket_send,
@@ -822,7 +839,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(federated_identity)
+        .manage(federated_identity.clone())
+        .manage(federated_identity::access::Registrations::default())
         .manage(federated_identity::socket::Sockets::default())
         .setup(move |app| {
             #[cfg(target_os = "linux")]
@@ -987,7 +1005,7 @@ pub fn run() {
         .manage(HostProcesses::default())
         .manage(HostMcpServers::default())
         .manage(OAuthCallbackHost::default())
-        .manage(NsecBackupHost::default())
+        .manage(NsecBackupHost::default().with_federated_identity(federated_identity))
         .manage(Notifications::default())
         .manage(DeepLinks::default())
         // Plugin storage lives in this identifier's app data, so development
@@ -1027,6 +1045,7 @@ pub fn run() {
                 webview.state::<relay::Spools>().cancel_all(&webview.state::<relay::Uploads>());
                 // Processes belong to the page that started them.
                 webview.state::<Huddles>().stop_all();
+                webview.state::<federated_identity::access::Registrations>().clear();
                 webview.state::<federated_identity::socket::Sockets>().clear();
                 webview.state::<federated_identity::FederatedIdentity>().clear_discoveries();
                 webview.state::<HostProcesses>().stop_all();
@@ -1070,6 +1089,8 @@ pub fn run() {
 pub(crate) fn shut_down<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     app.state::<NsecBackupHost>().close();
     app.state::<federated_identity::FederatedIdentity>().close();
+    app.state::<federated_identity::access::Registrations>()
+        .clear();
     app.state::<federated_identity::socket::Sockets>().clear();
     app.state::<relay::Spools>()
         .cancel_all(&app.state::<relay::Uploads>());

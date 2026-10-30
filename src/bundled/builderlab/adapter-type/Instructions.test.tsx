@@ -90,7 +90,9 @@ async function fixture(signedIn = true) {
     },
   }));
   const release = vi.fn();
-  const session = createOAuthSession(acquire, release);
+  const session = createOAuthSession(acquire, release, {
+    request: (input) => request(input),
+  });
   if (signedIn) await session.signIn();
   let stored = response();
   const request = vi.fn<Host["request"]>(async ({ url, body }) => {
@@ -124,7 +126,7 @@ async function fixture(signedIn = true) {
         }
       : stored;
   });
-  const client = createAgentClient({ request, runCommand: vi.fn() }, session);
+  const client = createAgentClient(session);
   const type = {
     ...builderlabType(client, session, {
       snapshot: () => ({ status: "disconnected", generation: 0 }),

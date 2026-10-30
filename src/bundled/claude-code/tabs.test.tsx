@@ -1515,3 +1515,29 @@ it("keeps same-channel recent threads visibly distinguishable", () => {
     ]),
   );
 });
+
+it("focuses the code only when its compact sign-in disclosure is expanded", async () => {
+  const { type } = installed({ loggedIn: false });
+  const Model = type.CreateModel;
+  if (!Model) throw new Error("Missing model controls");
+  const user = userEvent.setup();
+  render(<Model config={DEFAULT_CONFIG} onChange={vi.fn()} disabled={false} />);
+  await user.click(await screen.findByRole("button", { name: "Sign in" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Sign in to Claude",
+  });
+  await user.click(within(dialog).getByRole("button", { name: "Sign in" }));
+  const expand = await screen.findByRole("button", { name: "Enter a code" });
+  expect(screen.queryByLabelText("Sign-in code")).toBeNull();
+  await user.click(expand);
+  const code = await screen.findByLabelText("Sign-in code");
+  await waitFor(() => expect(code).toHaveFocus());
+  await user.type(code, "retained-code");
+  await user.click(expand);
+  expect(screen.queryByLabelText("Sign-in code")).toBeNull();
+  await user.click(expand);
+  await waitFor(() =>
+    expect(screen.getByLabelText("Sign-in code")).toHaveFocus(),
+  );
+  expect(screen.getByLabelText("Sign-in code")).toHaveValue("retained-code");
+});

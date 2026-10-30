@@ -56,6 +56,22 @@ requests share the creation requests' local bound and lifetime.
 Keys stay in native custody. Hosted-provider provisioning and standalone tool
 servers do not support these operations.
 
+## Product help for agents
+
+The read-only `buzz_help` tool returns [the Buzz quick guide](buzz-help.md), bundled
+with this app version. The shared agent prompt tells agents to read it when someone
+asks how to use Buzz; the full guide is not added to every session's initial context.
+Claude, Codex, Goose and Pi use the shared tools. This repository's standalone MCP
+server exposes the same tool and supplies the hint in its server instructions.
+Other remote hosts must adopt the tool themselves. No repository checkout or web
+request is needed to read it.
+
+Keep the guide current in the same change as user-facing behavior. It describes
+implemented features, not plans or internal support procedures. Existing sessions
+may retain their previous prompt or tool list; use **Start a new session** to pick
+up the new guidance. Installing a new build updates the bundled guide, not every
+older app or remote host.
+
 ## Agent Attention
 
 Attention itself (the runtime, tools, storage and sources) is core, but it runs on this device only while a plugin that shows it is on. The bundled Attention plugin (`buzz.watching`, on by default) adds an Attention tab to the settings of every agent running on this device, whatever its type. The tab explains Attention, holds the switch that lets this device run the agent's watches, then groups that agent's subscriptions by Interest. It shows instructions, listening and delivery destinations, enabled state and available wake history, and suggests asks while the agent has none. Ask an agent to create watches through its Attention tools; pausing or removing one preserves the other saved objects. Empty Interests remain visible and can be deleted after their watches are removed. Turning the plugin off hides the tab and turns every agent's Attention off on this device; mentions still wake agents, and each agent keeps its saved switch for when the plugin is back on. The former standalone Agent Attention page is gone, so an old link to `buzz.agents/attention` opens as an unavailable destination.

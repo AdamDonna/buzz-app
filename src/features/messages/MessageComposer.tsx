@@ -95,6 +95,7 @@ import {
   useMemo,
   useSyncExternalStore,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { fullSession, type ComposerSession } from "./composer-session";
 import type { RelaySession } from "../relay/session";
@@ -304,8 +305,8 @@ export type MessageComposerProps = {
   replyContext?: ReactNode;
   mediaTimeSeconds?: number;
   clearMediaTime?(): void;
-  /** Focus once when this conversation mounts, not when overlays close. */
-  autoFocus?: boolean;
+  /** Focus once on entry; an owner can cancel its target before a delayed mount. */
+  autoFocus?: boolean | RefObject<HTMLElement | null>;
   focusRequest?: number;
   hideMediaTimeIndicator?: boolean;
   disabled?: boolean;
@@ -754,9 +755,14 @@ function Composer({
   const caret = useRef<number | undefined>(undefined);
   const input = useRef<ComposerInputElement>(null);
   const hasFocused = useRef(false);
+  const focusFromControl = useRef(
+    typeof autoFocus === "object" ? autoFocus : undefined,
+  );
   const focusOnMount = useRef(
     autoFocus && typeof document !== "undefined"
-      ? document.activeElement
+      ? typeof autoFocus === "boolean"
+        ? document.activeElement
+        : autoFocus.current
       : undefined,
   );
   useEffect(() => {
@@ -782,11 +788,18 @@ function Composer({
     }
     if (!focusOnMount.current) return;
     const focus = () => {
+      const handoff = focusFromControl.current;
+      if (handoff && !handoff.current) return;
       const previous = focusOnMount.current;
+      // A responsive draft detail hides its opening row while the thread loads.
+      // That browser blur may leave body focused; a later focusin still cancels.
       if (
         !previous ||
         (previous !== document.activeElement &&
-          (previous.isConnected || document.activeElement !== document.body))
+          (document.activeElement !== document.body ||
+            (previous.isConnected &&
+              (!focusFromControl.current ||
+                previous.getClientRects().length > 0))))
       )
         return;
       const editor = input.current;
@@ -800,6 +813,8 @@ function Composer({
       );
       if (owner && !owner.contains(editor)) return;
       const end = editor.value.length;
+      // Let the visit's listener recognize its own successful focus handoff.
+      if (handoff) handoff.current = editor;
       editor.focus();
       if (document.activeElement !== editor) return;
       editor.setSelectionRange(end, end);

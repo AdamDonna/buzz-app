@@ -110,6 +110,15 @@ jobs:
       # --workspace includes Tauri, unlike the default Cargo member selection.
       - name: All Rust tests and doctests
         run: ./bin/cargo test --workspace --locked
+      - name: FI Builderlab build and grant tests
+        env:
+          # Fixture authority only; never use a release's real configuration.
+          BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: '{"version":1,"id":"ci-fi","identityOrigin":"https://identity.example.test","communityHosts":["relay.example.test"],"adapterBase":"https://identity.example.test/api/goose/nip-fa","apiBasePath":"/api/goose/"}'
+          BUZZ_BUILDERLAB_URL: ""
+        run: |
+          ./bin/cargo test -p buzzodz-plugins --lib --locked
+          ./bin/cargo test -p Buzz --lib --locked host_request
+          ./bin/pnpm exec vite build
       - name: Scheduled agent command identity
         run: ./bin/node scripts/test-agent-command.mjs
       - name: All Node integration tests

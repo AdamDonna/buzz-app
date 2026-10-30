@@ -831,6 +831,83 @@ it("defers initial focus until a loading conversation enables its composer", () 
   expect(h.input()).toHaveFocus();
 });
 
+it("does not mistake a later focused control for a saved draft's opening row", () => {
+  const row = document.createElement("button");
+  const later = document.createElement("button");
+  document.body.append(row, later);
+  try {
+    row.focus();
+    later.focus();
+    const h = mount({ autoFocus: { current: row } });
+    expect(later).toHaveFocus();
+    expect(h.input()).not.toHaveFocus();
+  } finally {
+    row.remove();
+    later.remove();
+  }
+});
+
+it("cancels a deferred draft handoff when another control takes focus and disappears", () => {
+  const row = document.createElement("button");
+  const later = document.createElement("button");
+  document.body.append(row, later);
+  try {
+    row.focus();
+    const h = mount({ autoFocus: { current: row }, disabled: true });
+    later.focus();
+    later.remove();
+    h.retarget({ disabled: false });
+    expect(document.activeElement).toBe(document.body);
+    expect(h.input()).not.toHaveFocus();
+  } finally {
+    row.remove();
+    later.remove();
+  }
+});
+
+it("honors a draft cancellation recorded before its composer mounts", () => {
+  const origin: { current: HTMLElement | null } = { current: null };
+  const h = mount({ autoFocus: origin });
+  expect(h.input()).not.toHaveFocus();
+});
+
+it("honors owner cancellation while the composer waits without a focus event", () => {
+  const row = document.createElement("button");
+  document.body.append(row);
+  const origin: { current: HTMLElement | null } = { current: row };
+  try {
+    row.focus();
+    const h = mount({ autoFocus: origin, disabled: true });
+    origin.current = null;
+    row.remove();
+    h.retarget({ disabled: false });
+    expect(h.input()).not.toHaveFocus();
+  } finally {
+    row.remove();
+  }
+});
+
+it("hands the live draft target to its editor through StrictMode replay", () => {
+  const row = document.createElement("button");
+  document.body.append(row);
+  const origin: { current: HTMLElement | null } = { current: row };
+  const moved = (event: FocusEvent) => {
+    if (event.target !== origin.current) origin.current = null;
+  };
+  document.addEventListener("focusin", moved, true);
+  try {
+    row.focus();
+    writeView("scope", "draft:channel", "Saved draft");
+    const h = mount({ autoFocus: origin });
+    expect(h.input()).toHaveFocus();
+    expect(origin.current).toBe(h.input());
+    expect(h.input().selectionEnd).toBe("Saved draft".length);
+  } finally {
+    document.removeEventListener("focusin", moved, true);
+    row.remove();
+  }
+});
+
 it("does not redo initial focus when a focused composer is disabled and enabled again", () => {
   writeView("scope", "draft:channel", "Saved draft");
   const h = mount({ autoFocus: true });
@@ -3209,6 +3286,24 @@ const oldBuzzAgents = () => {
   return { agents, port };
 };
 
+it("Enter on import entry keeps the draft without importing or sending", async () => {
+  const { agents, port } = oldBuzzAgents();
+  const h = mount({}, undefined, undefined, agents);
+  fireEvent.click(screen.getByRole("button", { name: "First Honey" }));
+  h.submit();
+  await screen.findByRole("dialog", { name: "Import Honey?" });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+  );
+  await userEvent.setup().keyboard("{Enter}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  expect(h.input()).toHaveValue("@Honey ");
+  expect(port).not.toHaveBeenCalled();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
 it("imports a mentioned agent an earlier Buzz runs before sending to it", async () => {
   const { agents, port } = oldBuzzAgents();
   const h = mount({}, undefined, undefined, agents);
@@ -3308,8 +3403,10 @@ it("keeps focus on the import action while it runs, fails and finishes", async (
   h.submit();
   await screen.findByRole("dialog", { name: "Import Honey?" });
   const action = screen.getByRole("button", { name: "Import and send" });
-  await waitFor(() => expect(action).toHaveFocus());
-  fireEvent.click(action);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+  );
+  await userEvent.setup().click(action);
   expect(action).toHaveAttribute("aria-busy", "true");
   expect(action).toHaveFocus();
   await act(async () => failed.reject(new Error("No disk space.")));
@@ -7821,9 +7918,7 @@ for (const channelType of ["stream", "forum"] as const)
       // block/buzz parity: without permission, Invite is absent, not disabled.
       expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
       await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: "Send anyway" }),
-        ).toHaveFocus(),
+        expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
       );
       expect(screen.getByRole("dialog")).toHaveTextContent(
         "Honey is not in this channel. You cannot add people to this channel. You can still send without inviting them.",
@@ -7893,7 +7988,7 @@ it.each(["Do nothing", "Invite"])(
   },
 );
 
-it("Enter invites a nonmember before sending", async () => {
+it("Enter on a deliberately focused Invite adds a nonmember before sending", async () => {
   const h = mount();
   const add = vi.fn(async () => {});
   const list = {
@@ -7910,7 +8005,10 @@ it("Enter invites a nonmember before sending", async () => {
   act(() => h.commands().insertMention(first));
   fireEvent.submit(screen.getByRole("form"));
   const invite = screen.getByRole("button", { name: "Invite" });
-  await waitFor(() => expect(invite).toHaveFocus());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+  );
+  invite.focus();
   await userEvent.setup().keyboard("{Enter}");
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
   expect(add).toHaveBeenCalledWith("channel", first.pubkey);
@@ -8002,7 +8100,7 @@ it.each([
   },
 );
 
-it.each(["close", "escape"])(
+it.each(["close", "escape", "enter"])(
   "%s preserves the captured draft and returns focus without adding or sending",
   async (action) => {
     const h = mount();
@@ -8029,11 +8127,14 @@ it.each(["close", "escape"])(
     );
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Invite" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
     );
     if (action === "close")
       fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    else await userEvent.setup().keyboard("{Escape}");
+    else
+      await userEvent
+        .setup()
+        .keyboard(action === "enter" ? "{Enter}" : "{Escape}");
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );

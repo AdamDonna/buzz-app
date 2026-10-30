@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { AvatarEditor } from "../profiles/AvatarEditor";
@@ -30,6 +31,7 @@ export function ProfileFields({
   onBusyChange,
   showAvatar = true,
   autoFocus = false,
+  nameRef,
 }: {
   profile: PersonalProfile;
   onChange(profile: PersonalProfile): void;
@@ -39,6 +41,7 @@ export function ProfileFields({
   showAvatar?: boolean;
   /** Focuses the display name on mount, for pages whose only task is this form. */
   autoFocus?: boolean;
+  nameRef?: Ref<HTMLInputElement>;
 }) {
   return (
     <div className="grid gap-4">
@@ -54,6 +57,7 @@ export function ProfileFields({
       )}
       <Field label="Display name">
         <Input
+          ref={nameRef}
           autoComplete="nickname"
           autoFocus={autoFocus}
           required

@@ -1160,11 +1160,9 @@ it("hands keyboard focus into draft deletion and back on cancel without changing
   );
   await waitFor(() =>
     expect(
-      within(dialog).getByRole("button", { name: "Delete draft" }),
+      within(dialog).getByRole("button", { name: "Cancel" }),
     ).toHaveFocus(),
   );
-  await user.tab();
-  expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
   await user.keyboard("{Enter}");
   await waitFor(() => expect(trigger).toHaveFocus());
   expect(screen.getByRole("region", { name: "Draft detail" })).toBeVisible();
@@ -1177,7 +1175,7 @@ it("hands keyboard focus into draft deletion and back on cancel without changing
   });
   await waitFor(() =>
     expect(
-      within(reopened).getByRole("button", { name: "Delete draft" }),
+      within(reopened).getByRole("button", { name: "Cancel" }),
     ).toHaveFocus(),
   );
   await user.keyboard("{Escape}");
@@ -1269,7 +1267,7 @@ it("a failed saved-text cleanup keeps its exact attachment draft for retry", asy
   );
   fireEvent.click(screen.getByRole("button", { name: "Delete draft…" }));
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Delete draft" })).toHaveFocus(),
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
   );
   const denied = vi
     .spyOn(Storage.prototype, "removeItem")
@@ -1277,7 +1275,9 @@ it("a failed saved-text cleanup keeps its exact attachment draft for retry", asy
       throw Error("disk full");
     });
   try {
-    fireEvent.click(screen.getByRole("button", { name: "Delete draft" }));
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Delete draft" }));
     expect(
       screen.getByRole("alertdialog", { name: "Delete draft?" }),
     ).toHaveTextContent("disk full");

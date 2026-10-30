@@ -1,4 +1,5 @@
 //! One native authority session owner. Secrets and adapter responses never cross IPC.
+pub(crate) mod access;
 pub(crate) mod agent;
 pub(crate) mod assertion;
 pub(crate) mod config;
@@ -370,6 +371,45 @@ impl FederatedIdentity {
             return Err("invalid-response".into());
         }
         Ok(result.email)
+    }
+    /// A granted call got 401. That alone never ends the session: ask the
+    /// adapter once whether `revision`'s session still stands, and end it
+    /// only when the adapter says it is gone.
+    pub(crate) async fn recheck(&self, revision: &str) {
+        let session = {
+            let state = self.state();
+            if state.closed || state.snapshot.revision != revision {
+                return;
+            }
+            let Some(session) = state.session.clone() else {
+                return;
+            };
+            session
+        };
+        let Err(failure) = self.verify(&session.record).await else {
+            return;
+        };
+        if !failure.session_denied {
+            return;
+        }
+        let retired = {
+            let mut state = self.state();
+            if state.closed || state.snapshot.revision != revision {
+                return;
+            }
+            self.signal(SessionChange::Expired);
+            self.retire_state(
+                &mut state,
+                Status::ReauthenticationRequired,
+                Some(failure.code),
+            )
+            .map(|session| (session, state.snapshot.revision.clone()))
+        };
+        if let Some((session, revision)) = retired {
+            if let Err(error) = self.remove(session).await {
+                self.change_current(&revision, Status::Unavailable, Some(error.code));
+            }
+        }
     }
     pub(crate) async fn restore(&self) -> Snapshot {
         let attempt = {

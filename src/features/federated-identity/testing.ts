@@ -1,5 +1,10 @@
 import { vi } from "vitest";
-import type { FederatedIdentity, SessionSnapshot } from "./service";
+import type {
+  FederatedIdentity,
+  SessionSnapshot,
+  AuthenticatedRequest,
+} from "./service";
+import type { HostResponse } from "../host/service";
 
 /** Consumer fixtures supply public host events; they do not implement credential custody. */
 export function federatedFixture(
@@ -24,6 +29,7 @@ export function federatedFixture(
   };
   let logins = 0;
   const service: FederatedIdentity = {
+    apiAvailable: true,
     snapshot: () => state,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -53,6 +59,15 @@ export function federatedFixture(
         email: null,
       });
     }),
+    request: vi.fn(
+      async (_input: AuthenticatedRequest): Promise<HostResponse> => {
+        throw new Error("Fixture response required");
+      },
+    ),
   };
-  return { service, publish };
+  return {
+    service,
+    publish,
+    request: vi.mocked(service.request),
+  };
 }

@@ -18,7 +18,9 @@ permissions:
   contents: read
 
 env:
-  BUZZ_BUILDERLAB_URL: ${{ vars.BUZZ_BUILDERLAB_URL || 'https://app.builderlab.xyz' }}
+  # Legacy login origin, only when FI is not configured: the build scripts
+  # reject a nonempty legacy origin alongside the FI descriptor.
+  BUZZ_BUILDERLAB_URL: ${{ !vars.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG && (vars.BUZZ_BUILDERLAB_URL || 'https://app.builderlab.xyz') || '' }}
   # Public verification inputs; the native build and plugins.updater must match.
   # Candidate-only runs build without the updater.
   BUZZ_UPDATER_PUBLIC_KEY: ${{ !inputs.candidates && 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjQ2RDZFMUEwOERFMTEKUldRUjNnZ2FibTIwTE10QkVaMzFyYkZlY0R4ajhmbFBjdncvNVRCYnNpSm9kaFNBaHQzemZlZHkK' || '' }}

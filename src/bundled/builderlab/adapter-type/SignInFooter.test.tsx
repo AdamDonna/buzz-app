@@ -23,7 +23,11 @@ import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
 import { createSettingsTab } from "./Instructions";
 import { deferred } from "../test-helpers";
-import { createProfileActions, createSignInFooter } from "./SignInFooter";
+import {
+  AccountRecoverySheet,
+  createProfileActions,
+  createSignInFooter,
+} from "./SignInFooter";
 
 vi.mock("../oauth/browser", async (original) => ({
   ...(await original<typeof import("../oauth/browser")>()),
@@ -42,6 +46,51 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllEnvs();
+});
+
+it("keeps account verification non-cancellable after the browser guidance deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const session = createOAuthSession(async () => credential);
+  const cancel = vi.fn();
+  const Footer = createSignInFooter({
+    ...session,
+    snapshot: () => checking,
+    cancel,
+  });
+  const checking = { status: "pending" as const, checking: true };
+  render(<Footer />);
+  await act(() => vi.advanceTimersByTimeAsync(30_000));
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Checking your Builderlab sign-in",
+  );
+  expect(screen.queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  );
+  expect(cancel).not.toHaveBeenCalled();
+  session.dispose();
+});
+
+it("sends FI account recovery to Identity without ending the shared session", () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  const session = createOAuthSession(async () => credential);
+  const signOut = vi.spyOn(session, "signOut");
+  const openIdentity = vi.fn();
+  render(
+    <AccountRecoverySheet
+      session={session}
+      active
+      mismatch={false}
+      openIdentity={openIdentity}
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Identity → Organization sign-in" }),
+  );
+  expect(openIdentity).toHaveBeenCalledTimes(1);
+  expect(signOut).not.toHaveBeenCalled();
+  expect(screen.queryByRole("link")).toBeNull();
+  session.dispose();
 });
 
 it("shows account status with one footer sign-in action and restores profile controls after authentication", async () => {
@@ -291,14 +340,13 @@ it("loads the pane after a late browser callback and verified exchange without w
     return reply({ models: [] });
   });
   const host: Host = { request, runCommand: vi.fn() };
-  const session = createOAuthSession((signal) =>
-    browserCredential(host, signal, bridge),
+  const session = createOAuthSession(
+    (signal) => browserCredential(host, signal, bridge),
+    undefined,
+    { request: (input) => host.request(input) },
   );
   const Footer = createSignInFooter(session);
-  const Settings = createSettingsTab(
-    createAgentClient(host, session, null),
-    session,
-  );
+  const Settings = createSettingsTab(createAgentClient(session), session);
   const agent = { pubkey, name: "Helper" } as Agent;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   render(
