@@ -93,9 +93,10 @@ export function subscribePrivateMembers(
 /** Stops the check-ins of each agent here that isn't the community's Bestie,
  * whenever the saved Bestie or the agents change. A choice made on another
  * device counts once this device reads the account again, which it does once
- * per connection. It acts only on a Bestie saved to the account and read:
- * while the choice is loading or unknown, or kept only on this device, where
- * an automatic pick looks the same, nobody counts as former. An agent also in
+ * per connection. It acts only on the account's choice once read: a Bestie,
+ * or none, when every agent here is stopped. While the choice is loading or
+ * unreadable, or kept only on this device, where an automatic pick looks the
+ * same, nobody counts as former. An agent also in
  * another community, where it may be Bestie, loses only its timer here, as
  * its instructions are shared. Memory and channels stay as they are. */
 export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
@@ -117,9 +118,11 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
       session = relaySnapshot.session;
       tried.clear();
     }
-    const current = session.mainAgent ? bestie.snapshot() : undefined;
-    if (!current) return;
-    if (relaySnapshot.scope) rememberBestie(relaySnapshot.scope, current);
+    if (!session.mainAgent) return;
+    const current = bestie.snapshot();
+    if (!current && !bestie.known()) return;
+    if (current && relaySnapshot.scope)
+      rememberBestie(relaySnapshot.scope, current);
     const { agents: here, running = [] } = agents.snapshot();
     for (const agent of here) {
       const on = checkIns.filter((feature) => featurePresent(agent, feature));

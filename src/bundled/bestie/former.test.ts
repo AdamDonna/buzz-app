@@ -39,11 +39,14 @@ const agent = (digit: string, instructions = "", attention = {}): Agent =>
 const ada = agent("a", checkingIn, TIMER);
 const bea = agent("b");
 
-/** A community whose account read of the saved Bestie waits until `settle`. */
+/** A community whose account read of the saved Bestie waits until `settle`,
+ * or `fail`. */
 function community(channels: readonly ChannelSummary[] = [], account = true) {
   let settle: (pubkey: string | undefined) => void = () => {};
-  const read = new Promise<string | undefined>((resolve) => {
+  let fail: (error: Error) => void = () => {};
+  const read = new Promise<string | undefined>((resolve, reject) => {
     settle = resolve;
+    fail = reject;
   });
   const session = {
     viewer: OWNER,
@@ -67,6 +70,11 @@ function community(channels: readonly ChannelSummary[] = [], account = true) {
     settle: async (pubkey: string | undefined) => {
       settle(pubkey);
       await read;
+      await Promise.resolve();
+    },
+    fail: async () => {
+      fail(new Error("offline"));
+      await read.catch(() => {});
       await Promise.resolve();
     },
   };
@@ -144,12 +152,32 @@ it("stops a former Bestie's check-ins once the Bestie is known, and leaves its m
   stop();
 });
 
+it("stops every agent's check-ins once the account is read to have no Bestie", async () => {
+  const none = community();
+  const cara = agent("c", checkingIn, TIMER);
+  const { agents, save } = host([ada, bea, cara]);
+  const stop = stopFormerCheckIns(none.relay, agents);
+  // Not while it is read.
+  await Promise.resolve();
+  expect(save).not.toHaveBeenCalled();
+  await none.settle(undefined);
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(4));
+  expect(new Set(save.mock.calls.map(([key]) => key))).toEqual(
+    new Set([ada.key, cara.key]),
+  );
+  // Memory stays.
+  expect(save).toHaveBeenCalledWith(cara.key, {
+    config: { instructions: withFeature("Be brief.\n", memory, true) },
+  });
+  stop();
+});
+
 it("does nothing while the saved Bestie is unknown, or to the Bestie itself", async () => {
   const unknown = community();
   const first = host([ada]);
   const stopUnknown = stopFormerCheckIns(unknown.relay, first.agents);
-  // An account with no saved Bestie, or a read that failed, isn't "none".
-  await unknown.settle(undefined);
+  // A read that failed isn't "none".
+  await unknown.fail();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(first.save).not.toHaveBeenCalled();
   stopUnknown();
