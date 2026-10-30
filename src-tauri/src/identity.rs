@@ -532,12 +532,14 @@ fn validate_sidebar_payload(coordinate: &str, value: &serde_json::Value) -> Resu
 
         "main-agent" => {
             let agent = data.get("agent").ok_or_else(invalid)?;
+            // A null agent saves none: the owner removed their Bestie.
             if data.len() != 2
-                || !agent.as_str().is_some_and(|v| {
-                    v.len() == 64
-                        && v.bytes()
-                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                })
+                || !(agent.is_null()
+                    || agent.as_str().is_some_and(|v| {
+                        v.len() == 64
+                            && v.bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    }))
             {
                 return Err(invalid());
             }
