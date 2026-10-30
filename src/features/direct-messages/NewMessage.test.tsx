@@ -1153,22 +1153,28 @@ it("filters the completed directory immediately without loading or searching aga
   expect(t.directMessages.people).toHaveBeenCalledTimes(requests);
 });
 
-it("keeps directory agents and holds Space and an empty result while local agents load", async () => {
+it("lists only controlled agents and shows loading, not an empty result, while local agents load", async () => {
   const t = setup();
   const agent = people[1];
   if (!agent) throw new Error("Missing fixture agent");
   const human = { pubkey: "a".repeat(64), name: agent.name };
+  const foreign = {
+    pubkey: "b".repeat(64),
+    name: "Other agent",
+    isAgent: true as const,
+  };
   t.directMessages.people.mockResolvedValue({
-    people: [human, agent],
+    people: [human, agent, foreign],
     hasMore: false,
   });
   const ready = t.control.snapshot();
   // As at launch, before agent controls first list this community's agents.
   t.updateControl({ status: "loading", agents: [] });
   t.mount();
-  await waitFor(() =>
-    expect(screen.getAllByRole("option", { name: /Person 2/ })).toHaveLength(2),
-  );
+  await screen.findByRole("option", { name: "Person 2" });
+  // No agent is offered until the list shows the viewer controls it.
+  expect(screen.getAllByRole("option")).toHaveLength(1);
+  expect(screen.getByRole("status", { name: "Loading people" })).toBeVisible();
   // The agent that loads could be a namesake, so Space waits.
   await t.user.type(recipient(), "person 2");
   await t.user.keyboard(" ");
@@ -1177,12 +1183,20 @@ it("keeps directory agents and holds Space and an empty result while local agent
     screen.queryByRole("button", { name: /^Remove / }),
   ).not.toBeInTheDocument();
   fireEvent.change(recipient(), { target: { value: "Nobody" } });
-  expect(
-    screen.queryByRole("status", { name: "Loading people" }),
-  ).not.toBeInTheDocument();
+  expect(screen.getByRole("status", { name: "Loading people" })).toBeVisible();
   expect(screen.queryByText("No matching people.")).not.toBeInTheDocument();
   t.updateControl(ready);
   expect(screen.getByText("No matching people.")).toBeVisible();
+  expect(
+    screen.queryByRole("status", { name: "Loading people" }),
+  ).not.toBeInTheDocument();
+  fireEvent.change(recipient(), { target: { value: "" } });
+  await waitFor(() =>
+    expect(screen.getAllByRole("option", { name: /Person 2/ })).toHaveLength(2),
+  );
+  expect(
+    screen.queryByRole("option", { name: /Other agent/ }),
+  ).not.toBeInTheDocument();
 });
 
 it("keeps uncontrolled agents hidden while only the agent library loads", async () => {

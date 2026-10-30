@@ -448,9 +448,10 @@ action that finds its agent missing awaits the source that could supply it befor
 refusing, rather than treating loading as absent: an action that needs a `managed`
 agent waits only while `managedPending`, through `refresh(false)`, since a library
 read cannot make an agent managed. A refresh that is not `fresh` joins a native list
-already in flight. `admissible` is `selectable` limited to `managed` agents unless the
-library is ready: channel admission, Solo chat start and tagged sends admit from it,
-rereading once before refusing, so stale rows never admit on their own.
+already in flight, and waits on any list that supersedes it. `admissible` is
+`selectable` limited to `managed` agents unless the library is ready: channel
+admission, Solo chat start and tagged sends admit from it, rereading once before
+refusing, so stale rows never admit on their own.
 
 Do not build another agent inventory in a plugin. `useAgentChoices(session,
 includeLegacy, archive)` retains the projection while mounted, which preserves

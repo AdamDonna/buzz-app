@@ -5275,6 +5275,51 @@ it("lets a refresh with no change of its own join the launch read", async () => 
   expect(native.list).toHaveBeenCalledTimes(2);
 });
 
+it("lets a joined refresh follow a read that supersedes the one it joined", async () => {
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const native = fakeNative();
+  const releases: ((value: AgentIdentity[]) => void)[] = [];
+  const held = () =>
+    new Promise<AgentIdentity[]>((resolve) => releases.push(resolve));
+  native.list.mockImplementationOnce(held).mockImplementationOnce(held);
+  const service = new AgentsService(
+    ctx,
+    fakeCommunities(fakeRelay()).communities,
+    native,
+    memoryStorage(),
+  );
+  await vi.waitFor(() => expect(native.list).toHaveBeenCalledOnce());
+  let joined = false;
+  const join = service.refresh({ join: true }).then(() => (joined = true));
+  // A change, such as a creation, reads the list again after the launch read.
+  const change = service.refresh();
+  expect(native.list).toHaveBeenCalledTimes(2);
+  // The launch read predates the change, so its result is dropped.
+  releases[0]?.([]);
+  await settle();
+  expect(joined).toBe(false);
+  expect(service.snapshot().status).toBe("loading");
+  releases[1]?.([
+    {
+      pubkey: bot,
+      relay: "wss://relay.example.test",
+      owner: viewer,
+      type: "example/echo",
+      name: "Echo",
+      deleted: false,
+    },
+  ]);
+  await Promise.all([join, change]);
+  expect(service.local()).toMatchObject({
+    status: "ready",
+    agents: [{ pubkey: bot, name: "Echo" }],
+  });
+});
+
 it("reads the list again on refresh and clears the error a failed read left", async () => {
   const ctx = new Context();
   ctx.provide("pluginStatus", {

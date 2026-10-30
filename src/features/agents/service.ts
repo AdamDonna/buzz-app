@@ -4871,12 +4871,14 @@ export class AgentsService extends Service implements Agents {
    * callers with no change of their own to read back. */
   refresh({ join = false } = {}): Promise<void> {
     if (join && this.listRead) return this.listRead;
-    const read = this.readList();
+    const read: Promise<void> = this.readList()
+      .finally(() => {
+        if (this.listRead === read) this.listRead = undefined;
+      })
+      // A superseded list's waiters follow the list that replaced it, so a
+      // finished refresh always means the current list.
+      .then(() => this.listRead);
     this.listRead = read;
-    const done = () => {
-      if (this.listRead === read) this.listRead = undefined;
-    };
-    read.then(done, done);
     return read;
   }
   private async readList() {
