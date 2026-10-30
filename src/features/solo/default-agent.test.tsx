@@ -1037,3 +1037,47 @@ it("a choice in another community doesn't keep a failed removal from coming back
     "b".repeat(64),
   );
 });
+
+it("saves none when the account's Bestie is deleted, if the account still holds it", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const store = savedAgentStore(session, "deleted");
+  const stop = store.subscribe(() => {});
+  await act(async () => account.resolve());
+  expect(store.snapshot()).toBe("b".repeat(64));
+  forgetDefaultAgent("b".repeat(64));
+  // The account is read again before none is saved.
+  expect(account.write).not.toHaveBeenCalled();
+  await act(async () => account.resolve());
+  await vi.waitFor(() => expect(account.write).toHaveBeenLastCalledWith(null));
+  expect(account.saved()).toBeNull();
+  expect(store.snapshot()).toBeUndefined();
+  expect(store.known()).toBe(true);
+  stop();
+});
+
+it("keeps a Bestie another device chose before the deleted one was cleared", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const stop = savedAgentStore(session, "moved").subscribe(() => {});
+  await act(async () => account.resolve());
+  // Another device saves First meanwhile.
+  await account.write("a".repeat(64));
+  account.write.mockClear();
+  forgetDefaultAgent("b".repeat(64));
+  await act(async () => account.resolve());
+  expect(account.write).not.toHaveBeenCalled();
+  expect(account.saved()).toBe("a".repeat(64));
+  stop();
+});
+
+it("keeps a choice made here while a deleted Bestie's account is read", async () => {
+  const { account, session } = accountSession("b".repeat(64));
+  const stop = savedAgentStore(session, "meanwhile").subscribe(() => {});
+  await act(async () => account.resolve());
+  forgetDefaultAgent("b".repeat(64));
+  await act(() => chooseDefaultAgent(session, "meanwhile", "a".repeat(64)));
+  // The read begun before the choice still finds Second.
+  await act(async () => account.resolve());
+  expect(account.write.mock.calls).toEqual([["a".repeat(64)]]);
+  expect(account.saved()).toBe("a".repeat(64));
+  stop();
+});

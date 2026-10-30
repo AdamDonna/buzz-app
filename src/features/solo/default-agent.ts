@@ -37,6 +37,9 @@ const known = new WeakSet<Account>();
 // here. A read that found no record leaves an account out.
 const recorded = new WeakSet<Account>();
 const saving = new WeakMap<Account, number>();
+// Accounts read this session, so a deleted agent can be cleared from them.
+const accounts = new Set<WeakRef<Account>>();
+const tracked = new WeakSet<Account>();
 const listeners = new Set<() => void>();
 function notifySaved() {
   for (const listener of listeners) listener();
@@ -174,7 +177,38 @@ export function forgetDefaultAgent(pubkey: string) {
   clearViewValue(KEY, pubkey);
   for (const [scope, agent] of unsaved)
     if (agent === pubkey) unsaved.delete(scope);
+  // An account that saved it as Bestie saves none, so it isn't left pointing
+  // at an agent that is gone.
+  for (const ref of accounts) {
+    const account = ref.deref();
+    if (!account) accounts.delete(ref);
+    else if (saved.get(account) === pubkey)
+      clearDeleted(account, pubkey).catch((error) =>
+        console.warn(
+          "The deleted Bestie wasn't cleared from your account",
+          error,
+        ),
+      );
+  }
   notifySaved();
+}
+
+/** Saves none to an account whose Bestie was deleted, only if the account
+ * still holds that agent when read again: another device may have chosen
+ * another since, and a choice made here meanwhile wins too. */
+async function clearDeleted(account: Account, pubkey: string) {
+  const started = revision(account);
+  if (saving.get(account)) return;
+  const current = await account.read();
+  if (
+    current !== pubkey ||
+    revision(account) !== started ||
+    saved.get(account) !== pubkey
+  )
+    return;
+  advance(account);
+  await save(account, null);
+  remember(account, undefined);
 }
 
 /** Adopts the account's saved choice once per session. Settles even when the
@@ -182,6 +216,10 @@ export function forgetDefaultAgent(pubkey: string) {
 function adopt(account: Account, scope: string) {
   let pending = adopted.get(account);
   if (!pending) {
+    if (!tracked.has(account)) {
+      tracked.add(account);
+      accounts.add(new WeakRef(account));
+    }
     const started = revision(account);
     pending = account.read().then(
       (record) => {

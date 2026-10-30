@@ -117,7 +117,10 @@ shared **New agent** dialog. Only agents on this device are offered for now,
 and the chooser says so. Choosing or creating an agent saves it through
 `main-agent`, then hands off to the canonical DM; like **Make my bestie**, a
 choice here starts the agent with Remembers you on. When the saved Bestie is
-no longer here, the page shows the same chooser in its place.
+no longer here, the page shows the same chooser in its place. Deleting the
+Bestie saves none to the account, after reading the account again to check it
+still holds that agent, so the page shows **Choose your bestie** rather than a
+Bestie that is gone.
 
 Builderlab no longer owns a separate Bestie setup, agent, Solo chat, or
 selection path.
