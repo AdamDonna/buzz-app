@@ -81,50 +81,51 @@ export function PrivateChannels({
   );
   const addable = others.filter((channel) => canAddMembers(session, channel));
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  /** Why each channel's last change failed, and whether it was to join. */
   const [failed, setFailed] = useState<
-    Readonly<Record<string, Readonly<{ name: string; error: string }>>>
+    Readonly<
+      Record<string, Readonly<{ name: string; error: string; join: boolean }>>
+    >
   >({});
-  const [confirming, setConfirming] = useState(false);
+  /** The channels Add to all asked about. */
+  const [confirming, setConfirming] = useState<readonly ChannelSummary[]>();
 
-  /** Runs `change` on each channel at once and keeps why each one failed. */
+  /** Runs `change` on each channel in turn, as adding several agents does,
+   * and keeps why each one failed. */
   const run = async (
     channels: readonly ChannelSummary[],
+    join: boolean,
     change: (id: string) => Promise<void>,
   ) => {
-    const ids = channels.map((channel) => channel.id);
+    const ids = new Set(channels.map((channel) => channel.id));
     setBusy((current) => new Set([...current, ...ids]));
     setFailed((current) =>
       Object.fromEntries(
-        Object.entries(current).filter(([id]) => !ids.includes(id)),
+        Object.entries(current).filter(([id]) => !ids.has(id)),
       ),
     );
-    const results = await Promise.allSettled(ids.map(change));
-    setBusy(
-      (current) => new Set([...current].filter((id) => !ids.includes(id))),
-    );
-    setFailed((current) => ({
-      ...current,
-      ...Object.fromEntries(
-        results.flatMap((result, index) => {
-          const channel = channels[index];
-          return result.status === "rejected" && channel
-            ? [
-                [
-                  channel.id,
-                  { name: channel.name, error: message(result.reason) },
-                ],
-              ]
-            : [];
-        }),
-      ),
-    }));
+    for (const { id, name } of channels) {
+      let error: string | undefined;
+      try {
+        await change(id);
+      } catch (cause) {
+        error = message(cause);
+      }
+      setBusy((current) => new Set([...current].filter((key) => key !== id)));
+      if (error !== undefined)
+        setFailed((current) => ({ ...current, [id]: { name, error, join } }));
+    }
   };
   const add = (channels: readonly ChannelSummary[]) =>
-    run(channels, (id) => session.memberAdditions.add(id, bestie));
+    run(channels, true, (id) => session.memberAdditions.add(id, bestie));
   const remove = (channel: ChannelSummary) =>
-    run([channel], (id) => removeMember(session, id, bestie));
+    run([channel], false, (id) => removeMember(session, id, bestie));
   const adding = addable.some((channel) => busy.has(channel.id));
-  const problems = Object.entries(failed);
+  // A failure stops showing once the channel is as the change wanted anyway.
+  const inBestie = new Set(joined.map((channel) => channel.id));
+  const problems = Object.entries(failed).filter(
+    ([id, { join }]) => inBestie.has(id) !== join,
+  );
 
   return (
     <>
@@ -154,7 +155,7 @@ export function PrivateChannels({
               variant="outline"
               disabled={!addable.length}
               loading={adding}
-              onClick={() => setConfirming(true)}
+              onClick={() => setConfirming(addable)}
             >
               Add to all my private channels
             </Button>
@@ -170,6 +171,7 @@ export function PrivateChannels({
               <Button
                 variant="outline"
                 loading={busy.has(channel.id)}
+                disabled={channel.cached}
                 aria-label={`Remove Bestie from #${channel.name}`}
                 onClick={() => void remove(channel)}
               >
@@ -202,17 +204,17 @@ export function PrivateChannels({
       )}
       {confirming && (
         <AlertDialog
-          title={`Add Bestie to ${addable.length} private ${addable.length === 1 ? "channel" : "channels"}?`}
+          title={`Add Bestie to ${confirming.length} private ${confirming.length === 1 ? "channel" : "channels"}?`}
           description="Members of each channel will see that you added Bestie."
-          onClose={() => setConfirming(false)}
+          onClose={() => setConfirming(undefined)}
           actions={
             <>
-              <Button onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button onClick={() => setConfirming(undefined)}>Cancel</Button>
               <Button
                 variant="prominent"
                 onClick={() => {
-                  setConfirming(false);
-                  void add(addable);
+                  setConfirming(undefined);
+                  void add(confirming);
                 }}
               >
                 Add to all

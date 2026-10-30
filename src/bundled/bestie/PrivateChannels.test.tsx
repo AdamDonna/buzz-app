@@ -57,7 +57,7 @@ it("keeps only your private channels, split by Bestie's membership, most recent 
   ]);
 });
 
-function session(channels: ChannelSummary[]) {
+function session(channels: ChannelSummary[], removal = "confirmed") {
   const roles: Record<string, string> = { [BESTIE]: "bot" };
   const add = vi.fn(async (id: string) => {
     if (id === "id-beta") throw new Error("Not confirmed. Try again.");
@@ -83,8 +83,11 @@ function session(channels: ChannelSummary[]) {
               authority: { roles: {} },
               operation: {
                 change: { pubkey: BESTIE, role: "remove" },
-                status: "confirmed",
+                status: removal,
               },
+              ...(removal !== "confirmed" && {
+                error: "The change may have taken effect. Refresh to check.",
+              }),
             }
           : { status: "ready", authority: { roles } },
       ),
@@ -144,5 +147,26 @@ it("adds Bestie to one channel, or to all after asking, and reports what didn't 
   ]);
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "#beta: Not confirmed. Try again.",
+  );
+});
+
+it("says when a removal isn't confirmed, and offers none from a cached roster", async () => {
+  const user = userEvent.setup();
+  const { value } = session(
+    [
+      channel("shared", [YOU, BESTIE]),
+      channel("offline", [YOU, BESTIE], { cached: true }),
+    ],
+    "uncertain",
+  );
+  render(<PrivateChannels session={value} bestie={BESTIE} />);
+  expect(
+    screen.getByRole("button", { name: "Remove Bestie from #offline" }),
+  ).toBeDisabled();
+  await user.click(
+    screen.getByRole("button", { name: "Remove Bestie from #shared" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "#shared: The change may have taken effect. Refresh to check.",
   );
 });
