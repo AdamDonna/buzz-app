@@ -307,7 +307,7 @@ test("top bar swaps its pages for an overflow menu when narrow", async ({
   await expect(search).toBeFocused();
   await openPage(page, "Bestie");
   await expect(
-    page.getByRole("heading", { name: "Meet your Bestie" }),
+    page.getByRole("heading", { name: "Choose your bestie", exact: true }),
   ).toBeVisible();
 });
 

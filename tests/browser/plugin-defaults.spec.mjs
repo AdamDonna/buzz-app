@@ -52,7 +52,7 @@ test("Bestie opts in without changing the other bundled defaults and survives re
   await expect(destination).toBeVisible();
   await destination.click();
   await expect(
-    page.getByRole("heading", { name: "Meet your Bestie" }),
+    page.getByRole("heading", { name: "Choose your bestie", exact: true }),
   ).toBeVisible();
   await plugins(page);
   await bestie.click();
