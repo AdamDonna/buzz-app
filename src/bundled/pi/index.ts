@@ -41,6 +41,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
       );
     },
     (key, listener) => agents.relay(key)?.subscribe(listener) ?? (() => {}),
+    (key) => agents.execution(key),
   );
   const { ActivityTab, Create, CreateModel, SettingsTab } = createTabs({
     setup: runtime.setup,
@@ -62,6 +63,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
 
   agents.register<Config>({
     id: TYPE_ID,
+    execution: true,
     hooks: { events: ["beforeTool", "afterTool"] },
     title: "Pi",
     icon: PiLogoIcon,

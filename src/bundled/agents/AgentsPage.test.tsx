@@ -397,6 +397,10 @@ function setup(
     addedTabs: () => [],
     registerTab: () => {},
     controlAttention: () => {},
+    registerExecution: () => {},
+    bindExecution: async () => {},
+    executionBinding: () => undefined,
+    execution: () => undefined,
   } satisfies Agents;
   const disconnected = { status: "disconnected", generation: 0 };
   const relay = {

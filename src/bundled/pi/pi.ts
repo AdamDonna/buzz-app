@@ -96,6 +96,7 @@ export class Pi {
   constructor(
     private readonly spawn: () => Spawn,
     private readonly handlers: Handlers,
+    private readonly directNode = false,
   ) {}
 
   /** Asks the host, starting it first if it is not running. */
@@ -182,7 +183,8 @@ export class Pi {
     // Windows has no bash, and starts Node from its own PATH. The host and
     // its packages go on stdin: together they are past Windows' 32 KB
     // command line.
-    const windows = /^Win/i.test(globalThis.navigator?.platform ?? "");
+    const windows =
+      this.directNode || /^Win/i.test(globalThis.navigator?.platform ?? "");
     const starting = this.spawn()(windows ? "node" : "pi-sh", {
       args: windows ? [launch] : [script, "pi.sh", launch],
       cwd: "~",

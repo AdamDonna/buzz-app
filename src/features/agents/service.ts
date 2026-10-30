@@ -1,4 +1,10 @@
 import type {} from "../navigation/service";
+import {
+  createAgentExecutions,
+  type AgentExecution,
+  type AgentExecutionBinding,
+  type AgentExecutionProvider,
+} from "./execution";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
 import { respond } from "../../buzz-mcp/rpc";
 import { connectMcp } from "../../buzz-mcp/connection";
@@ -791,6 +797,8 @@ export type AgentType<Config = unknown> = {
   }>;
   /** Runtime routes its supported security boundaries through AgentHandle.protection. */
   protection?: true;
+  /** Uses the agent's saved execution target for native process and file I/O. */
+  execution?: true;
   /** Why protected runs must stop when this runtime cannot enforce the contract. */
   protectionUnavailable?: string;
   /** Fully retires native sessions for this membership key before policy changes. */
@@ -1000,6 +1008,15 @@ export type NewAgent = Readonly<{
   config?: unknown;
 }>;
 export type Agents = {
+  registerExecution(provider: AgentExecutionProvider): void;
+  /** Bind a dedicated agent before its first local runtime use. This is write-once. */
+  bindExecution(
+    agent: AgentKey,
+    binding: Readonly<{ id: string; target: string; workspace: string }>,
+  ): Promise<void>;
+  executionBinding(agent: AgentKey): AgentExecutionBinding | undefined;
+  /** Only the agent's native harness can open its bound target. */
+  execution(agent: AgentKey): AgentExecution | undefined;
   registerHook(hook: AgentHook): void;
   /** Dispatches hooks for this plugin's agent types in contribution order. */
   dispatchHook(
@@ -1465,6 +1482,44 @@ const wssOf = (origin: string) =>
   relayOrigin(origin).replace(/^https:/, "wss:");
 
 export class AgentsService extends Service implements Agents {
+  private readonly executions;
+  private checkExecution(key: AgentKey, type: string) {
+    if (!this.executions.read(key)) return;
+    if (!this.types().find((kind) => kind.key === type)?.execution)
+      throw new Error(
+        "This runtime does not support the saved execution binding",
+      );
+    this.executions.check(key, type);
+  }
+
+  registerExecution(provider: AgentExecutionProvider) {
+    this.executions.register(this.ctx, provider);
+  }
+  async bindExecution(
+    key: AgentKey,
+    binding: Readonly<{ id: string; target: string; workspace: string }>,
+  ) {
+    const member = this.liveMember(key);
+    if (
+      !member ||
+      !this.types().find((type) => type.key === member.type)?.execution
+    )
+      throw new Error("This agent does not support plugin execution");
+    if (member.protection)
+      throw new Error("Plugin execution does not support protected agents");
+    await this.executions.bind(this.ctx, key, member.type, binding);
+  }
+  executionBinding(key: AgentKey) {
+    if (!this.liveMember(key)) throw new Error("No such agent on this device");
+    return this.executions.read(key);
+  }
+  execution(key: AgentKey) {
+    const member = this.liveMember(key);
+    if (!member) throw new Error("No such agent on this device");
+    if (member.protection && this.executions.read(key))
+      throw new Error("Plugin execution does not support protected agents");
+    return this.executions.open(this.ctx, key, member.type);
+  }
   private readonly hookContributions;
   registerHook(hook: AgentHook) {
     const adapter = this.contributions
@@ -1609,6 +1664,7 @@ export class AgentsService extends Service implements Agents {
     private readonly bindingFor?: (agent: Agent) => ConfigBinding,
   ) {
     super(ctx, "agents");
+    this.executions = createAgentExecutions(ctx, storage);
     this.contributions = createContributions<AgentType>(ctx);
     this.hookContributions = createAgentHooks(ctx);
     this.tabContributions = createContributions<AgentAddedTab>(ctx);
@@ -1746,8 +1802,13 @@ export class AgentsService extends Service implements Agents {
       changing: (key) => this.changing.has(key),
       timers: (key) => this.timersOf(key),
       progress: (key, ran) => this.progress(key, ran),
-      start: (agent) =>
-        this.resolve(agent, (this.records[agent.pubkey] ?? agent).config),
+      start: (agent) => {
+        this.checkExecution(agent.key, agent.type);
+        return this.resolve(
+          agent,
+          (this.records[agent.pubkey] ?? agent).config,
+        );
+      },
       team: (key) => {
         const member = this.liveMember(key);
         const origin = member && originOf(member.relay);
@@ -2038,7 +2099,16 @@ export class AgentsService extends Service implements Agents {
       throw new Error(
         "A hosted agent type has provision, activate, profile and remove, and no run, models or timeoutMs",
       );
-    this.contributions.register(this.ctx, type as unknown as AgentType);
+    const models = type.models;
+    this.contributions.register(this.ctx, {
+      ...type,
+      ...(models && {
+        models: (agent: Agent<Config>) => {
+          this.checkExecution(agent.key, agent.type);
+          return models(agent);
+        },
+      }),
+    } as unknown as AgentType);
   }
   types = () => this.contributions.snapshot();
   registerTab(tab: AgentAddedTab) {
@@ -3384,6 +3454,7 @@ export class AgentsService extends Service implements Agents {
     if (!kind) throw new Error("That agent type is not available");
     if (kind.remote)
       throw new Error("A hosted provider cannot take over a local agent key");
+    this.checkExecution(key, type);
     if (type === identity.type) return [];
     this.refuseWhileMoving(identity);
     const retyped = async () => {

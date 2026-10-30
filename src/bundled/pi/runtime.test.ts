@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
+import type { AgentExecution } from "../../features/agents/execution";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
 import type { MemoryEntry } from "../../features/agents/memory";
@@ -55,6 +56,7 @@ function setup(
   /** The channel's Canvas, as it reads now. */
   canvas?: { content: string; pubkey?: string },
   repositories?: (scope: string | undefined) => string,
+  execution?: (key: string) => AgentExecution | undefined,
 ) {
   let submissions = 0;
   const host = fakeHost({
@@ -130,6 +132,9 @@ function setup(
       connection.live && key === self
         ? (agent as unknown as AgentHandle)
         : undefined,
+    undefined,
+    undefined,
+    execution,
   );
   const published: { kind: number; content: string; tags: string[][] }[] = [];
   const agent = {
@@ -254,6 +259,95 @@ it("hands an owner's mention to its thread's Pi conversation", async () => {
   expect(String(delivered?.params.instructions)).toContain(self);
   expect(turn.workingUntil).toHaveBeenCalledTimes(1);
   expect(published).toEqual([]);
+});
+
+it("runs a bound Pi conversation with remote files, native Buzz tools and Stop", async () => {
+  const answered = deferred<object>();
+  const remote = fakeHost({
+    deliver: () => ({ submission: 1, conversation: CONVERSATION }),
+    place: () => ({ seen: 0 }),
+    unfinished: () => ({ submissions: [] }),
+    wait: () => answered.promise,
+    session: () => {
+      answered.resolve({ status: "unanswered", reason: "aborted" });
+    },
+  });
+  const lifetime = new AbortController();
+  const execution: AgentExecution = {
+    binding: {
+      provider: "internal/remote",
+      target: "guest-1",
+      workspace: "/remote/task",
+    },
+    signal: lifetime.signal,
+    spawn: remote.spawn,
+    readFile: vi.fn(async () => new Uint8Array([42])),
+    resolveDirectory: vi.fn(async (path) => path),
+    dispose: vi.fn(async () => {}),
+  };
+  const file: AddedTool = {
+    name: "test_file",
+    description: "Read a task file",
+    inputSchema: { type: "object" },
+    call: async (client) => {
+      if (!client.read) throw new Error("Missing file reader");
+      return String((await client.read("result"))[0]);
+    },
+  };
+  const f = setup({}, [file], undefined, undefined, () => execution);
+  const turn = f.deliver({ type: "mention", event: reply("2", "@Pi look") });
+  try {
+    await turn.run;
+    expect(f.host.processes).toHaveLength(0);
+    const process = remote.processes[0];
+    if (!process) throw new Error("Missing remote process");
+    expect(remote.processes[0]?.id).toBe("node");
+    expect(remote.processes[0]?.options.args?.slice(0, 2)).toEqual([
+      "--input-type=module",
+      "-e",
+    ]);
+    expect(remote.requests("deliver")[0]?.params.cwd).toBe("/remote/task");
+    const callback = {
+      agent: self,
+      conversation: CONVERSATION,
+      context: { channel, root: root.id },
+      name: "send",
+      arguments: { text: "Remote reply", audience: "everyone" },
+    };
+    await expect(
+      process.tool({ ...callback, agent: bob }),
+    ).resolves.toMatchObject({ error: "Pi callback names another agent" });
+    await expect(process.tool(callback)).resolves.toMatchObject({
+      result: { content: expect.any(Array) },
+    });
+    expect(f.published[0]?.content).toBe("Remote reply");
+    await expect(
+      process.tool({
+        ...callback,
+        name: "test_file",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({
+      result: { content: [{ type: "text", text: "42" }] },
+    });
+    expect(execution.readFile).toHaveBeenCalledWith("result", {
+      cwd: "/remote/task",
+    });
+    await f.runtime.session(
+      { key: self, config: DEFAULT_CONFIG } as Agent,
+      { channelId: channel, root: root.id },
+      "interrupt",
+    );
+    await expect(f.settled(turn)).resolves.toMatchObject({ ok: true });
+    expect(remote.requests("session")[0]?.params.action).toBe("interrupt");
+    await expect(process.tool(callback)).resolves.toMatchObject({
+      error: "Pi callback has no active run",
+    });
+  } finally {
+    answered.resolve({ status: "closed" });
+    f.runtime.dispose();
+    remote.processes[0]?.exit(0);
+  }
 });
 
 it("keeps one agent's two communities' storage apart, each under its membership's key", async () => {
