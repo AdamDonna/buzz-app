@@ -39,8 +39,14 @@ and use readable owner labels before abbreviated-key fallbacks.
 
 The agent you made your Bestie (with **Make my bestie** in Agents) gets a
 **Bestie** tab on its agent page while it runs on this device. **Change** picks
-another agent and asks before replacing your Bestie. The tab lists Bestie's
-settings, which are not set up yet.
+another agent and asks before replacing your Bestie.
+
+**Remembers you** adds memory rules to the agent's instructions, in a section
+marked `<!-- buzz:bestie/memory v1 -->` … `<!-- /buzz:bestie/memory -->`, and
+turning it off removes that section. The switch is on while the section is
+there. Off deletes no memory, and the agent's core memory is still in every
+prompt; clear memory in the Memory tab. The tab's other settings are not set
+up yet.
 
 ### Hosted setup fallback
 

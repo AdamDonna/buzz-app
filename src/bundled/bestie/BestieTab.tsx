@@ -1,4 +1,9 @@
-import type { Agent, AgentAddedTab } from "../../features/agents/service";
+import { useState } from "react";
+import type {
+  Agent,
+  AgentAddedTab,
+  Agents,
+} from "../../features/agents/service";
 import { relayOrigin } from "../../features/communities/destination";
 import { relayPartition } from "../../features/relay/partition";
 import { useRelayConnection } from "../../features/relay/react";
@@ -17,10 +22,14 @@ import {
 } from "../../shared/design-system/ui/Menu";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
+import { SwitchPreferenceRow } from "../../shared/design-system/ui/SwitchPreferenceRow";
 import { bestieName, useBestieChoice } from "../agents/BestieChoice";
+import { FEATURES, type Feature, hasFeature, withFeature } from "./features";
+
+type TabAgents = Pick<Agents, "save" | "types">;
 
 /** The Bestie tab, on the agent saved as Bestie in its community. */
-export function bestieTab(relay: RelayData): AgentAddedTab {
+export function bestieTab(relay: RelayData, agents: TabAgents): AgentAddedTab {
   const bestie = savedBestie(relay);
   return {
     id: "bestie",
@@ -29,7 +38,9 @@ export function bestieTab(relay: RelayData): AgentAddedTab {
       agent.pubkey === bestie.snapshot() &&
       inCommunity(agent, relay.snapshot()),
     subscribe: bestie.subscribe,
-    component: ({ agent }) => <BestieTab relay={relay} agent={agent} />,
+    component: ({ agent }) => (
+      <BestieTab relay={relay} agents={agents} agent={agent} />
+    ),
   };
 }
 
@@ -91,7 +102,15 @@ function inCommunity(agent: Agent, { scope }: RelaySnapshot) {
   }
 }
 
-function BestieTab({ relay, agent }: { relay: RelayData; agent: Agent }) {
+function BestieTab({
+  relay,
+  agents,
+  agent,
+}: {
+  relay: RelayData;
+  agents: TabAgents;
+  agent: Agent;
+}) {
   const { session, scope } = useRelayConnection(relay);
   const bestie = useBestieChoice(session, scope ?? "");
   const others = bestie.choices.selectable.filter(
@@ -131,7 +150,14 @@ function BestieTab({ relay, agent }: { relay: RelayData; agent: Agent }) {
       </SettingsGroup>
       <InlineHeader title="Settings" />
       <SettingsGroup>
-        <PreferenceRow title="Remembers you" subtitle="Not set up yet." />
+        {FEATURES.map((feature) => (
+          <FeatureSwitch
+            key={feature.id}
+            agents={agents}
+            agent={agent}
+            feature={feature}
+          />
+        ))}
         <PreferenceRow
           title="Check-ins"
           subtitle="Every hour. Not set up yet."
@@ -143,5 +169,64 @@ function BestieTab({ relay, agent }: { relay: RelayData; agent: Agent }) {
       </SettingsGroup>
       {bestie.view}
     </div>
+  );
+}
+
+/** A feature's switch: on while the agent's instructions hold its section.
+ * Saving revises the synced instructions the tab shows, as their editor does. */
+function FeatureSwitch({
+  agents,
+  agent,
+  feature,
+}: {
+  agents: TabAgents;
+  agent: Agent;
+  feature: Feature;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  // A type without `adopt` has no instructions, as `updateKind` says.
+  if (!agents.types().find(({ key }) => key === agent.type)?.adopt)
+    return (
+      <PreferenceRow
+        title={feature.title}
+        subtitle="This agent's type has no instructions to add this to."
+      />
+    );
+  const config = (agent.config ?? {}) as { instructions?: unknown };
+  const instructions =
+    typeof config.instructions === "string" ? config.instructions : "";
+  const save = async (on: boolean) => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      await agents.save(agent.key, {
+        config: {
+          ...config,
+          instructions: withFeature(instructions, feature, on),
+        },
+        ...(agent.configBase && { base: agent.configBase }),
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <SwitchPreferenceRow
+        label={feature.title}
+        description={feature.description}
+        checked={hasFeature(instructions, feature)}
+        disabled={saving}
+        onCheckedChange={(on) => void save(on)}
+      />
+      {error && (
+        <p role="alert" className="buzz-field-error">
+          {error}
+        </p>
+      )}
+    </>
   );
 }
