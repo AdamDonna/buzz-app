@@ -171,9 +171,9 @@ export async function loadAgentStorage(
   }
 }
 
-/** Agent storage held in memory and saved through `save`, one write at a
- * time, in order. A failed write puts back the key's saved value, so the
- * copy never keeps what is not saved and the same value can be set again. */
+/** Agent storage holds a copy in memory and saves updates in order.
+ * Atomic inserts wait only for writes to the same key. A failed write puts
+ * back the saved value, so callers can retry it. */
 export function fileStore(
   items: Map<string, string>,
   save: Native["set"],
@@ -188,7 +188,11 @@ export function fileStore(
   const pending = new Map<string, Promise<unknown>>();
   let queue: Promise<unknown> = Promise.resolve();
   const write = (key: string, value: string | null, absent = false) => {
-    const next = queue.then(async () =>
+    const same = pending.get(key)?.catch(() => {});
+    const before = absent
+      ? (same ?? Promise.resolve())
+      : Promise.all([queue, same]);
+    const next = before.then(async () =>
       absent && value !== null ? add(key, value) : save(key, value),
     );
     pending.set(key, next);
@@ -213,7 +217,7 @@ export function fileStore(
         throw error;
       },
     );
-    queue = done.catch(() => {});
+    if (!absent) queue = done.catch(() => {});
     return done;
   };
   return Object.freeze({

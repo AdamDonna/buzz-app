@@ -355,6 +355,7 @@ export class PiRuntime {
       throw new Error("Pi runtime is disposed");
     }
     if (!execution) return { pi: this.pi, setup: this.setup };
+    execution.signal.throwIfAborted();
     const held = this.remote.get(agent);
     if (held?.execution === execution) return held;
     const pi = this.createPi(
