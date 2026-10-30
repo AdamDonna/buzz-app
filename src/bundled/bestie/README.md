@@ -63,8 +63,7 @@ action has a row of its own, so in a narrow panel its button wraps under it.
 Until your channel list has loaded in full, the section says so instead of
 saying Bestie is in none: a failed read offers **Retry**, the channels already
 known keep their rows, and **Add to all** waits for the full list.
-Changing your Bestie stops an **Add to all** still under way.
-Public channels
+Changing your Bestie stops an **Add to all** still under way. Public channels
 need nothing: agents read them already. Adding Bestie to new channels you
 create is not set up yet.
 
@@ -85,6 +84,15 @@ removes the timer again, and turns Attention back off if it turned it on; a
 timer still left without its section gets a **Remove** row. After a
 sleep it runs once, not once for each missed hour. Each
 check-in is a feature in `features.ts`, so another kind is one more entry.
+
+**Changing your Bestie.** Only your Bestie checks in: whenever the saved Bestie
+is known, on this device or synced from another, any other agent here has its
+check-ins removed. Its memory section and channels stay. An agent this device
+makes Bestie starts with Remembers you on; a choice synced from elsewhere
+changes nothing, so memory turned off stays off. A former Bestie keeps a
+**Former Bestie** tab while it has a Bestie section, or, if this device saw it
+as Bestie, while it is in one of your private channels. The tab has the same
+switches, **Remove from all** for its channels, and **Make my Bestie again**.
 
 ### Hosted setup fallback
 

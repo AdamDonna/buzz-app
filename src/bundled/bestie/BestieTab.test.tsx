@@ -6,7 +6,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
 import { readView, writeView } from "../../shared/view-state";
-import { bestieTab } from "./BestieTab";
+import { onBestieMade } from "../agents/BestieChoice";
+import { bestieTab, formerBestieTab } from "./BestieTab";
 import { validateObject } from "../../features/agents/attention";
 import { checkinHourly, memory, withFeature } from "./features";
 
@@ -302,6 +303,11 @@ it("keeps memory on through the owner's edits, and offers Restore for edited mar
   rerender(<Tab agent={shown(on.replace(close, ""))} />);
   expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   expect(screen.getByText(/Fix its start and end lines there/)).toBeVisible();
+  // Check-ins wait on memory.
+  expect(screen.getByRole("switch", { name: "Every hour" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
 });
 
 it("says why a save failed and lets the switch be tried again", async () => {
@@ -580,4 +586,79 @@ it("says a check-in paused in Attention is paused, and how to restart it", async
     ada.key,
     { attention: { [INTEREST]: null, [TIMER]: null } },
   ]);
+});
+
+it("shows a Former Bestie tab while a former Bestie has a setting on, with a way back", async () => {
+  const user = userEvent.setup();
+  const { relay, mainAgent } = community(bea.pubkey);
+  const tab = formerBestieTab(relay, host().agents);
+  const remembering = {
+    ...ada,
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  const stop = tab.subscribe?.(() => {});
+  // Nobody is former before the account's choice is read.
+  expect(tab.when?.(remembering)).toBe(false);
+  await vi.waitFor(() => expect(tab.when?.(remembering)).toBe(true));
+  // Not on the Bestie, nor on an agent with nothing on.
+  expect(tab.when?.(bea)).toBe(false);
+  expect(tab.when?.(ada)).toBe(false);
+
+  const made = vi.fn();
+  const stopMade = onBestieMade(made);
+  const Tab = tab.component;
+  render(<Tab agent={remembering} />);
+  expect(
+    screen.getByText("Ada is no longer your Bestie. These are still on."),
+  ).toBeVisible();
+  expect(screen.getByRole("switch", { name: "Remembers you" })).toBeChecked();
+  const hourly = screen.getByRole("switch", { name: "Every hour" });
+  expect(hourly).toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByText("Only your Bestie checks in.")).toBeVisible();
+  expect(screen.getByText("Private channels Ada can read")).toBeVisible();
+
+  await user.click(
+    screen.getByRole("button", { name: "Make my Bestie again" }),
+  );
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Ada your bestie?",
+  });
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Switch to Ada" }),
+  );
+  expect(mainAgent.write).toHaveBeenCalledWith(ada.pubkey);
+  // This device made it Bestie, so the plugin hears of it.
+  await vi.waitFor(() => expect(made).toHaveBeenCalledWith(ada.pubkey));
+  await vi.waitFor(() => expect(tab.when?.(remembering)).toBe(false));
+  stopMade();
+  stop?.();
+});
+
+it("lets a former Bestie's leftover check-in be turned off", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(bea.pubkey);
+  const { agents, save } = host();
+  const Tab = formerBestieTab(relay, agents).component;
+  const checking = {
+    ...ada,
+    config: {
+      instructions: withFeature(
+        withFeature("Be brief.", memory, true),
+        checkinHourly,
+        true,
+      ),
+    },
+    attention: {
+      "interest/bestie-hourly-check-in": {},
+      "watch/bestie-hourly-check-in": {},
+    },
+  } as unknown as Agent;
+  render(<Tab agent={checking} />);
+  const hourly = screen.getByRole("switch", { name: "Every hour" });
+  expect(hourly).toBeChecked();
+  expect(hourly).not.toHaveAttribute("aria-disabled", "true");
+  await user.click(hourly);
+  expect(save).toHaveBeenLastCalledWith(ada.key, {
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  });
 });

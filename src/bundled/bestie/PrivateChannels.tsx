@@ -64,13 +64,16 @@ async function removeMember(
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-/** The private channels Bestie reads because it is a member. */
+/** The private channels Bestie reads because it is a member. For a former
+ * Bestie, `former` names it, and the list is for taking it out. */
 export function PrivateChannels({
   session,
   bestie,
+  former,
 }: {
   session: RelaySession;
   bestie: string;
+  former?: string;
 }) {
   const list = useChannelList(session.channels);
   const { joined, others } = privateChannels(
@@ -92,7 +95,7 @@ export function PrivateChannels({
       Record<string, Readonly<{ name: string; error: string; join: boolean }>>
     >
   >({});
-  /** The channels Add to all asked about. */
+  /** The channels Add to all, or Remove from all, asked about. */
   const [confirming, setConfirming] = useState<readonly ChannelSummary[]>();
   /** The agent this section is for now, or none once it is gone, as after
    * Change: changes still to run for an earlier one aren't sent. */
@@ -143,8 +146,10 @@ export function PrivateChannels({
     run(channels, true, (id) =>
       session.memberAdditions.add(id, bestie, { role: "guest" }),
     );
-  const remove = (channel: ChannelSummary) =>
-    run([channel], false, (id) => removeMember(session, id, bestie));
+  const remove = (channels: readonly ChannelSummary[]) =>
+    run(channels, false, (id) => removeMember(session, id, bestie));
+  const name = former ?? "Bestie";
+  const removable = joined.filter((channel) => !channel.cached);
   const adding = addable.some((channel) => busy.has(channel.id));
   // A failure stops showing once the channel is as the change wanted anyway.
   const inBestie = new Set(joined.map((channel) => channel.id));
@@ -155,8 +160,12 @@ export function PrivateChannels({
   return (
     <>
       <InlineHeader
-        title="Private channels Bestie can read"
-        subtitle="Bestie already reads every public channel. In a channel you add it to, it reads along as a guest and can't post there."
+        title={`Private channels ${name} can read`}
+        subtitle={
+          former
+            ? "Leaving it in a channel is fine: it reads along as a guest and can't post there."
+            : "Bestie already reads every public channel. In a channel you add it to, it reads along as a guest and can't post there."
+        }
       />
       <SettingsGroup>
         {joined.map((channel) => (
@@ -168,8 +177,8 @@ export function PrivateChannels({
                 variant="outline"
                 loading={busy.has(channel.id)}
                 disabled={channel.cached}
-                aria-label={`Remove Bestie from #${channel.name}`}
-                onClick={() => void remove(channel)}
+                aria-label={`Remove ${name} from #${channel.name}`}
+                onClick={() => void remove([channel])}
               >
                 Remove
               </Button>
@@ -181,7 +190,7 @@ export function PrivateChannels({
             title="Couldn't load your private channels"
             subtitle={
               list.error ??
-              "Bestie may be in channels that aren't shown here. Try again."
+              `${name} may be in channels that aren't shown here. Try again.`
             }
             trailing={(label) => (
               <Button
@@ -196,74 +205,93 @@ export function PrivateChannels({
         ) : list.coverage === "partial" ? (
           <PreferenceRow
             title="Only some of your private channels are loaded"
-            subtitle="Bestie may be in channels that aren't shown here."
+            subtitle={`${name} may be in channels that aren't shown here.`}
           />
         ) : list.status !== "ready" ? (
           !joined.length && (
             <PreferenceRow title="Loading your private channels…" />
           )
         ) : (
-          !joined.length && (
+          !joined.length &&
+          (former ? (
+            <PreferenceRow title="Not in any of your private channels" />
+          ) : (
             <PreferenceRow
               title="Not in any of your private channels yet"
               subtitle="Add Bestie to the ones you want it to catch you up on."
             />
-          )
+          ))
         )}
         {/* Each action has a row of its own, so its button can wrap under
             its title in a narrow panel instead of widening the tab. */}
-        {addable.length > 0 && (
-          <>
-            <PreferenceRow
-              title="Add to a channel"
-              subtitle="Pick one of your private channels."
-              trailing={(label) => (
-                <MenuRoot>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        aria-describedby={label["aria-labelledby"]}
-                      >
-                        Choose…
-                      </Button>
-                    }
-                  />
-                  <MenuPopup align="end">
-                    {addable.map((channel) => (
-                      <MenuItem
-                        key={channel.id}
-                        disabled={busy.has(channel.id)}
-                        onClick={() => void add([channel])}
-                      >
-                        #{channel.name}
-                      </MenuItem>
-                    ))}
-                  </MenuPopup>
-                </MenuRoot>
-              )}
-            />
-            <PreferenceRow
-              title="Add to all my private channels"
-              subtitle={
-                complete
-                  ? `${addable.length} ${addable.length === 1 ? "channel" : "channels"} without Bestie. Each channel's members see that you added it.`
-                  : "Available once all your private channels have loaded."
-              }
-              trailing={(label) => (
-                <Button
-                  variant="outline"
-                  aria-describedby={label["aria-labelledby"]}
-                  loading={adding}
-                  disabled={!complete}
-                  onClick={() => setConfirming(addable)}
-                >
-                  Add to all
-                </Button>
-              )}
-            />
-          </>
-        )}
+        {former
+          ? removable.length > 0 && (
+              <PreferenceRow
+                title={`Remove ${name} from all of them`}
+                trailing={(label) => (
+                  <Button
+                    variant="outline"
+                    aria-describedby={label["aria-labelledby"]}
+                    loading={removable.some((channel) => busy.has(channel.id))}
+                    onClick={() => setConfirming(removable)}
+                  >
+                    Remove from all
+                  </Button>
+                )}
+              />
+            )
+          : addable.length > 0 && (
+              <>
+                <PreferenceRow
+                  title="Add to a channel"
+                  subtitle="Pick one of your private channels."
+                  trailing={(label) => (
+                    <MenuRoot>
+                      <MenuTrigger
+                        render={
+                          <Button
+                            variant="outline"
+                            aria-describedby={label["aria-labelledby"]}
+                          >
+                            Choose…
+                          </Button>
+                        }
+                      />
+                      <MenuPopup align="end">
+                        {addable.map((channel) => (
+                          <MenuItem
+                            key={channel.id}
+                            disabled={busy.has(channel.id)}
+                            onClick={() => void add([channel])}
+                          >
+                            #{channel.name}
+                          </MenuItem>
+                        ))}
+                      </MenuPopup>
+                    </MenuRoot>
+                  )}
+                />
+                <PreferenceRow
+                  title="Add to all my private channels"
+                  subtitle={
+                    complete
+                      ? `${addable.length} ${addable.length === 1 ? "channel" : "channels"} without Bestie. Each channel's members see that you added it.`
+                      : "Available once all your private channels have loaded."
+                  }
+                  trailing={(label) => (
+                    <Button
+                      variant="outline"
+                      aria-describedby={label["aria-labelledby"]}
+                      loading={adding}
+                      disabled={!complete}
+                      onClick={() => setConfirming(addable)}
+                    >
+                      Add to all
+                    </Button>
+                  )}
+                />
+              </>
+            )}
       </SettingsGroup>
       {problems.length > 0 && (
         <div role="alert" className="buzz-field-error">
@@ -276,8 +304,12 @@ export function PrivateChannels({
       )}
       {confirming && (
         <AlertDialog
-          title={`Add Bestie to ${confirming.length} private ${confirming.length === 1 ? "channel" : "channels"}?`}
-          description="Members of each channel will see that you added Bestie."
+          title={`${former ? `Remove ${name} from` : "Add Bestie to"} ${confirming.length} private ${confirming.length === 1 ? "channel" : "channels"}?`}
+          description={
+            former
+              ? `Members of each channel will see that you removed ${name}.`
+              : "Members of each channel will see that you added Bestie."
+          }
           onClose={() => setConfirming(undefined)}
           actions={
             <>
@@ -286,10 +318,10 @@ export function PrivateChannels({
                 variant="prominent"
                 onClick={() => {
                   setConfirming(undefined);
-                  void add(confirming);
+                  void (former ? remove : add)(confirming);
                 }}
               >
-                Add to all
+                {former ? "Remove from all" : "Add to all"}
               </Button>
             </>
           }
