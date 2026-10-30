@@ -24,7 +24,14 @@ import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { SwitchPreferenceRow } from "../../shared/design-system/ui/SwitchPreferenceRow";
 import { bestieName, useBestieChoice } from "../agents/BestieChoice";
-import { FEATURES, type Feature, hasFeature, withFeature } from "./features";
+import {
+  FEATURES,
+  type Feature,
+  featureState,
+  hasFeature,
+  restoredFeature,
+  withFeature,
+} from "./features";
 
 type TabAgents = Pick<Agents, "save" | "types">;
 
@@ -173,7 +180,9 @@ function BestieTab({
 }
 
 /** A feature's switch: on while the agent's instructions hold its section.
- * Saving revises the synced instructions the tab shows, as their editor does. */
+ * Saving revises the synced instructions the tab shows, as their editor does.
+ * A section edited by hand where it starts or ends shows that instead, with
+ * Restore when what is left of its markers shows where it was. */
 function FeatureSwitch({
   agents,
   agent,
@@ -202,23 +211,63 @@ function FeatureSwitch({
   const config = (agent.config ?? {}) as { instructions?: unknown };
   const instructions =
     typeof config.instructions === "string" ? config.instructions : "";
-  const save = async (on: boolean) => {
+  const run = async (task: () => Promise<void>) => {
     setSaving(true);
     setError(undefined);
     try {
-      await agents.save(agent.key, {
-        config: {
-          ...config,
-          instructions: withFeature(instructions, feature, on),
-        },
-        ...(agent.configBase && { base: agent.configBase }),
-      });
+      await task();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setSaving(false);
     }
   };
+  const saveInstructions = (next: string) =>
+    agents.save(agent.key, {
+      config: { ...config, instructions: next },
+      ...(agent.configBase && { base: agent.configBase }),
+    });
+  const save = (on: boolean) =>
+    run(async () => {
+      // On never adds a second section beside one edited by hand.
+      if (on && featureState(instructions, feature) === "edited")
+        throw new Error(
+          `${feature.title} was edited in Instructions; restore it first.`,
+        );
+      await saveInstructions(withFeature(instructions, feature, on));
+    });
+  const alert = error && (
+    <p role="alert" className="buzz-field-error">
+      {error}
+    </p>
+  );
+  if (featureState(instructions, feature) === "edited") {
+    const restored = restoredFeature(instructions, feature);
+    return (
+      <>
+        <PreferenceRow
+          title={feature.title}
+          subtitle={
+            restored !== undefined
+              ? "Its section in Instructions was edited where it starts or ends. Restore puts back the original section."
+              : "Its section in Instructions was edited where it starts or ends. Fix its start and end lines there."
+          }
+          trailing={
+            restored !== undefined ? (
+              <Button
+                variant="outline"
+                disabled={saving}
+                onClick={() => void run(() => saveInstructions(restored))}
+              >
+                Restore
+              </Button>
+            ) : undefined
+          }
+        />
+        {alert}
+      </>
+    );
+  }
   return (
     <>
       <SwitchPreferenceRow
@@ -228,11 +277,7 @@ function FeatureSwitch({
         disabled={saving}
         onCheckedChange={(on) => void save(on)}
       />
-      {error && (
-        <p role="alert" className="buzz-field-error">
-          {error}
-        </p>
-      )}
+      {alert}
     </>
   );
 }

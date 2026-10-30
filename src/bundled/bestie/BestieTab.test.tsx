@@ -254,6 +254,45 @@ it("turns memory on and off as a marked section of the instructions", async () =
   });
 });
 
+it("keeps memory on through the owner's edits, and offers Restore for edited markers", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(ada.pubkey);
+  const { agents, save } = host();
+  const Tab = bestieTab(relay, agents).component;
+  const base = { instructions: "head-2" };
+  const on = withFeature("Be brief.", memory, true);
+  const close = "<!-- /buzz:bestie/memory -->";
+  const shown = (instructions: string) =>
+    ({ ...ada, config: { instructions }, configBase: base }) as Agent;
+  // Typed below the section, which lands on its closing marker's line.
+  const typed = `${on} Also French.`;
+  const { rerender } = render(<Tab agent={shown(typed)} />);
+  const remembers = screen.getByRole("switch", { name: "Remembers you" });
+  expect(remembers).toBeChecked();
+  await user.click(remembers);
+  expect(save).toHaveBeenLastCalledWith(ada.key, {
+    config: { instructions: "Be brief.\n\nAlso French." },
+    base,
+  });
+
+  // A closing marker edited by hand: no switch to add a second section.
+  save.mockClear();
+  const edited = on.replace(close, "<!-- /buzz:bestie/memory--> Also French.");
+  rerender(<Tab agent={shown(edited)} />);
+  expect(screen.queryByRole("switch", { name: "Remembers you" })).toBeNull();
+  expect(screen.getByText(/edited where it starts or ends/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Restore" }));
+  expect(save).toHaveBeenCalledWith(ada.key, {
+    config: { instructions: `${on} Also French.` },
+    base,
+  });
+
+  // With a marker gone, where the section ended is the owner's to say.
+  rerender(<Tab agent={shown(on.replace(close, ""))} />);
+  expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+  expect(screen.getByText(/Fix its start and end lines there/)).toBeVisible();
+});
+
 it("says why a save failed and lets the switch be tried again", async () => {
   const user = userEvent.setup();
   const { relay } = community(ada.pubkey);
