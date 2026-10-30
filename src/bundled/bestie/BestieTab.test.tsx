@@ -7,7 +7,8 @@ import type { Agent, Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
 import { readView, writeView } from "../../shared/view-state";
 import { bestieTab } from "./BestieTab";
-import { memory, withFeature } from "./features";
+import { validateObject } from "../../features/agents/attention";
+import { checkinHourly, memory, withFeature } from "./features";
 
 afterEach(() => {
   cleanup();
@@ -17,6 +18,7 @@ afterEach(() => {
 const OWNER = "f".repeat(64);
 const SCOPE = `https://relay.example:${OWNER}`;
 const NO_CHANNELS = { channels: [] };
+const DM = "0f0f0f0f-0000-4000-8000-000000000001";
 const member = (name: string, digit: string): Agent =>
   ({
     key: digit.repeat(64),
@@ -26,7 +28,8 @@ const member = (name: string, digit: string): Agent =>
     owner: OWNER,
     relay: "wss://relay.example",
     place: "here",
-  }) as Agent;
+    attention: {},
+  }) as unknown as Agent;
 const ada = member("Ada", "a");
 const bea = member("Bea", "b");
 
@@ -66,6 +69,7 @@ function community(saved: string | undefined, agents = [ada, bea]) {
     scope: SCOPE,
     session: {
       viewer: OWNER,
+      directMessages: { open: vi.fn(async () => DM) },
       channels: {
         list: () => NO_CHANNELS,
         subscribeList: () => () => {},
@@ -336,8 +340,90 @@ it("offers no switch while the agent's instructions can't be read here", () => {
     />,
   );
   expect(screen.queryByRole("switch", { name: "Remembers you" })).toBeNull();
+  // Each setting's row says why, check-ins too.
   expect(
-    screen.getByText("This agent's instructions could not be read"),
-  ).toBeVisible();
+    screen.getAllByText("This agent's instructions could not be read"),
+  ).toHaveLength(2);
   expect(save).not.toHaveBeenCalled();
+});
+
+it("checks in every hour only while memory is on, with a timer in the owner's DM", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(ada.pubkey);
+  const { agents, save } = host();
+  const Tab = bestieTab(relay, agents).component;
+  const base = { instructions: "head-1" };
+  const remembering = withFeature("Be brief.", memory, true);
+  const off = {
+    ...ada,
+    config: { instructions: "Be brief." },
+    configBase: base,
+  };
+  const { rerender } = render(<Tab agent={off as Agent} />);
+  const hourly = () => screen.getByRole("switch", { name: "Every hour" });
+  // Memory is off, so check-ins can't be turned on.
+  expect(hourly()).toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByText("Turn on Remembers you first.")).toBeVisible();
+
+  const on = { ...off, config: { instructions: remembering } } as Agent;
+  rerender(<Tab agent={on} />);
+  expect(hourly()).not.toBeChecked();
+  await user.click(hourly());
+  const [, change] = save.mock.lastCall ?? [];
+  expect(change?.config).toEqual({
+    instructions: withFeature(remembering, checkinHourly, true),
+  });
+  expect(change?.base).toBe(base);
+  // Turning it on lets the agent's Attention run.
+  expect(change?.attentionEnabled).toBe(true);
+  const timer = change?.attention?.["watch/bestie-hourly-check-in"];
+  expect(timer).toMatchObject({
+    type: "timer",
+    interest_id: "bestie-hourly-check-in",
+    interval_secs: 3600,
+    max_occurrences: null,
+    expires_at: null,
+    channel: DM,
+    enabled: true,
+  });
+  // The objects are ones Attention accepts.
+  for (const [slug, value] of Object.entries(change?.attention ?? {}))
+    expect(validateObject(slug, value)).toBeUndefined();
+
+  // On means the section and the timer are both there.
+  const checking = {
+    ...on,
+    config: { instructions: withFeature(remembering, checkinHourly, true) },
+    attention: {
+      "interest/bestie-hourly-check-in": {},
+      "watch/bestie-hourly-check-in": {},
+    },
+  } as unknown as Agent;
+  rerender(<Tab agent={checking} />);
+  expect(hourly()).toBeChecked();
+  rerender(<Tab agent={{ ...checking, attention: {} } as Agent} />);
+  expect(hourly()).not.toBeChecked();
+  rerender(<Tab agent={checking} />);
+
+  // Memory off takes check-ins with it, and leaves Attention's switch alone.
+  await user.click(screen.getByRole("switch", { name: "Remembers you" }));
+  expect(save).toHaveBeenLastCalledWith(ada.key, {
+    config: { instructions: "Be brief." },
+    base,
+    attention: {
+      "interest/bestie-hourly-check-in": null,
+      "watch/bestie-hourly-check-in": null,
+    },
+  });
+
+  // Check-ins off removes only their section and timer.
+  await user.click(hourly());
+  expect(save).toHaveBeenLastCalledWith(ada.key, {
+    config: { instructions: remembering.trimEnd() },
+    base,
+    attention: {
+      "interest/bestie-hourly-check-in": null,
+      "watch/bestie-hourly-check-in": null,
+    },
+  });
 });

@@ -32,6 +32,12 @@ import {
   restoredFeature,
   withFeature,
 } from "./features";
+import {
+  type AttentionValue,
+  interestSlug,
+  watchSlug,
+} from "../../features/agents/attention";
+import type { RelaySession } from "../../features/relay/session";
 import { PrivateChannels } from "./PrivateChannels";
 
 type TabAgents = Pick<Agents, "save" | "types">;
@@ -158,18 +164,27 @@ function BestieTab({
       </SettingsGroup>
       <InlineHeader title="Settings" />
       <SettingsGroup>
-        {FEATURES.map((feature) => (
+        {FEATURES.filter((feature) => !feature.timer).map((feature) => (
           <FeatureSwitch
             key={feature.id}
             agents={agents}
             agent={agent}
+            session={session}
             feature={feature}
           />
         ))}
-        <PreferenceRow
-          title="Check-ins"
-          subtitle="Every hour. Not set up yet."
-        />
+      </SettingsGroup>
+      <InlineHeader title="Check-ins" />
+      <SettingsGroup>
+        {FEATURES.filter((feature) => feature.timer).map((feature) => (
+          <FeatureSwitch
+            key={feature.id}
+            agents={agents}
+            agent={agent}
+            session={session}
+            feature={feature}
+          />
+        ))}
       </SettingsGroup>
       <PrivateChannels session={session} bestie={agent.pubkey} />
       {bestie.view}
@@ -177,17 +192,29 @@ function BestieTab({
   );
 }
 
-/** A feature's switch: on while the agent's instructions hold its section.
- * Saving revises the synced instructions the tab shows, as their editor does.
- * A section edited by hand where it starts or ends shows that instead, with
- * Restore when what is left of its markers shows where it was. */
+/** Whether `agent` has `feature` on: its section, and its timer if it has
+ * one. Half of one, such as a timer deleted in Watching, reads as off. */
+function featureOn(agent: Agent, instructions: string, feature: Feature) {
+  return (
+    hasFeature(instructions, feature) &&
+    (!feature.timer || !!agent.attention[watchSlug(feature.timer.id)])
+  );
+}
+
+/** A feature's switch. Saving revises the synced instructions the tab shows,
+ * as their editor does, with the feature's timer in the same change. Off also
+ * turns off the features that require this one. A section edited by hand
+ * where it starts or ends shows that instead, with Restore when what is left
+ * of its markers shows where it was. */
 function FeatureSwitch({
   agents,
   agent,
+  session,
   feature,
 }: {
   agents: TabAgents;
   agent: Agent;
+  session: RelaySession;
   feature: Feature;
 }) {
   const [saving, setSaving] = useState(false);
@@ -209,6 +236,8 @@ function FeatureSwitch({
   const config = (agent.config ?? {}) as { instructions?: unknown };
   const instructions =
     typeof config.instructions === "string" ? config.instructions : "";
+  const required = FEATURES.find(({ id }) => id === feature.requires);
+  const blocked = !!required && !featureOn(agent, instructions, required);
   const run = async (task: () => Promise<void>) => {
     setSaving(true);
     setError(undefined);
@@ -232,7 +261,57 @@ function FeatureSwitch({
         throw new Error(
           `${feature.title} was edited in Instructions; restore it first.`,
         );
-      await saveInstructions(withFeature(instructions, feature, on));
+      const off = on
+        ? []
+        : [
+            feature,
+            ...FEATURES.filter(({ requires }) => requires === feature.id),
+          ];
+      const attention: Record<string, AttentionValue | null> = {};
+      for (const { timer } of off)
+        for (const slug of timer
+          ? [interestSlug(timer.id), watchSlug(timer.id)]
+          : [])
+          if (agent.attention[slug]) attention[slug] = null;
+      const timer = on && feature.timer;
+      if (timer) {
+        // The owner's 1:1 DM with the agent: opening it is idempotent.
+        const channel = await session.directMessages.open(
+          [agent.pubkey],
+          AbortSignal.timeout(30_000),
+        );
+        attention[interestSlug(timer.id)] = {
+          type: "interest",
+          instructions: timer.interest,
+        };
+        attention[watchSlug(timer.id)] = {
+          type: "timer",
+          interest_id: timer.id,
+          prompt: timer.prompt,
+          enabled: true,
+          interval_secs: timer.everySecs,
+          armed_at: Math.floor(Date.now() / 1000),
+          max_occurrences: null,
+          expires_at: null,
+          channel,
+        };
+      }
+      await agents.save(agent.key, {
+        config: {
+          ...config,
+          instructions: on
+            ? withFeature(instructions, feature, true)
+            : off.reduce(
+                (text, item) => withFeature(text, item, false),
+                instructions,
+              ),
+        },
+        ...(agent.configBase && { base: agent.configBase }),
+        ...(Object.keys(attention).length && { attention }),
+        // Its timer runs only while the agent's Attention is on. Off leaves
+        // it on: the agent's other watches may need it.
+        ...(timer && { attentionEnabled: true }),
+      });
     });
   const alert = error && (
     <p role="alert" className="buzz-field-error">
@@ -270,9 +349,13 @@ function FeatureSwitch({
     <>
       <SwitchPreferenceRow
         label={feature.title}
-        description={feature.description}
-        checked={hasFeature(instructions, feature)}
-        disabled={saving}
+        description={
+          blocked && required
+            ? `Turn on ${required.title} first.`
+            : feature.description
+        }
+        checked={featureOn(agent, instructions, feature)}
+        disabled={saving || blocked}
         onCheckedChange={(on) => void save(on)}
       />
       {alert}
