@@ -228,7 +228,12 @@ export function savedAgentStore(session: RelaySession, scope: string) {
     snapshot: () => (account ? saved.get(account) : chosenAgent(scope)),
     subscribe(listener: () => void) {
       if (account) void adopt(account, scope);
-      const view = subscribeView(scope, listener);
+      // The device's choice is browser storage; without a window there is none
+      // to follow.
+      const view =
+        typeof window === "undefined"
+          ? () => {}
+          : subscribeView(scope, listener);
       const choices = subscribeSaved(listener);
       return () => {
         view();
