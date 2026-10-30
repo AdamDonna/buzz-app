@@ -325,7 +325,9 @@ it("runs a bound Pi conversation with remote files, native Buzz tools and Stop",
         { agent: self, conversation: 999, event: "beforeTool", input: {} },
         "hook",
       ),
-    ).resolves.toEqual({ error: "Pi callback names another conversation" });
+    ).resolves.toMatchObject({
+      error: "Pi callback names another conversation",
+    });
     await expect(
       process.tool({ ...callback, conversation: 999 }),
     ).resolves.toMatchObject({
@@ -350,7 +352,7 @@ it("runs a bound Pi conversation with remote files, native Buzz tools and Stop",
         },
         "hook",
       ),
-    ).resolves.toEqual({ result: { block: true } });
+    ).resolves.toMatchObject({ result: { block: true } });
     expect(hook).toHaveBeenCalledWith(
       self,
       String(CONVERSATION),

@@ -424,6 +424,60 @@ it("brings over an identity not already an agent, with its type's defaults and w
   ).rejects.toThrow("That agent type is not available");
 });
 
+it("binds a dedicated native agent and preserves its target when a provider change is refused", async () => {
+  const { ctx, plugin, service, native } = await setup();
+  plugin.agents.register({
+    id: "native",
+    title: "Native",
+    execution: true,
+    defaults: () => ({ config: {} }),
+    run: vi.fn(),
+  });
+  const target = {
+    spawn: vi.fn(),
+    readFile: vi.fn(),
+    resolveDirectory: vi.fn(),
+    dispose: vi.fn(async () => {}),
+  };
+  const adapter = ctx.extend({
+    pluginOwner: {
+      id: "internal",
+      revision: "one",
+      agentExecution: ["example/native"],
+    },
+  });
+  adapter.agents.registerExecution({
+    id: "remote",
+    harnesses: ["example/native"],
+    connect: () => target,
+  });
+  const agent = await service.create({
+    type: "example/native",
+    name: "Dedicated",
+  });
+  await adapter.agents.bindExecution(agent.key, {
+    id: "remote",
+    target: "guest-1",
+    workspace: "/work/task",
+  });
+  expect(service.executionBinding(agent.key)).toEqual({
+    provider: "internal/remote",
+    target: "guest-1",
+    workspace: "/work/task",
+  });
+  expect(() => adapter.agents.execution(agent.key)).toThrow(
+    "Only the native harness",
+  );
+  expect(plugin.agents.execution(agent.key)?.binding.workspace).toBe(
+    "/work/task",
+  );
+  await expect(service.retype(agent.key, "example/echo")).rejects.toThrow(
+    "does not support the saved execution binding",
+  );
+  expect(native.setType).not.toHaveBeenCalled();
+  expect(service.executionBinding(agent.key)?.target).toBe("guest-1");
+});
+
 it("brings back unarchived an agent whose Delete cleanup archived it, or says it stays archived", async () => {
   const { service, archives } = await setup();
   archives.archived.add(sibling);
