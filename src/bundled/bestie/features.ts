@@ -18,10 +18,10 @@ export const memory: Feature = {
     "Adds memory rules to Bestie's instructions. Off removes them. Nothing Bestie remembered is deleted, and its core memory still goes into every prompt. Clear memory in the Memory tab.",
   version: 1,
   text: `# Memory
-You keep memory about the owner, so your help gets better over time. core is already in your context. Call mem_get mem/user when the answer depends on who the owner is or what they asked for before. Save only what will improve future help, and say something is saved only after the tool confirms it.
+Your owner turned on "Remembers you": keep memory about them, so your help gets better over time. That is their approval to save what they tell you by these rules; still ask before you change or remove something they told you before. Call mem_get mem/user when the answer depends on who the owner is or what they asked for before. Save only what will improve future help, and say something is saved only after the tool confirms it.
 
 Your memory has these slugs:
-- core: who you are to this owner and your durable operating rules. At most 8 KB. It is injected into every turn.
+- core: who you are to this owner and your durable operating rules. Link the slugs below from it, as [[mem/user]].
 - mem/user: the owner's facts, preferences, timezone, notification preferences, and an "Open loops" section of things they asked you to follow up on.
 - mem/notes/YYYY-MM-DD: sparse dated notes of significant events, each with its source event id. Append only.
 - mem/memory: curated longer-term knowledge. Replace superseded claims; never duplicate.
@@ -38,35 +38,47 @@ Rules:
 export const FEATURES: readonly Feature[] = [memory];
 
 const ESCAPE = /[.*+?^${}()|[\]\\]/g;
-/** The feature's section in any version, opening to closing marker. */
-const section = ({ id }: Feature) => {
+/** Each of the feature's sections, in any version: an opening and a closing
+ * marker, each on a line of its own, with no other opening between them. */
+const sections = ({ id }: Feature) => {
   const name = `buzz:bestie/${id}`.replace(ESCAPE, "\\$&");
-  return new RegExp(`<!-- ${name} v\\d+ -->[\\s\\S]*?<!-- /${name} -->`);
+  const open = `<!-- ${name} v\\d+ -->`;
+  return new RegExp(
+    `^${open}\\r?$(?:(?!${open})[\\s\\S])*?^<!-- /${name} -->\\r?$`,
+    "gm",
+  );
 };
 
 /** Whether `instructions` hold the feature's section. A section whose markers
  * were edited by hand isn't found, so the switch offers to add it again. */
 export function hasFeature(instructions: string, feature: Feature) {
-  return section(feature).test(instructions);
+  return sections(feature).test(instructions);
 }
 
-/** `instructions` with the feature's section added at the end, or removed
- * with the blank lines that set it apart. The rest is left as it is. */
+/** `instructions` with the feature's section added at the end, or with each
+ * of its sections removed along with the blank lines that set it apart. The
+ * rest is left as it is. */
 export function withFeature(
   instructions: string,
   feature: Feature,
   on: boolean,
 ) {
-  const found = section(feature).exec(instructions);
-  if (!on) {
-    if (!found) return instructions;
-    const before = instructions.slice(0, found.index).trimEnd();
-    const after = instructions.slice(found.index + found[0].length).trimStart();
-    return [before, after].filter(Boolean).join("\n\n");
+  if (on) {
+    if (hasFeature(instructions, feature)) return instructions;
+    const { id, version, text } = feature;
+    const block = `<!-- buzz:bestie/${id} v${version} -->\n${text}\n<!-- /buzz:bestie/${id} -->\n`;
+    const kept = instructions.replace(/\r?\n\s*$/, "");
+    return kept.trim() ? `${kept}\n\n${block}` : block;
   }
-  if (found) return instructions;
-  const { id, version, text } = feature;
-  const block = `<!-- buzz:bestie/${id} v${version} -->\n${text}\n<!-- /buzz:bestie/${id} -->\n`;
-  const kept = instructions.trimEnd();
-  return kept ? `${kept}\n\n${block}` : block;
+  const parts = instructions.split(sections(feature));
+  if (parts.length === 1) return instructions;
+  return parts
+    .map((part, index) => {
+      let kept = part;
+      if (index > 0) kept = kept.replace(/^\s*\n/, "");
+      if (index < parts.length - 1) kept = kept.replace(/\r?\n\s*$/, "");
+      return kept;
+    })
+    .filter((part) => part.trim())
+    .join("\n\n");
 }

@@ -43,3 +43,20 @@ it("treats any version as on, and edited markers as absent", () => {
     withFeature(broken, memory, true).startsWith(`${broken}\n\n${OPEN}`),
   ).toBe(true);
 });
+
+it("leaves markers quoted in the owner's text, and removes every section", () => {
+  const quoted = `Never edit ${OPEN} by hand. Important rule.`;
+  expect(hasFeature(quoted, memory)).toBe(false);
+  const on = withFeature(quoted, memory, true);
+  expect(withFeature(on, memory, false)).toBe(quoted);
+  const twice = `${on}\n${OPEN}\ncopy\n${CLOSE}\n\n    indented code`;
+  const off = withFeature(twice, memory, false);
+  expect(off).toBe(`${quoted}\n\n    indented code`);
+  expect(hasFeature(off, memory)).toBe(false);
+});
+
+it("finds a section in Windows line endings", () => {
+  const text = `Mine.\r\n\r\n${OPEN}\r\nrules\r\n${CLOSE}\r\n`;
+  expect(hasFeature(text, memory)).toBe(true);
+  expect(withFeature(text, memory, false)).toBe("Mine.");
+});

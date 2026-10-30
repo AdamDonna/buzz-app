@@ -193,6 +193,12 @@ function FeatureSwitch({
         subtitle="This agent's type has no instructions to add this to."
       />
     );
+  // Without a confirmed copy its instructions aren't shown, so a save here
+  // would replace them.
+  if (agent.configProblem)
+    return (
+      <PreferenceRow title={feature.title} subtitle={agent.configProblem} />
+    );
   const config = (agent.config ?? {}) as { instructions?: unknown };
   const instructions =
     typeof config.instructions === "string" ? config.instructions : "";

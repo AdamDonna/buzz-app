@@ -273,3 +273,25 @@ it("says why a save failed and lets the switch be tried again", async () => {
     config: { instructions: withFeature("", memory, true) },
   });
 });
+
+it("offers no switch while the agent's instructions can't be read here", () => {
+  const { relay } = community(ada.pubkey);
+  const { agents, save } = host();
+  const Tab = bestieTab(relay, agents).component;
+  render(
+    <Tab
+      agent={
+        {
+          ...ada,
+          config: {},
+          configProblem: "This agent's instructions could not be read",
+        } as Agent
+      }
+    />,
+  );
+  expect(screen.queryByRole("switch")).toBeNull();
+  expect(
+    screen.getByText("This agent's instructions could not be read"),
+  ).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+});
