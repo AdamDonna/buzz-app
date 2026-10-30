@@ -55,9 +55,11 @@ deletes no memory, and the agent's core memory is still in every prompt;
 clear memory in the Memory tab.
 
 **Private channels Bestie can read** lists the private channels you share with
-Bestie, each with **Remove**. **Add to a channel…** and **Add to all my
-private channels** add it to the private channels you are in, most recently
-active first; each channel's members see that you added it. Public channels
+Bestie, each with **Remove**. **Add to a channel** (**Choose…**) and **Add to
+all my private channels** add it to the private channels you are in, most
+recently active first; each channel's members see that you added it. Each
+action has a row of its own, so in a narrow panel its button wraps under it.
+Public channels
 need nothing: agents read them already. Check-ins and adding Bestie to new
 channels you create are not set up yet.
 

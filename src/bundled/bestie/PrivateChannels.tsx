@@ -132,35 +132,6 @@ export function PrivateChannels({
       <InlineHeader
         title="Private channels Bestie can read"
         subtitle="Bestie already reads every public channel. In a channel you add it to, it reads along but answers only when mentioned."
-        actions={
-          <>
-            <MenuRoot>
-              <MenuTrigger
-                disabled={!addable.length}
-                render={<Button variant="outline">Add to a channel…</Button>}
-              />
-              <MenuPopup align="end">
-                {addable.map((channel) => (
-                  <MenuItem
-                    key={channel.id}
-                    disabled={busy.has(channel.id)}
-                    onClick={() => void add([channel])}
-                  >
-                    #{channel.name}
-                  </MenuItem>
-                ))}
-              </MenuPopup>
-            </MenuRoot>
-            <Button
-              variant="outline"
-              disabled={!addable.length}
-              loading={adding}
-              onClick={() => setConfirming(addable)}
-            >
-              Add to all my private channels
-            </Button>
-          </>
-        }
       />
       <SettingsGroup>
         {joined.map((channel) => (
@@ -185,6 +156,55 @@ export function PrivateChannels({
             title="Not in any of your private channels yet"
             subtitle="Add Bestie to the ones you want it to catch you up on."
           />
+        )}
+        {/* Each action has a row of its own, so its button can wrap under
+            its title in a narrow panel instead of widening the tab. */}
+        {addable.length > 0 && (
+          <>
+            <PreferenceRow
+              title="Add to a channel"
+              subtitle="Pick one of your private channels."
+              trailing={(label) => (
+                <MenuRoot>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        aria-describedby={label["aria-labelledby"]}
+                      >
+                        Choose…
+                      </Button>
+                    }
+                  />
+                  <MenuPopup align="end">
+                    {addable.map((channel) => (
+                      <MenuItem
+                        key={channel.id}
+                        disabled={busy.has(channel.id)}
+                        onClick={() => void add([channel])}
+                      >
+                        #{channel.name}
+                      </MenuItem>
+                    ))}
+                  </MenuPopup>
+                </MenuRoot>
+              )}
+            />
+            <PreferenceRow
+              title="Add to all my private channels"
+              subtitle={`${addable.length} ${addable.length === 1 ? "channel" : "channels"} without Bestie. Each channel's members see that you added it.`}
+              trailing={(label) => (
+                <Button
+                  variant="outline"
+                  aria-describedby={label["aria-labelledby"]}
+                  loading={adding}
+                  onClick={() => setConfirming(addable)}
+                >
+                  Add to all
+                </Button>
+              )}
+            />
+          </>
         )}
         <SwitchPreferenceRow
           label="Also add Bestie to private channels I create"

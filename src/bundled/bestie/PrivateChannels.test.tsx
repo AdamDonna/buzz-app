@@ -126,16 +126,18 @@ it("adds Bestie to one channel, or to all after asking, and reports what didn't 
   render(<PrivateChannels session={value} bestie={BESTIE} />);
   expect(screen.getByText(/Not in any of your private channels/)).toBeVisible();
 
-  await user.click(screen.getByRole("button", { name: "Add to a channel…" }));
+  await user.click(screen.getByRole("button", { name: "Choose…" }));
   const items = await screen.findAllByRole("menuitem");
   expect(items.map((item) => item.textContent)).toEqual(["#beta", "#alpha"]);
   await user.click(screen.getByRole("menuitem", { name: "#alpha" }));
   expect(add).toHaveBeenCalledWith("id-alpha", BESTIE);
 
   add.mockClear();
-  await user.click(
-    screen.getByRole("button", { name: "Add to all my private channels" }),
-  );
+  expect(screen.getByText(/2 channels without Bestie/)).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "Add to all" }),
+  ).toHaveAccessibleDescription("Add to all my private channels");
+  await user.click(screen.getByRole("button", { name: "Add to all" }));
   const ask = await screen.findByRole("alertdialog", {
     name: "Add Bestie to 2 private channels?",
   });
