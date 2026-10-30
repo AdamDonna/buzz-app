@@ -35,6 +35,7 @@ import type {
 import type { CustomEmoji } from "../relay/emoji";
 import type { RelaySession } from "../relay/session";
 import type { OutgoingEvent } from "../relay/outbox";
+import { readErrorKind } from "../relay/errors";
 import { selectProfiles } from "../relay/profile-selection";
 import styles from "./Messages.module.css";
 
@@ -223,9 +224,10 @@ function ReactorItems({
           return [id];
         });
         if (!page.length) return;
-        session.profiles
-          .ensure(page, "background")
-          .catch(() => setFailed(true));
+        // A reconnect cancels pending reads and then reads them again itself.
+        session.profiles.ensure(page, "background").catch((error) => {
+          if (readErrorKind(error) !== "cancelled") setFailed(true);
+        });
       },
       // The visible rows and the next screenful, far below the request budget.
       { root, rootMargin: "100% 0px" },
@@ -237,11 +239,6 @@ function ReactorItems({
   }, [popup, people, session]);
   return (
     <>
-      {failed && (
-        <MenuNote role="alert">
-          Some names could not load. Reopen this list to try again.
-        </MenuNote>
-      )}
       {people.map((authorId) => {
         const profile = loaded.get(authorId) ?? profiles?.get(authorId);
         const name =
@@ -276,6 +273,12 @@ function ReactorItems({
           </MenuItem>
         );
       })}
+      {/* After the rows: a failed later page must not push the visible ones down. */}
+      {failed && (
+        <MenuNote role="alert">
+          Some names could not load. Reopen this list to try again.
+        </MenuNote>
+      )}
     </>
   );
 }
@@ -297,6 +300,7 @@ function ReactionEmoji({
   previewSlide,
   previewOpen,
   onPreviewChange,
+  onListClose,
 }: Reactors & {
   reaction: MessageReaction;
   authorIds: string[];
@@ -310,6 +314,7 @@ function ReactionEmoji({
   previewSlide: "left" | "right" | undefined;
   previewOpen: boolean;
   onPreviewChange(open: boolean): void;
+  onListClose(): void;
 }) {
   const [name, setName] = useState(reaction.content);
   // A retained focus must not reopen the preview over delivery recovery controls.
@@ -464,7 +469,13 @@ function ReactionEmoji({
         </div>
       </PreviewCard>
       {remaining > 0 && (
-        <MenuRoot open={listOpen} onOpenChange={setListOpen}>
+        <MenuRoot
+          open={listOpen}
+          onOpenChange={(open) => {
+            setListOpen(open);
+            if (!open) onListClose();
+          }}
+        >
           <MenuPopup
             ref={listPopup}
             anchor={emojiAnchor}
@@ -533,6 +544,12 @@ export function MessageReactions(
   }>();
   if (!active && preview) setPreview(undefined);
   if (!active && pointerInRow) setPointerInRow(false);
+  const leaveRow = () => {
+    setPointerInRow(false);
+    // An open preview keeps its own hover close, so the pointer can cross
+    // the gap to it; only a closed one stops warming the next pill here.
+    setPreview((current) => (current?.key ? current : undefined));
+  };
   const select = (content: string) => {
     return action.toggle(content, catalogEmoji(catalog.entries, content));
   };
@@ -571,12 +588,7 @@ export function MessageReactions(
           focusedReaction.current = null;
       }}
       onMouseEnter={() => setPointerInRow(true)}
-      onMouseLeave={() => {
-        setPointerInRow(false);
-        // An open preview keeps its own hover close, so the pointer can cross
-        // the gap to it; only a closed one stops warming the next pill here.
-        setPreview((current) => (current?.key ? current : undefined));
-      }}
+      onMouseLeave={leaveRow}
     >
       {active &&
         reactions.map(({ reaction, authorIds, mine }, index) => {
@@ -609,6 +621,10 @@ export function MessageReactions(
               previewWarm={!!preview}
               previewOpen={preview?.key === key}
               previewSlide={previewSlide}
+              // React counts the portaled list as inside this row, but a list
+              // that unmounts under the pointer can send the row no leave.
+              // Closing it counts as leaving: at worst, the next pill waits.
+              onListClose={leaveRow}
               onPreviewChange={(open) =>
                 setPreview((current) =>
                   open
