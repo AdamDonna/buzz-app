@@ -57,6 +57,7 @@ function setup(
   canvas?: { content: string; pubkey?: string },
   repositories?: (scope: string | undefined) => string,
   execution?: (key: string) => AgentExecution | undefined,
+  hook?: ConstructorParameters<typeof PiRuntime>[6],
 ) {
   let submissions = 0;
   const host = fakeHost({
@@ -132,7 +133,7 @@ function setup(
       connection.live && key === self
         ? (agent as unknown as AgentHandle)
         : undefined,
-    undefined,
+    hook,
     undefined,
     execution,
   );
@@ -294,7 +295,8 @@ it("runs a bound Pi conversation with remote files, native Buzz tools and Stop",
       return String((await client.read("result"))[0]);
     },
   };
-  const f = setup({}, [file], undefined, undefined, () => execution);
+  const hook = vi.fn(async () => ({ block: true }));
+  const f = setup({}, [file], undefined, undefined, () => execution, hook);
   const turn = f.deliver({ type: "mention", event: reply("2", "@Pi look") });
   try {
     await turn.run;
@@ -302,6 +304,7 @@ it("runs a bound Pi conversation with remote files, native Buzz tools and Stop",
     const process = remote.processes[0];
     if (!process) throw new Error("Missing remote process");
     expect(remote.processes[0]?.id).toBe("node");
+    expect(remote.processes[0]?.options.cwd).toBe("/remote/task");
     expect(remote.processes[0]?.options.args?.slice(0, 2)).toEqual([
       "--input-type=module",
       "-e",
@@ -317,10 +320,43 @@ it("runs a bound Pi conversation with remote files, native Buzz tools and Stop",
     await expect(
       process.tool({ ...callback, agent: bob }),
     ).resolves.toMatchObject({ error: "Pi callback names another agent" });
+    await expect(
+      process.tool(
+        { agent: self, conversation: 999, event: "beforeTool", input: {} },
+        "hook",
+      ),
+    ).resolves.toEqual({ error: "Pi callback names another conversation" });
+    await expect(
+      process.tool({ ...callback, conversation: 999 }),
+    ).resolves.toMatchObject({
+      error: "Pi callback names another conversation",
+    });
+    await expect(
+      process.tool({ ...callback, context: { channel: "other" } }),
+    ).resolves.toMatchObject({
+      error: "Pi callback changes its conversation scope",
+    });
     await expect(process.tool(callback)).resolves.toMatchObject({
       result: { content: expect.any(Array) },
     });
     expect(f.published[0]?.content).toBe("Remote reply");
+    await expect(
+      process.tool(
+        {
+          agent: self,
+          conversation: CONVERSATION,
+          event: "beforeTool",
+          input: { toolName: "bash" },
+        },
+        "hook",
+      ),
+    ).resolves.toEqual({ result: { block: true } });
+    expect(hook).toHaveBeenCalledWith(
+      self,
+      String(CONVERSATION),
+      "beforeTool",
+      { toolName: "bash" },
+    );
     await expect(
       process.tool({
         ...callback,

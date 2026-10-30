@@ -35,8 +35,8 @@ async function setup(storage: AgentStore = memoryStorage()) {
   const registry = createAgentExecutions(root, storage);
   const ended = deferred<number | null>();
   const process = {
-    write: vi.fn(),
-    end: vi.fn(),
+    write: vi.fn(async () => {}),
+    end: vi.fn(async () => {}),
     kill: vi.fn(async () => {
       ended.resolve(null);
     }),
@@ -116,9 +116,10 @@ it("retires owned processes on adapter unload and never opens local execution fo
   await f.registry.bind(f.plugin, agent, harness, input);
   const execution = f.registry.open(f.native, agent, harness);
   if (!execution) throw new Error("Missing bound execution");
-  await execution.spawn("node");
+  const process = await execution.spawn("node");
   f.deactivate();
   expect(execution.signal.aborted).toBe(true);
+  await expect(process.write("prompt")).rejects.toThrow("stopped");
   await expect(execution.readFile("result")).rejects.toThrow();
   expect(() => f.registry.open(f.native, agent, harness)).toThrow(
     "unavailable",

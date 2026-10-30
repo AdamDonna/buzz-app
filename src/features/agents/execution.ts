@@ -205,7 +205,18 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
           }
           processes.add(process);
           void process.exited.then(() => processes.delete(process));
-          return process;
+          return Object.freeze({
+            write: async (data: string) => {
+              check();
+              await process.write(data);
+            },
+            end: async (data?: string) => {
+              check();
+              await process.end(data);
+            },
+            kill: () => process.kill(),
+            exited: process.exited,
+          });
         },
         readFile: async (path, options) => {
           check();

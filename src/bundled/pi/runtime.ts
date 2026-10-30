@@ -127,6 +127,8 @@ type Waited =
   | { status: "unanswered"; reason?: string; detail?: string }
   | { status: "closed" };
 type Receipt = Pick<Delivery, "step" | "acknowledged" | "superseded"> & {
+  context: Context;
+  conversation?: number;
   /** Its conversation key, which session controls act on. */
   key: string;
   /** Where its activity shows: a thread, or a Solo chat's channel. */
@@ -162,7 +164,7 @@ type Entry = {
   receipts: Map<string, Receipt>;
   /** Requests waited for here without a receipt: standalone turns handed to
    * Pi and not settled, and plugin wakes a left run continues. */
-  standalone: Set<string>;
+  standalone: Map<string, number | undefined>;
   /** The request each conversation's activity shows, by its scope. */
   active: Map<number, Map<string, Receipt>>;
   /** The latest taking-on of the runs Pi's storage holds that nothing here
@@ -235,7 +237,7 @@ export class PiRuntime {
     spawn: () => NonNullable<Host["spawn"]>,
     bound?: { agent: AgentKey; execution: AgentExecution },
   ) {
-    const check = (agent: string) => {
+    const check = (agent: string, conversation?: number) => {
       if (!bound) return;
       bound.execution.signal.throwIfAborted();
       if (agent !== bound.agent)
@@ -247,16 +249,39 @@ export class PiRuntime {
         (!entry.receipts.size && !entry.standalone.size)
       )
         throw new Error("Pi callback has no active run");
+      if (
+        conversation !== undefined &&
+        ![...entry.receipts.values()].some(
+          (receipt) => receipt.conversation === conversation,
+        ) &&
+        ![...entry.standalone.values()].includes(conversation)
+      )
+        throw new Error("Pi callback names another conversation");
     };
     return new Pi(
       spawn,
       {
         tool: (call) => {
-          check(call.agent);
+          check(call.agent, call.conversation);
+          if (bound) {
+            const entry = this.agents.get(call.agent);
+            const receipt = [...(entry?.receipts.values() ?? [])].find(
+              (item) => item.conversation === call.conversation,
+            );
+            const expected = receipt?.context ?? {};
+            if (
+              ["channel", "root", "topLevel", "wholeChannel"].some(
+                (key) =>
+                  call.context[key as keyof Context] !==
+                  expected[key as keyof Context],
+              )
+            )
+              throw new Error("Pi callback changes its conversation scope");
+          }
           return this.tool(call);
         },
         hook: (call) => {
-          check(call.agent);
+          check(call.agent, call.conversation);
           if (!this.agents.has(call.agent))
             throw new Error("Pi hook agent is no longer active");
           return (
@@ -298,6 +323,7 @@ export class PiRuntime {
         (_id, options = {}) =>
           execution.spawn("node", {
             ...options,
+            cwd: execution.binding.workspace,
             args: ["--input-type=module", "-e", ...(options.args ?? [])],
           }),
       { agent, execution },
@@ -332,7 +358,6 @@ export class PiRuntime {
         this.agents.delete(agent);
         const remote = this.remote.get(agent);
         if (remote) {
-          this.remote.delete(agent);
           void remote.pi.dispose();
           void remote.execution.dispose();
         } else void this.pi.request("close", { agent }).catch(() => undefined);
@@ -688,6 +713,7 @@ export class PiRuntime {
           : { channel, root };
       // Known before Pi has it, as it can say it joined a run first.
       entry.receipts.set(request, {
+        context,
         key,
         scope: topLevel ? channel : root,
         where,
@@ -726,6 +752,8 @@ export class PiRuntime {
         () => !interrupted && (!wake || !current || current()),
       );
       if (!submitted) return;
+      const receipt = entry.receipts.get(request);
+      if (receipt) receipt.conversation = submitted.conversation;
       if (
         this.remember(agent.key, key, submitted.conversation, event.created_at)
       )
@@ -825,13 +853,14 @@ export class PiRuntime {
       signal.throwIfAborted();
       if (delivery.current && !delivery.current()) return { ok: true };
       request = `${key}/${crypto.randomUUID()}`;
-      entry.standalone.add(request);
+      entry.standalone.set(request, undefined);
       const { submission, conversation } = await this.connection(
         agent.key,
       ).pi.request<{
         submission: number;
         conversation: number;
       }>("once", { agent: agent.key, text, request, ...turn });
+      entry.standalone.set(request, conversation);
       // A removed agent's storage is closed, and stays so.
       stop = () => {
         if (!entry.closed)
@@ -956,8 +985,8 @@ export class PiRuntime {
   private live(entry: Entry, agent: AgentKey) {
     if (!entry.closed) return;
     if (!this.running.has(agent) && !this.agents.has(agent))
-      void this.connection(agent)
-        .pi.request("close", { agent })
+      void (this.remote.get(agent)?.pi ?? this.pi)
+        .request("close", { agent })
         .catch(() => undefined);
     throw new Error("The agent was removed");
   }
@@ -1065,7 +1094,7 @@ export class PiRuntime {
           aborted.add(conversation);
         } else
           waits.push(async () => {
-            entry.standalone.add(request);
+            entry.standalone.set(request, conversation);
             try {
               await this.settle(entry, agent, submission);
             } catch {
@@ -1094,6 +1123,8 @@ export class PiRuntime {
         topLevel: !!context.topLevel,
       };
       const receipt: Receipt = {
+        context,
+        conversation,
         // Only a thread's own conversation has a root.
         key: context.root
           ? `${context.channel}/${context.root}`
@@ -1407,7 +1438,7 @@ export class PiRuntime {
       name: agent.name,
       policies: new Map(),
       receipts: new Map(),
-      standalone: new Set(),
+      standalone: new Map(),
       active: new Map(),
       closed: false,
     };

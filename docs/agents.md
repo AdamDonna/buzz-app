@@ -62,6 +62,37 @@ Attention itself (the runtime, tools, storage and sources) is core, but it runs 
 
 ## Agent types and providers
 
+### Plugin execution for Pi (preview)
+
+A plugin can offer a process and file target to the native Pi harness. Declare
+`host.agentExecution: ["buzz.pi/pi"]` and call `agents.registerExecution` with an
+ID, supported harness keys, and `connect(binding)`. The target supplies `spawn`,
+`readFile`, `resolveDirectory`, and idempotent `dispose`. Its process uses the
+`HostProcess` contract. Pi starts `node --input-type=module -e <launcher>` and
+sends its pinned host and packages through stdin. The adapter owns transport,
+provider authentication, file access limits, and cleanup on its host.
+
+Create a dedicated Pi agent with `agents.create`. Before its first runtime use,
+call `agents.bindExecution(agent.key, { id, target, workspace })` from the plugin
+that registers the target. `target` pins the host; `workspace` is an absolute
+directory on that host. The binding belongs to the agent's membership, so it
+applies to every conversation for that agent. It is separate from provider
+settings and session IDs. A saved binding cannot be replaced. There is no move
+or release operation in this interface.
+
+The Pi harness opens the target through `agents.execution(agent.key)`. Each
+bound agent has its own Pi process. Buzz keeps identity keys, native context,
+memory, tools, hooks, and session controls in their existing owners. Tool and
+hook callbacks must name the current agent and conversation. Tool defaults must
+match that conversation's scope. Disabling the adapter stops its processes and
+rejects further work. The saved binding remains for recovery; Buzz never uses
+local execution for it. An unsupported provider change fails before it changes
+the agent or its binding.
+
+This preview supports Pi on a target with Node.js. It does not supply native
+containment or an HTTP MCP tunnel. Protected agents cannot use it. Pi's coding
+tools retain their [existing approval limits](../src/bundled/pi/README.md#limits).
+
 Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run
 behavior for its agents. Plugins can add a tab to every local agent with
