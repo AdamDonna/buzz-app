@@ -142,7 +142,12 @@ import { formatMediaTime, mediaTimeReply } from "./media-timecode";
 import { RichComposerInput } from "./RichComposerInput";
 import type { MessageLinkOrigin } from "./MessageRow";
 import { composerMarkdown } from "./composer-markdown";
-import { recognizeSlashCommand } from "../conversation/slash-command";
+import {
+  recognizeSlashCommand,
+  runSlashCommand,
+  runsInScope,
+  scopeRefusal,
+} from "../conversation/slash-command";
 import type {
   ComposerInputElement,
   ComposerLinkEdit,
@@ -926,6 +931,7 @@ function Composer({
     return result;
   }
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [attachmentError, setAttachmentError] = useState<string>();
   const focusRestoredDraft = useRef(false);
   const beforeEdit = useRef<
@@ -948,6 +954,11 @@ function Composer({
     slashCommands && !solo && !editing.target && !submission
       ? extensions?.commands
       : undefined;
+  const slashScope = threadRootId
+    ? "thread"
+    : channelType === "dm"
+      ? "dm"
+      : "channel";
   const editScope = useMessageEditScope();
   const editableRows = () =>
     editMessages ??
@@ -2333,6 +2344,7 @@ function Composer({
     const savedRevision = revision.current;
     const attempt = new AbortController();
     sendAttempt.current = attempt;
+    setNotice(undefined);
     const captured = valueRef.current;
     const capturedRecipients = routing ? recipientsNow : captured.recipients;
     const capturedAttachments = attachments.store.snapshot();
@@ -2366,6 +2378,8 @@ function Composer({
           composerMarkdown({ ...captured, chatCards: [], gifs: [] }),
           commands.snapshot(),
         );
+      if (command && !runsInScope(command.command, slashScope))
+        throw new Error(scopeRefusal(command.command));
       if (
         command &&
         (capturedAttachments.length ||
@@ -2522,9 +2536,9 @@ function Composer({
           if (live.current) setSending(false);
         };
         attempt.signal.addEventListener("abort", release, { once: true });
-        let result: Awaited<ReturnType<typeof command.command.run>>;
+        let result: Awaited<ReturnType<typeof runSlashCommand>>;
         try {
-          result = await command.command.run({
+          result = await runSlashCommand(command.command, {
             session,
             scope,
             channelId,
@@ -2550,6 +2564,11 @@ function Composer({
           return;
         if (viewRevision(scope, draftKey) !== savedRevision) {
           setConflict(true);
+          return;
+        }
+        if (result.done) {
+          settle(mentionDraft(""));
+          setNotice(result.notice);
           return;
         }
         body = result.send;
@@ -2785,51 +2804,54 @@ function Composer({
         if (typeof result !== "string") setSending(true);
         id = typeof result === "string" ? result : await result;
       }
-      // Nothing is saved for the remembered agents: this composer shows them
-      // in memory, and any composer here, on any device, seeds them from the
-      // sent message once it lands (see seedMentions).
-      const followUp = next;
-      const pending = { next: mentionDraft(""), revision: savedRevision };
-      recoveryFor(session).set(recoveryKey, pending);
-      setAccepted(pending);
-      attachments.store.clear();
-      completion.invalidate();
-      clearMediaTime?.();
-      const changed =
-        JSON.stringify(followUp) !== JSON.stringify(valueRef.current);
-      valueRef.current = followUp;
-      updateDraft(followUp);
-      // The toolbar keeps whoever heard this message for the follow-up.
-      if (routing) {
-        setRouted(capturedRecipients);
-        setReplacedKey(undefined);
-        keepPick(null);
+      settle(next, id);
+      function settle(followUp: MentionDraft, sent?: string) {
+        // Nothing is saved for the remembered agents: this composer shows them
+        // in memory, and any composer here, on any device, seeds them from the
+        // sent message once it lands (see seedMentions).
+        const pending = { next: mentionDraft(""), revision: savedRevision };
+        recoveryFor(session).set(recoveryKey, pending);
+        setAccepted(pending);
+        attachments.store.clear();
+        completion.invalidate();
+        clearMediaTime?.();
+        const changed =
+          JSON.stringify(followUp) !== JSON.stringify(valueRef.current);
+        valueRef.current = followUp;
+        updateDraft(followUp);
+        // The toolbar keeps whoever heard this message for the follow-up.
+        if (routing) {
+          setRouted(capturedRecipients);
+          setReplacedKey(undefined);
+          keepPick(null);
+        }
+        setPicks({});
+        // An unchanged prefill may not render. Do not leave a caret command for
+        // the next keystroke to consume after inserting its first character.
+        caret.current = changed ? followUp.text.length : undefined;
+        input.current?.reset(followUp);
+        input.current?.focus();
+        if (!changed)
+          input.current?.setSelectionRange(
+            followUp.text.length,
+            followUp.text.length,
+          );
+        setError(undefined);
+        autoTagged.current = draftKey;
+        automaticTag.current = followUp.recipients.length
+          ? JSON.stringify(followUp)
+          : undefined;
+        // The typed draft that closed seeding is gone: the follow-up is this
+        // composer's own, settled for the message on screen like an edit, so a
+        // newer message of the viewer's seeds over it once it lands. The typed
+        // draft was not seeking, so the window is read here, not from render.
+        seedClosed.current = false;
+        const latest =
+          threadSeed ?? (seedsFromWindow ? windowSeed() : undefined);
+        if (latest) seedApplied.current = seedKey(latest);
+        if (sent) onSend?.(sent);
+        finishDraft(pending);
       }
-      setPicks({});
-      // An unchanged prefill may not render. Do not leave a caret command for
-      // the next keystroke to consume after inserting its first character.
-      caret.current = changed ? followUp.text.length : undefined;
-      input.current?.reset(followUp);
-      input.current?.focus();
-      if (!changed)
-        input.current?.setSelectionRange(
-          followUp.text.length,
-          followUp.text.length,
-        );
-      setError(undefined);
-      autoTagged.current = draftKey;
-      automaticTag.current = followUp.recipients.length
-        ? JSON.stringify(followUp)
-        : undefined;
-      // The typed draft that closed seeding is gone: the follow-up is this
-      // composer's own, settled for the message on screen like an edit, so a
-      // newer message of the viewer's seeds over it once it lands. The typed
-      // draft was not seeking, so the window is read here, not from render.
-      seedClosed.current = false;
-      const latest = threadSeed ?? (seedsFromWindow ? windowSeed() : undefined);
-      if (latest) seedApplied.current = seedKey(latest);
-      if (id) onSend?.(id);
-      finishDraft(pending);
     } catch (reason) {
       if (live.current && !attempt.signal.aborted)
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -3036,7 +3058,7 @@ function Composer({
             channelId={channelId}
             threadRootId={threadRootId}
             inviteAgents={agentChoices && !editing.target}
-            slashCommands={!!commands}
+            slashScope={commands ? slashScope : undefined}
             replace={replaceCompletion}
             resolved={value}
           />
@@ -3407,6 +3429,11 @@ function Composer({
         )}
         {(error || editing.error) && (
           <p role="alert">{error ?? editing.error}</p>
+        )}
+        {notice && (
+          <p className={styles.composerStatus} role="status">
+            {notice}
+          </p>
         )}
         {!editing.target &&
           !submission &&

@@ -1,5 +1,10 @@
 import type { Contribution } from "../../plugins/contributions";
-import type { SlashCommand } from "./contracts";
+import type {
+  SlashCommand,
+  SlashCommandContext,
+  SlashCommandResult,
+  SlashCommandScope,
+} from "./contracts";
 
 /** Every registered name and alias. A canonical name beats any alias; among
  * claimants of one name, the lowest key wins. */
@@ -27,4 +32,62 @@ export function recognizeSlashCommand(
   const command =
     match && slashNames(commands).get(match[1]?.toLowerCase() ?? "");
   return command ? { command, args: (match[2] ?? "").trim() } : undefined;
+}
+
+export const SLASH_SCOPES: readonly SlashCommandScope[] = [
+  "channel",
+  "dm",
+  "thread",
+];
+
+/** A command without `scopes` runs everywhere; an unknown scope runs nothing scoped. */
+export function runsInScope(
+  command: SlashCommand,
+  scope: SlashCommandScope | undefined,
+) {
+  return !command.scopes || (!!scope && command.scopes.includes(scope));
+}
+
+const SCOPE_NOUNS = {
+  channel: "channels",
+  dm: "direct messages",
+  thread: "threads",
+} as const;
+
+export function scopeRefusal(command: SlashCommand) {
+  const where = new Intl.ListFormat("en").format(
+    (command.scopes ?? []).map((scope) => SCOPE_NOUNS[scope]),
+  );
+  return `/${command.name} only works in ${where}.`;
+}
+
+/** Runs a command and returns only a well-formed result. A failure the host can
+ * show is an `Error` with a message; anything else becomes a generic one. */
+export async function runSlashCommand(
+  command: SlashCommand,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  let result: unknown;
+  try {
+    result = await command.run(context);
+  } catch (reason) {
+    throw reason instanceof Error && reason.message.trim()
+      ? reason
+      : new Error(`/${command.name} failed`);
+  }
+  const value = (result ?? {}) as Record<string, unknown>;
+  if (
+    typeof value.send === "string" &&
+    value.send.trim() &&
+    value.done === undefined &&
+    value.notice === undefined
+  )
+    return { send: value.send };
+  if (
+    value.done === true &&
+    value.send === undefined &&
+    (value.notice === undefined || typeof value.notice === "string")
+  )
+    return { done: true, notice: value.notice };
+  throw new Error(`/${command.name} returned an invalid result`);
 }

@@ -396,6 +396,8 @@ it.each([
   ["an empty usage", { usage: " " }],
   ["an empty description", { description: "" }],
   ["an id with a slash", { id: "a/b" }],
+  ["an empty scopes list", { scopes: [] }],
+  ["an unknown scope", { scopes: ["room"] as never }],
 ])("rejects a command with %s and keeps the valid one", async (_label, bad) => {
   const run = () => ({ send: "x" });
   const valid = {

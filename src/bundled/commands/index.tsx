@@ -9,8 +9,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
   conversation.registerCompletion({
     id: "typeahead",
     title: "Command",
-    match: ({ text, start }, { slashCommands }) =>
-      slashCommands ? slashQuery(text, start) : null,
+    match: ({ text, start }, { slashScope }) =>
+      slashScope ? slashQuery(text, start) : null,
     component: (props) => (
       <CommandCompletion {...props} commands={conversation.commands} />
     ),

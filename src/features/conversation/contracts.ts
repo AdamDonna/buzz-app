@@ -242,8 +242,15 @@ export type SlashCommandContext = Readonly<{
   signal: AbortSignal;
 }>;
 /** `send` replaces the draft's content; the host sends it to the same channel
- * or thread, with the draft's mentions, through the ordinary send path. */
-export type SlashCommandResult = Readonly<{ send: string }>;
+ * or thread, with the draft's mentions, through the ordinary send path.
+ * `done` sends nothing: the host clears the draft and shows `notice`, if any,
+ * as a short status confirmation. */
+export type SlashCommandResult =
+  | Readonly<{ send: string; done?: never; notice?: never }>
+  | Readonly<{ done: true; notice?: string | undefined; send?: never }>;
+/** Where a draft is composed: a top-level message in a channel, a direct
+ * message, or a thread reply (in a channel or a direct message). */
+export type SlashCommandScope = "channel" | "dm" | "thread";
 /** A typed entry point to an action the app already has. The first token of a
  * channel, DM or thread draft that is `/` plus a registered name or alias runs
  * the command on send; any other draft sends unchanged. */
@@ -257,6 +264,10 @@ export type SlashCommand = Readonly<{
   usage: string;
   /** One line under the usage in the list. */
   description: string;
+  /** Where the command is offered and runs; omitted means everywhere. Outside
+   * these scopes the list hides it and running it fails visibly with the
+   * draft kept. */
+  scopes?: readonly SlashCommandScope[];
   /** Throw to fail: the host shows the message and keeps the draft and its
    * attachments. Nothing is retried. */
   run(
@@ -288,8 +299,8 @@ export type CompletionContext = Pick<
   "session" | "scope" | "channelId" | "threadRootId" | "inviteAgents"
 > &
   Readonly<{
-    /** True only where a draft's first token can run a command. */
-    slashCommands?: boolean | undefined;
+    /** Set only where a draft's first token can run a command. */
+    slashScope?: SlashCommandScope | undefined;
   }>;
 export type CompletionQuery = Readonly<{
   start: number;

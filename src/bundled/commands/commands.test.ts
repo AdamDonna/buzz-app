@@ -1,7 +1,10 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { expect, it } from "vitest";
 import type { Contribution } from "../../plugins/contributions";
-import type { SlashCommand } from "../../features/conversation/contracts";
+import type {
+  SlashCommand,
+  SlashCommandScope,
+} from "../../features/conversation/contracts";
 import { listSlashCommands, slashQuery } from "./slash-query";
 import { shrug } from "./shrug";
 
@@ -35,7 +38,11 @@ it.each([
   expect(slashQuery(text, caret)).toEqual(expected);
 });
 
-function command(name: string, aliases?: string[]): Contribution<SlashCommand> {
+function command(
+  name: string,
+  aliases?: string[],
+  scopes?: SlashCommandScope[],
+): Contribution<SlashCommand> {
   return {
     id: name,
     key: `test/${name}`,
@@ -43,6 +50,7 @@ function command(name: string, aliases?: string[]): Contribution<SlashCommand> {
     revision: "1",
     name,
     ...(aliases ? { aliases } : {}),
+    ...(scopes ? { scopes } : {}),
     usage: `/${name}`,
     description: name,
     run: () => ({ send: name }),
@@ -58,10 +66,24 @@ it("lists commands whose name starts with the query, by name, never by alias", (
     command("rename"),
   ];
   const names = (query: string) =>
-    listSlashCommands(commands, query).map(({ name }) => name);
+    listSlashCommands(commands, query, "channel").map(({ name }) => name);
   expect(names("")).toEqual(["remove", "rename", "shrug", "status", "topic"]);
   expect(names("RE")).toEqual(["remove", "rename"]);
   expect(names("s")).toEqual(["shrug", "status"]);
   expect(names("kick")).toEqual([]);
   expect(names("hrug")).toEqual([]);
+});
+
+it("lists a scoped command only in its scopes", () => {
+  const commands = [
+    command("invite", undefined, ["channel"]),
+    command("away", undefined, ["channel", "dm", "thread"]),
+    command("shrug"),
+  ];
+  const names = (scope: SlashCommandScope | undefined) =>
+    listSlashCommands(commands, "", scope).map(({ name }) => name);
+  expect(names("channel")).toEqual(["away", "invite", "shrug"]);
+  expect(names("dm")).toEqual(["away", "shrug"]);
+  expect(names("thread")).toEqual(["away", "shrug"]);
+  expect(names(undefined)).toEqual(["shrug"]);
 });
