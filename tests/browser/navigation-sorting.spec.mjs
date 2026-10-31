@@ -95,7 +95,13 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     ).parentElement;
     const container = row.parentElement;
     const baseline = element.getBoundingClientRect().y;
-    window.stationaryMotion = { element, baseline, frames: [], done: false };
+    window.stationaryMotion = {
+      element,
+      baseline,
+      movingX: movingRow.getBoundingClientRect().x,
+      frames: [],
+      done: false,
+    };
     const sample = () => {
       const state = window.stationaryMotion;
       const opacity = Number(getComputedStyle(container).opacity);
@@ -103,6 +109,7 @@ test("keeps a stationary selected row visible while its neighbors exchange place
         y: element.getBoundingClientRect().y,
         stationary: Number(getComputedStyle(row).opacity) * opacity,
         moving: Number(getComputedStyle(movingRow).opacity) * opacity,
+        movingX: movingRow.getBoundingClientRect().x,
         stationaryScale:
           getComputedStyle(row).transform === "none"
             ? 1
@@ -172,6 +179,9 @@ test("keeps a stationary selected row visible while its neighbors exchange place
       movingFaded: state.frames.some((frame) => frame.moving < 1),
       movingScaled: state.frames.some((frame) => frame.movingScale < 1),
       minScale: Math.min(...state.frames.map((frame) => frame.movingScale)),
+      noLateralDrift: state.frames.every(
+        (frame) => frame.movingX === state.movingX,
+      ),
     };
   });
   expect(result).toMatchObject({
@@ -179,6 +189,7 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     fixed: true,
     movingFaded: true,
     movingScaled: true,
+    noLateralDrift: true,
   });
   expect(result.minScale).toBeGreaterThanOrEqual(0.85);
   await expect(maple).toHaveAttribute("aria-current", "page");

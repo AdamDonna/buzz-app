@@ -103,6 +103,7 @@ const ChannelRow = memo(
     return (
       <motion.div
         ref={ref}
+        style={{ transformOrigin: "left center" }}
         initial={{
           opacity: animated ? 0 : 1,
           transform: animated ? "scale(0.85)" : "scale(1)",
