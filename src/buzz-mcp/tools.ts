@@ -28,6 +28,14 @@ import {
 } from "../features/relay/emoji";
 import { newer } from "../features/relay/events";
 import { threadReference } from "../features/relay/thread-reference";
+import {
+  ACTIONS,
+  FORMS,
+  INLINE_UI_TAG,
+  TYPES,
+  inlineUiContent,
+  readInlineUi,
+} from "../features/inline-ui/spec";
 import { soloChannelMetadata } from "../features/relay/discovery";
 import type { RelayEvent } from "../features/relay/events";
 import { attestedOwner } from "../features/agents/owner-attestation";
@@ -147,6 +155,40 @@ export const TOOLS: readonly Tool[] = [
       mentions: strs,
       audience,
       final,
+      ui: {
+        type: "object",
+        description:
+          "Inline UI shown under your text in the Buzz app; your text is the question. Other clients get a plain-text version. choice: options (2–6), own: true allows a written answer. action: actions (1–2) of {label, do, channel}. list: channels (ids) the app shows live. form: agent_profile, only when Buzz asks. checklist: steps (1–8) of {label, joined?: channel id}. for: mentioned limits answers to the people you mention. Answers arrive as replies.",
+        properties: {
+          type: { type: "string", enum: [...TYPES] },
+          for: { type: "string", enum: ["mentioned"] },
+          options: strs,
+          own: { type: "boolean" },
+          actions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                label: str,
+                do: { type: "string", enum: [...ACTIONS] },
+                channel: str,
+              },
+              required: ["label", "do", "channel"],
+            },
+          },
+          channels: strs,
+          form: { type: "string", enum: [...FORMS] },
+          steps: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { label: str, joined: str },
+              required: ["label"],
+            },
+          },
+        },
+        required: ["type"],
+      },
     },
     ["audience"],
   ),
@@ -1308,8 +1350,14 @@ async function post(
   thread: readonly string[][],
   extra: readonly string[][] = [],
 ) {
+  const ui = args.ui === undefined ? undefined : readInlineUi(args.ui);
+  if (ui && "error" in ui) throw new Error(ui.error);
+  if (ui && list(args.files).length)
+    throw new Error("Send files in their own message, not with ui.");
   const files = await tools.attach(list(args.files));
-  const content = `${(await tools.body(args, !files.links)) ?? ""}${files.links}`;
+  const body = (await tools.body(args, !files.links || !!ui)) ?? "";
+  if (ui && !body.trim()) throw new Error("ui needs text: the question.");
+  const content = ui ? inlineUiContent(body, ui.ui) : `${body}${files.links}`;
   const mentions = await tools.mentions(channel, content, list(args.mentions));
   const event = await tools.client.publish({
     kind: 9,
@@ -1321,6 +1369,7 @@ async function post(
       ...files.tags,
       ...(await tools.emoji(content)),
       ...extra,
+      ...(ui ? [[INLINE_UI_TAG, JSON.stringify(ui.ui)]] : []),
     ],
   });
   return `sent ${event.id}`;

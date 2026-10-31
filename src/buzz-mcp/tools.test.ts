@@ -6,6 +6,7 @@ import type { BuzzClient, BuzzEvent, Filter, Memory, Template } from "./client";
 import { respond } from "./rpc";
 import { ATTENTION_TOOLS } from "./attention";
 import { createHash } from "node:crypto";
+import { inlineUiMessage } from "../features/inline-ui/spec";
 import { callTool, memoryVersion, TOOLS } from "./tools";
 import { callSessionTool } from "./session-tools";
 import { Context } from "@deepseek-ai/cordis";
@@ -419,6 +420,49 @@ it("tags a message for agents, and needs the audience said", async () => {
   await expect(
     callTool(client, context, "send", { text: "hi", audience: "humans" }),
   ).rejects.toThrow("audience must be everyone or agents");
+  expect(published).toHaveLength(1);
+});
+
+it("attaches Inline UI with its plain-text version, and explains a bad one", async () => {
+  const { client, published } = fake(community);
+  const context = { channel: "chan", root };
+  await callTool(client, context, "send", {
+    audience: "everyone",
+    text: "What tone should I use?",
+    ui: { type: "choice", options: ["Warm", "Direct"], own: true },
+  });
+  const ui = { v: 1, type: "choice", options: ["Warm", "Direct"], own: true };
+  expect(published[0]).toEqual({
+    kind: 9,
+    content:
+      "What tone should I use?\n\n1. Warm\n2. Direct\n\nOr reply with your own answer.",
+    tags: [
+      ["h", "chan"],
+      ["e", root, "", "reply"],
+      ["inline-ui", JSON.stringify(ui)],
+    ],
+  });
+  // What the app reads back is what was sent.
+  const [sent] = published;
+  expect(sent && inlineUiMessage(sent.content, sent.tags)?.ui).toEqual(ui);
+  await expect(
+    callTool(client, context, "send", {
+      audience: "everyone",
+      text: "Tone?",
+      ui: { type: "choice", options: ["Warm"] },
+    }),
+  ).rejects.toThrow("ui.options must list 2–6 items.");
+  await expect(
+    callTool(client, context, "send", { audience: "everyone", ui }),
+  ).rejects.toThrow("Give text or path.");
+  await expect(
+    callTool(client, context, "send", {
+      audience: "everyone",
+      text: "Tone?",
+      ui,
+      files: ["/tmp/a.png"],
+    }),
+  ).rejects.toThrow("Send files in their own message, not with ui.");
   expect(published).toHaveLength(1);
 });
 

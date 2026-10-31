@@ -3,6 +3,8 @@ import type { CustomEmoji } from "./emoji";
 import { validatedBlurhash } from "./blurhash";
 import { threadReference } from "./thread-reference";
 import { agentAudience } from "./audience";
+import { inlineUiMessage } from "../inline-ui/spec";
+import { readAnswerTag } from "../inline-ui/answers";
 import { emojiTags } from "./emoji";
 import { objectBody } from "./body";
 import { huddleRoom } from "../huddle/lifecycle";
@@ -461,6 +463,16 @@ export function foldMessages(
               }),
             }
           : {}),
+        // An edit turns Inline UI and answers back into plain text.
+        ...(() => {
+          if (edits.length || event.kind !== 9) return {};
+          const inlineUi = inlineUiMessage(content, event.tags);
+          const inlineUiAnswer = readAnswerTag(event.tags);
+          return {
+            ...(inlineUi ? { inlineUi } : {}),
+            ...(inlineUiAnswer ? { inlineUiAnswer } : {}),
+          };
+        })(),
         ...(edits.length ? { edited: true as const } : {}),
         ...(projected.seams.length ? { attachmentSeams: projected.seams } : {}),
         mentionReferences: Object.freeze([

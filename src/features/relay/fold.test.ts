@@ -6,6 +6,12 @@ import { shareMessageRows } from "./row-identity";
 import { foldProfiles } from "./profiles";
 import { DiscoveryState } from "./discovery";
 import {
+  INLINE_UI_TAG,
+  inlineUiContent,
+  readInlineUi,
+} from "../inline-ui/spec";
+import { ANSWER_TAG, inlineUiAnswers } from "../inline-ui/answers";
+import {
   keypair,
   message,
   metadata,
@@ -108,6 +114,46 @@ describe("message fold", () => {
     expect(
       rows.find((row) => row.id === rootOnly.id)?.threadRootId,
     ).toBeUndefined();
+  });
+  it("carries signed Inline UI and answers until an edit makes them plain text", () => {
+    const read = readInlineUi({ type: "choice", options: ["Warm", "Direct"] });
+    assert("ui" in read);
+    const tag = [INLINE_UI_TAG, JSON.stringify(read.ui)];
+    const content = inlineUiContent("Which tone?", read.ui);
+    const asked = message(alice, channel, content, 10, [tag]);
+    const edited = message(alice, channel, content, 9, [tag]);
+    const answered = message(bob, channel, "Direct", 11, [
+      ["p", alice.pubkey],
+      [ANSWER_TAG, asked.id, "1"],
+    ]);
+    const rows = foldMessages(channel, relay.pubkey, [
+      asked,
+      edited,
+      answered,
+      // The same text, edited: the Inline UI no longer counts.
+      signed(alice, {
+        kind: 40003,
+        content,
+        created_at: 12,
+        tags: [["e", edited.id]],
+      }),
+    ]);
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    // The timeline keeps showing the whole text, plain-text version included.
+    expect(byId.get(asked.id)).toMatchObject({
+      content,
+      inlineUi: { ui: read.ui, text: "Which tone?" },
+    });
+    expect(byId.get(edited.id)?.inlineUi).toBeUndefined();
+    expect(byId.get(answered.id)?.inlineUiAnswer).toEqual({
+      messageId: asked.id,
+      value: "1",
+    });
+    expect(
+      inlineUiAnswers(rows, () => undefined)
+        .get(asked.id)
+        ?.map((a) => a.content),
+    ).toEqual(["Direct"]);
   });
   it("applies author-only deletes and latest author edit, collects reactions and signed mentions", () => {
     const a = message(alice, channel, `hello @bob`, 10, [
