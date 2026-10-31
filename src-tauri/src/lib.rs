@@ -34,7 +34,6 @@ mod enterprise_adapter_url;
 #[cfg(test)]
 #[path = "enterprise_auth_build.rs"]
 mod enterprise_auth_build;
-#[cfg(test)]
 mod enterprise_relay_url;
 mod host_command;
 mod host_files;

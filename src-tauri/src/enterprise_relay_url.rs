@@ -1,5 +1,7 @@
 use url::Url;
 
+// The app uses only canonicalization; build.rs and tests parse the allowlist.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_enterprise_relay_allowlist(raw: &str) -> Result<Vec<String>, String> {
     let raw = raw.trim();
     if raw.is_empty() {
