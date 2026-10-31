@@ -246,7 +246,9 @@ export type SlashCommandContext = Readonly<{
  * `done` sends nothing: the host clears the draft and shows `notice`, if any,
  * as a short status confirmation. `after` runs once the draft is cleared, for
  * a command that moves the user to another conversation: that move unmounts
- * the composer, so it must not happen before the draft is gone. A `done`
+ * the composer, so it must not happen before the draft is gone. When the draft
+ * changed while the command ran, the host keeps the newer draft, shows the
+ * notice and still runs `after`, since the command's work is done. A `done`
  * result completes even if the destination stopped being writable while the
  * command ran (leaving a channel does that); only leaving the destination or
  * unmounting the composer cancels a run. */

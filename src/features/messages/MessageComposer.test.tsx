@@ -13184,12 +13184,14 @@ it("runs a command that sends nothing: clears the draft, announces its notice po
     h.submit();
     await waitFor(() => expect(service.held.runs).toBe(run));
   };
+  const after = vi.fn();
   await startHold(1);
   h.fill("my newer draft");
   await act(async () =>
-    service.held.result.resolve({ done: true, notice: "Held." }),
+    service.held.result.resolve({ done: true, notice: "Held.", after }),
   );
   expect(await screen.findByText("Held.")).toHaveAttribute("role", "status");
+  expect(after).toHaveBeenCalledTimes(1);
   expect(h.input()).toHaveValue("my newer draft");
   expect(screen.queryByRole("alert")).toBeNull();
   h.fill("my later draft");
@@ -13212,9 +13214,10 @@ it("runs a command that sends nothing: clears the draft, announces its notice po
     JSON.stringify("Saved elsewhere"),
   );
   await act(async () =>
-    service.held.result.resolve({ done: true, notice: "Held." }),
+    service.held.result.resolve({ done: true, notice: "Held.", after }),
   );
   expect(await screen.findByText("Held.")).toHaveAttribute("role", "status");
+  expect(after).toHaveBeenCalledTimes(2);
   expect(screen.getByRole("alert")).toHaveTextContent("changed elsewhere");
   expect(h.input()).toHaveValue("/hold now");
 });

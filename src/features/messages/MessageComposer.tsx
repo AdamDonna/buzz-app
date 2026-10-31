@@ -2591,12 +2591,18 @@ function Composer({
             capturedAttachments,
           )
         ) {
-          if (result.done) setNotice(result.notice);
+          if (result.done) {
+            setNotice(result.notice);
+            result.after?.();
+          }
           return;
         }
         if (viewRevision(scope, draftKey) !== savedRevision) {
           setConflict(true);
-          if (result.done) setNotice(result.notice);
+          if (result.done) {
+            setNotice(result.notice);
+            result.after?.();
+          }
           return;
         }
         if (result.done) {

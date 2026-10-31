@@ -1884,7 +1884,9 @@ must be non-blank text, `done` must be `true`, and `notice`, if present, a strin
 `run`'s context is the session scope, not a conversation scope.
 
 A `done` result may also carry `after`, a function the host calls once, after it has
-cleared the draft and shown the notice. Use it for navigation: opening another
+cleared the draft and shown the notice. When the draft changed while the command ran, or
+another writer saved over it, the host keeps that newer draft, shows the notice and
+still calls `after`, because the command's work is done. Use it for navigation: opening another
 conversation unmounts the composer and aborts `signal`, so a command that navigates
 must not do so from inside `run`. `after` is valid only on `done`; a `send` result
 that carries one is an invalid result.
