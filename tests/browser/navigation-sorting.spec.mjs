@@ -22,7 +22,7 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
         window.sidebarMotion = {
           element,
           opacities: [],
-          scales: [],
+          transforms: [],
           done: false,
         };
         const sample = () => {
@@ -35,9 +35,7 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           const transform = getComputedStyle(
             element.closest("[data-channel-sidebar-row]").parentElement,
           ).transform;
-          state.scales.push(
-            transform === "none" ? 1 : new DOMMatrixReadOnly(transform).a,
-          );
+          state.transforms.push(transform);
           if (!state.done) requestAnimationFrame(sample);
         };
         requestAnimationFrame(sample);
@@ -62,14 +60,12 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           faded: window.sidebarMotion.opacities.some(
             (value) => Number(value) < 1,
           ),
-          scaled: window.sidebarMotion.scales.some((value) => value < 1),
-          minScale: Math.min(...window.sidebarMotion.scales),
+          transforms: [...new Set(window.sidebarMotion.transforms)],
         };
       });
       expect(result.same).toBe(true);
       expect(result.faded).toBe(reducedMotion === "no-preference");
-      expect(result.scaled).toBe(reducedMotion === "no-preference");
-      expect(result.minScale).toBeGreaterThanOrEqual(0.85);
+      expect(result.transforms).toEqual(["none"]);
     });
   });
 }
@@ -114,10 +110,7 @@ test("keeps a stationary selected row visible while its neighbors exchange place
           getComputedStyle(row).transform === "none"
             ? 1
             : new DOMMatrixReadOnly(getComputedStyle(row).transform).a,
-        movingScale:
-          getComputedStyle(movingRow).transform === "none"
-            ? 1
-            : new DOMMatrixReadOnly(getComputedStyle(movingRow).transform).a,
+        movingTransform: getComputedStyle(movingRow).transform,
       });
       if (!state.done) requestAnimationFrame(sample);
     };
@@ -177,8 +170,9 @@ test("keeps a stationary selected row visible while its neighbors exchange place
           frame.stationaryScale === 1,
       ),
       movingFaded: state.frames.some((frame) => frame.moving < 1),
-      movingScaled: state.frames.some((frame) => frame.movingScale < 1),
-      minScale: Math.min(...state.frames.map((frame) => frame.movingScale)),
+      movingTransformed: state.frames.some(
+        (frame) => frame.movingTransform !== "none",
+      ),
       noLateralDrift: state.frames.every(
         (frame) => frame.movingX === state.movingX,
       ),
@@ -188,10 +182,9 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     same: true,
     fixed: true,
     movingFaded: true,
-    movingScaled: true,
+    movingTransformed: false,
     noLateralDrift: true,
   });
-  expect(result.minScale).toBeGreaterThanOrEqual(0.85);
   await expect(maple).toHaveAttribute("aria-current", "page");
 });
 // Native details/menu nesting, submenu focus/viewport placement and row reorder

@@ -16,7 +16,7 @@ import {
 } from "react";
 import styles from "./ChannelSidebarRows.module.css";
 
-/** Shrink and fade changing positions, retaining keyed rows and stationary anchors. */
+/** Fade changing positions, retaining keyed rows and stationary anchors. */
 export function ChannelSidebarRows({
   children,
   open,
@@ -98,21 +98,12 @@ const ChannelRow = memo(
     }
   >(function ChannelRow({ children, animated, hiding, onHidden }, ref) {
     const present = useIsPresent();
-    // Full transform keyframes let Motion delegate scaling to browser animations.
-    // Keep an explicit identity: Motion can normalize "none" to scale(0).
     return (
       <motion.div
         ref={ref}
-        style={{ transformOrigin: "left center" }}
-        initial={{
-          opacity: animated ? 0 : 1,
-          transform: animated ? "scale(0.85)" : "scale(1)",
-        }}
-        animate={{
-          opacity: hiding ? 0 : 1,
-          transform: hiding ? "scale(0.85)" : "scale(1)",
-        }}
-        exit={{ opacity: 0, transform: "scale(0.85)" }}
+        initial={{ opacity: animated ? 0 : 1 }}
+        animate={{ opacity: hiding ? 0 : 1 }}
+        exit={{ opacity: 0 }}
         transition={{ duration: animated ? (hiding ? 0.3 : 0.4) : 0 }}
         onAnimationComplete={() => {
           if (hiding && present) onHidden();
