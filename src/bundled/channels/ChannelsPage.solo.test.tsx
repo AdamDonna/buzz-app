@@ -1152,3 +1152,34 @@ it("finishes /archive when archiving removes the composer: the confirmed archive
     await screen.findByRole("textbox", { name: "Message #Planning" }),
   ).toHaveTextContent("");
 });
+
+it("shows one failure, from the dialog, when a confirmed /archive fails after its composer is gone", async () => {
+  const f = fixture({
+    type: "stream",
+    role: "admin",
+    commands: channelAdminCommands,
+  });
+  f.run.mockImplementationOnce(async () => {
+    f.setArchived(true);
+    throw new Error("Relay refused");
+  });
+  f.mountWithToasts();
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("textbox", { name: "Message #Planning" }),
+  );
+  await user.keyboard("/archive");
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Archive channel" }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("textbox", { name: "Message #Planning" }),
+    ).toBeNull(),
+  );
+  await screen.findByText("Archive channel failed");
+  await act(async () => {});
+  expect(screen.getAllByText(/Relay refused/)).toHaveLength(1);
+  expect(screen.getAllByText("Archive channel failed")).toHaveLength(1);
+});
