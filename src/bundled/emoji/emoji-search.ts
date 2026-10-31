@@ -106,6 +106,18 @@ function loadStandard() {
     });
   return standard;
 }
+/** The Unicode emoji a `:name:` shortcode or alias names, if any. */
+export async function standardEmojiFor(name: string) {
+  const { default: raw } = await import("@emoji-mart/data");
+  const data = raw as unknown as EmojiMartData;
+  const key = name.toLowerCase();
+  const id = Object.hasOwn(data.emojis, key)
+    ? key
+    : Object.hasOwn(data.aliases, key)
+      ? data.aliases[key]
+      : undefined;
+  return id ? data.emojis[id]?.skins[0]?.native : undefined;
+}
 function semanticScore(query: string, terms: readonly string[]) {
   let best: number | undefined;
   for (const [index, term] of terms.entries()) {

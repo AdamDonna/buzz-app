@@ -1131,6 +1131,7 @@ it.each([
         settingsSelected={false}
         pluginRecommendations={count}
         onSettings={() => {}}
+        bindStatusSheet={noStatusBinding}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Your profile" }));
@@ -1139,3 +1140,92 @@ it.each([
     else expect(item).not.toHaveTextContent("recommended");
   },
 );
+
+it("opens the set-status sheet for a slash command, returns focus to where it was, and refuses when statuses are not writable or the menu is gone", async () => {
+  const { createRelaySession } = await import("../../features/relay/session");
+  const { createStatusSheet } = await import(
+    "../../features/user-status/sheet"
+  );
+  const owner = createRelaySession(null);
+  const user = userEvent.setup();
+  const viewer = "a".repeat(64);
+  const current = vi.fn(async () => undefined);
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  const connectionWith = (writable: boolean) => ({
+    scope: "https://status.test",
+    session: {
+      ...owner.session,
+      statuses: { ...owner.session.statuses, writable, current },
+    },
+  });
+  let connection = connectionWith(true);
+  const actions: readonly [] = [];
+  const accountActions = {
+    subscribe,
+    snapshot: () => actions,
+  } as unknown as AccountActionsService;
+  const community = {
+    profile: { name: "Local", picture: "" },
+    viewer,
+    selected: "https://status.test",
+  };
+  const presence = { status: "online", preference: "auto", error: null };
+  const communities = {
+    subscribe,
+    snapshot: () => community,
+    presence: { subscribe, snapshot: () => presence },
+    relay: { subscribe, snapshot: () => connection },
+  } as unknown as Communities;
+  const { sheet, bind } = createStatusSheet();
+  const view = render(
+    <>
+      <ProfileButton
+        communities={communities}
+        accountActions={accountActions}
+        appearance={testAppearance}
+        settingsSelected={false}
+        onSettings={() => {}}
+        bindStatusSheet={bind}
+      />
+      <button type="button">Composer</button>
+    </>,
+  );
+  try {
+    const composer = screen.getByRole("button", { name: "Composer" });
+    act(() => composer.focus());
+    let opened = false;
+    act(() => {
+      opened = sheet.open();
+    });
+    expect(opened).toBe(true);
+    expect(
+      await screen.findByRole("dialog", { name: "Set a status" }),
+    ).toBeVisible();
+    expect(current).toHaveBeenCalledOnce();
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Set a status" }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(composer).toHaveFocus());
+    act(() => {
+      connection = connectionWith(false);
+      for (const listener of listeners) listener();
+    });
+    expect(sheet.open()).toBe(false);
+    expect(
+      screen.queryByRole("dialog", { name: "Set a status" }),
+    ).not.toBeInTheDocument();
+  } finally {
+    view.unmount();
+    owner.dispose();
+  }
+  expect(sheet.open()).toBe(false);
+});

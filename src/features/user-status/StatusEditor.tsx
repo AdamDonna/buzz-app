@@ -61,7 +61,7 @@ export function StatusEditor({
   /** Present for the viewer’s editor; refreshes its cached status in the background. */
   viewer?: string;
   close(): void;
-  finalFocus: RefObject<HTMLButtonElement | null>;
+  finalFocus: RefObject<HTMLElement | null>;
 }) {
   const [current, setCurrent] = useState(initialCurrent);
   const edited = useRef(false);

@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { exactEmoji, searchEmoji, searchCustomEmoji } from "./emoji-search";
+import {
+  exactEmoji,
+  searchEmoji,
+  searchCustomEmoji,
+  standardEmojiFor,
+} from "./emoji-search";
 
 it("verifies one exact shortcode for the closing colon, not ranking ties or namesakes", async () => {
   const party = [{ shortcode: "party", url: "https://a.test/party.png" }];
@@ -134,4 +139,17 @@ it("copies native primitives even when Mart previously mutated the shared dictio
     smile.keywords = originalKeywords;
     delete raw.emojis[customId];
   }
+});
+
+it.each([
+  ["tada", "🎉"],
+  ["TADA", "🎉"],
+  ["thumbsup", "👍"],
+  ["+1", "👍"],
+  ["nope", undefined],
+  ["constructor", undefined],
+  ["__proto__", undefined],
+  ["toString", undefined],
+])("resolves the Unicode emoji named by :%s:", async (name, expected) => {
+  expect(await standardEmojiFor(name)).toBe(expected);
 });

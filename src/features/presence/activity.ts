@@ -191,3 +191,15 @@ export type PresenceActivity = Pick<
   ReturnType<typeof createPresenceActivity>,
   "status" | "visible" | "subscribe" | "dispose"
 > & { command?: () => number };
+
+/** What a plugin may do with the viewer's manual presence choice. */
+export type PresenceControl = Pick<
+  ReturnType<typeof createPresenceActivity>,
+  "snapshot" | "setPreference"
+>;
+
+declare module "@deepseek-ai/cordis" {
+  interface Context {
+    presence: PresenceControl;
+  }
+}

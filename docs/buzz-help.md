@@ -75,7 +75,11 @@ the interface unless an available tool actually supports that action.
 - **Slash commands** run from the message composer in channels, DMs and
   threads. Type `/` to see the commands and press Enter or Tab to choose one;
   choosing a command does not send it. `/shrug` sends your message with
-  ¯\\\_(ツ)\_/¯ added. A message that starts with an @mention or an unknown
+  ¯\\\_(ツ)\_/¯ added. `/away` sets your availability to away and `/active`
+  clears that setting. `/status [emoji] <text>` sets your status with no expiry,
+  `/status clear` clears it, and `/status` alone opens the status sheet. The
+  first word is the emoji when it is a `:shortcode:` the app knows or a single
+  emoji; otherwise the whole text is the status. A message that starts with an @mention or an unknown
   `/command` is sent as written, so agents keep their own commands. A command
   cannot be sent with attachments.
 - **Canvas** holds shared notes and context for a channel or chat. Messages and

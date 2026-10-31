@@ -74,6 +74,7 @@ export function ProfileButton({
   settingsSelected,
   pluginRecommendations = 0,
   onSettings,
+  bindStatusSheet,
 }: {
   communities: Communities;
   accountActions: AccountActionsService;
@@ -82,6 +83,8 @@ export function ProfileButton({
   pluginRecommendations?: number;
   /** Opens Settings, optionally at one of its own sections. */
   onSettings(section?: "profile" | "plugins"): void;
+  /** Lets a slash command open the set-status sheet this menu renders. */
+  bindStatusSheet?: ((open: () => boolean) => () => void) | undefined;
 }) {
   const {
     profile: localProfile,
@@ -198,6 +201,22 @@ export function ProfileButton({
   const status = useUserStatus(session?.statuses, viewer ?? "");
   const statusEditor = useStatusEditor(session, viewer ?? undefined);
   const profileTrigger = useRef<HTMLButtonElement>(null);
+  const sheetFocus = useRef<HTMLElement | null>(null);
+  const statusWritable = session?.statuses?.writable === true;
+  useEffect(
+    () =>
+      bindStatusSheet?.(() => {
+        if (!statusWritable) return false;
+        const origin = document.activeElement;
+        if (!statusEditor.open()) return false;
+        sheetFocus.current =
+          origin instanceof HTMLElement && origin !== document.body
+            ? origin
+            : profileTrigger.current;
+        return true;
+      }),
+    [bindStatusSheet, statusWritable, statusEditor.open],
+  );
   const appearanceTrigger = useRef<HTMLDivElement>(null);
   const openingStatus = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -407,6 +426,7 @@ export function ProfileButton({
                 disabled={!session.statuses.writable}
                 onClick={() => {
                   if (statusEditor.open()) {
+                    sheetFocus.current = profileTrigger.current;
                     openingStatus.current = true;
                     setMenuOpen(false);
                   }
@@ -546,7 +566,7 @@ export function ProfileButton({
           current={statusEditor.editor.current}
           viewer={statusEditor.editor.viewer}
           close={statusEditor.close}
-          finalFocus={profileTrigger}
+          finalFocus={sheetFocus}
         />
       )}
     </>

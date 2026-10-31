@@ -4,6 +4,7 @@ import { PluginRuntime } from "../../plugins/runtime";
 import { ConversationService } from "../conversation/service";
 import * as emojiPlugin from "../../bundled/emoji";
 import * as commandsPlugin from "../../bundled/commands";
+import { createPresenceActivity } from "../presence/activity";
 import type { PluginModule } from "../../plugins/api";
 import { File as NodeFile } from "node:buffer";
 import { attachmentDraft } from "./attachment-draft";
@@ -1620,6 +1621,8 @@ async function mountUploadComposer(
     defaultMention?: MessageComposerProps["defaultMention"];
     requireMention?: boolean;
     slashCommands?: boolean;
+    /** Lets the session publish status events (kind 30315). */
+    statuses?: boolean;
   } = {},
 ) {
   vi.stubGlobal(
@@ -1682,7 +1685,14 @@ async function mountUploadComposer(
                 : [],
         );
       },
-      writer: { kinds: options.editable ? [9, 40003, 5] : [9], sign, publish },
+      writer: {
+        kinds: [
+          ...(options.editable ? [9, 40003, 5] : [9]),
+          ...(options.statuses ? [30315] : []),
+        ],
+        sign,
+        publish,
+      },
     },
     { outboxStorage: { load: () => [], save() {} } },
   );
@@ -12881,6 +12891,15 @@ const wireShrug = "¯" + "\\".repeat(3) + "_(ツ)" + "\\" + "_/¯";
  * one that always fails, one that sends nothing, and one scoped to channels. */
 async function commandService(probe?: SlashCommand["run"]) {
   const root = new Context();
+  const presence = createPresenceActivity();
+  presence.setViewer("viewer");
+  onTestFinished(() => presence.dispose());
+  const statusSheet = { open: vi.fn(() => true) };
+  root.provide("presence", {
+    snapshot: presence.snapshot,
+    setPreference: presence.setPreference,
+  });
+  root.provide("statusSheet", statusSheet);
   let tools: ComposerToolProps | undefined;
   const held = {
     runs: 0,
@@ -12983,9 +13002,14 @@ async function commandService(probe?: SlashCommand["run"]) {
   });
   runtime.reconcile([info("buzz.commands"), info("test.shout")]);
   await vi.waitFor(() =>
-    expect(service.commands.snapshot()).toHaveLength(probe ? 8 : 7),
+    expect(service.commands.snapshot()).toHaveLength(probe ? 11 : 10),
   );
-  return Object.assign(service, { composerTools: () => tools, held });
+  return Object.assign(service, {
+    composerTools: () => tools,
+    held,
+    presence,
+    statusSheet,
+  });
 }
 
 const commandRows = () =>
@@ -12998,14 +13022,17 @@ const commandRows = () =>
 it("completes slash commands from the keyboard without running them, and sends /shrug with the text first", async () => {
   const h = mount({ extensions: await commandService(), slashCommands: true });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(6));
+  await waitFor(() => expect(commandRows()).toHaveLength(9));
   expect(commandRows()).toEqual([
+    expect.stringContaining("/active"),
+    expect.stringContaining("/away"),
     expect.stringContaining("/hold"),
     expect.stringContaining("/hush [note]"),
     expect.stringContaining("/invite"),
     expect.stringContaining("/refuse"),
     expect.stringContaining("/shout"),
     expect.stringContaining("/shrug [text]"),
+    expect.stringContaining("/status [emoji] <text> | clear"),
   ]);
   await h.user.keyboard("{Escape}");
   expect(commandRows()).toEqual([]);
@@ -13016,7 +13043,7 @@ it("completes slash commands from the keyboard without running them, and sends /
   expect(h.input()).toHaveValue("/shrug ");
   expect(h.messages.send).not.toHaveBeenCalled();
   h.fill("/s");
-  await waitFor(() => expect(commandRows()).toHaveLength(2));
+  await waitFor(() => expect(commandRows()).toHaveLength(3));
   await h.user.keyboard("{Tab}");
   expect(h.input()).toHaveValue("/shout ");
   expect(h.messages.send).not.toHaveBeenCalled();
@@ -13300,17 +13327,22 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   h.messages.send.mockClear();
   h.retarget({ session: directMessageSession(h.session) });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(6));
+  await waitFor(() => expect(commandRows()).toHaveLength(9));
   const inDm = [
+    expect.stringContaining("/active"),
+    expect.stringContaining("/away"),
     expect.stringContaining("/hold"),
     expect.stringContaining("/hush"),
     expect.stringContaining("/refuse"),
     expect.stringContaining("/shout"),
     expect.stringContaining("/shrug"),
+    expect.stringContaining("/status"),
     expect.stringContaining("/whisper"),
   ];
   expect(commandRows()).toEqual(inDm);
-  await h.user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
+  await h.user.keyboard(
+    "{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}",
+  );
   expect(h.input()).toHaveValue("/shrug ");
   h.fill("/invite now");
   h.submit();
@@ -13331,7 +13363,7 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   );
   h.retarget({ threadRootId: "root" });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(6));
+  await waitFor(() => expect(commandRows()).toHaveLength(9));
   expect(commandRows()).toEqual(inDm);
   h.fill("/invite now");
   h.submit();
@@ -13354,7 +13386,7 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
     threadRootId: "root",
   });
   thread.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(5));
+  await waitFor(() => expect(commandRows()).toHaveLength(8));
   expect(commandRows().join()).not.toContain("/invite");
   expect(commandRows().join()).not.toContain("/whisper");
   thread.fill("/invite now");
@@ -13542,4 +13574,172 @@ it("leaves a new conversation's composer without commands", async () => {
     expect.anything(),
     undefined,
   );
+});
+
+it("sets away from a channel, and clears the override from a thread, announcing each and keeping the draft when the choice is not saved", async () => {
+  const service = await commandService();
+  const key = "buzz-presence.v1:viewer";
+  const h = mount({ extensions: service, slashCommands: true });
+  h.fill("/away ");
+  await h.user.keyboard("{Enter}");
+  expect(await screen.findByText("You are set to away")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  expect(h.input()).toHaveValue("");
+  expect(service.presence.snapshot().preference).toBe("away");
+  expect(localStorage.getItem(key)).toBe("away");
+  expect(h.messages.send).not.toHaveBeenCalled();
+  h.unmount();
+  const thread = mount({
+    extensions: service,
+    slashCommands: true,
+    threadRootId: "root",
+  });
+  thread.fill("/ACTIVE");
+  thread.submit();
+  expect(await screen.findByText("You are set to active")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  expect(thread.input()).toHaveValue("");
+  expect(service.presence.snapshot().preference).toBe("auto");
+  expect(localStorage.getItem(key)).toBe("auto");
+  expect(thread.messages.reply).not.toHaveBeenCalled();
+  const setItem = Storage.prototype.setItem;
+  const store = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(function (this: Storage, name, value) {
+      if (name === key) throw new Error("quota");
+      setItem.call(this, name, value);
+    });
+  onTestFinished(() => store.mockRestore());
+  thread.fill("/away");
+  thread.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Could not save your status. It applies to this window until you close it.",
+  );
+  expect(thread.input()).toHaveValue("/away");
+  localStorage.removeItem(key);
+});
+
+it("runs /status through the real status write path: a community emoji, a Unicode shortcode, plain text, and clear", async () => {
+  const service = await commandService();
+  const h = await mountUploadComposer({
+    extensions: service,
+    slashCommands: true,
+    statuses: true,
+    emojiRead: async () => [
+      signed(keypair(), {
+        kind: 30030,
+        created_at: 1700000000,
+        content: "",
+        tags: [
+          ["d", "buzz:custom-emoji"],
+          ["emoji", "party", "https://emoji.example/party.png"],
+        ],
+      }),
+    ],
+  });
+  const published = () =>
+    h.publish.mock.calls.map(([event]) => [
+      event.kind,
+      event.content,
+      event.tags,
+    ]);
+  const run = async (draft: string, notice: string) => {
+    await userEvent.clear(h.input());
+    await userEvent.type(h.input(), draft);
+    fireEvent.submit(h.form());
+    expect(await screen.findByText(notice)).toHaveAttribute("role", "status");
+    expect(h.input()).toHaveTextContent("");
+  };
+  await run("/status :Party: shipping it", "Status set");
+  await run("/status :tada: launch day", "Status set");
+  await run("/status :nope: heads down", "Status set");
+  await run("/status 🇺🇸 travelling", "Status set");
+  await run("/status clear", "Status cleared");
+  expect(published()).toEqual([
+    [
+      30315,
+      "shipping it",
+      [
+        ["d", "general"],
+        ["emoji", ":party:", "https://emoji.example/party.png"],
+      ],
+    ],
+    [
+      30315,
+      "launch day",
+      [
+        ["d", "general"],
+        ["emoji", "🎉"],
+      ],
+    ],
+    [30315, ":nope: heads down", [["d", "general"]]],
+    [
+      30315,
+      "travelling",
+      [
+        ["d", "general"],
+        ["emoji", "🇺🇸"],
+      ],
+    ],
+    [30315, "", [["d", "general"]]],
+  ]);
+  expect(service.statusSheet.open).not.toHaveBeenCalled();
+});
+
+it("opens the status sheet for a bare /status, and keeps the draft when the sheet, the write or the catalog fails", async () => {
+  const service = await commandService();
+  let offline = false;
+  const h = await mountUploadComposer({
+    extensions: service,
+    slashCommands: true,
+    statuses: true,
+    publish: async () => {
+      if (offline) throw new Error("Relay offline");
+    },
+    emojiRead: async () => {
+      throw new Error("catalog offline");
+    },
+  });
+  await waitFor(() =>
+    expect(h.owner.session.emoji.snapshot().status).toBe("error"),
+  );
+  const type = async (draft: string) => {
+    await userEvent.clear(h.input());
+    await userEvent.type(h.input(), draft);
+    fireEvent.submit(h.form());
+  };
+  await type("/status");
+  await waitFor(() => expect(h.input()).toHaveTextContent(""));
+  expect(service.statusSheet.open).toHaveBeenCalledOnce();
+  expect(h.publish).not.toHaveBeenCalled();
+  service.statusSheet.open.mockReturnValue(false);
+  await type("/status");
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Status updates are unavailable here.",
+  );
+  expect(h.input()).toHaveTextContent("/status");
+  offline = true;
+  await type("/status offline");
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent("Relay offline"),
+  );
+  expect(h.input()).toHaveTextContent("/status offline");
+  await type(`/status ${"x".repeat(101)}`);
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Keep your status to one short line (100 characters).",
+    ),
+  );
+  await type("/status :nosuchemoji: hi");
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not load community emoji. Try again.",
+    ),
+  );
+  expect(h.input()).toHaveTextContent("/status :nosuchemoji: hi");
+  expect(h.publish).toHaveBeenCalledTimes(1);
 });

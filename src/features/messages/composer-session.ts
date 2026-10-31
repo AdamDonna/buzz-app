@@ -43,6 +43,7 @@ export type ComposerSession = Pick<
   typing: Pick<RelaySession["typing"], "snapshot" | "subscribe"> &
     Partial<Pick<RelaySession["typing"], "send">>;
   presence?: Pick<NonNullable<RelaySession["presence"]>, "status"> | undefined;
+  statuses?: Pick<RelaySession["statuses"], "save" | "writable"> | undefined;
   directMessages: Pick<RelaySession["directMessages"], "people">;
   memberAdditions: Pick<RelaySession["memberAdditions"], "add">;
   channelWrites: Pick<

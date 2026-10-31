@@ -1901,7 +1901,10 @@ with an unknown first token, so agents keep their own `/commands`. A command wit
 attachments, chat cards or GIFs is refused with a visible error and nothing is lost.
 
 `buzz.commands` ships `/shrug [text]`, which sends `text ¯\\\_(ツ)\_/¯` (the text and
-its space are omitted when empty). It also registers a completion provider that lists
+its space are omitted when empty). It also ships `/away`, `/active` and
+`/status [emoji] <text> | clear`, which act through the app's `presence` service (the
+manual presence preference) and its status write path. A bare `/status` asks the
+profile menu, through the `statusSheet` service, to open the set-status sheet. It also registers a completion provider that lists
 commands by name while the caret ends a leading `/token`. Choosing a row inserts
 `/name ` and never runs it. The existing completion host supplies arrow, Enter, Tab
 and Escape handling. Other result variants (`ui`, cancelled) and availability that
