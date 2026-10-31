@@ -401,3 +401,51 @@ it("settles a requested confirmation as declined, failed or completed, and retir
   );
   await expect(ask()).rejects.toMatchObject({ name: "AbortError" });
 });
+
+it("lets a confirmed archive finish after its origin is gone: it still completes and toasts, and a failure then is shown as a toast", async () => {
+  const pending: { resolve(): void; reject(error: Error): void }[] = [];
+  const run = vi.fn(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        pending.push({ resolve, reject });
+      }),
+  );
+  const view = mount(fixture(run).relay, true);
+  const planning = {
+    id: "a",
+    name: "Planning",
+    channelType: "stream" as const,
+  };
+  const confirmed = async () => {
+    const origin = new AbortController();
+    const answer = view.result.current.confirmLifecycle(
+      planning,
+      "archive",
+      origin.signal,
+    );
+    const settled = vi.fn();
+    answer.then(settled, settled);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Archive channel" }),
+    );
+    await waitFor(() => expect(run).toHaveBeenCalled());
+    act(() => origin.abort());
+    return { answer, settled };
+  };
+
+  const first = await confirmed();
+  await act(async () => {});
+  expect(first.settled).not.toHaveBeenCalled();
+  expect(screen.queryByText("Archive channel failed")).toBeNull();
+  await act(async () => pending[0]?.resolve());
+  await expect(first.answer).resolves.toBe("completed");
+  await screen.findByText("Channel archived: Planning");
+  await waitFor(() =>
+    expect(view.result.current.lifecycleDialog).toBeUndefined(),
+  );
+
+  const second = await confirmed();
+  await act(async () => pending[1]?.reject(new Error("Relay refused")));
+  expect(await screen.findByText("Relay refused")).toBeTruthy();
+  await expect(second.answer).rejects.toMatchObject({ name: "AbortError" });
+});

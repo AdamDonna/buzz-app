@@ -29,6 +29,7 @@ import { linkedDraftKey } from "../../features/solo/linked-chat";
 import { readView, writeView } from "../../shared/view-state";
 import { ChannelsPage, type ArchiveShortcut } from "./ChannelsPage";
 import { SoloWorkspaces } from "./SoloWorkspaces";
+import { channelAdminCommands } from "../commands/channel-admin";
 import { membershipCommands } from "../commands/membership";
 import { emptyChannelsTarget } from "../../features/channel-navigation/channel-successor";
 import type { SlashCommand } from "../../features/conversation/contracts";
@@ -60,9 +61,12 @@ function fixture({
   viewerNamed = false,
   others = [],
   commands,
+  role,
 }: {
   /** Slash commands the page's composer offers. */
   commands?: (navigator: Navigation) => readonly SlashCommand[];
+  /** The viewer's role in the channel, which commands read to offer themselves. */
+  role?: "admin";
   /** Other Solo chats listed after this one in the sidebar's Chats. */
   others?: readonly string[];
   /** The viewer's own profile has loaded too. */
@@ -118,6 +122,7 @@ function fixture({
     creator: ownedBy ?? (placed ? viewer.pubkey : agent),
     members: [viewer.pubkey, agent, ...people],
     ...(archived && { archived }),
+    ...(role && { viewerRole: role }),
   };
   const neighbors = others.map((other, index) => ({
     ...channel,
@@ -1087,3 +1092,50 @@ it.each([
     );
   },
 );
+
+it("finishes /archive when archiving removes the composer: the confirmed archive completes with its toast, and the draft is not left to return on unarchive", async () => {
+  const f = fixture({
+    type: "stream",
+    role: "admin",
+    commands: channelAdminCommands,
+  });
+  f.mountWithToasts();
+  const user = userEvent.setup();
+  const box = await screen.findByRole("textbox", { name: "Message #Planning" });
+  await user.click(box);
+  await user.keyboard("/archive");
+  await waitFor(() =>
+    expect(readView(f.scope, `draft:${id}`, null)).toMatchObject({
+      text: "/archive",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Archive channel" }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("textbox", { name: "Message #Planning" }),
+    ).toBeNull(),
+  );
+  expect(f.run).toHaveBeenCalledExactlyOnceWith(
+    "archive",
+    id,
+    expect.any(AbortSignal),
+  );
+  expect(await screen.findByText("Channel archived: Planning")).toBeTruthy();
+  expect(
+    screen
+      .queryAllByRole("alert")
+      .map((alert) => alert.textContent)
+      .join(" "),
+  ).not.toMatch(/archive|failed/i);
+  await waitFor(() =>
+    expect(readView(f.scope, `draft:${id}`, null)).toMatchObject({ text: "" }),
+  );
+
+  f.setArchived(false);
+  expect(
+    await screen.findByRole("textbox", { name: "Message #Planning" }),
+  ).toHaveTextContent("");
+});

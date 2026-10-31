@@ -66,8 +66,11 @@ export function useChannelMenuActions() {
 type LifecycleCallbacks = {
   close(): void;
   completed(): void;
-  /** Takes over reporting the failure, which is otherwise shown as a toast. */
-  failed?(message: string): void;
+  /** Returns true when it takes over reporting the failure, which is otherwise
+   * shown as a toast. */
+  failed?(message: string): boolean;
+  /** The user confirmed: the operation now belongs to the session. */
+  began?(): void;
 };
 
 type PreparingDm = { existing: Set<string>; members: Set<string | undefined> };
@@ -285,7 +288,12 @@ export function ChannelNavigationProvider({
             return reject(
               new Error("Another channel action is waiting for an answer."),
             );
-          const abort = () => reject(origin.reason);
+          let attached = true;
+          let begun = false;
+          const abort = () => {
+            attached = false;
+            if (!begun) reject(origin.reason);
+          };
           origin.addEventListener("abort", abort, { once: true });
           const settle = (outcome: () => void) => {
             origin.removeEventListener("abort", abort);
@@ -303,8 +311,17 @@ export function ChannelNavigationProvider({
                     callbacks: {
                       close: () => settle(() => resolve("cancelled")),
                       completed: () => settle(() => resolve("completed")),
-                      failed: (message) =>
-                        settle(() => reject(new Error(message))),
+                      began: () => {
+                        begun = true;
+                      },
+                      failed: (message) => {
+                        if (!attached) {
+                          settle(() => reject(origin.reason));
+                          return false;
+                        }
+                        settle(() => reject(new Error(message)));
+                        return true;
+                      },
                     },
                   },
                 },
@@ -411,7 +428,10 @@ export function ChannelNavigationProvider({
               if (archived) value.undoArchive(archived);
             }}
             lifecycle={connection.session.channelLifecycle}
-            onSubmit={value.beginLifecycle}
+            onSubmit={() => {
+              state.lifecycleDialog?.callbacks?.began?.();
+              value.beginLifecycle();
+            }}
             // Submission closes asynchronously; use the same captured origin
             // as cancellation instead of Base UI's older focus-history entry.
             finalFocus={() => {
@@ -436,8 +456,8 @@ export function ChannelNavigationProvider({
             }}
             failed={(title, message) => {
               const { callbacks } = state.lifecycleDialog ?? {};
-              if (callbacks?.failed) callbacks.failed(`${title}: ${message}`);
-              else setFailure({ session: connection.session, title, message });
+              if (!callbacks?.failed?.(`${title}: ${message}`))
+                setFailure({ session: connection.session, title, message });
               value.closeLifecycle();
             }}
           />

@@ -14442,6 +14442,26 @@ it("archives only once the app's confirmation is accepted: declining keeps the d
   await waitFor(() => expect(h.input()).toHaveValue(""));
   expect(world.confirmLifecycle).toHaveBeenCalledTimes(3);
   expect(spokenStatuses()).toEqual([]);
+
+  world.change(() => {
+    world.state.channelArchived = false;
+  });
+  h.fill("/archive");
+  await waitFor(() =>
+    expect(readView(stewardScope, "draft:channel", null)).toMatchObject({
+      text: "/archive",
+    }),
+  );
+  world.confirmLifecycle.mockImplementationOnce(async () => {
+    h.unmount();
+    return "completed";
+  });
+  h.submit();
+  await waitFor(() =>
+    expect(readView(stewardScope, "draft:channel", null)).toMatchObject({
+      text: "",
+    }),
+  );
   expect(screen.queryByRole("alert")).toBeNull();
   expect(h.messages.send).not.toHaveBeenCalled();
 });
