@@ -384,3 +384,37 @@ it("retires plugin chat menu contributions when their plugin is disabled", async
     expect(h.service.chatMenus.snapshot()).toHaveLength(0),
   );
 });
+
+it.each([
+  ["an uppercase name", { name: "Shrug" }],
+  ["a name with a slash", { name: "a/b" }],
+  ["an alias with a space", { aliases: ["a b"] }],
+  ["an empty usage", { usage: " " }],
+  ["an empty description", { description: "" }],
+  ["an id with a slash", { id: "a/b" }],
+])("rejects a command with %s and keeps the valid one", async (_label, bad) => {
+  const run = () => ({ send: "x" });
+  const valid = {
+    id: "ok",
+    name: "ok",
+    usage: "/ok",
+    description: "Works",
+    run,
+  };
+  const failures: unknown[] = [];
+  const h = harness({
+    inject: ["conversation"],
+    apply({ conversation }) {
+      try {
+        conversation.registerCommand({ ...valid, id: "bad", ...bad });
+      } catch (error) {
+        failures.push(error);
+      }
+      conversation.registerCommand(valid);
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() => expect(h.service.commands.snapshot()).toHaveLength(1));
+  expect(failures).toHaveLength(1);
+  expect(h.service.commands.snapshot()[0]?.key).toBe("test.tools/ok");
+});

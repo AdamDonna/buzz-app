@@ -142,6 +142,7 @@ import { formatMediaTime, mediaTimeReply } from "./media-timecode";
 import { RichComposerInput } from "./RichComposerInput";
 import type { MessageLinkOrigin } from "./MessageRow";
 import { composerMarkdown } from "./composer-markdown";
+import { recognizeSlashCommand } from "../conversation/slash-command";
 import type {
   ComposerInputElement,
   ComposerLinkEdit,
@@ -285,6 +286,9 @@ export type MessageComposerProps = {
   activityClickOpensPanel?: boolean | undefined;
   trailingTool?: ReactNode;
   inviteAgents?: boolean | undefined;
+  /** Whether a draft that begins with a registered `/command` runs it on send.
+   * Channel, DM and thread composers opt in; Solo chats never run commands. */
+  slashCommands?: boolean | undefined;
   onSend?: (id: string) => void;
   /** Inbox may retire only after saving the replacement or confirming no draft remains. */
   onDraftSaved?: (() => void) | undefined;
@@ -489,6 +493,7 @@ function Composer({
   chatPresentation = false,
   activityClickOpensPanel = false,
   inviteAgents = false,
+  slashCommands = false,
   trailingTool,
 }: MessageComposerProps) {
   const active = useConversationPresentation();
@@ -939,6 +944,10 @@ function Composer({
     setLinkEdit(null);
     completion.invalidate();
   });
+  const commands =
+    slashCommands && !solo && !editing.target
+      ? extensions?.commands
+      : undefined;
   const editScope = useMessageEditScope();
   const editableRows = () =>
     editMessages ??
@@ -2351,6 +2360,21 @@ function Composer({
         agentKeys,
       );
     try {
+      const command =
+        commands &&
+        recognizeSlashCommand(
+          composerMarkdown({ ...captured, chatCards: [], gifs: [] }),
+          commands.snapshot(),
+        );
+      if (
+        command &&
+        (capturedAttachments.length ||
+          captured.chatCards?.length ||
+          captured.gifs?.length)
+      )
+        throw new Error(
+          "Commands can't be sent with attachments. Remove the attachments to run it.",
+        );
       const bringable = new Set(
         (agents?.joinable() ?? []).map((agent) => agent.pubkey),
       );
@@ -2488,10 +2512,34 @@ function Composer({
         setConflict(true);
         return;
       }
+      let body = composerMarkdown(captured);
+      if (command) {
+        setSending(true);
+        setError(undefined);
+        const result = await command.command.run({
+          session,
+          scope,
+          channelId,
+          threadRootId,
+          args: command.args,
+          recipients: captured.recipients.map(({ pubkey, name }) => ({
+            pubkey,
+            name,
+          })),
+          signal: attempt.signal,
+        });
+        attempt.signal.throwIfAborted();
+        if (valueRef.current !== captured) return;
+        if (viewRevision(scope, draftKey) !== savedRevision) {
+          setConflict(true);
+          return;
+        }
+        body = result.send;
+      }
       const content =
         threadRootId && mediaTimeSeconds !== undefined
-          ? mediaTimeReply(mediaTimeSeconds, composerMarkdown(captured))
-          : composerMarkdown(captured);
+          ? mediaTimeReply(mediaTimeSeconds, body)
+          : body;
       // Alone with agents, the toolbar keeps the agents; the next draft starts empty.
       const next = routing
         ? mentionDraft("")
@@ -2970,6 +3018,7 @@ function Composer({
             channelId={channelId}
             threadRootId={threadRootId}
             inviteAgents={agentChoices && !editing.target}
+            slashCommands={!!commands}
             replace={replaceCompletion}
             resolved={value}
           />

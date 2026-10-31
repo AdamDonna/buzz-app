@@ -20,6 +20,7 @@ import type {
   ComposerTool,
   ComposerAccessory,
   ComposerCompletion,
+  SlashCommand,
   InlineRenderer,
   LinkRenderer,
   MessageRenderer,
@@ -63,6 +64,8 @@ export type Conversation = {
   registerTool(tool: ComposerTool): void;
   completions: ContributionReader<ComposerCompletion>;
   registerCompletion(provider: ComposerCompletion): void;
+  commands: ContributionReader<SlashCommand>;
+  registerCommand(command: SlashCommand): void;
   inline: ContributionReader<InlineRenderer>;
   registerInline(renderer: InlineRenderer): void;
   links: ContributionReader<LinkRenderer>;
@@ -138,6 +141,8 @@ export class ConversationService extends Service implements Conversation {
   private readonly accessoryEntries;
   readonly completions;
   private readonly completionEntries;
+  readonly commands;
+  private readonly commandEntries;
   readonly inline;
   private readonly toolEntries;
   private readonly inlineEntries;
@@ -179,6 +184,12 @@ export class ConversationService extends Service implements Conversation {
     this.completions = {
       snapshot: completions.snapshot,
       subscribe: completions.subscribe,
+    };
+    const commands = createContributions<SlashCommand>(ctx);
+    this.commandEntries = commands;
+    this.commands = {
+      snapshot: commands.snapshot,
+      subscribe: commands.subscribe,
     };
     const inline = createContributions<InlineRenderer>(ctx);
     this.toolEntries = tools;
@@ -293,6 +304,23 @@ export class ConversationService extends Service implements Conversation {
     if (typeof value.match !== "function")
       throw new Error("A completion provider needs a matcher");
     this.completionEntries.register(this.ctx, value);
+  }
+  registerCommand(value: SlashCommand) {
+    const name = /^[a-z0-9][a-z0-9_-]*$/;
+    if (
+      !value ||
+      !/^[a-z0-9][a-z0-9._-]*$/.test(value.id) ||
+      ![value.name, ...(value.aliases ?? [])].every((word) =>
+        name.test(word),
+      ) ||
+      !value.usage?.trim() ||
+      !value.description?.trim() ||
+      typeof value.run !== "function"
+    )
+      throw new Error(
+        "A command needs an id, a lowercase name, a usage, a description and run",
+      );
+    this.commandEntries.register(this.ctx, value);
   }
   registerInline(value: InlineRenderer) {
     validate(value);

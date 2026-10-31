@@ -228,6 +228,41 @@ export type MessageAction = Readonly<{
    */
   marker?: ComponentType<{ message: ChannelMessage; session: RelaySession }>;
 }>;
+/** What a command's `run` may read. The draft has not been sent or cleared. */
+export type SlashCommandContext = Readonly<{
+  session: ComposerSession;
+  scope: string;
+  channelId: string;
+  threadRootId?: string | undefined;
+  /** The Markdown after the command token, trimmed. */
+  args: string;
+  /** Who the draft mentions, in draft order. */
+  recipients: readonly Readonly<{ pubkey: string; name: string }>[];
+  /** Aborts when the send is abandoned: the destination changes or the composer unmounts. */
+  signal: AbortSignal;
+}>;
+/** `send` replaces the draft's content; the host sends it to the same channel
+ * or thread, with the draft's mentions, through the ordinary send path. */
+export type SlashCommandResult = Readonly<{ send: string }>;
+/** A typed entry point to an action the app already has. The first token of a
+ * channel, DM or thread draft that is `/` plus a registered name or alias runs
+ * the command on send; any other draft sends unchanged. */
+export type SlashCommand = Readonly<{
+  id: string;
+  /** What follows `/`: lowercase letters, digits, `_` and `-`. */
+  name: string;
+  /** Names that run the command but never appear in the list. */
+  aliases?: readonly string[];
+  /** The list row's heading: the name and its argument hint, such as `/shrug [text]`. */
+  usage: string;
+  /** One line under the usage in the list. */
+  description: string;
+  /** Throw to fail: the host shows the message and keeps the draft and its
+   * attachments. Nothing is retried. */
+  run(
+    context: SlashCommandContext,
+  ): SlashCommandResult | Promise<SlashCommandResult>;
+}>;
 export type ConversationExtensions = Readonly<{
   attachments?: ContributionReader<AttachmentRenderer>;
   messages?: ContributionReader<MessageRenderer>;
@@ -236,6 +271,7 @@ export type ConversationExtensions = Readonly<{
   tools: ContributionReader<ComposerTool>;
   inline: ContributionReader<InlineRenderer>;
   completions?: ContributionReader<ComposerCompletion>;
+  commands?: ContributionReader<SlashCommand>;
   links?: ContributionReader<LinkRenderer>;
   codeBlocks?: ContributionReader<CodeBlockRenderer>;
 }>;
@@ -250,7 +286,11 @@ export type ComposerObservation = Readonly<{
 export type CompletionContext = Pick<
   ComposerToolProps,
   "session" | "scope" | "channelId" | "threadRootId" | "inviteAgents"
->;
+> &
+  Readonly<{
+    /** True only where a draft's first token can run a command. */
+    slashCommands?: boolean | undefined;
+  }>;
 export type CompletionQuery = Readonly<{
   start: number;
   end: number;

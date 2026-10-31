@@ -190,7 +190,14 @@ it.each([
     ).toEqual(["buzz.emoji/picker", "buzz.mentions/picker"]);
     expect(
       services.conversation.completions.snapshot().map(({ key }) => key),
-    ).toEqual(["buzz.emoji/typeahead", "buzz.mentions/typeahead"]);
+    ).toEqual([
+      "buzz.emoji/typeahead",
+      "buzz.mentions/typeahead",
+      "buzz.commands/typeahead",
+    ]);
+    expect(
+      services.conversation.commands.snapshot().map(({ key }) => key),
+    ).toEqual(["buzz.commands/shrug"]);
     expect(
       services.conversation.inline.snapshot().map(({ key }) => key),
     ).toEqual(["buzz.emoji/custom"]);
@@ -202,6 +209,7 @@ it.each([
     await services.dispose();
     expect(services.conversation.tools.snapshot()).toEqual([]);
     expect(services.conversation.completions.snapshot()).toEqual([]);
+    expect(services.conversation.commands.snapshot()).toEqual([]);
     expect(services.conversation.inline.snapshot()).toEqual([]);
     expect(services.settingsCards.has("buzz.emoji/custom-emoji")).toBe(false);
   },

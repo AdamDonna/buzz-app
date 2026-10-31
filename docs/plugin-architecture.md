@@ -180,9 +180,9 @@ folders; see [managed plugin sources](managed-plugins.md).
 
 ## Emoji and reusable conversation UI
 
-Emoji and Mentions are built-in conversation features, always loaded by the app
-and absent from the optional plugin catalog. Saved `buzz.emoji` and `buzz.mentions`
-enablement flags are ignored. They reuse the contribution runtime for readiness
+Emoji, Mentions and Commands are built-in conversation features, always loaded by the app
+and absent from the optional plugin catalog. Saved `buzz.emoji`, `buzz.mentions` and
+`buzz.commands` enablement flags are ignored. They reuse the contribution runtime for readiness
 and cleanup, retaining their contribution keys. Emoji's picker, reactions, custom
 rendering and Custom emoji Settings stay available; catalog, event tags and delivery stay
 session-owned. The standard composer remains shared host UI, independent of any
@@ -1862,6 +1862,33 @@ Plugins remain trusted same-process code; revocable editor commands do not sandb
 This preview is host-matched: a tool using `insertMention` needs a host providing
 that command. The generated type-only `@buzz/author` package and `apiVersion: 1`
 are not runtime capability negotiation or cross-version compatibility promises.
+
+### Slash commands
+
+A plugin that injects `conversation` calls `registerCommand({ id, name, aliases?,
+usage, description, run })`. `name` and each alias are lowercase `[a-z0-9_-]`
+tokens; `usage` and `description` feed the typeahead. Contributions are keyed
+`${pluginId}/${id}` and removed with their plugin; when two commands claim one name,
+the lowest key wins. `run` receives `{ session, scope, channelId, threadRootId?, args,
+recipients, signal }` and returns `{ send }`, the Markdown the host sends in place of
+the draft. A thrown or rejected `run` keeps the draft and shows its message.
+`signal` aborts when the destination changes or the composer unmounts.
+
+Only composers that pass `slashCommands` run commands: the channel and DM composers
+and the thread composer. Solo chats, message edit, Inbox previews, media review and
+huddles do not. The host recognizes a command only when the draft starts with
+`/name`, then a space or the end of the draft, and the name is registered. Every
+other draft sends unchanged, including drafts that start with an @mention and drafts
+with an unknown first token, so agents keep their own `/commands`. A command with
+attachments, chat cards or GIFs is refused with a visible error and nothing is lost.
+
+`buzz.commands` ships `/shrug [text]`, which sends `text ¯\\\_(ツ)\_/¯` (the text and
+its space are omitted when empty). It also registers a completion provider that lists
+commands by name while the caret ends a leading `/token`. Choosing a row inserts
+`/name ` and never runs it. The existing completion host supplies arrow, Enter, Tab
+and Escape handling. Result variants that do not send (`done`, `ui`, cancelled),
+per-command availability and `scope`/`context` restrictions are not part of this
+contract yet.
 
 ### Composer completion providers
 
