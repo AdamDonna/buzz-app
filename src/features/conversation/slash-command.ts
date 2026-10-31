@@ -88,6 +88,9 @@ export async function runSlashCommand(
     value.send === undefined &&
     (value.notice === undefined || typeof value.notice === "string")
   )
-    return { done: true, notice: value.notice };
+    return {
+      done: true,
+      notice: value.notice?.trim() ? value.notice : undefined,
+    };
   throw new Error(`/${command.name} returned an invalid result`);
 }

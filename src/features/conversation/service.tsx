@@ -336,7 +336,12 @@ export class ConversationService extends Service implements Conversation {
       throw new Error(
         `A command's scopes must list ${SLASH_SCOPES.join(", ")} or be omitted`,
       );
-    this.commandEntries.register(this.ctx, value);
+    this.commandEntries.register(
+      this.ctx,
+      value.scopes
+        ? { ...value, scopes: Object.freeze([...value.scopes]) }
+        : value,
+    );
   }
   registerInline(value: InlineRenderer) {
     validate(value);

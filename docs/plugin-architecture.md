@@ -1872,21 +1872,24 @@ tokens; `usage` and `description` feed the typeahead. Contributions are keyed
 the lowest key wins. `run` receives `{ session, scope, channelId, threadRootId?, args,
 recipients, signal }` and returns one of two results. `{ send }` is the Markdown the
 host sends in place of the draft. `{ done: true, notice? }` sends nothing: the host
-clears the draft and, when `notice` is set, shows it under the composer as a polite
-status announcement (`role="status"`, not an alert). The next send attempt clears the
-notice. A thrown or rejected `run` keeps the draft and shows its message as an alert;
+clears the draft and, when `notice` is set, shows it under the composer in an
+always-present `role="status"` region, so assistive technology announces it politely
+(not as an alert). A blank `notice` counts as none. The notice goes away when the draft
+changes, on the next send attempt, or when the composer shows an error. A thrown or rejected `run` keeps the draft and shows its message as an alert;
 a value that is not an `Error` with a message shows `/name failed`. Any other return
 fails the same way with `/name returned an invalid result` and sends nothing: `send`
-must be non-blank text, `done` must be `true`, and `notice`, if present, a string.
+must be non-blank text, `done` must be `true`, and `notice`, if present, a string
+(`done` and `send` together are invalid).
 `signal` aborts when the destination changes or the composer unmounts. The `scope` in
 `run`'s context is the session scope, not a conversation scope.
 
 `scopes` limits where a command is offered and runs: any of `"channel"` (a top-level
-message in a channel), `"dm"` (a top-level message in a direct message) and `"thread"`
-(a reply in any thread, whether in a channel or a direct message). The three do not
-overlap, so a command for channels and their threads lists `["channel", "thread"]`.
-Omitted means every scope; an empty list or an unknown value is rejected at
-registration. Outside its scopes the typeahead hides the command, and running it fails
+message in a non-DM channel), `"dm"` (a direct message, including a reply in a thread
+there) and `"thread"` (a reply in a thread in a non-DM channel). The three do not
+overlap, so a command for a non-DM channel and its threads lists
+`["channel", "thread"]`, and one for direct messages lists `["dm"]`. Omitted means every
+scope; an empty list or an unknown value is rejected at registration. The host copies
+and freezes the list. Outside its scopes the typeahead hides the command, and running it fails
 visibly with the draft kept, like any other failed command, before `run` is called.
 
 Only composers that pass `slashCommands` run commands: the channel and DM composers

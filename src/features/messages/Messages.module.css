@@ -664,6 +664,12 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   letter-spacing: var(--text-caption--letter-spacing);
   font-weight: var(--text-caption--font-weight);
 }
+.composerStatus:empty {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
 .composerContent {
   display: flex;
   flex-direction: column;

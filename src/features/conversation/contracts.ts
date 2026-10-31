@@ -248,8 +248,9 @@ export type SlashCommandContext = Readonly<{
 export type SlashCommandResult =
   | Readonly<{ send: string; done?: never; notice?: never }>
   | Readonly<{ done: true; notice?: string | undefined; send?: never }>;
-/** Where a draft is composed: a top-level message in a channel, a direct
- * message, or a thread reply (in a channel or a direct message). */
+/** Where a draft is composed: a top-level message in a non-DM channel, a direct
+ * message (including a reply in a thread there), or a reply in a thread in a
+ * non-DM channel. */
 export type SlashCommandScope = "channel" | "dm" | "thread";
 /** A typed entry point to an action the app already has. The first token of a
  * channel, DM or thread draft that is `/` plus a registered name or alias runs

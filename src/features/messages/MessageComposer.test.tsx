@@ -12932,7 +12932,9 @@ async function commandService(probe?: SlashCommand["run"]) {
         run: ({ args }) =>
           args === "quietly"
             ? { done: true }
-            : { done: true, notice: "Hushed." },
+            : args === "blank"
+              ? { done: true, notice: "  " }
+              : { done: true, notice: "Hushed." },
       });
       conversation.registerCommand({
         id: "invite",
@@ -12941,6 +12943,14 @@ async function commandService(probe?: SlashCommand["run"]) {
         description: "Channels only",
         scopes: ["channel"],
         run: () => ({ send: "invited" }),
+      });
+      conversation.registerCommand({
+        id: "whisper",
+        name: "whisper",
+        usage: "/whisper",
+        description: "Direct messages only",
+        scopes: ["dm"],
+        run: () => ({ send: "whispered" }),
       });
       if (probe)
         conversation.registerCommand({
@@ -12971,7 +12981,7 @@ async function commandService(probe?: SlashCommand["run"]) {
   });
   runtime.reconcile([info("buzz.commands"), info("test.shout")]);
   await vi.waitFor(() =>
-    expect(service.commands.snapshot()).toHaveLength(probe ? 7 : 6),
+    expect(service.commands.snapshot()).toHaveLength(probe ? 8 : 7),
   );
   return Object.assign(service, { composerTools: () => tools, held });
 }
@@ -13075,10 +13085,14 @@ it("keeps the draft and shows the reason when a command fails", async () => {
 });
 
 it("runs a command that sends nothing: clears the draft, announces its notice politely, and keeps the error path for failures", async () => {
-  const h = mount({ extensions: await commandService(), slashCommands: true });
+  const service = await commandService();
+  const h = mount({ extensions: service, slashCommands: true });
+  const regions = new Set(document.querySelectorAll('[role="status"]'));
   h.fill("/hush now");
   h.submit();
-  expect(await screen.findByText("Hushed.")).toHaveAttribute("role", "status");
+  const notice = await screen.findByText("Hushed.");
+  expect(notice).toHaveAttribute("role", "status");
+  expect(regions.has(notice)).toBe(true);
   expect(screen.queryByRole("alert")).toBeNull();
   expect(h.messages.send).not.toHaveBeenCalled();
   expect(h.messages.reply).not.toHaveBeenCalled();
@@ -13087,6 +13101,33 @@ it("runs a command that sends nothing: clears the draft, announces its notice po
   h.fill("/hush quietly");
   h.submit();
   await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(screen.queryByText("Hushed.")).toBeNull();
+  h.fill("/hush blank");
+  h.submit();
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(
+    [...document.querySelectorAll('[role="status"]')].map(
+      (region) => region.textContent,
+    ),
+  ).not.toContain("  ");
+  h.fill("/hush now");
+  h.submit();
+  expect(await screen.findByText("Hushed.")).toBeInTheDocument();
+  h.fill("next draft");
+  expect(screen.queryByText("Hushed.")).toBeNull();
+  h.fill("/hush now");
+  h.submit();
+  expect(await screen.findByText("Hushed.")).toBeInTheDocument();
+  Object.assign(h.session, {
+    archives: {
+      state: () => "archived",
+      snapshot: () => firstArchived,
+    },
+  });
+  act(() => {
+    service.composerTools()?.insertMention(first);
+  });
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
   expect(screen.queryByText("Hushed.")).toBeNull();
   h.fill("/hush now");
   h.submit();
@@ -13113,6 +13154,29 @@ it("runs a command that sends nothing: clears the draft, announces its notice po
   );
   expect(screen.queryByText("Hushed.")).toBeNull();
 });
+
+/** The mounted channel listed as a one-to-one DM. */
+function directMessageSession(session: RelaySession) {
+  const direct = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "channel",
+        name: "Honey DM",
+        channelType: "dm" as const,
+        members: [first.pubkey, second.pubkey],
+      },
+    ],
+  };
+  return {
+    ...session,
+    channels: {
+      ...session.channels,
+      list: () => direct,
+      get: () => direct.channels[0],
+    },
+  };
+}
 
 const unchecked = (run: () => unknown) => run as unknown as SlashCommand["run"];
 it.each([
@@ -13194,35 +13258,18 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
     ),
   );
   h.messages.send.mockClear();
-  const direct = {
-    status: "ready" as const,
-    channels: [
-      {
-        id: "channel",
-        name: "Honey DM",
-        channelType: "dm" as const,
-        members: [first.pubkey, second.pubkey],
-      },
-    ],
-  };
-  const inDirectMessage = {
-    ...h.session,
-    channels: {
-      ...h.session.channels,
-      list: () => direct,
-      get: () => direct.channels[0],
-    },
-  };
-  h.retarget({ session: inDirectMessage });
+  h.retarget({ session: directMessageSession(h.session) });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(5));
-  expect(commandRows()).toEqual([
+  await waitFor(() => expect(commandRows()).toHaveLength(6));
+  const inDm = [
     expect.stringContaining("/hold"),
     expect.stringContaining("/hush"),
     expect.stringContaining("/refuse"),
     expect.stringContaining("/shout"),
     expect.stringContaining("/shrug"),
-  ]);
+    expect.stringContaining("/whisper"),
+  ];
+  expect(commandRows()).toEqual(inDm);
   await h.user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
   expect(h.input()).toHaveValue("/shrug ");
   h.fill("/invite now");
@@ -13232,6 +13279,34 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   );
   expect(h.input()).toHaveValue("/invite now");
   expect(h.messages.send).not.toHaveBeenCalled();
+  h.fill("/whisper psst");
+  h.submit();
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "whispered",
+      [],
+      [],
+    ),
+  );
+  h.retarget({ threadRootId: "root" });
+  h.fill("/");
+  await waitFor(() => expect(commandRows()).toHaveLength(6));
+  expect(commandRows()).toEqual(inDm);
+  h.fill("/invite now");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "/invite only works in channels.",
+  );
+  expect(h.input()).toHaveValue("/invite now");
+  h.fill("/whisper psst");
+  h.submit();
+  await waitFor(() => expect(h.messages.reply).toHaveBeenCalledOnce());
+  expect(h.messages.reply.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "root",
+    "whispered",
+  ]);
   h.unmount();
   const thread = mount({
     extensions: service,
@@ -13241,12 +13316,18 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   thread.fill("/");
   await waitFor(() => expect(commandRows()).toHaveLength(5));
   expect(commandRows().join()).not.toContain("/invite");
+  expect(commandRows().join()).not.toContain("/whisper");
   thread.fill("/invite now");
   thread.submit();
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "/invite only works in channels.",
   );
   expect(thread.input()).toHaveValue("/invite now");
+  thread.fill("/whisper psst");
+  thread.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "/whisper only works in direct messages.",
+  );
   expect(thread.messages.reply).not.toHaveBeenCalled();
   expect(thread.messages.send).not.toHaveBeenCalled();
 });

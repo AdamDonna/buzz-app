@@ -905,6 +905,7 @@ function Composer({
     if (JSON.stringify(next) === JSON.stringify(valueRef.current)) return false;
     valueRef.current = next;
     updateDraft(next);
+    setNotice(undefined);
     if (save && !editing.target) {
       if (submission) {
         const saved = writeView(scope, draftKey, next);
@@ -930,8 +931,12 @@ function Composer({
     setStorageFailed(result === "failed");
     return result;
   }
-  const [error, setError] = useState<string>();
+  const [error, setErrorState] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const setError = useCallback((next: string | undefined) => {
+    setErrorState(next);
+    if (next) setNotice(undefined);
+  }, []);
   const [attachmentError, setAttachmentError] = useState<string>();
   const focusRestoredDraft = useRef(false);
   const beforeEdit = useRef<
@@ -954,11 +959,8 @@ function Composer({
     slashCommands && !solo && !editing.target && !submission
       ? extensions?.commands
       : undefined;
-  const slashScope = threadRootId
-    ? "thread"
-    : channelType === "dm"
-      ? "dm"
-      : "channel";
+  const slashScope =
+    channelType === "dm" ? "dm" : threadRootId ? "thread" : "channel";
   const editScope = useMessageEditScope();
   const editableRows = () =>
     editMessages ??
@@ -1292,7 +1294,7 @@ function Composer({
       deferredRecovery.current = undefined;
     }
     return stop;
-  }, [scope, submission, editingDraft, session, recoveryKey]);
+  }, [scope, submission, editingDraft, session, recoveryKey, setError]);
   const receiveRecovery = useEffectEvent((recovered: RecoveredSend) => {
     if (editing.target) deferredRecovery.current = recovered;
     reconcileDraft(recovered.draft, recovered.picks);
@@ -3430,11 +3432,13 @@ function Composer({
         {(error || editing.error) && (
           <p role="alert">{error ?? editing.error}</p>
         )}
-        {notice && (
-          <p className={styles.composerStatus} role="status">
-            {notice}
-          </p>
-        )}
+        <p
+          className={styles.composerStatus}
+          role="status"
+          aria-label="Command notice"
+        >
+          {notice}
+        </p>
         {!editing.target &&
           !submission &&
           (accepted || conflict || storageFailed) && (

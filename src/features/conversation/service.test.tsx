@@ -5,7 +5,7 @@ import { ConversationService } from "./service";
 import { inlineMatches } from "./InlineText";
 import type { PluginModule } from "../../plugins/api";
 import type { ChannelMessage } from "../relay/contracts";
-import type { InlineRenderer } from "./contracts";
+import type { InlineRenderer, SlashCommandScope } from "./contracts";
 import type { Contribution } from "../../plugins/contributions";
 import * as emoji from "../../bundled/emoji";
 import * as mentions from "../../bundled/mentions";
@@ -423,4 +423,27 @@ it.each([
   await vi.waitFor(() => expect(h.service.commands.snapshot()).toHaveLength(1));
   expect(failures).toHaveLength(1);
   expect(h.service.commands.snapshot()[0]?.key).toBe("test.tools/ok");
+});
+
+it("keeps a copy of a command's scopes that its plugin cannot change", async () => {
+  const scopes: SlashCommandScope[] = ["channel"];
+  const h = harness({
+    inject: ["conversation"],
+    apply({ conversation }) {
+      conversation.registerCommand({
+        id: "ok",
+        name: "ok",
+        usage: "/ok",
+        description: "Works",
+        scopes,
+        run: () => ({ send: "x" }),
+      });
+      scopes.push("dm");
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() => expect(h.service.commands.snapshot()).toHaveLength(1));
+  const stored = h.service.commands.snapshot()[0]?.scopes;
+  expect(stored).toEqual(["channel"]);
+  expect(Object.isFrozen(stored)).toBe(true);
 });
