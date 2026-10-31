@@ -2562,10 +2562,13 @@ function Composer({
             attachments.store.snapshot(),
             capturedAttachments,
           )
-        )
+        ) {
+          if (result.done) setNotice(result.notice);
           return;
+        }
         if (viewRevision(scope, draftKey) !== savedRevision) {
           setConflict(true);
+          if (result.done) setNotice(result.notice);
           return;
         }
         if (result.done) {
