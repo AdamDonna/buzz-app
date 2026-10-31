@@ -77,7 +77,9 @@ the interface unless an available tool actually supports that action.
   choosing a command does not send it. `/shrug` sends your message with
   ¯\\\_(ツ)\_/¯ added. `/invite @user`, `/remove @user`, `/join #channel`,
   `/leave` and `/who` manage channel members; `/invite` and `/remove` appear only
-  when your role allows them. A message that starts with an @mention or an unknown
+  when your role allows them. `/rename <name>` and `/archive` (owners and admins
+  only; `/archive` asks the same confirmation as the channel menu), `/mute` and
+  `/dm @user… [message]` (also `/msg`) work on the channel or conversation. A message that starts with an @mention or an unknown
   `/command` is sent as written, so agents keep their own commands. A command
   cannot be sent with attachments.
 - **Canvas** holds shared notes and context for a channel or chat. Messages and

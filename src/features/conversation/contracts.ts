@@ -240,6 +240,15 @@ export type SlashCommandContext = Readonly<{
   recipients: readonly Readonly<{ pubkey: string; name: string }>[];
   /** Aborts when the send is abandoned: the destination changes or the composer unmounts. */
   signal: AbortSignal;
+  /** Runs a channel action through the confirmation the app already shows for it.
+   * Resolves `completed` once the action ran and `cancelled` when the user
+   * declined; rejects with the failure. Absent where the app has no such host. */
+  confirmChannelAction?:
+    | ((
+        action: "archive",
+        channelId: string,
+      ) => Promise<"completed" | "cancelled">)
+    | undefined;
 }>;
 /** `send` replaces the draft's content; the host sends it to the same channel
  * or thread, with the draft's mentions, through the ordinary send path.
@@ -251,14 +260,29 @@ export type SlashCommandContext = Readonly<{
  * notice and still runs `after`, since the command's work is done. A `done`
  * result completes even if the destination stopped being writable while the
  * command ran (leaving a channel does that); only leaving the destination or
- * unmounting the composer cancels a run. */
+ * unmounting the composer cancels a run. `cancelled` means the user declined a
+ * confirmation: the draft stays and nothing is shown. */
 export type SlashCommandResult =
-  | Readonly<{ send: string; done?: never; notice?: never; after?: never }>
+  | Readonly<{
+      send: string;
+      done?: never;
+      notice?: never;
+      after?: never;
+      cancelled?: never;
+    }>
   | Readonly<{
       done: true;
       notice?: string | undefined;
       after?: (() => void) | undefined;
       send?: never;
+      cancelled?: never;
+    }>
+  | Readonly<{
+      cancelled: true;
+      send?: never;
+      done?: never;
+      notice?: never;
+      after?: never;
     }>;
 /** Where a draft is composed: a top-level message in a non-DM channel, a direct
  * message (including a reply in a thread there), or a reply in a thread in a

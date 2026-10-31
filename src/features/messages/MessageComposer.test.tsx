@@ -66,6 +66,7 @@ import { ConversationPresentation } from "../conversation/ConversationPresentati
 import { AgentsContext } from "../agents/react";
 import type { Agents } from "../agents/service";
 import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
+import type { useChannelNavigation } from "../channel-navigation/ChannelNavigationState";
 import { MessageEditScope, useMessageEditScope } from "./MessageEditScope";
 import { createRelaySession, type RelaySession } from "../relay/session";
 import { keypair, metadata, roster, signed } from "../relay/testing";
@@ -99,6 +100,15 @@ composerDOMFixture();
 
 const owners: ReturnType<typeof createRelaySession>[] = [];
 
+const channelNavigation = vi.hoisted(() => ({
+  current: undefined as ReturnType<typeof useChannelNavigation>,
+}));
+vi.mock("../channel-navigation/ChannelNavigationState", async (original) => ({
+  ...(await original<
+    typeof import("../channel-navigation/ChannelNavigationState")
+  >()),
+  useChannelNavigation: () => channelNavigation.current,
+}));
 const first = { pubkey: "a".repeat(64), name: "Honey" };
 const noArchives = Object.freeze({ status: "ready" as const, archived: [] });
 const firstArchived = Object.freeze({
@@ -145,6 +155,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  channelNavigation.current = undefined;
   for (const owner of owners.splice(0)) owner.dispose();
   vi.unstubAllGlobals();
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
@@ -13013,7 +13024,7 @@ async function commandService(probe?: SlashCommand["run"]) {
   });
   runtime.reconcile([info("buzz.commands"), info("test.shout")]);
   await vi.waitFor(() =>
-    expect(service.commands.snapshot()).toHaveLength(probe ? 13 : 12),
+    expect(service.commands.snapshot()).toHaveLength(probe ? 17 : 16),
   );
   return Object.assign(service, {
     composerTools: () => tools,
@@ -13032,12 +13043,14 @@ const commandRows = () =>
 it("completes slash commands from the keyboard without running them, and sends /shrug with the text first", async () => {
   const h = mount({ extensions: await commandService(), slashCommands: true });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(8));
+  await waitFor(() => expect(commandRows()).toHaveLength(10));
   expect(commandRows()).toEqual([
     expect.stringContaining("/channelonly"),
+    expect.stringContaining("/dm @user… [message]"),
     expect.stringContaining("/hold"),
     expect.stringContaining("/hush [note]"),
     expect.stringContaining("/join #channel"),
+    expect.stringContaining("/mute"),
     expect.stringContaining("/refuse"),
     expect.stringContaining("/shout"),
     expect.stringContaining("/shrug [text]"),
@@ -13339,11 +13352,13 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   h.messages.send.mockClear();
   h.retarget({ session: directMessageSession(h.session) });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(8));
+  await waitFor(() => expect(commandRows()).toHaveLength(10));
   const inDm = [
+    expect.stringContaining("/dm"),
     expect.stringContaining("/hold"),
     expect.stringContaining("/hush"),
     expect.stringContaining("/join"),
+    expect.stringContaining("/mute"),
     expect.stringContaining("/refuse"),
     expect.stringContaining("/shout"),
     expect.stringContaining("/shrug"),
@@ -13352,7 +13367,7 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   ];
   expect(commandRows()).toEqual(inDm);
   await h.user.keyboard(
-    "{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}",
+    "{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}",
   );
   expect(h.input()).toHaveValue("/shrug ");
   h.fill("/channelonly now");
@@ -13374,7 +13389,7 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
   );
   h.retarget({ threadRootId: "root" });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(8));
+  await waitFor(() => expect(commandRows()).toHaveLength(10));
   expect(commandRows()).toEqual(inDm);
   h.fill("/channelonly now");
   h.submit();
@@ -13382,7 +13397,13 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
     "/channelonly only works in channels.",
   );
   expect(h.input()).toHaveValue("/channelonly now");
-  for (const typed of ["/invite @Alice", "/kick @Alice", "/part"]) {
+  for (const typed of [
+    "/invite @Alice",
+    "/kick @Alice",
+    "/part",
+    "/rename Plans",
+    "/archive",
+  ]) {
     h.fill(typed);
     h.submit();
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -13405,7 +13426,7 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
     threadRootId: "root",
   });
   thread.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(7));
+  await waitFor(() => expect(commandRows()).toHaveLength(9));
   expect(commandRows().join()).not.toContain("/channelonly");
   expect(commandRows().join()).not.toContain("/whisper");
   thread.fill("/channelonly now");
@@ -13611,6 +13632,7 @@ function stewardship(
   initial: "member" | "admin" | "owner",
   members: string[] = [stewardKey, alice.pubkey],
   neighbors: boolean | "sidebar" = true,
+  extras: Record<string, unknown> = {},
 ) {
   const listeners = new Set<() => void>();
   const state = {
@@ -13618,6 +13640,7 @@ function stewardship(
     members,
     left: false,
     archived: [] as readonly string[],
+    channelArchived: false,
     refused: new Map<string, string>(),
   };
   const build = () => ({
@@ -13643,6 +13666,7 @@ function stewardship(
               channelType: "stream" as const,
               viewerRole: state.role,
               members: state.members,
+              archived: state.channelArchived,
             },
           ]),
       ...(neighbors
@@ -13764,11 +13788,14 @@ function stewardship(
       available: true,
       run: lifecycle,
       snapshot: () => ({ hidden: [] }),
+      load: async () => ({ canArchive: state.role !== "member" }),
     },
+    ...extras,
   };
   h.retarget({ session: session as never });
   return {
     session,
+    change,
     state,
     notify: () => {
       list = build();
@@ -14224,4 +14251,353 @@ it("opens the member list from /who and its alias in a channel and in a thread",
   thread.submit();
   await waitFor(() => expect(service.navigation.open).toHaveBeenCalledTimes(3));
   expect(thread.messages.reply).not.toHaveBeenCalled();
+});
+
+const planningId = "7d3e5f70-2a4c-4b6d-8e9f-1a2b3c4d5e6f";
+const spokenStatuses = () =>
+  screen
+    .queryAllByRole("status")
+    .map((element) => element.textContent)
+    .filter(Boolean);
+
+/** The services behind the channel administration commands. Everything past
+ * these boundaries, and the composer around them, is real. */
+function administration(
+  h: ReturnType<typeof mount>,
+  role: "member" | "admin" | "owner",
+  options: { muted?: string[]; muteWritable?: boolean } = {},
+) {
+  const details = {
+    channelId: "channel",
+    name: "General",
+    description: "About",
+    visibility: "public" as const,
+    version: "v1",
+    canEdit: true,
+  };
+  const save = vi.fn(
+    async (_base: unknown, _draft: unknown, _signal: AbortSignal) => {},
+  );
+  let muted = [...(options.muted ?? [])];
+  const setMute = vi.fn(async (id: string, on: boolean) => {
+    muted = on ? [...muted, id] : muted.filter((key) => key !== id);
+    return muted;
+  });
+  const open = vi.fn(
+    async (_keys: readonly string[], _signal: AbortSignal) => planningId,
+  );
+  const delivered = vi.fn(async (_id: string) => {});
+  const delivery = vi.fn((): string | undefined => undefined);
+  const dismiss = vi.fn(async (_id: string) => {});
+  const send = vi.fn(() => "dm-event");
+  const confirmLifecycle = vi.fn(
+    async (_channel: unknown, _action: string, _origin: AbortSignal) =>
+      "completed" as "completed" | "cancelled",
+  );
+  channelNavigation.current = {
+    confirmLifecycle,
+  } as unknown as ReturnType<typeof useChannelNavigation>;
+  const world = stewardship(h, role, [stewardKey], true, {
+    channelDetails: { available: true, load: async () => details, save },
+    sidebarPreferences: {
+      muteWritable: options.muteWritable ?? true,
+      snapshot: () => ({ data: { muted: [...muted] } }),
+      setMute,
+    },
+    directMessages: {
+      people: async () => ({ people: [], hasMore: false }),
+      available: true,
+      open,
+      delivered,
+      delivery,
+    },
+    messages: { ...h.messages, send },
+    outbox: { ...h.session.outbox, dismiss },
+  });
+  return {
+    ...world,
+    save,
+    setMute,
+    open,
+    delivered,
+    delivery,
+    dismiss,
+    send,
+    confirmLifecycle,
+  };
+}
+
+it("offers rename and archive only to an owner or admin, as the role changes, and still offers mute and dm", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "member");
+  h.fill("/");
+  await waitFor(() => expect(commandRows().join()).toContain("/mute"));
+  expect(commandRows().join()).toContain("/dm");
+  expect(commandRows().join()).not.toMatch(/\/(rename|archive|msg)\b/);
+  world.setRole("admin");
+  await waitFor(() => expect(commandRows().join()).toContain("/rename"));
+  expect(commandRows().join()).toContain("/archive");
+  world.setRole("member");
+  await waitFor(() => expect(commandRows().join()).not.toContain("/archive"));
+
+  await compose(h, service, "/rename Planning");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "/rename isn't available here. You may not have permission.",
+  );
+  expect(h.input()).toHaveValue("/rename Planning");
+  expect(world.save).not.toHaveBeenCalled();
+});
+
+it("renames the channel, keeping the draft through a usage error and a refused save", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "admin");
+  h.fill("/rename");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Say what to rename it to. Usage: /rename <name>",
+  );
+  expect(h.input()).toHaveValue("/rename");
+  h.fill(`/rename ${"x".repeat(121)}`);
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Enter a channel name of 1–120 characters without a leading #.",
+  );
+  expect(world.save).not.toHaveBeenCalled();
+
+  world.save.mockRejectedValueOnce(
+    new Error("You no longer have permission to edit this channel."),
+  );
+  h.fill("/rename #Planning");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "You no longer have permission to edit this channel.",
+  );
+  expect(h.input()).toHaveValue("/rename #Planning");
+
+  h.submit();
+  expect(
+    await screen.findByText("Renamed this channel to #Planning."),
+  ).toHaveAttribute("role", "status");
+  expect(world.save).toHaveBeenLastCalledWith(
+    expect.objectContaining({ name: "General", version: "v1" }),
+    expect.objectContaining({ name: "Planning", description: "About" }),
+    expect.any(AbortSignal),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(h.input()).toHaveValue("");
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("archives only once the app's confirmation is accepted: declining keeps the draft quietly, a failure shows, success clears it", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "admin");
+
+  world.confirmLifecycle.mockResolvedValueOnce("cancelled");
+  h.fill("/archive");
+  h.submit();
+  await waitFor(() =>
+    expect(world.confirmLifecycle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id: "channel", name: "General" }),
+      "archive",
+      expect.any(AbortSignal),
+    ),
+  );
+  await act(async () => {});
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(spokenStatuses()).toEqual([]);
+  expect(h.input()).toHaveValue("/archive");
+
+  world.confirmLifecycle.mockRejectedValueOnce(
+    new Error("Archive channel failed: The relay refused this change"),
+  );
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Archive channel failed: The relay refused this change",
+  );
+  expect(h.input()).toHaveValue("/archive");
+
+  world.confirmLifecycle.mockImplementationOnce(async () => {
+    world.change(() => {
+      world.state.channelArchived = true;
+    });
+    return "completed";
+  });
+  h.submit();
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(world.confirmLifecycle).toHaveBeenCalledTimes(3);
+  expect(spokenStatuses()).toEqual([]);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("refuses /archive where the app has no confirmation to ask, keeping the draft", async () => {
+  const h = mount({
+    extensions: await commandService(),
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "admin");
+  channelNavigation.current = undefined;
+  h.fill("/archive");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Archiving asks for confirmation",
+  );
+  expect(h.input()).toHaveValue("/archive");
+  expect(world.confirmLifecycle).not.toHaveBeenCalled();
+});
+
+it("toggles mute from /mute and says which state it is in; a refused write or an unavailable setting keeps the draft", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "member");
+  world.setMute.mockRejectedValueOnce(new Error("The relay is unreachable"));
+  h.fill("/mute");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The relay is unreachable",
+  );
+  expect(h.input()).toHaveValue("/mute");
+
+  h.submit();
+  expect(await screen.findByText("Muted #General.")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  expect(world.setMute).toHaveBeenLastCalledWith(
+    "channel",
+    true,
+    expect.any(AbortSignal),
+  );
+  expect(h.input()).toHaveValue("");
+
+  h.fill("/mute");
+  h.submit();
+  expect(await screen.findByText("Unmuted #General.")).toBeInTheDocument();
+  expect(world.setMute).toHaveBeenLastCalledWith(
+    "channel",
+    false,
+    expect.any(AbortSignal),
+  );
+
+  h.unmount();
+  const unavailable = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  administration(unavailable, "member", { muteWritable: false });
+  unavailable.fill("/mute");
+  unavailable.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Muting is unavailable on this connection.",
+  );
+  expect(unavailable.input()).toHaveValue("/mute");
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("messages people from /dm and its alias: a message that cannot be sent keeps the draft and opens nothing, then it sends first and opens after the draft clears", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "member");
+  let draftWhenOpened: string | undefined;
+  service.navigation.open.mockImplementation(async () => {
+    draftWhenOpened = h.input().value;
+    return { status: "opened" as const };
+  });
+
+  await compose(h, service, "/msg ", alice);
+  act(() => service.composerTools()?.insertText("are you free?"));
+  world.delivered.mockRejectedValueOnce(new Error("The relay refused it"));
+  world.delivery.mockReturnValueOnce("failed");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Couldn't send your message to Alice (The relay refused it).",
+  );
+  expect(world.open).toHaveBeenCalledExactlyOnceWith(
+    [alice.pubkey],
+    expect.any(AbortSignal),
+  );
+  expect(world.dismiss).toHaveBeenCalledExactlyOnceWith("dm-event");
+  expect(service.navigation.open).not.toHaveBeenCalled();
+  expect(h.input().value).toContain("are you free?");
+
+  h.submit();
+  await waitFor(() => expect(service.navigation.open).toHaveBeenCalledOnce());
+  expect(world.send).toHaveBeenLastCalledWith(planningId, "are you free?", []);
+  expect(draftWhenOpened).toBe("");
+  expect(service.navigation.open).toHaveBeenCalledWith({
+    version: 1,
+    kind: "conversation",
+    scope: {
+      communityOrigin: "https://relay.example.test",
+      viewer: stewardKey,
+    },
+    channelId: planningId,
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(spokenStatuses()).toEqual([]);
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.messages.reply).not.toHaveBeenCalled();
+});
+
+it("opens a direct message from /dm with no text, and refuses someone you cannot message, keeping the draft", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  const world = administration(h, "member");
+  h.fill("/dm alice");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Mention each person with @. Usage: /dm @user… [message]",
+  );
+  expect(h.input()).toHaveValue("/dm alice");
+
+  await compose(h, service, "/dm ", alice);
+  h.submit();
+  await waitFor(() => expect(service.navigation.open).toHaveBeenCalledOnce());
+  expect(world.open).toHaveBeenCalledExactlyOnceWith(
+    [alice.pubkey],
+    expect.any(AbortSignal),
+  );
+  expect(world.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("");
+
+  await compose(h, service, "/dm ", bob);
+  h.submit();
+  await waitFor(() => expect(service.navigation.open).toHaveBeenCalledTimes(2));
+  expect(world.open).toHaveBeenLastCalledWith(
+    [bob.pubkey],
+    expect.any(AbortSignal),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(h.input()).toHaveValue("");
+  expect(h.messages.send).not.toHaveBeenCalled();
 });

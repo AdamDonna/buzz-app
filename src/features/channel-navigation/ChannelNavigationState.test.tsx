@@ -339,3 +339,65 @@ it("runs a chat archive's Undo through the lifecycle gate, after any action hold
   expect(view.result.current.lifecycleDialog).toBeUndefined();
   expect(run).toHaveBeenCalledTimes(3);
 });
+
+it("settles a requested confirmation as declined, failed or completed, and retires it with its origin", async () => {
+  const outcomes: ("done" | Error)[] = [new Error("Relay refused"), "done"];
+  const run = vi.fn(async () => {
+    const next = outcomes.shift();
+    if (next instanceof Error) throw next;
+  });
+  const view = mount(fixture(run).relay, true);
+  const planning = {
+    id: "a",
+    name: "Planning",
+    channelType: "stream" as const,
+  };
+  const origin = new AbortController();
+  const ask = () =>
+    view.result.current.confirmLifecycle(planning, "archive", origin.signal);
+  const dialog = () =>
+    screen.findByRole("dialog", { name: "Archive channel: Planning" });
+
+  let answer = ask();
+  await dialog();
+  await expect(
+    act(() =>
+      view.result.current.confirmLifecycle(planning, "archive", origin.signal),
+    ),
+  ).rejects.toThrow("Another channel action is waiting for an answer.");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await expect(answer).resolves.toBe("cancelled");
+  expect(run).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(view.result.current.lifecycleDialog).toBeUndefined(),
+  );
+
+  answer = ask();
+  await dialog();
+  fireEvent.click(screen.getByRole("button", { name: "Archive channel" }));
+  await expect(answer).rejects.toThrow("Archive channel failed: Relay refused");
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("Relay refused")).toBeNull();
+  await waitFor(() =>
+    expect(view.result.current.lifecycleDialog).toBeUndefined(),
+  );
+
+  answer = ask();
+  await dialog();
+  fireEvent.click(screen.getByRole("button", { name: "Archive channel" }));
+  await expect(answer).resolves.toBe("completed");
+  expect(run).toHaveBeenCalledTimes(2);
+  await screen.findByRole("dialog", { name: "Channel archived: Planning" });
+
+  answer = ask();
+  const abandoned = expect(answer).rejects.toMatchObject({
+    name: "AbortError",
+  });
+  await dialog();
+  act(() => origin.abort());
+  await abandoned;
+  await waitFor(() =>
+    expect(view.result.current.lifecycleDialog).toBeUndefined(),
+  );
+  await expect(ask()).rejects.toMatchObject({ name: "AbortError" });
+});

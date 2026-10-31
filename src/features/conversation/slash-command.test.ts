@@ -149,3 +149,33 @@ it("keeps an after callback on a done result and rejects a bad one or one on a s
     ),
   ).rejects.toThrow("/x returned an invalid result");
 });
+
+it("accepts a lone cancelled result and rejects it mixed with any other", async () => {
+  const context = {
+    ...place,
+    args: "",
+    recipients: [],
+    signal: new AbortController().signal,
+  };
+  await expect(
+    runSlashCommand({ ...base, run: () => ({ cancelled: true }) }, context),
+  ).resolves.toEqual({ cancelled: true });
+  for (const extra of [
+    { send: "hi" },
+    { done: true },
+    { notice: "ok" },
+    { after: () => {} },
+  ])
+    await expect(
+      runSlashCommand(
+        { ...base, run: (() => ({ cancelled: true, ...extra })) as never },
+        context,
+      ),
+    ).rejects.toThrow("/x returned an invalid result");
+  await expect(
+    runSlashCommand(
+      { ...base, run: (() => ({ cancelled: false })) as never },
+      context,
+    ),
+  ).rejects.toThrow("/x returned an invalid result");
+});

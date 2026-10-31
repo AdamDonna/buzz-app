@@ -63,7 +63,12 @@ export function useChannelMenuActions() {
   );
 }
 
-type LifecycleCallbacks = { close(): void; completed(): void };
+type LifecycleCallbacks = {
+  close(): void;
+  completed(): void;
+  /** Takes over reporting the failure, which is otherwise shown as a toast. */
+  failed?(message: string): void;
+};
 
 type PreparingDm = { existing: Set<string>; members: Set<string | undefined> };
 type State = {
@@ -119,6 +124,14 @@ type Handoff = State & {
     origin?: AbortSignal,
     callbacks?: LifecycleCallbacks,
   ): void;
+  /** Asks the same confirmation as the menus and settles when it ends:
+   * `completed` after the action ran, `cancelled` when declined, a rejection
+   * with the failure. `origin` aborting retires an unconfirmed dialog. */
+  confirmLifecycle(
+    channel: ChannelSummary,
+    action: ChannelLifecycleAction,
+    origin: AbortSignal,
+  ): Promise<"completed" | "cancelled">;
   beginLifecycle(): void;
   closeLifecycle(): void;
   /** Unarchives through the same gate as every lifecycle action. */
@@ -265,6 +278,39 @@ export function ChannelNavigationProvider({
               },
         );
       },
+      confirmLifecycle(channel, action, origin) {
+        return new Promise((resolve, reject) => {
+          if (origin.aborted) return reject(origin.reason);
+          if (state.lifecycleDialog)
+            return reject(
+              new Error("Another channel action is waiting for an answer."),
+            );
+          const abort = () => reject(origin.reason);
+          origin.addEventListener("abort", abort, { once: true });
+          const settle = (outcome: () => void) => {
+            origin.removeEventListener("abort", abort);
+            outcome();
+          };
+          update((previous) =>
+            previous.lifecycleDialog
+              ? previous
+              : {
+                  ...previous,
+                  lifecycleDialog: {
+                    channel,
+                    action,
+                    origin,
+                    callbacks: {
+                      close: () => settle(() => resolve("cancelled")),
+                      completed: () => settle(() => resolve("completed")),
+                      failed: (message) =>
+                        settle(() => reject(new Error(message))),
+                    },
+                  },
+                },
+          );
+        });
+      },
       beginLifecycle() {
         // A confirmed operation belongs to the session, not its originating visit.
         update((previous) =>
@@ -389,7 +435,9 @@ export function ChannelNavigationProvider({
               value.closeLifecycle();
             }}
             failed={(title, message) => {
-              setFailure({ session: connection.session, title, message });
+              const { callbacks } = state.lifecycleDialog ?? {};
+              if (callbacks?.failed) callbacks.failed(`${title}: ${message}`);
+              else setFailure({ session: connection.session, title, message });
               value.closeLifecycle();
             }}
           />

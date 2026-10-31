@@ -18,11 +18,11 @@ import { splitPartition } from "../../features/relay/partition";
 import { writeView } from "../../shared/view-state";
 
 type Place = Pick<SlashCommandAvailabilityContext, "session" | "channelId">;
-type Person = SlashCommandContext["recipients"][number];
+export type Person = SlashCommandContext["recipients"][number];
 
-const CHANNEL_SCOPES = ["channel", "thread"] as const;
+export const CHANNEL_SCOPES = ["channel", "thread"] as const;
 
-function channelOf(session: Place["session"], id: string) {
+export function channelOf(session: Place["session"], id: string) {
   return (
     session.channels.list().channels.find((channel) => channel.id === id) ??
     session.channels.get?.(id)
@@ -30,7 +30,7 @@ function channelOf(session: Place["session"], id: string) {
 }
 
 /** A channel the viewer can act on as a member: not a DM, Solo chat or archive. */
-function ordinary({ session, channelId }: Place) {
+export function ordinary({ session, channelId }: Place) {
   const channel = channelOf(session, channelId);
   return channel &&
     !channel.archived &&
@@ -51,23 +51,26 @@ function sidebarOrderOf(session: Place["session"], scope: string) {
   });
 }
 
-const listNames = (names: readonly string[]) =>
+export const listNames = (names: readonly string[]) =>
   new Intl.ListFormat("en").format(names);
 
-function distinct(people: readonly Person[]) {
+export function distinct(people: readonly Person[]) {
   const seen = new Set<string>();
   return people.filter(({ pubkey }) => !seen.has(pubkey) && seen.add(pubkey));
 }
+
+/** A pattern for `text` as typed in a draft, where Markdown may have put a
+ * backslash before any character. */
+export const optionallyEscaped = (text: string) =>
+  [...text]
+    .map((char) => `\\\\?${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
+    .join("");
 
 /** Throws unless the arguments are exactly the draft's mentions: every person
  * is named in them and nothing else is, so neither a name that did not resolve
  * nor a person the text does not mention is silently acted on or dropped. */
 function mentioned(usage: string, args: string, recipients: readonly Person[]) {
   const people = distinct(recipients);
-  const optionallyEscaped = (text: string) =>
-    [...text]
-      .map((char) => `\\\\?${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
-      .join("");
   const longestFirst = [...people].sort(
     (a, b) => b.name.length - a.name.length,
   );
@@ -97,7 +100,7 @@ function channelReference(args: string) {
   return parsed.channelId;
 }
 
-function open(navigation: Navigation, target: OpenTarget) {
+export function open(navigation: Navigation, target: OpenTarget) {
   return () => void navigation.open(target);
 }
 
@@ -337,7 +340,7 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
   ];
 }
 
-const why = (reason: unknown) =>
+export const why = (reason: unknown) =>
   reason instanceof Error && reason.message.trim()
     ? reason.message.replace(/\.$/, "")
     : "unknown error";

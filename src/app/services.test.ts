@@ -204,6 +204,10 @@ it.each([
       "buzz.commands/join",
       "buzz.commands/leave",
       "buzz.commands/who",
+      "buzz.commands/rename",
+      "buzz.commands/archive",
+      "buzz.commands/mute",
+      "buzz.commands/dm",
     ]);
     expect(
       services.conversation.inline.snapshot().map(({ key }) => key),

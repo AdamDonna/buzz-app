@@ -43,15 +43,36 @@ export type ComposerSession = Pick<
   typing: Pick<RelaySession["typing"], "snapshot" | "subscribe"> &
     Partial<Pick<RelaySession["typing"], "send">>;
   presence?: Pick<NonNullable<RelaySession["presence"]>, "status"> | undefined;
-  directMessages: Pick<RelaySession["directMessages"], "people">;
+  directMessages: Pick<RelaySession["directMessages"], "people"> &
+    Partial<
+      Pick<
+        RelaySession["directMessages"],
+        "available" | "open" | "delivered" | "delivery"
+      >
+    >;
+  /** Rename and mute for slash commands; a detached editor has neither. */
+  channelDetails?: Pick<
+    RelaySession["channelDetails"],
+    "available" | "load" | "save"
+  >;
+  /** Saved sidebar arrangement and mute list, for commands that follow the
+   * sidebar's order or change what it mutes. */
+  sidebarPreferences?: Pick<
+    RelaySession["sidebarPreferences"],
+    "muteWritable" | "setMute" | "snapshot"
+  >;
   memberAdditions: Pick<RelaySession["memberAdditions"], "add">;
   channelWrites: Pick<
     RelaySession["channelWrites"],
     "refreshMembership" | "addAgents"
   >;
-  /** Join and leave for slash commands, and the hidden direct messages the
-   * sidebar leaves out; a detached editor has none. */
-  channelLifecycle?: Pick<RelaySession["channelLifecycle"], "available"> & {
+  /** Join and leave for slash commands, the permission read behind /archive,
+   * and the hidden direct messages the sidebar leaves out; a detached editor
+   * has none. */
+  channelLifecycle?: Pick<
+    RelaySession["channelLifecycle"],
+    "available" | "load"
+  > & {
     run(
       action: "join" | "leave",
       channelId: string,
@@ -62,17 +83,16 @@ export type ComposerSession = Pick<
       "hidden"
     >;
   };
-  /** Saved sidebar arrangement, for commands that follow the sidebar's order. */
-  sidebarPreferences?: Pick<RelaySession["sidebarPreferences"], "snapshot">;
   memberAdministration?: Pick<
     RelaySession["memberAdministration"],
     "available" | "refresh" | "run" | "snapshot"
   >;
   outbox:
-    | Pick<
+    | (Pick<
         NonNullable<RelaySession["outbox"]>,
         "supports" | "snapshot" | "subscribe" | "retry"
-      >
+      > &
+        Partial<Pick<NonNullable<RelaySession["outbox"]>, "dismiss">>)
     | undefined;
   attachments:
     | (NonNullable<RelaySession["attachments"]> & {
