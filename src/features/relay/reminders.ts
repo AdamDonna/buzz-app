@@ -55,8 +55,9 @@ export type Reminders = Readonly<{
   snapshot(): RemindersState;
   subscribe(listener: () => void): () => void;
   refresh(): Promise<void>;
+  /** Without a `target` the reminder is standalone and needs a non-blank note. */
   create(
-    target: ReminderTarget,
+    target: ReminderTarget | undefined,
     notBefore: number,
     note?: string,
   ): Promise<void>;
@@ -335,17 +336,20 @@ export function createReminders(options: {
       loading = read;
       return loading;
     },
-    create: (target, notBefore, note) =>
-      write({
+    create: async (target, notBefore, note) => {
+      const trimmed = note?.trim();
+      if (!target && !trimmed) throw new Error("A reminder needs a note");
+      await write({
         d: randomD(),
         createdAt: now(),
         notBefore,
         content: {
-          target,
-          ...(note?.trim() ? { note: note.trim() } : {}),
+          ...(target ? { target } : {}),
+          ...(trimmed ? { note: trimmed } : {}),
           status: "pending",
         },
-      }),
+      });
+    },
     snooze: (id, notBefore) =>
       replace(id, (current) => ({
         notBefore,

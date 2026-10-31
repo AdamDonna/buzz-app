@@ -13,6 +13,7 @@ import {
   nowSeconds,
   pendingMessageIds,
 } from "./model";
+import { remindCommand } from "./remind-command";
 import { RemindDialog } from "./RemindDialog";
 import { RemindersPage } from "./RemindersPage";
 import styles from "./Reminders.module.css";
@@ -272,4 +273,5 @@ export const apply: PluginModule["apply"] = (ctx) => {
     component: RemindDialog,
     marker: Marker,
   });
+  ctx.conversation.registerCommand(remindCommand({ relay }));
 };

@@ -4,6 +4,9 @@ import { PluginRuntime } from "../../plugins/runtime";
 import { ConversationService } from "../conversation/service";
 import * as emojiPlugin from "../../bundled/emoji";
 import * as commandsPlugin from "../../bundled/commands";
+import { remindCommand } from "../../bundled/reminders/remind-command";
+import type { RelayData } from "../relay/service";
+import type { Reminders } from "../relay/reminders";
 import type { PluginModule } from "../../plugins/api";
 import { File as NodeFile } from "node:buffer";
 import { attachmentDraft } from "./attachment-draft";
@@ -13542,4 +13545,129 @@ it("leaves a new conversation's composer without commands", async () => {
     expect.anything(),
     undefined,
   );
+});
+
+/** The built-in commands plus the Reminders plugin's `/remind`, bound to a fake
+ * ready session whose reminders record what they are asked to create. */
+async function remindService(create: Reminders["create"]) {
+  const root = new Context();
+  const relay = {
+    subscribe: () => () => {},
+    snapshot: () => ({
+      status: "ready",
+      scope: "scope",
+      session: { reminders: { create } },
+    }),
+  } as unknown as RelayData;
+  const reminders: PluginModule = {
+    inject: ["conversation"],
+    apply: ({ conversation }) =>
+      conversation.registerCommand(
+        remindCommand({
+          relay,
+          timeZone: "America/Chicago",
+          now: () => Date.UTC(2026, 9, 28, 15, 0),
+        }),
+      ),
+  };
+  const runtime = new PluginRuntime(root, async (plugin) =>
+    plugin.manifest.id === "buzz.commands" ? commandsPlugin : reminders,
+  );
+  const service = new ConversationService(root);
+  onTestFinished(async () => {
+    await runtime.dispose();
+    await root.fiber.dispose();
+  });
+  const info = (id: string) => ({
+    manifest: { id, name: id, apiVersion: 1 as const },
+    enabled: true,
+    source: "external" as const,
+    revision: "one",
+    previous: null,
+    reloadable: true,
+    error: null,
+  });
+  runtime.reconcile([info("buzz.commands"), info("buzz.reminders")]);
+  await vi.waitFor(() => expect(service.commands.snapshot()).toHaveLength(2));
+  return service;
+}
+
+it("runs /remind from a channel, a thread and a direct message: a standalone reminder, a notice with the resolved time, and every refusal keeps the draft", async () => {
+  const create = vi.fn<Reminders["create"]>(async () => {});
+  const service = await remindService(create);
+  const h = mount({ extensions: service, slashCommands: true });
+  h.fill("/rem");
+  await waitFor(() =>
+    expect(commandRows()).toEqual([
+      expect.stringContaining("/remind me <what> <when>"),
+    ]),
+  );
+  for (const [draft, message] of [
+    ["/remind me to stretch", "Say when, such as"],
+    ["/remind me in 2 hours", "Say what to be reminded about."],
+    ["/remind @sam to stretch in 1 hour", "Reminders are personal."],
+    ["/remind me to stretch at 3", "Add am or pm to the hour"],
+    [
+      "/remind me to stretch in 400 days",
+      "Pick a time within the next 365 days.",
+    ],
+    ["/remind me", "Usage: /remind me <what> <when>"],
+  ] as const) {
+    h.fill(draft);
+    h.submit();
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(h.input()).toHaveValue(draft);
+  }
+  expect(create).not.toHaveBeenCalled();
+  create.mockRejectedValueOnce(new Error("The relay refused the reminder"));
+  h.fill("/remind me to stretch in 1 hour");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The relay refused the reminder",
+  );
+  expect(h.input()).toHaveValue("/remind me to stretch in 1 hour");
+  h.submit();
+  const notice = await screen.findByText(/^Reminder set for /);
+  expect(notice).toHaveAttribute("role", "status");
+  expect(notice).toHaveTextContent(
+    /^Reminder set for Oct 28, 2026, 11:00\sAM$/,
+  );
+  expect(create).toHaveBeenLastCalledWith(
+    undefined,
+    Date.UTC(2026, 9, 28, 16, 0) / 1000,
+    "stretch",
+  );
+  expect(h.input()).toHaveValue("");
+  expect(h.messages.send).not.toHaveBeenCalled();
+  h.unmount();
+
+  const thread = mount({
+    extensions: service,
+    slashCommands: true,
+    threadRootId: "root",
+  });
+  thread.fill("/remind me to call Sam tomorrow at 4pm");
+  thread.submit();
+  await waitFor(() => expect(thread.input()).toHaveValue(""));
+  expect(create).toHaveBeenLastCalledWith(
+    undefined,
+    Date.UTC(2026, 9, 29, 21, 0) / 1000,
+    "call Sam",
+  );
+  expect(thread.messages.reply).not.toHaveBeenCalled();
+  expect(thread.messages.send).not.toHaveBeenCalled();
+  thread.unmount();
+
+  const dm = mount({ extensions: service, slashCommands: true });
+  dm.retarget({ session: directMessageSession(dm.session) });
+  dm.fill("/remind me check the deploy at noon");
+  dm.submit();
+  await waitFor(() => expect(dm.input()).toHaveValue(""));
+  expect(create).toHaveBeenCalledTimes(4);
+  expect(create).toHaveBeenLastCalledWith(
+    undefined,
+    Date.UTC(2026, 9, 28, 17, 0) / 1000,
+    "check the deploy",
+  );
+  expect(dm.messages.send).not.toHaveBeenCalled();
 });

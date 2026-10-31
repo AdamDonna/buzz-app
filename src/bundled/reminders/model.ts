@@ -137,10 +137,11 @@ export const shiftedFrom = (time: string, at: number) =>
 export const isDisplayable = (at: number) =>
   !Number.isNaN(new Date(at * 1000).getTime());
 
-export const formatDue = (at: number) =>
+export const formatDue = (at: number, timeZone?: string) =>
   new Date(at * 1000).toLocaleString([], {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone,
   });
 
 /** Beta may store empty target fields; those reminders cannot open a message. */

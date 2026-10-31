@@ -199,6 +199,62 @@ describe("reminder writes and reconciliation", () => {
     await after;
     expect(h.head()).toMatchObject({ createdAt: 100, status: "pending" });
   });
+
+  it("creates a standalone reminder with the same plaintext as a message reminder minus the target", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: 100_000 });
+    const plaintext: string[] = [];
+    const model = createReminders({
+      viewer,
+      signal: new AbortController().signal,
+      host: {
+        decode: async (events) =>
+          events.map((e) => ({
+            eventId: e.id,
+            content: JSON.parse(e.content),
+          })),
+        sign: async (intent) => {
+          plaintext.push(JSON.stringify(intent.content));
+          return {
+            id: `e${plaintext.length}`,
+            pubkey: viewer,
+            kind: 30300,
+            created_at: intent.createdAt,
+            tags: [
+              ["d", intent.d],
+              ["not_before", String(intent.notBefore)],
+            ],
+            content: JSON.stringify(intent.content),
+            sig: "",
+          } as unknown as RelayEvent;
+        },
+      },
+      query: () => Promise.resolve([]),
+      publish: async () => {},
+    });
+    const { capability } = model;
+    await capability.create(undefined, 500, "  call Sam  ");
+    await capability.create(target, 600, "");
+    expect(plaintext).toEqual([
+      '{"note":"call Sam","status":"pending"}',
+      `{"target":${JSON.stringify(target)},"status":"pending"}`,
+    ]);
+    const [standalone] = capability.snapshot().reminders;
+    expect(standalone).toMatchObject({
+      note: "call Sam",
+      notBefore: 500,
+      status: "pending",
+    });
+    expect(standalone).not.toHaveProperty("target");
+    await capability.complete(standalone?.id ?? "");
+    expect(plaintext[2]).toBe('{"note":"call Sam","status":"done"}');
+    await expect(capability.create(undefined, 700, "  ")).rejects.toThrow(
+      "A reminder needs a note",
+    );
+    await expect(capability.create(undefined, 700)).rejects.toThrow(
+      "A reminder needs a note",
+    );
+    expect(plaintext).toHaveLength(3);
+  });
 });
 
 it("does not mark a disposed session ready from a late empty history reply", async () => {

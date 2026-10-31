@@ -75,7 +75,8 @@ the interface unless an available tool actually supports that action.
 - **Slash commands** run from the message composer in channels, DMs and
   threads. Type `/` to see the commands and press Enter or Tab to choose one;
   choosing a command does not send it. `/shrug` sends your message with
-  ¯\\\_(ツ)\_/¯ added. A message that starts with an @mention or an unknown
+  ¯\\\_(ツ)\_/¯ added. `/remind me to call Sam tomorrow at 4pm` sets a reminder
+  for yourself. A message that starts with an @mention or an unknown
   `/command` is sent as written, so agents keep their own commands. A command
   cannot be sent with attachments.
 - **Canvas** holds shared notes and context for a channel or chat. Messages and

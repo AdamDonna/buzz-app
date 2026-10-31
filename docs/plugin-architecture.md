@@ -1907,6 +1907,11 @@ commands by name while the caret ends a leading `/token`. Choosing a row inserts
 and Escape handling. Other result variants (`ui`, cancelled) and availability that
 depends on more than the conversation scope are not part of this contract yet.
 
+`buzz.reminders` owns `/remind me <what> <when>`. The command's `session` carries no
+reminders, so it reads the ready session from the plugin's `relay` injection, requires
+that session's scope to equal the composer's, and creates a standalone reminder (a note
+and a due time, no target message) with `reminders.create(undefined, notBefore, note)`.
+
 ### Composer completion providers
 
 Emoji, Mentions and Channels each register a separate `registerCompletion` contribution.
