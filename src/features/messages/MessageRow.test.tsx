@@ -1366,7 +1366,11 @@ it.each(["peer", "own"] as const)(
     const operations: never[] = [];
     const session = {
       viewer: author === "own" ? row.authorId : "viewer",
-      channels: { list: () => snapshot, subscribeList: () => () => {} },
+      channels: {
+        list: () => snapshot,
+        subscribeList: () => () => {},
+        window: () => ({ rows: [row] }),
+      },
       messages: { report: vi.fn(async () => {}) },
       profiles: { subscribe: () => () => {}, event: () => undefined },
       outbox: {
@@ -1376,6 +1380,8 @@ it.each(["peer", "own"] as const)(
         snapshot: () => operations,
       },
       unread: {
+        revision: () => 0,
+        sync: () => ({ capability: "unsupported" }),
         subscribe: () => () => {},
         subscribeSync: () => () => {},
         snapshot: () => undefined,
