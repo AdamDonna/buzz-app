@@ -13572,6 +13572,7 @@ const alice = { pubkey: "a1".repeat(32), name: "Alice" };
 const bob = { pubkey: "b1".repeat(32), name: "Bob" };
 const stewardScope = `https://relay.example.test:${stewardKey}`;
 const randomId = "9a2c4e6f-1b3d-4f5a-8c7e-0d1f2a3b4c5d";
+const designId = "7c3e5a1b-2d4f-4a6b-8c8d-1e2f3a4b5c6d";
 const randomLink = `[\\#random](buzz://channel/${randomId})`;
 
 /** The mounted channel as the viewer's role sees it, with the membership
@@ -13580,26 +13581,47 @@ function stewardship(
   h: ReturnType<typeof mount>,
   initial: "member" | "admin" | "owner",
   members: string[] = [stewardKey, alice.pubkey],
+  neighbors = true,
 ) {
   const listeners = new Set<() => void>();
-  const state = { role: initial, members, refused: new Map<string, string>() };
+  const state = {
+    role: initial,
+    members,
+    left: false,
+    refused: new Map<string, string>(),
+  };
   const build = () => ({
     status: "ready" as const,
     channels: [
-      {
-        id: "channel",
-        name: "General",
-        channelType: "stream" as const,
-        viewerRole: state.role,
-        members: state.members,
-      },
-      {
-        id: randomId,
-        name: "random",
-        channelType: "stream" as const,
-        readOnly: true as const,
-        members: [] as string[],
-      },
+      ...(state.left
+        ? []
+        : [
+            {
+              id: "channel",
+              name: "General",
+              channelType: "stream" as const,
+              viewerRole: state.role,
+              members: state.members,
+            },
+          ]),
+      ...(neighbors
+        ? [
+            {
+              id: designId,
+              name: "design",
+              channelType: "stream" as const,
+              viewerRole: "member" as const,
+              members: [stewardKey],
+            },
+            {
+              id: randomId,
+              name: "random",
+              channelType: "stream" as const,
+              readOnly: true as const,
+              members: [] as string[],
+            },
+          ]
+        : []),
     ],
   });
   let list = build();
@@ -13651,9 +13673,13 @@ function stewardship(
       };
     },
   );
-  const lifecycle = vi.fn(async (_action: string, id: string) => {
+  const lifecycle = vi.fn(async (action: string, id: string) => {
     const reason = state.refused.get(id);
     if (reason) throw new Error(reason);
+    if (action === "leave" && id === "channel")
+      change(() => {
+        state.left = true;
+      });
   });
   h.retarget({
     session: {
@@ -13682,6 +13708,10 @@ function stewardship(
   });
   return {
     state,
+    notify: () => {
+      list = build();
+      for (const listener of listeners) listener();
+    },
     add,
     remove,
     lifecycle,
@@ -13849,7 +13879,74 @@ it("joins an open channel, then opens it only after the draft has cleared; a ref
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-it("leaves through its alias, confirming and moving on once the draft has cleared; a refusal stays put", async () => {
+it.each([
+  [
+    "the next channel in the list",
+    true,
+    {
+      version: 1,
+      kind: "conversation",
+      scope: {
+        communityOrigin: "https://relay.example.test",
+        viewer: stewardKey,
+      },
+      channelId: designId,
+    },
+  ],
+  [
+    "the empty channels page when none is left",
+    false,
+    {
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.channels",
+      pageId: "channels",
+      route: { version: 1, params: "empty" },
+    },
+  ],
+])(
+  "leaves through its alias even though that makes the channel unwritable, then opens %s once the draft has cleared; a refusal stays put",
+  async (_label, neighbors, target) => {
+    const service = await commandService();
+    const h = mount({
+      extensions: service,
+      slashCommands: true,
+      scope: stewardScope,
+    });
+    const world = stewardship(h, "member", undefined, neighbors);
+    let draftWhenOpened: string | undefined;
+    service.navigation.open.mockImplementation(async () => {
+      draftWhenOpened = h.input().value;
+      return { status: "opened" as const };
+    });
+    world.state.refused.set(
+      "channel",
+      "Transfer ownership before leaving the channel.",
+    );
+    h.fill("/part");
+    h.submit();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Transfer ownership before leaving the channel.",
+    );
+    expect(h.input()).toHaveValue("/part");
+    expect(service.navigation.open).not.toHaveBeenCalled();
+    world.state.refused.clear();
+    h.submit();
+    expect(await screen.findByText("Left #General.")).toBeInTheDocument();
+    expect(world.lifecycle).toHaveBeenLastCalledWith(
+      "leave",
+      "channel",
+      expect.any(AbortSignal),
+    );
+    expect(world.state.left).toBe(true);
+    expect(service.navigation.open).toHaveBeenCalledExactlyOnceWith(target);
+    expect(draftWhenOpened).toBe("");
+    expect(h.input()).toHaveValue("");
+    expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
+
+it("refuses to publish a command's text into a destination that stopped being writable, and keeps the draft", async () => {
   const service = await commandService();
   const h = mount({
     extensions: service,
@@ -13857,27 +13954,57 @@ it("leaves through its alias, confirming and moving on once the draft has cleare
     scope: stewardScope,
   });
   const world = stewardship(h, "member");
-  world.state.refused.set(
-    "channel",
-    "Transfer ownership before leaving the channel.",
-  );
-  h.fill("/part");
+  h.fill("/hold");
   h.submit();
+  await waitFor(() => expect(service.held.runs).toBe(1));
+  world.state.left = true;
+  act(() => world.notify());
+  expect(service.held.signals[0]?.aborted).toBe(false);
+  service.held.result.resolve({ send: "late words" });
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Transfer ownership before leaving the channel.",
+    "/hold can't send here any more. Your draft is kept.",
   );
-  expect(h.input()).toHaveValue("/part");
-  expect(service.navigation.open).not.toHaveBeenCalled();
-  world.state.refused.clear();
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("/hold");
+});
+
+it("still cancels a running command when the composer moves to another conversation", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  stewardship(h, "member");
+  h.fill("/hold");
   h.submit();
-  expect(await screen.findByText("Left #General.")).toBeInTheDocument();
-  expect(world.lifecycle).toHaveBeenLastCalledWith(
-    "leave",
-    "channel",
-    expect.any(AbortSignal),
+  await waitFor(() => expect(service.held.runs).toBe(1));
+  expect(service.held.signals[0]?.aborted).toBe(false);
+  h.retarget({ channelId: designId });
+  expect(service.held.signals[0]?.aborted).toBe(true);
+  service.held.result.resolve({ send: "late words" });
+  await act(async () => {});
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("asks about a non-member mentioned in a command that is not about its mentions, and sends nothing until confirmed", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    scope: stewardScope,
+  });
+  stewardship(h, "member");
+  await compose(h, service, "/shrug hi ", bob);
+  h.submit();
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "Bob is not in this channel.",
   );
-  expect(service.navigation.open).toHaveBeenCalledOnce();
-  expect(h.input()).toHaveValue("");
+  expect(h.messages.send).not.toHaveBeenCalled();
+  await h.user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("/shrug hi @Bob ");
 });
 
 it("opens the member list from /who and its alias in a channel and in a thread", async () => {

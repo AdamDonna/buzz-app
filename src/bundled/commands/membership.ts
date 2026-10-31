@@ -1,6 +1,9 @@
 import { canAddMembers } from "../../features/channel-members/members";
 import { canRemoveMember } from "../../features/channel-members/administration-protocol";
-import { soloSuccessor } from "../../features/channel-navigation/solo-successor";
+import {
+  channelNeighbors,
+  channelSuccessorTarget,
+} from "../../features/channel-navigation/channel-successor";
 import { conversationTarget } from "../../features/channel-navigation/routes";
 import type {
   SlashCommand,
@@ -37,6 +40,15 @@ function ordinary({ session, channelId }: Place) {
     : undefined;
 }
 
+function listedIds(session: Place["session"]) {
+  return session.channels
+    .list()
+    .channels.filter(
+      (channel) => !channel.archived && channel.channelType !== "solo",
+    )
+    .map((channel) => channel.id);
+}
+
 const listNames = (names: readonly string[]) =>
   new Intl.ListFormat("en").format(names);
 
@@ -45,20 +57,30 @@ function distinct(people: readonly Person[]) {
   return people.filter(({ pubkey }) => !seen.has(pubkey) && seen.add(pubkey));
 }
 
-/** Throws unless the arguments are exactly the draft's mentions, so a name that
- * did not resolve to a person is never silently dropped. */
+/** Throws unless the arguments are exactly the draft's mentions: every person
+ * is named in them and nothing else is, so neither a name that did not resolve
+ * nor a person the text does not mention is silently acted on or dropped. */
 function mentioned(usage: string, args: string, recipients: readonly Person[]) {
   const people = distinct(recipients);
   const optionallyEscaped = (text: string) =>
     [...text]
       .map((char) => `\\\\?${char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
       .join("");
-  let rest = args;
-  for (const { name } of [...people].sort(
+  const longestFirst = [...people].sort(
     (a, b) => b.name.length - a.name.length,
-  ))
-    rest = rest.replace(new RegExp(`@${optionallyEscaped(name)}`, "g"), "");
-  if (!people.length || rest.trim())
+  );
+  const mention = (name: string, flags: string) =>
+    new RegExp(`@${optionallyEscaped(name)}`, flags);
+  let rest = args;
+  let unnamed = false;
+  for (const { name } of longestFirst) {
+    const next = rest.replace(mention(name, ""), "");
+    unnamed ||= next === rest;
+    rest = next;
+  }
+  for (const { name } of longestFirst)
+    rest = rest.replace(mention(name, "g"), "");
+  if (!people.length || unnamed || rest.trim())
     throw new Error(`Mention each person with @. Usage: ${usage}`);
   return people;
 }
@@ -87,6 +109,7 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
       usage: "/invite @user…",
       description: "Add people to this channel",
       scopes: CHANNEL_SCOPES,
+      mentionsAreArguments: true,
       available: ({ session, channelId }) =>
         canAddMembers(session, channelOf(session, channelId)),
       async run({ session, channelId, args, recipients, signal }) {
@@ -124,6 +147,7 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
       usage: "/remove @user…",
       description: "Remove people from this channel",
       scopes: CHANNEL_SCOPES,
+      mentionsAreArguments: true,
       available: ({ session, channelId }) => {
         const role = ordinary({ session, channelId })?.viewerRole;
         return (
@@ -146,21 +170,24 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
             loaded.error ?? "Member roles are unavailable. Try again.",
           );
         const removed: string[] = [];
+        const absent: string[] = [];
         const failed: string[] = [];
         for (const { pubkey, name } of people) {
           signal.throwIfAborted();
           const { authority } = administration.snapshot(channelId);
           const role = authority.roles[pubkey];
+          if (pubkey !== session.viewer && !role) {
+            absent.push(name);
+            continue;
+          }
           const refusal =
             pubkey === session.viewer
               ? "you can't remove yourself; use /leave"
-              : !role
-                ? "not a member"
-                : role === "owner"
-                  ? "owners can't be removed"
-                  : !canRemoveMember(authority, session.viewer, pubkey)
-                    ? "you can't remove this member"
-                    : undefined;
+              : role === "owner"
+                ? "owners can't be removed"
+                : !canRemoveMember(authority, session.viewer, pubkey)
+                  ? "you can't remove this member"
+                  : undefined;
           if (refusal || !role) {
             failed.push(`${name} (${refusal})`);
             continue;
@@ -184,11 +211,25 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
             removed.push(name);
           else failed.push(`${name} (${error ?? "not confirmed"})`);
         }
+        const gone = absent.length
+          ? `${listNames(absent)} ${absent.length === 1 ? "is" : "are"} already out of this channel.`
+          : "";
         if (failed.length)
           throw new Error(
-            `${removed.length ? `Removed ${listNames(removed)}. ` : ""}Couldn't remove ${failed.join(", ")}.`,
+            [
+              removed.length ? `Removed ${listNames(removed)}.` : "",
+              gone,
+              `Couldn't remove ${failed.join(", ")}.`,
+            ]
+              .filter(Boolean)
+              .join(" "),
           );
-        return { done: true, notice: `Removed ${listNames(removed)}.` };
+        return {
+          done: true,
+          notice: [removed.length ? `Removed ${listNames(removed)}.` : "", gone]
+            .filter(Boolean)
+            .join(" "),
+        };
       },
     },
     {
@@ -221,11 +262,16 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
       description: "Leave this channel",
       scopes: CHANNEL_SCOPES,
       available: ({ session, channelId }) => {
-        const channel = ordinary({ session, channelId });
+        const channel = channelOf(session, channelId);
         return (
           !!session.channelLifecycle?.available &&
           !!session.viewer &&
-          !!channel?.members?.includes(session.viewer)
+          !!channel &&
+          !channel.cached &&
+          (channel.channelType === "stream" ||
+            channel.channelType === "forum" ||
+            channel.channelType === "system") &&
+          (!channel.members || channel.members.includes(session.viewer))
         );
       },
       async run({ session, scope, channelId, signal }) {
@@ -235,11 +281,12 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
             "Leaving channels is unavailable on this connection.",
           );
         const name = channelOf(session, channelId)?.name;
+        const neighbors = channelNeighbors(listedIds(session), channelId);
         await lifecycle.run("leave", channelId, signal);
-        const target = soloSuccessor(
+        const target = channelSuccessorTarget(
           scope,
-          session.channels.list().channels,
-          [],
+          neighbors,
+          listedIds(session),
           channelId,
         );
         return {

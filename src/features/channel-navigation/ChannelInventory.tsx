@@ -1,3 +1,4 @@
+import { emptyChannelsTarget, successorChannel } from "./channel-successor";
 import { revealCreatedChannel } from "./created-channel";
 import {
   useCallback,
@@ -1044,13 +1045,13 @@ export function ChannelInventory({
               return;
             }
             // Its neighbor takes its place, so the sidebar stays where it is.
-            const listed = sections.flatMap((section) => section.rows);
-            const next =
-              (lifecycleNeighbors.current?.id === id
+            const next = successorChannel(
+              lifecycleNeighbors.current?.id === id
                 ? lifecycleNeighbors.current.ids
-                : []
-              ).find((neighbor) => listed.some((row) => row.id === neighbor)) ??
-              listed.find((channel) => channel.id !== id)?.id;
+                : [],
+              sections.flatMap((section) => section.rows.map((row) => row.id)),
+              id,
+            );
             if (next) lifecycleFocus.current = next;
             // Confirmed access loss can already have removed current from the roster.
             if (
@@ -1061,13 +1062,7 @@ export function ChannelInventory({
               if (next) select(next);
               else {
                 writeView(scope, "selected-channel", undefined);
-                void navigator.open({
-                  version: 1,
-                  kind: "page",
-                  pluginId: "buzz.channels",
-                  pageId: "channels",
-                  route: { version: 1, params: "empty" },
-                });
+                void navigator.open(emptyChannelsTarget());
               }
             }
           },

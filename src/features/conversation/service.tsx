@@ -338,6 +338,13 @@ export class ConversationService extends Service implements Conversation {
       );
     if (value.available !== undefined && typeof value.available !== "function")
       throw new Error("A command's available must be a function or omitted");
+    if (
+      value.mentionsAreArguments !== undefined &&
+      value.mentionsAreArguments !== true
+    )
+      throw new Error(
+        "A command's mentionsAreArguments must be true or omitted",
+      );
     this.commandEntries.register(
       this.ctx,
       value.scopes

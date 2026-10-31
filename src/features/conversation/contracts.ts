@@ -246,7 +246,10 @@ export type SlashCommandContext = Readonly<{
  * `done` sends nothing: the host clears the draft and shows `notice`, if any,
  * as a short status confirmation. `after` runs once the draft is cleared, for
  * a command that moves the user to another conversation: that move unmounts
- * the composer, so it must not happen before the draft is gone. */
+ * the composer, so it must not happen before the draft is gone. A `done`
+ * result completes even if the destination stopped being writable while the
+ * command ran (leaving a channel does that); only leaving the destination or
+ * unmounting the composer cancels a run. */
 export type SlashCommandResult =
   | Readonly<{ send: string; done?: never; notice?: never; after?: never }>
   | Readonly<{
@@ -292,6 +295,12 @@ export type SlashCommand = Readonly<{
    * relay stays the authority: this hides what is known to be denied. A throw
    * counts as false. */
   available?(context: SlashCommandAvailabilityContext): boolean;
+  /** Set when the command's @mentions are its arguments (`/invite @user`), not
+   * people the message notifies. The host then skips what a send to those
+   * people asks first (an old-agent or non-member prompt, the archived check),
+   * since the command acts on them itself. Omitted, the mentions of a command
+   * draft are checked like any message's: a `send` result publishes with them. */
+  mentionsAreArguments?: true;
   /** Throw to fail: the host shows the message and keeps the draft and its
    * attachments. Nothing is retried. */
   run(

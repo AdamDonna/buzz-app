@@ -57,9 +57,17 @@ function world(
     administration?: boolean;
     lifecycle?: boolean;
     roster?: Record<string, MemberRole>;
+    /** Other listed channels, in sidebar order, before and after this one. */
+    before?: ChannelSummary[];
+    after?: ChannelSummary[];
+    canRemove?: boolean;
   } = {},
 ): World {
-  const channels = [channel];
+  const channels = [
+    ...(options.before ?? []),
+    channel,
+    ...(options.after ?? []),
+  ];
   const roles: Record<string, MemberRole> = {
     [viewer]: "owner",
     [alice.pubkey]: "member",
@@ -71,8 +79,8 @@ function world(
   const authority = () => ({
     roles: { ...roles },
     canManage: true,
-    canRemove: true,
-    canRemoveOwnedAgent: true,
+    canRemove: options.canRemove ?? true,
+    canRemoveOwnedAgent: options.canRemove ?? true,
     system: false,
   });
   let state = {
@@ -111,9 +119,15 @@ function world(
   };
   const lifecycle = {
     available: options.lifecycle ?? true,
-    run: vi.fn(async (_action: string, id: string) => {
+    run: vi.fn(async (action: string, id: string) => {
       const reason = refused.get(id);
       if (reason) throw new Error(reason);
+      if (action === "leave")
+        channels.splice(
+          0,
+          channels.length,
+          ...channels.filter((item) => item.id !== id),
+        );
     }),
   };
   const add = vi.fn(async (id: string, pubkey: string) => {
@@ -227,7 +241,17 @@ describe("availability", () => {
     [
       "an owner of an archived channel",
       { viewerRole: "owner", archived: true },
-      yes(false, false, false),
+      yes(false, false, true),
+    ],
+    [
+      "an owner whose member list has not loaded",
+      { viewerRole: "owner", members: undefined },
+      yes(false, true, true),
+    ],
+    [
+      "a member whose member list has not loaded",
+      { viewerRole: "member", members: undefined },
+      yes(false, false, true),
     ],
     [
       "an owner whose roster is only cached",
@@ -374,6 +398,7 @@ describe("/invite", () => {
     ["no one", "", []],
     ["a name that did not resolve to a person", "alice", []],
     ["a mention beside text it cannot place", "@Alice and bob", [alice]],
+    ["a person the text does not mention", "@Alice", [alice, bob]],
   ])("rejects %s with the usage and adds no one", async (_label, args, who) => {
     const w = world();
     await expect(commandsFor(w).run("invite", args, who)).rejects.toThrow(
@@ -478,8 +503,37 @@ describe("/remove", () => {
         boss,
       ]),
     ).rejects.toThrow(
-      "Couldn't remove Me (you can't remove yourself; use /leave), Stranger (not a member), Boss (owners can't be removed).",
+      "Stranger is already out of this channel. Couldn't remove Me (you can't remove yourself; use /leave), Boss (owners can't be removed).",
     );
+    expect(w.administration.run).not.toHaveBeenCalled();
+  });
+
+  it("finishes on a rerun: someone the first run removed is already out, not a failure", async () => {
+    const w = world();
+    const { run } = commandsFor(w);
+    w.refused.set(bob.pubkey, "The relay refused this member");
+    await expect(run("remove", "@Alice @Bob", [alice, bob])).rejects.toThrow(
+      "Removed Alice. Couldn't remove Bob (The relay refused this member).",
+    );
+    w.refused.clear();
+    w.administration.run.mockClear();
+    await expect(run("remove", "@Alice @Bob", [alice, bob])).resolves.toEqual({
+      done: true,
+      notice: "Removed Bob. Alice is already out of this channel.",
+    });
+    expect(w.administration.run).toHaveBeenCalledTimes(1);
+    await expect(run("remove", "@Alice @Bob", [alice, bob])).resolves.toEqual({
+      done: true,
+      notice: "Alice and Bob are already out of this channel.",
+    });
+    expect(w.administration.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses, before any write, a member the refreshed roles say it may not remove", async () => {
+    const w = world(summary({ viewerRole: "admin" }), { canRemove: false });
+    await expect(
+      commandsFor(w).run("remove", "@Alice", [alice]),
+    ).rejects.toThrow("Couldn't remove Alice (you can't remove this member).");
     expect(w.administration.run).not.toHaveBeenCalled();
   });
 
@@ -590,22 +644,70 @@ describe("/join", () => {
 });
 
 describe("/leave", () => {
-  it("leaves through the channel action, confirms, and moves off the channel after the draft clears", async () => {
-    const w = world();
-    const result = await commandsFor(w).run("leave");
-    expect(w.lifecycle.run).toHaveBeenCalledWith(
-      "leave",
-      channelId,
-      expect.any(AbortSignal),
-    );
-    expect(w.navigation.open).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ done: true, notice: "Left #general." });
-    if (!("after" in result && result.after)) throw new Error("No after");
-    result.after();
-    expect(w.navigation.open).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ kind: "page", pluginId: "buzz.channels" }),
-    );
+  const other = (id: string, over: Overrides = {}) =>
+    summary({ id, name: id.slice(0, 4), ...over });
+  const above = other("1111aaaa-0000-4000-8000-000000000001");
+  const below = other("2222bbbb-0000-4000-8000-000000000002");
+  const farBelow = other("3333cccc-0000-4000-8000-000000000003");
+  const conversation = (id: string) => ({
+    version: 1,
+    kind: "conversation",
+    scope: partition,
+    channelId: id,
   });
+
+  it.each([
+    [
+      "the channel below it, once it is gone from the list",
+      { before: [above], after: [below, farBelow] },
+      conversation(below.id),
+    ],
+    [
+      "the channel above it when none is below",
+      { before: [above] },
+      conversation(above.id),
+    ],
+    [
+      "a channel that is still listed rather than a DM-free Solo chat",
+      {
+        before: [
+          other("4444dddd-0000-4000-8000-000000000004", {
+            channelType: "solo",
+          }),
+        ],
+        after: [farBelow],
+      },
+      conversation(farBelow.id),
+    ],
+    [
+      "the empty channels page when none is left",
+      {},
+      {
+        version: 1,
+        kind: "page",
+        pluginId: "buzz.channels",
+        pageId: "channels",
+        route: { version: 1, params: "empty" },
+      },
+    ],
+  ])(
+    "leaves, confirms, then opens %s only after the draft clears",
+    async (_label, around, target) => {
+      const w = world(summary(), around);
+      const result = await commandsFor(w).run("leave");
+      expect(w.lifecycle.run).toHaveBeenCalledWith(
+        "leave",
+        channelId,
+        expect.any(AbortSignal),
+      );
+      expect(w.channels.some((item) => item.id === channelId)).toBe(false);
+      expect(w.navigation.open).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ done: true, notice: "Left #general." });
+      if (!("after" in result && result.after)) throw new Error("No after");
+      result.after();
+      expect(w.navigation.open).toHaveBeenCalledExactlyOnceWith(target);
+    },
+  );
 
   it("fails visibly, and stays on the channel, when the relay refuses", async () => {
     const w = world();
