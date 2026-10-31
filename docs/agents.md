@@ -72,6 +72,14 @@ may retain their previous prompt or tool list; use **Start a new session** to pi
 up the new guidance. Installing a new build updates the bundled guide, not every
 older app or remote host.
 
+## Inline UI
+
+Agents can attach a choice, action, channel list, form or checklist to a
+message with `send`'s `ui` argument. [Inline UI](inline-ui.md) defines the
+message format, plain-text versions and answers, which other runtimes must
+follow to send it. The app shows these messages as plain text until the
+visuals land.
+
 ## Agent Attention
 
 Attention itself (the runtime, tools, storage and sources) is core, but it runs on this device only while a plugin that shows it is on. The bundled Attention plugin (`buzz.watching`, on by default) adds an Attention tab to the settings of every agent running on this device, whatever its type. The tab explains Attention, holds the switch that lets this device run the agent's watches, then groups that agent's subscriptions by Interest. It shows instructions, listening and delivery destinations, enabled state and available wake history, and suggests asks while the agent has none. Ask an agent to create watches through its Attention tools; pausing or removing one preserves the other saved objects. Empty Interests remain visible and can be deleted after their watches are removed. Turning the plugin off hides the tab and turns every agent's Attention off on this device; mentions still wake agents, and each agent keeps its saved switch for when the plugin is back on. The former standalone Agent Attention page is gone, so an old link to `buzz.agents/attention` opens as an unavailable destination.
