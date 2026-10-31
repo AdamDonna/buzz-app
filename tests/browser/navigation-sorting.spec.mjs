@@ -24,8 +24,7 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           const state = window.sidebarMotion;
           state.opacities.push(
             getComputedStyle(
-              element.closest("[data-channel-sidebar-row]").parentElement
-                .parentElement,
+              element.closest("[data-channel-sidebar-row]").parentElement,
             ).opacity,
           );
           if (!state.done) requestAnimationFrame(sample);
@@ -39,8 +38,7 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           cedar.evaluate(
             (element) =>
               getComputedStyle(
-                element.closest("[data-channel-sidebar-row]").parentElement
-                  .parentElement,
+                element.closest("[data-channel-sidebar-row]").parentElement,
               ).opacity,
           ),
         )
@@ -60,6 +58,97 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
     });
   });
 }
+
+// Cedar and Willow exchange indices between A–Z and Recent; Maple keeps its
+// index. Real browser frames prove the anchor never dims or shifts.
+test("keeps a stationary selected row visible while its neighbors exchange places", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const section = page.locator('[data-sidebar-section="channels"]');
+  const rows = section.locator("[data-channel-id]");
+  const maple = section.locator('[data-channel-id="maple"]');
+  await maple.click();
+  await maple.evaluate((element) => {
+    const moving = element
+      .closest("[data-sidebar-section]")
+      .querySelector('[data-channel-id="cedar"]');
+    const row = element.closest("[data-channel-sidebar-row]").parentElement;
+    const movingRow = moving.closest(
+      "[data-channel-sidebar-row]",
+    ).parentElement;
+    const container = row.parentElement;
+    const baseline = element.getBoundingClientRect().y;
+    window.stationaryMotion = { element, baseline, frames: [], done: false };
+    const sample = () => {
+      const state = window.stationaryMotion;
+      const opacity = Number(getComputedStyle(container).opacity);
+      state.frames.push({
+        y: element.getBoundingClientRect().y,
+        stationary: Number(getComputedStyle(row).opacity) * opacity,
+        moving: Number(getComputedStyle(movingRow).opacity) * opacity,
+      });
+      if (!state.done) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await section
+    .getByRole("button", { name: "More actions for Channels" })
+    .click();
+  await page
+    .getByRole("menu", { name: "More actions for Channels", exact: true })
+    .getByRole("menuitem", { name: "Sort", exact: true })
+    .focus();
+  await page.keyboard.press("ArrowRight");
+  await page
+    .getByRole("menu", { name: "Sort Channels", exact: true })
+    .getByRole("menuitemradio", { name: "Recent", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      rows.evaluateAll((elements) =>
+        elements.map((element) => element.dataset.channelId),
+      ),
+    )
+    .toEqual(["willow", "maple", "cedar"]);
+  await expect
+    .poll(() =>
+      maple.evaluate(
+        (element) =>
+          getComputedStyle(
+            element.closest("[data-channel-sidebar-row]").parentElement
+              .parentElement,
+          ).opacity,
+      ),
+    )
+    .toBe("1");
+  await expect
+    .poll(() =>
+      section
+        .locator('[data-channel-id="cedar"]')
+        .evaluate(
+          (element) =>
+            getComputedStyle(
+              element.closest("[data-channel-sidebar-row]").parentElement,
+            ).opacity,
+        ),
+    )
+    .toBe("1");
+  const result = await maple.evaluate((element) => {
+    const state = window.stationaryMotion;
+    state.done = true;
+    return {
+      same: state.element === element,
+      fixed: state.frames.every(
+        (frame) => frame.y === state.baseline && frame.stationary === 1,
+      ),
+      movingFaded: state.frames.some((frame) => frame.moving < 1),
+    };
+  });
+  expect(result).toEqual({ same: true, fixed: true, movingFaded: true });
+  await expect(maple).toHaveAttribute("aria-current", "page");
+});
 // Native details/menu nesting, submenu focus/viewport placement and row reorder
 // through the built app + real broker are browser contracts. Matrices live below.
 test("section sort applies immediately, rolls back on failure, and persists retry independently", async ({

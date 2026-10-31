@@ -528,7 +528,9 @@ it("uses relay section filters across navigation and remount, and offers only hi
     expect.objectContaining({ kind: "conversation", channelId: "beta" }),
   );
   mounted.rerender(h.view("beta"));
-  expect(screen.getByRole("button", { name: "beta" })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "beta" })).toBeVisible(),
+  );
   expect(screen.queryByRole("button", { name: "alpha" })).toBeNull();
   mounted.rerender(h.view("not-in-this-section"));
   expect(screen.queryByText("0 matches")).toBeNull();
