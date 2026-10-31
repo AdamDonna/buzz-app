@@ -1110,6 +1110,19 @@ it("finishes /archive when archiving removes the composer: the confirmed archive
     }),
   );
   await user.click(screen.getByRole("button", { name: "Send message" }));
+  await screen.findByRole("button", { name: "Archive channel" });
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Archive channel" }),
+    ).toBeNull(),
+  );
+  await waitFor(() => expect(box).toHaveFocus());
+  expect(f.run).not.toHaveBeenCalled();
+  expect(readView(f.scope, `draft:${id}`, null)).toMatchObject({
+    text: "/archive",
+  });
+  await user.click(screen.getByRole("button", { name: "Send message" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Archive channel" }),
   );

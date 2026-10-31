@@ -2617,7 +2617,10 @@ function Composer({
           return;
         }
         attempt.signal.throwIfAborted();
-        if (result.cancelled) return;
+        if (result.cancelled) {
+          input.current?.focus();
+          return;
+        }
         if (
           valueRef.current !== captured ||
           !sameAttachmentSelection(

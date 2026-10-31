@@ -40,6 +40,7 @@ type Options = {
   canArchive?: boolean;
   muteWritable?: boolean;
   muted?: string[];
+  preferencesLoaded?: boolean;
   dms?: boolean;
 };
 
@@ -71,7 +72,11 @@ function world(channel: ChannelSummary = summary(), options: Options = {}) {
   let muted = [...(options.muted ?? [])];
   const preferences = {
     muteWritable: options.muteWritable ?? true,
-    snapshot: vi.fn(() => ({ data: { muted: [...muted] } })),
+    snapshot: vi.fn(() =>
+      options.preferencesLoaded === false
+        ? { data: undefined }
+        : { data: { muted: [...muted] } },
+    ),
     setMute: vi.fn(async (id: string, on: boolean) => {
       muted = on ? [...muted, id] : muted.filter((key) => key !== id);
       return muted;
@@ -444,9 +449,7 @@ describe("/mute", () => {
       done: true,
       notice: "Unmuted #general.",
     });
-    expect(
-      w.preferences.setMute.mock.calls.map(([id, on]) => [id, on]),
-    ).toEqual([
+    expect(w.preferences.setMute.mock.calls).toEqual([
       [channelId, true],
       [channelId, false],
     ]);
@@ -466,6 +469,11 @@ describe("/mute", () => {
       "Muting is unavailable on this connection.",
     );
     expect(off.preferences.setMute).not.toHaveBeenCalled();
+    const unloaded = world(summary(), { preferencesLoaded: false });
+    await expect(commandsFor(unloaded).run("mute")).rejects.toThrow(
+      "Your mute settings haven't loaded yet. Try again in a moment.",
+    );
+    expect(unloaded.preferences.setMute).not.toHaveBeenCalled();
     const failing = world();
     failing.preferences.setMute.mockRejectedValueOnce(new Error("Offline"));
     await expect(commandsFor(failing).run("mute")).rejects.toThrow("Offline");
@@ -620,6 +628,20 @@ describe("/dm", () => {
     ).rejects.toThrow("Couldn't send your message to Alice (Relay refused).");
     expect(w.dismiss).toHaveBeenCalledExactlyOnceWith("event-1");
     expect(w.navigation.open).not.toHaveBeenCalled();
+  });
+
+  it("says so when the failed event cannot be cleared from the outbox", async () => {
+    const w = world();
+    w.directMessages.delivered.mockRejectedValueOnce(
+      new Error("Relay refused"),
+    );
+    w.directMessages.delivery.mockReturnValue("failed");
+    w.dismiss.mockRejectedValueOnce(new Error("Storage is full"));
+    await expect(
+      commandsFor(w).run("dm", "@Alice hi", [alice]),
+    ).rejects.toThrow(
+      "Couldn't send your message to Alice (Relay refused), and the failed message couldn't be cleared from your outbox (Storage is full). Trying again may send it twice.",
+    );
   });
 
   it("keeps the draft and the event, and warns of a duplicate, when delivery is unknown", async () => {

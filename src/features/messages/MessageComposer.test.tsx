@@ -13407,7 +13407,7 @@ it("hides a scoped command from the list and refuses it outside its scopes, keep
     h.fill(typed);
     h.submit();
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /only works in channels and threads\./,
+      /only works in channels and channel threads\./,
     );
     expect(h.input()).toHaveValue(typed);
   }
@@ -14410,6 +14410,8 @@ it("archives only once the app's confirmation is accepted: declining keeps the d
 
   world.confirmLifecycle.mockResolvedValueOnce("cancelled");
   h.fill("/archive");
+  h.input().blur();
+  expect(h.input()).not.toHaveFocus();
   h.submit();
   await waitFor(() =>
     expect(world.confirmLifecycle).toHaveBeenCalledExactlyOnceWith(
@@ -14421,6 +14423,26 @@ it("archives only once the app's confirmation is accepted: declining keeps the d
   await act(async () => {});
   expect(screen.queryByRole("alert")).toBeNull();
   expect(spokenStatuses()).toEqual([]);
+  expect(h.input()).toHaveValue("/archive");
+  expect(h.input()).toHaveFocus();
+
+  let held: AbortSignal | undefined;
+  let release = (_outcome: "completed" | "cancelled") => {};
+  world.confirmLifecycle.mockImplementationOnce(
+    (_channel, _action, signal) =>
+      new Promise((resolve) => {
+        held = signal;
+        release = resolve;
+      }),
+  );
+  h.submit();
+  await waitFor(() => expect(held).toBeDefined());
+  expect(held?.aborted).toBe(false);
+  h.retarget({ channelId: designId });
+  expect(held?.aborted).toBe(true);
+  release("cancelled");
+  await act(async () => {});
+  h.retarget({ channelId: "channel" });
   expect(h.input()).toHaveValue("/archive");
 
   world.confirmLifecycle.mockRejectedValueOnce(
@@ -14440,7 +14462,7 @@ it("archives only once the app's confirmation is accepted: declining keeps the d
   });
   h.submit();
   await waitFor(() => expect(h.input()).toHaveValue(""));
-  expect(world.confirmLifecycle).toHaveBeenCalledTimes(3);
+  expect(world.confirmLifecycle).toHaveBeenCalledTimes(4);
   expect(spokenStatuses()).toEqual([]);
 
   world.change(() => {
@@ -14452,16 +14474,21 @@ it("archives only once the app's confirmation is accepted: declining keeps the d
       text: "/archive",
     }),
   );
-  world.confirmLifecycle.mockImplementationOnce(async () => {
-    h.unmount();
-    return "completed";
-  });
+  let confirming: AbortSignal | undefined;
+  world.confirmLifecycle.mockImplementationOnce(
+    async (_channel, _action, signal) => {
+      confirming = signal;
+      h.unmount();
+      return "completed";
+    },
+  );
   h.submit();
   await waitFor(() =>
     expect(readView(stewardScope, "draft:channel", null)).toMatchObject({
       text: "",
     }),
   );
+  expect(confirming?.aborted).toBe(true);
   expect(screen.queryByRole("alert")).toBeNull();
   expect(h.messages.send).not.toHaveBeenCalled();
 });
@@ -14504,21 +14531,13 @@ it("toggles mute from /mute and says which state it is in; a refused write or an
     "role",
     "status",
   );
-  expect(world.setMute).toHaveBeenLastCalledWith(
-    "channel",
-    true,
-    expect.any(AbortSignal),
-  );
+  expect(world.setMute).toHaveBeenLastCalledWith("channel", true);
   expect(h.input()).toHaveValue("");
 
   h.fill("/mute");
   h.submit();
   expect(await screen.findByText("Unmuted #General.")).toBeInTheDocument();
-  expect(world.setMute).toHaveBeenLastCalledWith(
-    "channel",
-    false,
-    expect.any(AbortSignal),
-  );
+  expect(world.setMute).toHaveBeenLastCalledWith("channel", false);
 
   h.unmount();
   const unavailable = mount({

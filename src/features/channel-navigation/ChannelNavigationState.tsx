@@ -10,6 +10,7 @@ import {
   useCallback,
   useLayoutEffect,
   useContext,
+  useEffect,
   useMemo,
   useState,
   useRef,
@@ -62,6 +63,9 @@ export function useChannelMenuActions() {
     handoff?.menuActions.snapshot ?? noActions,
   );
 }
+
+const connectionChanged =
+  "The connection changed before this finished. Check the channel before trying again.";
 
 type LifecycleCallbacks = {
   close(): void;
@@ -181,6 +185,14 @@ export function ChannelNavigationProvider({
     activityAgent.current = undefined;
     setState(restore(connection.session, scope));
   }
+  const confirmations = useRef(new Set<(reason: unknown) => void>());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reject pending confirmations when the relay session or scope changes.
+  useEffect(() => {
+    const pending = confirmations.current;
+    return () => {
+      for (const fail of [...pending]) fail(new Error(connectionChanged));
+    };
+  }, [connection.session, scope]);
   const update = useCallback(
     (change: (previous: State) => State) => {
       // Retired page/dialog completions cannot mutate a replacement session.
@@ -284,48 +296,53 @@ export function ChannelNavigationProvider({
       confirmLifecycle(channel, action, origin) {
         return new Promise((resolve, reject) => {
           if (origin.aborted) return reject(origin.reason);
-          if (state.lifecycleDialog)
-            return reject(
-              new Error("Another channel action is waiting for an answer."),
-            );
+          if (relay.snapshot().session !== connection.session)
+            return reject(new Error(connectionChanged));
           let attached = true;
           let begun = false;
           const abort = () => {
             attached = false;
-            if (!begun) reject(origin.reason);
+            if (!begun) fail(origin.reason);
           };
           origin.addEventListener("abort", abort, { once: true });
           const settle = (outcome: () => void) => {
             origin.removeEventListener("abort", abort);
+            confirmations.current.delete(fail);
             outcome();
           };
-          update((previous) =>
-            previous.lifecycleDialog
-              ? previous
-              : {
-                  ...previous,
-                  lifecycleDialog: {
-                    channel,
-                    action,
-                    origin,
-                    callbacks: {
-                      close: () => settle(() => resolve("cancelled")),
-                      completed: () => settle(() => resolve("completed")),
-                      began: () => {
-                        begun = true;
-                      },
-                      failed: (message) => {
-                        if (!attached) {
-                          settle(() => reject(origin.reason));
-                          return false;
-                        }
-                        settle(() => reject(new Error(message)));
-                        return true;
-                      },
-                    },
+          const fail = (reason: unknown) => settle(() => reject(reason));
+          confirmations.current.add(fail);
+          update((previous) => {
+            if (previous.lifecycleDialog) {
+              fail(
+                new Error("Another channel action is waiting for an answer."),
+              );
+              return previous;
+            }
+            return {
+              ...previous,
+              lifecycleDialog: {
+                channel,
+                action,
+                origin,
+                callbacks: {
+                  close: () => settle(() => resolve("cancelled")),
+                  completed: () => settle(() => resolve("completed")),
+                  began: () => {
+                    begun = true;
+                  },
+                  failed: (message) => {
+                    if (!attached) {
+                      fail(origin.reason);
+                      return false;
+                    }
+                    fail(new Error(message));
+                    return true;
                   },
                 },
-          );
+              },
+            };
+          });
         });
       },
       beginLifecycle() {
@@ -373,6 +390,7 @@ export function ChannelNavigationProvider({
       mute,
       connection.session,
       connection.viewer,
+      relay,
       update,
       clearPreparingDm,
     ],

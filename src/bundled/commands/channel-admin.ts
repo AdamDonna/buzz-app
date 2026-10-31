@@ -98,7 +98,6 @@ export function channelAdminCommands(navigation: Navigation): SlashCommand[] {
             "Renaming channels is unavailable on this connection.",
           );
         const current = await details.load(channelId, signal);
-        signal.throwIfAborted();
         if (!current.canEdit) throw new Error("You can't rename this channel.");
         if (current.name === name)
           return {
@@ -128,7 +127,6 @@ export function channelAdminCommands(navigation: Navigation): SlashCommand[] {
             "Archiving asks for confirmation, which isn't available here. Use the channel menu.",
           );
         const permissions = await lifecycle.load(channelId, signal);
-        signal.throwIfAborted();
         if (!permissions.canArchive)
           throw new Error("You can't archive this channel.");
         return (await confirmChannelAction("archive", channelId)) ===
@@ -142,15 +140,18 @@ export function channelAdminCommands(navigation: Navigation): SlashCommand[] {
       name: "mute",
       usage: "/mute",
       description: "Mute or unmute this conversation",
-      async run({ session, channelId, signal }) {
+      async run({ session, channelId }) {
         const preferences = session.sidebarPreferences;
-        const loaded = preferences?.snapshot().data;
-        if (!preferences?.muteWritable || !loaded)
+        if (!preferences?.muteWritable)
           throw new Error("Muting is unavailable on this connection.");
+        const loaded = preferences.snapshot().data;
+        if (!loaded)
+          throw new Error(
+            "Your mute settings haven't loaded yet. Try again in a moment.",
+          );
         const muted = await preferences.setMute(
           channelId,
           !loaded.muted.includes(channelId),
-          signal,
         );
         const channel = channelOf(session, channelId);
         const label =
@@ -209,11 +210,18 @@ export function channelAdminCommands(navigation: Navigation): SlashCommand[] {
           } catch (reason) {
             signal.throwIfAborted();
             const proven = directMessages.delivery?.(sent) === "failed";
-            if (proven) await session.outbox?.dismiss?.(sent).catch(() => {});
+            let kept: unknown;
+            if (proven && session.outbox?.dismiss)
+              kept = await session.outbox.dismiss(sent).then(
+                () => undefined,
+                (failure: unknown) => failure ?? new Error("unknown error"),
+              );
             throw new Error(
-              proven
-                ? `Couldn't send your message to ${names} (${why(reason)}).`
-                : `Couldn't confirm your message to ${names} (${why(reason)}). It may have been sent; check the conversation before trying again.`,
+              !proven
+                ? `Couldn't confirm your message to ${names} (${why(reason)}). It may have been sent; check the conversation before trying again.`
+                : kept
+                  ? `Couldn't send your message to ${names} (${why(reason)}), and the failed message couldn't be cleared from your outbox (${why(kept)}). Trying again may send it twice.`
+                  : `Couldn't send your message to ${names} (${why(reason)}).`,
             );
           }
         }

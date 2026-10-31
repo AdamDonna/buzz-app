@@ -74,8 +74,13 @@ const SCOPE_NOUNS = {
 } as const;
 
 export function scopeRefusal(command: SlashCommand) {
+  const scopes = command.scopes ?? [];
   const where = new Intl.ListFormat("en").format(
-    (command.scopes ?? []).map((scope) => SCOPE_NOUNS[scope]),
+    scopes.map((scope) =>
+      scope === "thread" && !scopes.includes("dm")
+        ? "channel threads"
+        : SCOPE_NOUNS[scope],
+    ),
   );
   return `/${command.name} only works in ${where}.`;
 }
