@@ -1887,9 +1887,10 @@ A `done` result may also carry `after`, a function the host calls once, after it
 cleared the draft and shown the notice. When the draft changed while the command ran, or
 another writer saved over it, the host keeps that newer draft, shows the notice and
 still calls `after`, because the command's work is done. Use it for navigation: opening another
-conversation unmounts the composer and aborts `signal`, so a command that navigates
-must not do so from inside `run`. `after` is valid only on `done`; a `send` result
-that carries one is an invalid result.
+conversation unmounts the composer and aborts `signal`, so a command navigates from
+`after`, not from inside `run`. The one exception is a command whose own change removes
+its composer; it navigates from inside `run` (see below). `after` is valid only on
+`done`; a `send` result that carries one is an invalid result.
 
 A run is cancelled (its `signal` aborts) only when the composer unmounts or its
 destination changes (another channel, thread or reply target), or when the host
@@ -1898,7 +1899,9 @@ that changes access, such as `/leave`, makes its own channel read-only, and its 
 result still clears the draft and runs `after`. When that change also removes the
 composer (the channel leaves the roster), the host cannot show a notice under it: it
 clears the spent draft and shows the notice as a toast instead, and `after` does not
-run, so such a command navigates from inside `run`, once its change is confirmed. A
+run. That is why such a command, once its change is confirmed, navigates from inside
+`run`. If `run` throws after the composer is gone, the host shows the error as a toast
+unless it is an `AbortError`, which stays silent. A
 `send` result to a destination that has become unwritable fails visibly with the draft
 kept; it is never published.
 

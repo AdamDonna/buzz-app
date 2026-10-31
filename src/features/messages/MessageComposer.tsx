@@ -2572,6 +2572,18 @@ function Composer({
             })),
             signal: attempt.signal,
           });
+        } catch (reason) {
+          // A change that outlives the composer (`/leave` dropping the
+          // channel) cannot show this error under it. An abort is not one.
+          if (
+            !live.current &&
+            !(reason instanceof Error && reason.name === "AbortError")
+          )
+            notify(
+              reason instanceof Error ? reason.message : String(reason),
+              "error",
+            );
+          throw reason;
         } finally {
           commandRunning.current = false;
           attempt.signal.removeEventListener("abort", release);

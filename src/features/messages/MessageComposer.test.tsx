@@ -162,6 +162,7 @@ function mount(
   control?: LocalAgents,
   viewer?: string,
   agents?: Agents,
+  toasts = false,
 ) {
   let commands: ComposerToolProps;
   const completionRequests: ComposerCompletionProps["publish"][] = [];
@@ -399,17 +400,19 @@ function mount(
   };
   bindChoices();
   let presented = true;
+  let removed = false;
   const tree = () => (
     <AgentsContext.Provider value={agents}>
       <ConversationPresentation value={presented}>
         <div hidden={!presented} inert={!presented}>
-          <MessageComposer {...props} />
+          {!removed && <MessageComposer {...props} />}
         </div>
       </ConversationPresentation>
     </AgentsContext.Provider>
   );
   const view = render(tree(), {
     reactStrictMode: true,
+    ...(toasts && { wrapper: ToastProvider }),
   });
   const input = () =>
     within(view.container).getByRole<ComposerInputElement>("textbox");
@@ -468,6 +471,11 @@ function mount(
         completions = [{ ...completion("2"), pluginId }];
         for (const listener of completionListeners) listener();
       });
+    },
+    /** Unmounts only the composer, leaving any toast host mounted. */
+    removeComposer() {
+      removed = true;
+      view.rerender(tree());
     },
     retarget(
       next: Partial<
@@ -13706,14 +13714,16 @@ function stewardship(
       };
     },
   );
-  const lifecycle = vi.fn(async (action: string, id: string) => {
-    const reason = state.refused.get(id);
-    if (reason) throw new Error(reason);
-    if (action === "leave" && id === "channel")
-      change(() => {
-        state.left = true;
-      });
-  });
+  const lifecycle = vi.fn(
+    async (action: string, id: string, _signal?: AbortSignal) => {
+      const reason = state.refused.get(id);
+      if (reason) throw new Error(reason);
+      if (action === "leave" && id === "channel")
+        change(() => {
+          state.left = true;
+        });
+    },
+  );
   let archives = { status: "ready" as const, archived: state.archived };
   const session = {
     ...h.session,
@@ -13981,6 +13991,7 @@ it.each([
       undefined,
       undefined,
       oldBuzzAgents().agents,
+      true,
     );
     const world = stewardship(h, "member", undefined, neighbors);
     world.state.refused.set(
@@ -13994,6 +14005,12 @@ it.each([
     );
     expect(h.input()).toHaveValue("/part");
     expect(service.navigation.open).not.toHaveBeenCalled();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(
+      screen.getAllByText("Transfer ownership before leaving the channel."),
+    ).toHaveLength(1);
 
     // The refused command must not leave later read-only changes treated as
     // its own: an ordinary send waiting on its import prompt still ends.
@@ -14022,6 +14039,52 @@ it.each([
     expect(service.navigation.open).toHaveBeenCalledExactlyOnceWith(target);
     expect(h.input()).toHaveValue("");
     expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
+
+it.each([
+  [
+    "a failed confirmation",
+    new Error("The request may have taken effect. Refresh channels."),
+    true,
+  ],
+  [
+    "a plain abort",
+    Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    }),
+    false,
+  ],
+])(
+  "toasts %s of a leave once its composer is gone, unless it is an abort",
+  async (_label, reason, toasted) => {
+    const service = await commandService();
+    const h = mount(
+      { extensions: service, slashCommands: true, scope: stewardScope },
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const world = stewardship(h, "member");
+    world.lifecycle.mockImplementation(
+      (_action: string, _id: string, signal?: AbortSignal) =>
+        new Promise<void>((_resolve, reject) =>
+          signal?.addEventListener("abort", () => reject(reason), {
+            once: true,
+          }),
+        ),
+    );
+    h.fill("/leave");
+    h.submit();
+    await waitFor(() => expect(world.lifecycle).toHaveBeenCalledOnce());
+    act(() => h.removeComposer());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    if (toasted) expect(await screen.findByText(reason.message)).toBeVisible();
+    else expect(screen.queryByText(reason.message)).toBeNull();
+    expect(service.navigation.open).not.toHaveBeenCalled();
   },
 );
 
