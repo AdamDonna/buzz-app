@@ -172,6 +172,45 @@ it("takes the due time as strictly after now and at most 365 days ahead", () => 
   });
 });
 
+it.each([
+  ["300000000 days", "in 300000000 days"],
+  ["100000000 weeks", "in 100000000 weeks"],
+  ["20-digit days", "in 99999999999999999999 days"],
+  ["20-digit weeks", "in 99999999999999999999 weeks"],
+  ["400-digit days", `in ${"9".repeat(400)} days`],
+])(
+  "rejects %s as out of range instead of overflowing the date",
+  (_label, when) => {
+    expectOutcome(`me x ${when}`, { error: "outOfRange" });
+  },
+);
+
+it("resolves a wall time that DST skips forward, and one it repeats to its first occurrence", () => {
+  const eve = wall("2027-03-13 23:00");
+  const inGap = parse("me x at 2:30am", eve);
+  if (!inGap.ok) throw new Error("expected a time");
+  expect(new Date(inGap.dueAt).toISOString()).toBe("2027-03-14T08:30:00.000Z");
+  expect(local(inGap.dueAt)).toBe("2027-03-14 03:30");
+  expect(inGap.dueAt).toBeGreaterThan(eve);
+  expectOutcome("me x at 3am", { note: "x", due: "2027-03-14 03:00" }, eve);
+  expectOutcome(
+    "me x tomorrow at 2am",
+    { note: "x", due: "2027-03-14 03:00" },
+    eve,
+  );
+  const gapDay = parse("me x in 1 day", wall("2027-03-13 02:30"));
+  if (!gapDay.ok) throw new Error("expected a time");
+  expect(local(gapDay.dueAt)).toBe("2027-03-14 03:30");
+
+  const fallEve = wall("2026-10-31 23:00");
+  const overlap = parse("me x at 1:30am", fallEve);
+  if (!overlap.ok) throw new Error("expected a time");
+  expect(new Date(overlap.dueAt).toISOString()).toBe(
+    "2026-11-01T06:30:00.000Z",
+  );
+  expectOutcome("me x at 2am", { note: "x", due: "2026-11-01 02:00" }, fallEve);
+});
+
 it("makes minutes and hours exact durations and days and weeks wall-clock across DST", () => {
   const eve = wall("2026-10-31 12:00");
   const hours = parse("me x in 24 hours", eve);

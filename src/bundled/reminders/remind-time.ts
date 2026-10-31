@@ -23,7 +23,9 @@ export type WallTime = Readonly<{
 export type RemindZone = Readonly<{
   /**
    * The instant at which the zone's clock reads the given wall time. Fields
-   * outside their normal range roll over, as in `Date.UTC`.
+   * outside their normal range roll over, as in `Date.UTC`. A wall time that
+   * occurs twice resolves to its first occurrence; one that a DST change skips
+   * resolves forward, by the length of the gap.
    */
   wallToInstant(
     year: number,
@@ -34,6 +36,8 @@ export type RemindZone = Readonly<{
   ): number;
   instantToWall(instant: number): WallTime;
 }>;
+
+const DAY_MS = 86_400_000;
 
 const ISO_WEEKDAYS: Readonly<Record<string, number>> = {
   Mon: 1,
@@ -93,8 +97,14 @@ export function createRemindZone(timeZone?: string): RemindZone {
   return {
     wallToInstant(year, month, day, hour, minute) {
       const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute);
-      const guess = wallAsUtc - offsetAt(wallAsUtc);
-      return wallAsUtc - offsetAt(guess);
+      const before = offsetAt(wallAsUtc - DAY_MS);
+      const after = offsetAt(wallAsUtc + DAY_MS);
+      const candidates = [before, after]
+        .map((offset) => wallAsUtc - offset)
+        .filter((instant) => wallAsUtc - offsetAt(instant) === instant);
+      return candidates.length > 0
+        ? Math.min(...candidates)
+        : wallAsUtc - before;
     },
     instantToWall(instant) {
       const { second: _second, ...wall } = wallOf(instant);
@@ -136,6 +146,14 @@ export type RemindParseResult =
   | Readonly<{ ok: false; error: RemindParseError }>;
 
 const MAX_LEAD_MS = 365 * 24 * 60 * 60 * 1_000;
+const RELATIVE_UNIT_MS: Readonly<Record<string, number>> = {
+  minute: 60_000,
+  min: 60_000,
+  hour: 3_600_000,
+  hr: 3_600_000,
+  day: 86_400_000,
+  week: 7 * 86_400_000,
+};
 const DEFAULT_HOUR = 9;
 const MONDAY = 1;
 
@@ -207,8 +225,7 @@ export function parseRemind(
     throw error;
   }
   if (note === "") return { ok: false, error: "missingNote" };
-  if (dueAt <= now || dueAt - now > MAX_LEAD_MS)
-    return { ok: false, error: "outOfRange" };
+  if (dueAt - now > MAX_LEAD_MS) return { ok: false, error: "outOfRange" };
   return { ok: true, note, dueAt };
 }
 
@@ -258,13 +275,14 @@ function resolveWhen(when: string, now: number, zone: RemindZone): number {
     const amount =
       count === "a" || count === "an" ? 1 : Number.parseInt(count, 10);
     if (!(amount >= 1)) throw new Rejected("invalidTime");
+    const unitMs = RELATIVE_UNIT_MS[relative[2] ?? ""] ?? 0;
+    if (amount * unitMs > MAX_LEAD_MS) throw new Rejected("outOfRange");
     switch (relative[2]) {
       case "minute":
       case "min":
-        return now + amount * 60_000;
       case "hour":
       case "hr":
-        return now + amount * 3_600_000;
+        return now + amount * unitMs;
       case "day":
         return atWall(amount, wall.hour, wall.minute);
       default:

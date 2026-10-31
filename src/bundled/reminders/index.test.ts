@@ -142,6 +142,38 @@ it("owns /remind, a command for every composer scope", () => {
   expect(registerCommand.mock.calls[0]?.[0]).not.toHaveProperty("scopes");
 });
 
+it("saves a /remind run through the registered command to the connected community's reminders", async () => {
+  const model = session(Promise.resolve([]));
+  const { connect, registerCommand } = mount();
+  const command = registerCommand.mock.calls[0]?.[0];
+  const run = (args: string) =>
+    command.run({
+      session: {},
+      scope: `origin:${viewer}`,
+      channelId: "c",
+      args,
+      recipients: [],
+      signal: new AbortController().signal,
+    });
+
+  await expect(run("me stretch in 1 hour")).rejects.toThrow(
+    "Reminders are not available right now.",
+  );
+  connect(`origin:${viewer}`, model.capability);
+  await flush();
+  await expect(run("me stretch in 1 hour")).resolves.toEqual({
+    done: true,
+    notice: expect.stringMatching(/^Reminder set for /),
+  });
+  expect(model.capability.snapshot().reminders).toEqual([
+    expect.objectContaining({
+      note: "stretch",
+      notBefore: 100 + 3600,
+      status: "pending",
+    }),
+  ]);
+});
+
 it("notifies a reminder from slow history even after a live update moved the clock", async () => {
   let resolveHistory: (events: RelayEvent[]) => void = () => {};
   const model = session(new Promise((resolve) => (resolveHistory = resolve)));
