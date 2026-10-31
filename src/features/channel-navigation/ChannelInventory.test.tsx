@@ -548,15 +548,19 @@ it("uses relay section filters across navigation and remount, and offers only hi
   expect(screen.queryByText("0 matches")).toBeNull();
   expect(screen.queryByRole("button", { name: "beta" })).toBeNull();
   restored.rerender(h.view("alpha"));
-  expect(screen.getByRole("button", { name: "alpha" })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "alpha" })).toBeVisible(),
+  );
   expect(screen.queryByRole("button", { name: "gamma" })).toBeNull();
   await user.click(
     screen.getByRole("button", { name: "More actions for Channels" }),
   );
   await user.click(await screen.findByRole("menuitem", { name: "Filter" }));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "All" }));
-  expect(screen.getByRole("button", { name: "beta" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "gamma" })).toBeVisible();
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "beta" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "gamma" })).toBeVisible();
+  });
   await user.click(
     screen.getByRole("button", { name: "More actions for Channels" }),
   );

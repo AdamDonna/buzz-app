@@ -2,6 +2,64 @@ import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 
 test.use({ productionBroker: true, savedSidebar: true, sortingSidebar: true });
+
+// Real layout/paint and focus retention while live activity reorders keyed DOM
+// cannot be established in jsdom. The same flow exercises reduced motion.
+for (const reducedMotion of ["no-preference", "reduce"]) {
+  test.describe(`live sidebar motion: ${reducedMotion}`, () => {
+    test.use({ reducedMotion, initialSidebarSort: { channels: "recent" } });
+    test("fades a live reorder without replacing the focused row", async ({
+      page,
+      app,
+    }) => {
+      await open(page, app);
+      const section = page.locator('[data-sidebar-section="channels"]');
+      const rows = section.locator("[data-channel-id]");
+      await expect(rows.first()).toHaveAttribute("data-channel-id", "willow");
+      const cedar = section.locator('[data-channel-id="cedar"]');
+      await cedar.focus();
+      await cedar.evaluate((element) => {
+        window.sidebarMotion = { element, opacities: [], done: false };
+        const sample = () => {
+          const state = window.sidebarMotion;
+          state.opacities.push(
+            getComputedStyle(
+              element.closest("[data-channel-sidebar-row]").parentElement
+                .parentElement,
+            ).opacity,
+          );
+          if (!state.done) requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      app.activity({ channel: "cedar", kind: 45003 });
+      await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
+      await expect
+        .poll(() =>
+          cedar.evaluate(
+            (element) =>
+              getComputedStyle(
+                element.closest("[data-channel-sidebar-row]").parentElement
+                  .parentElement,
+              ).opacity,
+          ),
+        )
+        .toBe("1");
+      await expect(cedar).toBeFocused();
+      const result = await cedar.evaluate((element) => {
+        window.sidebarMotion.done = true;
+        return {
+          same: element === window.sidebarMotion.element,
+          faded: window.sidebarMotion.opacities.some(
+            (value) => Number(value) < 1,
+          ),
+        };
+      });
+      expect(result.same).toBe(true);
+      expect(result.faded).toBe(reducedMotion === "no-preference");
+    });
+  });
+}
 // Native details/menu nesting, submenu focus/viewport placement and row reorder
 // through the built app + real broker are browser contracts. Matrices live below.
 test("section sort applies immediately, rolls back on failure, and persists retry independently", async ({

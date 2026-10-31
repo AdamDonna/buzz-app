@@ -55,6 +55,7 @@ import {
 import { ChannelReadMenuItem } from "../../bundled/channels/ChannelReadMenuItem";
 import { ChannelCopyLinkMenuItem } from "../../bundled/channels/ChannelCopyLinkMenuItem";
 import { ChannelSidebarItem } from "../../bundled/channels/ChannelSidebarItem";
+import { ChannelSidebarRows } from "./ChannelSidebarRows";
 import type { UnreadDmPreview } from "../../bundled/channels/SidebarUnread";
 import {
   ChannelSidebarDnd,
@@ -1369,59 +1370,63 @@ export function ChannelInventory({
                   : undefined
               }
             >
-              {section.rows.map((channel) => {
-                const selected =
-                  current?.id === channel.id ? current.id : undefined;
-                // Every row offers Copy link; build items only for the open
-                // menu. useChannelRowMenu closes a menu left with none.
-                const menuOpen =
-                  rowMenu?.channelId === channel.id &&
-                  rowMenu.sectionKey === section.key;
-                return (
-                  <ChannelSidebarItem
-                    profile={
-                      channel.channelType === "dm" &&
-                      channel.participants?.length === 1
-                        ? dmProfiles.get(channel.participants[0] ?? "")
-                        : undefined
-                    }
-                    key={channel.id}
-                    channel={channel}
-                    session={queries}
-                    working={workingChannels.has(channel.id)}
-                    selected={composingMessage ? undefined : selected}
-                    onSelect={select}
-                    onOpenThread={openActivityThread}
-                    onOpenWorkingAgent={openWorkingAgent}
-                    onOpenAgentActivity={openAgentActivity}
-                    menuEnabled
-                    sectionKey={section.key}
-                    selectFrame={
-                      channel.channelType !== "dm" &&
-                      isChannelDropSectionKey(section.key)
-                        ? DraggableChannel
-                        : undefined
-                    }
-                    onOpenMenu={openRowMenu}
-                    menuOpen={menuOpen}
-                    menuAnchor={menuOpen ? rowMenu.anchor : undefined}
-                    menuContent={
-                      menuOpen ? (
-                        <>
-                          {rowActions(channel, section.key)}
-                          {readWrite?.pending && <p role="status">Saving…</p>}
-                          {readWrite?.error && (
-                            <p role="alert">{readWrite.error}</p>
-                          )}
-                        </>
-                      ) : undefined
-                    }
-                    onCloseMenu={closeRowMenu}
-                    onMenuClosed={rowMenuClosed}
-                    menuFinalFocus={rowMenuFinalFocus}
-                  />
-                );
-              })}
+              <ChannelSidebarRows
+                open={!sidebar.collapsed.includes(section.key)}
+              >
+                {section.rows.map((channel) => {
+                  const selected =
+                    current?.id === channel.id ? current.id : undefined;
+                  // Every row offers Copy link; build items only for the open
+                  // menu. useChannelRowMenu closes a menu left with none.
+                  const menuOpen =
+                    rowMenu?.channelId === channel.id &&
+                    rowMenu.sectionKey === section.key;
+                  return (
+                    <ChannelSidebarItem
+                      profile={
+                        channel.channelType === "dm" &&
+                        channel.participants?.length === 1
+                          ? dmProfiles.get(channel.participants[0] ?? "")
+                          : undefined
+                      }
+                      key={channel.id}
+                      channel={channel}
+                      session={queries}
+                      working={workingChannels.has(channel.id)}
+                      selected={composingMessage ? undefined : selected}
+                      onSelect={select}
+                      onOpenThread={openActivityThread}
+                      onOpenWorkingAgent={openWorkingAgent}
+                      onOpenAgentActivity={openAgentActivity}
+                      menuEnabled
+                      sectionKey={section.key}
+                      selectFrame={
+                        channel.channelType !== "dm" &&
+                        isChannelDropSectionKey(section.key)
+                          ? DraggableChannel
+                          : undefined
+                      }
+                      onOpenMenu={openRowMenu}
+                      menuOpen={menuOpen}
+                      menuAnchor={menuOpen ? rowMenu.anchor : undefined}
+                      menuContent={
+                        menuOpen ? (
+                          <>
+                            {rowActions(channel, section.key)}
+                            {readWrite?.pending && <p role="status">Saving…</p>}
+                            {readWrite?.error && (
+                              <p role="alert">{readWrite.error}</p>
+                            )}
+                          </>
+                        ) : undefined
+                      }
+                      onCloseMenu={closeRowMenu}
+                      onMenuClosed={rowMenuClosed}
+                      menuFinalFocus={rowMenuFinalFocus}
+                    />
+                  );
+                })}
+              </ChannelSidebarRows>
             </DroppableSidebarSection>
           ))}
           {orderedContributions.map((entry, index) => {
