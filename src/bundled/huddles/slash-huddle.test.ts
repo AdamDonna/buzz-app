@@ -7,6 +7,8 @@ import type {
 import type { HuddleAudio, OpenHuddleAudio } from "../../features/huddle/audio";
 import type { HuddleBridge, HuddleUpdate } from "../../features/huddle/bridge";
 import { createHuddles } from "../../features/huddle/service";
+import { createHuddleWindow } from "../../features/huddle/window";
+import type { WindowBridge } from "../../features/huddle/window";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import { createRelaySession } from "../../features/relay/session";
@@ -77,8 +79,16 @@ function harness(
   };
   const openAudio = vi.fn<OpenHuddleAudio>(async () => audio);
   const huddles = createHuddles(relay, bridge, openAudio);
-  const showWindow = vi.fn(async () => {});
-  const command: SlashCommand = huddleCommand({ relay, huddles, showWindow });
+  const windowBridge: WindowBridge = {
+    open: vi.fn(async () => {}),
+    update: vi.fn(async () => {}),
+  };
+  const companion = createHuddleWindow(huddles, relay, windowBridge);
+  const command: SlashCommand = huddleCommand({
+    relay,
+    huddles,
+    showWindow: companion.open,
+  });
   const run = (extra: Partial<SlashCommandContext> = {}) =>
     command.run({
       session: session as unknown as SlashCommandContext["session"],
@@ -96,8 +106,9 @@ function harness(
     bridge,
     openAudio,
     huddles,
-    showWindow,
+    windowBridge,
     async dispose() {
+      await companion.dispose();
       await huddles.dispose();
       store.dispose();
     },
@@ -124,7 +135,7 @@ it.each([
     { ...design, name: "Honey", channelType: "dm" as const },
   ],
 ])(
-  "starts a huddle in %s through the button's start path, with its microphone prompt",
+  "starts a huddle in %s with its microphone prompt and one discovery read",
   async (_label, extra, channel) => {
     const h = harness([channel]);
     try {
@@ -132,6 +143,7 @@ it.each([
         done: true,
         notice: "Starting a huddle",
       });
+      expect(h.read).toHaveBeenCalledOnce();
       expect(h.openAudio).toHaveBeenCalledOnce();
       expect(h.bridge.open).toHaveBeenCalledExactlyOnceWith(
         expect.any(String),
@@ -163,6 +175,7 @@ it("joins the newest running huddle instead of starting another", async () => {
       done: true,
       notice: "Joining the huddle",
     });
+    expect(h.read).toHaveBeenCalledOnce();
     expect(h.bridge.open).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
       expect.objectContaining({ channelId }),
@@ -286,29 +299,47 @@ it.each([
   }
 });
 
-it("shows the active huddle, in this channel or another, instead of leaving or starting a second", async () => {
-  const other: ChannelSummary = { ...design, id: otherId, name: "Ops" };
-  const h = harness([design, other]);
+const ops: ChannelSummary = { ...design, id: otherId, name: "Ops" };
+const opsDestination = {
+  scope,
+  viewer,
+  relayUrl: origin,
+  channelId: otherId,
+  channelName: "Ops",
+};
+const designDestination = {
+  ...opsDestination,
+  channelId,
+  channelName: "Design",
+};
+
+async function connect(
+  h: ReturnType<typeof harness>,
+  destination: typeof opsDestination,
+) {
+  await h.huddles.join(destination);
+  h.receive({ type: "connected", room, participants: [viewer] });
+  await vi.waitFor(() => expect(h.huddles.snapshot().phase).toBe("connected"));
+}
+
+it("shows the connected huddle, in this channel or another, through the real window", async () => {
+  const h = harness([design, ops]);
   try {
-    await h.huddles.join({
-      scope,
-      viewer,
-      relayUrl: origin,
-      channelId: otherId,
-      channelName: "Ops",
-    });
+    await connect(h, opsDestination);
     h.read.mockClear();
+    await vi.waitFor(() => expect(h.windowBridge.open).toHaveBeenCalled());
+    const opened = vi.mocked(h.windowBridge.open).mock.calls.length;
     await expect(h.run()).resolves.toEqual({
       done: true,
       notice: "Showing your active huddle",
     });
-    expect(h.showWindow).toHaveBeenCalledOnce();
+    expect(h.windowBridge.open).toHaveBeenCalledTimes(opened + 1);
     const capsule = document.createElement("button");
     capsule.id = "huddle-capsule";
     document.body.append(capsule);
     await h.run({ channelId: otherId });
     expect(document.activeElement).toBe(capsule);
-    expect(h.showWindow).toHaveBeenCalledOnce();
+    expect(h.windowBridge.open).toHaveBeenCalledTimes(opened + 1);
     expect(h.read).not.toHaveBeenCalled();
     expect(h.openAudio).toHaveBeenCalledTimes(1);
     expect(h.bridge.open).toHaveBeenCalledTimes(1);
@@ -319,19 +350,122 @@ it("shows the active huddle, in this channel or another, instead of leaving or s
   }
 });
 
-it("fails visibly when the active huddle's window cannot be shown", async () => {
+it("fails visibly when the connected huddle's window cannot be shown", async () => {
   const h = harness();
   try {
-    await h.huddles.join({
-      scope,
-      viewer,
-      relayUrl: origin,
-      channelId,
-      channelName: "Design",
-    });
-    h.showWindow.mockRejectedValueOnce(new Error("The window failed."));
+    await connect(h, designDestination);
+    await vi.waitFor(() => expect(h.windowBridge.open).toHaveBeenCalled());
+    vi.mocked(h.windowBridge.open).mockRejectedValueOnce(
+      new Error("The window failed."),
+    );
     await expect(h.run()).rejects.toThrow("The window failed.");
   } finally {
+    await h.dispose();
+  }
+});
+
+it.each([
+  ["connecting", "A huddle is already connecting.", false],
+  ["leaving", "Wait for your current huddle to finish leaving.", true],
+])(
+  "refuses honestly while a call is %s, without showing a window or touching the call",
+  async (phase, message, leaving) => {
+    const h = harness([design, ops]);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await h.huddles.join(opsDestination);
+      if (leaving) {
+        h.bridge.close = vi.fn(() => gate);
+        void h.huddles.leave();
+      }
+      expect(h.huddles.snapshot().phase).toBe(phase);
+      h.read.mockClear();
+      await expect(h.run()).rejects.toThrow(message);
+      await expect(h.run({ channelId: otherId })).rejects.toThrow(message);
+      expect(h.windowBridge.open).not.toHaveBeenCalled();
+      expect(h.read).not.toHaveBeenCalled();
+      expect(h.openAudio).toHaveBeenCalledTimes(1);
+      expect(h.bridge.open).toHaveBeenCalledTimes(1);
+      expect(h.huddles.snapshot().phase).toBe(phase);
+      if (!leaving) expect(h.bridge.close).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await h.dispose();
+    }
+  },
+);
+
+it.each([
+  ["connecting", "A huddle is already connecting.", false],
+  ["connected", "Showing your active huddle", true],
+])(
+  "re-checks for a call that began in another channel during discovery (%s)",
+  async (_phase, outcome, connected) => {
+    const h = harness([design, ops]);
+    let finish = (_events: Awaited<ReturnType<typeof h.read>>) => {};
+    h.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    try {
+      const result = Promise.resolve(h.run()).then(
+        (value) => value.notice,
+        (error: Error) => error.message,
+      );
+      await vi.waitFor(() => expect(h.read).toHaveBeenCalledOnce());
+      if (connected) await connect(h, opsDestination);
+      else await h.huddles.join(opsDestination);
+      finish([]);
+      await expect(result).resolves.toBe(outcome);
+      expect(h.openAudio).toHaveBeenCalledTimes(1);
+      expect(h.bridge.open).toHaveBeenCalledTimes(1);
+      expect(h.huddles.snapshot().destination?.channelId).toBe(otherId);
+    } finally {
+      await h.dispose();
+    }
+  },
+);
+
+it("does not report success for a call in another conversation when join does nothing", async () => {
+  const h = harness([design, ops]);
+  const join = h.huddles.join;
+  vi.spyOn(h.huddles, "join").mockImplementationOnce(async () => {
+    await join(opsDestination);
+  });
+  try {
+    await expect(h.run()).rejects.toThrow("Another huddle is already active.");
+  } finally {
+    await h.dispose();
+  }
+});
+
+it("fails, rather than report success, when the call ends before it connects", async () => {
+  const h = harness();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  h.bridge.open = vi.fn(async () => {
+    await gate;
+  });
+  try {
+    const settled = Promise.resolve(h.run()).then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    await vi.waitFor(() => expect(h.bridge.open).toHaveBeenCalled());
+    void h.huddles.leave();
+    release();
+    await expect(settled).resolves.toBe(
+      "The huddle ended before it connected.",
+    );
+  } finally {
+    release();
     await h.dispose();
   }
 });

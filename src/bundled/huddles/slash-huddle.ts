@@ -2,13 +2,7 @@ import type { SlashCommand } from "../../features/conversation/contracts";
 import { discoverHuddles } from "../../features/huddle/discovery";
 import type { Huddles } from "../../features/huddle/service";
 import type { RelayData } from "../../features/relay/service";
-
-/** Brings the running call forward: its mini player if shown, else its window. */
-export async function showActiveHuddle(showWindow: () => Promise<void>) {
-  const capsule = document.getElementById("huddle-capsule");
-  if (capsule) capsule.focus();
-  else await showWindow();
-}
+import { showActiveHuddle } from "./show-active-huddle";
 
 /**
  * `/huddle` takes the same path as the channel's headphone button: join the
@@ -21,6 +15,16 @@ export function huddleCommand(deps: {
   showWindow(): Promise<void>;
 }): SlashCommand {
   const { relay, huddles, showWindow } = deps;
+  const refuseOrShowActive = async () => {
+    const { phase } = huddles.snapshot();
+    if (phase === "connecting")
+      throw new Error("A huddle is already connecting.");
+    if (phase === "leaving")
+      throw new Error("Wait for your current huddle to finish leaving.");
+    if (phase !== "connected") return;
+    await showActiveHuddle(showWindow);
+    return { done: true, notice: "Showing your active huddle" } as const;
+  };
   return {
     id: "huddle",
     name: "huddle",
@@ -50,14 +54,8 @@ export function huddleCommand(deps: {
         throw new Error("Huddles are not available in a read-only channel.");
       if (!channel.members?.includes(viewer))
         throw new Error("Join this channel before starting a huddle.");
-      if (
-        ["connecting", "connected", "leaving"].includes(
-          huddles.snapshot().phase,
-        )
-      ) {
-        await showActiveHuddle(showWindow);
-        return { done: true, notice: "Showing your active huddle" };
-      }
+      const active = await refuseOrShowActive();
+      if (active) return active;
       const destination = {
         scope,
         viewer,
@@ -71,17 +69,22 @@ export function huddleCommand(deps: {
         signal,
       );
       signal.throwIfAborted();
+      const raced = await refuseOrShowActive();
+      if (raced) return raced;
       const room = rooms.find((candidate) =>
         huddles.canJoin(scope, candidate.id),
       );
-      await (room
-        ? huddles.join(destination, room.id)
-        : huddles.start(destination));
+      await huddles.join(destination, room?.id);
       const call = huddles.snapshot();
       if (call.phase === "error")
         throw new Error(call.error ?? "The huddle could not start.");
       if (call.phase !== "connecting" && call.phase !== "connected")
         throw new Error("The huddle ended before it connected.");
+      if (
+        call.destination?.scope !== scope ||
+        call.destination.channelId !== channelId
+      )
+        throw new Error("Another huddle is already active.");
       return {
         done: true,
         notice: room ? "Joining the huddle" : "Starting a huddle",

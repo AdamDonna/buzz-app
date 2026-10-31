@@ -24,7 +24,7 @@ import {
 import { ChannelMembersDialog } from "../channels/ChannelMembersDialog";
 import styles from "./Huddles.module.css";
 import { writeClipboardText } from "../../shared/clipboard";
-import { showActiveHuddle } from "./slash-huddle";
+import { showActiveHuddle } from "./show-active-huddle";
 
 type Props = Pick<
   ChannelLauncherProps,
