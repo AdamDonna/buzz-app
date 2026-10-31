@@ -54,6 +54,11 @@ function restore(scope: string): HiddenDm[] {
   });
 }
 
+/** The DMs this scope has hidden, as last saved. */
+export function savedHiddenDmIds(scope: string): ReadonlySet<string> {
+  return new Set(restore(scope).map((entry) => entry.id));
+}
+
 /** The DMs this scope's sidebar has hidden, as it last saved them. The
  * sidebar's own hook drops an entry when a newer message or an open restores
  * the row, and this follows that saved state while mounted. */
@@ -68,9 +73,7 @@ export function useSavedHiddenDmIds(scope: string | undefined) {
   return useMemo<ReadonlySet<string>>(
     () =>
       // The revision is the saved value restore() reads; it keys the memo.
-      revision !== undefined && scope
-        ? new Set(restore(scope).map((entry) => entry.id))
-        : new Set(),
+      revision !== undefined && scope ? savedHiddenDmIds(scope) : new Set(),
     [revision, scope],
   );
 }

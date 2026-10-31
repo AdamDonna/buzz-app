@@ -1,4 +1,5 @@
 import { emptyChannelsTarget, successorChannel } from "./channel-successor";
+import { sidebarListed, sidebarNeighbors } from "./sidebar-order";
 import { revealCreatedChannel } from "./created-channel";
 import {
   useCallback,
@@ -14,7 +15,6 @@ import {
 import { ChannelLifecycleMenu } from "../../bundled/channels/ChannelLifecycleMenu";
 import { lifecycleNoun } from "../../bundled/channels/ChannelLifecycleDialog";
 import type { ChannelLifecycleAction } from "../relay/channel-lifecycle-protocol";
-import { inTeamInventory } from "./team-inventory";
 import type { RelayData } from "../relay/service";
 import type { Agents } from "../agents/service";
 import type { RelaySession } from "../relay/session";
@@ -257,9 +257,7 @@ export function ChannelInventory({
   const sidebarChannels = channels.filter(
     (channel) =>
       channel.id !== promotedDm &&
-      !channel.huddle &&
-      !channel.metadataPending &&
-      inTeamInventory(channel) &&
+      sidebarListed(channel) &&
       (!preparingDm ||
         preparingDm.existing.has(channel.id) ||
         channel.channelType !== "dm" ||
@@ -1002,27 +1000,10 @@ export function ChannelInventory({
     if (!lifecycleCallbacks) return;
     const dialogId = lifecycleDialog?.channel.id;
     if (!dialogId) lifecycleNeighbors.current = undefined;
-    const at = sections.findIndex((section) =>
-      section.rows.some((row) => row.id === dialogId),
-    );
-    const placement = sections[at];
-    if (dialogId && placement) {
-      const shown = (section: typeof placement) =>
-        sidebar.collapsed.includes(section.key)
-          ? []
-          : section.rows.map((row) => row.id);
-      const own = shown(placement);
-      const index = Math.max(own.indexOf(dialogId), 0);
-      lifecycleNeighbors.current = {
-        id: dialogId,
-        ids: [
-          ...own.slice(index + 1),
-          ...own.slice(0, index).reverse(),
-          ...sections.slice(at + 1).flatMap(shown),
-          ...sections.slice(0, at).flatMap(shown).reverse(),
-        ],
-      };
-    }
+    const ids = dialogId
+      ? sidebarNeighbors(sections, sidebar.collapsed, dialogId)
+      : undefined;
+    if (dialogId && ids) lifecycleNeighbors.current = { id: dialogId, ids };
     lifecycleCallbacks.current = lifecycleDialog
       ? {
           close: () => {

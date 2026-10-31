@@ -36,6 +36,11 @@ function restore(scope: string): SidebarView {
   };
 }
 
+/** The sidebar sections this scope has collapsed, as last saved. */
+export function savedCollapsedSections(scope: string): readonly string[] {
+  return restore(scope).collapsed;
+}
+
 /** Header creation shares the sidebar's durable section expansion. */
 export function expandSidebarSection(scope: string, key: string) {
   const saved = readView<object>(scope, "channel-sidebar", {});

@@ -1,10 +1,11 @@
 import { canAddMembers } from "../../features/channel-members/members";
 import { canRemoveMember } from "../../features/channel-members/administration-protocol";
 import {
-  channelNeighbors,
-  channelSuccessorTarget,
+  emptyChannelsTarget,
+  successorChannel,
 } from "../../features/channel-navigation/channel-successor";
 import { conversationTarget } from "../../features/channel-navigation/routes";
+import { sidebarOrder } from "../../features/channel-navigation/sidebar-order";
 import type {
   SlashCommand,
   SlashCommandAvailabilityContext,
@@ -14,6 +15,7 @@ import type { Navigation } from "../../features/navigation/controller";
 import { parseBuzzLink } from "../../features/navigation/buzz-links";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { splitPartition } from "../../features/relay/partition";
+import { writeView } from "../../shared/view-state";
 
 type Place = Pick<SlashCommandAvailabilityContext, "session" | "channelId">;
 type Person = SlashCommandContext["recipients"][number];
@@ -40,13 +42,13 @@ function ordinary({ session, channelId }: Place) {
     : undefined;
 }
 
-function listedIds(session: Place["session"]) {
-  return session.channels
-    .list()
-    .channels.filter(
-      (channel) => !channel.archived && channel.channelType !== "solo",
-    )
-    .map((channel) => channel.id);
+function sidebarOrderOf(session: Place["session"], scope: string) {
+  return sidebarOrder({
+    scope,
+    channels: session.channels.list().channels,
+    preferences: session.sidebarPreferences?.snapshot().data,
+    hiddenDms: session.channelLifecycle?.snapshot().hidden,
+  });
 }
 
 const listNames = (names: readonly string[]) =>
@@ -174,21 +176,27 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
         const failed: string[] = [];
         for (const { pubkey, name } of people) {
           signal.throwIfAborted();
+          if (pubkey === session.viewer) {
+            failed.push(`${name} (you can't remove yourself; use /leave)`);
+            continue;
+          }
           const { authority } = administration.snapshot(channelId);
+          if (!Object.keys(authority.roles).length) {
+            failed.push(`${name} (member roles are unavailable)`);
+            continue;
+          }
           const role = authority.roles[pubkey];
-          if (pubkey !== session.viewer && !role) {
+          if (!role) {
             absent.push(name);
             continue;
           }
           const refusal =
-            pubkey === session.viewer
-              ? "you can't remove yourself; use /leave"
-              : role === "owner"
-                ? "owners can't be removed"
-                : !canRemoveMember(authority, session.viewer, pubkey)
-                  ? "you can't remove this member"
-                  : undefined;
-          if (refusal || !role) {
+            role === "owner"
+              ? "owners can't be removed"
+              : !canRemoveMember(authority, session.viewer, pubkey)
+                ? "you can't remove this member"
+                : undefined;
+          if (refusal) {
             failed.push(`${name} (${refusal})`);
             continue;
           }
@@ -281,18 +289,26 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
             "Leaving channels is unavailable on this connection.",
           );
         const name = channelOf(session, channelId)?.name;
-        const neighbors = channelNeighbors(listedIds(session), channelId);
+        const neighbors = sidebarOrderOf(session, scope).neighbors(channelId);
         await lifecycle.run("leave", channelId, signal);
-        const target = channelSuccessorTarget(
-          scope,
-          neighbors,
-          listedIds(session),
-          channelId,
-        );
+        // The composer goes with the channel, so the move cannot wait for
+        // `after`. Like the sidebar's leave, it moves only a viewer still on
+        // this channel.
+        const here = navigation.snapshot().entry.target;
+        if (here.kind === "conversation" && here.channelId === channelId) {
+          const next = successorChannel(
+            neighbors,
+            sidebarOrderOf(session, scope).listed,
+            channelId,
+          );
+          if (!next) writeView(scope, "selected-channel", undefined);
+          await navigation.open(
+            next ? conversationTarget(scope, next) : emptyChannelsTarget(),
+          );
+        }
         return {
           done: true,
-          notice: name ? `Left #${name}.` : "Left the channel.",
-          after: open(navigation, target),
+          notice: name ? `Channel left: ${name}` : "Channel left",
         };
       },
     },

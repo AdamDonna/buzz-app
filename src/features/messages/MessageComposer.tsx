@@ -2576,6 +2576,13 @@ function Composer({
           commandRunning.current = false;
           attempt.signal.removeEventListener("abort", release);
         }
+        if (attempt.signal.aborted && !live.current && result.done) {
+          // A finished command whose effect removed this composer (`/leave`):
+          // its draft is spent, and its notice outlives the composer as a toast.
+          persist(mentionDraft(""), savedRevision);
+          if (result.notice) notify(result.notice, "success");
+          return;
+        }
         attempt.signal.throwIfAborted();
         if (
           valueRef.current !== captured ||

@@ -12967,6 +12967,19 @@ async function commandService(probe?: SlashCommand["run"]) {
   };
   const navigation = {
     open: vi.fn(async () => ({ status: "opened" as const })),
+    snapshot: () => ({
+      entry: {
+        target: {
+          version: 1,
+          kind: "conversation",
+          scope: {
+            communityOrigin: "https://relay.example.test",
+            viewer: "1".repeat(64),
+          },
+          channelId: "channel",
+        },
+      },
+    }),
   };
   root.provide("navigation", navigation as unknown as Navigation);
   const runtime = new PluginRuntime(root, async (plugin) =>
@@ -13573,6 +13586,7 @@ const bob = { pubkey: "b1".repeat(32), name: "Bob" };
 const stewardScope = `https://relay.example.test:${stewardKey}`;
 const randomId = "9a2c4e6f-1b3d-4f5a-8c7e-0d1f2a3b4c5d";
 const designId = "7c3e5a1b-2d4f-4a6b-8c8d-1e2f3a4b5c6d";
+const zuluId = "5d7f9b2c-3e4a-4b6c-8d9e-2f3a4b5c6d7e";
 const randomLink = `[\\#random](buzz://channel/${randomId})`;
 
 /** The mounted channel as the viewer's role sees it, with the membership
@@ -13581,18 +13595,30 @@ function stewardship(
   h: ReturnType<typeof mount>,
   initial: "member" | "admin" | "owner",
   members: string[] = [stewardKey, alice.pubkey],
-  neighbors = true,
+  neighbors: boolean | "sidebar" = true,
 ) {
   const listeners = new Set<() => void>();
   const state = {
     role: initial,
     members,
     left: false,
+    archived: [] as readonly string[],
     refused: new Map<string, string>(),
   };
   const build = () => ({
     status: "ready" as const,
     channels: [
+      ...(neighbors === "sidebar"
+        ? [
+            {
+              id: zuluId,
+              name: "zulu",
+              channelType: "stream" as const,
+              viewerRole: "member" as const,
+              members: [stewardKey],
+            },
+          ]
+        : []),
       ...(state.left
         ? []
         : [
@@ -13613,13 +13639,17 @@ function stewardship(
               viewerRole: "member" as const,
               members: [stewardKey],
             },
-            {
-              id: randomId,
-              name: "random",
-              channelType: "stream" as const,
-              readOnly: true as const,
-              members: [] as string[],
-            },
+            ...(neighbors === true
+              ? [
+                  {
+                    id: randomId,
+                    name: "random",
+                    channelType: "stream" as const,
+                    readOnly: true as const,
+                    members: [] as string[],
+                  },
+                ]
+              : []),
           ]
         : []),
     ],
@@ -13681,32 +13711,47 @@ function stewardship(
         state.left = true;
       });
   });
-  h.retarget({
-    session: {
-      ...h.session,
-      viewer: stewardKey,
-      channels: {
-        ...h.session.channels,
-        list: () => list,
-        get: (id: string) => list.channels.find((item) => item.id === id),
-        subscribeList(listener: () => void) {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
+  let archives = { status: "ready" as const, archived: state.archived };
+  const session = {
+    ...h.session,
+    viewer: stewardKey,
+    archives: {
+      ...h.session.archives,
+      snapshot: () => {
+        if (archives.archived !== state.archived)
+          archives = { status: "ready", archived: state.archived };
+        return archives;
       },
-      memberAdditions: { add },
-      memberAdministration: {
-        available: true,
-        snapshot: () => administration,
-        refresh: async () => {
-          administration = { status: "ready", authority: authority() };
-        },
-        run: remove,
+      state: (key: string) =>
+        state.archived.includes(key) ? "archived" : "not-archived",
+    },
+    channels: {
+      ...h.session.channels,
+      list: () => list,
+      get: (id: string) => list.channels.find((item) => item.id === id),
+      subscribeList(listener: () => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
       },
-      channelLifecycle: { available: true, run: lifecycle },
-    } as never,
-  });
+    },
+    memberAdditions: { add },
+    memberAdministration: {
+      available: true,
+      snapshot: () => administration,
+      refresh: async () => {
+        administration = { status: "ready", authority: authority() };
+      },
+      run: remove,
+    },
+    channelLifecycle: {
+      available: true,
+      run: lifecycle,
+      snapshot: () => ({ hidden: [] }),
+    },
+  };
+  h.retarget({ session: session as never });
   return {
+    session,
     state,
     notify: () => {
       list = build();
@@ -13816,6 +13861,26 @@ it("keeps an invite's draft and names who failed, then finishes it without askin
   expect(screen.queryByRole("alert")).toBeNull();
   expect(h.input()).toHaveValue("");
   expect(h.messages.send).not.toHaveBeenCalled();
+
+  // Archived after being named, a person is refused as the audience of
+  // another command's text, yet /invite still acts on them.
+  await compose(h, service, "/shrug hi ", alice);
+  world.state.archived = [alice.pubkey];
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "A selected recipient is archived. Remove it before sending.",
+  );
+  expect(h.input()).toHaveValue("/shrug hi @Alice ");
+  expect(h.messages.send).not.toHaveBeenCalled();
+  world.state.archived = [];
+  await compose(h, service, "/invite ", alice);
+  world.state.archived = [alice.pubkey];
+  h.submit();
+  expect(
+    await screen.findByText("Alice is already in this channel."),
+  ).toHaveAttribute("role", "status");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(h.input()).toHaveValue("");
 });
 
 it("rejects /invite with no one mentioned, naming the usage", async () => {
@@ -13881,8 +13946,8 @@ it("joins an open channel, then opens it only after the draft has cleared; a ref
 
 it.each([
   [
-    "the next channel in the list",
-    true,
+    "the next channel in the sidebar, not the next in the roster",
+    "sidebar" as const,
     {
       version: 1,
       kind: "conversation",
@@ -13890,7 +13955,7 @@ it.each([
         communityOrigin: "https://relay.example.test",
         viewer: stewardKey,
       },
-      channelId: designId,
+      channelId: zuluId,
     },
   ],
   [
@@ -13905,20 +13970,16 @@ it.each([
     },
   ],
 ])(
-  "leaves through its alias even though that makes the channel unwritable, then opens %s once the draft has cleared; a refusal stays put",
+  "leaves through its alias even though that makes the channel unwritable, then opens %s itself; a refusal stays put",
   async (_label, neighbors, target) => {
     const service = await commandService();
-    const h = mount({
-      extensions: service,
-      slashCommands: true,
-      scope: stewardScope,
-    });
+    const h = mount(
+      { extensions: service, slashCommands: true, scope: stewardScope },
+      undefined,
+      undefined,
+      oldBuzzAgents().agents,
+    );
     const world = stewardship(h, "member", undefined, neighbors);
-    let draftWhenOpened: string | undefined;
-    service.navigation.open.mockImplementation(async () => {
-      draftWhenOpened = h.input().value;
-      return { status: "opened" as const };
-    });
     world.state.refused.set(
       "channel",
       "Transfer ownership before leaving the channel.",
@@ -13930,9 +13991,25 @@ it.each([
     );
     expect(h.input()).toHaveValue("/part");
     expect(service.navigation.open).not.toHaveBeenCalled();
-    world.state.refused.clear();
+
+    // The refused command must not leave later read-only changes treated as
+    // its own: an ordinary send waiting on its import prompt still ends.
+    await compose(h, service, "hi ", first);
     h.submit();
-    expect(await screen.findByText("Left #General.")).toBeInTheDocument();
+    await screen.findByRole("dialog", { name: "Import Honey?" });
+    world.state.left = true;
+    act(() => world.notify());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(h.messages.send).not.toHaveBeenCalled();
+    world.state.left = false;
+    world.state.refused.clear();
+    act(() => world.notify());
+
+    h.fill("/part");
+    h.submit();
+    expect(
+      await screen.findByText("Channel left: General"),
+    ).toBeInTheDocument();
     expect(world.lifecycle).toHaveBeenLastCalledWith(
       "leave",
       "channel",
@@ -13940,7 +14017,6 @@ it.each([
     );
     expect(world.state.left).toBe(true);
     expect(service.navigation.open).toHaveBeenCalledExactlyOnceWith(target);
-    expect(draftWhenOpened).toBe("");
     expect(h.input()).toHaveValue("");
     expect(screen.queryByRole("alert")).toBeNull();
   },

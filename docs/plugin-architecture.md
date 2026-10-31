@@ -1893,8 +1893,12 @@ A run is cancelled (its `signal` aborts) only when the composer unmounts or its
 destination changes (another channel, thread or reply target), or when the host
 disables it. The destination merely becoming unwritable does not cancel it: a command
 that changes access, such as `/leave`, makes its own channel read-only, and its `done`
-result still clears the draft and runs `after`. A `send` result to a destination that
-has become unwritable fails visibly with the draft kept; it is never published.
+result still clears the draft and runs `after`. When that change also removes the
+composer (the channel leaves the roster), the host cannot show a notice under it: it
+clears the spent draft and shows the notice as a toast instead, and `after` does not
+run, so such a command navigates from inside `run`, once its change is confirmed. A
+`send` result to a destination that has become unwritable fails visibly with the draft
+kept; it is never published.
 
 `scopes` limits where a command is offered and runs: any of `"channel"` (a top-level
 message in a non-DM channel), `"dm"` (a direct message, including a reply in a thread
@@ -1946,7 +1950,7 @@ channel UI already uses and each throwing on failure so the draft stays:
 | `/invite @user…` | channel, thread | the viewer may add members | adds each person; says who is already in |
 | `/remove @user…` (hidden alias `/kick`) | channel, thread | the viewer is owner or admin of a regular channel | removes each person after refreshing roles; confirms from the operation state; someone already out is reported, not failed |
 | `/join #channel` | any | always | joins when not a member, then opens the channel |
-| `/leave` (alias `/part`) | channel, thread | a regular channel the viewer is listed in | leaves, then opens the nearest listed channel, else the empty channels page |
+| `/leave` (alias `/part`) | channel, thread | a regular channel the viewer is listed in | leaves, then (only if the viewer is still on that channel) opens the channel that takes its place in the sidebar, else the empty channels page; toasts `Channel left: <name>` |
 | `/who` (alias `/members`) | any | always | opens the conversation's member panel |
 
 `/invite` and `/remove` set `mentionsAreArguments` and take only @mentions: every
@@ -1955,6 +1959,13 @@ mention, is rejected with the usage. They act on people in order. When some fail
 command reports a failure that names who was added or removed and who was not, and
 keeps the draft, so rerunning finishes the rest. It never reports full success for a
 partial result. `/join` takes one channel picked from the `#` list.
+
+`/leave` picks its successor from the sidebar's own order, read through
+`features/channel-navigation/sidebar-order.ts`, which the sidebar's leave flow uses too:
+huddle, still-loading, hidden and Solo channels and hidden direct messages are skipped,
+each section sorts as the sidebar sorts it, and a collapsed section is not preferred. Direct
+messages are ordered by their stored names, not the resolved labels the sidebar shows.
+Unlike the sidebar's Leave action, `/leave` asks no confirmation.
 
 ### Composer completion providers
 

@@ -52,8 +52,10 @@ export type ComposerSession = Pick<
   /** Join, leave and member removal for slash commands; a detached editor has none. */
   channelLifecycle?: Pick<
     RelaySession["channelLifecycle"],
-    "available" | "run"
+    "available" | "run" | "snapshot"
   >;
+  /** Saved sidebar arrangement, for commands that follow the sidebar's order. */
+  sidebarPreferences?: Pick<RelaySession["sidebarPreferences"], "snapshot">;
   memberAdministration?: Pick<
     RelaySession["memberAdministration"],
     "available" | "refresh" | "run" | "snapshot"

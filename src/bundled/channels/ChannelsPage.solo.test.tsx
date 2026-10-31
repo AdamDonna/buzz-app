@@ -29,6 +29,9 @@ import { linkedDraftKey } from "../../features/solo/linked-chat";
 import { readView, writeView } from "../../shared/view-state";
 import { ChannelsPage, type ArchiveShortcut } from "./ChannelsPage";
 import { SoloWorkspaces } from "./SoloWorkspaces";
+import { membershipCommands } from "../commands/membership";
+import { emptyChannelsTarget } from "../../features/channel-navigation/channel-successor";
+import type { SlashCommand } from "../../features/conversation/contracts";
 import type { RelaySession } from "../../features/relay/session";
 
 composerDOMFixture();
@@ -56,7 +59,10 @@ function fixture({
   archived = false,
   viewerNamed = false,
   others = [],
+  commands,
 }: {
+  /** Slash commands the page's composer offers. */
+  commands?: (navigator: Navigation) => readonly SlashCommand[];
   /** Other Solo chats listed after this one in the sidebar's Chats. */
   others?: readonly string[];
   /** The viewer's own profile has loaded too. */
@@ -329,7 +335,23 @@ function fixture({
           requestOpen: () => false,
           handleOpenRequests: () => () => {},
         }}
-        extensions={extensions}
+        extensions={
+          commands
+            ? {
+                ...extensions,
+                commands: {
+                  snapshot: () =>
+                    commands(navigator).map((command) => ({
+                      ...command,
+                      key: `test/${command.id}`,
+                      pluginId: "test",
+                      revision: "one",
+                    })),
+                  subscribe: () => () => {},
+                },
+              }
+            : extensions
+        }
         navigation={navigation}
         navigator={navigator}
         archive={archive}
@@ -1024,3 +1046,44 @@ it("finishes a linked chat across roster updates without appending source prose"
   expect(f.session.channelWrites.start).toHaveBeenCalledOnce();
   expect(f.send.mock.calls[0]?.[1]).toContain(source.link);
 });
+
+it.each([
+  ["lands on the next channel", ["22222222-2222-4222-8222-222222222222"]],
+  ["lands on the empty channels page when none is left", []],
+] as const)(
+  "/leave in the real page %s: the channel and its composer go away mid-command, yet the move and the toast still happen and the draft is spent",
+  async (_label, others) => {
+    const f = fixture({ type: "stream", others, commands: membershipCommands });
+    f.mountWithToasts();
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("textbox", { name: "Message #Planning" }),
+    );
+    await user.keyboard("/leave{Enter}");
+    await waitFor(() =>
+      expect(f.run).toHaveBeenCalledExactlyOnceWith(
+        "leave",
+        id,
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(f.open).toHaveBeenCalledExactlyOnceWith(
+        others[0]
+          ? conversationTarget(f.scope, others[0])
+          : emptyChannelsTarget(),
+      ),
+    );
+    expect(
+      screen.queryByRole("textbox", { name: "Message #Planning" }),
+    ).toBeNull();
+    expect(await screen.findByText("Channel left: Planning")).toBeVisible();
+    expect(
+      readView<{ text?: string } | null>(f.scope, `draft:${id}`, null)?.text ??
+        "",
+    ).toBe("");
+    expect(readView(f.scope, "selected-channel", "unset")).toBe(
+      others[0] ? id : "unset",
+    );
+  },
+);

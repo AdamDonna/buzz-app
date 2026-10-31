@@ -1,10 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemberAdministrationState } from "../../features/channel-members/administration";
 import type { MemberRole } from "../../features/channel-members/administration-protocol";
 import type { SlashCommandContext } from "../../features/conversation/contracts";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import type { Navigation } from "../../features/navigation/controller";
 import type { ChannelSummary } from "../../features/relay/contracts";
+import type { SidebarPreferences } from "../../features/relay/sidebar-preferences";
+import { readView, writeView } from "../../shared/view-state";
 import { isAvailable } from "../../features/conversation/slash-command";
 import { membershipCommands } from "./membership";
 
@@ -45,8 +48,15 @@ type World = {
     run: ReturnType<typeof vi.fn>;
   };
   lifecycle: { available: boolean; run: ReturnType<typeof vi.fn> };
+  /** Direct messages the lifecycle service reports as hidden. */
+  hidden: string[];
+  /** The sidebar's saved preferences, if any. */
+  preferences: { data?: SidebarPreferences };
   add: ReturnType<typeof vi.fn>;
-  navigation: { open: ReturnType<typeof vi.fn> };
+  navigation: {
+    open: ReturnType<typeof vi.fn>;
+    here: { target: unknown };
+  };
   session: ComposerSession;
 };
 
@@ -117,8 +127,11 @@ function world(
       },
     ),
   };
+  const hidden: string[] = [];
+  const preferences: { data?: SidebarPreferences } = {};
   const lifecycle = {
     available: options.lifecycle ?? true,
+    snapshot: () => ({ hidden }),
     run: vi.fn(async (action: string, id: string) => {
       const reason = refused.get(id);
       if (reason) throw new Error(reason);
@@ -143,8 +156,18 @@ function world(
       ),
     );
   });
+  const here: { target: unknown } = {
+    target: {
+      version: 1,
+      kind: "conversation",
+      scope: partition,
+      channelId: channel.id,
+    },
+  };
   const navigation = {
+    here,
     open: vi.fn(async () => ({ status: "opened" as const })),
+    snapshot: () => ({ entry: here }),
   };
   const session = {
     viewer,
@@ -157,6 +180,7 @@ function world(
     memberAdditions: { add },
     memberAdministration: administration,
     channelLifecycle: lifecycle,
+    sidebarPreferences: { snapshot: () => preferences },
   } as unknown as ComposerSession;
   return {
     channels,
@@ -164,6 +188,8 @@ function world(
     refused,
     administration,
     lifecycle,
+    hidden,
+    preferences,
     add,
     navigation,
     session,
@@ -508,6 +534,31 @@ describe("/remove", () => {
     expect(w.administration.run).not.toHaveBeenCalled();
   });
 
+  it("fails, rather than calling everyone already out, when the roles were cleared mid-command", async () => {
+    const w = world();
+    const authority = {
+      canManage: true,
+      canRemove: true,
+      canRemoveOwnedAgent: true,
+      system: false,
+    };
+    w.administration.snapshot
+      .mockReturnValueOnce({
+        status: "ready",
+        authority: { ...authority, roles: { [viewer]: "owner" } },
+      })
+      .mockReturnValue({
+        status: "idle",
+        authority: { ...authority, roles: {} },
+      });
+    await expect(
+      commandsFor(w).run("remove", "@Alice @Bob", [alice, bob]),
+    ).rejects.toThrow(
+      "Couldn't remove Alice (member roles are unavailable), Bob (member roles are unavailable).",
+    );
+    expect(w.administration.run).not.toHaveBeenCalled();
+  });
+
   it("finishes on a rerun: someone the first run removed is already out, not a failure", async () => {
     const w = world();
     const { run } = commandsFor(w);
@@ -644,56 +695,105 @@ describe("/join", () => {
 });
 
 describe("/leave", () => {
-  const other = (id: string, over: Overrides = {}) =>
-    summary({ id, name: id.slice(0, 4), ...over });
-  const above = other("1111aaaa-0000-4000-8000-000000000001");
-  const below = other("2222bbbb-0000-4000-8000-000000000002");
-  const farBelow = other("3333cccc-0000-4000-8000-000000000003");
+  afterEach(() => localStorage.clear());
+  // Roster order is deliberately not sidebar order: the sidebar sorts each
+  // section by name, so "general" sits between "alpha" and "hotel".
+  const other = (name: string, over: Overrides = {}) =>
+    summary({
+      id: `${name.slice(0, 4)}0000-0000-4000-8000-000000000000`,
+      name,
+      ...over,
+    });
+  const alpha = other("alpha");
+  const bravo = other("bravo");
+  const hotel = other("hotel");
+  const zulu = other("zulu");
   const conversation = (id: string) => ({
     version: 1,
     kind: "conversation",
     scope: partition,
     channelId: id,
   });
+  const emptyPage = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.channels",
+    pageId: "channels",
+    route: { version: 1, params: "empty" },
+  };
+  type Setup = (w: World) => void;
 
-  it.each([
+  it.each<[string, ChannelSummary[], ChannelSummary[], unknown, Setup?]>([
     [
-      "the channel below it, once it is gone from the list",
-      { before: [above], after: [below, farBelow] },
-      conversation(below.id),
+      "the channel below it in the sidebar, not the next in the roster",
+      [zulu],
+      [alpha, hotel],
+      conversation(hotel.id),
     ],
     [
-      "the channel above it when none is below",
-      { before: [above] },
-      conversation(above.id),
+      "the channel above it in the sidebar when none is below",
+      [bravo, alpha],
+      [],
+      conversation(bravo.id),
     ],
     [
-      "a channel that is still listed rather than a DM-free Solo chat",
-      {
-        before: [
-          other("4444dddd-0000-4000-8000-000000000004", {
-            channelType: "solo",
-          }),
-        ],
-        after: [farBelow],
+      "the first channel the sidebar lists, skipping huddle, loading, hidden and Solo ones",
+      [
+        other("bravo", { huddle: true }),
+        other("charlie", { metadataPending: true }),
+        other("delta", { hidden: true }),
+        other("echo", { channelType: "solo" }),
+      ],
+      [other("foxtrot", { archived: true }), alpha, zulu],
+      conversation(zulu.id),
+    ],
+    [
+      "a direct message the sidebar shows",
+      [],
+      [other("kilo", { channelType: "dm" })],
+      conversation(other("kilo").id),
+    ],
+    [
+      "the empty channels page when the only direct message is hidden by the lifecycle service",
+      [],
+      [other("kilo", { channelType: "dm" })],
+      emptyPage,
+      (w) => w.hidden.push(other("kilo").id),
+    ],
+    [
+      "the empty channels page when the only direct message is hidden in the sidebar",
+      [],
+      [other("kilo", { channelType: "dm" })],
+      emptyPage,
+      () => writeView(scope, "hidden-dms", [{ id: other("kilo").id }]),
+    ],
+    [
+      "a starred channel, not one in a section the sidebar has collapsed",
+      [],
+      [hotel, other("yankee")],
+      conversation(other("yankee").id),
+      (w) => {
+        w.preferences.data = {
+          starred: [other("yankee").id],
+          muted: [],
+          sections: [],
+          assignments: {},
+        };
+        writeView(scope, "channel-sidebar", { collapsed: ["channels"] });
       },
-      conversation(farBelow.id),
     ],
     [
-      "the empty channels page when none is left",
-      {},
-      {
-        version: 1,
-        kind: "page",
-        pluginId: "buzz.channels",
-        pageId: "channels",
-        route: { version: 1, params: "empty" },
-      },
+      "the empty channels page when no channel is left",
+      [other("bravo", { huddle: true })],
+      [],
+      emptyPage,
+      () => writeView(scope, "selected-channel", channelId),
     ],
   ])(
-    "leaves, confirms, then opens %s only after the draft clears",
-    async (_label, around, target) => {
-      const w = world(summary(), around);
+    "leaves and opens %s itself, without waiting for the draft",
+    async (_label, before, after, target, setup) => {
+      const w = world(summary(), { before, after });
+      setup?.(w);
       const result = await commandsFor(w).run("leave");
       expect(w.lifecycle.run).toHaveBeenCalledWith(
         "leave",
@@ -701,13 +801,26 @@ describe("/leave", () => {
         expect.any(AbortSignal),
       );
       expect(w.channels.some((item) => item.id === channelId)).toBe(false);
-      expect(w.navigation.open).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ done: true, notice: "Left #general." });
-      if (!("after" in result && result.after)) throw new Error("No after");
-      result.after();
       expect(w.navigation.open).toHaveBeenCalledExactlyOnceWith(target);
+      expect(result).toEqual({ done: true, notice: "Channel left: general" });
+      if (target === emptyPage)
+        expect(readView(scope, "selected-channel", "unset")).toBe("unset");
     },
   );
+
+  it("leaves a viewer who has already moved on where they are", async () => {
+    const w = world(summary(), { after: [alpha] });
+    w.navigation.here.target = conversation(alpha.id);
+    expect(await commandsFor(w).run("leave")).toEqual({
+      done: true,
+      notice: "Channel left: general",
+    });
+    expect(w.lifecycle.run).toHaveBeenCalledOnce();
+    expect(w.navigation.open).not.toHaveBeenCalled();
+    w.navigation.here.target = { version: 1, kind: "settings", scope: null };
+    await commandsFor(w).run("leave");
+    expect(w.navigation.open).not.toHaveBeenCalled();
+  });
 
   it("fails visibly, and stays on the channel, when the relay refuses", async () => {
     const w = world();

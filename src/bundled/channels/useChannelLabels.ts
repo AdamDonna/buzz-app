@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import { selectProfiles } from "../../features/relay/profile-selection";
+import { rosterListed } from "../../features/channel-navigation/sidebar-order";
 import { sortParticipantNames } from "../../features/identity-names/participant-order";
 
 /** Visible labels share the session's bounded profile directory, not per-row fetches. */
@@ -13,15 +14,7 @@ export function useChannelLabels(
   names?: IdentityNameView,
 ) {
   const resolveName = useIdentityNames(names);
-  const channels = useMemo(
-    () =>
-      roster.filter(
-        (channel) =>
-          !channel.archived &&
-          (!channel.hidden || channel.channelType === "dm"),
-      ),
-    [roster],
-  );
+  const channels = useMemo(() => roster.filter(rosterListed), [roster]);
   const key = useMemo(
     () =>
       [...new Set(channels.flatMap((channel) => channel.participants ?? []))]
