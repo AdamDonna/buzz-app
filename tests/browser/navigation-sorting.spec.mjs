@@ -19,13 +19,24 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
       const cedar = section.locator('[data-channel-id="cedar"]');
       await cedar.focus();
       await cedar.evaluate((element) => {
-        window.sidebarMotion = { element, opacities: [], done: false };
+        window.sidebarMotion = {
+          element,
+          opacities: [],
+          scales: [],
+          done: false,
+        };
         const sample = () => {
           const state = window.sidebarMotion;
           state.opacities.push(
             getComputedStyle(
               element.closest("[data-channel-sidebar-row]").parentElement,
             ).opacity,
+          );
+          const transform = getComputedStyle(
+            element.closest("[data-channel-sidebar-row]").parentElement,
+          ).transform;
+          state.scales.push(
+            transform === "none" ? 1 : new DOMMatrixReadOnly(transform).a,
           );
           if (!state.done) requestAnimationFrame(sample);
         };
@@ -51,10 +62,12 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           faded: window.sidebarMotion.opacities.some(
             (value) => Number(value) < 1,
           ),
+          scaled: window.sidebarMotion.scales.some((value) => value < 1),
         };
       });
       expect(result.same).toBe(true);
       expect(result.faded).toBe(reducedMotion === "no-preference");
+      expect(result.scaled).toBe(reducedMotion === "no-preference");
     });
   });
 }
@@ -88,6 +101,14 @@ test("keeps a stationary selected row visible while its neighbors exchange place
         y: element.getBoundingClientRect().y,
         stationary: Number(getComputedStyle(row).opacity) * opacity,
         moving: Number(getComputedStyle(movingRow).opacity) * opacity,
+        stationaryScale:
+          getComputedStyle(row).transform === "none"
+            ? 1
+            : new DOMMatrixReadOnly(getComputedStyle(row).transform).a,
+        movingScale:
+          getComputedStyle(movingRow).transform === "none"
+            ? 1
+            : new DOMMatrixReadOnly(getComputedStyle(movingRow).transform).a,
       });
       if (!state.done) requestAnimationFrame(sample);
     };
@@ -141,12 +162,21 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     return {
       same: state.element === element,
       fixed: state.frames.every(
-        (frame) => frame.y === state.baseline && frame.stationary === 1,
+        (frame) =>
+          frame.y === state.baseline &&
+          frame.stationary === 1 &&
+          frame.stationaryScale === 1,
       ),
       movingFaded: state.frames.some((frame) => frame.moving < 1),
+      movingScaled: state.frames.some((frame) => frame.movingScale < 1),
     };
   });
-  expect(result).toEqual({ same: true, fixed: true, movingFaded: true });
+  expect(result).toEqual({
+    same: true,
+    fixed: true,
+    movingFaded: true,
+    movingScaled: true,
+  });
   await expect(maple).toHaveAttribute("aria-current", "page");
 });
 // Native details/menu nesting, submenu focus/viewport placement and row reorder

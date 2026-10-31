@@ -16,7 +16,7 @@ import {
 } from "react";
 import styles from "./ChannelSidebarRows.module.css";
 
-/** Fade only changing positions, retaining keyed rows and stationary anchors. */
+/** Shrink and fade changing positions, retaining keyed rows and stationary anchors. */
 export function ChannelSidebarRows({
   children,
   open,
@@ -101,10 +101,10 @@ const ChannelRow = memo(
     return (
       <motion.div
         ref={ref}
-        initial={{ opacity: animated ? 0 : 1 }}
-        animate={{ opacity: hiding ? 0 : 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: animated ? (hiding ? 0.06 : 0.09) : 0 }}
+        initial={{ opacity: animated ? 0 : 1, scale: animated ? 0.85 : 1 }}
+        animate={{ opacity: hiding ? 0 : 1, scale: hiding ? 0.85 : 1 }}
+        exit={{ opacity: 0, scale: 0.85 }}
+        transition={{ duration: animated ? (hiding ? 0.3 : 0.4) : 0 }}
         onAnimationComplete={() => {
           if (hiding && present) onHidden();
         }}
