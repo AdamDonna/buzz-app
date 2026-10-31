@@ -336,6 +336,8 @@ export class ConversationService extends Service implements Conversation {
       throw new Error(
         `A command's scopes must list ${SLASH_SCOPES.join(", ")} or be omitted`,
       );
+    if (value.available !== undefined && typeof value.available !== "function")
+      throw new Error("A command's available must be a function or omitted");
     this.commandEntries.register(
       this.ctx,
       value.scopes

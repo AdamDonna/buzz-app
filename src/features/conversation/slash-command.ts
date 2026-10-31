@@ -1,6 +1,7 @@
 import type { Contribution } from "../../plugins/contributions";
 import type {
   SlashCommand,
+  SlashCommandAvailabilityContext,
   SlashCommandContext,
   SlashCommandResult,
   SlashCommandScope,
@@ -48,6 +49,24 @@ export function runsInScope(
   return !command.scopes || (!!scope && command.scopes.includes(scope));
 }
 
+/** A command without `available` is available. A throwing check hides the
+ * command rather than the whole list. */
+export function isAvailable(
+  command: SlashCommand,
+  context: SlashCommandAvailabilityContext,
+) {
+  if (!command.available) return true;
+  try {
+    return command.available(context) === true;
+  } catch {
+    return false;
+  }
+}
+
+export function unavailableRefusal(command: SlashCommand) {
+  return `/${command.name} isn't available here. You may not have permission.`;
+}
+
 const SCOPE_NOUNS = {
   channel: "channels",
   dm: "direct messages",
@@ -80,17 +99,20 @@ export async function runSlashCommand(
     typeof value.send === "string" &&
     value.send.trim() &&
     value.done === undefined &&
-    value.notice === undefined
+    value.notice === undefined &&
+    value.after === undefined
   )
     return { send: value.send };
   if (
     value.done === true &&
     value.send === undefined &&
-    (value.notice === undefined || typeof value.notice === "string")
+    (value.notice === undefined || typeof value.notice === "string") &&
+    (value.after === undefined || typeof value.after === "function")
   )
     return {
       done: true,
       notice: value.notice?.trim() ? value.notice : undefined,
+      after: value.after as (() => void) | undefined,
     };
   throw new Error(`/${command.name} returned an invalid result`);
 }

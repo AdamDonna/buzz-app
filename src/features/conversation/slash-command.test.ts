@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import type { Contribution } from "../../plugins/contributions";
 import type { SlashCommand } from "./contracts";
-import { recognizeSlashCommand } from "./slash-command";
+import {
+  isAvailable,
+  recognizeSlashCommand,
+  runSlashCommand,
+} from "./slash-command";
 
 function command(
   key: string,
@@ -67,4 +71,81 @@ it("gives a duplicated name to the lowest contribution key", () => {
     command("a.plugin/shrug", "shrug"),
   ]);
   expect(found?.command.key).toBe("a.plugin/shrug");
+});
+
+const place = {
+  session: {} as never,
+  scope: "scope",
+  channelId: "channel",
+  conversation: "channel" as const,
+};
+const base = {
+  id: "x",
+  name: "x",
+  usage: "/x",
+  description: "x",
+  run: () => ({ send: "x" }),
+};
+
+it.each([
+  ["omitted", undefined, true],
+  ["true", () => true, true],
+  ["false", () => false, false],
+  [
+    "throwing",
+    () => {
+      throw new Error("boom");
+    },
+    false,
+  ],
+  ["truthy but not true", (() => "yes") as never, false],
+])(
+  "treats an availability check that is %s as %s",
+  (_label, available, expected) => {
+    expect(
+      isAvailable({ ...base, ...(available ? { available } : {}) }, place),
+    ).toBe(expected);
+  },
+);
+
+it("passes the composing place to the availability check", () => {
+  const seen: unknown[] = [];
+  isAvailable(
+    {
+      ...base,
+      available: (context) => {
+        seen.push(context);
+        return true;
+      },
+    },
+    { ...place, threadRootId: "root", conversation: "thread" },
+  );
+  expect(seen).toEqual([
+    { ...place, threadRootId: "root", conversation: "thread" },
+  ]);
+});
+
+it("keeps an after callback on a done result and rejects a bad one or one on a send", async () => {
+  const after = () => {};
+  const context = {
+    ...place,
+    args: "",
+    recipients: [],
+    signal: new AbortController().signal,
+  };
+  await expect(
+    runSlashCommand({ ...base, run: () => ({ done: true, after }) }, context),
+  ).resolves.toMatchObject({ done: true, after });
+  await expect(
+    runSlashCommand(
+      { ...base, run: (() => ({ done: true, after: "go" })) as never },
+      context,
+    ),
+  ).rejects.toThrow("/x returned an invalid result");
+  await expect(
+    runSlashCommand(
+      { ...base, run: (() => ({ send: "hi", after })) as never },
+      context,
+    ),
+  ).rejects.toThrow("/x returned an invalid result");
 });

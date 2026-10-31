@@ -53,6 +53,7 @@ export type {
   SlashCommandContext,
   SlashCommandResult,
   SlashCommandScope,
+  SlashCommandAvailabilityContext,
   InlineContent,
   InlineRange,
   InlineRenderer,

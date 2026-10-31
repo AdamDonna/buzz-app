@@ -1883,6 +1883,12 @@ must be non-blank text, `done` must be `true`, and `notice`, if present, a strin
 `signal` aborts when the destination changes or the composer unmounts. The `scope` in
 `run`'s context is the session scope, not a conversation scope.
 
+A `done` result may also carry `after`, a function the host calls once, after it has
+cleared the draft and shown the notice. Use it for navigation: opening another
+conversation unmounts the composer and aborts `signal`, so a command that navigates
+must not do so from inside `run`. `after` is valid only on `done`; a `send` result
+that carries one is an invalid result.
+
 `scopes` limits where a command is offered and runs: any of `"channel"` (a top-level
 message in a non-DM channel), `"dm"` (a direct message, including a reply in a thread
 there) and `"thread"` (a reply in a thread in a non-DM channel). The three do not
@@ -1891,6 +1897,17 @@ overlap, so a command for a non-DM channel and its threads lists
 scope; an empty list or an unknown value is rejected at registration. The host copies
 and freezes the list. Outside its scopes the typeahead hides the command, and running it fails
 visibly with the draft kept, like any other failed command, before `run` is called.
+
+`available?({ session, scope, channelId, threadRootId?, conversation })` is the
+"hidden when" check for anything `scopes` cannot say, such as the viewer's role in the
+channel. It is synchronous and cheap: it reads state the session already holds and
+never awaits. Omitted means available. A throw, or any return other than `true`,
+counts as unavailable. The typeahead hides an unavailable command and re-evaluates
+when the channel list changes, so a role change shows or hides it live. Running one
+anyway (typed by hand, or through a hidden alias) fails with `/name isn't available
+here` before `run`, and the draft is kept. Aliases never list but resolve like the
+name, with the same `scopes` and `available`. The check only decides what is offered;
+`run` still verifies what it changes, because the relay is the authority.
 
 Only composers that pass `slashCommands` run commands: the channel and DM composers
 and the thread composer. Solo chats, message edit, Inbox previews, media review and
@@ -1905,7 +1922,26 @@ its space are omitted when empty). It also registers a completion provider that 
 commands by name while the caret ends a leading `/token`. Choosing a row inserts
 `/name ` and never runs it. The existing completion host supplies arrow, Enter, Tab
 and Escape handling. Other result variants (`ui`, cancelled) and availability that
-depends on more than the conversation scope are not part of this contract yet.
+depends on a relay round trip are not part of this contract yet.
+
+`buzz.commands` also ships the channel membership commands, each over the service the
+channel UI already uses and each throwing on failure so the draft stays:
+
+| Command | Scopes | Offered when | Result |
+| --- | --- | --- | --- |
+| `/invite @user…` | channel, thread | the viewer may add members | adds each person; says who is already in |
+| `/remove @user…` (hidden alias `/kick`) | channel, thread | the viewer is owner or admin of a regular channel | removes each person after refreshing roles; confirms from the operation state |
+| `/join #channel` | any | always | joins when not a member, then opens the channel |
+| `/leave` (alias `/part`) | channel, thread | the viewer is a member of a regular channel | leaves, then opens the next conversation |
+| `/who` (alias `/members`) | any | always | opens the conversation's member panel |
+
+`/invite` and `/remove` take only @mentions; no mention, or text that is not a
+mention, is rejected with the usage. They act on people in order. When some fail the
+command reports a failure that names who was added or removed and who was not, and
+keeps the draft, so rerunning finishes the rest. It never reports full success for a
+partial result. Mentions typed into a command draft skip the agent and non-member
+admission prompts, since the command adds membership itself. `/join` takes one
+channel picked from the `#` list.
 
 ### Composer completion providers
 

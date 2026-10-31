@@ -244,14 +244,30 @@ export type SlashCommandContext = Readonly<{
 /** `send` replaces the draft's content; the host sends it to the same channel
  * or thread, with the draft's mentions, through the ordinary send path.
  * `done` sends nothing: the host clears the draft and shows `notice`, if any,
- * as a short status confirmation. */
+ * as a short status confirmation. `after` runs once the draft is cleared, for
+ * a command that moves the user to another conversation: that move unmounts
+ * the composer, so it must not happen before the draft is gone. */
 export type SlashCommandResult =
-  | Readonly<{ send: string; done?: never; notice?: never }>
-  | Readonly<{ done: true; notice?: string | undefined; send?: never }>;
+  | Readonly<{ send: string; done?: never; notice?: never; after?: never }>
+  | Readonly<{
+      done: true;
+      notice?: string | undefined;
+      after?: (() => void) | undefined;
+      send?: never;
+    }>;
 /** Where a draft is composed: a top-level message in a non-DM channel, a direct
  * message (including a reply in a thread there), or a reply in a thread in a
  * non-DM channel. */
 export type SlashCommandScope = "channel" | "dm" | "thread";
+/** What `available` may read: where the draft is composed, never the draft. */
+export type SlashCommandAvailabilityContext = Readonly<{
+  session: ComposerSession;
+  scope: string;
+  channelId: string;
+  threadRootId?: string | undefined;
+  /** The conversation kind the draft is composed in. */
+  conversation: SlashCommandScope;
+}>;
 /** A typed entry point to an action the app already has. The first token of a
  * channel, DM or thread draft that is `/` plus a registered name or alias runs
  * the command on send; any other draft sends unchanged. */
@@ -269,6 +285,13 @@ export type SlashCommand = Readonly<{
    * these scopes the list hides it and running it fails visibly with the
    * draft kept. */
   scopes?: readonly SlashCommandScope[];
+  /** Whether this viewer can run the command here, checked after `scopes`.
+   * False hides it from the list; running it anyway fails visibly with the
+   * draft kept, before `run`. Synchronous and cheap, since the list calls it
+   * on every render, and it may only read what the session already holds. The
+   * relay stays the authority: this hides what is known to be denied. A throw
+   * counts as false. */
+  available?(context: SlashCommandAvailabilityContext): boolean;
   /** Throw to fail: the host shows the message and keeps the draft and its
    * attachments. Nothing is retried. */
   run(

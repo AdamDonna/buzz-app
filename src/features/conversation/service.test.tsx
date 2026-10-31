@@ -398,6 +398,10 @@ it.each([
   ["an id with a slash", { id: "a/b" }],
   ["an empty scopes list", { scopes: [] }],
   ["an unknown scope", { scopes: ["room"] as never }],
+  [
+    "an availability check that is not a function",
+    { available: true as never },
+  ],
 ])("rejects a command with %s and keeps the valid one", async (_label, bad) => {
   const run = () => ({ send: "x" });
   const valid = {

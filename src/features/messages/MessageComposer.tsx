@@ -143,10 +143,12 @@ import { RichComposerInput } from "./RichComposerInput";
 import type { MessageLinkOrigin } from "./MessageRow";
 import { composerMarkdown } from "./composer-markdown";
 import {
+  isAvailable,
   recognizeSlashCommand,
   runSlashCommand,
   runsInScope,
   scopeRefusal,
+  unavailableRefusal,
 } from "../conversation/slash-command";
 import type {
   ComposerInputElement,
@@ -2384,6 +2386,17 @@ function Composer({
         throw new Error(scopeRefusal(command.command));
       if (
         command &&
+        !isAvailable(command.command, {
+          session,
+          scope,
+          channelId,
+          threadRootId,
+          conversation: slashScope,
+        })
+      )
+        throw new Error(unavailableRefusal(command.command));
+      if (
+        command &&
         (capturedAttachments.length ||
           captured.chatCards?.length ||
           captured.gifs?.length)
@@ -2395,6 +2408,7 @@ function Composer({
         (agents?.joinable() ?? []).map((agent) => agent.pubkey),
       );
       if (
+        !command &&
         capturedRecipients.some(
           (p) => archivedMention(session, p.pubkey) && !bringable.has(p.pubkey),
         )
@@ -2435,7 +2449,9 @@ function Composer({
           recipients,
           routing && !captured.recipients.length,
         );
-      } else if (recipients.length) {
+      } else if (recipients.length && !command) {
+        // A command's mentions are its arguments, not people the message
+        // notifies, so none of this admission applies to them.
         // An agent only an earlier Buzz runs would not answer; offer it here first.
         const lookup = oldAgents.find(captured.recipients);
         const old = lookup instanceof Promise ? await lookup : lookup;
@@ -2574,6 +2590,7 @@ function Composer({
         if (result.done) {
           settle(mentionDraft(""));
           setNotice(result.notice);
+          result.after?.();
           return;
         }
         body = result.send;

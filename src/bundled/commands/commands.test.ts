@@ -38,10 +38,13 @@ it.each([
   expect(slashQuery(text, caret)).toEqual(expected);
 });
 
+const here = { session: {} as never, scope: "scope", channelId: "channel" };
+
 function command(
   name: string,
   aliases?: string[],
   scopes?: SlashCommandScope[],
+  available?: SlashCommand["available"],
 ): Contribution<SlashCommand> {
   return {
     id: name,
@@ -51,6 +54,7 @@ function command(
     name,
     ...(aliases ? { aliases } : {}),
     ...(scopes ? { scopes } : {}),
+    ...(available ? { available } : {}),
     usage: `/${name}`,
     description: name,
     run: () => ({ send: name }),
@@ -66,7 +70,7 @@ it("lists commands whose name starts with the query, by name, never by alias", (
     command("rename"),
   ];
   const names = (query: string) =>
-    listSlashCommands(commands, query, "channel").map(({ name }) => name);
+    listSlashCommands(commands, query, "channel", here).map(({ name }) => name);
   expect(names("")).toEqual(["remove", "rename", "shrug", "status", "topic"]);
   expect(names("RE")).toEqual(["remove", "rename"]);
   expect(names("s")).toEqual(["shrug", "status"]);
@@ -81,9 +85,36 @@ it("lists a scoped command only in its scopes", () => {
     command("shrug"),
   ];
   const names = (scope: SlashCommandScope | undefined) =>
-    listSlashCommands(commands, "", scope).map(({ name }) => name);
+    listSlashCommands(commands, "", scope, here).map(({ name }) => name);
   expect(names("channel")).toEqual(["away", "invite", "shrug"]);
   expect(names("dm")).toEqual(["away", "shrug"]);
   expect(names("thread")).toEqual(["away", "shrug"]);
   expect(names(undefined)).toEqual(["shrug"]);
+});
+
+it("hides a command its availability check denies, for the place the draft is in", () => {
+  const seen: unknown[] = [];
+  const commands = [
+    command("kick", undefined, undefined, () => false),
+    command("part", undefined, undefined, () => {
+      throw new Error("boom");
+    }),
+    command("who", undefined, undefined, (context) => {
+      seen.push(context);
+      return true;
+    }),
+    command("shrug"),
+  ];
+  expect(
+    listSlashCommands(commands, "", "thread", {
+      ...here,
+      threadRootId: "root",
+    }).map(({ name }) => name),
+  ).toEqual(["shrug", "who"]);
+  expect(seen).toEqual([
+    { ...here, threadRootId: "root", conversation: "thread" },
+  ]);
+  expect(
+    listSlashCommands(commands, "", undefined, here).map(({ name }) => name),
+  ).toEqual(["shrug"]);
 });
