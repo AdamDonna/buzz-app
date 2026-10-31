@@ -155,6 +155,7 @@ createRoot(root).render(
         <ProfileButton
           communities={communities}
           accountActions={accountActions}
+          bindStatusSheet={() => () => {}}
           appearance={appearance}
           settingsSelected={false}
           onSettings={() => {}}

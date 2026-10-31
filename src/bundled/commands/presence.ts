@@ -6,9 +6,8 @@ export function choosePresence(
   presence: PresenceControl,
   preference: "away" | "auto",
 ) {
-  presence.setPreference(preference);
-  const { preference: current, error } = presence.snapshot();
-  if (current !== preference)
+  if (!presence.setPreference(preference))
     throw new Error("Could not change your availability.");
+  const { error } = presence.snapshot();
   if (error) throw new Error(error);
 }

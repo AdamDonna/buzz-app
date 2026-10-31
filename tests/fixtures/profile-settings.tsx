@@ -144,6 +144,7 @@ function Fixture() {
         <ProfileButton
           communities={communities}
           accountActions={accountActions}
+          bindStatusSheet={() => () => {}}
           appearance={appearance}
           settingsSelected={human}
           onSettings={() => setHuman(true)}

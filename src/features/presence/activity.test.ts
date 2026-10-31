@@ -90,6 +90,17 @@ it("Online resumes automatic detection and migrates saved Online", async () => {
   activity.dispose();
 });
 
+it("applies a preference only once a viewer is set, and says so", () => {
+  vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+  const activity = createPresenceActivity();
+  expect(activity.setPreference("away")).toBe(false);
+  expect(activity.snapshot().preference).toBe("auto");
+  activity.setViewer("viewer");
+  expect(activity.setPreference("away")).toBe(true);
+  expect(activity.snapshot().preference).toBe("away");
+  activity.dispose();
+});
+
 it("uses machine idle outside Buzz and falls back after native failures, with no late disposal work", async () => {
   vi.useFakeTimers();
   vi.stubGlobal(

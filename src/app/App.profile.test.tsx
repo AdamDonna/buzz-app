@@ -10,7 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { finalizeEvent, getPublicKey } from "nostr-tools";
 import { StrictMode } from "react";
 import { App } from "./App";
@@ -120,6 +120,7 @@ async function setup(
     channelId: string;
     muted: boolean;
   }) => Promise<Response>,
+  writeKinds: number[] = [9],
 ) {
   // jsdom has no media queries; responsive shell geometry is covered in browsers.
   vi.stubGlobal("matchMedia", (media: string) => ({
@@ -179,7 +180,7 @@ async function setup(
           viewer,
           relayAuthor: viewer,
           relayUrl: origin,
-          writeKinds: [9],
+          writeKinds,
           directMessages: true,
           sidebarPreferences: !!muteWrite,
           sidebarMuteWrites: !!muteWrite,
@@ -580,6 +581,31 @@ it("delivers a page sidebar target only after selecting its personal scope", asy
     expect(observation.relayScope).toBeUndefined();
   }
 });
+
+it("opens the set-status sheet from a bare /status typed in a channel composer", async () => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value() {},
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  });
+  const user = await setup(false, vi.fn(), [9, 30315]);
+  const sidebar = await screen.findByRole("complementary", { name: "Sidebar" });
+  await user.click(
+    await within(sidebar).findByRole("button", { name: "Planning" }),
+  );
+  const editor = await screen.findByRole<ComposerInputElement>("textbox", {
+    name: /^Message/,
+  });
+  await user.click(editor);
+  await user.paste("/status");
+  await user.keyboard("{Enter}");
+  await user.keyboard("{Enter}");
+  expect(
+    await screen.findByRole("dialog", { name: "Set a status" }),
+  ).toBeVisible();
+}, 30000);
 
 it("opens profile settings from the account menu header", async () => {
   const user = await setup();

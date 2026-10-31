@@ -31,7 +31,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     description: "Set your availability to away",
     run: () => {
       choosePresence(presence, "away");
-      return { done: true, notice: "You are set to away" };
+      return { done: true, notice: "Availability set to away." };
     },
   });
   conversation.registerCommand({
@@ -41,7 +41,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     description: "Clear your away setting",
     run: () => {
       choosePresence(presence, "auto");
-      return { done: true, notice: "You are set to active" };
+      return { done: true, notice: "Availability set to automatic." };
     },
   });
   conversation.registerCommand({

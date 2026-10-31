@@ -13582,7 +13582,7 @@ it("sets away from a channel, and clears the override from a thread, announcing 
   const h = mount({ extensions: service, slashCommands: true });
   h.fill("/away ");
   await h.user.keyboard("{Enter}");
-  expect(await screen.findByText("You are set to away")).toHaveAttribute(
+  expect(await screen.findByText("Availability set to away.")).toHaveAttribute(
     "role",
     "status",
   );
@@ -13598,10 +13598,9 @@ it("sets away from a channel, and clears the override from a thread, announcing 
   });
   thread.fill("/ACTIVE");
   thread.submit();
-  expect(await screen.findByText("You are set to active")).toHaveAttribute(
-    "role",
-    "status",
-  );
+  expect(
+    await screen.findByText("Availability set to automatic."),
+  ).toHaveAttribute("role", "status");
   expect(thread.input()).toHaveValue("");
   expect(service.presence.snapshot().preference).toBe("auto");
   expect(localStorage.getItem(key)).toBe("auto");
@@ -13719,7 +13718,7 @@ it("opens the status sheet for a bare /status, and keeps the draft when the shee
   service.statusSheet.open.mockReturnValue(false);
   await type("/status");
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Status updates are unavailable here.",
+    "Status updates are unavailable in this community.",
   );
   expect(h.input()).toHaveTextContent("/status");
   offline = true;

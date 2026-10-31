@@ -144,8 +144,9 @@ export function createPresenceActivity(
       choice = "auto";
       restore();
     },
+    /** False when no viewer is set, so nothing was applied or saved. */
     setPreference(value: PresencePreference) {
-      if (!viewer) return;
+      if (!viewer) return false;
       const previous = choice;
       choice = preference(value);
       command++;
@@ -161,6 +162,7 @@ export function createPresenceActivity(
       }
       if (choice === "auto") input();
       emit();
+      return true;
     },
     visible: () => shown,
     subscribe(listener: () => void) {
@@ -195,8 +197,10 @@ export type PresenceActivity = Pick<
 /** What a plugin may do with the viewer's manual presence choice. */
 export type PresenceControl = Pick<
   ReturnType<typeof createPresenceActivity>,
-  "snapshot" | "setPreference"
->;
+  "snapshot"
+> & {
+  setPreference(value: "away" | "auto"): boolean;
+};
 
 declare module "@deepseek-ai/cordis" {
   interface Context {

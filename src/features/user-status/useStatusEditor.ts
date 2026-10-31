@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { RelaySession } from "../relay/session";
 import type { UserStatus } from "../relay/user-status";
 
@@ -16,20 +16,21 @@ export function useStatusEditor(
     setEditor(undefined);
   }, [session, viewer]);
   const close = () => setEditor(undefined);
+  const open = useCallback(() => {
+    if (!session || !viewer) return false;
+    setEditor({
+      session,
+      viewer,
+      current: session.statuses.snapshot().get(viewer),
+    });
+    return true;
+  }, [session, viewer]);
   return {
     editor:
       editor?.session === session && editor?.viewer === viewer
         ? editor
         : undefined,
-    open() {
-      if (!session || !viewer) return false;
-      setEditor({
-        session,
-        viewer,
-        current: session.statuses.snapshot().get(viewer),
-      });
-      return true;
-    },
+    open,
     close,
   };
 }

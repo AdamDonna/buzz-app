@@ -24,6 +24,7 @@ import { AppShell } from "./AppShell";
 import { createAppearance } from "../../shared/theme/service";
 
 const testAppearance = createAppearance(window);
+const noStatusBinding = () => () => {};
 
 vi.mock("../../bundled", () => ({ bundledPlugins: [] }));
 
@@ -99,6 +100,7 @@ it("hides and shows the channel sidebar without re-rendering its content", async
         sidebar={sidebar}
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -156,6 +158,7 @@ it("lets a plugin page hide and show the shell sidebar", async () => {
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -221,6 +224,7 @@ it("does not make a non-primary plugin page's sidebar collapsible", () => {
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -250,6 +254,7 @@ it("keeps built-in sidebar controls available before page contributions load", (
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -299,6 +304,7 @@ it("lets a non-primary page-owned sidebar collapse without losing local state", 
         sidebar={sidebar}
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -358,6 +364,7 @@ it("keeps narrow contributed sidebars in the existing Escape-dismissed navigatio
         sidebar={sidebar}
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -410,6 +417,7 @@ it("shows a primary plugin page's declared icon beside its nav label", () => {
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -455,6 +463,7 @@ it("contains a throwing page badge to its own nav row", () => {
           tone="default"
           communities={current.communities}
           accountActions={current.accountActions}
+          bindStatusSheet={noStatusBinding}
           appearance={testAppearance}
         >
           content
@@ -505,6 +514,7 @@ it("partitions primary pages without duplicate links and preserves exact selecti
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -576,6 +586,7 @@ it("routes compact header pages through the labelled overflow with main focus ha
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         content
@@ -624,6 +635,7 @@ it("falls back from a failed toolbar image and isolates toolbar badge errors", (
           tone="default"
           communities={current.communities}
           accountActions={current.accountActions}
+          bindStatusSheet={noStatusBinding}
           appearance={testAppearance}
         >
           content
@@ -667,6 +679,7 @@ it("uses chrome tabs with manual keyboard selection, page linkage, and isolated 
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
+        bindStatusSheet={noStatusBinding}
         appearance={testAppearance}
       >
         Page content
@@ -767,6 +780,7 @@ it.each([false, true])(
           tone="default"
           communities={current.communities}
           accountActions={current.accountActions}
+          bindStatusSheet={noStatusBinding}
           appearance={testAppearance}
         >
           <p>Child content</p>
@@ -898,6 +912,7 @@ it.each([true, false])(
           tone="default"
           communities={current.communities}
           accountActions={current.accountActions}
+          bindStatusSheet={noStatusBinding}
           appearance={testAppearance}
           searchServices={current}
           creationInSidebar={creationInSidebar}

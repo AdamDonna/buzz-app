@@ -137,34 +137,29 @@ it("asks the resolver only about a lone :shortcode: first argument", async () =>
 });
 
 const control = (
-  preference: string,
+  accepted: boolean,
   error?: string,
 ): [PresenceControl, ReturnType<typeof vi.fn>] => {
-  const setPreference = vi.fn();
+  const setPreference = vi.fn(() => accepted);
   return [
     {
       setPreference,
-      snapshot: () => ({ status: "online", preference, error }),
-    } as unknown as PresenceControl,
+      snapshot: () => ({ status: "online", preference: "auto", error }),
+    },
     setPreference,
   ];
 };
 
 it.each([
-  ["away", "away", undefined, undefined],
-  ["auto", "auto", undefined, undefined],
-  ["away", "auto", undefined, "Could not change your availability."],
-  ["auto", "away", undefined, "Could not change your availability."],
-  [
-    "away",
-    "away",
-    "Could not save your status.",
-    "Could not save your status.",
-  ],
+  ["away", true, undefined, undefined],
+  ["auto", true, undefined, undefined],
+  ["away", false, undefined, "Could not change your availability."],
+  ["auto", false, undefined, "Could not change your availability."],
+  ["away", true, "Could not save your status.", "Could not save your status."],
 ] as const)(
-  "sets %s and reports a failed or unsaved presence change (%s, %s)",
-  (target, current, error, failure) => {
-    const [presence, setPreference] = control(current, error);
+  "sets %s and reports a missing viewer or an unsaved presence change (accepted %s, error %s)",
+  (target, accepted, error, failure) => {
+    const [presence, setPreference] = control(accepted, error);
     if (failure)
       expect(() => choosePresence(presence, target)).toThrow(failure);
     else expect(() => choosePresence(presence, target)).not.toThrow();

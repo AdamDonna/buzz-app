@@ -55,7 +55,8 @@ export async function runStatus(
     resolveShortcode(session, code),
   );
   if (request.kind === "open") {
-    if (!sheet.open()) throw new Error("Status updates are unavailable here.");
+    if (!sheet.open())
+      throw new Error("Status updates are unavailable in this community.");
     return undefined;
   }
   if (!session.statuses)

@@ -17,6 +17,7 @@ import { ConversationService } from "../../src/features/conversation/service";
 import { ShortcutsService } from "../../src/features/shortcuts/service";
 import { SettingsCardsService } from "../../src/features/settings/service";
 import { bundledPlugins } from "../../src/bundled";
+import { provideCommandServices } from "./command-services";
 import { conversationFeatures } from "../../src/app/conversation-features";
 import { createRelaySession } from "../../src/features/relay/session";
 import { PublishRejected } from "../../src/features/relay/outbox";
@@ -278,6 +279,7 @@ new PanelsService(ctx);
 new SettingsCardsService(ctx);
 new ShortcutsService(ctx);
 const conversation = new ConversationService(ctx);
+provideCommandServices(ctx);
 // Deliberately fire a removed contribution's command before React can unmount it.
 conversation.tools.subscribe(() => {
   if (

@@ -14,6 +14,7 @@ import { SettingsCardsService } from "../../src/features/settings/service";
 import { provideNavigation } from "../../src/features/navigation/service";
 import { ConversationService } from "../../src/features/conversation/service";
 import { bundledPlugins } from "../../src/bundled";
+import { provideCommandServices } from "./command-services";
 import { conversationFeatures } from "../../src/app/conversation-features";
 import { bindNames } from "../../src/features/identity-names/service";
 import { createAgentDirectory } from "../../src/features/identity-names/testing";
@@ -362,6 +363,7 @@ const plugins = createPluginManager(context, {
   ],
 });
 const conversation = new ConversationService(context);
+provideCommandServices(context);
 if (channels) {
   new PagesService(context);
   new PanelsService(context);

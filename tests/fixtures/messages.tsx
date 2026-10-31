@@ -8,6 +8,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { createPluginManager } from "../../src/plugins/manager";
 import { ConversationService } from "../../src/features/conversation/service";
 import { conversationFeatures } from "../../src/app/conversation-features";
+import { provideCommandServices } from "./command-services";
 import { ThreadPanel } from "../../src/features/messages/ThreadPanel";
 import { MessageComposer } from "../../src/features/messages/MessageComposer";
 import { VideoPlayer } from "../../src/features/messages/VideoPlayer";
@@ -51,6 +52,7 @@ const plugins = createPluginManager(context, {
   builtIn: conversationFeatures,
 });
 const extensions = new ConversationService(context);
+provideCommandServices(context);
 const viewer = keypair(),
   agent = keypair(),
   relay = keypair();
