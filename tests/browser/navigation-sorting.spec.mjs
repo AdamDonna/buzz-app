@@ -63,11 +63,13 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
             (value) => Number(value) < 1,
           ),
           scaled: window.sidebarMotion.scales.some((value) => value < 1),
+          minScale: Math.min(...window.sidebarMotion.scales),
         };
       });
       expect(result.same).toBe(true);
       expect(result.faded).toBe(reducedMotion === "no-preference");
       expect(result.scaled).toBe(reducedMotion === "no-preference");
+      expect(result.minScale).toBeGreaterThanOrEqual(0.85);
     });
   });
 }
@@ -169,14 +171,16 @@ test("keeps a stationary selected row visible while its neighbors exchange place
       ),
       movingFaded: state.frames.some((frame) => frame.moving < 1),
       movingScaled: state.frames.some((frame) => frame.movingScale < 1),
+      minScale: Math.min(...state.frames.map((frame) => frame.movingScale)),
     };
   });
-  expect(result).toEqual({
+  expect(result).toMatchObject({
     same: true,
     fixed: true,
     movingFaded: true,
     movingScaled: true,
   });
+  expect(result.minScale).toBeGreaterThanOrEqual(0.85);
   await expect(maple).toHaveAttribute("aria-current", "page");
 });
 // Native details/menu nesting, submenu focus/viewport placement and row reorder
