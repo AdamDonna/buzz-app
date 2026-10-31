@@ -197,7 +197,14 @@ it.each([
     ]);
     expect(
       services.conversation.commands.snapshot().map(({ key }) => key),
-    ).toEqual(["buzz.commands/shrug"]);
+    ).toEqual([
+      "buzz.commands/shrug",
+      "buzz.commands/invite",
+      "buzz.commands/remove",
+      "buzz.commands/join",
+      "buzz.commands/leave",
+      "buzz.commands/who",
+    ]);
     expect(
       services.conversation.inline.snapshot().map(({ key }) => key),
     ).toEqual(["buzz.emoji/custom"]);
