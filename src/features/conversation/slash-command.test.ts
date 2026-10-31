@@ -53,6 +53,14 @@ it.each([
   expect(recognizeSlashCommand(draft, commands)).toBeUndefined();
 });
 
+it("keeps a canonical name against another plugin's alias, whatever the keys", () => {
+  const found = recognizeSlashCommand("/shrug", [
+    command("a.plugin/shout", "shout", ["shrug"]),
+    command("z.plugin/shrug", "shrug"),
+  ]);
+  expect(found?.command.key).toBe("z.plugin/shrug");
+});
+
 it("gives a duplicated name to the lowest contribution key", () => {
   const found = recognizeSlashCommand("/shrug", [
     command("z.plugin/shrug", "shrug"),

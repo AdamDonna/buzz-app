@@ -389,6 +389,10 @@ it.each([
   ["an uppercase name", { name: "Shrug" }],
   ["a name with a slash", { name: "a/b" }],
   ["an alias with a space", { aliases: ["a b"] }],
+  ["no name", { name: undefined }],
+  ["a numeric name", { name: 7 }],
+  ["a string in place of the aliases", { aliases: "kick" }],
+  ["a non-string alias", { aliases: [7] }],
   ["an empty usage", { usage: " " }],
   ["an empty description", { description: "" }],
   ["an id with a slash", { id: "a/b" }],
@@ -406,7 +410,7 @@ it.each([
     inject: ["conversation"],
     apply({ conversation }) {
       try {
-        conversation.registerCommand({ ...valid, id: "bad", ...bad });
+        conversation.registerCommand({ ...valid, id: "bad", ...bad } as never);
       } catch (error) {
         failures.push(error);
       }

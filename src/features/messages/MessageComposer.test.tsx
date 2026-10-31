@@ -12878,6 +12878,11 @@ const wireShrug = "¯" + "\\".repeat(3) + "_(ツ)" + "\\" + "_/¯";
 async function commandService() {
   const root = new Context();
   let tools: ComposerToolProps | undefined;
+  const held = {
+    runs: 0,
+    signals: [] as AbortSignal[],
+    result: deferred<{ send: string }>(),
+  };
   const failing: PluginModule = {
     inject: ["conversation"],
     apply: ({ conversation }) => {
@@ -12897,6 +12902,24 @@ async function commandService() {
         run: () => {
           throw new Error("Shout is unavailable");
         },
+      });
+      conversation.registerCommand({
+        id: "hold",
+        name: "hold",
+        usage: "/hold",
+        description: "Waits until the test settles it",
+        run: ({ signal }) => {
+          held.runs++;
+          held.signals.push(signal);
+          return held.result.promise;
+        },
+      });
+      conversation.registerCommand({
+        id: "refuse",
+        name: "refuse",
+        usage: "/refuse",
+        description: "Rejects",
+        run: () => Promise.reject(new Error("Refused remotely")),
       });
     },
   };
@@ -12918,8 +12941,8 @@ async function commandService() {
     error: null,
   });
   runtime.reconcile([info("buzz.commands"), info("test.shout")]);
-  await vi.waitFor(() => expect(service.commands.snapshot()).toHaveLength(2));
-  return Object.assign(service, { composerTools: () => tools });
+  await vi.waitFor(() => expect(service.commands.snapshot()).toHaveLength(4));
+  return Object.assign(service, { composerTools: () => tools, held });
 }
 
 const commandRows = () =>
@@ -12932,8 +12955,10 @@ const commandRows = () =>
 it("completes slash commands from the keyboard without running them, and sends /shrug with the text first", async () => {
   const h = mount({ extensions: await commandService(), slashCommands: true });
   h.fill("/");
-  await waitFor(() => expect(commandRows()).toHaveLength(2));
+  await waitFor(() => expect(commandRows()).toHaveLength(4));
   expect(commandRows()).toEqual([
+    expect.stringContaining("/hold"),
+    expect.stringContaining("/refuse"),
     expect.stringContaining("/shout"),
     expect.stringContaining("/shrug [text]"),
   ]);
@@ -13046,4 +13071,101 @@ it("refuses to run a command with an attachment", async () => {
     "Commands can't be sent with attachments",
   );
   expect(h.publish).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("/shrug");
+  expect(screen.getByText("notes.txt")).toBeVisible();
+});
+
+it("runs a pending command once, keeps the draft until it settles, and clears it after", async () => {
+  const service = await commandService();
+  const h = mount({ extensions: service, slashCommands: true });
+  h.fill("/hold now");
+  await h.user.keyboard("{Enter}");
+  await waitFor(() => expect(service.held.runs).toBe(1));
+  await h.user.keyboard("{Enter}");
+  h.submit();
+  expect(service.held.runs).toBe(1);
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("/hold now");
+  await act(async () => service.held.result.resolve({ send: "done" }));
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "done",
+      [],
+      [],
+    ),
+  );
+  expect(h.input()).toHaveValue("");
+});
+
+it("keeps the draft and shows the reason when a command's promise rejects", async () => {
+  const h = mount({ extensions: await commandService(), slashCommands: true });
+  h.fill("/refuse please");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Refused remotely",
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("/refuse please");
+});
+
+it("abandons a pending command when the composer unmounts, sending and reporting nothing", async () => {
+  const service = await commandService();
+  const h = mount({ extensions: service, slashCommands: true });
+  h.fill("/hold now");
+  h.submit();
+  await waitFor(() => expect(service.held.runs).toBe(1));
+  const signal = service.held.signals[0];
+  expect(signal?.aborted).toBe(false);
+  h.unmount();
+  expect(signal?.aborted).toBe(true);
+  await act(async () => service.held.result.resolve({ send: "late" }));
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("chooses a typeahead option by pointer without running it", async () => {
+  const h = mount({ extensions: await commandService(), slashCommands: true });
+  h.fill("/sh");
+  await waitFor(() => expect(commandRows()).toHaveLength(2));
+  await h.user.click(screen.getByRole("option", { name: /\/shrug/ }));
+  expect(h.input()).toHaveValue("/shrug ");
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("takes the first Enter on a typed command name as a choice and the second as the send", async () => {
+  const h = mount({ extensions: await commandService(), slashCommands: true });
+  h.fill("/shrug");
+  await waitFor(() => expect(commandRows()).toHaveLength(1));
+  await h.user.keyboard("{Enter}");
+  expect(h.input()).toHaveValue("/shrug ");
+  expect(h.messages.send).not.toHaveBeenCalled();
+  await h.user.keyboard("{Enter}");
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      wireShrug,
+      [],
+      [],
+    ),
+  );
+});
+
+it("leaves a new conversation's composer without commands", async () => {
+  const submit = vi.fn();
+  const h = mount({
+    extensions: await commandService(),
+    slashCommands: true,
+    submission: { draftKey: "new", locked: false, disabled: false, submit },
+  });
+  h.fill("/sh");
+  await act(async () => {});
+  expect(commandRows()).toEqual([]);
+  h.fill("/shrug hi");
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  expect(submit).toHaveBeenCalledWith(
+    expect.objectContaining({ text: "/shrug hi" }),
+    expect.anything(),
+    undefined,
+  );
 });

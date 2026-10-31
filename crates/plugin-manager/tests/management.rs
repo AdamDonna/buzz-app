@@ -1056,7 +1056,7 @@ fn bundled_plugins_have_independent_flags_and_all_ids_are_reserved() {
         .unwrap();
         assert!(manager.install(&source).is_err());
     }
-    for id in ["buzz.emoji", "buzz.mentions"] {
+    for id in ["buzz.emoji", "buzz.mentions", "buzz.commands"] {
         fs::write(
             source.join("manifest.json"),
             serde_json::to_vec(&serde_json::json!({
@@ -1195,7 +1195,7 @@ fn built_in_conversation_features_are_absent_even_with_old_disabled_flags() {
         serde_json::to_vec(&serde_json::json!({
             "version": 2,
             "bundledEnabled": true,
-            "bundledOverrides": { "buzz.emoji": false, "buzz.mentions": false },
+            "bundledOverrides": { "buzz.emoji": false, "buzz.mentions": false, "buzz.commands": false },
             "installed": {}
         }))
         .unwrap(),
@@ -1203,7 +1203,7 @@ fn built_in_conversation_features_are_absent_even_with_old_disabled_flags() {
     .unwrap();
     let reopened = Manager::open(Some(root.path().to_path_buf()), "test", false).unwrap();
     let catalog = reopened.catalog().unwrap();
-    for id in ["buzz.emoji", "buzz.mentions"] {
+    for id in ["buzz.emoji", "buzz.mentions", "buzz.commands"] {
         assert!(!catalog
             .plugins
             .iter()
@@ -1227,7 +1227,7 @@ fn built_in_conversation_features_are_absent_even_with_old_disabled_flags() {
 
 #[test]
 fn registry_cannot_restore_plugins_with_built_in_conversation_ids() {
-    for id in ["buzz.emoji", "buzz.mentions"] {
+    for id in ["buzz.emoji", "buzz.mentions", "buzz.commands"] {
         let (_root, manager, source) = fixture();
         manager.install(&source).unwrap();
         let path = manager.storage_root().join("registry.json");

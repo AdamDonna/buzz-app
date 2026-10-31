@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn prebuilt_artifacts_cannot_claim_built_in_conversation_ids() {
-        for id in ["buzz.emoji", "buzz.mentions"] {
+        for id in ["buzz.emoji", "buzz.mentions", "buzz.commands"] {
             let release = Release {
                 bytes: serde_json::to_vec(&serde_json::json!({
                     "manifest": { "id": id, "name": "Reserved feature", "apiVersion": 1 },

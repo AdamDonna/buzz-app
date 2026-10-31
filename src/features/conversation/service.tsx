@@ -310,9 +310,15 @@ export class ConversationService extends Service implements Conversation {
     if (
       !value ||
       !/^[a-z0-9][a-z0-9._-]*$/.test(value.id) ||
-      ![value.name, ...(value.aliases ?? [])].every((word) =>
-        name.test(word),
-      ) ||
+      typeof value.name !== "string" ||
+      !name.test(value.name) ||
+      (value.aliases !== undefined &&
+        !(
+          Array.isArray(value.aliases) &&
+          value.aliases.every(
+            (alias) => typeof alias === "string" && name.test(alias),
+          )
+        )) ||
       !value.usage?.trim() ||
       !value.description?.trim() ||
       typeof value.run !== "function"

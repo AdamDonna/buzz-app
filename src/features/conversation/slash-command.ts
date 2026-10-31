@@ -1,14 +1,18 @@
 import type { Contribution } from "../../plugins/contributions";
 import type { SlashCommand } from "./contracts";
 
-/** Every registered name and alias; a duplicate belongs to the lowest key. */
+/** Every registered name and alias. A canonical name beats any alias; among
+ * claimants of one name, the lowest key wins. */
 export function slashNames(commands: readonly Contribution<SlashCommand>[]) {
   const names = new Map<string, Contribution<SlashCommand>>();
-  for (const command of [...commands].sort((a, b) =>
-    a.key.localeCompare(b.key),
-  ))
-    for (const name of [command.name, ...(command.aliases ?? [])])
-      if (!names.has(name)) names.set(name, command);
+  const sorted = [...commands].sort((a, b) =>
+    a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
+  );
+  for (const command of sorted)
+    if (!names.has(command.name)) names.set(command.name, command);
+  for (const command of sorted)
+    for (const alias of command.aliases ?? [])
+      if (!names.has(alias)) names.set(alias, command);
   return names;
 }
 

@@ -945,7 +945,7 @@ function Composer({
     completion.invalidate();
   });
   const commands =
-    slashCommands && !solo && !editing.target
+    slashCommands && !solo && !editing.target && !submission
       ? extensions?.commands
       : undefined;
   const editScope = useMessageEditScope();

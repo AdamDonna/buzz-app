@@ -1726,7 +1726,7 @@ controls. Its action opens the diagram in an expanded dialog, which zooms by
 pinch, Ctrl/⌘-scroll, drag, double-click and keyboard and offers Copy code.
 Invalid source shows Pele's error with the source.
 
-The conversation preview exposes top-level `registerTool`, `registerCompletion` and `registerInline`
+The conversation preview exposes top-level `registerTool`, `registerCompletion`, `registerCommand` and `registerInline`
 methods and stable `conversation.ui.Composer` / `.Message` / `.Thread` components, plus `.Tabs` while a plugin provides it. Generated
 type-only `@buzz/author` declarations are exercised by a source-only external consumer
 fixture in `tests/fixtures/conversation-consumer`; it is built and installed only in
