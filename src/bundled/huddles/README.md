@@ -4,6 +4,6 @@ Talk with people in your channels and direct messages using live audio on deskto
 
 ## Getting started
 
-1. Open a channel or direct message and select the headphone button to start or join a Huddle.
+1. Open a channel or direct message and select the headphone button, or type `/huddle` in the message box, to start or join a Huddle.
 2. Allow microphone access when prompted. Use the Huddle controls to mute yourself or choose an audio device.
 3. Leave using the call controls when you're finished. Closing the Huddle window keeps the call connected; reopen it from the mini player beside search.
