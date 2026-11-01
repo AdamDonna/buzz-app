@@ -22,6 +22,13 @@ import styles from "./ChannelSidebarRows.module.css";
 // Fast Refresh preserves refs; a replaced module must restart the prepared batch.
 const animationGeneration = {};
 
+function clearSlide(node: HTMLElement) {
+  if (node.style.transform && node.style.transform !== "none")
+    node.style.transform = "none";
+  if (node.hasAttribute("data-moving")) delete node.dataset.moving;
+  if (node.style.zIndex) node.style.zIndex = "";
+}
+
 /** Keep local movement short; fade distant jumps between their endpoints. */
 export function ChannelSidebarRows({
   children,
@@ -141,11 +148,7 @@ const ChannelRow = memo(
       return () => {
         playback.current?.stop();
         position.current = null;
-        if (node) {
-          node.style.transform = "none";
-          delete node.dataset.moving;
-          node.style.zIndex = "";
-        }
+        if (node) clearSlide(node);
       };
     }, []);
     useLayoutEffect(() => {
@@ -156,9 +159,7 @@ const ChannelRow = memo(
       position.current = { index, top };
       if (!present || !animated) {
         playback.current?.stop();
-        node.style.transform = "none";
-        delete node.dataset.moving;
-        node.style.zIndex = "";
+        clearSlide(node);
         return;
       }
       if (!previous || previous.index === index || previous.top === top) return;
@@ -172,9 +173,7 @@ const ChannelRow = memo(
           window.innerHeight;
       playback.current?.stop();
       if (!visible || Math.abs(previous.index - index) > 2 || delta === 0) {
-        node.style.transform = "none";
-        delete node.dataset.moving;
-        node.style.zIndex = "";
+        clearSlide(node);
         return;
       }
       // Nearby crossings retain an opaque backing. Distant rows never sweep
