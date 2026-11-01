@@ -1432,7 +1432,10 @@ it("restores lifecycle focus to the active row while an inert copy is exiting", 
     return (
       <button
         type="button"
-        onClick={() => navigation?.openLifecycle(channel, "archive")}
+        onClick={() => {
+          assert(channel);
+          navigation?.openLifecycle(channel, "archive");
+        }}
       >
         Start action
       </button>
