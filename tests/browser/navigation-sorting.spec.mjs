@@ -30,9 +30,8 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
         const sample = () => {
           const state = window.sidebarMotion;
           state.opacities.push(
-            getComputedStyle(
-              element.closest("[data-channel-sidebar-row]").parentElement,
-            ).opacity,
+            getComputedStyle(element.closest("[data-channel-sidebar-row]"))
+              .opacity,
           );
           const transform = getComputedStyle(
             element.closest("[data-channel-sidebar-row]").parentElement,
@@ -50,9 +49,8 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           .poll(() =>
             cedar.evaluate((element) =>
               Number(
-                getComputedStyle(
-                  element.closest("[data-channel-sidebar-row]").parentElement,
-                ).opacity,
+                getComputedStyle(element.closest("[data-channel-sidebar-row]"))
+                  .opacity,
               ),
             ),
           )
@@ -141,7 +139,16 @@ test("keeps a stationary selected row visible while its neighbors exchange place
       state.frames.push({
         y: element.getBoundingClientRect().y,
         stationary: Number(getComputedStyle(row).opacity) * opacity,
-        moving: Number(getComputedStyle(movingRow).opacity) * opacity,
+        moving:
+          Number(getComputedStyle(movingRow.firstElementChild).opacity) *
+          Number(getComputedStyle(movingRow).opacity) *
+          opacity,
+        backed:
+          movingRow.hasAttribute("data-moving") &&
+          getComputedStyle(movingRow).opacity === "1" &&
+          !["transparent", "rgba(0, 0, 0, 0)"].includes(
+            getComputedStyle(movingRow).backgroundColor,
+          ),
         movingX: movingRow.getBoundingClientRect().x,
         stationaryScale:
           getComputedStyle(row).transform === "none"
@@ -178,13 +185,23 @@ test("keeps a stationary selected row visible while its neighbors exchange place
         .locator('[data-channel-id="cedar"]')
         .evaluate((element) =>
           Number(
-            getComputedStyle(
-              element.closest("[data-channel-sidebar-row]").parentElement,
-            ).opacity,
+            getComputedStyle(element.closest("[data-channel-sidebar-row]"))
+              .opacity,
           ),
         ),
     )
     .toBeLessThan(0.9);
+  const layers = await section.evaluate((section) => {
+    const wrapper = (id) =>
+      section
+        .querySelector(`[data-channel-id="${id}"]`)
+        .closest("[data-channel-sidebar-row]").parentElement;
+    return {
+      promoted: Number(getComputedStyle(wrapper("willow")).zIndex),
+      displaced: Number(getComputedStyle(wrapper("cedar")).zIndex),
+    };
+  });
+  expect(layers.promoted).toBeGreaterThan(layers.displaced);
   await expect
     .poll(() =>
       maple.evaluate(
@@ -218,6 +235,9 @@ test("keeps a stationary selected row visible while its neighbors exchange place
           frame.stationaryScale === 1,
       ),
       movingFaded: state.frames.some((frame) => frame.moving < 1),
+      crossingIsOpaque: state.frames
+        .filter((frame) => frame.moving < 0.99)
+        .every((frame) => frame.backed),
       movingTransformed: state.frames.some(
         (frame) => frame.movingTransform !== "none",
       ),
@@ -230,9 +250,11 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     same: true,
     fixed: true,
     movingFaded: true,
+    crossingIsOpaque: true,
     movingTransformed: true,
     noLateralDrift: true,
   });
+  await expect(section.locator("[data-moving]")).toHaveCount(0);
   await expect(maple).toHaveAttribute("aria-current", "page");
 });
 // Real animation progress and retargeted screen positions require a browser.
@@ -278,9 +300,8 @@ test("retargets an unfinished slide without jumping or losing focus", async ({
     .poll(() =>
       willow.evaluate((element) =>
         Number(
-          getComputedStyle(
-            element.closest("[data-channel-sidebar-row]").parentElement,
-          ).opacity,
+          getComputedStyle(element.closest("[data-channel-sidebar-row]"))
+            .opacity,
         ),
       ),
     )
@@ -328,9 +349,8 @@ test("retargets an unfinished slide without jumping or losing focus", async ({
     .poll(() =>
       willow.evaluate(
         (element) =>
-          getComputedStyle(
-            element.closest("[data-channel-sidebar-row]").parentElement,
-          ).opacity,
+          getComputedStyle(element.closest("[data-channel-sidebar-row]"))
+            .opacity,
       ),
     )
     .toBe("1");
