@@ -56,6 +56,7 @@ import { ChannelReadMenuItem } from "../../bundled/channels/ChannelReadMenuItem"
 import { ChannelCopyLinkMenuItem } from "../../bundled/channels/ChannelCopyLinkMenuItem";
 import { ChannelSidebarItem } from "../../bundled/channels/ChannelSidebarItem";
 import { ChannelSidebarRows } from "./ChannelSidebarRows";
+import { activeChannelRows } from "./active-channel-rows";
 import type { UnreadDmPreview } from "../../bundled/channels/SidebarUnread";
 import {
   ChannelSidebarDnd,
@@ -343,11 +344,7 @@ export function ChannelInventory({
       trigger.focus({ preventScroll: true });
       return;
     }
-    const rows = [
-      ...(sidebar.list.current?.querySelectorAll<HTMLButtonElement>(
-        "[data-channel-id]",
-      ) ?? []),
-    ];
+    const rows = activeChannelRows(sidebar.list.current);
     const row =
       rows.find(
         (row) => row.dataset.channelId === id && row.getClientRects().length,
@@ -382,8 +379,8 @@ export function ChannelInventory({
     ) => {
       if (!viewer || relay.snapshot().session !== queries) return;
       const trigger =
-        sidebar.list.current?.querySelector<HTMLElement>(
-          `[data-channel-id="${CSS.escape(channelId)}"]`,
+        activeChannelRows(sidebar.list.current).find(
+          (row) => row.dataset.channelId === channelId,
         ) ?? null;
       const result = navigator.open({
         version: 1,
@@ -448,8 +445,8 @@ export function ChannelInventory({
         channelId,
         agent,
         trigger:
-          sidebar.list.current?.querySelector<HTMLElement>(
-            `[data-channel-id="${CSS.escape(channelId)}"]`,
+          activeChannelRows(sidebar.list.current).find(
+            (row) => row.dataset.channelId === channelId,
           ) ?? null,
       };
       if (handoff) handoff.activityAgent.current = intent;
@@ -840,15 +837,11 @@ export function ChannelInventory({
               surface.focus();
               return;
             }
-            const trigger = sidebar.list.current?.querySelector<HTMLElement>(
-              `[data-channel-id="${CSS.escape(channel.id)}"]`,
+            const trigger = activeChannelRows(sidebar.list.current).find(
+              (row) => row.dataset.channelId === channel.id,
             );
             const section = trigger?.closest("[data-sidebar-section]");
-            const rows = [
-              ...(section?.querySelectorAll<HTMLElement>(
-                "button[data-channel-id]",
-              ) ?? []),
-            ];
+            const rows = activeChannelRows(section);
             const index = rows.indexOf(trigger as HTMLButtonElement);
             const survivingSummary = [
               ...(sidebar.list.current?.querySelectorAll<HTMLElement>(
@@ -907,11 +900,9 @@ export function ChannelInventory({
   const rowFocusTarget = useCallback(
     (channelId: string) => {
       const list = sidebar.list.current;
-      const row = [
-        ...(list?.querySelectorAll<HTMLElement>(
-          `[data-channel-id="${CSS.escape(channelId)}"]`,
-        ) ?? []),
-      ].find((candidate) => !candidate.closest("[inert]"));
+      const row = activeChannelRows(list).find(
+        (candidate) => candidate.dataset.channelId === channelId,
+      );
       if (row) return row;
       const sectionKey = hiddenRowSections.current.get(channelId);
       return sectionKey
@@ -935,11 +926,9 @@ export function ChannelInventory({
     if (!rowFocus) return;
     (
       rowFocusTarget(rowFocus) ??
-      [
-        ...(sidebar.list.current?.querySelectorAll<HTMLButtonElement>(
-          "[data-channel-id]",
-        ) ?? []),
-      ].find((row) => row.getClientRects().length) ??
+      activeChannelRows(sidebar.list.current).find(
+        (row) => row.getClientRects().length,
+      ) ??
       sidebar.list.current
         ?.closest("aside")
         ?.querySelector<HTMLButtonElement>("button")
