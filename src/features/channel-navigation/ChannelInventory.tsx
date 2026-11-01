@@ -907,9 +907,11 @@ export function ChannelInventory({
   const rowFocusTarget = useCallback(
     (channelId: string) => {
       const list = sidebar.list.current;
-      const row = list?.querySelector<HTMLElement>(
-        `[data-channel-id="${CSS.escape(channelId)}"]`,
-      );
+      const row = [
+        ...(list?.querySelectorAll<HTMLElement>(
+          `[data-channel-id="${CSS.escape(channelId)}"]`,
+        ) ?? []),
+      ].find((candidate) => !candidate.closest("[inert]"));
       if (row) return row;
       const sectionKey = hiddenRowSections.current.get(channelId);
       return sectionKey
