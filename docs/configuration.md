@@ -82,10 +82,12 @@ After identity restoration the pin is present in the saved community inventory.
 A fresh identity starts there. An allowed saved selection or Personal space
 remains selected; a saved blocked selection falls back to the pin. Disallowed
 saved memberships are excluded before metadata reads, session acquisition and
-background agent startup, and omitted on the next community-record write.
-Their remote memberships and relay-scoped device data are retained. A failed
-preference write does not disable policy enforcement. Account sync, legacy
-import, invites and deep links pass through the same destination gate.
+background agent startup, but stay in the stored community record, so a build
+that allows them restores them. Their remote memberships and relay-scoped
+device data are retained. A failed preference write does not disable policy
+enforcement. Account sync, legacy import, invites and deep links pass through
+the same destination gate; a legacy import that skipped blocked relays offers
+them again once a build allows them.
 Saved agent identities remain in the reconciliation inventory so their settings
 and teams survive policy changes; blocked relays acquire no agent sessions or
 profile publications. Unfinished joins to blocked relays remain stored and are

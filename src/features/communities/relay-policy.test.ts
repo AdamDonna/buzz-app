@@ -58,15 +58,18 @@ afterEach(async () => {
   vi.resetModules();
 });
 
-async function startup(saved?: unknown) {
-  vi.stubEnv("VITE_BUZZ_RELAY_POLICY", raw);
+const viewer = "a".repeat(64);
+const recordKey = `buzz-client.v1:${viewer}`;
+
+async function startup(
+  saved?: unknown,
+  stored = new Map<string, string>(),
+  relaxed = false,
+) {
+  vi.stubEnv("VITE_BUZZ_RELAY_POLICY", relaxed ? undefined : raw);
   vi.resetModules();
   const { createCommunities } = await import("./service");
-  const viewer = "a".repeat(64);
-  const key = `buzz-client.v1:${viewer}`;
-  const stored = new Map(
-    saved === undefined ? [] : [[key, JSON.stringify(saved)]],
-  );
+  if (saved !== undefined) stored.set(recordKey, JSON.stringify(saved));
   vi.stubGlobal("localStorage", {
     getItem: (id: string) => stored.get(id) ?? null,
     setItem: (id: string, value: string) => stored.set(id, value),
@@ -86,7 +89,7 @@ async function startup(saved?: unknown) {
     connect,
   );
   await vi.waitFor(() => expect(client.snapshot().status).toBe("ready"));
-  return { client, connect };
+  return { client, connect, stored };
 }
 
 it("starts a fresh identity on the pin, refuses blocked joins and leaving the pin", async () => {
@@ -107,8 +110,8 @@ it("starts a fresh identity on the pin, refuses blocked joins and leaving the pi
   ).toBeNull();
 });
 
-it("drops a saved blocked relay without connecting to it", async () => {
-  const { client, connect } = await startup({
+it("hides a saved blocked relay without connecting to it or erasing it", async () => {
+  const { client, connect, stored } = await startup({
     memberships: [
       { id: "https://evil.example", name: "Evil" },
       { id: "https://other.example:8443", name: "Other" },
@@ -124,6 +127,43 @@ it("drops a saved blocked relay without connecting to it", async () => {
   expect(
     connect.mock.calls.every(([id]) => id === "https://relay.example"),
   ).toBe(true);
+  client.select("https://other.example:8443");
+  expect(
+    JSON.parse(stored.get(recordKey) ?? "null").memberships.map(
+      (m: { id: string }) => m.id,
+    ),
+  ).toEqual([
+    "https://relay.example",
+    "https://other.example:8443",
+    "https://evil.example",
+  ]);
+  const relaxed = await startup(undefined, stored, true);
+  expect(relaxed.client.snapshot().memberships.map((m) => m.id)).toContain(
+    "https://evil.example",
+  );
+});
+
+it("offers legacy relays a policy blocked once a build allows them", async () => {
+  const legacy = vi.fn(async () => [
+    { relayUrl: "wss://other.example:8443", pubkey: viewer },
+    { relayUrl: "wss://evil.example", pubkey: viewer },
+  ]);
+  const decline = vi.fn(async () => false);
+  const { client, stored } = await startup({ memberships: [], selected: null });
+  const { importLegacyCommunities } = await import("./legacy-communities");
+  importLegacyCommunities(client, decline, legacy);
+  await vi.waitFor(() =>
+    expect(stored.get(`buzz-legacy-communities.v1:${viewer}`)).toMatch(/^1:/),
+  );
+  expect(decline).toHaveBeenCalledWith(["https://other.example:8443"]);
+  const relaxed = await startup(undefined, stored, true);
+  const later = await import("./legacy-communities");
+  const confirm = vi.fn(async () => false);
+  later.importLegacyCommunities(relaxed.client, confirm, legacy);
+  await vi.waitFor(() =>
+    expect(stored.get(`buzz-legacy-communities.v1:${viewer}`)).toBe("1"),
+  );
+  expect(confirm).toHaveBeenCalledWith(["https://evil.example"]);
 });
 
 it("keeps a saved Personal space choice", async () => {

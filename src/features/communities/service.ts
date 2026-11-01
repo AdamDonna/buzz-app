@@ -12,6 +12,7 @@ import {
   relayAddress,
   configuredRelayPolicy,
   assertRelayRemovable,
+  RelayPolicyError,
 } from "./destination";
 import { purgeCommunityDeviceState, type PurgeFailure } from "./device-state";
 import { fetchCommunityPresentation } from "./community-icon";
@@ -298,9 +299,11 @@ export function createCommunities(
                         return [
                           { ...membership, id: communityDestination(m.id).id },
                         ];
-                      } catch {
+                      } catch (error) {
+                        // Keep aliases and policy-blocked relays stored, hidden.
                         if (
-                          isCommunityAlias(m.id) &&
+                          (isCommunityAlias(m.id) ||
+                            error instanceof RelayPolicyError) &&
                           !unresolvedMemberships.some(
                             (entry) => entry.id === m.id,
                           )
