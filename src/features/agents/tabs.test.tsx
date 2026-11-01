@@ -119,19 +119,17 @@ it("moves both synced histories into a collapsed Settings disclosure", async () 
   expect(sections.some((tab) => tab.value === "agent:history")).toBe(false);
   const section = sections.find((tab) => tab.value === "agent:settings");
   render(<div>{section?.render()}</div>);
-  const disclosure = screen.getByRole("button", { name: "Config history" });
+  const disclosure = screen.getByRole("button", { name: "Previous versions" });
   expect(disclosure).toHaveAttribute("aria-expanded", "false");
   expect(
-    screen.queryByRole("region", { name: "Settings history" }),
+    screen.queryByRole("region", { name: "Settings" }),
   ).not.toBeInTheDocument();
-  expect(await screen.findByText("0 revisions")).toBeInTheDocument();
+  expect(await screen.findByText("0 versions")).toBeInTheDocument();
   await userEvent.click(disclosure);
   expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("region", { name: "Settings" })).toBeInTheDocument();
   expect(
-    screen.getByRole("region", { name: "Settings history" }),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByRole("region", { name: "Instructions history" }),
+    screen.getByRole("region", { name: "Instructions" }),
   ).toBeInTheDocument();
 });
 

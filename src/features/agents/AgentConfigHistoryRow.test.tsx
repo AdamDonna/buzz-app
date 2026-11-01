@@ -73,19 +73,17 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
   const { agents, read, revise } = fixture();
   const user = userEvent.setup();
   render(<AgentConfigHistoryRow agents={agents} pubkey="a" />);
-  const row = screen.getByRole("button", { name: "Config history" });
+  const row = screen.getByRole("button", { name: "Previous versions" });
   expect(row).toHaveAttribute("aria-expanded", "false");
-  expect(await screen.findByText("3 revisions")).toBeInTheDocument();
+  expect(await screen.findByText("3 versions")).toBeInTheDocument();
   expect(read).toHaveBeenCalledTimes(2);
   expect(
-    screen.queryByRole("region", { name: "Instructions history" }),
+    screen.queryByRole("region", { name: "Instructions" }),
   ).not.toBeInTheDocument();
   await user.click(row);
-  expect(
-    screen.getByRole("region", { name: "Settings history" }),
-  ).toBeVisible();
+  expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
   const instructions = within(
-    screen.getByRole("region", { name: "Instructions history" }),
+    screen.getByRole("region", { name: "Instructions" }),
   );
   await user.click(
     instructions.getAllByRole("button", {
@@ -118,8 +116,8 @@ it("marks paginated counts as incomplete and updates the count after Load older"
   const { agents } = fixture(HISTORY_PAGE + 1);
   const user = userEvent.setup();
   render(<AgentConfigHistoryRow agents={agents} pubkey="a" />);
-  expect(await screen.findByText("101+ revisions")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Config history" }));
+  expect(await screen.findByText("101+ versions")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Previous versions" }));
   await user.click(screen.getByRole("button", { name: "Load older" }));
-  expect(await screen.findByText("102 revisions")).toBeInTheDocument();
+  expect(await screen.findByText("102 versions")).toBeInTheDocument();
 });

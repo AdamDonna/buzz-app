@@ -35,33 +35,32 @@ function HistoryRow({ history }: { history: ConfigHistory }) {
   const summary = tracks.some(
     (track) => !track || (!track.next && !track.failed),
   )
-    ? "Loading revision count…"
+    ? "Loading versions…"
     : tracks.some((track) => track?.failed)
-      ? "Revision count unavailable"
-      : `${count.toLocaleString()}${tracks.some((track) => !track?.done) ? "+" : ""} ${count === 1 ? "revision" : "revisions"}`;
+      ? "Version count unavailable"
+      : `${count.toLocaleString()}${tracks.some((track) => !track?.done) ? "+" : ""} ${count === 1 ? "version" : "versions"}`;
   return (
     <Accordion
       variant="settings"
       keepMounted
       items={[
         {
-          value: "Config history",
+          value: "Previous versions",
           title: (
             <span className="grid gap-1 text-left">
-              <span>Config history</span>
+              <span>Previous versions</span>
               <span className="text-caption text-secondary">{summary}</span>
             </span>
           ),
           content: (
             <div className="grid gap-6">
+              <p className="m-0 text-body-sm text-secondary">
+                Versions are kept automatically when changes are saved.
+              </p>
               {history.sides.map(({ side, expected, head, version }) => (
                 <AgentConfigHistory
                   key={`${expected.channel}/${expected.d}`}
-                  title={
-                    side === "settings"
-                      ? "Settings history"
-                      : "Instructions history"
-                  }
+                  title={side === "settings" ? "Settings" : "Instructions"}
                   expected={expected}
                   head={head}
                   version={version}

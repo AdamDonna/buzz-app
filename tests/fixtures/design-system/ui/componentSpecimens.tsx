@@ -2445,11 +2445,11 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
           variant="settings"
           items={[
             {
-              value: "Config history",
-              title: "Config history · 3 revisions",
+              value: "Previous versions",
+              title: "Previous versions · 3 versions",
               content: (
                 <p className="text-body-sm">
-                  Settings and instructions revisions.
+                  Settings and instructions versions.
                 </p>
               ),
             },
