@@ -65,6 +65,7 @@ import { AgentPortrait, useAgentPortraitSource } from "./AgentCard";
 import { AgentIdentityDialog } from "./AgentIdentityDialog";
 import { useNamePrompt, useShake } from "./useNamePrompt";
 import { AgentTabs } from "./AgentTabs";
+import { AgentConfigHistoryRow } from "../../features/agents/AgentConfigHistoryRow";
 import { useAgentSettingsHost } from "./AgentSettingsHost";
 import styles from "./AgentsPage.module.css";
 import { PackedAgentAvatar } from "./PackedAgentAvatar";
@@ -525,6 +526,12 @@ export function AgentDetails({
                         />
                       }
                     />
+                    {agent.place === "here" && (
+                      <AgentConfigHistoryRow
+                        agents={agents}
+                        pubkey={agent.pubkey}
+                      />
+                    )}
                     <AgentArchiveRetry agents={agents} agent={agent} />
                     {inSeveral(agents, agent) && (
                       <PreferenceRow

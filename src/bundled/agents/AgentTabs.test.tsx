@@ -347,7 +347,7 @@ it.each(["here", "hosted"] as const)(
   },
 );
 
-it("shows History for an agent whose config syncs", () => {
+it("leaves History out of the agent page tabs", () => {
   const agent: Agent = {
     key: "a".repeat(64),
     pubkey: "a".repeat(64),
@@ -385,7 +385,9 @@ it("shows History for an agent whose config syncs", () => {
     />,
     { wrapper: ToastProvider },
   );
-  expect(screen.getByRole("tab", { name: "History" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("tab", { name: "History" }),
+  ).not.toBeInTheDocument();
 });
 
 it("places plugin tabs after Activity and before Settings", () => {

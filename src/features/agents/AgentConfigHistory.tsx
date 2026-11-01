@@ -58,6 +58,7 @@ export function AgentConfigHistory({
   settings,
   onRevert,
   title = "History",
+  onHistoryChange,
 }: {
   expected: Expected;
   /** The current head from the config store; revert builds on it. */
@@ -72,12 +73,15 @@ export function AgentConfigHistory({
   onRevert(template: ReturnType<typeof revertTemplate>): Promise<RevertOutcome>;
   /** Names the section, as which side of the config it shows. */
   title?: string;
+  /** Reports loaded counts without a separate history read. */
+  onHistoryChange?: (history: History) => void;
 }) {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState<string>();
   const [reverting, setReverting] = useState<string>();
   const [failure, setFailure] = useState<{ id: string; text: string }>();
+  useEffect(() => onHistoryChange?.(history), [history, onHistoryChange]);
   const live = useRef(history);
   live.current = history;
   const signal = useRef<AbortController>(undefined);

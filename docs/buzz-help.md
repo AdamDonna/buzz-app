@@ -264,6 +264,10 @@ available rather than silently discarding it.
 - **Settings → Agent setup → Harness defaults** is where supported agent types
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.
+- **Settings → Agent details → Config history** expands saved revisions for
+  agents whose configuration syncs here. Settings and instructions have separate
+  histories; **Show changes** compares revisions and **Load older** fetches more.
+  Reverting one track saves a new revision without changing the other track.
 - **Activity**, where the agent type provides it, shows sessions and their
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label
   opens that conversation. Working indicators describe current work,

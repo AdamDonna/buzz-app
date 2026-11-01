@@ -131,6 +131,7 @@ the row's alignment. A row is not an extra click target around its input. Preser
 visible labels and connect help/error text; placeholders cannot replace labels.
 Use `Accordion` for optional details, retaining mounted draft input where needed.
 Use `Accordion variant="settings"` for disclosures alongside preference rows.
+Inside a row-layout `SettingsGroup`, it shares the group's frame and content inset.
 Its full-row trigger uses the settings container shape and spacing; the chevron
 is decorative, and the entire row expands the content. `Select variant="preference"` uses the same
 label and compact choice control without adding a group container.

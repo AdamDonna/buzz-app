@@ -2439,6 +2439,23 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
           },
         ]}
       />
+      <SettingsGroup>
+        <PreferenceRow title="Public key" subtitle="npub1…" />
+        <Accordion
+          variant="settings"
+          items={[
+            {
+              value: "Config history",
+              title: "Config history · 3 revisions",
+              content: (
+                <p className="text-body-sm">
+                  Settings and instructions revisions.
+                </p>
+              ),
+            },
+          ]}
+        />
+      </SettingsGroup>
       <h3 className="text-label">
         Form disclosures · spacing owned by the form
       </h3>
