@@ -33,7 +33,7 @@ it("shows initial rows immediately and preserves their nodes and focus on reorde
   expect(alpha).toHaveFocus();
 });
 
-it("applies the latest order when more activity arrives during a fade", async () => {
+it("applies the latest order when more activity arrives during a move", async () => {
   const view = render(rows(["alpha", "beta", "gamma"]));
   view.rerender(rows(["beta", "alpha", "gamma"]));
   view.rerender(rows(["gamma", "beta", "alpha"]));
@@ -50,41 +50,13 @@ it("applies the latest order when more activity arrives during a fade", async ()
   );
 });
 
-it("leaves a stationary middle row fully opaque while its neighbors swap", async () => {
+it("preserves the stationary middle row and its appearance when neighbors swap", () => {
   const view = render(rows(["alpha", "beta", "gamma"]));
   const beta = screen.getByRole("button", { name: "beta" });
-  const anchor = beta.parentElement;
-  const container = view.container.firstElementChild;
-  const opacities: number[] = [];
-  const observer = new MutationObserver(() => {
-    opacities.push(
-      Number(getComputedStyle(anchor as Element).opacity) *
-        Number(getComputedStyle(container as Element).opacity || "1"),
-    );
-  });
-  observer.observe(view.container, {
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["style"],
-  });
-  try {
-    view.rerender(rows(["gamma", "beta", "alpha"]));
-    await waitFor(() =>
-      expect(
-        screen.getAllByRole("button").map((node) => node.textContent),
-      ).toEqual(["gamma", "beta", "alpha"]),
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "alpha" }).parentElement,
-      ).toHaveStyle({ opacity: "1" }),
-    );
-    expect(screen.getByRole("button", { name: "beta" })).toBe(beta);
-    expect(opacities.length).toBeGreaterThan(0);
-    expect(opacities.every((opacity) => opacity === 1)).toBe(true);
-  } finally {
-    observer.disconnect();
-  }
+  expect(beta.parentElement).toHaveStyle({ opacity: "1" });
+  view.rerender(rows(["gamma", "beta", "alpha"]));
+  expect(screen.getAllByRole("button")[1]).toBe(beta);
+  expect(beta.parentElement).toHaveStyle({ opacity: "1" });
 });
 
 it("retires an exiting row from interaction and accessibility before its fade ends", async () => {

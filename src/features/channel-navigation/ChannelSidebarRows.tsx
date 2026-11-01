@@ -1,5 +1,6 @@
 import { useDndContext } from "@dnd-kit/core";
 import {
+  animate,
   AnimatePresence,
   motion,
   useIsPresent,
@@ -8,15 +9,15 @@ import {
 import {
   forwardRef,
   memo,
-  useCallback,
+  useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
-  useState,
   type ReactElement,
 } from "react";
 import styles from "./ChannelSidebarRows.module.css";
 
-/** Fade changing positions, retaining keyed rows and stationary anchors. */
+/** Slide keyed rows to their new positions while stationary anchors stay still. */
 export function ChannelSidebarRows({
   children,
   open,
@@ -26,45 +27,8 @@ export function ChannelSidebarRows({
 }) {
   const { active } = useDndContext();
   const reducedMotion = useReducedMotion();
-  const instant = !open || !!active || !!reducedMotion;
-  const desired = JSON.stringify(children.map((child) => String(child.key)));
-  const [order, setOrder] = useState(desired);
-  const [fading, setFading] = useState<ReadonlySet<string>>(() => new Set());
-  const latest = useRef(desired);
-  const ids: string[] = JSON.parse(order);
-  const byId = new Map(children.map((child) => [String(child.key), child]));
-  const sameMembers =
-    ids.length === children.length && ids.every((id) => byId.has(id));
-  useLayoutEffect(() => {
-    latest.current = desired;
-    if (instant || !sameMembers) {
-      if (order !== desired) setOrder(desired);
-      setFading((previous) => (previous.size ? new Set() : previous));
-      return;
-    }
-    const target: string[] = JSON.parse(desired);
-    const positions = new Map(target.map((id, index) => [id, index]));
-    const displayed: string[] = JSON.parse(order);
-    setFading((previous) => {
-      const next = new Set(previous);
-      displayed.forEach((id, index) => {
-        if (positions.get(id) !== index) next.add(id);
-      });
-      return next.size === previous.size ? previous : next;
-    });
-  }, [desired, instant, order, sameMembers]);
-  // The first completed fade applies the latest target. More activity can
-  // add moving rows without restarting the rows already fading out.
-  const applyOrder = useCallback(() => {
-    setOrder(latest.current);
-    setFading((previous) => (previous.size ? new Set() : previous));
-  }, []);
-  const rows = sameMembers
-    ? ids.flatMap((id) => {
-        const child = byId.get(id);
-        return child ? [child] : [];
-      })
-    : children;
+  const animated = open && !active && !reducedMotion;
+  const order = JSON.stringify(children.map((child) => String(child.key)));
   return (
     <div className={styles.rows}>
       <AnimatePresence
@@ -72,13 +36,8 @@ export function ChannelSidebarRows({
         mode="popLayout"
         presenceAffectsLayout={false}
       >
-        {rows.map((child) => (
-          <ChannelRow
-            key={child.key}
-            animated={!instant}
-            hiding={!instant && sameMembers && fading.has(String(child.key))}
-            onHidden={applyOrder}
-          >
+        {children.map((child) => (
+          <ChannelRow key={child.key} animated={animated} order={order}>
             {child}
           </ChannelRow>
         ))}
@@ -90,24 +49,77 @@ export function ChannelSidebarRows({
 const ChannelRow = memo(
   forwardRef<
     HTMLDivElement,
-    {
-      children: ReactElement;
-      animated: boolean;
-      hiding: boolean;
-      onHidden: () => void;
-    }
-  >(function ChannelRow({ children, animated, hiding, onHidden }, ref) {
+    { children: ReactElement; animated: boolean; order: string }
+  >(function ChannelRow({ children, animated, order }, forwardedRef) {
+    const ref = useRef<HTMLDivElement>(null);
+    const position = useRef<{ order: string; top: number } | null>(null);
+    const playback = useRef<ReturnType<typeof animate> | null>(null);
     const present = useIsPresent();
+    useImperativeHandle(forwardedRef, () => ref.current as HTMLDivElement);
+    useEffect(() => () => playback.current?.stop(), []);
+    useLayoutEffect(() => {
+      const node = ref.current;
+      if (!node) return;
+      const previous = position.current;
+      const top = node.offsetTop;
+      position.current = { order, top };
+      if (!present) {
+        playback.current?.stop();
+        return;
+      }
+      if (!animated) {
+        playback.current?.stop();
+        node.style.transform = "none";
+        node.style.opacity = "1";
+        return;
+      }
+      if (previous === null || previous.order === order || previous.top === top)
+        return;
+      // Read only on an order change. Native transforms avoid per-frame layout
+      // projection, and retarget from the displayed position during bursts.
+      const style = getComputedStyle(node);
+      const transform = new DOMMatrixReadOnly(style.transform);
+      const delta = previous.top - top + transform.m42;
+      const rect = node.getBoundingClientRect();
+      const visible =
+        Math.max(
+          rect.bottom - transform.m42,
+          rect.bottom + previous.top - top,
+        ) > 0 &&
+        Math.min(rect.top - transform.m42, rect.top + previous.top - top) <
+          window.innerHeight;
+      const scale = transform.a;
+      const opacity = Number(style.opacity);
+      playback.current?.stop();
+      if (!visible || delta === 0) {
+        node.style.transform = "none";
+        node.style.opacity = "1";
+        return;
+      }
+      // Hold the old screen position before paint while native playback starts.
+      node.style.transform = `translateY(${delta}px) scale(${scale})`;
+      playback.current = animate(
+        node,
+        {
+          transform: [
+            `translateY(${delta}px) scale(${scale})`,
+            `translateY(${delta * 0.8}px) scale(0.9)`,
+            `translateY(${delta * 0.2}px) scale(0.9)`,
+            "translateY(0px) scale(1)",
+          ],
+          opacity: [opacity, 0.75, 0.75, 1],
+        },
+        { duration: 0.6, times: [0, 0.2, 0.8, 1], ease: "linear" },
+      );
+    }, [animated, order, present]);
     return (
       <motion.div
         ref={ref}
+        style={{ transformOrigin: "left center" }}
         initial={{ opacity: animated ? 0 : 1 }}
-        animate={{ opacity: hiding ? 0 : 1 }}
+        animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: animated ? (hiding ? 0.3 : 0.4) : 0 }}
-        onAnimationComplete={() => {
-          if (hiding && present) onHidden();
-        }}
+        transition={{ duration: animated ? 0.15 : 0 }}
         inert={!present}
         aria-hidden={!present || undefined}
       >

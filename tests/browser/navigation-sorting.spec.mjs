@@ -8,7 +8,7 @@ test.use({ productionBroker: true, savedSidebar: true, sortingSidebar: true });
 for (const reducedMotion of ["no-preference", "reduce"]) {
   test.describe(`live sidebar motion: ${reducedMotion}`, () => {
     test.use({ reducedMotion, initialSidebarSort: { channels: "recent" } });
-    test("fades a live reorder without replacing the focused row", async ({
+    test("slides a live reorder without replacing the focused row", async ({
       page,
       app,
     }) => {
@@ -23,6 +23,8 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           element,
           opacities: [],
           transforms: [],
+          ys: [],
+          baselineY: element.getBoundingClientRect().y,
           done: false,
         };
         const sample = () => {
@@ -36,22 +38,36 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
             element.closest("[data-channel-sidebar-row]").parentElement,
           ).transform;
           state.transforms.push(transform);
+          state.ys.push(element.getBoundingClientRect().y);
           if (!state.done) requestAnimationFrame(sample);
         };
         requestAnimationFrame(sample);
       });
       app.activity({ channel: "cedar", kind: 45003 });
       await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
+      if (reducedMotion === "no-preference") {
+        await expect
+          .poll(() =>
+            cedar.evaluate((element) =>
+              Number(
+                getComputedStyle(
+                  element.closest("[data-channel-sidebar-row]").parentElement,
+                ).opacity,
+              ),
+            ),
+          )
+          .toBeLessThan(0.9);
+      }
       await expect
         .poll(() =>
-          cedar.evaluate(
-            (element) =>
-              getComputedStyle(
-                element.closest("[data-channel-sidebar-row]").parentElement,
-              ).opacity,
+          cedar.evaluate((element) =>
+            element
+              .closest("[data-channel-sidebar-row]")
+              .parentElement.getAnimations()
+              .every((animation) => animation.playState !== "running"),
           ),
         )
-        .toBe("1");
+        .toBe(true);
       await expect(cedar).toBeFocused();
       const result = await cedar.evaluate((element) => {
         window.sidebarMotion.done = true;
@@ -60,12 +76,33 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           faded: window.sidebarMotion.opacities.some(
             (value) => Number(value) < 1,
           ),
-          transforms: [...new Set(window.sidebarMotion.transforms)],
+          scales: window.sidebarMotion.transforms.map((value) =>
+            value === "none" ? 1 : new DOMMatrixReadOnly(value).a,
+          ),
+          translations: window.sidebarMotion.transforms.map((value) =>
+            value === "none" ? 0 : new DOMMatrixReadOnly(value).m42,
+          ),
+          opacities: window.sidebarMotion.opacities.map(Number),
+          intermediate: window.sidebarMotion.ys.some(
+            (y) =>
+              y < window.sidebarMotion.baselineY - 1 &&
+              y > element.getBoundingClientRect().y + 1,
+          ),
         };
       });
       expect(result.same).toBe(true);
       expect(result.faded).toBe(reducedMotion === "no-preference");
-      expect(result.transforms).toEqual(["none"]);
+      expect(result.intermediate).toBe(reducedMotion === "no-preference");
+      expect(result.scales.some((value) => value < 0.95)).toBe(
+        reducedMotion === "no-preference",
+      );
+      expect(result.translations.some((value) => Math.abs(value) > 1)).toBe(
+        reducedMotion === "no-preference",
+      );
+      expect(Math.min(...result.scales)).toBeGreaterThanOrEqual(0.899);
+      expect(Math.min(...result.opacities)).toBeGreaterThanOrEqual(0.749);
+      if (reducedMotion === "no-preference")
+        expect(Math.min(...result.opacities)).toBeLessThanOrEqual(0.751);
     });
   });
 }
@@ -137,6 +174,19 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     .toEqual(["willow", "maple", "cedar"]);
   await expect
     .poll(() =>
+      section
+        .locator('[data-channel-id="cedar"]')
+        .evaluate((element) =>
+          Number(
+            getComputedStyle(
+              element.closest("[data-channel-sidebar-row]").parentElement,
+            ).opacity,
+          ),
+        ),
+    )
+    .toBeLessThan(0.9);
+  await expect
+    .poll(() =>
       maple.evaluate(
         (element) =>
           getComputedStyle(
@@ -148,16 +198,14 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     .toBe("1");
   await expect
     .poll(() =>
-      section
-        .locator('[data-channel-id="cedar"]')
-        .evaluate(
-          (element) =>
-            getComputedStyle(
-              element.closest("[data-channel-sidebar-row]").parentElement,
-            ).opacity,
-        ),
+      section.locator('[data-channel-id="cedar"]').evaluate((element) =>
+        element
+          .closest("[data-channel-sidebar-row]")
+          .parentElement.getAnimations()
+          .every((animation) => animation.playState !== "running"),
+      ),
     )
-    .toBe("1");
+    .toBe(true);
   const result = await maple.evaluate((element) => {
     const state = window.stationaryMotion;
     state.done = true;
@@ -182,11 +230,122 @@ test("keeps a stationary selected row visible while its neighbors exchange place
     same: true,
     fixed: true,
     movingFaded: true,
-    movingTransformed: false,
+    movingTransformed: true,
     noLateralDrift: true,
   });
   await expect(maple).toHaveAttribute("aria-current", "page");
 });
+// Real animation progress and retargeted screen positions require a browser.
+test("retargets an unfinished slide without jumping or losing focus", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const section = page.locator('[data-sidebar-section="channels"]');
+  const rows = section.locator("[data-channel-id]");
+  await section
+    .getByRole("button", { name: "More actions for Channels" })
+    .click();
+  await page
+    .getByRole("menu", { name: "More actions for Channels", exact: true })
+    .getByRole("menuitem", { name: "Sort", exact: true })
+    .focus();
+  await page.keyboard.press("ArrowRight");
+  await page
+    .getByRole("menu", { name: "Sort Channels", exact: true })
+    .getByRole("menuitemradio", { name: "Recent", exact: true })
+    .click();
+  const cedar = section.locator('[data-channel-id="cedar"]');
+  const willow = section.locator('[data-channel-id="willow"]');
+  const settled = () =>
+    expect
+      .poll(() =>
+        rows.evaluateAll((elements) =>
+          elements.every((element) =>
+            element
+              .closest("[data-channel-sidebar-row]")
+              .parentElement.getAnimations()
+              .every((animation) => animation.playState !== "running"),
+          ),
+        ),
+      )
+      .toBe(true);
+  await settled();
+  await cedar.focus();
+  app.activity({ channel: "cedar", kind: 45003, age: 30 });
+  await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
+  await expect
+    .poll(() =>
+      willow.evaluate((element) =>
+        Number(
+          getComputedStyle(
+            element.closest("[data-channel-sidebar-row]").parentElement,
+          ).opacity,
+        ),
+      ),
+    )
+    .toBeLessThan(0.9);
+  // Freeze the old slide at its midpoint, then compare with the first frame
+  // of its replacement. Elapsed runner time cannot masquerade as a jump.
+  const before = await willow.evaluate((element) => {
+    const row = element.closest("[data-channel-sidebar-row]").parentElement;
+    for (const animation of row.getAnimations()) {
+      animation.pause();
+      animation.currentTime = 300;
+    }
+    return element.getBoundingClientRect().y;
+  });
+  app.activity({ channel: "willow", kind: 45003, age: 29 });
+  await expect(rows.first()).toHaveAttribute("data-channel-id", "willow");
+  await expect
+    .poll(() =>
+      willow.evaluate((element) =>
+        element
+          .closest("[data-channel-sidebar-row]")
+          .parentElement.getAnimations()
+          .some((animation) =>
+            animation.effect
+              .getKeyframes()
+              .some((frame) => "transform" in frame),
+          ),
+      ),
+    )
+    .toBe(true);
+  const after = await willow.evaluate((element) => {
+    const row = element.closest("[data-channel-sidebar-row]").parentElement;
+    for (const animation of row.getAnimations()) {
+      animation.pause();
+      animation.currentTime = 0;
+    }
+    const y = element.getBoundingClientRect().y;
+    for (const animation of row.getAnimations()) animation.play();
+    return y;
+  });
+  expect(Math.abs(after - before)).toBeLessThan(0.5);
+  await settled();
+  await expect(cedar).toBeFocused();
+  await expect
+    .poll(() =>
+      willow.evaluate(
+        (element) =>
+          getComputedStyle(
+            element.closest("[data-channel-sidebar-row]").parentElement,
+          ).opacity,
+      ),
+    )
+    .toBe("1");
+  const transform = await willow.evaluate(
+    (element) =>
+      new DOMMatrixReadOnly(
+        getComputedStyle(
+          element.closest("[data-channel-sidebar-row]").parentElement,
+        ).transform,
+      ),
+  );
+  expect(transform.a).toBe(1);
+  expect(transform.m42).toBe(0);
+});
+
 // Native details/menu nesting, submenu focus/viewport placement and row reorder
 // through the built app + real broker are browser contracts. Matrices live below.
 test("section sort applies immediately, rolls back on failure, and persists retry independently", async ({
