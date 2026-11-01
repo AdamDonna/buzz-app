@@ -72,6 +72,7 @@ pub(crate) async fn relay_socket_connect(
 ) -> Result<SocketMode, String> {
     uuid::Uuid::parse_str(&id).map_err(|_| "Invalid socket connection")?;
     let relay = canonical_relay(&relay)?;
+    crate::relay_policy::allowed(&relay)?;
     let stop = CancellationToken::new();
     let (sender, mut outgoing) = mpsc::channel(16);
     let (start, started) = oneshot::channel();
