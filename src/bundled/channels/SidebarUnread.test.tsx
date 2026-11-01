@@ -80,6 +80,30 @@ function row(id: string, top: number, onClick = vi.fn()) {
   );
 }
 
+it.each([
+  ["above", 60],
+  ["below", 340],
+] as const)("remeasures the %s cue when a slide settles", async (edge, top) => {
+  render(
+    <SidebarUnread>
+      <div data-moving="">{row("moving", 180)}</div>
+    </SidebarUnread>,
+  );
+  await measure();
+  expect(
+    screen.queryByRole("button", { name: /unread conversation/ }),
+  ).toBeNull();
+  const moving = screen.getByRole("button", { name: "moving" });
+  await act(async () => {
+    moving.dataset.top = String(top);
+    moving.parentElement?.removeAttribute("data-moving");
+  });
+  await measure();
+  expect(
+    screen.getByRole("button", { name: `1 unread conversation ${edge}` }),
+  ).toBeVisible();
+});
+
 it.each([0, 1, 3, 5])(
   "previews at most three of %i eligible DMs without changing the conversation count",
   async (count) => {

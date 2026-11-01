@@ -129,6 +129,7 @@ export function SidebarUnread({
         "data-channel-type",
         "data-channel-id",
         "data-priority",
+        "data-moving",
       ],
     });
     viewport.addEventListener("scroll", schedule, { passive: true });
