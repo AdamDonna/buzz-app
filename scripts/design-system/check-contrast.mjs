@@ -461,14 +461,6 @@ const claimedExceptions = new Set();
 const levelAwayMeasurements = new Map();
 const NO_SURFACES = new Set();
 /**
- * A chart swatch on a theme's tinted light base or inset surface may fall
- * marginally under 3:1, because the theme's gray is a little darker than the
- * neutral base the chart palette was tuned against. The chart palette is shared
- * and stays untouched; the shortfall is capped and reported on every run.
- */
-const THEMED_CHART_FLOOR = 2.9;
-const themedChartMeasurements = new Map();
-/**
  * A theme with a dark frame paints the canvas, sidebar and sidebar hover only
  * inside the frame scope. The light page scope never sets text on them.
  */
@@ -492,7 +484,7 @@ const NOT_IN_FRAME = new Set([
 const FRAME_SKIP = {
   has: (name) => NOT_IN_FRAME.has(name) || name.startsWith("--chart-series-"),
 };
-function audit(mode, map, baseline, skip = NO_SURFACES, themed = false) {
+function audit(mode, map, baseline, skip = NO_SURFACES) {
   const check = (textRole, surfaceRole) => {
     if (skip.has(surfaceRole)) return;
     const text = resolve(map, textRole);
@@ -588,16 +580,6 @@ function audit(mode, map, baseline, skip = NO_SURFACES, themed = false) {
         levelAwayMeasurements.set(pair, ratio);
         continue;
       }
-      if (
-        themed &&
-        role.startsWith("--chart-series-") &&
-        ratio !== null &&
-        ratio < 3 &&
-        ratio >= THEMED_CHART_FLOOR
-      ) {
-        themedChartMeasurements.set(`${mode} ${role} on ${surface}`, ratio);
-        continue;
-      }
       if (ratio === null || ratio < 3) {
         boundaryFailures.push(
           `${mode}: ${role} on ${surface} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
@@ -626,7 +608,6 @@ function scopes(family, level, theme) {
       : mode === "frame"
         ? FRAME_SKIP
         : NO_SURFACES,
-    theme !== DEFAULT_THEME,
   ]);
 }
 const LEVELS = [
@@ -690,8 +671,8 @@ for (const theme of THEMES)
         level !== BASELINE_LEVEL ||
         family !== DEFAULT_ACCENT
       )
-        for (const [label, map, skip, themed] of measured)
-          audit(label, map, false, skip, themed);
+        for (const [label, map, skip] of measured)
+          audit(label, map, false, skip);
       for (const [label, map, skip] of measured) {
         for (const [textRole, surfaceRole] of ACCENT_PAIRS) {
           if (skip.has(surfaceRole)) continue;
@@ -949,12 +930,6 @@ if (skipped.length > 0) {
 for (const [pair, ratio] of acceptedAwayMeasurements) {
   console.log(
     `  (accepted Away contrast) ${pair}: ${ratio.toFixed(3)}:1 < 3:1 — approved unoutlined badge, not a contrast pass`,
-  );
-}
-if (themedChartMeasurements.size) {
-  const worst = Math.min(...themedChartMeasurements.values());
-  console.log(
-    `  (Chart series on themed surfaces) ${themedChartMeasurements.size} pairs below 3:1, none fainter than ${THEMED_CHART_FLOOR}:1 (worst ${worst.toFixed(3)}:1)`,
   );
 }
 if (levelAwayMeasurements.size) {
