@@ -57,10 +57,11 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
         writerReads++;
         if (failWriterRead) {
           failWriterRead = false;
-          app.report.sidebarPreferenceFailures ??= [];
-          app.report.sidebarPreferenceFailures.push(route.request().url());
+          // A denial keeps manual recovery available while transient reads retry.
+          app.report.relayFailures ??= [];
+          app.report.relayFailures.push(route.request().url());
           await route.fulfill({
-            status: 502,
+            status: 403,
             contentType: "application/json",
             body: JSON.stringify({ error: "Preference read unavailable" }),
           });
