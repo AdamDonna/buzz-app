@@ -98,8 +98,12 @@ the interface unless an available tool actually supports that action.
 - **Make my bestie** in an agent card's menu chooses the agent initially tagged
   in new Solo chats for that community. It does not replace recipients in an
   existing chat or an edited draft. People can choose a different agent for a
-  particular conversation. Being the bestie does not prove an agent is ready
-  or running.
+  particular conversation. When the optional **Bestie** plugin is on, that saved
+  choice also opens the agent's DM from the left navigation; Messages omits the
+  duplicate row while it is pinned. A verified existing DM stays available if
+  agent discovery fails. If a replacement save fails, the last confirmed Bestie
+  remains selected and the confirmation offers another attempt. Being the bestie
+  does not prove an agent is ready or running.
 - **Settings → Agent setup → Harness defaults** is where supported agent types
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.

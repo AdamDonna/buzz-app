@@ -1,4 +1,5 @@
 import { useSearchSettings } from "./SearchSettings";
+import { usePagePresentation } from "./BestieNavigation";
 import {
   useCallback,
   useEffect,
@@ -22,11 +23,7 @@ import type { ShortcutBindingsSnapshot } from "../../features/shortcuts/preferen
 import type { AppServices } from "../services";
 import { HOST_SHORTCUT_ORDER } from "../shortcuts";
 import { conversationComposerFocusTarget } from "../focus-navigation";
-import {
-  orderPages,
-  pagePresentation,
-  shellPresentation,
-} from "./presentation";
+import { orderPages, shellPresentation } from "./presentation";
 import { matchName } from "../../features/search/match";
 import {
   SearchChoices,
@@ -68,6 +65,7 @@ export function PageSearch({
   onSelect: (key: string, options?: { section?: string }) => void;
   services?: SearchServices | undefined;
 }) {
+  const pagePresentation = usePagePresentation();
   const [open, setOpen] = useState(false);
   const [contentPresent, setContentPresent] = useState(false);
   const [query, setQuery] = useState("");
@@ -149,9 +147,24 @@ export function PageSearch({
   ]
     .flatMap((page) => {
       if (!needle) return [{ page, rank: 0 }];
-      const match = matchName(page.label, needle);
-      return match
-        ? [{ page: { ...page, matches: match.positions }, rank: match.rank }]
+      const labelMatch = matchName(page.label, needle);
+      const detailMatch = page.detail
+        ? matchName(page.detail, needle)
+        : undefined;
+      const rank = Math.min(
+        labelMatch?.rank ?? Infinity,
+        detailMatch?.rank ?? Infinity,
+      );
+      return Number.isFinite(rank)
+        ? [
+            {
+              page: {
+                ...page,
+                ...(labelMatch ? { matches: labelMatch.positions } : {}),
+              },
+              rank,
+            },
+          ]
         : [];
     })
     .sort((a, b) => a.rank - b.rank)

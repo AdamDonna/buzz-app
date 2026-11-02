@@ -3895,6 +3895,7 @@ function peopleSession(
     name: string;
     username?: string;
     isAgent?: true;
+    ownerPubkey?: string;
   }[] = [],
   agents: readonly {
     pubkey: string;
@@ -4380,6 +4381,85 @@ it("tells uncached directory namesakes apart before a DM opens", async () => {
           label?.includes(`Namesake · ${npubEncode(key).slice(-4)}`),
         ),
       ).toBe(true);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
+it("uses readable owners before key suffixes for agent namesakes", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    first = keypair(),
+    second = keypair(),
+    secondOwner = keypair();
+  // The default naming policy, as the bundled plugin registers it.
+  const directory = createAgentDirectory();
+  const owner = createRelaySession(
+    {
+      ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+      async query(filters) {
+        return filters.some((filter) => filter.kinds?.includes(0))
+          ? [profile(secondOwner, { display_name: "Morgan" })]
+          : [];
+      },
+    },
+    {
+      identityNames: {
+        bind: (source) =>
+          bindNames(source, {
+            snapshot: () => [directory],
+            subscribe: () => () => {},
+          }),
+      } as IdentityNames,
+    },
+  );
+  const t = peopleSession(
+    owner.session,
+    [
+      {
+        pubkey: first.pubkey,
+        name: "Namesake",
+        isAgent: true,
+        ownerPubkey: viewer.pubkey,
+      },
+      {
+        pubkey: second.pubkey,
+        name: "Namesake",
+        isAgent: true,
+        ownerPubkey: secondOwner.pubkey,
+      },
+    ],
+    [
+      { pubkey: first.pubkey, name: "Namesake", managed: true },
+      { pubkey: second.pubkey, name: "Namesake", managed: true },
+    ],
+  );
+  try {
+    render(
+      <SearchResults
+        session={t.session}
+        query="namesake"
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={() => {}}
+      />,
+    );
+    const group = await screen.findByRole("group", { name: "Agents" });
+    await waitFor(() =>
+      expect(within(group).getAllByRole("option")).toHaveLength(2),
+    );
+    expect(
+      await within(group).findByRole("option", {
+        name: /^Morgan’s Namesake/,
+      }),
+    ).toBeVisible();
+    expect(
+      within(group).getByRole("option", {
+        name: /^NamesakeStart a direct message$/,
+      }),
+    ).toBeVisible();
   } finally {
     cleanup();
     owner.dispose();
