@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import { useIdentityNames } from "../../features/identity-names/react";
 import { soloOwner } from "../../features/solo/labels";
+import { useSharedWithPeople } from "./ChatSharedMark";
 import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
 import {
   IconButton,
@@ -82,9 +83,9 @@ export function ChannelMemberAvatars({
         Number(b === owner) - Number(a === owner) ||
         Number(!!profiles.get(b)?.picture) - Number(!!profiles.get(a)?.picture),
     );
-  const unshared =
-    channel?.channelType === "solo" &&
-    people.every((id) => id === session.viewer);
+  // A Solo chat shows its people once the sidebar would mark it shared.
+  const shared = useSharedWithPeople(session, channel);
+  const unshared = channel?.channelType === "solo" && !shared;
   if (!people.length || unshared)
     return <UsersIcon size="1rem" aria-hidden="true" />;
   const shown = 3;
