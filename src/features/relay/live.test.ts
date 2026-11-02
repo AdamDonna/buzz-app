@@ -7,6 +7,8 @@ import {
 import { assert, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createLiveAdmission,
+  LIVE_BATCH_REFRESH_INTERVAL,
+  LIVE_RECOVERY_INTERVAL,
   liveChannels,
   liveReconnectDelay,
   liveResumeSince,
@@ -125,6 +127,31 @@ function setup(
   const first = sockets[0];
   assert.exists(first);
   return { key, sockets, callbacks, owner, first };
+}
+/** The relay's member-added notice for `channel` on the viewer's membership
+ * route: the one event that makes a live batch re-send its REQ. */
+async function grant(
+  h: { key: ReturnType<typeof keypair>; first: Socket },
+  channel: string,
+  socket = h.first,
+) {
+  const membership = socket
+    .requests()
+    .find((r) => filtersOf(r)[0]?.kinds.includes(44100));
+  assert.exists(membership);
+  await socket.receive([
+    "EVENT",
+    membership[1],
+    signed(keypair(), {
+      kind: 44100,
+      content: "",
+      tags: [
+        ["p", h.key.pubkey],
+        ["h", channel],
+      ],
+    }),
+  ]);
+  await vi.advanceTimersByTimeAsync(0);
 }
 it("uses independent explicit channel routes and self-p globals; equal interests do not restart", async () => {
   vi.useFakeTimers();
@@ -608,9 +635,10 @@ it("renews with one bounded overlap and releases both wires on timeout and dispo
       await h.first.receive(["EOSE", id]);
     const initial = h.first.requests()[2];
     assert.exists(initial);
-    await vi.advanceTimersByTimeAsync(59999);
+    // A healthy batch is never re-sent on a timer.
+    await vi.advanceTimersByTimeAsync(180000);
     expect(h.first.requests()).toHaveLength(3);
-    await vi.advanceTimersByTimeAsync(1);
+    await grant(h, "b");
     const renewal = h.first.requests().at(-1);
     assert.exists(renewal);
     expect(h.first.requests()).toHaveLength(4);
@@ -623,7 +651,9 @@ it("renews with one bounded overlap and releases both wires on timeout and dispo
         since: initial[2].since,
       }),
     ]);
-    expect(h.first.sent.filter(([kind]) => kind === "CLOSE")).toEqual([]);
+    expect(
+      h.first.sent.filter((frame) => frame[0] === "CLOSE" && !isProbe(frame)),
+    ).toEqual([]);
     const event = message(h.key, "b", "fresh", 1700000000);
     await h.first.receive(["EVENT", renewal[1], event]);
     expect(h.callbacks.receive).toHaveBeenLastCalledWith([event], {
@@ -634,9 +664,9 @@ it("renews with one bounded overlap and releases both wires on timeout and dispo
     h.owner.update(["b", "c"], ["b", "c"]);
     const survivor = h.first.requests().at(-1);
     assert.exists(survivor);
-    expect(h.first.sent.filter(([kind]) => kind === "CLOSE")).toEqual([
-      ["CLOSE", renewal[1]],
-    ]);
+    expect(
+      h.first.sent.filter((frame) => frame[0] === "CLOSE" && !isProbe(frame)),
+    ).toEqual([["CLOSE", renewal[1]]]);
     h.callbacks.receive.mockClear();
     await h.first.receive(["EVENT", initial[1], event]);
     expect(h.callbacks.receive).toHaveBeenCalledWith([event], {
@@ -675,15 +705,141 @@ it("renews with one bounded overlap and releases both wires on timeout and dispo
     assert.exists(quotaRetry);
     expect(filtersOf(quotaRetry)).toEqual(filtersOf(retry));
     await h.first.receive(["EOSE", quotaRetry[1]]);
-    await vi.advanceTimersByTimeAsync(47000);
+    const settled = h.first.requests().length;
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(h.first.requests()).toHaveLength(settled);
+    await grant(h, "c");
     const nextRenewal = h.first.requests().at(-1);
     assert.exists(nextRenewal);
+    expect(h.first.requests()).toHaveLength(settled + 1);
     expect(filtersOf(nextRenewal)).toEqual(filtersOf(retry));
   } finally {
     h.owner.dispose();
   }
   expect(h.first.readyState).toBe(3);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("re-sends only the batches a grant names, and once more after an in-flight REQ", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    const ids = Array.from(
+      { length: 12 },
+      (_, i) => `c${String(i).padStart(2, "0")}`,
+    );
+    h.owner.update(ids, ids);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const [first, second] = h.first
+      .requests()
+      .filter((r) => scopeOf(r).length > 1);
+    assert.exists(first);
+    assert.exists(second);
+    expect(scopeOf(second)).toEqual(["c10", "c11"]);
+    // "c11" is granted while the second batch's REQ waits for EOSE: the relay
+    // may have checked access before the grant, so it is re-sent after EOSE.
+    for (const r of h.first.requests())
+      if (r !== second) await h.first.receive(["EOSE", r[1]]);
+    const count = h.first.requests().length;
+    await grant(h, "c11");
+    expect(h.first.requests()).toHaveLength(count);
+    await h.first.receive(["EOSE", second[1]]);
+    expect(h.first.requests()).toHaveLength(count + 1);
+    expect(h.first.requests().at(-1)?.[2]).toMatchObject({
+      "#h": ["c10", "c11"],
+      limit: 0,
+    });
+    await h.first.receive(["EOSE", h.first.requests().at(-1)?.[1]]);
+    // A grant that fails and is retried after the grant needs no re-send.
+    const retried = h.first.requests().length;
+    await grant(h, "c10");
+    expect(h.first.requests()).toHaveLength(retried + 1);
+    const failing = h.first.requests().at(-1);
+    assert.exists(failing);
+    await grant(h, "c11");
+    await h.first.receive([
+      "CLOSED",
+      failing[1],
+      "rate-limited: quota exceeded; retry in 2s",
+    ]);
+    await vi.advanceTimersByTimeAsync(3000);
+    const retry = h.first.requests().at(-1);
+    assert.exists(retry);
+    expect(retry[1]).not.toBe(failing[1]);
+    await h.first.receive(["EOSE", retry[1]]);
+    expect(h.first.requests().slice(retried).map(scopeOf)).toEqual([
+      ["c10", "c11"],
+      ["c10", "c11"],
+    ]);
+    // Each notice is its own socket message. The first re-sends the batch at
+    // once; the second, while that REQ is in flight, re-sends it at its EOSE.
+    // Other batches stay put.
+    const before = h.first.requests().length;
+    const membership = h.first
+      .requests()
+      .find((r) => filtersOf(r)[0]?.kinds.includes(44100));
+    assert.exists(membership);
+    const notice = (kind: number, channel: string) =>
+      signed(keypair(), {
+        kind,
+        content: "",
+        tags: [
+          ["p", h.key.pubkey],
+          ["h", channel],
+        ],
+      });
+    await h.first.receive(["EVENT", membership[1], notice(44100, "c01")]);
+    await h.first.receive(["EVENT", membership[1], notice(44100, "c02")]);
+    expect(h.first.requests()).toHaveLength(before + 1);
+    await h.first.receive(["EOSE", h.first.requests().at(-1)?.[1]]);
+    await h.first.receive(["EOSE", h.first.requests().at(-1)?.[1]]);
+    expect(h.first.requests().slice(before).map(scopeOf)).toEqual([
+      ids.slice(0, 10),
+      ids.slice(0, 10),
+    ]);
+    // A removal, or a grant for a channel in no batch, sends nothing.
+    const settled = h.first.requests().length;
+    await h.first.receive(["EVENT", membership[1], notice(44101, "c03")]);
+    await grant(h, "elsewhere");
+    expect(h.first.requests()).toHaveLength(settled);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("re-sends a batch with no grant after the slow refresh interval", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const batches = () =>
+      h.first.requests().filter((r) => scopeOf(r).length > 1);
+    expect(batches()).toHaveLength(1);
+    // A lost grant must not leave the batch narrow for good.
+    await vi.advanceTimersByTimeAsync(LIVE_BATCH_REFRESH_INTERVAL - 60_000);
+    expect(batches()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(batches()).toHaveLength(2);
+    expect(batches().at(-1)?.[2]).toMatchObject({ "#h": ["a", "b"], limit: 0 });
+    await h.first.receive(["EOSE", batches().at(-1)?.[1]]);
+    // A grant re-send restarts the interval.
+    await vi.advanceTimersByTimeAsync(LIVE_BATCH_REFRESH_INTERVAL / 2);
+    await grant(h, "a");
+    expect(batches()).toHaveLength(3);
+    await h.first.receive(["EOSE", batches().at(-1)?.[1]]);
+    await vi.advanceTimersByTimeAsync(LIVE_BATCH_REFRESH_INTERVAL - 60_000);
+    expect(batches()).toHaveLength(3);
+    // The next tick after the interval re-sends it.
+    await vi.advanceTimersByTimeAsync(LIVE_RECOVERY_INTERVAL * 2);
+    expect(batches()).toHaveLength(4);
+  } finally {
+    h.owner.dispose();
+  }
 });
 
 it.each(["timeout", "error: temporarily unavailable"])(
@@ -698,7 +854,7 @@ it.each(["timeout", "error: temporarily unavailable"])(
         await h.first.receive(["EOSE", id]);
       const initial = h.first.requests()[2];
       assert.exists(initial);
-      await vi.advanceTimersByTimeAsync(60000);
+      await grant(h, "a");
       const renewal = h.first.requests().at(-1);
       assert.exists(renewal);
       if (failure === "timeout") await vi.advanceTimersByTimeAsync(10000);
@@ -769,7 +925,7 @@ it.each(["recover", "exhaust", "unsupported"])(
         await h.first.receive(["EOSE", id]);
       const initial = h.first.requests()[2];
       assert.exists(initial);
-      await vi.advanceTimersByTimeAsync(60000);
+      await grant(h, "a");
       for (let i = 0; i < (outcome === "exhaust" ? 4 : 1); i++) {
         const renewal = h.first.requests().at(-1);
         assert.exists(renewal);
@@ -1527,15 +1683,18 @@ it("resumes from when a silent socket last answered, not from when it was replac
   }
 });
 
-/** A joined batch of "a" and "b", established, then renewed by the recovery tick. */
+/** A joined batch of "a" and "b", established, then renewed by a grant after
+ * the next recovery tick. */
 async function renewing(h: ReturnType<typeof setup>) {
   age();
   h.owner.update(["a", "b"], ["a", "b"]);
   await h.first.auth();
   await vi.advanceTimersByTimeAsync(750);
   for (const [, id] of h.first.requests()) await h.first.receive(["EOSE", id]);
-  const heard = Math.floor(Date.now() / 1000);
   await vi.advanceTimersByTimeAsync(60_000);
+  // The grant is a frame, so it proves the relay up to the tick before it.
+  const heard = Math.floor(Date.now() / 1000) - 60;
+  await grant(h, "a");
   const renewal = h.first
     .requests()
     .find((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 0);
@@ -1596,10 +1755,11 @@ it("resumes a silent joined batch from its last frame, though its renewal never 
     for (const [, id] of h.first.requests())
       await h.first.receive(["EOSE", id]);
     const heard = Math.floor(Date.now() / 1000);
+    await grant(h, "a");
     h.first.silent = true;
     for (let i = 0; i < 300 && h.sockets.length < 2; i++)
       await vi.advanceTimersByTimeAsync(1000);
-    // The recovery tick renewed the batch before the stall was found.
+    // A grant renewed the batch before the stall was found.
     expect(
       h.first
         .requests()
@@ -2608,7 +2768,7 @@ it.each([false, true])(
       channelId: "a",
     });
     if (joined) {
-      await vi.advanceTimersByTimeAsync(60000);
+      await grant(h, "b");
       const renewal = h.first.requests().at(-1);
       assert.exists(renewal);
       expect(filtersOf(renewal)).toHaveLength(1);
