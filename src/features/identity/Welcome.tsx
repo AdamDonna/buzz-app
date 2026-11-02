@@ -903,7 +903,7 @@ function Failure({
   invite?:
     | { error?: string | undefined; onSubmit: (code: string) => void }
     | undefined;
-  /** Offers Try again; every action is disabled while `busy`. */
+  /** Offers Try again; no action can start while `busy`. */
   onRetry?: (() => void) | undefined;
   /** Which action is in flight: Try again's read, or the code's claim. */
   busy?: "read" | "code" | undefined;
@@ -938,8 +938,15 @@ function Failure({
           </Button>
         )}
         {onRetry && (
-          <Button variant="prominent" onClick={onRetry} disabled={!!busy}>
-            {busy === "read" ? "Trying again…" : "Try again"}
+          // Loading keeps focus here, so a repeated denial, which leaves the
+          // page unchanged, does not drop it.
+          <Button
+            variant="prominent"
+            onClick={onRetry}
+            loading={busy === "read"}
+            disabled={busy === "code"}
+          >
+            Try again
           </Button>
         )}
       </div>

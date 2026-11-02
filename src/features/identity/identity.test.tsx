@@ -3077,7 +3077,7 @@ it("a relay that refuses the read says the community needs an invite, shows the 
   identity.dispose();
 });
 
-it("Try again on the invite page repeats the signed read and enters the app once the relay admits the key", async () => {
+it("Try again on the invite page repeats the signed read, keeps focus through another refusal, and enters the app once the relay admits the key", async () => {
   const member = keypair();
   const relay = nativeRelay(member);
   relay.admitted = false;
@@ -3091,15 +3091,21 @@ it("Try again on the invite page repeats the signed read and enters the app once
   expect(journalOf(member)).toEqual([
     { id: expect.any(String), community: relay.origin },
   ]);
-  // The admin has added the key in the meantime; the read is held to show the
-  // page waiting on it. With the join journaled, Try again reads first, and
-  // that read is the admission, so nothing else is sent.
-  relay.admitted = true;
-  const gate = deferred<void>();
-  relay.query = gate.promise;
-  await user.click(screen.getByRole("button", { name: "Try again" }));
-  expect(screen.getByRole("button", { name: "Trying again…" })).toBeDisabled();
+  // The read is held to show the page waiting on it; the relay still refuses
+  // the key. Try again stays focusable while it waits: browsers move focus
+  // off a natively disabled button and jsdom does not, so the attribute is
+  // what is checked.
+  const denial = deferred<void>();
+  relay.query = denial.promise;
+  const tryAgain = screen.getByRole("button", { name: "Try again" });
+  await user.click(tryAgain);
+  expect(tryAgain).toHaveAttribute("aria-busy", "true");
+  expect(tryAgain).toHaveAttribute("aria-disabled", "true");
+  expect(tryAgain).not.toHaveAttribute("disabled");
+  expect(tryAgain).toHaveFocus();
   expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+  // Focused, it still starts nothing until the read settles.
+  await user.keyboard("{Enter}");
   await waitFor(() => expect(relay.calls).toHaveLength(6));
   expect(relay.calls.slice(4)).toEqual([
     { community: relay.origin, path: "/", method: "GET", body: null },
@@ -3118,7 +3124,20 @@ it("Try again on the invite page repeats the signed read and enters the app once
     },
   ]);
   expect(screen.queryByText("Signed in")).toBeNull();
-  await act(async () => gate.resolve());
+  // Refused again, the page stays as it was, and so does focus: Enter tries
+  // once more, and the admin has added the key in the meantime. With the join
+  // journaled, Try again reads first: a refused read is repeated once the join
+  // is journaled afresh, and an admitted one is the admission, so nothing
+  // else is sent.
+  await act(async () => denial.resolve());
+  await waitFor(() => expect(tryAgain).not.toHaveAttribute("aria-busy"));
+  expect(tryAgain).toHaveFocus();
+  expect(relay.calls).toHaveLength(8);
+  relay.admitted = true;
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(relay.calls).toHaveLength(10));
+  const read = relay.calls.slice(4, 6);
+  expect(relay.calls.slice(6)).toEqual([...read, ...read]);
   // Admitted on retry: the first community continues to the profile step.
   await user.click(await screen.findByRole("button", { name: "Skip for now" }));
   expect(await screen.findByText("Signed in")).toBeVisible();
