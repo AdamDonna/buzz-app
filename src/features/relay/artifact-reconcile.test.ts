@@ -283,6 +283,110 @@ it.each(["policy_changed", "checkpoint_expired"])(
     );
   },
 );
+it.each(["success", "bootstrap failure", "revalidation failure"])(
+  "recovers a rejected saved checkpoint with %s",
+  async (outcome) => {
+    const h = setup();
+    h.rows.set(id, { record: { id, availability: { state: "available" } } });
+    const requests: import("./artifact-incremental-reader").ArtifactIncrementalRequest[] =
+      [];
+    const reader = createArtifactIncrementalReader(async (filter) => {
+      requests.push(filter);
+      if ("checkpoint" in filter || outcome === "bootstrap failure")
+        return Response.json({ code: "incremental_invalid" }, { status: 400 });
+      if ("action" in filter) {
+        if (outcome === "revalidation failure")
+          return Response.json(
+            { code: "incremental_unavailable" },
+            { status: 503 },
+          );
+        return Response.json({
+          ...h.page,
+          changes: [{ type: "remove", artifactId: id }],
+        });
+      }
+      return Response.json(h.page);
+    });
+    const pass = reconcileArtifactDelta(
+      reader,
+      h.collection as unknown as HostArtifactCollection,
+      "test.task",
+      h.controller.signal,
+    );
+    if (outcome === "success") {
+      await pass;
+      expect(h.rows.get(id)?.record.availability.state).toBe("unavailable");
+      expect(h.collection.completeRefresh).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          expected: old,
+          next: JSON.stringify({
+            protocol: "incremental-v1",
+            checkpoint: "next",
+          }),
+        },
+        h.controller.signal,
+      );
+    } else {
+      await expect(pass).rejects.toBeInstanceOf(ArtifactIncrementalError);
+      expect(h.collection.completeRefresh).not.toHaveBeenCalled();
+      expect(h.rows.get(id)?.record.availability.state).toBe("available");
+    }
+    expect(
+      requests.map((request) =>
+        "checkpoint" in request
+          ? "saved"
+          : "action" in request
+            ? "current"
+            : "fresh",
+      ),
+    ).toEqual(
+      outcome === "bootstrap failure"
+        ? ["saved", "fresh"]
+        : ["saved", "fresh", "current"],
+    );
+  },
+);
+it.each(["cursor", "response", "request"])(
+  "does not reset an invalid %s",
+  async (failure) => {
+    const h = setup();
+    const request = vi.fn(
+      async (
+        filter: import("./artifact-incremental-reader").ArtifactIncrementalRequest,
+      ) => {
+        if (failure === "response") return Response.json({ version: 1 });
+        if ("checkpoint" in filter)
+          return Response.json({
+            ...h.page,
+            nextCursor: "second",
+            checkpoint: null,
+          });
+        return Response.json({ code: "incremental_invalid" }, { status: 400 });
+      },
+    );
+    const reader =
+      failure === "request"
+        ? h.reader
+        : createArtifactIncrementalReader(request);
+    if (failure === "request")
+      h.reader.delta.mockRejectedValue(
+        new ArtifactIncrementalError("incremental_invalid", "Invalid request"),
+      );
+    await expect(
+      reconcileArtifactDelta(
+        reader,
+        h.collection as unknown as HostArtifactCollection,
+        "test.task",
+        h.controller.signal,
+      ),
+    ).rejects.toMatchObject({ code: "incremental_invalid" });
+    expect(
+      failure === "request" ? h.reader.delta : request,
+    ).toHaveBeenCalledTimes(failure === "cursor" ? 2 : 1);
+    expect(h.collection.completeRefresh).not.toHaveBeenCalled();
+  },
+);
 it("keeps recovery incomplete after failed revalidation", async () => {
   const h = setup(null);
   h.rows.set(id, { record: { id, availability: { state: "available" } } });

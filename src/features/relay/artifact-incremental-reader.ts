@@ -70,6 +70,7 @@ export class ArtifactIncrementalError extends Error {
     readonly code: ErrorCode,
     message: string,
     readonly reason?: ResetReason,
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -211,6 +212,7 @@ async function responseValue(response: Response, signal: AbortSignal) {
             failure.code,
             failure.error,
             failure.reason,
+            response.status,
           )
         : new ArtifactIncrementalError(
             "incremental_unavailable",

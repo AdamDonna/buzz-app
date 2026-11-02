@@ -267,8 +267,8 @@ export async function reconcileArtifactDelta(
   try {
     let next: string;
     while (true) {
+      let cursor: string | undefined;
       try {
-        let cursor: string | undefined;
         let startedAt: string | undefined;
         const cursors = new Set<string>();
         while (true) {
@@ -301,7 +301,13 @@ export async function reconcileArtifactDelta(
       } catch (error) {
         if (
           !(error instanceof ArtifactIncrementalError) ||
-          error.code !== "incremental_reset" ||
+          (error.code !== "incremental_reset" &&
+            !(
+              error.code === "incremental_invalid" &&
+              error.status === 400 &&
+              checkpoint !== undefined &&
+              cursor === undefined
+            )) ||
           recovery
         )
           throw error;
