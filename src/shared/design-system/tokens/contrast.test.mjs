@@ -16,7 +16,10 @@ const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const tokens = readFileSync(
   join(root, "src/shared/design-system/styles/tokens.css"),
   "utf8",
-);
+)
+  .replace(/\(\s*\n\s*/g, "(")
+  .replace(/,\s*\n\s*/g, ", ")
+  .replace(/\s*\n\s*\)/g, ")");
 
 // Exercise the real CLI against isolated stylesheet mutations. No repository
 // files are changed, and a green status proves the guard actually ran.
@@ -473,4 +476,46 @@ describe("semantic contrast contract", () => {
       expect(result.output).toContain(pairing);
     },
   );
+
+  it.each([
+    [
+      "a light frame sidebar under light navigation text",
+      "--theme-frame-sidebar-light: var(--relax-frame-sidebar-light);",
+      "--theme-frame-sidebar-light: var(--relax-neutral-1-light);",
+      /relax\/theme\/neutral\/frame --text-navigation \(#\w+\) on --surface-sidebar \(/,
+    ],
+    [
+      "a light frame canvas under light page text",
+      "--theme-frame-canvas-light: var(--relax-frame-canvas-light);",
+      "--theme-frame-canvas-light: var(--relax-neutral-1-light);",
+      /relax\/theme\/neutral\/frame --text-standard \(#\w+\) on --bg-app \(/,
+    ],
+    [
+      "an unreadable badge pair",
+      "--theme-badge-text-light: var(--relax-badge-text-light);",
+      "--theme-badge-text-light: var(--relax-badge-light);",
+      /relax\/theme\/neutral\/light --text-on-badge \(#\w+\) on --surface-badge \(/,
+    ],
+    [
+      "an unreadable sidebar selection",
+      "--theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-text-dark);",
+      "--theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-dark);",
+      /relax\/theme\/neutral\/dark --text-sidebar-selected \(#\w+\) on --surface-sidebar-selected \(/,
+    ],
+  ])("measures a theme in its own scope: %s", (_name, from, to, pairing) => {
+    expect(tokens).toContain(from);
+    const result = check(tokens.replaceAll(from, to));
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toMatch(pairing);
+  });
+
+  it("keeps the tinted-neutral allowance to a theme's own neutrals", () => {
+    const from = "--theme-canvas-dark: var(--relax-frame-canvas-dark);";
+    expect(tokens).toContain(from);
+    const result = check(
+      tokens.replaceAll(from, "--theme-canvas-dark: var(--relax-9-dark);"),
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("is gray on --bg-app");
+  });
 });

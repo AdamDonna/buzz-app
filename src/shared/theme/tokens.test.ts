@@ -23,7 +23,11 @@ function resolvedPalette(
     readFileSync("src/shared/design-system/styles/tokens.css", "utf8") +
     "\n" +
     css
-  ).replace(/\/\*[\s\S]*?\*\//g, "");
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\(\s*\n\s*/g, "(")
+    .replace(/,\s*\n\s*/g, ", ")
+    .replace(/\s*\n\s*\)/g, ")");
   const values: Record<string, string> = {};
   for (const [, selector = "", body = ""] of source.matchAll(
     /([^{}]+)\{([^{}]*)\}/g,

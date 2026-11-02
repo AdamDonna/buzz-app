@@ -112,9 +112,9 @@ const PALETTE_HUES = [
  * slot's fallback, so a theme that leaves a slot unset changes nothing.
  */
 const THEMED_LITERAL =
-  /^(?:#[0-9a-f]{6}|var\(--theme-[a-z0-9-]+,\s*#[0-9a-f]{6}\))$/i;
+  /^(?:#[0-9a-f]{6}|var\(\s*--theme-[a-z0-9-]+,\s*#[0-9a-f]{6}\s*\))$/i;
 const THEMED_REFERENCE =
-  /^var\(--(?:theme-[a-z0-9-]+,\s*var\(--[a-z0-9-]+\)|[a-z0-9-]+)\)$/;
+  /^var\(\s*--(?:theme-[a-z0-9-]+,\s*var\(--[a-z0-9-]+\)\s*|[a-z0-9-]+)\)$/;
 
 /** Glass is consumed as a complete material, never as a bare fill. Direct
  * palette consumption in production is checked by check-adoption.mjs; viewer
