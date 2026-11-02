@@ -85,6 +85,16 @@ export function createHeadPersistence(
   }
   /** `handler` must issue follow-up requests synchronously (IDB auto-commits). */
   type Then = <R>(request: IDBRequest<R>, handler: (result: R) => void) => void;
+  /** Keep the startup store, across identities, within its byte budget. */
+  function prune(store: IDBObjectStore, then: Then) {
+    then(store.getAll(), (rows) => {
+      let total = 0;
+      for (const row of rows.sort((a, b) => b.savedAt - a.savedAt)) {
+        total += row.bytes;
+        if (total > MAX_BYTES) store.delete(row.key);
+      }
+    });
+  }
   async function transact<T>(
     mode: IDBTransactionMode,
     work: (store: IDBObjectStore, done: (value: T) => void, then: Then) => void,
@@ -163,13 +173,7 @@ export function createHeadPersistence(
             const bytes = byteSize(data);
             if (bytes <= MAX_BYTES) {
               store.put({ key: scope, data, bytes, savedAt: Date.now() });
-              then(store.getAll(), (rows) => {
-                let total = 0;
-                for (const row of rows.sort((a, b) => b.savedAt - a.savedAt)) {
-                  total += row.bytes;
-                  if (total > MAX_BYTES) store.delete(row.key);
-                }
-              });
+              prune(store, then);
             }
             done(undefined);
           }),
@@ -185,15 +189,17 @@ export function createHeadPersistence(
     writeProfiles: (events) =>
       transact(
         "readwrite",
-        (store, done) => {
+        (store, done, then) => {
           const bytes = byteSize(events);
-          if (bytes <= MAX_BYTES)
+          if (bytes <= MAX_BYTES) {
             store.put({
               key: profiles,
               data: events,
               bytes,
               savedAt: Date.now(),
             });
+            prune(store, then);
+          }
           done(undefined);
         },
         STARTUP,

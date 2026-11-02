@@ -1157,6 +1157,9 @@ export function createChannelStore(
       if (disposed || generation !== epoch || discoveryObserved) return;
       applyDiscovery(events, undefined, undefined, true);
       directory.accept(profiles);
+      // Applying cached discovery purged access and emptied the mirror; a
+      // successor session may read it before the throttled save.
+      saveProfiles();
       await (options.initialChannelId ? initialHydration : hydration);
     } catch {
       // Missing, corrupt or unavailable device storage never blocks fresh reads.

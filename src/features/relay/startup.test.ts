@@ -427,6 +427,8 @@ describe("device-local startup", () => {
     expect(
       next.owner.session.profiles.snapshot().get(stranger.pubkey)?.name,
     ).toBe("Stranger");
+    // A live successor can restore before the cached owner's throttled save.
+    expect(await storage.readProfiles?.()).toHaveLength(1);
   });
 
   it("reveals the selected head before verifying unrelated history", async () => {
