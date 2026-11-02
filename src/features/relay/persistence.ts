@@ -6,7 +6,6 @@ export type SavedStartup = {
     savedAt: number;
     relayAuthor: string;
     events: unknown[];
-    profiles?: unknown[];
   };
   preferences?: { savedAt: number; data: SidebarPreferences };
 };
@@ -22,6 +21,9 @@ export interface HeadPersistence {
   read(): Promise<SavedHead[]>;
   readStartup?(): Promise<SavedStartup | undefined>;
   writeStartup?(patch: SavedStartup): Promise<void>;
+  /** Signed kind 0 events mirrored from the profile directory. */
+  readProfiles?(): Promise<unknown[]>;
+  writeProfiles?(events: readonly unknown[]): Promise<void>;
   write(head: SavedHead): Promise<void>;
   remove(channelId: string): Promise<void>;
   retain(channelIds: readonly string[]): Promise<void>;
@@ -41,6 +43,7 @@ export function createHeadPersistence(
   relay: string,
 ): HeadPersistence {
   const scope = `${viewer}:${relay}`;
+  const profiles = `${scope}:profiles`;
   let closed = false;
   let opening: Promise<IDBDatabase> | undefined;
   function database() {
@@ -172,6 +175,29 @@ export function createHeadPersistence(
           }),
         STARTUP,
       ),
+    readProfiles: () =>
+      transact(
+        "readonly",
+        (store, done, then) =>
+          then(store.get(profiles), (row) => done(row?.data ?? [])),
+        STARTUP,
+      ),
+    writeProfiles: (events) =>
+      transact(
+        "readwrite",
+        (store, done) => {
+          const bytes = byteSize(events);
+          if (bytes <= MAX_BYTES)
+            store.put({
+              key: profiles,
+              data: events,
+              bytes,
+              savedAt: Date.now(),
+            });
+          done(undefined);
+        },
+        STARTUP,
+      ),
     read: () =>
       transact("readonly", (store, done, then) =>
         then(store.getAll(), (rows: Record[]) =>
@@ -237,6 +263,7 @@ export function createHeadPersistence(
         "readwrite",
         (store, done) => {
           store.delete(scope);
+          store.delete(profiles);
           done(undefined);
         },
         STARTUP,

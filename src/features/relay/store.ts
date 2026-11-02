@@ -286,10 +286,12 @@ export function createChannelStore(
   });
   let startup: Promise<void> | undefined;
   let discoveryObserved = false;
-  // Profile bursts rewrite the whole startup record; save at most once per 500ms.
-  let discoverySave: ReturnType<typeof setTimeout> | undefined;
-  // Participant profiles in the last startup snapshot, by identity.
-  let savedProfiles: ReadonlyMap<string, RelayEvent | undefined> = new Map();
+  // Profile bursts rewrite the whole disk mirror; save at most once per second.
+  let profileSave: ReturnType<typeof setTimeout> | undefined;
+  // Never mirror before restore has read the saved profiles.
+  let profilesRestored = false;
+  // Event ids last written to the mirror; undefined when the disk copy is unknown.
+  let savedProfiles: string | undefined;
   let preparing = false;
   let warming = false;
   const notify = (listeners: Iterable<Listener> | undefined) => {
@@ -1076,40 +1078,46 @@ export function createChannelStore(
     }
   }
   function saveDiscovery() {
-    clearTimeout(discoverySave);
-    discoverySave = undefined;
     if (!persistence?.writeStartup || !discovery || !transport || disposed)
       return;
-    savedProfiles = new Map(
-      [
-        ...new Set(
-          discovery
-            .channels()
-            .filter((channel) => !channel.cached)
-            .flatMap((channel) => channel.participants ?? []),
-        ),
-      ]
-        .slice(0, 1024)
-        .map((id) => [id, directory.event(id)]),
-    );
     void persistence
       .writeStartup({
         discovery: {
           savedAt: now(),
           relayAuthor: transport.relayAuthor,
           events: discovery.savedEvents(),
-          profiles: [...savedProfiles.values()].filter(
-            (event) => event !== undefined,
-          ),
         },
       })
       .catch(() => {});
+  }
+  /** Mirror the directory so the next session starts with its names. Access
+   * purges empty the mirror with the directory. */
+  function saveProfiles() {
+    clearTimeout(profileSave);
+    profileSave = undefined;
+    if (!persistence?.writeProfiles || !profilesRestored || disposed) return;
+    const events = [...directory.queries.snapshot().keys()].flatMap((id) => {
+      const event = directory.event(id);
+      return event ? [event] : [];
+    });
+    const signature = events.map((event) => event.id).join(":");
+    if (signature === savedProfiles) return;
+    savedProfiles = signature;
+    void persistence.writeProfiles(events).catch(() => {
+      savedProfiles = undefined;
+    });
   }
   async function restoreStartup() {
     if (!persistence?.readStartup || !transport || !discovery) return;
     const generation = epoch;
     try {
-      const saved = (await persistence.readStartup())?.discovery;
+      const [record, mirrored] = await Promise.all([
+        persistence.readStartup(),
+        persistence.readProfiles?.().catch(() => []) ?? [],
+      ]).finally(() => {
+        profilesRestored = true;
+      });
+      const saved = record?.discovery;
       if (
         !saved ||
         saved.relayAuthor !== transport.relayAuthor ||
@@ -1132,9 +1140,10 @@ export function createChannelStore(
         if (disposed || generation !== epoch || discoveryObserved) return;
       }
       const profiles: RelayEvent[] = [];
-      if (Array.isArray(saved.profiles) && saved.profiles.length <= 1024) {
-        for (let index = 0; index < saved.profiles.length; index += 12) {
-          for (const value of saved.profiles.slice(index, index + 12)) {
+      // Only with a restored roster, whose later revocation purges these names.
+      if (Array.isArray(mirrored) && mirrored.length <= 1024) {
+        for (let index = 0; index < mirrored.length; index += 12) {
+          for (const value of mirrored.slice(index, index + 12)) {
             try {
               profiles.push(eventDto(JSON.parse(JSON.stringify(value))));
             } catch {
@@ -1147,14 +1156,7 @@ export function createChannelStore(
       }
       if (disposed || generation !== epoch || discoveryObserved) return;
       applyDiscovery(events, undefined, undefined, true);
-      const participants = new Set(
-        discovery.channels().flatMap((channel) => channel.participants ?? []),
-      );
-      directory.accept(
-        profiles.filter(
-          (event) => event.kind === 0 && participants.has(event.pubkey),
-        ),
-      );
+      directory.accept(profiles);
       await (options.initialChannelId ? initialHydration : hydration);
     } catch {
       // Missing, corrupt or unavailable device storage never blocks fresh reads.
@@ -1683,8 +1685,9 @@ export function createChannelStore(
           heads.clear();
           tails.clear();
           directory.clear();
-          clearTimeout(discoverySave);
-          discoverySave = undefined;
+          clearTimeout(profileSave);
+          profileSave = undefined;
+          savedProfiles = undefined;
           void persistence?.clear().catch(() => {});
           setList({
             status: "error",
@@ -2544,8 +2547,9 @@ export function createChannelStore(
     tails.clear();
     if (discovery) setList({ ...list, channels: discovery.channels() });
     resetReferences();
-    clearTimeout(discoverySave);
-    discoverySave = undefined;
+    clearTimeout(profileSave);
+    profileSave = undefined;
+    savedProfiles = undefined;
     await persistence?.clear().catch(() => {});
   }
   /** One background head read at a time; warm never competes with demand reads
@@ -3019,13 +3023,7 @@ export function createChannelStore(
     }
     for (const state of windows.values()) setWindow(state, {});
     setList(list);
-    // Only a saved participant's profile changes the startup snapshot.
-    if (
-      discoveryObserved &&
-      !discoverySave &&
-      [...savedProfiles].some(([id, event]) => directory.event(id) !== event)
-    )
-      discoverySave = setTimeout(saveDiscovery, 500);
+    profileSave ??= setTimeout(saveProfiles, 1000);
   });
   const unsubscribeLocal = local?.subscribe(() => {
     if (disposed) return;
@@ -3287,12 +3285,14 @@ export function createChannelStore(
     // Disk heads also carry profile and cross-channel auxiliary evidence. Drop
     // this disposable cache conservatively; pending writes use separate storage.
     if (hadHydration) void persistence?.retain([]).catch(() => {});
+    savedProfiles = undefined;
+    void persistence?.writeProfiles?.([]).catch(() => {});
     setList(list);
     resetReferences();
   }
   function dispose() {
     disposed = true;
-    clearTimeout(discoverySave);
+    clearTimeout(profileSave);
     if (referenceWake) clearTimeout(referenceWake.timer);
     referenceWake = undefined;
     unsubscribeLocal?.();
