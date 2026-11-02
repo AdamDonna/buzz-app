@@ -1697,6 +1697,32 @@ describe("a reconnect whose replay was continuous", () => {
     }
   });
 
+  it("clears a failed outage page read when a continuous replay verifies the window", async () => {
+    const h = reconnectHarness();
+    try {
+      const seen = await verifiedThenDropped(h);
+      h.owner.session.channels.loadOlder("c");
+      h.read().fail(new Error("Relay request failed"));
+      await flush();
+      expect(h.window().error).toBe("Relay request failed");
+      h.queries.length = 0;
+      await resume(h, [], true);
+      expect(channelReads(h)).toEqual([]);
+      expect(h.window()).toMatchObject({
+        freshness: "verified",
+        error: undefined,
+      });
+      // Automatic paging can use the retained cursor again after recovery.
+      h.owner.session.channels.loadOlder("c");
+      const older = message(h.alice, "c", "older", 5);
+      h.read().respond(h.page(h.cursor(seen), [older], null));
+      await flush();
+      expect(h.rows()).toEqual([older.id, seen.id]);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
   it("catches up as before when the replay was cut", async () => {
     const h = reconnectHarness();
     try {
