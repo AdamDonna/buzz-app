@@ -27,16 +27,25 @@ it.each([
   [42, "buzz"],
   ["buzz", "buzz"],
   ["relax", "relax"],
+  ["Baton", "buzz"],
+  ["baton", "baton"],
 ])("parses %j as %s", (value, expected) => {
   expect(parseTheme(value)).toBe(expected);
 });
 
-it("opens a dark frame scope only on a light page for a dark-frame theme", () => {
-  expect(frameScope("buzz", "light")).toBeUndefined();
-  expect(frameScope("buzz", "dark")).toBeUndefined();
-  expect(frameScope("relax", "light")).toBe("dark");
-  expect(frameScope("relax", "dark")).toBeUndefined();
-});
+it.each([
+  ["buzz", "light", undefined],
+  ["buzz", "dark", undefined],
+  ["relax", "light", "dark"],
+  ["relax", "dark", undefined],
+  ["baton", "light", undefined],
+  ["baton", "dark", undefined],
+] as const)(
+  "opens a dark frame scope for %s on a %s page: %s",
+  (theme, mode, expected) => {
+    expect(frameScope(theme, mode)).toBe(expected);
+  },
+);
 
 const tokens = readFileSync(
   new URL("../design-system/styles/tokens.css", import.meta.url),

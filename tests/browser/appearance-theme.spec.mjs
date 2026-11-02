@@ -73,7 +73,7 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
 
   await appearance(page);
   const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
-  await expect(radios(page)).toHaveCount(2);
+  await expect(radios(page)).toHaveCount(3);
   await expect(group.getByRole("radio", { name: /^Buzz/ })).toBeChecked();
   await expect(group.getByRole("radio", { name: /^Relax/ })).not.toBeChecked();
   // The name and the description each have one owner; the thumbnail has none.
@@ -215,4 +215,43 @@ test("a saved manual accent stays when the theme changes", async ({
   await expect(
     page.getByRole("button", { name: "Cobalt accent color" }),
   ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("Baton keeps its frame on the page mode and changes accent between modes", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await appearance(page);
+  const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
+  await group.getByText("Baton", { exact: true }).click();
+  await expect(group.getByRole("radio", { name: /^Baton/ })).toBeChecked();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "baton");
+  expect(await page.evaluate((k) => localStorage.getItem(k), themeKey)).toBe(
+    "baton",
+  );
+  await expect(
+    page.getByRole("button", { name: "Theme accent color" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await chooseColorMode(page, "Light");
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(255, 255, 255)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(196, 193, 184)",
+  );
+  expect(await resolved(page, "--accent-9")).toBe("rgb(16, 16, 138)");
+
+  await chooseColorMode(page, "Dark");
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(8, 8, 8)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(30, 30, 30)",
+  );
+  expect(await resolved(page, "--surface-panel", "body")).toBe("rgb(0, 0, 0)");
+  expect(await resolved(page, "--accent-9")).toBe("rgb(43, 209, 43)");
 });

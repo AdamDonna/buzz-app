@@ -1336,7 +1336,7 @@
 
 :root {
   --baton-neutral-1-light: #ffffff;
-  --baton-neutral-2-light: #f2f2f2;
+  --baton-neutral-2-light: #f3f3f3;
   --baton-neutral-3-light: #e2e2e2;
   --baton-neutral-4-light: #d5d5d5;
   --baton-neutral-5-light: #c8c8c8;
@@ -3119,6 +3119,123 @@
   );
   --theme-frame-canvas-light: var(--relax-frame-canvas-light);
   --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
+}
+
+/* Baton: beige-box chrome and navy highlights in light mode, a phosphor-green
+   accent on black in dark mode. Dark ink sits on the dark accent, so its overlays
+   are tints. Every value is a palette step from LAYER 0. */
+[data-theme="baton"] {
+  --theme-neutral-1-light: var(--baton-neutral-1-light);
+  --theme-neutral-2-light: var(--baton-neutral-2-light);
+  --theme-neutral-3-light: var(--baton-neutral-3-light);
+  --theme-neutral-4-light: var(--baton-neutral-4-light);
+  --theme-neutral-5-light: var(--baton-neutral-5-light);
+  --theme-neutral-6-light: var(--baton-neutral-6-light);
+  --theme-neutral-7-light: var(--baton-neutral-7-light);
+  --theme-neutral-8-light: var(--baton-neutral-8-light);
+  --theme-neutral-9-light: var(--baton-neutral-9-light);
+  --theme-neutral-10-light: var(--baton-neutral-10-light);
+  --theme-neutral-11-light: var(--baton-neutral-11-light);
+  --theme-neutral-12-light: var(--baton-neutral-12-light);
+  --theme-neutral-standard-text-light: var(--baton-neutral-standard-text-light);
+  --theme-neutral-navigation-text-light: var(
+    --baton-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --baton-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --baton-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--baton-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --baton-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --baton-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--baton-bubble-neutral-light);
+  --theme-bubble-received-light: var(--baton-bubble-received-light);
+  --theme-canvas-light: var(--baton-frame-canvas-light);
+  --theme-sidebar-light: var(--baton-frame-sidebar-light);
+  --theme-accent-1-light: var(--baton-1-light);
+  --theme-accent-2-light: var(--baton-2-light);
+  --theme-accent-3-light: var(--baton-3-light);
+  --theme-accent-4-light: var(--baton-4-light);
+  --theme-accent-5-light: var(--baton-5-light);
+  --theme-accent-6-light: var(--baton-6-light);
+  --theme-accent-7-light: var(--baton-7-light);
+  --theme-accent-8-light: var(--baton-8-light);
+  --theme-accent-9-light: var(--baton-9-light);
+  --theme-accent-10-light: var(--baton-10-light);
+  --theme-accent-11-light: var(--baton-11-light);
+  --theme-accent-12-light: var(--baton-12-light);
+  --theme-accent-contrast-light: var(--baton-contrast-light);
+  --theme-accent-ink-light: var(--baton-ink-light);
+  --theme-accent-pressed-light: var(--baton-pressed-light);
+  --theme-accent-link-light: var(--baton-link-light);
+  --theme-accent-link-hover-light: var(--baton-link-hover-light);
+  --theme-sidebar-selected-light: var(--baton-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(--baton-sidebar-selected-text-light);
+  --theme-sidebar-hover-light: var(--baton-sidebar-hover-light);
+  --theme-sidebar-hover-text-light: var(--baton-neutral-12-light);
+  --theme-badge-light: var(--baton-badge-light);
+  --theme-badge-text-light: var(--baton-badge-text-light);
+  --theme-status-online-light: var(--baton-status-online-light);
+  --theme-status-away-light: var(--baton-status-away-light);
+
+  --theme-neutral-1-dark: var(--baton-neutral-1-dark);
+  --theme-neutral-2-dark: var(--baton-neutral-2-dark);
+  --theme-neutral-3-dark: var(--baton-neutral-3-dark);
+  --theme-neutral-4-dark: var(--baton-neutral-4-dark);
+  --theme-neutral-5-dark: var(--baton-neutral-5-dark);
+  --theme-neutral-6-dark: var(--baton-neutral-6-dark);
+  --theme-neutral-7-dark: var(--baton-neutral-7-dark);
+  --theme-neutral-8-dark: var(--baton-neutral-8-dark);
+  --theme-neutral-9-dark: var(--baton-neutral-9-dark);
+  --theme-neutral-10-dark: var(--baton-neutral-10-dark);
+  --theme-neutral-11-dark: var(--baton-neutral-11-dark);
+  --theme-neutral-12-dark: var(--baton-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --baton-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--baton-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--baton-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(--baton-neutral-action-pressed-dark);
+  --theme-bubble-neutral-dark: var(--baton-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--baton-bubble-received-dark);
+  --theme-canvas-dark: var(--baton-frame-canvas-dark);
+  --theme-sidebar-dark: var(--baton-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--baton-1-dark);
+  --theme-accent-2-dark: var(--baton-2-dark);
+  --theme-accent-3-dark: var(--baton-3-dark);
+  --theme-accent-4-dark: var(--baton-4-dark);
+  --theme-accent-5-dark: var(--baton-5-dark);
+  --theme-accent-6-dark: var(--baton-6-dark);
+  --theme-accent-7-dark: var(--baton-7-dark);
+  --theme-accent-8-dark: var(--baton-8-dark);
+  --theme-accent-9-dark: var(--baton-9-dark);
+  --theme-accent-10-dark: var(--baton-10-dark);
+  --theme-accent-11-dark: var(--baton-11-dark);
+  --theme-accent-12-dark: var(--baton-12-dark);
+  --theme-accent-contrast-dark: var(--baton-contrast-dark);
+  --theme-accent-ink-dark: var(--baton-ink-dark);
+  --theme-accent-pressed-dark: var(--baton-pressed-dark);
+  --theme-accent-link-dark: var(--baton-link-dark);
+  --theme-accent-link-hover-dark: var(--baton-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--baton-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--baton-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--baton-sidebar-hover-dark);
+  --theme-sidebar-hover-text-dark: var(--baton-neutral-12-dark);
+  --theme-badge-dark: var(--baton-badge-dark);
+  --theme-badge-text-dark: var(--baton-badge-text-dark);
+  --theme-status-online-dark: var(--baton-status-online-dark);
+  --theme-status-away-dark: var(--baton-status-away-dark);
+  --theme-accent-overlay-dark: var(--tint-fill);
+  --theme-accent-overlay-hover-dark: var(--tint-hover-fill);
+  --theme-accent-overlay-soft-dark: var(--tint-soft-fill);
+  --theme-accent-overlay-quiet-dark: var(--tint-quiet-fill);
+  --theme-accent-overlay-highlight-dark: var(--tint-fill);
 }
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */

@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import { createAppearance } from "../shared/theme/service";
+import { THEMES } from "../shared/theme/themes";
 import { AppearanceSettings } from "./AppearanceSettings";
 
 import {
@@ -316,7 +317,9 @@ it("chooses a theme by pointer and keyboard, saves only the theme, and recovers 
   expect(relax).toHaveAccessibleDescription(
     "Deep plum frame around a bright, open workspace.",
   );
-  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(2);
+  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(
+    THEMES.length,
+  );
   expect(
     group.querySelector("svg[data-theme='relax'][data-color-mode]"),
   ).not.toBeNull();
@@ -342,6 +345,15 @@ it("chooses a theme by pointer and keyboard, saves only the theme, and recovers 
   expect(buzz).toBeChecked();
   expect(localStorage.getItem("buzz-theme.v1")).toBe("buzz");
   expect(document.documentElement.dataset.theme).toBe("buzz");
+
+  const baton = within(group).getByRole("radio", { name: "Baton" });
+  expect(baton).toHaveAccessibleDescription(
+    "Beige-box chrome and navy highlights. After dark, it glows green.",
+  );
+  await user.click(baton);
+  expect(baton).toBeChecked();
+  expect(document.documentElement.dataset.theme).toBe("baton");
+  expect(localStorage.getItem("buzz-theme.v1")).toBe("baton");
   appearance.dispose();
 });
 

@@ -502,6 +502,12 @@ describe("semantic contrast contract", () => {
       "--theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-dark);",
       /relax\/theme\/neutral\/dark --text-sidebar-selected \(#\w+\) on --surface-sidebar-selected \(/,
     ],
+    [
+      "dark ink on shade overlays",
+      "--theme-accent-overlay-dark: var(--tint-fill);",
+      "--theme-accent-overlay-dark: var(--shade-fill);",
+      /baton\/theme\/high\/dark --text-mention-own \(#\w+\) on --affordance-mention-own \(/,
+    ],
   ])("measures a theme in its own scope: %s", (_name, from, to, pairing) => {
     expect(tokens).toContain(from);
     const result = check(tokens.replaceAll(from, to));
