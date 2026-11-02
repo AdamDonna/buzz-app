@@ -5,9 +5,11 @@
 // a harness that loads tools on demand shows only once the agent needs them.
 import type { ClassifierOutcome } from "../agents/service";
 import type { EventData } from "../relay/events";
+import { unframed } from "./plugin-wake";
 
+// Every body is text a turn takes as data, and none is the turn's event.
 const section = (tag: string, body: string, attributes = "") =>
-  `<${tag}${attributes}>\n${body.trim()}\n</${tag}>`;
+  `<${tag}${attributes}>\n${unframed(body.trim())}\n</${tag}>`;
 
 /** Janet's end-of-turn review, added to every turn of an agent with attention. */
 export const ATTENTION_REVIEW = section(

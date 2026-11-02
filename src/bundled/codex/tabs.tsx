@@ -567,6 +567,8 @@ export function createTabs(
     const [draft, setDraft] = useState(state.defaults);
     const [saveError, setSaveError] = useState("");
     const [savingDefaults, setSavingDefaults] = useState(false);
+    // Keeps a ready-state sign-in's output once it ends, failed or not.
+    const [signingIn, setSigningIn] = useState(false);
     const action =
       error === NOT_INSTALLED
         ? ({ step: "install", label: "Install Codex" } as const)
@@ -603,7 +605,63 @@ export function createTabs(
             {installing.notice}
           </p>
         )}
-        <div className="grid gap-2" hidden={state.readiness === "ready"}>
+        <form
+          id={defaultsForm}
+          className="grid gap-3"
+          hidden={state.readiness !== "ready"}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (savingDefaults) return;
+            setSaveError("");
+            setSavingDefaults(true);
+            // Closes only once saved; else the draft stays to try again.
+            provider
+              .saveDefaults(draft)
+              .then(onClose, (reason) => setSaveError(message(reason)))
+              .finally(() => setSavingDefaults(false));
+          }}
+        >
+          <Select
+            label="Default thinking"
+            valueLabel={
+              draft.effort ? undefined : codexDefaultEffortLabel("", selected)
+            }
+            valueSuffix={draft.effort ? undefined : " · Default"}
+            variant="preference"
+            value={draft.effort}
+            groups={[{ label: "", options: efforts }]}
+            disabled={checking || !selected || savingDefaults}
+            onValueChange={(effort) => setDraft({ ...draft, effort })}
+          />
+          {saveError && (
+            <p role="alert" className="buzz-field-error">
+              {saveError}
+            </p>
+          )}
+        </form>
+        {/* Signed in elsewhere, Codex is ready, but reviews need a sign-in
+            made here, which records its workspace. */}
+        {state.readiness === "ready" && (
+          <div className="grid justify-items-start gap-2">
+            <p className="m-0 text-body-sm text-subtle">
+              Security reviews need a ChatGPT sign-in made in Buzz.
+            </p>
+            <Button
+              loading={installing.running === "login"}
+              disabled={installing.running === "install"}
+              onClick={() => {
+                setSigningIn(true);
+                void setup.run("login");
+              }}
+            >
+              Sign in again
+            </Button>
+          </div>
+        )}
+        <div
+          className="grid gap-2"
+          hidden={state.readiness === "ready" && !signingIn}
+        >
           {installing.running ? (
             <div className="flex flex-wrap items-center gap-2">
               <p role="status" className="m-0 text-body-sm">
@@ -639,40 +697,6 @@ export function createTabs(
             </div>
           )}
         </div>
-        <form
-          id={defaultsForm}
-          className="grid gap-3"
-          hidden={state.readiness !== "ready"}
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (savingDefaults) return;
-            setSaveError("");
-            setSavingDefaults(true);
-            // Closes only once saved; else the draft stays to try again.
-            provider
-              .saveDefaults(draft)
-              .then(onClose, (reason) => setSaveError(message(reason)))
-              .finally(() => setSavingDefaults(false));
-          }}
-        >
-          <Select
-            label="Default thinking"
-            valueLabel={
-              draft.effort ? undefined : codexDefaultEffortLabel("", selected)
-            }
-            valueSuffix={draft.effort ? undefined : " · Default"}
-            variant="preference"
-            value={draft.effort}
-            groups={[{ label: "", options: efforts }]}
-            disabled={checking || !selected || savingDefaults}
-            onValueChange={(effort) => setDraft({ ...draft, effort })}
-          />
-          {saveError && (
-            <p role="alert" className="buzz-field-error">
-              {saveError}
-            </p>
-          )}
-        </form>
         <ProviderDialogActions>
           <Button
             onClick={() =>

@@ -33,11 +33,21 @@ export const wakeAnchor = (wake: ConversationWake): EventData => ({
 export const wakeLands = (wake: ConversationWake, topLevel: boolean) =>
   !!wake.root || topLevel || wake.topLevel === true;
 
+/** `text` that is not Buzz's own: its lines cannot open the turn's event or
+ * steer section, which a turn with a wake in place of its event has none of. */
+export const unframed = (text: string) =>
+  text.replace(
+    /(?<![^\n])<(buzz-event|new-message-arrived-while-you-were-working)>/g,
+    "<\\$1>",
+  );
+
 /** The section a wake's turn has in place of `<buzz-event>`. */
 export function wakeSection(wake: ConversationWake) {
   if (wake.type === "attention") return wake.text;
   // Its text cannot close the section early.
-  const text = wake.text.replace(/<\/(plugin-wake|self-handoff)/gi, "<\\/$1");
+  const text = unframed(
+    wake.text.replace(/<\/(plugin-wake|self-handoff)/gi, "<\\/$1"),
+  );
   const from = "from" in wake ? wake.from : undefined;
   const plugin = "plugin" in wake ? wake.plugin.replace(/[^\w.:-]/g, "") : "";
   const tag = from ? "self-handoff" : "plugin-wake";

@@ -50,13 +50,15 @@ export class AppServer {
   private buffer = "";
   private stderr = "";
   private listeners = new Set<(message: Wire) => void>();
-  private closing?: Promise<void>;
+  private closing?: Promise<void> | undefined;
+  private gone = false;
 
   constructor(
     private readonly toolCall?: (call: ToolCall) => Promise<ToolReply>,
   ) {}
 
-  async open(spawn: Spawn, cwd?: string) {
+  async open(spawn: Spawn, cwd?: string, protectedRuntime = false) {
+    if (this.failure) throw this.failure;
     this.process = await spawn("app-server", {
       ...(cwd ? { cwd } : {}),
       onStdout: (data) => this.read(data),
@@ -64,35 +66,50 @@ export class AppServer {
         this.stderr = (this.stderr + data).slice(-4000);
       },
     });
-    void this.process.exited.then((code) =>
+    void this.process.exited.then((code) => {
+      this.gone = true;
       this.fail(
         new Error(this.stderr.trim() || `Codex exited (${code ?? "signal"})`),
-      ),
-    );
+      );
+    });
     if (this.failure) {
       await this.close();
       throw this.failure;
     }
-    await this.request("initialize", {
-      clientInfo: {
-        name: "buzz_codex_plugin",
-        title: "Buzz Codex",
-        version: "0.1.0",
+    const initialized = await this.request<{ userAgent?: string }>(
+      "initialize",
+      {
+        clientInfo: {
+          name: "buzz_codex_plugin",
+          title: "Buzz Codex",
+          version: "0.1.0",
+        },
+        capabilities: {
+          experimentalApi: true,
+          optOutNotificationMethods: [
+            "item/agentMessage/delta",
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
+            "item/plan/delta",
+            "item/commandExecution/outputDelta",
+            "item/fileChange/outputDelta",
+          ],
+        },
       },
-      capabilities: {
-        experimentalApi: true,
-        optOutNotificationMethods: [
-          "item/agentMessage/delta",
-          "item/reasoning/summaryTextDelta",
-          "item/reasoning/textDelta",
-          "item/plan/delta",
-          "item/commandExecution/outputDelta",
-          "item/fileChange/outputDelta",
-        ],
-      },
-    });
+    );
+    if (
+      protectedRuntime &&
+      !initialized.userAgent?.includes("buzz-protection-v2")
+    ) {
+      await this.close();
+      throw new Error("This Codex build lacks mandatory security hooks");
+    }
     await this.send({ method: "initialized" });
     return this;
+  }
+  /** Whether the process has exited. */
+  get exited() {
+    return this.gone;
   }
   onMessage(listener: (message: Wire) => void) {
     this.listeners.add(listener);
@@ -221,7 +238,7 @@ export class AppServer {
     if (!this.process) return Promise.resolve();
     if (this.closing) return this.closing;
     const process = this.process;
-    this.closing = (async () => {
+    const closing = (async () => {
       // EOF lets Codex stop its separately grouped background terminals.
       const timer = setTimeout(() => void process.kill(), 3000);
       try {
@@ -231,7 +248,12 @@ export class AppServer {
         clearTimeout(timer);
       }
     })();
-    return this.closing;
+    this.closing = closing;
+    // A close that failed to stop the process is attempted again by the next.
+    void closing.catch(() => {
+      if (this.closing === closing) this.closing = undefined;
+    });
+    return closing;
   }
 }
 

@@ -6,6 +6,7 @@
 import { attestedOwner } from "../agents/owner-attestation";
 import type { EventData } from "../relay/events";
 import { workspaceDirectories } from "../solo/workspace";
+import { unframed } from "./plugin-wake";
 
 export type Project = Readonly<{
   /** The prompt section; empty when the Canvas is. */
@@ -29,7 +30,7 @@ export function project(canvas: string | undefined): Project {
     ? ` This chat's work happens in these folders, not your own workspace: ${directories.map((folder) => `\`${folder}\``).join(", ")}. \`cd\` into the one you need; your workspace keeps your notes.`
     : "";
   return {
-    section: `<workspace-canvas>\nThis Solo chat's Canvas as of this message: its standing instructions for this chat, which the owner's messages override. It replaces any earlier workspace Canvas.${folders}\n\n${canvas.trim()}\n</workspace-canvas>`,
+    section: `<workspace-canvas>\nThis Solo chat's Canvas as of this message: its standing instructions for this chat, which the owner's messages override. It replaces any earlier workspace Canvas.${folders}\n\n${unframed(canvas.trim())}\n</workspace-canvas>`,
     directories,
   };
 }

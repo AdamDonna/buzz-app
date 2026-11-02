@@ -7,6 +7,7 @@ import { BASE_PROMPT } from "../../features/agent-harness/base-prompt";
 import { coreMemorySection } from "../../features/agent-harness/core-memory";
 import {
   type ConversationWake,
+  unframed,
   wakeSection,
 } from "../../features/agent-harness/plugin-wake";
 import type { AgentKey } from "../../features/agents/membership";
@@ -60,9 +61,10 @@ export function turnContext(
   const text = `You are ${agent.name} (pubkey ${agent.pubkey}).\nCurrent Buzz custom instructions replace all prior Buzz custom instructions. An empty section means no custom instructions apply.\n<agent-instructions>\n${settings.instructions}\n</agent-instructions>\n\nCurrent team sections replace all prior team sections. None means you are on no team.${team ? `\n${team}` : ""}${core ? `\n\nCurrent core memory replaces all prior core memory.\n${core}` : ""}`;
   const values = [""];
   let size = 0;
-  for (const line of `${text}${repositories ? `\n\n${repositories}` : ""}`.split(
-    /(?<=\n)/,
-  )) {
+  // None of it is Buzz's event or steer section.
+  for (const line of unframed(
+    `${text}${repositories ? `\n\n${repositories}` : ""}`,
+  ).split(/(?<=\n)/)) {
     // A line over the limit splits by code point.
     const pieces = bytes(line) > CONTEXT_VALUE_BYTES ? [...line] : [line];
     for (const piece of pieces) {
