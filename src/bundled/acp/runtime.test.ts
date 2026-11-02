@@ -1148,6 +1148,53 @@ describe("AcpRuntime", () => {
     expect(steps).toEqual(["b", "high", "prompt"]);
   });
 
+  it("refuses a synced effort the harness doesn't offer, unless the message picks its own", async () => {
+    const config = await confirmed();
+    const { fake, runtime, deliver, sync, published, workingUntil } = setup({
+      configOptions: [
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "low",
+          options: [{ value: "low", name: "low" }],
+        },
+      ],
+    });
+    sync(config);
+    const signal = new AbortController().signal;
+    const synced = { synced: { effort: "high" } };
+    await deliver(message("1", "@Opal think"), config, signal, synced).run;
+    await vi.waitFor(() => expect(published).toHaveLength(1));
+    expect(fake.harnesses[0]?.sent("session/prompt")).toEqual([]);
+    await expect(workingUntil.mock.calls[0]?.[0]).resolves.toMatchObject({
+      error: expect.stringContaining('synced effort "high"'),
+    });
+    // A watch or timer is checked the same way.
+    const wake = await runtime.runOnce({
+      delivery: {
+        agent: { pubkey: self, name: "Opal", owner: alice },
+        config,
+        ...synced,
+      } as unknown as Delivery,
+      key: "timer",
+      signal,
+      prompt: async () => "wake",
+    });
+    expect(wake).toMatchObject({ ok: false });
+    expect(wake.error).toContain('synced effort "high"');
+    expect(fake.harnesses.flatMap((h) => h.turns)).toEqual([]);
+    // The message's own pick runs on its own level.
+    void deliver(message("2", "@Opal think"), config, signal, {
+      ...synced,
+      effort: "low",
+    }).run;
+    await vi.waitFor(() =>
+      expect(fake.harnesses.flatMap((h) => h.turns)).toHaveLength(1),
+    );
+  });
+
   it("leaves nothing running when a delivery is cancelled while the harness starts", async () => {
     const config = await confirmed();
     const { fake, deliver, sync } = setup({

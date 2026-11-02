@@ -286,6 +286,7 @@ export class AcpRuntime {
     model,
     effort,
     named,
+    synced,
   }: Delivery) {
     const settings = config(raw);
     // Watches and timers come as standalone turns (`runOnce`).
@@ -374,6 +375,8 @@ export class AcpRuntime {
       signal,
       ...(model ? { model } : {}),
       ...(effort ? { effort } : {}),
+      // A pick runs on its own level; a synced one is checked.
+      ...(synced?.effort && !model && !effort ? { kept: synced.effort } : {}),
       ...(topLevel && named ? { named } : {}),
       activityScope: topLevel ? channel : place.root,
       ...(step ? { step } : {}),
@@ -435,7 +438,10 @@ export class AcpRuntime {
           ? undefined
           : standalonePrompt(agent.pubkey, text);
       },
-      { signal },
+      {
+        signal,
+        ...(delivery.synced?.effort ? { kept: delivery.synced.effort } : {}),
+      },
     );
     this.notify();
     return done.finally(() => this.notify());
