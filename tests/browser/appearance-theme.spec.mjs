@@ -243,6 +243,17 @@ test("Baton keeps its frame on the page mode and changes accent between modes", 
     "rgb(196, 193, 184)",
   );
   expect(await resolved(page, "--accent-9")).toBe("rgb(16, 16, 138)");
+  expect(await resolved(page, "--border-standard")).toBe("rgb(128, 128, 128)");
+  expect(
+    (
+      await group
+        .locator('svg[data-theme="relax"]')
+        .evaluate((node) =>
+          getComputedStyle(node).getPropertyValue("--border-standard"),
+        )
+    ).trim(),
+    "a card keeps its own hairline instead of the page theme's",
+  ).toBe("#e6dfe5");
 
   await chooseColorMode(page, "Dark");
   await expectFramed(page, false);
@@ -254,4 +265,5 @@ test("Baton keeps its frame on the page mode and changes accent between modes", 
   );
   expect(await resolved(page, "--surface-panel", "body")).toBe("rgb(0, 0, 0)");
   expect(await resolved(page, "--accent-9")).toBe("rgb(43, 209, 43)");
+  expect(await resolved(page, "--border-standard")).toBe("rgb(58, 58, 58)");
 });

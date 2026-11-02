@@ -1908,7 +1908,7 @@
   --icon-categorical-purple-own: var(--icon-categorical-purple);
   --text-link: var(--text-standard);
   --affordance-link-hover: var(--affordance-subtle-hover);
-  --border-standard: var(--neutral-3);
+  --border-standard: var(--theme-border-standard-light, var(--neutral-3));
   --border-message-thread: var(--neutral-4);
   --scrollbar-thumb: var(--neutral-8);
   --scrollbar-thumb-quiet: color-mix(
@@ -2058,7 +2058,7 @@
   --icon-categorical-purple-own: var(--icon-categorical-purple);
   --text-link: var(--text-standard);
   --affordance-link-hover: var(--affordance-subtle-hover);
-  --border-standard: var(--neutral-5);
+  --border-standard: var(--theme-border-standard-dark, var(--neutral-5));
   --border-message-thread: var(--neutral-6);
   --scrollbar-thumb: var(--neutral-9);
   --scrollbar-thumb-quiet: color-mix(
@@ -2816,6 +2816,9 @@
    dark sets --theme-accent-overlay-dark, -hover-dark, -soft-dark, -quiet-dark
    and -highlight-dark to --tint-fill, --tint-hover-fill, --tint-soft-fill,
    --tint-quiet-fill and --tint-fill, so overlays lighten rather than darken.
+
+   --border-standard reads --theme-border-standard-light and -dark, so a theme
+   may set its hairline apart from its neutral ramp.
    ============================================================ */
 
 .dark[data-theme-frame] {
@@ -2854,8 +2857,9 @@
 }
 
 /* Slots inherit down the tree, so a scope that previews another theme must not
-   pick up the page theme's values. A scope that previews the unthemed baseline
-   carries data-theme-reset, which returns every slot to its role's fallback. */
+   pick up the page theme's values. A preview scope carries data-theme-reset,
+   which returns every slot to its role's fallback; the theme's own block, which
+   comes later, then assigns the slots that theme sets. */
 [data-theme-reset] {
   --theme-accent-1-dark: initial;
   --theme-accent-1-light: initial;
@@ -2905,6 +2909,8 @@
   --theme-badge-light: initial;
   --theme-badge-text-dark: initial;
   --theme-badge-text-light: initial;
+  --theme-border-standard-dark: initial;
+  --theme-border-standard-light: initial;
   --theme-bubble-neutral-dark: initial;
   --theme-bubble-neutral-light: initial;
   --theme-bubble-received-dark: initial;
@@ -3156,6 +3162,7 @@
   );
   --theme-bubble-neutral-light: var(--baton-bubble-neutral-light);
   --theme-bubble-received-light: var(--baton-bubble-received-light);
+  --theme-border-standard-light: var(--baton-neutral-8-light);
   --theme-canvas-light: var(--baton-frame-canvas-light);
   --theme-sidebar-light: var(--baton-frame-sidebar-light);
   --theme-accent-1-light: var(--baton-1-light);
@@ -3204,6 +3211,7 @@
   --theme-neutral-action-pressed-dark: var(--baton-neutral-action-pressed-dark);
   --theme-bubble-neutral-dark: var(--baton-bubble-neutral-dark);
   --theme-bubble-received-dark: var(--baton-bubble-received-dark);
+  --theme-border-standard-dark: var(--baton-neutral-5-dark);
   --theme-canvas-dark: var(--baton-frame-canvas-dark);
   --theme-sidebar-dark: var(--baton-frame-sidebar-dark);
   --theme-accent-1-dark: var(--baton-1-dark);
