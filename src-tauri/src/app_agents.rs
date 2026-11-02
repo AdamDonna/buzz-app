@@ -391,9 +391,8 @@ impl Hosting {
         std::fs::create_dir_all(dir).map_err(|_| "Could not open agent hosting")?;
         let packaged = dir.join(format!("{pubkey}.packaged"));
         let mut held = self.held();
-        if !self.packaged
-            && (!lock(open_lock(&packaged)?.try_lock_shared())? || self.wanted_elsewhere(dir)?)
-        {
+        let packaged_runs = !self.packaged && !lock(open_lock(&packaged)?.try_lock_shared())?;
+        if packaged_runs || (!self.packaged && self.wanted_elsewhere(dir)) {
             held.remove(pubkey);
             return Ok(false);
         }
@@ -414,31 +413,23 @@ impl Hosting {
         held.insert(pubkey.into(), file);
         Ok(true)
     }
-    /// Whether another live dev build was asked to run agents.
+    /// Whether another live dev build was asked to run agents. Anything
+    /// unreadable counts as no one asked, so agents keep running somewhere.
     #[allow(clippy::incompatible_msrv)]
-    fn wanted_elsewhere(&self, dir: &Path) -> Result<bool, String> {
-        let id = match std::fs::read_to_string(dir.join("here")) {
-            Ok(id) => id,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(_) => return Err("Could not read agent hosting".into()),
+    fn wanted_elsewhere(&self, dir: &Path) -> bool {
+        let Ok(id) = std::fs::read_to_string(dir.join("here")) else {
+            return false;
         };
-        if !valid_copy_id(&id)
-            || self
-                .here
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-                .is_some_and(|(own, _)| *own == id)
-        {
-            return Ok(false);
-        }
-        let copy = match File::open(dir.join(format!("{id}.copy"))) {
-            Ok(copy) => copy,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(_) => return Err("Could not read agent hosting".into()),
-        };
-        // A copy that exited holds nothing; taking its lock shows that.
-        Ok(!lock(copy.try_lock_shared())?)
+        let own = self
+            .here
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|(own, _)| *own == id);
+        // A copy that exited holds nothing, so its lock can be taken.
+        !own && valid_copy_id(&id)
+            && File::open(dir.join(format!("{id}.copy")))
+                .is_ok_and(|copy| matches!(copy.try_lock_shared(), Err(TryLockError::WouldBlock)))
     }
     /// Asks every other dev build to let go of its agents while this one lives.
     #[allow(clippy::incompatible_msrv)]
@@ -448,6 +439,20 @@ impl Hosting {
         }
         let dir = self.dir.as_ref().map_err(Clone::clone)?;
         std::fs::create_dir_all(dir).map_err(|_| "Could not open agent hosting")?;
+        let entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map_err(|_| "Could not read agent hosting")?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .collect();
+        let held = |path: &PathBuf| {
+            File::open(path)
+                .is_ok_and(|file| matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock)))
+        };
+        if entries
+            .iter()
+            .any(|path| path.extension().is_some_and(|ext| ext == "packaged") && held(path))
+        {
+            return Err("Quit the installed Buzz app first; it runs your agents".into());
+        }
         let mut here = self
             .here
             .lock()
@@ -461,12 +466,10 @@ impl Hosting {
             *here = Some((id, copy));
         }
         let (id, _) = here.as_ref().expect("set above");
-        // The copy named before, once it exited, leaves nothing to keep.
-        if let Ok(old) = std::fs::read_to_string(dir.join("here")) {
-            let path = dir.join(format!("{old}.copy"));
-            if valid_copy_id(&old)
-                && old != *id
-                && File::open(&path).is_ok_and(|copy| matches!(copy.try_lock(), Ok(())))
+        // Copies that exited leave nothing to keep; a live one holds its file.
+        for path in &entries {
+            if path.extension().is_some_and(|ext| ext == "copy")
+                && File::open(path).is_ok_and(|copy| matches!(copy.try_lock(), Ok(())))
             {
                 let _ = std::fs::remove_file(path);
             }
@@ -2272,7 +2275,10 @@ mod tests {
         drop(first);
         assert!(third.claim(&agent).unwrap());
         assert!(!second.claim(&agent).unwrap());
-        // Asking again forgets the copy that exited.
+        // A copy asked before and then passed over is forgotten once it exits.
+        third.run_here().unwrap();
+        second.run_here().unwrap();
+        drop(third);
         second.run_here().unwrap();
         let copies = std::fs::read_dir(dir.path().join("hosts"))
             .unwrap()
@@ -2286,7 +2292,18 @@ mod tests {
             })
             .count();
         assert_eq!(copies, 1);
-        assert!(hosting(hosts(), true).run_here().is_err());
+        // An unreadable choice stops no one.
+        std::fs::remove_file(dir.path().join("hosts/here")).unwrap();
+        std::fs::create_dir(dir.path().join("hosts/here")).unwrap();
+        assert!(second.claim(&agent).unwrap());
+        // The installed app keeps what it runs, and says so.
+        let packaged = hosting(hosts(), true);
+        assert!(packaged.run_here().is_err());
+        assert!(packaged.claim(&agent).unwrap());
+        assert_eq!(
+            second.run_here(),
+            Err("Quit the installed Buzz app first; it runs your agents".into())
+        );
     }
 
     #[test]
