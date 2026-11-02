@@ -1,5 +1,6 @@
 import type { ConversationHostServices } from "../../features/conversation/ConversationHost";
 import { workflowLabel } from "../../features/relay/workflow-attribution";
+import { ownSolo } from "../../features/solo/labels";
 import { LightningIcon } from "../../shared/design-system/icons";
 import {
   type ReactNode,
@@ -147,14 +148,19 @@ const targetOf = (item: InboxItem) => ({
   ...(item.rootId ? { rootId: item.rootId } : {}),
 });
 
-/** DMs and a Solo chat's own messages open whole; others open at their message. */
+/** DMs and a Solo chat's own messages open whole; others open at their
+ * message. Someone else's chat opens whole at the tag its row previews. */
 const tabTarget = (
   item: InboxItem,
-  channel: { channelType?: string } | undefined,
+  channel: Parameters<typeof ownSolo>[0],
 ): PageTabTarget =>
   item.target.kind === "channel" ||
   (channel?.channelType === "solo" && !item.thread)
-    ? { channelId: item.channelId }
+    ? {
+        channelId: item.channelId,
+        ...(channel?.channelType === "solo" &&
+          !ownSolo(channel) && { messageId: item.messageId }),
+      }
     : {
         channelId: item.channelId,
         threadId: item.rootId ?? item.messageId,
@@ -722,6 +728,20 @@ function InboxList({
           leaves && index >= 0
             ? (current.visible[index + 1] ?? current.visible[index - 1])
             : undefined;
+        // Someone else's chat has no sidebar row to carry its dot, so archiving
+        // its tags also reads them.
+        const shared = session.channels
+          .list()
+          .channels.find((entry) => entry.id === item.channelId);
+        if (
+          value &&
+          canRead &&
+          hasUnread(conversation) &&
+          shared?.channelType === "solo" &&
+          !ownSolo(shared)
+        )
+          for (const step of conversation.readThrough)
+            await session.unread.markThrough(step.target, step.messageId);
         updateArchive(archiveScope, conversation, value, at);
         setMenu(undefined);
         if (!leaves) return;

@@ -14,7 +14,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { PageTabs } from "../channels/PageTabs";
+import { PageTabs, type PageTabTarget } from "../channels/PageTabs";
 import { InboxPage, type ArchiveShortcut } from "./InboxPage";
 import { huddleDescription } from "../../features/huddle/lifecycle";
 import { archiveKey, readArchives } from "./archive";
@@ -1515,6 +1515,8 @@ function fixture(
     holdProfiles?: boolean;
     withWriter?: boolean;
     soloChannel?: boolean;
+    /** Alice's Solo chat, shared with the viewer. */
+    sharedSolo?: boolean;
     memberAgents?: 1 | 2;
     readCapability?: "read-only" | "unsupported";
     guest?: boolean;
@@ -1622,15 +1624,19 @@ function fixture(
         ...(options.memberAgents === 2 ? [profileAgent.pubkey] : []),
       ],
       10,
-      options.soloChannel ? { [viewer.pubkey]: "owner" } : {},
+      options.soloChannel
+        ? { [viewer.pubkey]: "owner" }
+        : options.sharedSolo
+          ? { [alice.pubkey]: "owner" }
+          : {},
     ),
     metadata(relayKey, "room", "Design", 10, [
-      ...(options.soloChannel
+      ...(options.soloChannel || options.sharedSolo
         ? [
             ["t", "stream"],
             ["private"],
             ["t", "buzz.solo"],
-            ["P", viewer.pubkey],
+            ["P", options.sharedSolo ? alice.pubkey : viewer.pubkey],
           ]
         : [
             ["t", "stream"],
@@ -1697,6 +1703,8 @@ function fixture(
       acceptedRevision: 1,
     };
   }
+  // Every tab the page asks for, and where it asked it to open.
+  const tabOpens: PageTabTarget[] = [];
   const owner = createRelaySession(
     {
       viewer: viewer.pubkey,
@@ -2046,13 +2054,27 @@ function fixture(
     mention,
     reply,
     open,
+    tabOpens,
     archive,
     journal: () => journal,
     view: (
       <StrictMode>
         <InboxPage
           host={host}
-          tabs={(props) => <PageTabs {...props} host={host} />}
+          tabs={(props) => (
+            <PageTabs {...props} host={host}>
+              {(open, close, isOpen) =>
+                props.children(
+                  (target, options) => {
+                    tabOpens.push(target);
+                    return open(target, options);
+                  },
+                  close,
+                  isOpen,
+                )
+              }
+            </PageTabs>
+          )}
           relay={relay}
           navigator={{ open } as unknown as Navigation}
           archive={archive}
@@ -3554,6 +3576,44 @@ it.each([true, false])(
     );
   },
 );
+it("opens someone else's chat at the tag its row previews", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  fireEvent.click(
+    within(rows()[0] as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  // The whole chat opens, revealing the tag rather than focusing the composer.
+  await waitFor(() =>
+    expect(h.tabOpens.at(-1)).toEqual({
+      channelId: "room",
+      messageId: h.mention.id,
+    }),
+  );
+});
+
+it("archiving someone else's chat from Inbox also reads its tags", async () => {
+  const h = fixture({ sharedSolo: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  expect(
+    h.owner.session.unread.snapshot({ kind: "channel", channelId: "room" })
+      .observedCount,
+  ).toBe(1);
+  fireEvent.click(
+    within(rows()[0] as HTMLElement).getByRole("button", {
+      name: /^Archive /,
+    }),
+  );
+  await waitFor(() => expect(rows()).toHaveLength(0));
+  await waitFor(() =>
+    expect(
+      h.owner.session.unread.snapshot({ kind: "channel", channelId: "room" })
+        .observedCount,
+    ).toBe(0),
+  );
+});
+
 it("Inbox Solo chat activity shared with a person sends without a tag", async () => {
   const h = fixture({
     withWriter: true,
