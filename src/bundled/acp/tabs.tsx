@@ -731,14 +731,34 @@ export function createTabs({
         );
       return () => abort.abort();
     }, [agent.pubkey, open]);
+    // Focus follows the view: into Back, then back to the opened row's action.
+    const here = useRef<HTMLDivElement>(null);
+    const opened = useRef<string>(undefined);
+    useEffect(() => {
+      const view = here.current;
+      if (open !== undefined) opened.current = open;
+      else if (opened.current === undefined) return;
+      const actions = [
+        ...(view?.querySelectorAll<HTMLElement>("[data-row]") ?? []),
+      ];
+      (open !== undefined
+        ? view?.querySelector<HTMLElement>("[data-back]")
+        : (actions.find((action) => action.dataset.row === opened.current) ??
+          actions[0])
+      )?.focus();
+    }, [open]);
     const label = (row: Conversation) =>
       row.title ||
       `${row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
     if (open !== undefined)
       return (
-        <div className="grid gap-4">
+        <div ref={here} className="grid gap-4">
           <div>
-            <Button variant="ghost" onClick={() => setOpen(undefined)}>
+            <Button
+              variant="ghost"
+              data-back
+              onClick={() => setOpen(undefined)}
+            >
               Back
             </Button>
           </div>
@@ -759,7 +779,7 @@ export function createTabs({
       );
     if (!rows.length) return <p>No conversations on this device yet.</p>;
     return (
-      <div className="grid gap-2">
+      <div ref={here} className="grid gap-2">
         {replays === false && <p>This harness can't replay its transcripts.</p>}
         <ul className="grid gap-1">
           {rows.map((row) => (
@@ -770,7 +790,11 @@ export function createTabs({
                 {new Date(row.at).toLocaleString()}
               </span>
               {replays !== false && row.replayable && (
-                <Button variant="ghost" onClick={() => setOpen(row.key)}>
+                <Button
+                  variant="ghost"
+                  data-row={row.key}
+                  onClick={() => setOpen(row.key)}
+                >
                   Transcript
                 </Button>
               )}

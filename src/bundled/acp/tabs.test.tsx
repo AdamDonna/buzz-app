@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../../features/agents/service";
 import { approve, approved, type Config, DEFAULT_CONFIG } from "./config";
 import { READY } from "./harness";
@@ -455,4 +455,65 @@ it("mounts Settings and History on the real runtime, which React calls unbound",
   render(<SettingsTab agent={agent} save={async () => {}} />);
   render(<HistoryTab agent={agent} save={async () => {}} />);
   expect(screen.getByRole("button", { name: "Confirm command" })).toBeVisible();
+});
+
+describe("History focus", () => {
+  const row = (key: string): Conversation => ({
+    key,
+    channelId: key,
+    at: 1,
+    replayable: true,
+  });
+  function history(
+    transcript: TabsRuntime["transcript"],
+    rows = [row("c1"), row("c2")],
+  ) {
+    const runtime = fakeRuntime({ conversations: () => rows, transcript });
+    const { HistoryTab } = createTabs({
+      check: vi.fn(),
+      cache: modelCache(localStorage),
+      runtime,
+    });
+    render(
+      <HistoryTab
+        agent={{ pubkey: "p1", config: start } as Agent<Config>}
+        save={async () => {}}
+      />,
+    );
+    return rows;
+  }
+  const actions = () => screen.getAllByRole("button", { name: "Transcript" });
+  const back = () => screen.getByRole("button", { name: "Back" });
+
+  it("moves into Back while loading and returns to the opened row", async () => {
+    history(() => new Promise(() => {}));
+    actions()[1]?.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("Reading…");
+    expect(back()).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(actions()[1]).toHaveFocus();
+  });
+
+  it("moves into Back once loaded", async () => {
+    history(async () => ({ turns: [] }));
+    actions()[0]?.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(back()).toHaveFocus();
+  });
+
+  it("keeps focus on Back after a read failure, and falls back to a surviving row", async () => {
+    const rows = history(async () => {
+      throw new Error("no replay");
+    });
+    actions()[1]?.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("no replay");
+    expect(back()).toHaveFocus();
+    rows.pop();
+    await userEvent.keyboard("{Enter}");
+    expect(actions()).toHaveLength(1);
+    expect(actions()[0]).toHaveFocus();
+  });
 });
