@@ -1,0 +1,56 @@
+.cards {
+  min-inline-size: 0;
+  padding-block: var(--space-3);
+}
+.cards [class~="buzz-radio-group"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--space-4);
+}
+.cards [class~="buzz-choice"] {
+  align-items: start;
+}
+.cards [class~="buzz-choice"] > span {
+  display: grid;
+  gap: var(--space-1);
+  inline-size: 100%;
+}
+.cards [class~="buzz-theme-choice"] {
+  justify-items: stretch;
+  gap: var(--space-2);
+}
+.thumbnail {
+  inline-size: 100%;
+}
+.canvas {
+  fill: var(--bg-app);
+}
+.sidebar {
+  fill: var(--surface-sidebar);
+}
+.selected {
+  stroke: var(--surface-sidebar-selected);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.sidebarLines {
+  stroke: var(--text-navigation);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.6;
+}
+.panel {
+  fill: var(--surface-panel);
+}
+.lines {
+  stroke: var(--text-metadata);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.message {
+  fill: var(--surface-message-own);
+}
+.composer {
+  fill: none;
+  stroke: var(--border-standard);
+}

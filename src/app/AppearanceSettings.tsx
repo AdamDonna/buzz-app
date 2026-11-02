@@ -1,5 +1,5 @@
 import { Select } from "../shared/design-system/ui/Select";
-import { ACCENTS, accentButtonStyle } from "../shared/theme/accent";
+import { ACCENT_CHOICES, accentButtonStyle } from "../shared/theme/accent";
 
 import { IconButton } from "../shared/design-system/ui/IconButton";
 import {
@@ -11,6 +11,8 @@ import { Header, InlineHeader } from "../shared/design-system/ui/Header";
 import { ToastNotice } from "../shared/design-system/ui/Toast";
 import { PreferenceRow } from "../shared/design-system/ui/PreferenceRow";
 import { AppearancePreview } from "./AppearancePreview";
+import { ThemeCards } from "./ThemeCards";
+import { frameScope } from "../shared/theme/themes";
 import { Button } from "../shared/design-system/ui/Button";
 import {
   useCallback,
@@ -64,14 +66,22 @@ export function AppearanceSettings({
     accentError,
     contrast,
     contrastError,
+    theme,
+    themeError,
   } = useSyncExternalStore(appearance.subscribe, appearance.snapshot);
   return (
     <section aria-labelledby="appearance-settings-title">
       <Header id="appearance-settings-title" title="Appearance" />
-      <AppearancePreview />
+      <AppearancePreview framed={frameScope(theme, mode) === "dark"} />
       <div>
         <InlineHeader title="Interface" />
         <SettingsGroup>
+          <ThemeCards
+            value={theme}
+            mode={mode}
+            accent={accent}
+            onValueChange={appearance.setTheme}
+          />
           <PreferenceRow
             id="setting-mode"
             title="Mode"
@@ -158,7 +168,7 @@ export function AppearanceSettings({
                   data-accent-colors
                   className="grid auto-cols-max grid-flow-col gap-2 overflow-x-auto p-1 scroll-p-1 [&>button]:scroll-m-1"
                 >
-                  {ACCENTS.map((color) => {
+                  {ACCENT_CHOICES.map((color) => {
                     const colorLabel =
                       color === "bee"
                         ? "Honey"
@@ -302,6 +312,13 @@ export function AppearanceSettings({
               onClick={() => setThreadPlacementPreference(placement)}
             >
               Retry saving thread placement
+            </Button>
+          </ToastNotice>
+        )}
+        {active && themeError && (
+          <ToastNotice title="Theme wasn’t saved" description={themeError}>
+            <Button size="sm" onClick={() => appearance.setTheme(theme)}>
+              Retry saving theme
             </Button>
           </ToastNotice>
         )}

@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
@@ -264,11 +265,15 @@ it("selects and restores an accent color, including retry after a failed save", 
   );
   expect(
     screen.getAllByRole("button", { name: / accent color$/ }),
-  ).toHaveLength(6);
-
+  ).toHaveLength(7);
+  // Theme is first and the default; under the Buzz theme it resolves to Citrus.
   expect(
-    screen.getByRole("button", { name: "Citrus accent color" }),
+    screen.getAllByRole("button", { name: / accent color$/ })[0],
+  ).toHaveAccessibleName("Theme accent color");
+  expect(
+    screen.getByRole("button", { name: "Theme accent color" }),
   ).toHaveAttribute("aria-pressed", "true");
+  expect(document.documentElement.dataset.accent).toBe("theme");
   const save = vi
     .spyOn(Storage.prototype, "setItem")
     .mockImplementationOnce(() => {
@@ -292,6 +297,52 @@ it("selects and restores an accent color, including retry after a failed save", 
   const restored = createAppearance();
   expect(restored.snapshot().accent).toBe("mono");
   restored.dispose();
+});
+
+it("chooses a theme by pointer and keyboard, saves only the theme, and recovers from a failed save", async () => {
+  const user = userEvent.setup();
+  const appearance = createAppearance();
+  appearance.setAccent("cobalt");
+  localStorage.clear();
+  render(
+    <ToastProvider>
+      <AppearanceSettings appearance={appearance} />
+    </ToastProvider>,
+  );
+  const group = screen.getByRole("radiogroup", { name: "Theme" });
+  const buzz = within(group).getByRole("radio", { name: "Buzz" });
+  const relax = within(group).getByRole("radio", { name: "Relax" });
+  expect(buzz).toBeChecked();
+  expect(relax).toHaveAccessibleDescription(
+    "Deep plum frame around a bright, open workspace.",
+  );
+  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(2);
+  expect(
+    group.querySelector("svg[data-theme='relax'][data-color-mode]"),
+  ).not.toBeNull();
+
+  const save = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementationOnce(() => {
+      throw new Error("denied");
+    });
+  await user.click(relax);
+  expect(relax).toBeChecked();
+  expect(document.documentElement.dataset.theme).toBe("relax");
+  expect(document.documentElement.dataset.accent).toBe("cobalt");
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Retry saving theme" }),
+  );
+  expect(localStorage.getItem("buzz-theme.v1")).toBe("relax");
+  expect(localStorage.getItem("buzz-accent.v1")).toBeNull();
+  save.mockRestore();
+
+  relax.focus();
+  await user.keyboard("{ArrowLeft}");
+  expect(buzz).toBeChecked();
+  expect(localStorage.getItem("buzz-theme.v1")).toBe("buzz");
+  expect(document.documentElement.dataset.theme).toBe("buzz");
+  appearance.dispose();
 });
 
 it("saves new-thread placement, restores it, and follows another window", async () => {
