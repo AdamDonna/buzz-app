@@ -314,6 +314,122 @@ fn a_bundled_program_runs_from_the_app_bin_never_path() {
 }
 
 #[test]
+fn artifacts_may_be_under_home() {
+    let process = |path: &str| -> HostProcess {
+        serde_json::from_value(serde_json::json!({
+            "id": "agent", "program": "agent",
+            "artifact": { "path": path, "sha256": "a".repeat(64) }
+        }))
+        .unwrap()
+    };
+    let path = |declared: HostProcess| declared.artifact.unwrap().path;
+    assert_eq!(
+        PathBuf::from(path(at_home(process("~/tools/agent")).unwrap())),
+        expand_home("~").unwrap().join("tools/agent")
+    );
+    assert_eq!(path(at_home(process("/opt/agent")).unwrap()), "/opt/agent");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_hook_guard_says_why_it_stopped_a_worker() {
+    let processes = HostProcesses::default();
+    let (sender, mut events) = channel();
+    let script = "echo not-json; exec sleep 30";
+    processes
+        .start_guarded(
+            0,
+            "a.plugin".into(),
+            "sh",
+            command("/bin/sh", &["-c", script]),
+            sender,
+            None,
+            true,
+        )
+        .unwrap();
+    let (stdout, stderr, _) = until_exit(&mut events).await;
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "Invalid protected Claude frame\n");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_guarded_worker_s_last_frame_reaches_the_page_after_it_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let gate = dir.path().join("gate");
+    assert!(std::process::Command::new("/usr/bin/mkfifo")
+        .arg(&gate)
+        .status()
+        .unwrap()
+        .success());
+    let path = gate.to_str().unwrap().to_owned();
+    // The worker writes its last frame only once the page holds its first,
+    // then exits; the page holds the reader until the host has reaped it.
+    let script = r#"echo "{\"type\":\"system\",\"pid\":$$}"; read _ < "$1"; echo '{"type":"result"}'; exit 1"#;
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let held = std::sync::atomic::AtomicBool::new(false);
+    let channel = Channel::new(move |body| {
+        let InvokeResponseBody::Json(json) = body else {
+            return Ok(());
+        };
+        let event: serde_json::Value = serde_json::from_str(&json).unwrap();
+        if event["type"] == "stdout" && !held.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let first: serde_json::Value =
+                serde_json::from_str(event["data"].as_str().unwrap().trim()).unwrap();
+            let pid = first["pid"].as_i64().unwrap() as i32;
+            std::fs::write(&gate, "\n").unwrap();
+            // This blocks a Tauri runtime worker; a second one must reap the child.
+            let start = std::time::Instant::now();
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                assert!(start.elapsed() < Duration::from_secs(10), "not reaped");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let _ = sender.send(event);
+        Ok(())
+    });
+    let processes = HostProcesses::default();
+    processes
+        .start_guarded(
+            0,
+            "a.plugin".into(),
+            "sh",
+            command("/bin/sh", &["-c", script, "sh", &path]),
+            channel,
+            None,
+            true,
+        )
+        .unwrap();
+    let (stdout, stderr, exit) = until_exit(&mut events).await;
+    assert!(stdout.ends_with("{\"type\":\"result\"}\n"), "{stdout:?}");
+    assert_eq!(stderr, "");
+    assert_eq!(exit["code"], 1);
+}
+
+#[test]
+fn only_the_protected_claude_cli_gets_the_hook_guard() {
+    let manifest: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../src/bundled/claude-code/manifest.json"
+    ))
+    .unwrap();
+    let declared = manifest["host"]["processes"].as_array().unwrap();
+    let cli = ["claude-protected-arm64", "claude-protected-x64"];
+    for process in declared {
+        let id = process["id"].as_str().unwrap();
+        // The pinned CLI artifacts are the only declared processes that run
+        // the CLI under protection; the protected file reader prints raw base64.
+        assert_eq!(process["artifact"].is_object(), cli.contains(&id), "{id}");
+        assert_eq!(
+            runs_protected_claude("buzz.claude-code", id, true),
+            cli.contains(&id),
+            "{id}"
+        );
+        assert!(!runs_protected_claude("buzz.claude-code", id, false));
+        assert!(!runs_protected_claude("other.plugin", id, true));
+    }
+}
+
+#[test]
 fn protected_launch_refuses_path_programs_and_preserves_bundled_resolution() {
     let store = tempfile::tempdir().unwrap();
     let mut process: HostProcess =

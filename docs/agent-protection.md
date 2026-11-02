@@ -83,5 +83,27 @@ is not general workstation isolation or a guarantee against code that runs later
 outside Buzz. Runtime and installed-plugin code remain trusted. Declared native
 artifacts are verified and staged before launch; that does not verify an entire
 runtime dependency graph or defend against other unsandboxed same-user programs.
+Claude's protected agents and security reviews run its pinned release this way:
+the host runs only its own verified copy, so a changed file in the download
+folder never runs. Both ignore Claude settings files, though Claude still reads
+its folder's sign-in and cached managed settings. Security reviews also have
+their own sign-in, in a Claude folder of their own that Buzz Security
+hides from contained agents (`~/Library/Application Support/Buzz/claude-code-review-home`).
+To set it up, run `claude setup-token` in Terminal, then paste the token it
+prints under **Sign in for reviews** in **Settings → Agent setup → Harness
+defaults → Claude → Edit configuration**. It needs a Claude Pro, Max, Team or
+Enterprise subscription, not an API key or gateway, and lasts a year. Until it
+is saved, and once it expires or is revoked, Claude reviews fail closed; save a
+new token or choose another review model. A review's 60-second budget includes
+waiting for Buzz to download that release the first time; a longer download
+fails the review closed and carries on for later reviews.
+Known Claude gaps: while a review runs, other processes of yours, likely
+contained agents too (not checked against the pinned release), can read its
+sign-in from the review's process environment. Protected Claude agents, unlike
+reviews, still use `~/.claude`, which other contained agents can write, so one
+can plant a sign-in there, or cached managed settings that carry hooks and env
+into a protected run's checks. Their transcripts live in `~/.claude/projects`
+too, so a contained agent can swap one between a run's checks or before it
+resumes.
 Broader restrictions on workspace writes, startup files and login jobs belong to
 Sandpit.

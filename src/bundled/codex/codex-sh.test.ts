@@ -10,6 +10,7 @@ import { once } from "node:events";
 import { watch } from "node:fs";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -385,24 +386,54 @@ it("keeps a newer shared sign-in over the one in Buzz's home", async () => {
   expect(await readFile(join(f.codex, "auth.json"), "utf8")).toBe("signed in");
 });
 
-it("writes a handed-over sign-in through the user's own link, and privately when new", async () => {
+it("replaces the user's own linked sign-in with a private file, as `codex login` does", async () => {
   const f = await echoing();
   await f.step("run");
-  await signIn(f.own, "first");
-  await f.step("run");
-  expect((await stat(join(f.codex, "auth.json"))).mode & 0o777).toBe(0o600);
   // The user keeps their sign-in elsewhere and links it into their Codex home.
+  // Buzz can't tell that link from one a contained worker made.
   const kept = join(f.home, "dotfiles-auth.json");
-  await rm(join(f.codex, "auth.json"));
   await writeFile(kept, "first", { mode: 0o600 });
   await symlink("../dotfiles-auth.json", join(f.codex, "auth.json"));
   await signIn(f.own, "second");
   await f.step("run");
-  expect(await readlink(join(f.codex, "auth.json"))).toBe(
-    "../dotfiles-auth.json",
-  );
-  expect(await readFile(kept, "utf8")).toBe("second");
+  const auth = await lstat(join(f.codex, "auth.json"));
+  expect(auth.isFile()).toBe(true);
+  expect(auth.mode & 0o777).toBe(0o600);
+  expect(await readFile(join(f.codex, "auth.json"), "utf8")).toBe("second");
+  expect(await readFile(kept, "utf8")).toBe("first");
 });
+
+it("never writes a handed-over sign-in through a link to a file", async () => {
+  const f = await echoing();
+  await f.step("run");
+  // A contained worker can write both homes, but not this checker.
+  const checker = join(f.home, "protected/engine.py");
+  await mkdir(dirname(checker));
+  await writeFile(checker, "checker");
+  await utimes(checker, 1_000, 1_000);
+  await symlink(checker, join(f.codex, "auth.json"));
+  await signIn(f.own, "planted");
+  await f.step("run");
+  expect(await readFile(checker, "utf8")).toBe("checker");
+  expect(await readFile(join(f.codex, "auth.json"), "utf8")).toBe("planted");
+});
+
+// Only macOS's `mv -h` replaces a link to a folder; containment is macOS-only.
+it.runIf(process.platform === "darwin")(
+  "never moves a handed-over sign-in into a linked folder",
+  async () => {
+    const f = await echoing();
+    await f.step("run");
+    const folder = join(f.home, "protected");
+    await mkdir(folder);
+    await utimes(folder, 1_000, 1_000);
+    await symlink(folder, join(f.codex, "auth.json"));
+    await signIn(f.own, "planted");
+    await f.step("run");
+    expect(await readdir(folder)).toEqual([]);
+    expect(await readFile(join(f.codex, "auth.json"), "utf8")).toBe("planted");
+  },
+);
 
 it("leaves the shared sign-in alone when another run hands it over while it waits", async () => {
   const f = await echoing();
@@ -447,14 +478,14 @@ it("keeps a sign-in it fails to hand over, and hands it over on the next run", a
   await utimes(join(f.codex, "auth.json"), 500, 500);
   await signIn(f.own, "signed in");
   await utimes(join(f.own, "auth.json"), 1_000, 1_000);
-  // A `cat` that stops partway through writing the sign-in, as on a full disk.
+  // An `mv` that fails to move the sign-in, as across volumes on a full disk.
   const bin = join(f.home, "bin");
   await mkdir(bin);
   await writeFile(
-    join(bin, "cat"),
-    '#!/bin/sh\ncase "$1" in *-home/auth.json) printf partial; exit 1 ;; esac\nexec /bin/cat "$@"\n',
+    join(bin, "mv"),
+    '#!/bin/sh\ncase "$*" in *-home/auth.json*) exit 1 ;; esac\nexec /bin/mv "$@"\n',
   );
-  await chmod(join(bin, "cat"), 0o755);
+  await chmod(join(bin, "mv"), 0o755);
   await expect(
     run("bash", ["-c", script, "codex.sh", "run"], {
       env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: f.home },
@@ -464,7 +495,6 @@ it("keeps a sign-in it fails to hand over, and hands it over on the next run", a
   });
   // Left as it was, so not newer than the sign-in still waiting in Buzz's home.
   expect(await readFile(join(f.codex, "auth.json"), "utf8")).toBe("revoked");
-  expect(await readdir(f.codex)).not.toContain("auth.json.buzz");
   await f.step("run");
   expect(await readFile(join(f.codex, "auth.json"), "utf8")).toBe("signed in");
   expect(await readlink(join(f.own, "auth.json"))).toBe(
@@ -530,4 +560,68 @@ it("copies a saved thread from the user's home once, never over Buzz's copy", as
   await step("adopt", "thread-2");
   await expect(step("adopt", "../thread-1")).rejects.toThrow("Invalid thread");
   expect(await readdir(join(`${dir}-home`, day))).toEqual([name]);
+});
+
+/** A saved thread's path in both homes, and a checker a contained worker can't
+ * read or write, though it can write both homes. */
+async function adopting() {
+  const f = await disk([]);
+  const path = "sessions/2026/10/14/rollout-2026-10-14T14-32-19-thread-1.jsonl";
+  const checker = join(f.home, "protected/engine.py");
+  await mkdir(dirname(checker));
+  await writeFile(checker, "checker\n");
+  const rollout = join(f.home, ".codex", path);
+  await mkdir(dirname(rollout), { recursive: true });
+  return { ...f, checker, rollout, copy: join(`${f.dir}-home`, path) };
+}
+
+it("never copies a saved thread that is a link", async () => {
+  const { checker, rollout, copy, step } = await adopting();
+  await symlink(checker, rollout);
+  await step("adopt", "thread-1");
+  await expect(lstat(copy)).rejects.toThrow("ENOENT");
+});
+
+it("never copies a saved thread through a link planted in its way", async () => {
+  const { home, checker, rollout, copy } = await adopting();
+  await writeFile(rollout, "planted\n");
+  await mkdir(dirname(copy), { recursive: true });
+  // Planted at the copy's temporary name, which the launcher's pid predicts:
+  // `exec` keeps the pid.
+  await expect(
+    run(
+      "bash",
+      [
+        "-c",
+        'ln -s "$1" "$2.$$" && exec bash -c "$3" codex.sh adopt thread-1',
+        "plant",
+        checker,
+        copy,
+        script,
+      ],
+      { env: { PATH: process.env.PATH ?? "", HOME: home } },
+    ),
+  ).rejects.toThrow("cannot overwrite existing file");
+  expect(await readFile(checker, "utf8")).toBe("checker\n");
+  expect((await stat(checker)).nlink).toBe(1);
+  await expect(lstat(copy)).rejects.toThrow("ENOENT");
+});
+
+it("never hard-links a file a link swapped in for the copy points to", async () => {
+  const { home, checker, rollout, copy } = await adopting();
+  await writeFile(rollout, "planted\n");
+  // A `tail` that swaps the new copy for a link first, as a worker could then.
+  const bin = join(home, "bin");
+  await mkdir(bin);
+  await writeFile(
+    join(bin, "tail"),
+    `#!/bin/sh\nfor f; do :; done\ncase "$f" in *.jsonl.*) rm -f "$f"; ln -s "${checker}" "$f" ;; esac\nexec /usr/bin/tail "$@"\n`,
+  );
+  await chmod(join(bin, "tail"), 0o755);
+  await run("bash", ["-c", script, "codex.sh", "adopt", "thread-1"], {
+    env: { PATH: `${bin}:${process.env.PATH ?? ""}`, HOME: home },
+  });
+  expect(await readFile(checker, "utf8")).toBe("checker\n");
+  expect((await stat(checker)).nlink).toBe(1);
+  expect((await lstat(copy)).isSymbolicLink()).toBe(true);
 });

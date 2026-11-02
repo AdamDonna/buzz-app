@@ -26,6 +26,7 @@ const SAVED_LIMIT = 200;
 
 /** What is saved for one conversation. */
 export type SavedSession = Readonly<{
+  protection?: string;
   id: string;
   /** created_at of the newest event this session has been shown. */
   seen: number;
@@ -75,6 +76,9 @@ type DeliveryOptions = Readonly<{
 }> &
   ActivityReceipt;
 
+/** A process `shutdown` can stop and wait for. */
+type Stoppable = Readonly<{ kill(): unknown; exited: Promise<unknown> }>;
+
 type Live = {
   process: ClaudeProcess;
   fingerprint: string;
@@ -101,6 +105,15 @@ export class AgentSessions {
       }
     | undefined;
   private disposed = false;
+  /** Every process this pool may have started for the agent, from the moment
+   * it asked for one until it exits: `shutdown` stops and waits for them all,
+   * those still starting too. */
+  private readonly started = new Set<Promise<Stoppable>>();
+  /** The host's spawn, recording what it starts; none starts once disposed. */
+  private readonly spawn: Spawn = (id, options) =>
+    this.disposed
+      ? Promise.reject(new Error("Claude was stopped"))
+      : this.track(this.options.spawn(id, options));
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -113,6 +126,11 @@ export class AgentSessions {
   seen(key: string, contextRoot?: string) {
     const saved = this.options.store.get(key);
     return (contextRoot ? saved?.threads?.[contextRoot] : saved?.seen) ?? 0;
+  }
+  protectionContext(key: string) {
+    const live = this.live.get(key) ?? this.once.get(key);
+    if (!live) throw new Error("The protected Claude session is unavailable");
+    return live.process.protectionContext();
   }
   active(key: string) {
     return this.opening.has(key) || !!this.live.get(key)?.process.active;
@@ -167,8 +185,11 @@ export class AgentSessions {
         const launch = await this.options.launch();
         if (this.disposed || this.discovery !== discovery)
           throw new Error("Claude was stopped");
-        const process = await ClaudeProcess.start(this.options.spawn, {
+        const process = await ClaudeProcess.start(this.spawn, {
           cwd: launch.cwd,
+          ...(launch.protection
+            ? { protection: launch.protection, discovery: true }
+            : {}),
           ...(launch.model ? { model: launch.model } : {}),
           ...(launch.effort ? { effort: launch.effort } : {}),
           systemPrompt: "",
@@ -423,6 +444,22 @@ export class AgentSessions {
         this.drop(key, live);
   }
 
+  async shutdown() {
+    this.dispose();
+    await Promise.allSettled(
+      [...this.started].map(async (started) => {
+        const process = await started;
+        void process.kill();
+        await process.exited;
+      }),
+    );
+  }
+  private track<T extends Stoppable>(started: Promise<T>) {
+    const done = () => void this.started.delete(started);
+    this.started.add(started);
+    void started.then((process) => process.exited.then(done, done), done);
+    return started;
+  }
   dispose() {
     this.disposed = true;
     this.clearDiscovery();
@@ -473,7 +510,7 @@ export class AgentSessions {
     const fingerprint = this.options.fingerprint(key);
     const launch = await this.options.launch(key);
     const process = resume
-      ? await ClaudeProcess.start(this.options.spawn, { ...launch, resume })
+      ? await ClaudeProcess.start(this.spawn, { ...launch, resume })
       : await this.fresh(launch, spawned);
     if (fingerprint === this.options.fingerprint(key) || this.disposed) {
       if (!resume && process.sessionId)
@@ -489,16 +526,19 @@ export class AgentSessions {
     launch: Omit<ClaudeLaunch, "resume" | "sessionId">,
     spawned?: (process: ClaudeProcess) => void,
   ) {
-    const spare = await this.options.spare?.take(launch);
+    const spare =
+      !launch.protection && (await this.options.spare?.take(launch));
     if (spare)
       try {
+        if (this.disposed) throw new Error("Claude was stopped");
+        void this.track(Promise.resolve(spare));
         spawned?.(spare);
         await spare.initialize(launch);
         return spare;
       } catch {
         void spare.kill();
       }
-    const process = await ClaudeProcess.spawn(this.options.spawn, {
+    const process = await ClaudeProcess.spawn(this.spawn, {
       ...launch,
       sessionId: this.newId(),
     });

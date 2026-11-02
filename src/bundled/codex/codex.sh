@@ -11,9 +11,9 @@ set -eu
 
 # Shared by every Buzz build on this computer, so there is one download.
 if [ "$(uname)" = Darwin ]; then
-  dir="$HOME/Library/Application Support/Buzz/codex"
+  dir="$HOME/Library/Application Support/Buzz/codex" nofollow=-h physical=-P
 else
-  dir="${XDG_DATA_HOME:-$HOME/.local/share}/buzz/codex"
+  dir="${XDG_DATA_HOME:-$HOME/.local/share}/buzz/codex" nofollow='' physical=''
 fi
 # Versions name folders, so only digits and dots: no `..` or `/` escapes.
 valid() {
@@ -67,22 +67,18 @@ if [ "$command" = run ] || [ "$command" = adopt ]; then
   # else in the way is left for Codex to handle, as it would in the shared home.
   mkdir -p "$shared/skills" "$shared/rules" 2>/dev/null || true
   # `codex login` signs out first, removing the link, so signing in from Buzz
-  # leaves a file here. The shared sign-in, which that revoked, takes it as it would
-  # have through the link, unless the shared one is newer. Under a lock, so runs
-  # starting at once hand it over once. An empty file is one Codex is still writing.
+  # leaves a file here. It replaces the shared sign-in, which that revoked, even
+  # a link, as `codex login` there would, unless the shared one is newer. Under a
+  # lock, so runs starting at once hand it over once. An empty file is one Codex
+  # is still writing.
   if [ -s "$home/auth.json" ] && [ ! -L "$home/auth.json" ]; then
     lock "$dir-home.lock"
     if [ -s "$home/auth.json" ] && [ ! -L "$home/auth.json" ]; then
-      # Through any links the user made, bounded in case they loop.
-      auth="$shared/auth.json" hops=0
-      while [ -L "$auth" ] && [ $((hops += 1)) -le 40 ]; do
-        link=$(readlink "$auth")
-        case "$link" in /*) auth=$link ;; *) auth=${auth%/*}/$link ;; esac
-      done
-      # Replaced whole, so never left partial, and private.
+      # Moved, never read or written through a link: a contained worker can
+      # make both, and this script is not contained. A rename replaces the
+      # whole file, and on macOS (-h) never moves it into a linked folder.
       [ "$shared/auth.json" -nt "$home/auth.json" ] ||
-        (umask 077 && cat "$home/auth.json" >"$auth.buzz" && mv -f "$auth.buzz" "$auth") || {
-        rm -f "$auth.buzz"
+        mv -f $nofollow "$home/auth.json" "$shared/auth.json" || {
         echo "Buzz couldn't save the Codex sign-in to $shared/auth.json" >&2
         exit 1
       }
@@ -173,17 +169,22 @@ adopt)
   thread="$1"
   case "$thread" in "" | *[!0-9A-Za-z-]*) echo "Invalid thread" >&2; exit 2 ;; esac
   for rollout in "$shared"/sessions/*/*/*/rollout-*-"$thread".jsonl; do
-    [ -f "$rollout" ] || continue
+    # Never a link, which a contained worker could point at a file it can't read.
+    [ -f "$rollout" ] && [ ! -L "$rollout" ] || continue
     copy="$home/${rollout#"$shared"/}"
     # Never over a copy Buzz already continued, here or in another build.
     [ -e "$copy" ] && continue
     mkdir -p "$(dirname "$copy")"
-    cp -p "$rollout" "$copy.$$"
+    # A new file, never one planted in the way, with the rollout's time.
+    (set -C && cat "$rollout" >"$copy.$$")
+    touch -r "$rollout" "$copy.$$"
     # The Codex app may be writing the thread now. A line it has not finished
     # is skipped when read, and must not join the next line Buzz writes.
     [ -z "$(tail -c 1 "$copy.$$")" ] || echo >>"$copy.$$"
     # A hard link publishes the whole copy, and fails if one is already there.
-    ln "$copy.$$" "$copy" 2>/dev/null || true
+    # -P links the name itself, never a file a link there points to. Linux
+    # always does, so it is passed only on macOS.
+    ln $physical "$copy.$$" "$copy" 2>/dev/null || true
     rm -f "$copy.$$"
   done
   ;;
