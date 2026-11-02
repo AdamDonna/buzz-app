@@ -80,6 +80,12 @@ export function PrivateChannels({
     bestie,
   );
   const addable = others.filter((channel) => canAddMembers(session, channel));
+  // Only a complete, current roster shows which channels Bestie is not in.
+  const complete = list.status === "ready" && list.coverage !== "partial";
+  const retry = () =>
+    session.channels.refreshList
+      ? session.channels.refreshList()
+      : session.channels.ensureList();
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   /** Why each channel's last change failed, and whether it was to join. */
   const [failed, setFailed] = useState<
@@ -151,11 +157,39 @@ export function PrivateChannels({
             }
           />
         ))}
-        {!joined.length && (
+        {list.status === "error" ? (
           <PreferenceRow
-            title="Not in any of your private channels yet"
-            subtitle="Add Bestie to the ones you want it to catch you up on."
+            title="Couldn't load your private channels"
+            subtitle={
+              list.error ??
+              "Bestie may be in channels that aren't shown here. Try again."
+            }
+            trailing={(label) => (
+              <Button
+                variant="outline"
+                aria-describedby={label["aria-labelledby"]}
+                onClick={retry}
+              >
+                Retry
+              </Button>
+            )}
           />
+        ) : list.coverage === "partial" ? (
+          <PreferenceRow
+            title="Only some of your private channels are loaded"
+            subtitle="Bestie may be in channels that aren't shown here."
+          />
+        ) : list.status !== "ready" ? (
+          !joined.length && (
+            <PreferenceRow title="Loading your private channels…" />
+          )
+        ) : (
+          !joined.length && (
+            <PreferenceRow
+              title="Not in any of your private channels yet"
+              subtitle="Add Bestie to the ones you want it to catch you up on."
+            />
+          )
         )}
         {/* Each action has a row of its own, so its button can wrap under
             its title in a narrow panel instead of widening the tab. */}
@@ -192,12 +226,17 @@ export function PrivateChannels({
             />
             <PreferenceRow
               title="Add to all my private channels"
-              subtitle={`${addable.length} ${addable.length === 1 ? "channel" : "channels"} without Bestie. Each channel's members see that you added it.`}
+              subtitle={
+                complete
+                  ? `${addable.length} ${addable.length === 1 ? "channel" : "channels"} without Bestie. Each channel's members see that you added it.`
+                  : "Available once all your private channels have loaded."
+              }
               trailing={(label) => (
                 <Button
                   variant="outline"
                   aria-describedby={label["aria-labelledby"]}
                   loading={adding}
+                  disabled={!complete}
                   onClick={() => setConfirming(addable)}
                 >
                   Add to all

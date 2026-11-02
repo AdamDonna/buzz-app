@@ -3,7 +3,10 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ChannelSummary } from "../../features/relay/contracts";
+import type {
+  ChannelList,
+  ChannelSummary,
+} from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import { PrivateChannels, privateChannels } from "./PrivateChannels";
 
@@ -57,13 +60,18 @@ it("keeps only your private channels, split by Bestie's membership, most recent 
   ]);
 });
 
-function session(channels: ChannelSummary[], removal = "confirmed") {
+function session(
+  channels: ChannelSummary[],
+  removal = "confirmed",
+  read: Partial<ChannelList> = { status: "ready" },
+) {
   const roles: Record<string, string> = { [BESTIE]: "bot" };
   const add = vi.fn(async (id: string) => {
     if (id === "id-beta") throw new Error("Not confirmed. Try again.");
   });
   const run = vi.fn(async () => {});
-  const list = { channels };
+  const list = { channels, ...read };
+  const refreshList = vi.fn();
   const value = {
     viewer: YOU,
     outbox: { supports: () => true },
@@ -71,6 +79,7 @@ function session(channels: ChannelSummary[], removal = "confirmed") {
       list: () => list,
       subscribeList: () => () => {},
       ensureList: () => () => {},
+      refreshList,
     },
     memberAdditions: { add },
     memberAdministration: {
@@ -93,7 +102,7 @@ function session(channels: ChannelSummary[], removal = "confirmed") {
       ),
     },
   } as unknown as RelaySession;
-  return { value, add, run };
+  return { value, add, run, refreshList };
 }
 
 it("removes Bestie from a channel it is in, as the Members dialog does", async () => {
@@ -171,4 +180,50 @@ it("says when a removal isn't confirmed, and offers none from a cached roster", 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "#shared: The change may have taken effect. Refresh to check.",
   );
+});
+
+it("doesn't call a roster it couldn't read empty, and retries it", async () => {
+  const user = userEvent.setup();
+  const { value, refreshList } = session([], "confirmed", {
+    status: "error",
+    error: "The relay didn't answer.",
+  });
+  render(<PrivateChannels session={value} bestie={BESTIE} />);
+  expect(screen.queryByText(/Not in any of your private channels/)).toBeNull();
+  expect(screen.getByText("Couldn't load your private channels")).toBeVisible();
+  expect(screen.getByText("The relay didn't answer.")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(refreshList).toHaveBeenCalledOnce();
+});
+
+it("says it is still loading rather than that Bestie is in none", () => {
+  const { value } = session([], "confirmed", { status: "loading" });
+  render(<PrivateChannels session={value} bestie={BESTIE} />);
+  expect(screen.getByText("Loading your private channels…")).toBeVisible();
+  expect(screen.queryByText(/Not in any of your private channels/)).toBeNull();
+});
+
+it("keeps the channels it knows from a partial roster, and holds Add to all", async () => {
+  const user = userEvent.setup();
+  const { value, add } = session(
+    [channel("shared", [YOU, BESTIE]), channel("alpha", [YOU])],
+    "confirmed",
+    { status: "ready", coverage: "partial" },
+  );
+  render(<PrivateChannels session={value} bestie={BESTIE} />);
+  expect(
+    screen.getByRole("button", { name: "Remove Bestie from #shared" }),
+  ).toBeEnabled();
+  expect(
+    screen.getByText("Only some of your private channels are loaded"),
+  ).toBeVisible();
+  expect(screen.queryByText(/Not in any of your private channels/)).toBeNull();
+  expect(screen.getByRole("button", { name: "Add to all" })).toBeDisabled();
+  expect(
+    screen.getByText("Available once all your private channels have loaded."),
+  ).toBeVisible();
+  // A channel that is known can still be added on its own.
+  await user.click(screen.getByRole("button", { name: "Choose…" }));
+  await user.click(await screen.findByRole("menuitem", { name: "#alpha" }));
+  expect(add).toHaveBeenCalledWith("id-alpha", BESTIE);
 });
