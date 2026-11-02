@@ -354,7 +354,12 @@ function AgentChooser({
     // Hover leaves focus in the composer. Consume Escape before its panel's
     // React handler; Base UI's document-bubble dismissal would arrive too late.
     const dismiss = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229)
+      if (
+        event.key !== "Escape" ||
+        event.shiftKey ||
+        event.isComposing ||
+        event.keyCode === 229
+      )
         return;
       event.preventDefault();
       event.stopPropagation();

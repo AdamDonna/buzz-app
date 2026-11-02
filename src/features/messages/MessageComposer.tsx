@@ -2925,6 +2925,7 @@ function Composer({
           if (
             editing.target &&
             event.key === "Escape" &&
+            !event.shiftKey &&
             !event.defaultPrevented &&
             !event.nativeEvent.isComposing &&
             event.nativeEvent.keyCode !== 229 &&

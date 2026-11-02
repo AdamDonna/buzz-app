@@ -496,6 +496,28 @@ it.each(["hover", "keyboard"])(
   },
 );
 
+it("lets Shift+Escape reach the owning panel while the popup is open", async () => {
+  const f = fixture(),
+    user = userEvent.setup(),
+    panelKey = vi.fn();
+  f.update([entry()]);
+  render(
+    <section aria-label="Thread" onKeyDown={panelKey}>
+      <input aria-label="Composer" />
+      <TypingIndicator session={f.session} channelId="channel" />
+    </section>,
+  );
+  const input = screen.getByRole("textbox");
+  input.focus();
+  await user.hover(
+    screen.getByRole("button", { name: "Activity: Agent working" }),
+  );
+  await screen.findByRole("dialog");
+  panelKey.mockClear();
+  fireEvent.keyDown(input, { key: "Escape", shiftKey: true });
+  expect(panelKey).toHaveBeenCalledOnce();
+});
+
 it("hands navigation a retained trigger instead of the disposable popup action", async () => {
   const f = fixture(),
     user = userEvent.setup();

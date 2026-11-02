@@ -1373,6 +1373,10 @@ it("still closes the popup when the query closes, on Escape, and on a Space that
   expect(h.rows()).toBeNull();
   h.fill("@hone");
   expect(h.rows()).toEqual(["Honey hone"]);
+  expect(fireEvent.keyDown(input, { key: "Escape", shiftKey: true })).toBe(
+    true,
+  );
+  expect(h.rows()).toEqual(["Honey hone"]);
   fireEvent.keyDown(input, { key: "Escape" });
   expect(h.rows()).toBeNull();
   h.fill("@honey");
@@ -2506,6 +2510,8 @@ it("defers a failed upload recovery until an empty active message edit ends", as
   expect(editor).toHaveAccessibleName("Edit message");
   await userEvent.clear(editor);
   expect(editor).toHaveValue("");
+  fireEvent.keyDown(editor, { key: "Escape", shiftKey: true });
+  expect(editor).toHaveAccessibleName("Edit message");
   await act(async () => h.uploadCalls[0]?.result.reject(new Error("offline")));
   expect(editor).toHaveAccessibleName("Edit message");
   expect(editor).toHaveValue("");

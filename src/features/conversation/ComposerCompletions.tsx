@@ -347,7 +347,7 @@ function OwnedCompletion({
     ) => {
       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
         return false;
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
         current.current.editor.invalidate();
