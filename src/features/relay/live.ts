@@ -183,6 +183,25 @@ export function liveProvenance(value: unknown): LiveProvenance {
       : {}),
   });
 }
+/** A global route's establishment. `continuous`: the route resumed from the
+ * cursor an earlier connection left, and its replay ended below the limit, so
+ * it delivered every change since that connection last heard the relay. */
+export type LiveGlobal = Readonly<{
+  route: "profiles" | "membership";
+  continuous: boolean;
+}>;
+/** Host-relayed global establishment; anything else reports nothing, so the
+ * session reads again as if the replay was cut. */
+export function liveGlobal(value: unknown): LiveGlobal | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { route, continuous } = value as Record<string, unknown>;
+  if (
+    (route !== "profiles" && route !== "membership") ||
+    typeof continuous !== "boolean"
+  )
+    return undefined;
+  return Object.freeze({ route, continuous });
+}
 export type LiveCallbacks = {
   /** Legacy/missing provenance reconciles quietly; it is never implicitly fresh. */
   receive(events: readonly VerifiedEvent[], provenance?: LiveProvenance): void;
@@ -192,7 +211,8 @@ export type LiveCallbacks = {
   observer?(frame: ObserverFrame, generation: number): void;
   presence?(event: VerifiedEvent): void;
   state(snapshot: LiveSnapshot): void;
-  established(channels?: string | readonly string[]): void;
+  /** A global route (no channels) also reports whether it stayed continuous. */
+  established(channels?: string | readonly string[], global?: LiveGlobal): void;
   /** Periodic repair hint, not membership or historical-completeness evidence. */
   recover?(): void;
   denied(channelId: string, reason: string): void;
@@ -280,6 +300,9 @@ type Route = {
   /** Live on the socket a planned renewal replaced, over the same scope. Its
    * replay resumes from the cursor, so its EOSE needs no catch-up. */
   carried?: boolean;
+  /** Every key had a cursor when the route was created, so its replay starts
+   * where an earlier connection's delivery could have stopped. */
+  resumed?: boolean;
   quotaRetries: number;
   /** Consecutive refusals that need action, and when the recover tick may retry. */
   refusals?: number;
@@ -601,6 +624,7 @@ export function subscribeRelayTraffic(
         since: Math.floor(Date.now() / 1000) - 300,
       };
       route.since = resumeSince(route);
+      route.resumed = cursorKeys(route).every((key) => cursors.has(key));
       // Presence and observer feeds establish nothing, so carry no obligation.
       if (
         carrying &&
@@ -717,7 +741,17 @@ export function subscribeRelayTraffic(
     settle();
   }
   const establish = (route: Route) => {
-    if (route.id !== "observer" && route.id !== "presence")
+    if (route.id === "profiles" || route.id === "membership")
+      callbacks.established(
+        undefined,
+        Object.freeze({
+          route: route.id,
+          // The count covers every filter of the route, so any filter the
+          // limit cut marks it. A retry keeps the route's original since.
+          continuous: !!route.resumed && route.replay !== "limited",
+        }),
+      );
+    else if (route.id !== "observer" && route.id !== "presence")
       callbacks.established(route.channelIds ?? route.channelId);
   };
   /** A renewal stays quiet only while every carried route keeps continuity.

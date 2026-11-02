@@ -1778,6 +1778,56 @@ it("keeps a route's cursor through a connection that never established it", asyn
   }
 });
 
+it("reports a global route continuous only when it resumed from a cursor and its replay stayed under the limit", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  const globals = () =>
+    h.callbacks.established.mock.calls.flatMap(([channels, global]) =>
+      channels === undefined ? [global] : [],
+    );
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    // The first connection has no cursor: its five-minute window proves nothing.
+    expect(globals()).toEqual([
+      { route: "profiles", continuous: false },
+      { route: "membership", continuous: false },
+    ]);
+    h.callbacks.established.mockClear();
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const profiles = next.requests().find(isProfiles);
+    const membership = next.requests().find((r) => !isProfiles(r));
+    assert.exists(profiles);
+    assert.exists(membership);
+    // The limit cut the profiles replay: there may be more it did not send.
+    const event = signed(h.key, {
+      kind: 0,
+      content: "{}",
+      tags: [],
+      created_at: Math.floor(Date.now() / 1000),
+    });
+    for (let i = 0; i < 500; i++)
+      await next.receive(["EVENT", profiles[1], event]);
+    await next.receive(["EOSE", profiles[1]]);
+    await next.receive(["EVENT", membership[1], event]);
+    await next.receive(["EOSE", membership[1]]);
+    expect(globals()).toEqual([
+      { route: "profiles", continuous: false },
+      { route: "membership", continuous: true },
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
 it("forgets the cursor of a channel that left the interests before a rebuild", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup(["a", "b"], undefined, () => 0.5);
@@ -3797,7 +3847,12 @@ it("recovers like an outage after a renewal whose replay hit the limit", async (
     expect(statuses.slice(-2)).toEqual(["connecting", "connected"]);
     expect(statuses.slice(0, -2)).not.toContain("connecting");
     expect(h.callbacks.established.mock.calls).toEqual(
-      expect.arrayContaining([[undefined], [undefined], ["b"], ["a"]]),
+      expect.arrayContaining([
+        [undefined, { route: "profiles", continuous: true }],
+        [undefined, { route: "membership", continuous: true }],
+        ["b"],
+        ["a"],
+      ]),
     );
     expect(h.callbacks.established).toHaveBeenCalledTimes(4);
   } finally {

@@ -3351,18 +3351,34 @@ export function createRelaySession(
       revalidatePreviews(previews);
       publishLive();
     },
-    established(channelId) {
+    established(channelId, global) {
       if (closed) return;
       streamDropped = false;
       if (!channelId) {
-        if (refreshedGeneration !== liveGeneration) {
+        const first = refreshedGeneration !== liveGeneration;
+        // Not every roster change sends a membership notice (a deleted channel
+        // sends none), so the roster is still read again on each connection.
+        if (first) refreshRoster();
+        // The profiles route replays every profile change from its cursor. A
+        // continuous replay already delivered each one since the last
+        // connection heard the relay, so held profiles are not read again. A
+        // cut replay, a first connection, or a host that reports no route
+        // (once per connection) reads them all again.
+        if (
+          global ? global.route === "profiles" && !global.continuous : first
+        ) {
+          const timer = setTimeout(() => {
+            timers.delete(timer);
+            if (!closed) void profiles.reconnect().catch(() => {});
+          }, 0);
+          timers.add(timer);
+        }
+        if (first) {
           refreshedGeneration = liveGeneration;
-          refreshRoster();
           const generation = liveGeneration;
           const timer = setTimeout(() => {
             timers.delete(timer);
             if (!closed) {
-              void profiles.reconnect().catch(() => {});
               agentLibrary.reconnect();
               activityRosterKey = undefined;
               refreshChannelActivity();
