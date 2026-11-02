@@ -29,7 +29,7 @@ import type { Communities, PersonalProfile } from "../communities/service";
 import { readErrorKind } from "../relay/errors";
 import { Button } from "../../shared/design-system/ui/Button";
 import { BackupOffer } from "./BackupOffer";
-import { isBuilderlabHosted } from "./builderlab-hosted";
+import { builderlabHosting } from "./builderlab-hosted";
 import {
   builderlabAccount,
   type FirstRunAccount,
@@ -144,6 +144,10 @@ export function Welcome({
   // The code of the invite link `finding` came from, claimed on Join; "" for
   // a bare address. Every submit sets it with `finding`.
   const [inviteCode, setInviteCode] = useState("");
+  // The other Builderlab's portal host when the found community is hosted
+  // there rather than at this build's: the connect choice offers only a key.
+  // Set by every lookup that pauses on the choice.
+  const [elsewhere, setElsewhere] = useState<string>();
   const [joinError, setJoinError] = useState<{
     title: string;
     error: string;
@@ -398,7 +402,8 @@ export function Welcome({
     publish?: PersonalProfile,
   ) => {
     if (!(await complete(step, publish))) return;
-    if (step.admission)
+    // Another Builderlab's community is not this account's to keep.
+    if (step.admission && builderlabHosting(step.found)?.here !== false)
       await reads.current?.saveCommunity(step.found.url).catch(() => {});
     leave();
   };
@@ -507,6 +512,7 @@ export function Welcome({
         return finding ? (
           <ConnectChoice
             host={new URL(finding).host}
+            elsewhere={elsewhere}
             onConnect={() => {
               setup.reset();
               void signIn();
@@ -673,8 +679,9 @@ export function Welcome({
     );
   // Discovery: the same unauthenticated lookup Join Community runs after
   // setup, so a bad address fails here, before sign-in and before a key
-  // exists. A Builderlab-hosted community signs in at once; any other asks
-  // the user whether to connect at the build portal or bring a key.
+  // exists. A community hosted by this build's Builderlab signs in at once;
+  // one hosted by another Builderlab offers only a key; any other asks the
+  // user whether to connect at the build portal or bring a key.
   if (progress.status === "idle" && !auth.error && !discovering)
     return (
       <OnboardingScreen
@@ -814,8 +821,10 @@ export function Welcome({
           url={finding}
           onCancel={backToLanding}
           onFound={(found) => {
-            if (isBuilderlabHosted(found)) void signIn();
-            else pause("connect-choice");
+            const hosting = builderlabHosting(found);
+            if (hosting?.here) return void signIn();
+            setElsewhere(hosting && new URL(hosting.portal).host);
+            pause("connect-choice");
           }}
           titleId="welcome-title"
         />
@@ -829,7 +838,7 @@ type Denied = { found: FoundCommunity; consent: JoinConsent };
 
 /** The community the profile step is for, and the read that admitted the key. */
 type ProfileStepState = {
-  found: Pick<FoundCommunity, "url" | "host" | "icon">;
+  found: Pick<FoundCommunity, "url" | "host" | "icon" | "self">;
   read: Admission["found"];
   /** The join's admission; absent for a restored community, whose membership is saved already. */
   admission?: Admission;

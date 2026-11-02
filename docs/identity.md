@@ -25,15 +25,23 @@ relay or a non-Buzz address fails there with the same classified copy; **Cancel*
 welcome screen with the address kept in the field. A Builderlab-hosted
 community (a host under `communities.buzz.xyz`, `block.builderlab.xyz` or
 `test.blockstaging.build` on the default port, or a relay publishing one of
-those deployments' NIP-11 `self` keys; `builderlab-hosted.ts`) requires
-Builderlab sign-in, so it starts at once at `BUZZ_BUILDERLAB_URL`, exactly as
-the welcome screen's own button does, and the welcome screen shows it pending
-(**Cancel sign-in**, with the field disabled); setup then lands on **Join
-Community** for the address, and it is never offered a key of the user's own
-instead. Cancel sign-in, and **Back** from a sign-in or setup failure, return
-to the welcome screen with the address kept and do not look it up again. A
-canceled sign-in that finishes later is ignored: it cannot restart setup or use
-a later sign-in's account. Any other found community pauses on **Connect to
+those deployments' NIP-11 `self` keys; `builderlab-hosted.ts`) belongs to that
+deployment's portal: `app.builderlab.xyz`, `block.builderlab.xyz` and
+`test.blockstaging.build` respectively. One whose portal is this build's own
+(the origin of `BUZZ_BUILDERLAB_URL`) requires Builderlab sign-in, so it
+starts at once there, exactly as the welcome screen's own button does, and the
+welcome screen shows it pending (**Cancel sign-in**, with the field disabled);
+setup then lands on **Join Community** for the address, and it is never
+offered a key of the user's own instead. Cancel sign-in, and **Back** from a
+sign-in or setup failure, return to the welcome screen with the address kept
+and do not look it up again. A canceled sign-in that finishes later is
+ignored: it cannot restart setup or use a later sign-in's account. One hosted
+by another deployment pauses on **Connect to your community**, which names that
+portal and offers only **I already have a key** (and **Back**): this build
+never signs in, links or backs up a key for another deployment's community,
+nothing is sent to its own Builderlab, and no backup offer follows. A join of
+such a community after a sign-in made from the welcome screen is not saved to
+that account. Any other found community pauses on **Connect to
 {host}**: nothing a relay publishes names its sign-in portal, so the user
 chooses. The page says only that Buzz relies on a key for the user's identity; its choices are
 **Sign in with email**, which signs in at `BUZZ_BUILDERLAB_URL` and
