@@ -531,6 +531,8 @@ test("reaction previews use the delayed first open, immediate warm switch, and r
     await page.clock.runFor(75);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(151);
+    // Re-entering through another control must not revive the old warm preview.
+    await row.getByTestId("inline-add-reaction").getByRole("button").hover();
     await custom.hover();
     await page.clock.runFor(299);
     await expect(tooltip).toHaveCount(0);

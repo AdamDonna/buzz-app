@@ -284,7 +284,10 @@ function ReactionEmoji({
   );
   const user = users.join(", ");
   const revealName = () => {
-    void session.profiles.ensure(previewAuthors, "background").catch(() => {});
+    // Enrich within the directory's cache/request budget; every identity remains visible.
+    void session.profiles
+      .ensure(previewAuthors.slice(0, 1024), "background")
+      .catch(() => {});
     if (reaction.emoji) return;
     void import("./reaction-name").then(({ reactionName }) =>
       setName(reactionName(reaction.content)),
@@ -430,6 +433,7 @@ export function MessageReactions(
       onMouseEnter={() => setPointerInRow(true)}
       onMouseLeave={() => {
         setPointerInRow(false);
+        setPreview((current) => (current?.key === null ? undefined : current));
       }}
     >
       {active &&
@@ -472,7 +476,9 @@ export function MessageReactions(
                             : current?.index,
                       }
                     : current?.key === key
-                      ? { ...current, key: null }
+                      ? pointerInRow
+                        ? { ...current, key: null }
+                        : undefined
                       : current,
                 )
               }

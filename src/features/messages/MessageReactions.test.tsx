@@ -237,6 +237,42 @@ it.each([3, 4, 5])("shows all %i reactors in the preview", async (count) => {
   ).toBe(0);
 });
 
+it("keeps everyone visible without exceeding the profile directory budget", async () => {
+  const h = harness([react(other)]);
+  const row = h.session.channels.window("c").rows[0];
+  if (!row) throw new Error("Expected fixture message");
+  const authors = Array.from({ length: 1025 }, (_, index) =>
+    index.toString(16).padStart(10, "0").padEnd(64, "0"),
+  );
+  const ensure = vi.fn(h.session.profiles.ensure);
+  render(
+    <MessageReactions
+      row={{
+        ...row,
+        reactions: [
+          {
+            content: "👍",
+            events: authors.map((authorId, index) => ({
+              id: String(index),
+              authorId,
+            })),
+          },
+        ],
+      }}
+      session={{ ...h.session, profiles: { ...h.session.profiles, ensure } }}
+      scope="test"
+      disabled={false}
+      tools={tools}
+      inline={inline}
+    />,
+  );
+  act(() => screen.getByRole("button", { name: "👍: 1025 people" }).focus());
+  const preview = await screen.findByRole("dialog");
+  expect(ensure).toHaveBeenCalledWith(authors.slice(0, 1024), "background");
+  for (const author of authors)
+    expect(preview.textContent).toContain(author.slice(0, 10));
+});
+
 it("keeps custom emoji URLs separate and updates a grouped count when I join", async () => {
   const people = Array.from({ length: 9 }, () => keypair());
   const first = "https://a.test/first.gif";
