@@ -431,7 +431,7 @@ export function createMessages(
     },
     /** Answer a message's Inline UI as the viewer: an ordinary message in
      * its channel and thread whose text is the answer, tagging the asker. */
-    answer(messageId: string, value: string, own?: string) {
+    async answer(messageId: string, value: string, own?: string) {
       const original = find(messageId);
       const channelId = original?.tags.find(([name]) => name === "h")?.[1];
       const asked =
@@ -443,6 +443,9 @@ export function createMessages(
       const mentions = original.tags.flatMap(([name, key]) =>
         name === "p" && key ? [key] : [],
       );
+      // Only a form checks the owner; load the agent's profile so its
+      // verified owner is known before deciding.
+      if (asked.ui.type === "form") await profiles?.ensure([authorId]);
       const owner = (agent: string) => profiles?.owner?.(agent);
       if (!canAnswer({ authorId, mentions, inlineUi: asked }, viewer, owner))
         throw new Error("This isn’t yours to answer");

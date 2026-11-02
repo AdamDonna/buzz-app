@@ -61,10 +61,19 @@ type Read = Readonly<{ ui: InlineUi }> | Readonly<{ error: string }>;
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
+/** Breaks a line, or reorders how text displays. Emoji joiners and variation
+ * selectors stay allowed. */
+const NOT_ONE_LINE =
+  /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+
 function label(value: unknown, what: string) {
   const text = typeof value === "string" ? value.trim() : "";
-  if (!text || text.length > LABEL_MAX || /[\p{C}]/u.test(text))
+  if (!text || text.length > LABEL_MAX || NOT_ONE_LINE.test(text))
     throw new Error(`${what} must be one line of 1–${LABEL_MAX} characters.`);
+  // The plain-text version writes links after labels; a label holding one
+  // could make two different Inline UIs read the same.
+  if (text.includes("buzz://"))
+    throw new Error(`${what} can't contain a buzz:// link.`);
   return text;
 }
 
@@ -126,8 +135,8 @@ export function readInlineUi(value: unknown): Read {
           label(option, "Each option"),
         );
         unique(options, "ui.options");
-        if (value.own !== undefined && value.own !== true)
-          throw new Error("ui.own must be true when present.");
+        if (value.own !== undefined && typeof value.own !== "boolean")
+          throw new Error("ui.own must be true or false.");
         return done({
           ...base,
           type: "choice",

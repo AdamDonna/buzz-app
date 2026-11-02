@@ -43,7 +43,14 @@ function setup(events: EventData[], owner?: string) {
     load: () => [],
     save: () => {},
   });
-  const profiles = { owner: () => owner } as unknown as ProfileQueries;
+  let known: string | undefined;
+  const ensure = vi.fn(async () => {
+    known = owner;
+  });
+  const profiles = {
+    ensure,
+    owner: () => known,
+  } as unknown as ProfileQueries;
   const messages = createMessages(
     outbox,
     viewer.pubkey,
@@ -61,12 +68,12 @@ function setup(events: EventData[], owner?: string) {
     assert.exists(event);
     return event;
   };
-  return { messages, sent };
+  return { messages, sent, ensure };
 }
 
-it("sends an answer as a plain reply that tags the asker and counts once folded", () => {
+it("sends an answer as a plain reply that tags the asker and counts once folded", async () => {
   const { messages, sent } = setup([choice]);
-  messages.answer(choice.id, "1");
+  await messages.answer(choice.id, "1");
   const event = sent();
   expect(event.content).toBe("Direct");
   expect(event.tags.slice(0, 3)).toEqual([
@@ -82,13 +89,13 @@ it("sends an answer as a plain reply that tags the asker and counts once folded"
   ]);
 });
 
-it("answers in the asking message's thread", () => {
+it("answers in the asking message's thread", async () => {
   const root = message(agent, "channel", "Thread", 1);
   const inThread = asking({ type: "choice", options: ["a", "b"] }, 2, [
     ["e", root.id, "", "reply"],
   ]);
   const { messages, sent } = setup([root, inThread]);
-  messages.answer(inThread.id, "0");
+  await messages.answer(inThread.id, "0");
   expect(sent().tags.slice(0, 3)).toEqual([
     ["h", "channel"],
     ["e", root.id, "", "root"],
@@ -96,12 +103,12 @@ it("answers in the asking message's thread", () => {
   ]);
 });
 
-it("refuses answers that aren't the viewer's to give or aren't offered", () => {
+it("refuses answers that aren't the viewer's to give or aren't offered", async () => {
   const { messages } = setup([choice]);
-  expect(() => messages.answer(choice.id, "5")).toThrow(
+  await expect(messages.answer(choice.id, "5")).rejects.toThrow(
     "That isn’t one of its answers",
   );
-  expect(() => messages.answer("f".repeat(64), "0")).toThrow(
+  await expect(messages.answer("f".repeat(64), "0")).rejects.toThrow(
     "Load the message before answering it",
   );
   const tagged = asking(
@@ -109,22 +116,24 @@ it("refuses answers that aren't the viewer's to give or aren't offered", () => {
     3,
     [["p", relay.pubkey]],
   );
-  expect(() => setup([tagged]).messages.answer(tagged.id, "0")).toThrow(
+  await expect(setup([tagged]).messages.answer(tagged.id, "0")).rejects.toThrow(
     "This isn’t yours to answer",
   );
   // A message whose text no longer matches its Inline UI isn't answerable.
   const plain = signed(agent, { ...choice, content: "Pick one." });
-  expect(() => setup([plain]).messages.answer(plain.id, "0")).toThrow(
+  await expect(setup([plain]).messages.answer(plain.id, "0")).rejects.toThrow(
     "Load the message before answering it",
   );
 });
 
-it("lets only the agent's verified owner answer its form", () => {
+it("lets only the agent's verified owner answer its form", async () => {
   const form = asking({ type: "form", form: "agent_profile" });
-  expect(() => setup([form]).messages.answer(form.id, SAVED)).toThrow(
+  await expect(setup([form]).messages.answer(form.id, SAVED)).rejects.toThrow(
     "This isn’t yours to answer",
   );
-  const { messages, sent } = setup([form], viewer.pubkey);
-  messages.answer(form.id, SAVED);
+  // The owner's form save loads the agent's profile before checking it.
+  const { messages, sent, ensure } = setup([form], viewer.pubkey);
+  await messages.answer(form.id, SAVED);
+  expect(ensure).toHaveBeenCalledWith([agent.pubkey]);
   expect(sent().content).toBe("Saved your name and avatar.");
 });

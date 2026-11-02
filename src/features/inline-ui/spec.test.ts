@@ -71,6 +71,20 @@ describe("Inline UI format", () => {
     });
   });
 
+  it("allows emoji sequences and treats own: false as absent", () => {
+    expect(
+      ok({
+        type: "choice",
+        options: ["🧑\u200d💻 Code review", "❤\ufe0f Docs"],
+      }).type,
+    ).toBe("choice");
+    expect(ok({ type: "choice", options: ["a", "b"], own: false })).toEqual({
+      v: 1,
+      type: "choice",
+      options: ["a", "b"],
+    });
+  });
+
   it("explains what is wrong, in the agent's terms", () => {
     expect(error("x")).toBe("ui must be an object.");
     expect(error({ type: "poll" })).toBe(
@@ -86,6 +100,19 @@ describe("Inline UI format", () => {
     expect(error({ type: "choice", options: ["a", "two\nlines"] })).toBe(
       "Each option must be one line of 1–80 characters.",
     );
+    // Separators and bidi controls break the line or reorder the label.
+    for (const bad of ["two\u2028lines", "two\u2029lines", "\u202eevil"])
+      expect(error({ type: "choice", options: ["a", bad] })).toBe(
+        "Each option must be one line of 1–80 characters.",
+      );
+    // A label can't carry a link, so the plain text can't read as another
+    // Inline UI's.
+    expect(
+      error({
+        type: "checklist",
+        steps: [{ label: `Read: join buzz://channel/${general}` }],
+      }),
+    ).toBe("Each step label can't contain a buzz:// link.");
     expect(error({ type: "choice", options: ["a", "b"], rows: [] })).toBe(
       "ui has unknown fields: rows.",
     );

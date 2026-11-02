@@ -43,13 +43,14 @@ Inline UI sees what the buttons do.
 
 ## Version 1
 
-Every object has `"v": 1` and a `type`. Labels are trimmed, one line, 1–80
-characters, and contain no control characters. Labels are unique within an
+Every object has `"v": 1` and a `type`. Labels are trimmed, one line, and 1–80
+characters. They contain no control characters, line or paragraph separators,
+bidirectional controls, or `buzz://` links. Labels are unique within an
 object, ignoring case. Channel ids are lowercase UUIDs.
 
 | Type | Fields |
 |------|--------|
-| `choice` | `options`: 2–6 labels. `own`: `true` to allow a written answer (omit otherwise). `for`: optional. |
+| `choice` | `options`: 2–6 labels. `own`: `true` to allow a written answer. `false` is the same as leaving it out. `for`: optional. |
 | `action` | `actions`: 1–2 of `{ "label", "do", "channel" }`, where `do` is `join_channel` or `open_channel`. `for`: optional. |
 | `list` | `channels`: 1–50 unique channel ids. The app shows each one live, as the viewer. `for`: optional. |
 | `form` | `form`: `agent_profile` (the agent's own name and avatar). No `for`. |
