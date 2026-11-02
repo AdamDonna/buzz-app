@@ -389,6 +389,9 @@ test("Escape cancelling IME composition does not close the tab", () => {
   expect(draft).toHaveFocus();
   fireEvent.keyDown(draft, { key: "Escape", keyCode: 229 });
   expect(draft).toHaveFocus();
+  // Shift+Escape belongs to the Mark all as read shortcut.
+  fireEvent.keyDown(draft, { key: "Escape", shiftKey: true });
+  expect(draft).toHaveFocus();
   fireEvent.keyDown(draft, { key: "Escape" });
   expect(draft).not.toBeInTheDocument();
   expect(tab("Ada")).toHaveFocus();

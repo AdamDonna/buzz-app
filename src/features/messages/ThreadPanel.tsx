@@ -125,6 +125,7 @@ export function ThreadPanel(props: ThreadPanelProps) {
         // Portalled viewers bubble here through React but own their Escape.
         if (
           event.key === "Escape" &&
+          !event.shiftKey &&
           !tabbed &&
           close &&
           event.currentTarget.contains(event.target as Node)

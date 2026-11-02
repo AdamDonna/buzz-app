@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
 import { SettingsCardsService } from "../settings/service";
+import { ShortcutsService } from "../shortcuts/service";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { UnreadCapability } from "../relay/unread";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
@@ -504,6 +505,44 @@ it("marks every channel read through the selected session and reports failures",
   );
   await screen.findByText("Couldn’t mark everything as read.");
   expect(h.select).not.toHaveBeenCalled();
+});
+
+it("marks every channel read with Shift+Escape only while read state can sync", async () => {
+  const root = new Context();
+  root.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const shortcuts = new ShortcutsService(root, window);
+  const pressShiftEscape = () =>
+    fireEvent.keyDown(document.body, { key: "Escape", shiftKey: true });
+  try {
+    const unsupported = harness({ capability: "unsupported" });
+    const view = rtlRender(
+      <CommunityPicker
+        communities={unsupported.communities}
+        shortcuts={shortcuts}
+      />,
+      { wrapper: ToastProvider },
+    );
+    pressShiftEscape();
+    expect(unsupported.markAllChannelsRead).not.toHaveBeenCalled();
+    view.unmount();
+    expect(shortcuts.hostSnapshot()).toEqual([]);
+
+    const h = harness();
+    rtlRender(
+      <CommunityPicker communities={h.communities} shortcuts={shortcuts} />,
+      { wrapper: ToastProvider },
+    );
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(h.markAllChannelsRead).not.toHaveBeenCalled();
+    pressShiftEscape();
+    expect(h.markAllChannelsRead).toHaveBeenCalledTimes(1);
+    await screen.findByText("Marked all as read.");
+  } finally {
+    await root.fiber.dispose();
+  }
 });
 
 it.each([

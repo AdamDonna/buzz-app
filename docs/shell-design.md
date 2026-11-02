@@ -428,7 +428,8 @@ On desktop, Cmd+W on macOS or Ctrl+W on Windows/Linux closes the selected
 closable tab in the focused pane. If focus is in the permanent main conversation,
 it closes the selected tab in the visible side pane instead. A selected closable
 main-pane tab takes priority over that fallback. Hidden tabs remain untouched;
-with nothing to close the shortcut does nothing and never closes the window.
+with no tab to close, the shortcut closes the window, as the platform's close
+shortcut does elsewhere. On macOS the window hides and Buzz keeps running.
 The macOS native Close menu uses the same action, including when an embedded
 browser owns focus (embedded browsing is currently macOS-only). On macOS,
 Cmd+Shift+W and the native **Close All Tabs** menu item close all tabs in the current channel,
@@ -437,7 +438,9 @@ A terminal tab closes its presentation, not its shell; Ctrl+W while typing in a
 terminal remains shell word deletion on Windows/Linux. While a modal is open,
 close shortcuts do nothing rather than closing content behind it.
 Windows/Linux consume held-key repeats without closing further tabs or the window.
-Window buttons and Alt+F4 always retain their window-only behavior. The bottom
+Window buttons and Alt+F4 always retain their window-only behavior.
+Shift+Escape marks every channel in the selected community as read, like the
+community's **Mark all as read** menu item. It yields to modals and the terminal. The bottom
 terminal drawer keeps its existing Cmd/Ctrl+J/Hide behavior. Browser-build
 shortcuts are unchanged.
 Feature-local details such as harness logs remain tied to their owning profile;

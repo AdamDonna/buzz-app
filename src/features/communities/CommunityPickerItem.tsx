@@ -239,6 +239,17 @@ export function CommunityPickerItem({
   );
 }
 
+/** Shared by the menu item and the Shift+Escape shortcut. */
+export function markAllRead(
+  unread: SelectedSession["unread"],
+  notify: ReturnType<typeof useToastNotification>,
+) {
+  void unread.markAllChannelsRead().then(
+    () => notify("Marked all as read.", "success"),
+    () => notify("Couldn’t mark everything as read.", "error"),
+  );
+}
+
 /** Mounted only while the menu is open, so the read-state subscription is too. */
 function MarkAllReadItem({
   name,
@@ -279,10 +290,7 @@ function MarkAllReadItem({
         aria-describedby={reason ? noteId : undefined}
         onClick={() => {
           if (!unread || reason) return;
-          void unread.markAllChannelsRead().then(
-            () => notify("Marked all as read.", "success"),
-            () => notify("Couldn’t mark everything as read.", "error"),
-          );
+          markAllRead(unread, notify);
         }}
       >
         <MenuIcon>

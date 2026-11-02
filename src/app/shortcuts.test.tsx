@@ -92,7 +92,7 @@ function press(
 }
 
 it.each(["Win32"])(
-  "%s closes tabs from the composer, never the window; ignores held repeats",
+  "%s closes tabs from the composer, not the window until the next press; ignores held repeats",
   async (platform) => {
     const h = harness(platform);
     vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
@@ -123,7 +123,7 @@ it.each(["Win32"])(
       press(document.body, { repeat: true });
       expect(close).not.toHaveBeenCalled();
       press();
-      expect(close).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
     } finally {
       await h.dispose();
     }
@@ -199,7 +199,7 @@ it("does nothing behind a modal, with or without a tab consumer", async () => {
   }
 });
 
-it("leaves hidden tabs intact and keeps the window open", async () => {
+it("leaves hidden tabs intact and falls back to window close", async () => {
   const h = harness();
   try {
     render(
@@ -208,8 +208,24 @@ it("leaves hidden tabs intact and keeps the window open", async () => {
       </div>,
     );
     press();
-    expect(close).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
     expect(screen.getAllByRole("tab", { hidden: true })).toHaveLength(2);
+  } finally {
+    await h.dispose();
+  }
+});
+
+it("reports a failed window close without retrying", async () => {
+  const h = harness();
+  const failure = new Error("Window unavailable");
+  close.mockRejectedValueOnce(failure);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    press();
+    await vi.waitFor(() =>
+      expect(error).toHaveBeenCalledWith("Shortcut failed: close-tab", failure),
+    );
+    expect(close).toHaveBeenCalledOnce();
   } finally {
     await h.dispose();
   }

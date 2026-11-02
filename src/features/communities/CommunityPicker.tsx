@@ -16,6 +16,7 @@ import {
 } from "../../shared/design-system/icons/index";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import type { SettingsCards } from "../settings/service";
+import type { ShortcutsService } from "../shortcuts/service";
 import type { OpenTarget } from "../navigation/targets";
 import { communityFromScope } from "../relay/gifs";
 import { useRelayConnection } from "../relay/react";
@@ -31,7 +32,11 @@ import {
 import { CommunityDialog } from "./CommunityDialog";
 import type { FederatedIdentity } from "../federated-identity/service";
 import type { InviteLink } from "./invite-link";
-import { CommunityPickerItem, MEMBERSHIP_SECTION } from "./CommunityPickerItem";
+import {
+  CommunityPickerItem,
+  MEMBERSHIP_SECTION,
+  markAllRead,
+} from "./CommunityPickerItem";
 import { communityDestination } from "./destination";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import {
@@ -59,6 +64,7 @@ export function CommunityPicker({
   onSelect,
   onOpenTarget,
   settingsCards,
+  shortcuts,
 }: {
   communities: Communities;
   federatedIdentity?: FederatedIdentity | undefined;
@@ -68,6 +74,7 @@ export function CommunityPicker({
   onSelect?: ((id: string | null) => void) | undefined;
   /** Menu destinations (Invites, hosting) open through the host's navigation. */
   onOpenTarget?: ((target: OpenTarget) => void) | undefined;
+  shortcuts?: Pick<ShortcutsService, "registerHost"> | undefined;
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -121,6 +128,28 @@ export function CommunityPicker({
   const hostedAvailable = useSyncExternalStore(
     settingsCards?.subscribe ?? noSubscription,
     () => settingsCards?.has("block.builderlab/login") ?? false,
+  );
+  const latest = useRef({ session, notify });
+  useEffect(() => {
+    latest.current = { session, notify };
+  });
+  useEffect(
+    () =>
+      shortcuts?.registerHost({
+        id: "mark-all-read",
+        title: "Mark all as read",
+        binding: { key: "Escape", shift: true },
+        order: 35,
+        allowInEditable: true,
+        when: () =>
+          !document.activeElement?.closest(".xterm") &&
+          latest.current.session?.unread.sync().capability === "frontier-sync",
+        run: () => {
+          const { session, notify } = latest.current;
+          if (session) markAllRead(session.unread, notify);
+        },
+      }),
+    [shortcuts],
   );
   const invites = !!onOpenTarget && membershipAvailable;
   const role = useCommunityRole(invites ? session : undefined, client.viewer);

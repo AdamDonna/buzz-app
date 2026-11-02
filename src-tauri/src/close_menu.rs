@@ -1,6 +1,5 @@
-//! Cmd+W is a menu action that only ever closes a tab, never the window: with
-//! no tab to close it does nothing. Cmd+Shift+W clears the current channel's tabs.
-//! The red button still closes the window.
+//! Cmd+W is a menu action that closes the active tab, or the window when no tab
+//! or dialog takes it. Cmd+Shift+W clears the current channel's tabs.
 //! Edit → Paste and Match Style (Cmd+Shift+V) pastes the clipboard as plain text.
 //! Ctrl+Tab bypasses macOS menu highlighting latency. Menu commands and the
 //! native key handler both work while a raw guest webview owns keyboard focus.
@@ -27,7 +26,7 @@ const SWITCH: &str = include_str!("switch-tab-request.js");
 
 pub(crate) fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
-    let close = MenuItem::with_id(app, CLOSE, "Close Tab", true, Some("CmdOrCtrl+W"))?;
+    let close = MenuItem::with_id(app, CLOSE, "Close", true, Some("CmdOrCtrl+W"))?;
     let close_all = MenuItem::with_id(
         app,
         CLOSE_ALL,
@@ -95,7 +94,26 @@ pub(crate) fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 
 pub(crate) fn handle<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEvent) {
     let script = match event.id().as_ref() {
-        CLOSE => format!("{{ const tabEvent = \"buzz:close-active-tab\";\n{REQUEST}}}"),
+        CLOSE => {
+            let script = format!("{{ const tabEvent = \"buzz:close-active-tab\";\n{REQUEST}}}");
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+            // Only an explicit unhandled result permits fallback. Evaluation errors
+            // must not turn a handled tab close into a second, window-level close.
+            let close = move |result: String| {
+                if result == r#""unhandled""#
+                    && window.is_visible().unwrap_or(false)
+                    && window.is_focused().unwrap_or(false)
+                {
+                    if let Err(error) = window.close() {
+                        eprintln!("Could not close Buzz window: {error}");
+                    }
+                }
+            };
+            send_request_with(app, &script, Some(Box::new(close)));
+            return;
+        }
         CLOSE_ALL => format!("{{ const tabEvent = \"buzz:close-all-tabs\";\n{REQUEST}}}"),
         // A block keeps the binding out of the page's global scope.
         NEXT => format!("{{ const tabEvent = \"buzz:next-tab\";\n{SWITCH}}}"),
@@ -128,6 +146,14 @@ fn paste_plain() {
 }
 
 fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool {
+    send_request_with(app, script, None)
+}
+
+fn send_request_with<R: Runtime>(
+    app: &AppHandle<R>,
+    script: &str,
+    callback: Option<Box<dyn Fn(String) + Send>>,
+) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
@@ -144,7 +170,11 @@ fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool {
     let browser = serde_json::to_string(&crate::browser::focused_session())
         .expect("Browser session IDs are JSON strings");
     let script = format!("{{ const browserSessionId = {browser};\n{script}\n}}");
-    if let Err(error) = window.eval(script) {
+    let sent = match callback {
+        Some(callback) => window.eval_with_callback(script, callback),
+        None => window.eval(script),
+    };
+    if let Err(error) = sent {
         eprintln!("Could not send Buzz tab request: {error}");
         return false;
     }

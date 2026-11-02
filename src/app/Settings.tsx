@@ -344,7 +344,8 @@ function PluginDetails({
       className={styles.pluginAside}
       aria-label={`${plugin.manifest.name} details`}
       onKeyDown={(event) => {
-        if (event.defaultPrevented || event.key !== "Escape") return;
+        if (event.defaultPrevented || event.key !== "Escape" || event.shiftKey)
+          return;
         event.stopPropagation();
         onClose();
       }}

@@ -341,6 +341,13 @@ it("allocates only after commit and disposes distinct owned views under StrictMo
   });
   expect(h.close).toHaveBeenCalledTimes(2);
   expect(h.bubble).not.toHaveBeenCalled();
+  // Shift+Escape reaches the Mark all as read shortcut instead.
+  fireEvent.keyDown(screen.getByRole("complementary", { name: "Thread" }), {
+    key: "Escape",
+    shiftKey: true,
+  });
+  expect(h.close).toHaveBeenCalledTimes(2);
+  expect(h.bubble).toHaveBeenCalledOnce();
   h.unmount();
   for (const view of h.views) {
     expect(view.dispose).toHaveBeenCalledOnce();
