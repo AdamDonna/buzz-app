@@ -1273,7 +1273,13 @@ function relay(refused: Readonly<Record<string, string>> = {}) {
   client.publish = vi.fn(async (template: Template) => {
     const id = template.tags.find((t) => t[0] === "h")?.[1] ?? "";
     const target = template.tags.find((t) => t[0] === "p")?.[1] ?? "";
-    if (refused[target]) throw new Error(refused[target]);
+    // Like the relay, any refused member keeps a whole create out.
+    const refusal = (
+      template.kind === 9007
+        ? template.tags.flatMap(([key, value]) => (key === "p" ? [value] : []))
+        : [target]
+    ).find((key) => key && refused[key]);
+    if (refusal) throw new Error(refused[refusal]);
     published.push(template);
     const { kind } = template;
     if (kind === 9007) {
@@ -1282,6 +1288,11 @@ function relay(refused: Readonly<Record<string, string>> = {}) {
       const value = (key: string) =>
         template.tags.find((t) => t[0] === key)?.[1];
       const type = ["t", value("channel_type") ?? "stream"];
+      // Labels follow the type; `p` members join in the create.
+      const labels = template.tags.filter((t) => t[0] === "t");
+      const members = template.tags.flatMap(([key, value]) =>
+        key === "p" && value ? [["p", value, "", "member"]] : [],
+      );
       state.push(
         event({
           kind: 39000,
@@ -1289,12 +1300,13 @@ function relay(refused: Readonly<Record<string, string>> = {}) {
             ["d", id],
             ["name", value("name") ?? ""],
             type,
+            ...labels,
             ...(value("visibility") === "private" ? [["private"]] : []),
           ],
         }),
         event({
           kind: 39002,
-          tags: [["d", id], type, ["p", me, "", "owner"]],
+          tags: [["d", id], type, ["p", me, "", "owner"], ...members],
         }),
       );
     }
@@ -1496,6 +1508,163 @@ it("creates a system channel", async () => {
       type: "dm",
     }),
   ).rejects.toThrow("type must be stream, forum or system.");
+});
+
+it("creates a Solo chat with its members in the create, as Buzz does", async () => {
+  const { client, published } = relay();
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "triage",
+    visibility: "private",
+    solo: true,
+    members: [alice, npubEncode(bob), alice, me],
+  });
+  const id = published[0]?.tags[0]?.[1] as string;
+  expect(published).toEqual([
+    {
+      kind: 9007,
+      content: "",
+      tags: [
+        ["h", id],
+        ["name", "triage"],
+        ["visibility", "private"],
+        ["channel_type", "stream"],
+        ["t", "buzz.solo"],
+        ["t", "buzz.session.named"],
+        ["p", alice],
+        ["p", bob],
+      ],
+    },
+  ]);
+  expect(answer).toBe(
+    `created ${id}\nadded ${alice} Alice Smith\nadded ${bob}`,
+  );
+  await expect(
+    callTool(client, {}, "channel_get", { channel: id }),
+  ).resolves.toBe(`${id} triage (stream, solo, private)\nyou: owner`);
+  await expect(
+    callTool(client, {}, "member_list", { channel: id }),
+  ).resolves.toBe(`${me}  (owner)\n${alice} Alice Smith\n${bob} `);
+  // An ordinary private channel is not Solo.
+  await callTool(client, {}, "channel_create", {
+    name: "ops",
+    visibility: "private",
+  });
+  const plain = published[1]?.tags[0]?.[1] as string;
+  expect(published[1]?.tags.some(([key]) => key === "t" || key === "p")).toBe(
+    false,
+  );
+  await expect(
+    callTool(client, {}, "channel_get", { channel: plain }),
+  ).resolves.toBe(`${plain} ops (stream, private)\nyou: owner`);
+});
+
+it("refuses Solo arguments that do not fit, before publishing", async () => {
+  const { client, published } = relay();
+  const create = (args: Record<string, unknown>) =>
+    callTool(client, {}, "channel_create", {
+      name: "x",
+      visibility: "private",
+      ...args,
+    });
+  const shape = "A Solo chat is a private stream without about or template.";
+  await expect(create({ solo: true, visibility: "open" })).rejects.toThrow(
+    shape,
+  );
+  await expect(create({ solo: true, type: "forum" })).rejects.toThrow(shape);
+  await expect(create({ solo: true, about: "notes" })).rejects.toThrow(shape);
+  await expect(create({ solo: true, template: "Triage" })).rejects.toThrow(
+    shape,
+  );
+  for (const members of [[alice], ["alice"], alice])
+    await expect(create({ members })).rejects.toThrow(
+      "members is for Solo chats.",
+    );
+  await expect(create({ solo: true, members: ["alice"] })).rejects.toThrow(
+    "Not a pubkey: alice",
+  );
+  await expect(create({ solo: true, members: alice })).rejects.toThrow(
+    "members must be a list of pubkeys.",
+  );
+  await expect(create({ solo: "true" })).rejects.toThrow(
+    "solo must be true or false.",
+  );
+  const many = Array.from({ length: 33 }, (_, n) =>
+    n.toString(16).padStart(64, "0"),
+  );
+  await expect(create({ solo: true, members: many })).rejects.toThrow(
+    "A Solo chat starts with at most 32 members.",
+  );
+  expect(published).toEqual([]);
+});
+
+it("starts a Solo chat with the relay's maximum of 32 members", async () => {
+  const { client, published } = relay();
+  const members = Array.from({ length: 32 }, (_, n) =>
+    (n + 1).toString(16).padStart(64, "0"),
+  );
+  await callTool(client, {}, "channel_create", {
+    name: "x",
+    visibility: "private",
+    solo: true,
+    members: [...members, me],
+  });
+  expect(
+    published[0]?.tags.filter(([key]) => key === "p").map(([, key]) => key),
+  ).toEqual(members);
+});
+
+it("creates no Solo chat when a member refuses, and says what it cannot confirm", async () => {
+  const { client, published, state } = relay({
+    [alice]: "blocked: this agent only joins its owner's channels",
+  });
+  await expect(
+    callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [bob, alice],
+    }),
+  ).rejects.toThrow("blocked: this agent only joins its owner's channels");
+  expect(published).toEqual([]);
+  expect(state.filter((e) => e.kind === 39000)).toHaveLength(1);
+
+  vi.useFakeTimers();
+  try {
+    // A relay without channel labels drops them and keeps the channel.
+    const publish = client.publish;
+    client.publish = vi.fn(async (template: Template) =>
+      publish({
+        ...template,
+        tags: template.tags.filter(([key]) => key !== "t"),
+      }),
+    );
+    let answer = callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [bob],
+    });
+    await vi.runAllTimersAsync();
+    let id = published.at(-1)?.tags[0]?.[1] as string;
+    await expect(answer).resolves.toBe(
+      `created ${id}\nThe community did not keep the Solo label, so it is an ordinary private channel.\nadded ${bob}`,
+    );
+    // A create the community never shows leaves its members unconfirmed.
+    client.query = vi.fn(async () => []);
+    answer = callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [bob],
+    });
+    await vi.runAllTimersAsync();
+    id = published.at(-1)?.tags[0]?.[1] as string;
+    await expect(answer).resolves.toBe(
+      `The community accepted channel ${id} but does not show it yet; its members are not confirmed.`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("finds a channel past the relay's first page, by name and then by ID", async () => {

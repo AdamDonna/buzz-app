@@ -29,6 +29,8 @@ import {
 import { newer } from "../features/relay/events";
 import { threadReference } from "../features/relay/thread-reference";
 import { soloChannelMetadata } from "../features/relay/discovery";
+import { channelLabelTags } from "../features/relay/channel-labels";
+import { SOLO_LABEL, SOLO_NAMED_LABEL } from "../features/solo/labels";
 import type { RelayEvent } from "../features/relay/events";
 import { attestedOwner } from "../features/agents/owner-attestation";
 import type {
@@ -222,7 +224,7 @@ export const TOOLS: readonly Tool[] = [
   }),
   tool(
     "channel_create",
-    "Create a channel. template: one of your owner's, by name.",
+    "Create a channel. template: one of your owner's, by name. solo: a private Solo chat, with members added in the create.",
     {
       name: str,
       visibility: { type: "string", enum: ["open", "private"] },
@@ -236,6 +238,8 @@ export const TOOLS: readonly Tool[] = [
       ttl,
       join_role: joinRole,
       template: str,
+      solo: { type: "boolean" },
+      members: { ...strs, description: "Solo only: pubkeys or npubs." },
     },
     ["name", "visibility"],
   ),
@@ -1421,6 +1425,7 @@ class Tools {
     )?.role;
     const flags = [
       tag(metadata, "t"),
+      soloChannelMetadata(metadata as RelayEvent) ? "solo" : "",
       has(metadata, "private") ? "private" : "open",
       has(metadata, "archived") ? "archived" : "",
       tag(metadata, "ttl")
@@ -1450,6 +1455,27 @@ class Tools {
     const role = joinRoleArg(args);
     if (role === "guest" && args.visibility === "private")
       throw new Error("join_role guest is for open channels.");
+    if (args.solo !== undefined && typeof args.solo !== "boolean")
+      throw new Error("solo must be true or false.");
+    const solo = args.solo === true;
+    if (!solo && args.members !== undefined)
+      throw new Error("members is for Solo chats.");
+    const members = keys(args, "members").filter(
+      (key) => key !== this.client.pubkey,
+    );
+    // Its members are only the ones named, so no template adds agents.
+    if (
+      solo &&
+      (args.visibility !== "private" ||
+        type !== "stream" ||
+        about ||
+        args.template !== undefined)
+    )
+      throw new Error(
+        "A Solo chat is a private stream without about or template.",
+      );
+    if (members.length > 32)
+      throw new Error("A Solo chat starts with at most 32 members.");
     // Found first, so a wrong name creates nothing.
     const template =
       args.template === undefined
@@ -1466,12 +1492,22 @@ class Tools {
         ["channel_type", type],
         ...(about ? [["about", about]] : []),
         ...(ttl ? [["ttl", String(ttl)]] : []),
+        // As Buzz starts a Solo chat: the relay adds the `p` members in the create.
+        ...(solo ? channelLabelTags([SOLO_LABEL, SOLO_NAMED_LABEL]) : []),
+        ...members.map((key) => ["p", key]),
       ],
     });
-    const shown = await until(() => this.metadata(id), Boolean).catch(unread);
+    const labeled = (now: BuzzEvent | undefined) =>
+      !!now && (!solo || soloChannelMetadata(now as RelayEvent));
+    const shown = await until(() => this.metadata(id), labeled).catch(unread);
     if (!shown || shown instanceof Error)
-      return `The community accepted channel ${id} but ${shown ? shown.message : "does not show it yet"}${template ? "; the template was not applied" : ""}${role === "guest" ? "; join_role was not set" : ""}.`;
+      return `The community accepted channel ${id} but ${shown ? shown.message : "does not show it yet"}${template ? "; the template was not applied" : ""}${role === "guest" ? "; join_role was not set" : ""}${members.length ? "; its members are not confirmed" : ""}.`;
     const lines = [`created ${id}`];
+    if (!labeled(shown))
+      lines.push(
+        "The community did not keep the Solo label, so it is an ordinary private channel.",
+      );
+    if (members.length) lines.push(...(await this.joined(id, members)));
     if (template) lines.push(...(await this.apply(id, template)));
     // Last, so the template's agents join as members, not guests.
     if (role === "guest")
@@ -1484,6 +1520,25 @@ class Tools {
         lines.push(`join_role not set: ${reason(error)}`);
       }
     return lines.join("\n");
+  }
+
+  /** Reports each of a new channel's `members` as its roster shows them. */
+  async joined(id: string, members: readonly string[]) {
+    const roster = await until(
+      () => this.roster(id),
+      (now) => members.every((key) => now.some((m) => m.pubkey === key)),
+    ).catch(unread);
+    const names = await this.names(members).catch(
+      () => new Map<string, string>(),
+    );
+    return members.map((key) => {
+      const who = names.has(key) ? `${key} ${names.get(key)}` : key;
+      if (roster instanceof Error)
+        return `${who}: the community accepted it but ${roster.message}`;
+      return roster.some((m) => m.pubkey === key)
+        ? `added ${who}`
+        : `${who}: the community accepted it but does not show it yet`;
+    });
   }
 
   /** Starts a new channel's Canvas and adds its agents from `template`. */
