@@ -143,10 +143,18 @@ function setup(
   const relay = {
     snapshot: () => ({ status: "ready", session, viewer: alice }),
   } as unknown as RelayData;
+  // Another community of the same identity: its own session, with its own memory.
+  const awaySession = {
+    ...session,
+    agentMemories: { read: vi.fn(async () => ({ entries: [] })) },
+  };
+  const awayRelay = {
+    snapshot: () => ({ status: "ready", session: awaySession, viewer: alice }),
+  } as unknown as RelayData;
   const cache = modelCache(storage);
   const runtime = new AcpRuntime(
     host,
-    () => relay,
+    (key) => (key === self ? relay : awayRelay),
     core,
     added,
     cache,
@@ -194,6 +202,8 @@ function setup(
   return {
     fake,
     runtime,
+    session,
+    awaySession,
     deliver,
     sync,
     published,
@@ -267,7 +277,7 @@ describe("AcpRuntime", () => {
 
   it("keeps each community membership's handle for its own sessions' tools", async () => {
     const config = await confirmed();
-    const { fake, deliver, sync } = setup();
+    const { fake, deliver, sync, session, awaySession } = setup();
     sync(config);
     await deliver(message("1", "@Opal hello"), config).run;
     await vi.waitFor(() => expect(fake.harnesses[0]?.turns).toHaveLength(1));
@@ -278,12 +288,31 @@ describe("AcpRuntime", () => {
     await deliver(message("2", "@Opal over here"), config, undefined, {
       agent: away,
     } as Partial<Delivery>).run;
-    await home?.mcp(homeSession, "tools/list");
+    await home?.mcp(homeSession, "tools/call", {
+      name: "mem_get",
+      arguments: { slug: "notes" },
+    });
+    // The read goes to the home community, never the other one.
+    expect(session.agentMemories.read).toHaveBeenCalledTimes(1);
+    expect(awaySession.agentMemories.read).not.toHaveBeenCalled();
     expect(appClient).toHaveBeenLastCalledWith(
       expect.objectContaining({ key: self }),
       expect.anything(),
     );
     expect(appClient).not.toHaveBeenLastCalledWith(away, expect.anything());
+    // And the other membership's session reads only its own community.
+    await vi.waitFor(() => expect(fake.harnesses[1]?.turns).toHaveLength(1));
+    const awayHarness = fake.harnesses[1];
+    await awayHarness?.mcp(
+      awayHarness.turns[0]?.sessionId ?? "",
+      "tools/call",
+      {
+        name: "mem_get",
+        arguments: { slug: "notes" },
+      },
+    );
+    expect(awaySession.agentMemories.read).toHaveBeenCalledTimes(1);
+    expect(session.agentMemories.read).toHaveBeenCalledTimes(1);
   });
 
   it("hands a Solo chat's Canvas to each turn, and a shared channel's to none", async () => {
