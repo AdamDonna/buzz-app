@@ -16,6 +16,7 @@ import type {
   NavigationOpenOptions,
 } from "../features/navigation/controller";
 import { isBuiltInSettingsSection } from "./settings-sections";
+import { linkedPage, linkedPageTarget } from "../features/pages/plugin-link";
 
 const channelsKey = "buzz.channels/channels";
 /** Presentation-only lease for an already-confirmed Settings departure. */
@@ -98,6 +99,8 @@ export function useAppNavigation(
         ? channelsKey
         : undefined;
   const page = pages.find((page) => page.key === pageKey);
+  const pluginLink = target.kind === "plugin" ? target : undefined;
+  const linked = pluginLink && linkedPage(pages, pluginLink);
   const membership = scope
     ? client.memberships.find(
         (item) => communityDestination(item.id).url === scope.communityOrigin,
@@ -125,7 +128,10 @@ export function useAppNavigation(
   const legacyMessagesSettings =
     settings && target.section === "buzz.channels/messages";
   let waiting =
-    legacyHome || legacyPage !== undefined || legacyMessagesSettings;
+    legacyHome ||
+    legacyPage !== undefined ||
+    legacyMessagesSettings ||
+    pluginLink !== undefined;
   if (scope === null) {
     waiting ||= client.status === "loading" || client.selected !== null;
   } else if (scope) {
@@ -155,6 +161,13 @@ export function useAppNavigation(
         failure = "unavailable";
       }
     }
+  }
+  if (pluginLink && !failure && !linked) {
+    if (
+      startup !== "loading" &&
+      plugins.activation[pluginLink.pluginId]?.status !== "starting"
+    )
+      failure = "unavailable";
   }
   if (
     target.kind === "settings" &&
@@ -211,6 +224,11 @@ export function useAppNavigation(
         ...target,
         section: "appearance",
       });
+    else if (pluginLink && linked && !failure)
+      services.navigationHost.resolve(
+        state.attempt,
+        linkedPageTarget(pluginLink, linked),
+      );
   }, [
     services,
     state.attempt,
@@ -219,6 +237,9 @@ export function useAppNavigation(
     legacyMessagesSettings,
     target,
     scope,
+    pluginLink,
+    linked,
+    failure,
   ]);
   const owner = useMemo(
     () => ({ attempt: state.attempt, page, waiting, failure }),

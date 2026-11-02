@@ -1,3 +1,4 @@
+import type { Conversation } from "../../features/conversation/service";
 import { StartLinkedChat, canStartLinkedChat } from "./StartLinkedChat";
 import {
   readLinkedChat,
@@ -120,6 +121,7 @@ export type ArchiveShortcut = {
 
 export function ChannelsPage({
   extensions,
+  chatMenus,
   relay,
   panels,
   companion,
@@ -130,6 +132,7 @@ export function ChannelsPage({
   archive,
 }: {
   extensions?: ConversationExtensions | undefined;
+  chatMenus?: Conversation["chatMenus"] | undefined;
   /** For adding a whole team of the owner's agents from the members dialog. */
   agents?: Agents | undefined;
   communities?: CommunityReader | undefined;
@@ -270,6 +273,7 @@ export function ChannelsPage({
         </PanelFrame>
       ) : (
         <ChannelWorkspace
+          chatMenus={chatMenus}
           extensions={extensions}
           key={`${session.scope ?? "disconnected"}:${session.generation}`}
           scope={session.scope ?? "disconnected"}
@@ -300,6 +304,7 @@ function LiveNewMessage(
 
 function ChannelWorkspace({
   extensions,
+  chatMenus,
   queries,
   cached,
   relay,
@@ -314,6 +319,7 @@ function ChannelWorkspace({
   archive,
 }: {
   extensions?: ConversationExtensions | undefined;
+  chatMenus?: Conversation["chatMenus"] | undefined;
   agents?: Agents | undefined;
   companion?: ReactNode;
   communities?: CommunityReader | undefined;
@@ -1034,6 +1040,7 @@ function ChannelWorkspace({
     conversationToolbar: (channel, open) =>
       channel.channelType === "solo" && (
         <SoloToolbar
+          chatMenus={chatMenus}
           key={channel.id}
           session={queries}
           scope={scope}
@@ -1903,7 +1910,6 @@ function ChannelWorkspace({
     >
       {current && membersOpen && (
         <ChannelMembersDialog
-          communityScope={scope}
           key={current.id}
           session={queries}
           channelId={current.id}
@@ -2007,6 +2013,7 @@ function ChannelWorkspace({
             <>
               {current && solo ? (
                 <SoloHeading
+                  chatMenus={chatMenus}
                   key={`${current.id}:${navigation?.entryId ?? ""}`}
                   session={queries}
                   scope={scope}

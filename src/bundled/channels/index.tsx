@@ -87,6 +87,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     route: { version: 1, validate: isChannelRoute },
     component: ({ companion, navigation }) => (
       <ChannelsPage
+        chatMenus={ctx.conversation.chatMenus}
         navigation={navigation}
         navigator={navigator}
         extensions={extensions}

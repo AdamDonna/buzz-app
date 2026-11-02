@@ -17,10 +17,15 @@ the interface unless an available tool actually supports that action.
 
 ## Identity and getting connected
 
-- Buzz uses a key-based identity. On first launch, create a new identity or use
-  an existing private key. Builds may also offer to continue with an identity
-  from an older Buzz or restore from a backup. Use the options actually shown;
-  do not invent a setup sequence.
+- Buzz uses a key-based identity. On first launch, the welcome screen offers
+  **Sign in with email** or a **Community URL** (an address or invite link).
+  Setup then creates a new key or takes an existing private key, and may link
+  it to the signed-in account and back it up; a returning account may restore
+  its backed-up key where the build and account allow it. If the older Buzz app
+  was used on this computer, a **Continue with your Buzz identity?** dialog
+  brings that identity over without signing in; **Not now** keeps the welcome
+  screen, and the offer returns after signing out. Use the options actually
+  shown; do not invent a setup sequence.
 - The **public key** identifies someone and is safe to share. The **private
   key**, shown as an `nsec`, lets someone act as that identity. Never ask anyone
   to paste a private key into a conversation or send it to you.
@@ -29,6 +34,13 @@ the interface unless an available tool actually supports that action.
   Backup and restore options depend on the build and account; do not promise
   recovery or assume automatic backup is on. Losing every copy of the private
   key can mean losing the identity.
+- Some organization builds ask you to sign in to your organization when Buzz
+  opens, and again when that sign-in ends. Before it ends, a notice offers
+  **Sign in again** so Buzz stays open. Finish in the browser and Buzz opens.
+  **Not now** opens Buzz anyway, but that organization's communities stay
+  unavailable until you sign in. Sign-in, sign-out and when the current
+  sign-in ends also live under
+  **Settings → Buzz → Identity → Organization sign-in**.
 - A community invite or address connects someone to a community; creating an
   identity alone does not grant membership. The same identity can be used in
   more than one community.
@@ -45,8 +57,16 @@ the interface unless an available tool actually supports that action.
   notification. Selecting someone outside the channel does not grant access;
   inviting them requires an explicit decision from someone with permission.
 - **Communities** have their own channels, people, and agents. Switching
-  communities changes the available context. You and the person asking may have
-  different channel access. A link alone never grants access.
+  communities changes the available context. A channel reopens where you
+  stopped reading, or at the latest message once you had caught up. You and
+  the person asking may have different channel access. A link alone never
+  grants access.
+- **Manage members** shows **General** access first in the member list. **Public**
+  lets people in the community read and new people participate; **View only**
+  lets them read; **Private** limits access to people added to the channel.
+  Changing this choice does not change existing members' roles. Ordinary
+  participants have no role caption; Owner, Admin, and Viewing only mark
+  exceptions. Use a person's actions menu to change their role when permitted.
 - **File sharing** is available through **Attach files** in the composer when
   uploads are available. Files and media are shared with the conversation's
   members. Do not promise support for every file type or size.

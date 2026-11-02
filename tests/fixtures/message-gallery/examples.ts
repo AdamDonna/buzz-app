@@ -407,6 +407,43 @@ export const groups: Group[] = [
         "I reviewed the changes. **Two details** still need attention:\n\n- Align the labels.\n- Check the narrow layout.",
         { authorId: agent, agentEnvelope: true },
       ),
+      {
+        id: "edited",
+        title: "Edited messages",
+        description:
+          "An author's edit is marked after the last line, or below a closing block.",
+        rows: [
+          message("edited-own", "Hi how are ya.", { edited: true }),
+          message("edited-own-emoji", "🎉", { edited: true }),
+          message(
+            "edited-own-table",
+            "| Day | Room |\n| --- | --- |\n| Thu | 4B |",
+            {
+              edited: true,
+            },
+          ),
+          message("edited-teammate", "Moved the review to Thursday.", {
+            authorId: teammate,
+            edited: true,
+          }),
+          message(
+            "edited-block",
+            "Use this command instead:\n\n```sh\njust iterate\n```",
+            { authorId: teammate, edited: true },
+          ),
+          message("edited-attachment", "", {
+            authorId: teammate,
+            edited: true,
+            attachments: [
+              {
+                url: "https://fixture.test/landscape",
+                kind: "image",
+                dimensions: { width: 640, height: 360 },
+              },
+            ],
+          }),
+        ],
+      },
       single(
         "fallback",
         "Unknown author",
@@ -496,13 +533,6 @@ export const groups: Group[] = [
         "An explicit recipient plus a matching profile binds the name to its identity.",
         "@Sam Rivera could you review the spacing?",
         { mentions: [teammate] },
-      ),
-      single(
-        "edited",
-        "Edited content",
-        "The current renderer shows the replacement body without a separate edited badge.",
-        "Updated: the review is now at 3 pm.",
-        { edited: true },
       ),
     ],
   },

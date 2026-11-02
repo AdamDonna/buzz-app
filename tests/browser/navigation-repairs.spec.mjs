@@ -257,3 +257,27 @@ launchTest(
     await expect(failed).toBeHidden();
   },
 );
+
+// A page status rule that continues past its :has(), or a :has() list the
+// minifier wraps in :is(), restyles the whole tab panel on every mutation.
+test("page status :has() rules keep :has() on their subject", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const selectors = await page.evaluate(() => {
+    const found = [];
+    const walk = (rules) => {
+      for (const rule of rules) {
+        if (rule.cssRules) walk(rule.cssRules);
+        const selector = rule.selectorText ?? "";
+        if (selector.includes(":has(") && selector.includes("page-status"))
+          found.push(selector);
+      }
+    };
+    for (const sheet of document.styleSheets) walk(sheet.cssRules);
+    return found;
+  });
+  expect(selectors.length).toBeGreaterThan(0);
+  for (const selector of selectors) expect(selector).toMatch(/:has\([^()]*\)$/);
+});

@@ -41,7 +41,12 @@ import { addPullStateTool } from "./pull-state-tool";
 import { isRetryableRead, retryRead } from "../../features/relay/read-retry";
 import { stateIcons } from "./pull-state-view";
 import { PullLink } from "./PullLink";
-import { SoloPullIcon, SoloPullLink, SoloPullMenu } from "./SoloPull";
+import {
+  SoloPullIcon,
+  SoloPullLink,
+  SoloPullMenu,
+  SoloPullLauncher,
+} from "./SoloPull";
 import { watchPulls } from "./watcher";
 import { presentPull } from "./attention";
 import { SubmitReview } from "./SubmitReview";
@@ -69,6 +74,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
   ctx.panels.register({
     id: "object",
     title: "GitHub",
+    channelLauncher: (props) => (
+      <SoloPullLauncher {...props} relay={ctx.relay} pullsFor={pullsFor} />
+    ),
     deferUntilShown: true,
     matches: (target) => !!parseGitHubReference(target),
     component: (props: PanelProps) => {

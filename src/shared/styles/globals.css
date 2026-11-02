@@ -483,13 +483,17 @@
     gap: var(--space-3);
   }
   /* A page status fills the page area, even inside its padded content
-   * column, so it sits in the middle rather than near the top. */
-  .buzz-tabs-panel:has(> * > .page-status),
-  .buzz-tabs-panel:has(> * > .page-status) > * {
+   * column, so it sits in the middle rather than near the top. Each rule's
+   * :has() is on its own subject: a selector that continues past :has()
+   * (or a :has() list the minifier wraps in :is()) restyles the whole panel
+   * subtree on every DOM mutation inside it. */
+  .buzz-tabs-panel:has(> * > .page-status) {
     display: flex;
     flex-direction: column;
   }
-  .buzz-tabs-panel:has(> * > .page-status) > * {
+  .buzz-tabs-panel > :has(> .page-status) {
+    display: flex;
+    flex-direction: column;
     flex: 1;
   }
   .error,

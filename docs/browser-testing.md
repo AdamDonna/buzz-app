@@ -3,7 +3,7 @@
 `pnpm test` and therefore `just scan` now run the checked-in Chromium and WebKit
 journeys in `tests/browser/`. `just iterate` remains the fast, browser-free loop.
 [GitHub Actions](../.github/workflows/ci.yml) runs these gates on PRs and main
-pushes: an isolated serial measurement job runs alongside twenty-one Linux functional jobs
+pushes: an isolated serial measurement job runs alongside twenty-three Linux functional jobs
 (nine Chromium and fourteen WebKit file-level shards, two workers per runner) and one macOS WebKit
 recording job. Both engines remain
 mandatory for the [CI-selected coverage](#ci-coverage-and-local-only-webkit-checks);

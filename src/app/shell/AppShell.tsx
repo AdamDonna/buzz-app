@@ -54,6 +54,7 @@ export function AppShell({
   federatedIdentity,
   accountActions,
   appearance,
+  pluginRecommendations = 0,
   searchServices,
   navigationControls,
   onCommunitySelect,
@@ -83,6 +84,8 @@ export function AppShell({
   federatedIdentity?: FederatedIdentity | undefined;
   accountActions: AccountActionsService;
   appearance: Appearance;
+  /** Managed plugin recommendations awaiting review, pointed out beside Plugins. */
+  pluginRecommendations?: number;
   searchServices?: SearchServices;
   navigationControls?: ReactNode;
   onCommunitySelect?: (id: string | null) => void;
@@ -461,6 +464,7 @@ export function AppShell({
                 accountActions={accountActions}
                 settingsSelected={selected === "settings"}
                 appearance={appearance}
+                pluginRecommendations={pluginRecommendations}
                 onSettings={(section) =>
                   onSelect("settings", section ? { section } : undefined)
                 }

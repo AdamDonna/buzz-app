@@ -19,7 +19,8 @@
       "!!src-tauri/target",
       "!!src-tauri/gen",
       "!!target",
-      "!!test-results"
+      "!!test-results",
+      "!!tests/fixtures/design-system/flake-selection-*"
     ]
   },
   "formatter": {

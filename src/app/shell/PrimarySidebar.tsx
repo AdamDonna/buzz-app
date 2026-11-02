@@ -116,12 +116,13 @@ function ScopedSidebar({
     [connection.session],
   );
   const soloNavigation = soloNavigationFor(connection.session);
-  const soloSnapshot = useSyncExternalStore(
+  // Select the title, not the snapshot: Solo regions are rebuilt on every message.
+  const soloTitle = useSyncExternalStore(
     soloNavigation?.subscribe ?? noSubscription,
-    () => soloNavigation?.snapshot(),
+    () =>
+      soloNavigation?.snapshot().regions.find((region) => region.source)
+        ?.title ?? "Solo",
   );
-  const soloTitle =
-    soloSnapshot?.regions.find((region) => region.source)?.title ?? "Solo";
   const target = props.target;
   const local =
     "scope" in target &&
@@ -130,9 +131,11 @@ function ScopedSidebar({
   // The conversation's own Solo label, not the opening page, says which
   // inventory owns it; an unlisted conversation waits until it is known.
   const channels = connection.session?.channels;
-  const channelList = useSyncExternalStore(
+  const conversation = target.kind === "conversation" ? target.channelId : "";
+  // Only the destination: the list is replaced on every message preview.
+  const listedDestination = useSyncExternalStore(
     channels?.subscribeList ?? noSubscription,
-    () => channels?.list(),
+    () => conversationDestination(channels?.list(), conversation),
   );
   const preferences = connection.session?.soloPreferences;
   const soloPreferences = useSyncExternalStore(
@@ -147,7 +150,7 @@ function ScopedSidebar({
     soloPreferences?.status !== "loading";
   const destination = local
     ? target.kind === "conversation"
-      ? conversationDestination(channelList, target.channelId)
+      ? listedDestination
       : target.kind === "page" && target.pluginId === "buzz.channels"
         ? soloDraft(target.route?.params)
           ? "solo"

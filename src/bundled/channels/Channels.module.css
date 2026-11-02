@@ -382,10 +382,6 @@
   line-height: var(--text-body-sm--line-height);
   cursor: grabbing;
 }
-.channelDragOverlay[data-section-creation-preview] {
-  /* The new-section slot opens below the gap where the pointer first enters. */
-  translate: var(--space-3) calc(-100% - var(--space-3));
-}
 .channelDragOverlay > span {
   overflow: hidden;
   text-overflow: ellipsis;

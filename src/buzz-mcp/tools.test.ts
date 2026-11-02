@@ -131,41 +131,51 @@ function fake(
   return { client, published };
 }
 
-it("serves product help through MCP without channel access or host I/O", async () => {
-  const client = new Proxy({} as BuzzClient, {
-    get(_target, property) {
-      throw new Error(`Help must not access the host: ${String(property)}`);
-    },
-  });
-  const list = await respond(client, {}, { id: 1, method: "tools/list" });
-  expect(list).toMatchObject({
-    result: {
-      tools: expect.arrayContaining([
-        expect.objectContaining({ name: "buzz_help" }),
-      ]),
-    },
-  });
-  const reply = await respond(
-    client,
-    {},
-    {
-      id: 2,
-      method: "tools/call",
-      params: { name: "buzz_help", arguments: {} },
-    },
-  );
-  expect(reply).toMatchObject({
-    result: {
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining("# Buzz quick guide"),
-        },
-      ],
-    },
-  });
-  expect(reply).not.toHaveProperty("result.isError");
-});
+it.each([false, true])(
+  "serves product help through MCP without channel access or host I/O (protected: %s)",
+  async (protectedSession) => {
+    const protect = vi.fn<NonNullable<BuzzClient["protect"]>>(async () => {});
+    const client = new Proxy({} as BuzzClient, {
+      get(_target, property) {
+        // The shared session gate checks this optional hook before dispatch.
+        if (property === "protect")
+          return protectedSession ? protect : undefined;
+        throw new Error(`Help must not access the host: ${String(property)}`);
+      },
+    });
+    const list = await respond(client, {}, { id: 1, method: "tools/list" });
+    expect(list).toMatchObject({
+      result: {
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "buzz_help" }),
+        ]),
+      },
+    });
+    const reply = await respond(
+      client,
+      {},
+      {
+        id: 2,
+        method: "tools/call",
+        params: { name: "buzz_help", arguments: {} },
+      },
+    );
+    expect(reply).toMatchObject({
+      result: {
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("# Buzz quick guide"),
+          },
+        ],
+      },
+    });
+    expect(reply).not.toHaveProperty("result.isError");
+    expect(protect.mock.calls.map(([action]) => action.kind)).toEqual(
+      protectedSession ? ["tool", "tool-result"] : [],
+    );
+  },
+);
 
 const members = event({
   kind: 39002,
@@ -474,6 +484,60 @@ it("posts at the channel's top level when given a channel", async () => {
     text: "hello",
   });
   expect(published[0]?.tags).toEqual([["h", "other"]]);
+});
+
+it("tags the community emoji a message or edit uses, as the composer does", async () => {
+  const stamp = "https://relay/media/stamp.png";
+  const emojiSet = (pubkey: string, created_at: number, entries: string[][]) =>
+    event({
+      id: `${created_at}`.padStart(64, "d"),
+      pubkey,
+      created_at,
+      kind: 30030,
+      tags: [
+        ["d", "buzz:custom-emoji"],
+        ...entries.map((e) => ["emoji", ...e]),
+      ],
+    });
+  const { client, published } = fake([
+    ...community,
+    // Alice's newer set replaces her older one, so its :gone: is not used.
+    emojiSet(alice, 10, [["gone", "https://relay/media/gone.png"]]),
+    emojiSet(alice, 20, [["pray-for-stamp", stamp]]),
+    emojiSet(bob, 15, [["wave", "https://relay/media/wave.png"]]),
+  ]);
+  await callTool(client, { channel: "chan" }, "send", {
+    audience: "everyone",
+    channel: "chan",
+    text: ":Pray-For-Stamp: :gone: :unknown: https://x.test/:wave: :pray-for-stamp:",
+  });
+  await callTool(client, { channel: "chan" }, "edit", {
+    id: root,
+    text: "now :wave:",
+  });
+  expect(published.map((p) => p.tags)).toEqual([
+    [
+      ["h", "chan"],
+      ["emoji", "pray-for-stamp", stamp],
+    ],
+    [
+      ["h", "chan"],
+      ["e", root],
+      ["emoji", "wave", "https://relay/media/wave.png"],
+    ],
+  ]);
+});
+
+it("reads no emoji sets for a message without a shortcode", async () => {
+  const { client } = fake(community);
+  await callTool(client, { channel: "chan" }, "send", {
+    audience: "everyone",
+    channel: "chan",
+    text: "at 10:30 see https://x.test/a:b:c",
+  });
+  expect(client.query).not.toHaveBeenCalledWith([
+    expect.objectContaining({ kinds: [30030] }),
+  ]);
 });
 
 it("keeps a top-level chat out of threads, wherever a reply would resolve", async () => {

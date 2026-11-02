@@ -1,6 +1,6 @@
 // FOUNDATION: Startup, navigation, contributed pages, and built-in Settings.
 import { AgentAvatarArtworkProvider } from "../features/agents/AgentAvatarArtworkProvider";
-import { IdentitySetup } from "../features/identity/IdentitySetup";
+import { Welcome } from "../features/identity/Welcome";
 import { NewMenu } from "./shell/NewMenu";
 import { PrimarySidebar } from "./shell/PrimarySidebar";
 import { ChannelNavigationProvider } from "../features/channel-navigation/ChannelNavigationState";
@@ -22,6 +22,7 @@ import { modalWindowDragHandlers } from "./shell/title-bar";
 import { isTauri } from "@tauri-apps/api/core";
 import { Dialog } from "../shared/design-system/ui/Dialog";
 import { UpdateNotice } from "../features/updates/UpdateNotice";
+import { RejectedLinkNotice } from "../features/navigation/RejectedLinkNotice";
 import { CreationReview } from "../bundled/agents/CreationReview";
 import { UpdateReview } from "../bundled/agents/UpdateReview";
 import { InterruptedNotice } from "../features/agents/InterruptedNotice";
@@ -36,6 +37,7 @@ import { registerAppShortcuts } from "./shortcuts";
 import type { AppServices } from "./services";
 import { Settings } from "./Settings";
 import { SettingsSidebar } from "./SettingsSidebar";
+import { pendingManaged } from "../plugins/managed";
 import { RecoveryScreen } from "./RecoveryScreen";
 import { PageView } from "../features/pages/PageView";
 import { OwnedContribution } from "../plugins/OwnedContribution";
@@ -56,6 +58,10 @@ import { PanelCard } from "../features/panels/PanelCard";
 import { communityDestination } from "../features/communities/destination";
 import { CommunityLanding } from "../features/communities/CommunityLanding";
 import { LegacyCommunityImport } from "../features/communities/LegacyCommunityImport";
+import {
+  LaunchSignIn,
+  SignInEnding,
+} from "../features/federated-identity/LaunchSignIn";
 import { launchVisible, setLaunchReady, subscribeLaunch } from "./launch";
 
 export function App({ services }: { services: AppServices }) {
@@ -78,12 +84,18 @@ export function App({ services }: { services: AppServices }) {
       >
         <LaunchWindowControls />
         {services.identity ? (
-          <IdentitySetup identity={services.identity}>
-            <ConnectedApp services={services} />
-            {!launching && (
-              <LegacyCommunityImport communities={services.communities} />
-            )}
-          </IdentitySetup>
+          <Welcome
+            identity={services.identity}
+            communities={services.communities}
+            invites={services.invites}
+          >
+            <LaunchSignIn identity={services.federatedIdentity}>
+              <ConnectedApp services={services} />
+              {!launching && (
+                <LegacyCommunityImport communities={services.communities} />
+              )}
+            </LaunchSignIn>
+          </Welcome>
         ) : (
           <ConnectedApp services={services} />
         )}
@@ -97,6 +109,13 @@ function ConnectedApp({ services }: { services: AppServices }) {
   const [workspaceElement, setWorkspaceElement] =
     useState<HTMLDivElement | null>(null);
   const startup = useSyncExternalStore(plugins.subscribe, plugins.startup);
+  const { configuration } = useSyncExternalStore(
+    plugins.subscribe,
+    plugins.snapshot,
+  );
+  const pluginRecommendations = pendingManaged(
+    configuration.status === "ready" ? configuration.managed : undefined,
+  ).length;
   const launching = useSyncExternalStore(subscribeLaunch, launchVisible);
   // Unsaved Profile edits turn a Settings dismissal into a discard prompt.
   const [settingsUnsaved, setSettingsUnsaved] = useState(false);
@@ -504,6 +523,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
     <ToastProvider
       portalContainer={document.getElementById("buzz-toast-root") ?? undefined}
     >
+      <SignInEnding identity={services.federatedIdentity} />
       <ChannelNavigationProvider relay={services.relay}>
         <AgentsContext.Provider value={services.agents}>
           <AppShell
@@ -582,6 +602,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
             settingsCards={services.settingsCards}
             accountActions={services.accountActions}
             appearance={services.appearance}
+            pluginRecommendations={pluginRecommendations}
             searchServices={services}
             launchers={
               <PanelLaunchers
@@ -601,6 +622,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
             }
           >
             <UpdateNotice updates={services.updates} />
+            <RejectedLinkNotice links={services.rejectedLinks} />
             <InterruptedNotice agents={services.agents} />
             <CreationReview agents={services.agents} />
             <UpdateReview agents={services.agents} />
@@ -639,6 +661,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
                 <SettingsSidebar
                   cards={services.settingsCards}
                   communities={services.communities}
+                  recommendations={pluginRecommendations}
                   {...(route.target.kind === "settings" && route.target.section
                     ? { selected: route.target.section }
                     : {})}
