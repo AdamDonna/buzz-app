@@ -313,6 +313,69 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
   }
 });
 
+it("qualifies verified namesakes and shared usernames, but not a unique verified name", async () => {
+  const { createProfileDirectory } = await import("./profile-directory");
+  const carol = keypair();
+  const dave = keypair();
+  const verifiedAs = (subject: string, displayName: string, username: string) =>
+    eventDto(
+      signed(relay, {
+        kind: 30382,
+        content: "",
+        created_at: 10,
+        tags: [
+          ["d", subject],
+          ["p", subject],
+          ["active", "true"],
+          ["display_name", displayName],
+          ["username", username],
+          ["issuer_label", "Example"],
+          ["verified_at", "10"],
+        ],
+      }),
+    );
+  let sink: VerifiedProfileSink | undefined;
+  const directory = createProfileDirectory(
+    { read: async () => [] },
+    undefined,
+    undefined,
+    {
+      authority: { ...authority, multipleIssuers: false },
+      subscribe(_filter, next) {
+        sink = next;
+        return () => {};
+      },
+    },
+  );
+  try {
+    const people = [alice, bob, carol, dave];
+    directory.accept(
+      people.map((key) =>
+        eventDto(signed(key, { kind: 0, tags: [], content: "{}" })),
+      ),
+    );
+    await directory.ensure(people.map((key) => key.pubkey));
+    assert(sink);
+    sink.event(verifiedAs(alice.pubkey, "Sam", "sam1"));
+    sink.event(verifiedAs(bob.pubkey, "Sam", "sam2"));
+    sink.event(verifiedAs(carol.pubkey, "Carol", "shared"));
+    sink.event(verifiedAs(dave.pubkey, "Dave", "shared"));
+    sink.eose();
+    const name = (key: { pubkey: string }) =>
+      directory.queries.snapshot().get(key.pubkey)?.name;
+    expect(name(alice)).toBe(`Sam (${alice.pubkey.slice(0, 10)})`);
+    expect(name(bob)).toBe(`Sam (${bob.pubkey.slice(0, 10)})`);
+    expect(name(carol)).toBe(`Carol (${carol.pubkey.slice(0, 10)})`);
+    expect(name(dave)).toBe(`Dave (${dave.pubkey.slice(0, 10)})`);
+    sink.event(retract(20, bob.pubkey));
+    sink.event(retract(20, dave.pubkey));
+    expect(name(alice)).toBe("Sam");
+    expect(name(carol)).toBe("Carol");
+  } finally {
+    directory.dispose();
+  }
+});
+
 it("invalidates a signed newer duplicate-d event at its NIP-01 address", async () => {
   const h = harness();
   try {
