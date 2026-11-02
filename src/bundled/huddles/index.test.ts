@@ -26,6 +26,7 @@ function host() {
       },
       conversation: {
         registerMessage: vi.fn(),
+        registerChatMenu: vi.fn(),
         registerCommand,
       },
       panels: { register: vi.fn() },
