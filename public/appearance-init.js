@@ -13,9 +13,17 @@
     // Storage may be denied; the system palette still opens safely.
   }
   document.documentElement.dataset.colorMode = mode;
-  let accent = "citrus";
+  let accent = "theme";
   try {
-    const accents = ["bee", "magenta", "iris", "cobalt", "citrus", "mono"];
+    const accents = [
+      "theme",
+      "bee",
+      "magenta",
+      "iris",
+      "cobalt",
+      "citrus",
+      "mono",
+    ];
     let value = localStorage.getItem("buzz-accent.v1");
     if (value === null) {
       // The former bubble color carries over; its old "Default" does not.
@@ -46,6 +54,15 @@
     /* The default accent remains usable without storage. */
   }
   document.documentElement.dataset.accent = accent;
+  let theme = "buzz";
+  try {
+    const themes = ["buzz", "relax"];
+    const saved = localStorage.getItem("buzz-theme.v1");
+    if (themes.includes(saved)) theme = saved;
+  } catch {
+    /* The default theme remains usable without storage. */
+  }
+  document.documentElement.dataset.theme = theme;
   let contrast = "low";
   try {
     const saved = localStorage.getItem("buzz-contrast.v1");

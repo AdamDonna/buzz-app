@@ -4,8 +4,10 @@ import { ACCENTS } from "../design-system/tokens/brand";
 // Device-local color for messages, send and sidebar row states.
 // Shared controls stay neutral; contrast changes message bubbles.
 export { ACCENTS };
-export type Accent = (typeof ACCENTS)[number];
-export const DEFAULT_ACCENT: Accent = "citrus";
+/** `theme` follows the active theme's signature family; Buzz resolves it to Citrus. */
+export const ACCENT_CHOICES = ["theme", ...ACCENTS] as const;
+export type Accent = (typeof ACCENT_CHOICES)[number];
+export const DEFAULT_ACCENT: Accent = "theme";
 export const ACCENT_KEY = "buzz-accent.v1";
 /** The former message-bubble preference; read once when no accent is saved. */
 export const LEGACY_BUBBLE_KEY = "buzz-bubble-color.v1";
@@ -20,7 +22,9 @@ export function parseAccent(value: unknown): Accent {
     return "citrus";
   if (value === "flame") return "bee";
   if (value === "gray") return "mono";
-  return ACCENTS.includes(value as Accent) ? (value as Accent) : DEFAULT_ACCENT;
+  return ACCENT_CHOICES.includes(value as Accent)
+    ? (value as Accent)
+    : DEFAULT_ACCENT;
 }
 
 /** A saved bubble color carries over to its accent; its old "Default" does not. */

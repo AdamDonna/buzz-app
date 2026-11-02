@@ -1,4 +1,4 @@
-import { ACCENTS, ACCENT_KEY, LEGACY_BUBBLE_KEY } from "./accent";
+import { ACCENT_CHOICES, ACCENT_KEY, LEGACY_BUBBLE_KEY } from "./accent";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   parseColorModePreference,
   parseFontScale,
 } from "./service";
+import { THEMES, THEME_KEY, parseTheme } from "./themes";
 
 function browser(stored: string | null = null, systemDark = false) {
   const values = new Map(stored === null ? [] : [[APPEARANCE_KEY, stored]]);
@@ -110,10 +111,12 @@ it.each([
       error: null,
       fontScale: 1,
       fontError: null,
-      accent: "citrus",
+      accent: "theme",
       accentError: null,
       contrast: "low",
       contrastError: null,
+      theme: "buzz",
+      themeError: null,
     });
     expect(b.root.dataset.colorMode).toBe(app.snapshot().mode);
     expect(b.meta.setAttribute).toHaveBeenLastCalledWith(
@@ -305,17 +308,21 @@ it("font writes clamp, round, recover from failure, sync and preserve color stor
 });
 
 it.each<[string, string | null, string]>([
-  ...ACCENTS.map((color): [string, null, string] => [color, null, color]),
+  ...ACCENT_CHOICES.map((color): [string, null, string] => [
+    color,
+    null,
+    color,
+  ]),
   ["chartreuse", null, "citrus"],
   ["lime", null, "citrus"],
-  ["invalid", null, "citrus"],
-  ["citron", null, "citrus"],
+  ["invalid", null, "theme"],
+  ["citron", null, "theme"],
   ["gray", null, "mono"],
   ["pear", null, "citrus"],
   ["jade", null, "citrus"],
   ["flame", null, "bee"],
-  ["purple", null, "citrus"],
-  ["neutral", null, "citrus"],
+  ["purple", null, "theme"],
+  ["neutral", null, "theme"],
   // The saved accent wins over the former bubble color.
   ["iris", "blue", "iris"],
 ])(
@@ -338,7 +345,7 @@ it.each<[string, string | null, string]>([
   },
 );
 it.each<[string | null, string]>([
-  [null, "citrus"],
+  [null, "theme"],
   ["blue", "cobalt"],
   ["cyan", "cobalt"],
   ["indigo", "cobalt"],
@@ -349,8 +356,8 @@ it.each<[string | null, string]>([
   ["lilac", "iris"],
   ["purple", "iris"],
   // The former "Default" bubble now means the new default accent.
-  ["neutral", "citrus"],
-  ["#ffffff", "citrus"],
+  ["neutral", "theme"],
+  ["#ffffff", "theme"],
 ])("carries a former bubble color %s over as accent %s", (bubble, expected) => {
   const b = browser();
   if (bubble) b.values.set(LEGACY_BUBBLE_KEY, bubble);
@@ -382,10 +389,10 @@ it("saves the accent, recovers from denied storage, synchronizes reset, and disp
   expect(app.snapshot().accent).toBe("iris");
   b.values.delete(ACCENT_KEY);
   b.change(null);
-  expect(app.snapshot().accent).toBe("citrus");
+  expect(app.snapshot().accent).toBe("theme");
   app.dispose();
   app.setAccent("magenta");
-  expect(b.root.dataset.accent).toBe("citrus");
+  expect(b.root.dataset.accent).toBe("theme");
 });
 
 it.each(["neutral", "touch", "more", "full"])(
@@ -446,4 +453,99 @@ it("keeps contrast active on storage failure, retries, and follows other windows
   app.dispose();
   app.setContrast("high");
   expect(b.root.dataset.colorLevel).toBe("touch");
+});
+
+it.each([null, "", "RELAX", "garbage", "buzz", "relax"])(
+  "bootstrap and service agree on stored theme %j",
+  (value) => {
+    const b = browser();
+    if (value !== null) b.values.set(THEME_KEY, value);
+    runInNewContext(readFileSync("public/appearance-init.js", "utf8"), {
+      localStorage: b.storage,
+      document: b.host.document,
+      matchMedia: b.host.matchMedia,
+    });
+    const initial = b.root.dataset.theme;
+    const app = createAppearance(b.host);
+    expect(initial).toBe(parseTheme(value));
+    expect(app.snapshot().theme).toBe(parseTheme(value));
+    expect(b.root.dataset.theme).toBe(initial);
+    app.dispose();
+  },
+);
+
+it("keeps every registered theme restorable before and after startup", () => {
+  for (const theme of THEMES) {
+    const b = browser();
+    b.values.set(THEME_KEY, theme);
+    runInNewContext(readFileSync("public/appearance-init.js", "utf8"), {
+      localStorage: b.storage,
+      document: b.host.document,
+      matchMedia: b.host.matchMedia,
+    });
+    expect(b.root.dataset.theme).toBe(theme);
+  }
+});
+
+it("a theme choice writes only the theme key and leaves a saved accent alone", () => {
+  const b = browser();
+  b.values.set(ACCENT_KEY, "cobalt");
+  const app = createAppearance(b.host);
+  app.setTheme("relax");
+  expect(b.root.dataset.theme).toBe("relax");
+  expect(b.root.dataset.accent).toBe("cobalt");
+  expect(b.storage.setItem).toHaveBeenCalledTimes(1);
+  expect(b.storage.setItem).toHaveBeenCalledWith(THEME_KEY, "relax");
+  expect(app.snapshot().accent).toBe("cobalt");
+  app.setTheme("unknown" as "buzz");
+  expect(app.snapshot().theme).toBe("buzz");
+  app.dispose();
+});
+
+it("keeps the theme active on storage failure, retries, follows other windows and disposes", () => {
+  const b = browser();
+  const app = createAppearance(b.host);
+  b.storage.setItem.mockImplementationOnce(() => {
+    throw new Error("denied");
+  });
+  app.setTheme("relax");
+  expect(b.root.dataset.theme).toBe("relax");
+  expect(app.snapshot().themeError).toContain("could not be saved");
+  expect(b.values.has(THEME_KEY)).toBe(false);
+  app.setTheme("relax");
+  expect(app.snapshot().themeError).toBeNull();
+  expect(b.values.get(THEME_KEY)).toBe("relax");
+  b.values.set(THEME_KEY, "buzz");
+  b.change(THEME_KEY);
+  expect(app.snapshot().theme).toBe("buzz");
+  b.values.set(THEME_KEY, "relax");
+  b.change(null);
+  expect(app.snapshot().theme).toBe("relax");
+  app.dispose();
+  app.setTheme("buzz");
+  expect(b.root.dataset.theme).toBe("relax");
+});
+
+it("reports an unreadable theme and keeps the default", () => {
+  const b = browser();
+  b.storage.getItem.mockImplementation((key: string) => {
+    if (key === THEME_KEY) throw new Error("denied");
+    return null;
+  });
+  const app = createAppearance(b.host);
+  expect(app.snapshot().theme).toBe("buzz");
+  expect(app.snapshot().themeError).toContain("could not be restored");
+  app.dispose();
+});
+
+it("treats a theme change as a palette change for transition suppression", () => {
+  const b = browser();
+  const app = createAppearance(b.host);
+  b.frame();
+  app.setTheme("relax");
+  expect(b.root.dataset.paletteChanging).toBe("");
+  b.frame();
+  b.frame();
+  expect(b.root.dataset.paletteChanging).toBeUndefined();
+  app.dispose();
 });
