@@ -316,7 +316,10 @@ it("chooses a theme by pointer and keyboard, saves only the theme, and recovers 
   expect(relax).toHaveAccessibleDescription(
     "Deep plum frame around a bright, open workspace.",
   );
-  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(2);
+  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(3);
+  expect(
+    within(group).getByRole("radio", { name: "Cable" }),
+  ).toHaveAccessibleDescription("Airy sky blue with fresh green replies.");
   expect(
     group.querySelector("svg[data-theme='relax'][data-color-mode]"),
   ).not.toBeNull();

@@ -502,6 +502,30 @@ describe("semantic contrast contract", () => {
       "--theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-dark);",
       /relax\/theme\/neutral\/dark --text-sidebar-selected \(#\w+\) on --surface-sidebar-selected \(/,
     ],
+    [
+      "an unreadable own-bubble metadata ink",
+      "--theme-message-own-soft-metadata-dark: var(--cable-message-own-soft-metadata-dark);",
+      "--theme-message-own-soft-metadata-dark: var(--cable-message-own-soft-dark);",
+      /cable\/theme\/touch\/dark --text-metadata-own \(#\w+\) on --surface-message-own \(/,
+    ],
+    [
+      "an unreadable own-bubble mention hover",
+      "--theme-message-own-soft-mention-hover-dark: var(--cable-message-own-soft-mention-hover-dark);",
+      "--theme-message-own-soft-mention-hover-dark: var(--cable-neutral-12-dark);",
+      /cable\/theme\/touch\/dark --text-mention-own \(#\w+\) on --affordance-mention-own-hover \(/,
+    ],
+    [
+      "an own bubble that leaves its text unreadable",
+      "--theme-message-own-soft-text-light: var(--cable-message-own-soft-text-light);",
+      "--theme-message-own-soft-text-light: var(--cable-message-own-soft-light);",
+      /cable\/theme\/touch\/light --text-message-own \(#\w+\) on --surface-message-own \(/,
+    ],
+    [
+      "a received bubble more saturated than the theme's neutrals",
+      "--theme-bubble-received-dark: var(--cable-bubble-received-dark);",
+      "--theme-bubble-received-dark: var(--cable-4-dark);",
+      /cable\/mono\/neutral\/dark: --text-message-link #\w+ is gray on --surface-message #\w+/,
+    ],
   ])("measures a theme in its own scope: %s", (_name, from, to, pairing) => {
     expect(tokens).toContain(from);
     const result = check(tokens.replaceAll(from, to));

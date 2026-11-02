@@ -1126,7 +1126,7 @@
 
 :root {
   --cable-neutral-1-light: #f7fafb;
-  --cable-neutral-2-light: #edf1f4;
+  --cable-neutral-2-light: #f0f4f7;
   --cable-neutral-3-light: #dfe6eb;
   --cable-neutral-4-light: #dae1e6;
   --cable-neutral-5-light: #cbd2d8;
@@ -1163,7 +1163,7 @@
   --cable-neutral-quiet-hover-dark: #1c2631;
   --cable-neutral-action-pressed-dark: #c4cdd6;
   --cable-bubble-neutral-dark: #1f2b39;
-  --cable-bubble-received-dark: #192634;
+  --cable-bubble-received-dark: #141e29;
 
   --cable-frame-canvas-light: #dce7ee;
   --cable-frame-sidebar-light: #ffffff;
@@ -1216,6 +1216,8 @@
   --cable-status-busy-light: #d9534f;
   --cable-message-own-soft-light: #e8f7db;
   --cable-message-own-soft-text-light: #1f3313;
+  --cable-message-own-soft-metadata-light: #57743e;
+  --cable-message-own-soft-mention-hover-light: #d5f1be;
 
   --cable-sidebar-selected-dark: #2c6a9e;
   --cable-sidebar-selected-text-dark: #ffffff;
@@ -1227,6 +1229,8 @@
   --cable-status-busy-dark: #e0625e;
   --cable-message-own-soft-dark: #2a4e72;
   --cable-message-own-soft-text-dark: #eef5fc;
+  --cable-message-own-soft-metadata-dark: #afc2d4;
+  --cable-message-own-soft-mention-hover-dark: #325d88;
 }
 
 :root {
@@ -2931,6 +2935,10 @@
   --theme-frame-sidebar-light: initial;
   --theme-message-own-soft-dark: initial;
   --theme-message-own-soft-light: initial;
+  --theme-message-own-soft-mention-hover-dark: initial;
+  --theme-message-own-soft-mention-hover-light: initial;
+  --theme-message-own-soft-metadata-dark: initial;
+  --theme-message-own-soft-metadata-light: initial;
   --theme-message-own-soft-text-dark: initial;
   --theme-message-own-soft-text-light: initial;
   --theme-neutral-1-dark: initial;
@@ -3121,6 +3129,141 @@
   --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
 }
 
+/* Cable: airy sky blue with fresh green replies. Every value is a palette step
+   from LAYER 0 or a shared fill; a role is never restated here. */
+[data-theme="cable"] {
+  --theme-neutral-1-light: var(--cable-neutral-1-light);
+  --theme-neutral-2-light: var(--cable-neutral-2-light);
+  --theme-neutral-3-light: var(--cable-neutral-3-light);
+  --theme-neutral-4-light: var(--cable-neutral-4-light);
+  --theme-neutral-5-light: var(--cable-neutral-5-light);
+  --theme-neutral-6-light: var(--cable-neutral-6-light);
+  --theme-neutral-7-light: var(--cable-neutral-7-light);
+  --theme-neutral-8-light: var(--cable-neutral-8-light);
+  --theme-neutral-9-light: var(--cable-neutral-9-light);
+  --theme-neutral-10-light: var(--cable-neutral-10-light);
+  --theme-neutral-11-light: var(--cable-neutral-11-light);
+  --theme-neutral-12-light: var(--cable-neutral-12-light);
+  --theme-neutral-standard-text-light: var(--cable-neutral-standard-text-light);
+  --theme-neutral-navigation-text-light: var(
+    --cable-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --cable-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --cable-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--cable-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --cable-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --cable-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--cable-bubble-neutral-light);
+  --theme-bubble-received-light: var(--cable-bubble-received-light);
+  --theme-canvas-light: var(--cable-frame-canvas-light);
+  --theme-sidebar-light: var(--cable-frame-sidebar-light);
+  --theme-accent-1-light: var(--cable-1-light);
+  --theme-accent-2-light: var(--cable-2-light);
+  --theme-accent-3-light: var(--cable-3-light);
+  --theme-accent-4-light: var(--cable-4-light);
+  --theme-accent-5-light: var(--cable-5-light);
+  --theme-accent-6-light: var(--cable-6-light);
+  --theme-accent-7-light: var(--cable-7-light);
+  --theme-accent-8-light: var(--cable-8-light);
+  --theme-accent-9-light: var(--cable-9-light);
+  --theme-accent-10-light: var(--cable-10-light);
+  --theme-accent-11-light: var(--cable-11-light);
+  --theme-accent-12-light: var(--cable-12-light);
+  --theme-accent-contrast-light: var(--cable-contrast-light);
+  --theme-accent-ink-light: var(--cable-ink-light);
+  --theme-accent-pressed-light: var(--cable-pressed-light);
+  --theme-accent-link-light: var(--cable-link-light);
+  --theme-accent-link-hover-light: var(--cable-link-hover-light);
+  --theme-sidebar-selected-light: var(--cable-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(--cable-sidebar-selected-text-light);
+  --theme-sidebar-hover-light: var(--cable-sidebar-hover-light);
+  --theme-badge-light: var(--cable-badge-light);
+  --theme-badge-text-light: var(--cable-badge-text-light);
+  --theme-status-online-light: var(--cable-status-online-light);
+  --theme-status-away-light: var(--cable-status-away-light);
+
+  --theme-neutral-1-dark: var(--cable-neutral-1-dark);
+  --theme-neutral-2-dark: var(--cable-neutral-2-dark);
+  --theme-neutral-3-dark: var(--cable-neutral-3-dark);
+  --theme-neutral-4-dark: var(--cable-neutral-4-dark);
+  --theme-neutral-5-dark: var(--cable-neutral-5-dark);
+  --theme-neutral-6-dark: var(--cable-neutral-6-dark);
+  --theme-neutral-7-dark: var(--cable-neutral-7-dark);
+  --theme-neutral-8-dark: var(--cable-neutral-8-dark);
+  --theme-neutral-9-dark: var(--cable-neutral-9-dark);
+  --theme-neutral-10-dark: var(--cable-neutral-10-dark);
+  --theme-neutral-11-dark: var(--cable-neutral-11-dark);
+  --theme-neutral-12-dark: var(--cable-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --cable-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--cable-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--cable-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(--cable-neutral-action-pressed-dark);
+  --theme-bubble-neutral-dark: var(--cable-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--cable-bubble-received-dark);
+  --theme-canvas-dark: var(--cable-frame-canvas-dark);
+  --theme-sidebar-dark: var(--cable-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--cable-1-dark);
+  --theme-accent-2-dark: var(--cable-2-dark);
+  --theme-accent-3-dark: var(--cable-3-dark);
+  --theme-accent-4-dark: var(--cable-4-dark);
+  --theme-accent-5-dark: var(--cable-5-dark);
+  --theme-accent-6-dark: var(--cable-6-dark);
+  --theme-accent-7-dark: var(--cable-7-dark);
+  --theme-accent-8-dark: var(--cable-8-dark);
+  --theme-accent-9-dark: var(--cable-9-dark);
+  --theme-accent-10-dark: var(--cable-10-dark);
+  --theme-accent-11-dark: var(--cable-11-dark);
+  --theme-accent-12-dark: var(--cable-12-dark);
+  --theme-accent-contrast-dark: var(--cable-contrast-dark);
+  --theme-accent-ink-dark: var(--cable-ink-dark);
+  --theme-accent-pressed-dark: var(--cable-pressed-dark);
+  --theme-accent-link-dark: var(--cable-link-dark);
+  --theme-accent-link-hover-dark: var(--cable-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--cable-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--cable-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--cable-sidebar-hover-dark);
+  --theme-badge-dark: var(--cable-badge-dark);
+  --theme-badge-text-dark: var(--cable-badge-text-dark);
+  --theme-status-online-dark: var(--cable-status-online-dark);
+  --theme-status-away-dark: var(--cable-status-away-dark);
+  --theme-accent-overlay-dark: var(--tint-fill);
+  --theme-accent-overlay-hover-dark: var(--tint-hover-fill);
+  --theme-accent-overlay-soft-dark: var(--tint-soft-fill);
+  --theme-accent-overlay-quiet-dark: var(--tint-quiet-fill);
+  --theme-accent-overlay-highlight-dark: var(--tint-fill);
+}
+
+/* Own bubbles take the theme's green only under the Theme accent; a manual
+   accent keeps its own bubbles. */
+[data-theme="cable"][data-accent="theme"] {
+  --theme-message-own-soft-light: var(--cable-message-own-soft-light);
+  --theme-message-own-soft-text-light: var(--cable-message-own-soft-text-light);
+  --theme-message-own-soft-metadata-light: var(
+    --cable-message-own-soft-metadata-light
+  );
+  --theme-message-own-soft-mention-hover-light: var(
+    --cable-message-own-soft-mention-hover-light
+  );
+  --theme-message-own-soft-dark: var(--cable-message-own-soft-dark);
+  --theme-message-own-soft-text-dark: var(--cable-message-own-soft-text-dark);
+  --theme-message-own-soft-metadata-dark: var(
+    --cable-message-own-soft-metadata-dark
+  );
+  --theme-message-own-soft-mention-hover-dark: var(
+    --cable-message-own-soft-mention-hover-dark
+  );
+}
+
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
 :root[data-color-level="touch"],
 [data-color-level="touch"] .light {
@@ -3130,6 +3273,14 @@
     var(--accent-12)
   );
   --text-message-link-own: var(--accent-link);
+  --text-metadata-own: var(
+    --theme-message-own-soft-metadata-light,
+    var(--text-metadata)
+  );
+  --affordance-mention-own-hover: var(
+    --theme-message-own-soft-mention-hover-light,
+    var(--affordance-mention-hover)
+  );
 }
 
 :root[data-color-level="touch"][data-color-mode="dark"],
@@ -3137,6 +3288,14 @@
   --surface-message-own: var(--theme-message-own-soft-dark, var(--accent-4));
   --text-message-own: var(--theme-message-own-soft-text-dark, var(--accent-12));
   --text-message-link-own: var(--accent-link);
+  --text-metadata-own: var(
+    --theme-message-own-soft-metadata-dark,
+    var(--text-metadata)
+  );
+  --affordance-mention-own-hover: var(
+    --theme-message-own-soft-mention-hover-dark,
+    var(--affordance-mention-hover)
+  );
 }
 
 :root[data-color-level="high"],

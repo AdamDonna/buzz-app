@@ -319,7 +319,10 @@ const BLOCKS = [
 
 /** Themes the stylesheet defines. Buzz is the unthemed baseline and has no block. */
 const THEME_BLOCKS = new Map(
-  BLOCKS.filter((block) => block.theme).map((block) => [block.theme, block]),
+  BLOCKS.filter((block) => block.theme && !block.family).map((block) => [
+    block.theme,
+    block,
+  ]),
 );
 /** A theme with a dark frame over a light page defines its frame slots. */
 const hasDarkFrame = (theme) =>

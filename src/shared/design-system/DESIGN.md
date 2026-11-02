@@ -1654,13 +1654,15 @@ colors or use opacity to invent lighter shades.
 
 A theme is the one owner allowed to recolor the shell. Buzz, the default, is
 the neutral look described everywhere else in this file. Relax is a deep plum
-frame around a bright, open workspace. A theme changes only what these slots
+frame around a bright, open workspace. Cable is airy sky blue with fresh green
+replies. A theme changes only what these slots
 name; it never restates a role and never edits a component.
 
 - **Slots.** A theme assigns `--theme-*` custom properties, a light and a dark half each, in one `[data-theme]` block in `tokens.css`: the neutral ramps and named neutrals, `canvas`, `sidebar`, `sidebar-selected`, `sidebar-selected-text`, `sidebar-hover`, `sidebar-hover-text`, `badge`, `badge-text`, the online and away status dots, the accent family behind the Theme accent, and optional accent overlays and own-message fills. Every role reads its slot with the neutral value as the fallback, so a slot a theme leaves out changes nothing.
 - **Shared controls stay neutral.** Buttons, fields, menus, tabs and rows keep reading neutral roles; they look tinted only because the neutral ramp underneath is tinted. A theme never gives a shared control an accent. Accents keep the scope listed above.
 - **Dark frame scope.** A theme whose light-mode frame is dark also defines `--theme-frame-*` slots. The top bar and the sidebar wrapper then carry `class="dark"`, `data-color-mode="dark"` and `data-theme-frame`, which re-enters the dark role blocks with the frame's values. The main pane stays light, and so does anything portaled out of the frame: menus, popovers, dialogs and toasts follow the page mode. In dark mode no wrapper is needed.
 - **`surface-sidebar`** is the sidebar panel's fill, `surface-badge` and `text-on-badge` are the sidebar count badge. They fall back to `surface-panel`, `affordance-subtle` and `text-subtle`.
+- **Own bubbles.** A theme may fill the soft own bubble with `--theme-message-own-soft-{,text-,metadata-,mention-hover-}{light,dark}`: the fill, its text, the metadata ink and the mention hover fill on it. Cable declares them in a `[data-theme="cable"][data-accent="theme"]` block, so they apply only under the Theme accent; a manual accent keeps its own bubbles. The guard merges that block over the theme block and measures the tinted-neutral allowance from the theme block alone.
 - **Dark ink overlays.** A theme whose dark accent ink is dark maps the five dark accent overlays to the tint fills so overlays lighten instead of darken.
 - **Guard.** `pnpm design:check` measures every registered theme in every mode, vibe level and accent, including Theme, and the dark frame scope. Gray text on a ground no more saturated than the theme's own neutral ramps is allowed; the allowance is measured from the ramps and is zero for Buzz. Registered pairs stay in `registry.ts`.
 - **Adding a theme.** Add its palette to LAYER 0, a `[data-theme]` block, and an entry in `themes.ts`. Nothing else changes.
