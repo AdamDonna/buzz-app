@@ -5,6 +5,14 @@ import type { ChannelStoreOptions } from "./store";
 import type { ReadFilter, RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
 import { headRecovering } from "./live-recovery";
+import { EMOJI_SET } from "./emoji";
+import { readJournal, type ReadJournal } from "./read-state-storage";
+// The real host codec, as read-state.test.ts uses it.
+import {
+  decodeReadState,
+  signReadState,
+  // @ts-expect-error Node-only host module
+} from "../../../browser-host/read-state.mjs";
 import {
   bounds,
   flush,
@@ -1382,6 +1390,236 @@ it("re-reads held profiles and the roster on reconnect only when their replay wa
     // Its later continuous establishment on the same connection reads nothing.
     live.established(undefined, { route: "profiles", continuous: true });
     expect(profileReads(await drain())).toEqual([]);
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("skips the reads a continuous global replay covers, and keeps them after a cut, no cursor, a failed route or an unreported one", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    alice = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  let live!: LiveCallbacks;
+  let journal: ReadJournal | undefined;
+  const decodeMarkers = vi.fn(async (events: readonly RelayEvent[]) =>
+    decodeReadState(events, viewer.secret),
+  );
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+      readState: { decode: decodeMarkers },
+      writer: {
+        sign: async () => {
+          throw new Error("unused");
+        },
+        publish: async () => {},
+      },
+      reminders: {
+        decode: async (events) =>
+          events.map((e) => ({
+            eventId: e.id,
+            content: JSON.parse(e.content),
+          })),
+        sign: async () => {
+          throw new Error("unused");
+        },
+      },
+    },
+    {
+      readStateStorage: {
+        async update(change) {
+          journal = readJournal(change(journal), viewer.pubkey);
+          return journal;
+        },
+        close() {},
+      },
+    },
+  );
+  const status = (text: string, at: number) =>
+    signed(alice, {
+      kind: 30315,
+      content: text,
+      tags: [["d", "general"]],
+      created_at: at,
+    });
+  const emojiSet = (shortcode: string, at: number) =>
+    signed(alice, {
+      kind: 30030,
+      content: "",
+      tags: [
+        ["d", EMOJI_SET],
+        ["emoji", shortcode, `https://example.com/${shortcode}.png`],
+      ],
+      created_at: at,
+    });
+  const reminder = (state: string, at: number) =>
+    signed(viewer, {
+      kind: 30300,
+      content: JSON.stringify({ note: "Call Bob", status: state }),
+      tags: [["d", "r1"]],
+      created_at: at,
+    });
+  // Another device's read-state marker for channel "c".
+  const marker: RelayEvent = signReadState(
+    {
+      slot: "ab".repeat(16),
+      createdAt: 1_700_000_100,
+      blob: { v: 1, client_id: "phone", contexts: { c: 1_700_000_050 } },
+    },
+    viewer.secret,
+    1_700_000_100,
+  );
+  const channel = [
+    roster(relay, "c", [viewer.pubkey]),
+    metadata(relay, "c", "C"),
+  ];
+  /** Answers every read until the wire is quiet; returns what was read. */
+  const drain = async () => {
+    const reads: (readonly ReadFilter[])[] = [];
+    for (let quiet = 0; quiet < 3; ) {
+      await flush();
+      if (!wire.pending.length) quiet++;
+      else quiet = 0;
+      for (const entry of wire.pending.splice(0)) {
+        reads.push(entry.filters);
+        const kinds = entry.filters.flatMap((f) => f.kinds ?? []);
+        entry.respond(
+          kinds.includes(39002) || kinds.includes(39000)
+            ? channel
+            : kinds.includes(30315)
+              ? [status("At lunch", 1_700_000_000)]
+              : kinds.includes(30030)
+                ? [emojiSet("wave", 1_700_000_000)]
+                : kinds.includes(30300)
+                  ? [reminder("pending", 1_700_000_000)]
+                  : [],
+        );
+      }
+    }
+    return reads;
+  };
+  /** The finite reads of each covered hook. */
+  const covered = (reads: (readonly ReadFilter[])[]) => {
+    const count = (kind: number) =>
+      reads.filter((filters) => filters.some((f) => f.kinds?.includes(kind)))
+        .length;
+    return {
+      statuses: count(30315),
+      emoji: count(30030),
+      markers: count(30078),
+      reminders: count(30300),
+    };
+  };
+  const once = { statuses: 1, emoji: 1, markers: 1, reminders: 1 };
+  const none = { statuses: 0, emoji: 0, markers: 0, reminders: 0 };
+  const drop = () => {
+    live.state({ status: "retrying", routes: [] });
+    live.state({ status: "connected", routes: [] });
+  };
+  const establish = (profiles: boolean, membership: boolean) => {
+    live.established(undefined, { route: "profiles", continuous: profiles });
+    live.established(undefined, {
+      route: "membership",
+      continuous: membership,
+    });
+  };
+  /** Every covered owner is back to its ready state. */
+  const ready = () => {
+    expect(owner.session.emoji.snapshot().status).toBe("ready");
+    expect(owner.session.unread.sync().status).toBe("reconciled");
+    expect(owner.session.reminders?.snapshot()).toMatchObject({
+      status: "ready",
+      hydrated: true,
+    });
+  };
+  try {
+    owner.session.channels.ensureList();
+    const stop = owner.session.statuses.watch([alice.pubkey]);
+    void owner.session.emoji.ensure();
+    void owner.session.unread.ensure();
+    await drain();
+    // The first connection has no cursor: every covered hook reads.
+    live.state({ status: "connected", routes: [] });
+    establish(false, false);
+    expect(covered(await drain())).toEqual(once);
+    ready();
+    // A quiet outage with a continuous replay: no covered hook reads, and each
+    // owner is ready again. Changes made during the outage arrive through it.
+    live.state({ status: "retrying", routes: [] });
+    expect(owner.session.reminders?.snapshot().status).toBe("loading");
+    expect(owner.session.unread.sync().status).toBe("stale");
+    live.state({ status: "connected", routes: [] });
+    live.receive([
+      status("In a meeting", 1_700_000_100),
+      emojiSet("party", 1_700_000_100),
+      reminder("done", 1_700_000_100),
+      marker,
+    ]);
+    establish(true, true);
+    expect(covered(await drain())).toEqual(none);
+    ready();
+    // The replayed marker went through the same ingest as a snapshot read.
+    expect(decodeMarkers.mock.calls.at(-1)?.[0]).toEqual([marker]);
+    expect(owner.session.statuses.snapshot().get(alice.pubkey)?.text).toBe(
+      "In a meeting",
+    );
+    expect(
+      owner.session.emoji.snapshot().entries.map((e) => e.shortcode),
+    ).toContain("party");
+    expect(owner.session.reminders?.snapshot().reminders).toMatchObject([
+      { id: "r1", status: "done" },
+    ]);
+    // Each route decides only its own hooks.
+    drop();
+    establish(true, false);
+    expect(covered(await drain())).toEqual({
+      ...none,
+      markers: 1,
+      reminders: 1,
+    });
+    drop();
+    establish(false, true);
+    expect(covered(await drain())).toEqual({ ...none, statuses: 1, emoji: 1 });
+    ready();
+    // A cut replay reads as before.
+    drop();
+    establish(false, false);
+    expect(covered(await drain())).toEqual(once);
+    // An older host reports no route: once per connection, as before.
+    drop();
+    live.established();
+    live.established();
+    expect(covered(await drain())).toEqual(once);
+    ready();
+    // Routes that fail before they establish: the finite reads stand in for
+    // their replay, once per connection; a later continuous establishment on
+    // the same connection reads nothing.
+    drop();
+    const failed = {
+      status: "connected",
+      routes: (["profiles", "membership"] as const).map((id) => ({
+        id,
+        status: "error" as const,
+        replay: "unknown" as const,
+        error: "Live subscription setup timed out; retry available",
+      })),
+    } as const;
+    live.state(failed);
+    live.state(failed);
+    expect(covered(await drain())).toEqual(once);
+    establish(true, true);
+    expect(covered(await drain())).toEqual(none);
+    ready();
+    // A cut report later on the same connection still reads.
+    establish(false, false);
+    expect(covered(await drain())).toEqual(once);
+    ready();
+    stop();
   } finally {
     owner.dispose();
   }

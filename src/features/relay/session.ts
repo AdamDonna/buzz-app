@@ -88,7 +88,7 @@ import {
 import { PRODUCT_FEEDBACK_KIND } from "./product-feedback";
 import { attemptEnded } from "./withdraw";
 import type { ReadTransport } from "./transport";
-import type { LiveSnapshot, LiveSubscription } from "./live";
+import type { LiveGlobal, LiveSnapshot, LiveSubscription } from "./live";
 import {
   hasTag,
   type ReadFilter,
@@ -3092,6 +3092,40 @@ export function createRelaySession(
     global.generation = liveGeneration;
     if (!continuous || global.owed()) global.read();
   };
+  /** Per global route, the connection whose covered reads are settled. */
+  const coveredGeneration = { profiles: -1, membership: -1 };
+  /** The reads a global route's replay covers (statuses and emoji for
+   * `profiles`; read state and reminders for `membership`), once per
+   * connection. A continuous replay already delivered every change since the
+   * last connection heard the relay, so each owner resumes the state the
+   * drop interrupted; otherwise it reads again. Like `settleGlobal`, a cut
+   * replay reads again even after an earlier report on this connection, and
+   * `continuous` is undefined when the route failed or went unreported. */
+  const settleCovered = (route: LiveGlobal["route"], continuous?: boolean) => {
+    if (continuous !== false && coveredGeneration[route] === liveGeneration)
+      return;
+    coveredGeneration[route] = liveGeneration;
+    const generation = liveGeneration;
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (closed) return;
+      if (route === "profiles") {
+        if (continuous) {
+          emoji.resume();
+          statuses.resume();
+        } else {
+          emoji.reconnect();
+          statuses.reconnect();
+        }
+        return;
+      }
+      unread.reconnect(continuous);
+      // Only while this same connection is still up.
+      if (generation === liveGeneration && memoryConnected)
+        void (continuous ? reminders?.resume() : reminders?.recover());
+    }, 0);
+    timers.add(timer);
+  };
   /** No route has been established since the stream dropped, or ever: a
    * thread view opened now reads while it is down. */
   let streamDropped = true;
@@ -3377,8 +3411,10 @@ export function createRelaySession(
           if (
             (route.id === "profiles" || route.id === "membership") &&
             route.status === "error"
-          )
+          ) {
             settleGlobal(route.id);
+            settleCovered(route.id);
+          }
       // Suspend every affected preview before any recheck: one revocation can
       // cancel another read, but must never leave its old public grant readable.
       const previews = snapshot.routes
@@ -3402,27 +3438,24 @@ export function createRelaySession(
         const first = refreshedGeneration !== liveGeneration;
         // A host that reports no route (an older broker) leaves both reads
         // to this connection's first establishment, in any order.
-        if (global) settleGlobal(global.route, global.continuous);
-        else {
+        if (global) {
+          settleGlobal(global.route, global.continuous);
+          settleCovered(global.route, global.continuous);
+        } else {
           settleGlobal("membership");
           settleGlobal("profiles");
+          settleCovered("membership");
+          settleCovered("profiles");
         }
         if (first) {
           refreshedGeneration = liveGeneration;
-          const generation = liveGeneration;
           const timer = setTimeout(() => {
             timers.delete(timer);
             if (!closed) {
               agentLibrary.reconnect();
               activityRosterKey = undefined;
               refreshChannelActivity();
-              emoji.reconnect();
-              statuses.reconnect();
-              unread.reconnect();
               inboxFeed.reconnect();
-              // Only while this same connection is still up.
-              if (generation === liveGeneration && memoryConnected)
-                void reminders?.recover();
               for (const refresh of refreshers) void refresh();
             }
           }, 0);
