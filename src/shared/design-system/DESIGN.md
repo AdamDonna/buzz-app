@@ -599,7 +599,7 @@ Use the surface that matches the content and its position in the interface.
 
 - **Panels:** the shell uses an independent `Panel` for sidebar navigation and one `Panel joined` around the main content workspace, separated by `space-panel-gap` (8px at default scale). The sidebar resize grip stays centered in that gutter. Both retain opaque surfaces when navigation overlays at narrow widths. Nested Panels keep their opaque fill and clipping but lose independent borders, corners, and shadows. The layout owner separates adjacent regions with `border-standard` hairlines. Standalone Panels use `radius-container` (24px) corners and `shadow-panel` for a translucent contour and subtle lift, rather than an opaque depth border.
 - **Recessed regions:** use `bg-inset` for a region pushed into its surrounding surface. Use quiet fills where they communicate separation; reserve outlines for boundaries that need to be identified.
-- **Shell:** `bg-app` is a solid color, neutral-quiet-hover in light mode and neutral 2 in dark. The shell owns one continuous `texture-dots` grid beneath its header, rail and panes. Dots derive from this background: darker in light mode, lighter in dark mode, never an unrelated gray. The app root owns the background and its texture together. Do not override a descendant background and expect inherited texture colors to recompute. The pattern is decorative; do not increase its contrast to communicate state.
+- **Shell:** `bg-app` is a solid color, neutral-quiet-hover in light mode and neutral 2 in dark; a theme may assign its own canvas through `--theme-canvas-*`. The shell owns one continuous `texture-dots` grid beneath its header, rail and panes. Dots derive from this background: darker in light mode, lighter in dark mode, never an unrelated gray. The app root owns the background and its texture together. Do not override a descendant background and expect inherited texture colors to recompute. The pattern is decorative; do not increase its contrast to communicate state.
 - **Reading surfaces:** documentation and dense prose sit on opaque `bg-panel`. Keep the dot grid outside reading panes. Do not add gradient backgrounds to the app shell.
 - **Borders:** use `border-standard` for quiet separators, `border-prominent` for controls, and `border-focus` for keyboard-focus recipes. Errors and warnings have their own boundary roles. Measure the actual pairing in both themes.
 - **Shadows:** use the shared elevation roles and keep them subtle. Light mode relies on shadow; dark mode also raises the fill’s lightness. Do not strengthen a shadow to separate a dark floating surface.
@@ -1602,6 +1602,7 @@ need their own values in each mode.
 - Accent text is darker than its fill on light surfaces and lighter on dark surfaces.
 - Tints are pale in light mode and deep in dark mode; their names describe their purpose.
 - Check text with its actual fill and backdrop, including interactive states.
+- A theme with a dark frame is a third scope, not a mode. In light mode its top bar and sidebar render with the dark roles while the main pane stays light; see Themes below.
 - The original design exploration was light-only. Buzz’s dark values are authored choices and should be revised when rendered evidence shows a problem.
 
 Received message bubbles use `bubble-received`, slightly stronger than quiet
@@ -1635,14 +1636,34 @@ their own link pairing. The composer uses the existing `accentButtonStyle` on
 Send; other prominent actions use the neutral prominent roles.
 
 Reuse the existing twelve-step ramps in each mode. Keep the fill and its paired
-ink together. Never recolor the whole shell. Nested dark scopes resolve their
-own ramp. Media pixels, the black viewing canvas, and white-on-dark media glass
+ink together. An accent never recolors the shell: only a theme may, through
+the documented slots below. Nested dark scopes resolve their own ramp. Media pixels, the black viewing canvas, and white-on-dark media glass
 never follow the accent.
+
+The first swatch, **Theme**, follows the active theme's signature family and
+is the default. Under Buzz it resolves to Citrus. A manually chosen accent
+persists across theme changes, and choosing a theme never writes the accent.
 
 Swatches and their tooltips preview each family's strong fill and paired
 `text-on-accent` ink. They carry `data-accent` and `data-color-mode`.
-Appearance uses compact Mode and Vibe level Selects with a live illustrative
-preview. Do not mix colors or use opacity to invent lighter shades.
+Appearance uses a Theme row of radio cards, then compact Mode and Vibe level
+Selects, with a live illustrative preview that follows the theme. Do not mix
+colors or use opacity to invent lighter shades.
+
+### Themes
+
+A theme is the one owner allowed to recolor the shell. Buzz, the default, is
+the neutral look described everywhere else in this file. Relax is a deep plum
+frame around a bright, open workspace. A theme changes only what these slots
+name; it never restates a role and never edits a component.
+
+- **Slots.** A theme assigns `--theme-*` custom properties, a light and a dark half each, in one `[data-theme]` block in `tokens.css`: the neutral ramps and named neutrals, `canvas`, `sidebar`, `sidebar-selected`, `sidebar-selected-text`, `sidebar-hover`, `sidebar-hover-text`, `badge`, `badge-text`, the online and away status dots, the accent family behind the Theme accent, and optional accent overlays and own-message fills. Every role reads its slot with the neutral value as the fallback, so a slot a theme leaves out changes nothing.
+- **Shared controls stay neutral.** Buttons, fields, menus, tabs and rows keep reading neutral roles; they look tinted only because the neutral ramp underneath is tinted. A theme never gives a shared control an accent. Accents keep the scope listed above.
+- **Dark frame scope.** A theme whose light-mode frame is dark also defines `--theme-frame-*` slots. The top bar and the sidebar wrapper then carry `class="dark"`, `data-color-mode="dark"` and `data-theme-frame`, which re-enters the dark role blocks with the frame's values. The main pane stays light, and so does anything portaled out of the frame: menus, popovers, dialogs and toasts follow the page mode. In dark mode no wrapper is needed.
+- **`surface-sidebar`** is the sidebar panel's fill, `surface-badge` and `text-on-badge` are the sidebar count badge. They fall back to `surface-panel`, `affordance-subtle` and `text-subtle`.
+- **Dark ink overlays.** A theme whose dark accent ink is dark maps the five dark accent overlays to the tint fills so overlays lighten instead of darken.
+- **Guard.** `pnpm design:check` measures every registered theme in every mode, vibe level and accent, including Theme, and the dark frame scope. Gray text on a ground no more saturated than the theme's own neutral ramps is allowed; the allowance is measured from the ramps and is zero for Buzz. Registered pairs stay in `registry.ts`.
+- **Adding a theme.** Add its palette to LAYER 0, a `[data-theme]` block, and an entry in `themes.ts`. Nothing else changes.
 
 
 ## Density and rhythm

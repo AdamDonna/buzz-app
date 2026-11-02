@@ -350,8 +350,13 @@ profile avatar editor, shortcut recorder, native emoji file input,
 plugin skipped-folder disclosure, and developer diagnostics.
 External plugin settings own their content.
 
+Appearance starts with a Theme row of radio cards, one per theme, each with a
+preview thumbnail and the theme description. A theme is the only owner that may
+recolor the shell, through documented slots; see Themes in the design-system
+DESIGN.md. The Theme accent follows the active theme and is the default.
+
 Use a compact shared Select at the trailing edge of a PreferenceRow for Mode,
-with System, Light, and Dark options. Mode, interface size, accent color, and
+with System, Light, and Dark options. Theme, mode, interface size, accent color, and
 vibe level rows share one Appearance group beneath the live illustrative preview.
 Accent applies only to message bubbles and their related content, Send, and
 sidebar row hover/selection. Shared controls stay neutral. Use another compact
