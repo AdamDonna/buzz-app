@@ -54,6 +54,13 @@ checks, not that an OS banner was displayed or read.
   [workflow mention classifier](unread.md#workflow-mentions) preserves explicit
   template mentions and other recipients; DM and relevant-reply policies still
   apply. This does not change notification settings or suppress all workflows.
+- Local agent completions alert only for relay-verified Solo chats. Their agent
+  replies do not also produce a mention alert. When Buzz is focused elsewhere,
+  the existing app toast says the agent is done, names the Solo chat, and offers
+  **View**; when another app is focused, the native banner uses the same completion
+  framing: “Agent is done” and “View in Chat.” A focused, visibly active matching
+  Solo chat stays quiet. Ordinary DMs keep their message alerts and do not receive
+  an additional agent-completion alert.
 - Messages signed `audience=agents` (coordination between agents) never alert,
   even when they mention the viewer. The unread engine applies the same rule
   ([quiet agent messages](unread.md#relevant-replies)), so badges, Inbox, thread
@@ -160,9 +167,14 @@ Reload/cold-start restoration remains out of scope.
 
 Real banners require OS permission, an available notification service and
 appropriate app packaging/installation. macOS development processes outside an
-app bundle cannot submit notifications; Windows development notifications may use
-PowerShell's identity. Test the packaged app identity before claiming release
-acceptance.
+app bundle cannot submit notifications. For local macOS acceptance, install a
+stable code-signing certificate (Apple Development or a trusted local development
+certificate), set its name or SHA-1 as `BUZZ_DEV_SIGNING_IDENTITY` in `.env.local`,
+quit other Buzz copies, then use
+`just desktop-bundle --launch`. An ad-hoc signature changes its designated
+requirement on every rebuild and is not a stable notification identity. Windows
+development notifications may use PowerShell's identity. Test the packaged app
+identity before claiming release acceptance.
 
 Chromium/WebKit fixtures replace only OS/IPC boundaries; tests and native builds
 do not prove actual permission dialogs, appearance, sound or foregrounding.
