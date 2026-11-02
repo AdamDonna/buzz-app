@@ -760,7 +760,7 @@ for (const local of [false, true]) {
   });
 }
 
-test("member rows hand off to Profiles without trapping or losing keyboard focus", async ({
+test("member list keeps one scrolling region across themes and viewport sizes", async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
@@ -962,6 +962,30 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       );
     }
   }
+  expect(errors.unexplained()).toEqual([]);
+});
+
+// Popup, tab and native history focus use a fresh page independently of layout.
+test("member rows hand off to Profiles without trapping or losing keyboard focus", async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await page.goto("/tests/fixtures/profiles.html");
+  const members = page.getByRole("button", {
+    name: "Manage members",
+    exact: true,
+  });
+  await members.click();
+  const dialog = page.getByRole("dialog", {
+    name: "Manage members",
+    exact: true,
+    includeHidden: true,
+  });
+  const search = dialog.getByRole("searchbox");
+  // Preserve the final theme and viewport of the former combined journey.
+  await page.evaluate(() => {
+    document.documentElement.dataset.colorMode = "dark";
+  });
   await page.setViewportSize({ width: 1440, height: 950 });
   const row = dialog.getByRole("button", {
     name: /^Open profile for Viewer/,
