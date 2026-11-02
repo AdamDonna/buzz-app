@@ -99,8 +99,10 @@ export type ChannelStoreOptions = {
   maxHeads?: number;
   maxHistoryRows?: number;
   maxHistoryBytes?: number;
-  /** Public directory budget in pages of 500; at most the default 20,000. */
+  /** Public directory budget in whole pages; at most the default 20,000. */
   maxPublicDirectory?: number;
+  /** Public directory page size, at most the default 500. */
+  publicDirectoryPage?: number;
   now?: () => number;
   local?: Pick<Outbox, "snapshot" | "subscribe">;
   /** The session's send clock; rendered windows raise its channel watermarks. */
@@ -212,6 +214,7 @@ export function createChannelStore(
     maxHistoryRows = 2400,
     maxHistoryBytes = 8 * 1024 * 1024,
     maxPublicDirectory = PUBLIC_CHANNEL_DIRECTORY,
+    publicDirectoryPage = PUBLIC_CHANNEL_PAGE,
     now = Date.now,
     local,
     clock = new MessageClock(),
@@ -221,9 +224,12 @@ export function createChannelStore(
   if (!Number.isInteger(maxWindows) || maxWindows < 1)
     throw new Error("Invalid window capacity");
   if (
+    !Number.isInteger(publicDirectoryPage) ||
+    publicDirectoryPage < 1 ||
+    publicDirectoryPage > PUBLIC_CHANNEL_PAGE ||
     !Number.isInteger(maxPublicDirectory) ||
-    maxPublicDirectory % PUBLIC_CHANNEL_PAGE !== 0 ||
-    maxPublicDirectory < PUBLIC_CHANNEL_PAGE ||
+    maxPublicDirectory % publicDirectoryPage !== 0 ||
+    maxPublicDirectory < publicDirectoryPage ||
     maxPublicDirectory > PUBLIC_CHANNEL_DIRECTORY
   )
     throw new Error("Invalid public directory capacity");
@@ -1995,7 +2001,7 @@ export function createChannelStore(
           {
             kinds: [39000],
             authors: [relay.relayAuthor],
-            limit: PUBLIC_CHANNEL_PAGE,
+            limit: publicDirectoryPage,
             ...(since !== undefined ? { since } : {}),
             ...cursor,
           },
@@ -2010,7 +2016,7 @@ export function createChannelStore(
           (event) => event.kind === 39000 && event.pubkey === relay.relayAuthor,
         ),
       );
-      if (page.length < PUBLIC_CHANNEL_PAGE) return { partial: false };
+      if (page.length < publicDirectoryPage) return { partial: false };
       if (events.length >= maxPublicDirectory) return { partial: true };
       landed();
       // Relay query order is time descending, then ID ascending (also at ties).

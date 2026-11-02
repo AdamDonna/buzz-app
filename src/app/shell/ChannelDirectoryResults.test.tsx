@@ -69,6 +69,8 @@ function connected(
     newer?: number;
     /** Holds the directory's later pages until it settles. */
     later?: Promise<void>;
+    /** The directory's page size. */
+    page?: number;
   } = {},
 ) {
   const relay = keypair();
@@ -132,49 +134,54 @@ function connected(
   let countReads = 0;
   /** Paged reads of the whole open directory, as opposed to exact lookups. */
   let directoryReads = 0;
-  const owner = createRelaySession({
-    ...wire.transport,
-    query(filters) {
-      const directory = filters.some(
-        (filter) =>
-          filter.kinds?.includes(39000) && !filter["#p"] && !filter["#d"],
-      );
-      if (directory) directoryReads += 1;
-      if (
-        filters.some((filter) => filter.kinds?.includes(39002) && !filter["#p"])
-      )
-        countReads += 1;
-      // Only the directory's paged read fails, not the joined list.
-      if (failing && directory) return Promise.reject(new Error("offline"));
-      const [filter] = filters;
-      if (directory && filter) {
-        // The relay's pages: newest first, then by id, after the cursor.
-        const { limit, until, before_id, ...match } = filter as Filter & {
-          before_id?: string;
-        };
-        const page = discovery
-          .filter((event) => matchFilter(match as Filter, event))
-          .sort(
-            (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      query(filters) {
+        const directory = filters.some(
+          (filter) =>
+            filter.kinds?.includes(39000) && !filter["#p"] && !filter["#d"],
+        );
+        if (directory) directoryReads += 1;
+        if (
+          filters.some(
+            (filter) => filter.kinds?.includes(39002) && !filter["#p"],
           )
-          .filter(
-            (event) =>
-              until === undefined ||
-              event.created_at < until ||
-              (event.created_at === until && event.id > (before_id ?? "")),
-          )
-          .slice(0, limit);
-        return until === undefined || !options.later
-          ? Promise.resolve(page)
-          : options.later.then(() => page);
-      }
-      return Promise.resolve(
-        discovery.filter((event) =>
-          filters.some((filter) => matchFilter(filter as Filter, event)),
-        ),
-      );
+        )
+          countReads += 1;
+        // Only the directory's paged read fails, not the joined list.
+        if (failing && directory) return Promise.reject(new Error("offline"));
+        const [filter] = filters;
+        if (directory && filter) {
+          // The relay's pages: newest first, then by id, after the cursor.
+          const { limit, until, before_id, ...match } = filter as Filter & {
+            before_id?: string;
+          };
+          const page = discovery
+            .filter((event) => matchFilter(match as Filter, event))
+            .sort(
+              (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+            )
+            .filter(
+              (event) =>
+                until === undefined ||
+                event.created_at < until ||
+                (event.created_at === until && event.id > (before_id ?? "")),
+            )
+            .slice(0, limit);
+          return until === undefined || !options.later
+            ? Promise.resolve(page)
+            : options.later.then(() => page);
+        }
+        return Promise.resolve(
+          discovery.filter((event) =>
+            filters.some((filter) => matchFilter(filter as Filter, event)),
+          ),
+        );
+      },
     },
-  });
+    options.page ? { publicDirectoryPage: options.page } : {},
+  );
   const root = new Context();
   root.provide("pluginStatus", {
     isActive: () => true,
@@ -232,7 +239,6 @@ const openSearch = async () => {
   return screen.findByRole("dialog", { name: "Search Buzz" });
 };
 const field = () => screen.getByRole("combobox", { name: "Search Buzz" });
-// A selector, not a role query: role queries over 500 rows are too slow.
 const rows = () =>
   Array.from(
     screen
@@ -488,29 +494,28 @@ it("shows the directory's first page while the rest loads", async () => {
   const later = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const t = connected({ newer: 500, later });
+  // Pages of 10: the 10 newest fill the first, and the rest are one more.
+  const t = connected({ newer: 10, later, page: 10 });
   try {
     t.render();
     await openSearch();
     await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
-    // The newest 500 arrive first and show while the older page is held.
-    // A full first page is the store's 500 rows: slow to draw in jsdom.
-    await waitFor(() => expect(rows()).toHaveLength(500), { timeout: 5_000 });
+    // The newest page arrives first and shows while the older page is held.
+    await waitFor(() => expect(rows()).toHaveLength(10));
     expect(rows()[0]).toContain("team-000");
     expect(screen.getByText("Loading more channels…")).toBeVisible();
     expect(rows()).not.toContainEqual(
       expect.stringContaining("buzz-community"),
     );
     release();
-    await waitFor(
-      () => expect(screen.queryByText("Loading more channels…")).toBeNull(),
-      { timeout: 5_000 },
+    await waitFor(() =>
+      expect(screen.queryByText("Loading more channels…")).toBeNull(),
     );
     // The older page joins below them rather than reshuffling the rows
     // already shown, A–Z among itself.
-    expect(rows()).toHaveLength(503);
+    expect(rows()).toHaveLength(13);
     expect(rows()[0]).toContain("team-000");
-    expect(rows().slice(500)).toEqual([
+    expect(rows().slice(10)).toEqual([
       expect.stringContaining("buzz-community"),
       expect.stringContaining("design-crit"),
       expect.stringContaining("release-notes"),
@@ -518,11 +523,9 @@ it("shows the directory's first page while the rest loads", async () => {
     // Opened again on the finished read, the whole list is A–Z.
     await userEvent.click(screen.getByRole("tab", { name: "All" }));
     await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
-    await waitFor(() => expect(rows()[0]).toContain("buzz-community"), {
-      timeout: 5_000,
-    });
+    await waitFor(() => expect(rows()[0]).toContain("buzz-community"));
   } finally {
     release();
     await t.dispose();
   }
-}, 20_000);
+});

@@ -1956,3 +1956,19 @@ it("finds a labeled system channel whose roster arrived before its metadata", as
   names.respond([labeled]);
   expect(found.map((channel) => channel.id)).toEqual([id]);
 });
+
+it("accepts only a directory page size that divides its budget", () => {
+  for (const options of [
+    { publicDirectoryPage: 0 },
+    { publicDirectoryPage: 501 },
+    { publicDirectoryPage: 2.5 },
+    { publicDirectoryPage: 300, maxPublicDirectory: 1000 },
+  ])
+    expect(() => createRelaySession(null, options)).toThrow(
+      "Invalid public directory capacity",
+    );
+  createRelaySession(null, {
+    publicDirectoryPage: 10,
+    maxPublicDirectory: 20,
+  }).dispose();
+});
