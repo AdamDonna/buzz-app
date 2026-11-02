@@ -14,7 +14,10 @@ import {
 import type { ChannelSummary, Profile } from "../../features/relay/contracts";
 import type { EventData } from "../../features/relay/events";
 import type { RelaySession } from "../../features/relay/session";
-import { useChannelList } from "../../features/relay/react";
+import {
+  useChannelList,
+  useProfileGeneration,
+} from "../../features/relay/react";
 import { useSavedHiddenDmIds } from "../../bundled/channels/useHiddenDms";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import { canMessageAgent } from "../../features/agents/choices";
@@ -520,12 +523,14 @@ export function SearchResults({
     .sort()
     .slice(0, 1024)
     .join(":");
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (profileKey)
       void session.profiles
         .ensure(profileKey.split(":"), "background")
         .catch(() => {});
-  }, [session, profileKey]);
+  }, [session, profileKey, profileGeneration]);
   const needle = parsed.text.toLowerCase().replace(/^#/, "");
   // Read once per opening, so usage recorded while it is open cannot reorder it.
   const usage = useMemo(

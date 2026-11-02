@@ -46,7 +46,10 @@ import {
 } from "../../features/profiles/target";
 import { formatPublicKey } from "../../shared/identity/public-key";
 import { selectProfiles } from "../../features/relay/profile-selection";
-import { useRelayConnection } from "../../features/relay/react";
+import {
+  useProfileGeneration,
+  useRelayConnection,
+} from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { ProfileAgentIdentity } from "./ProfileAgentIdentity";
@@ -352,10 +355,14 @@ function ProfileDetails({
   useEffect(() => {
     if (!tabbed) region.current?.focus();
   }, [tabbed]);
+  const profileGeneration = useProfileGeneration(session.profiles);
   // Each target/session owns this completion; shared data work remains session-owned.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is explicit recovery.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is explicit recovery; a purge generation rereads.
   useEffect(() => {
     let active = true;
+    // A purge reread must not unmount a focused Retry: keep it pending, and
+    // let success hand its focus to the stable region as an explicit retry does.
+    if (document.activeElement === retryButton.current) setRetrying(true);
     setStatus("loading");
     void session.profiles.ensure([pubkey]).then(
       () => {
@@ -375,7 +382,7 @@ function ProfileDetails({
     return () => {
       active = false;
     };
-  }, [session, pubkey, attempt]);
+  }, [session, pubkey, attempt, profileGeneration]);
   const agentPubkeys = useKnownAgentPubkeys(session, profiles);
   const presence = usePresenceStatus(session.presence, pubkey, true);
   const knownAgent = agentPubkeys.has(pubkey);
