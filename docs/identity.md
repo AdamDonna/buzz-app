@@ -75,10 +75,10 @@ keys the account holds a backup of
 (`POST /api/goose/v1/buzz/nsec-backups/status`, same portal). It is sent only
 where the backup step can run (see
 [automatic backup](#automatic-backup-and-optional-recovery)); kgoose answers
-`404` wherever backups are not configured, which today is everywhere but
-staging's public Builderlab. Not sent, a `404` or any failure leaves the lookup
-unavailable rather than empty, and never fails setup: it only decides whether
-Welcome back offers a restore and whether an import needs the backup offer.
+`404` wherever backups are not configured. Not sent, a `404` or any failure
+leaves the lookup unavailable rather than empty, and never fails setup: it only
+decides whether Welcome back offers a restore and whether an import needs the
+backup offer.
 
 **Not linked** then pauses on **Set up your key**: when the lookup listed no
 backups, it says no backed-up key was found for this account, so Buzz will
@@ -159,12 +159,12 @@ the keys it recovers, only the linked one is offered; a recovery without it
 says *None of your backups holds the key linked to this account, so nothing was
 restored.*, installs nothing and offers **Enter your private key**, which opens
 the import page. Installing the key continues as an import does, without the
-backup offer: the key is already backed up. Where recovery is unavailable or
-refused for the account — no tenant enables it today, and public organizations
-are refused by design — the page says *Backup restore isn’t available for this
-account* and offers **Enter your private key**, which opens the import
-page, never a retry. Any other failure offers **Try recovery again**. **Back**
-cancels the recovery and returns to Welcome back.
+backup offer: the key is already backed up. Where recovery is unavailable for
+the deployment or refused for the account (public organizations are refused by
+design), the page says *Backup restore isn’t available for this account* and
+offers **Enter your private key**, which opens the import page, never a retry.
+Any other failure offers **Try recovery again**. **Back** cancels the recovery
+and returns to Welcome back.
 
 On Welcome back, **I lost this key** (quieter) runs **Finding communities**, a real read of the
 communities the account owns
@@ -524,10 +524,10 @@ stays on after a failure, Continue without backup included, so a later
 Builderlab sign-in may still finish the backup the user asked for. The step
 hands a sign-in over only when this build's uploader can back up to Builderlab
 and the user signed in at the build's own portal: a tenant's sign-in is never
-handed to the uploader. Anywhere else, which today is every tenant sign-in and
-every build without backup configured, the step fails at once as *Key backup
-isn’t available in this version of Buzz.* without saving the choice, and the
-user continues without backup.
+handed to the uploader. Anywhere else — a tenant sign-in, or a build without
+backup configured — the step fails at once as *Key backup isn’t available in
+this version of Buzz.* without saving the choice, and the user continues without
+backup.
 
 When secure storage confirms absence, native recovery commands support explicit
 browser sign-in. The session and recovered keys remain native; the renderer sees
