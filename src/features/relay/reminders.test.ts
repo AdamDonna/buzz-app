@@ -255,6 +255,40 @@ describe("reminder writes and reconciliation", () => {
     );
     expect(plaintext).toHaveLength(3);
   });
+
+  it("publishes nothing when the caller abandons a create while it is being signed", async () => {
+    const publish = vi.fn(async () => {});
+    const abandon = new AbortController();
+    let signing: AbortSignal | undefined;
+    const { capability } = createReminders({
+      viewer,
+      signal: new AbortController().signal,
+      host: {
+        decode: async () => [],
+        sign: async (intent, signal) => {
+          signing = signal;
+          abandon.abort(new Error("abandoned"));
+          return {
+            id: "e1",
+            pubkey: viewer,
+            kind: 30300,
+            created_at: intent.createdAt,
+            tags: [["d", intent.d]],
+            content: "",
+            sig: "",
+          } as unknown as RelayEvent;
+        },
+      },
+      query: () => Promise.resolve([]),
+      publish,
+    });
+    await expect(
+      capability.create(undefined, 500, "call Sam", abandon.signal),
+    ).rejects.toThrow("abandoned");
+    expect(signing?.aborted).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(capability.snapshot().reminders).toEqual([]);
+  });
 });
 
 it("does not mark a disposed session ready from a late empty history reply", async () => {

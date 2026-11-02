@@ -45,6 +45,7 @@ it("creates a standalone reminder and reports the resolved local time", async ()
     undefined,
     (NOW + 20 * 60_000) / 1000,
     "submit the report",
+    expect.any(AbortSignal),
   );
 });
 

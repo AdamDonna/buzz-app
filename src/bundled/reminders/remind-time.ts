@@ -183,6 +183,12 @@ const START_MATCHERS = WHEN_FORMS.map(
   (form) => new RegExp(String.raw`^(?:${form})(?=\s|$)`, "i"),
 );
 
+const DAY_ONLY = new RegExp(
+  String.raw`^(?:tomorrow|(?:(?:on|next)\s+)?(?:${WEEKDAY_NAMES.join("|")}))$`,
+  "i",
+);
+const CLOCK_ATTEMPT = /^\s+at\s+\d/i;
+
 const ME_TARGET = /^me(?:\s+|$)/i;
 const LEADING_TO = /^to(?:\s+|$)/i;
 const IN_PATTERN = /^in\s+(\d+|an?)\s+(minute|min|hour|hr|day|week)s?$/i;
@@ -215,6 +221,8 @@ export function parseRemind(
 
   const split = splitWhen(rest);
   if (!split) return { ok: false, error: "missingTime" };
+  if (DAY_ONLY.test(split.phrase) && CLOCK_ATTEMPT.test(split.noteSource))
+    return { ok: false, error: "invalidTime" };
   const note = split.noteSource.trim().replace(LEADING_TO, "").trim();
 
   let dueAt: number;

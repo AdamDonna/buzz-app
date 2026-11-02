@@ -95,6 +95,25 @@ it.each(WHEN_VECTORS)(
   },
 );
 
+it.each([
+  "me tomorrow at 3:5 to call Sam",
+  "me tomorrow at 9:5",
+  "me friday at 3:555 to call Sam",
+  "me next monday at 10:5am to call Sam",
+])(
+  "rejects the malformed clock in %j instead of keeping only its day",
+  (args) => {
+    expectOutcome(args, { error: "invalidTime" });
+  },
+);
+
+it('keeps a note that starts with "at" and no digit after a day', () => {
+  expectOutcome("me tomorrow at the dentist", {
+    note: "at the dentist",
+    due: "2026-10-29 09:00",
+  });
+});
+
 it.each(WHEN_VECTORS.filter(([, due]) => /^\d{4}-/.test(due)))(
   "resolves <when> %j at the start of the text the same way: %s",
   (when, due) => {

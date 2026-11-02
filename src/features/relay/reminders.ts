@@ -55,11 +55,13 @@ export type Reminders = Readonly<{
   snapshot(): RemindersState;
   subscribe(listener: () => void): () => void;
   refresh(): Promise<void>;
-  /** Without a `target` the reminder is standalone and needs a non-blank note. */
+  /** Without a `target` the reminder is standalone and needs a non-blank note.
+   * `caller` abandons the create until publication starts. */
   create(
     target: ReminderTarget | undefined,
     notBefore: number,
     note?: string,
+    caller?: AbortSignal,
   ): Promise<void>;
   snooze(id: string, notBefore: number): Promise<void>;
   complete(id: string): Promise<void>;
@@ -246,8 +248,12 @@ export function createReminders(options: {
       .catch(() => {});
     return run;
   }
-  async function write(intent: ReminderIntent) {
-    const event = await host.sign(intent, signal);
+  async function write(intent: ReminderIntent, caller?: AbortSignal) {
+    const event = await host.sign(
+      intent,
+      caller ? AbortSignal.any([signal, caller]) : signal,
+    );
+    caller?.throwIfAborted();
     await options.publish(event, signal);
     if (await accept([event])) publishChange();
   }
@@ -336,19 +342,22 @@ export function createReminders(options: {
       loading = read;
       return loading;
     },
-    create: async (target, notBefore, note) => {
+    create: async (target, notBefore, note, caller) => {
       const trimmed = note?.trim();
       if (!target && !trimmed) throw new Error("A reminder needs a note");
-      await write({
-        d: randomD(),
-        createdAt: now(),
-        notBefore,
-        content: {
-          ...(target ? { target } : {}),
-          ...(trimmed ? { note: trimmed } : {}),
-          status: "pending",
+      await write(
+        {
+          d: randomD(),
+          createdAt: now(),
+          notBefore,
+          content: {
+            ...(target ? { target } : {}),
+            ...(trimmed ? { note: trimmed } : {}),
+            status: "pending",
+          },
         },
-      });
+        caller,
+      );
     },
     snooze: (id, notBefore) =>
       replace(id, (current) => ({

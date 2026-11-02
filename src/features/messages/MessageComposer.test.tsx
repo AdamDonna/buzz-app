@@ -13636,6 +13636,7 @@ it("runs /remind from a channel, a thread and a direct message: a standalone rem
     undefined,
     Date.UTC(2026, 9, 28, 16, 0) / 1000,
     "stretch",
+    expect.any(AbortSignal),
   );
   expect(h.input()).toHaveValue("");
   expect(h.messages.send).not.toHaveBeenCalled();
@@ -13653,6 +13654,7 @@ it("runs /remind from a channel, a thread and a direct message: a standalone rem
     undefined,
     Date.UTC(2026, 9, 29, 21, 0) / 1000,
     "call Sam",
+    expect.any(AbortSignal),
   );
   expect(thread.messages.reply).not.toHaveBeenCalled();
   expect(thread.messages.send).not.toHaveBeenCalled();
@@ -13668,6 +13670,7 @@ it("runs /remind from a channel, a thread and a direct message: a standalone rem
     undefined,
     Date.UTC(2026, 9, 28, 17, 0) / 1000,
     "check the deploy",
+    expect.any(AbortSignal),
   );
   expect(dm.messages.send).not.toHaveBeenCalled();
 });

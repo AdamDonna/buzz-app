@@ -46,7 +46,7 @@ export function remindCommand(options: {
       if (!reminders) throw new Error("Reminders are not available right now.");
       signal.throwIfAborted();
       const dueAt = Math.floor(parsed.dueAt / 1000);
-      await reminders.create(undefined, dueAt, parsed.note);
+      await reminders.create(undefined, dueAt, parsed.note, signal);
       return {
         done: true,
         notice: `Reminder set for ${formatDue(dueAt, timeZone)}`,
