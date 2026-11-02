@@ -107,6 +107,18 @@ it("a different valid signature for the same event ID earns a new proof", () => 
   expect(verifyEvent).toHaveBeenCalledTimes(3);
 });
 
+it("keeps no proof for an ephemeral event, which a relay never sends again", () => {
+  const verify = createEventVerifier();
+  const typing = signed(key, { kind: 20002, content: "", tags: [["h", "a"]] });
+  verify(typing);
+  verify(JSON.parse(JSON.stringify(typing)));
+  expect(verifyEvent).toHaveBeenCalledTimes(2);
+  const addressable = signed(key, { kind: 30000, content: "", tags: [] });
+  verify(addressable);
+  verify(JSON.parse(JSON.stringify(addressable)));
+  expect(verifyEvent).toHaveBeenCalledTimes(3);
+});
+
 it("evicts the oldest proof at the fixed 8192-entry bound and re-verifies it", () => {
   // Observe the real memo populated by cryptographic verification, then fill its
   // remaining slots directly. Cache pressure needs opaque entries, not thousands

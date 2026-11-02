@@ -16,7 +16,7 @@ import {
   type ObserverFrame,
 } from "../agents/observer.ts";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
-import { eventDto } from "./events.ts";
+import { createEventVerifier, eventDto } from "./events.ts";
 import { EMOJI_SET } from "./emoji.ts";
 import type {
   ArtifactSyncFilter,
@@ -46,6 +46,16 @@ export const RELAY_TIMESTAMP_DRIFT_SECS = 900;
  * pod can trail its peers), the client clock's skew from the relay's, and the
  * relay's replica read budget for the unread repair, which uses the same margin. */
 export const LIVE_RESUME_LAG = RELAY_TIMESTAMP_DRIFT_SECS + 60;
+/** Signature proofs a live subscription keeps across its reconnects. Each resume
+ * replays `LIVE_RESUME_LAG` of events the subscription already verified; a
+ * fresh signature check costs about 1 ms of main thread per event, a proof hit
+ * only the hash. A resume whose window holds more distinct events than this
+ * (about 17 a second for 16 minutes, or 33 channels at `LIVE_REPLAY_LIMIT`)
+ * evicts each proof before its replay reaches it and gains nothing. Artifact
+ * sync events share the memo, so that rate is an upper bound, not a proven fit
+ * for a typical community. About 3 MiB of IDs and signatures, about 5 MiB of
+ * heap. */
+export const LIVE_PROOF_ENTRIES = 16_384;
 /** Close codes for a relay that is going away on purpose (a rolling deploy
  * sends 1012 to every client at once): 1001 Going Away, 1012 Service Restart. */
 const RESTART_CLOSE_CODES = [1001, 1012];
@@ -352,6 +362,8 @@ export function subscribeRelayTraffic(
   // established it last heard the relay. A later connection that never
   // establishes it leaves the cursor, so flapping does not lose it.
   const cursors = new Map<string, LiveCursor>();
+  // Outlives each socket, so a reconnect's replay reuses the proofs.
+  const verify = createEventVerifier(LIVE_PROOF_ENTRIES);
   const cursorKeys = (route: Route) =>
     scope(route).length
       ? scope(route).map((id) => `channel:${id}`)
@@ -1025,7 +1037,7 @@ export function subscribeRelayTraffic(
         if (data[0] === "EVENT") {
           let incoming: VerifiedEvent;
           try {
-            incoming = eventDto(data[2]);
+            incoming = verify(data[2]);
           } catch {
             send(["CLOSE", data[1]]);
             endSync(sync, "error: relay supplied an invalid event");
@@ -1064,7 +1076,7 @@ export function subscribeRelayTraffic(
       if (data[0] === "EVENT") {
         let incoming: VerifiedEvent;
         try {
-          incoming = eventDto(data[2]);
+          incoming = verify(data[2]);
         } catch {
           // One undecodable event must not take the route (or its batch) down.
           log.warn(`${peer} dropped an undecodable live event`);

@@ -1,5 +1,9 @@
 import { getLogger, setLogLevel } from "../developer/logging";
-import type { EventTemplate, VerifiedEvent } from "nostr-tools";
+import {
+  verifyEvent,
+  type EventTemplate,
+  type VerifiedEvent,
+} from "nostr-tools";
 import { assert, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createLiveAdmission,
@@ -68,6 +72,11 @@ class Socket {
     await this.receive(["OK", event.id, true]);
   }
 }
+// Count the real verifier; its cryptographic result is never replaced.
+vi.mock("nostr-tools", async (original) => {
+  const actual = await original<typeof import("nostr-tools")>();
+  return { ...actual, verifyEvent: vi.fn(actual.verifyEvent) };
+});
 afterEach(() => vi.useRealTimers());
 it("keeps the browser authentication deadline measured from construction", async () => {
   vi.useFakeTimers();
@@ -988,6 +997,51 @@ function captureLog() {
     restore: () => logger.setReporters(reporters),
   };
 }
+
+it("verifies a reconnect's replayed events once and still rejects a changed copy", async () => {
+  vi.useFakeTimers();
+  const h = setup(["a"], undefined, () => 0.5);
+  const log = captureLog();
+  try {
+    await h.first.auth();
+    const route = h.first.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(route);
+    const event = message(keypair(), "a", "heard before the drop", 1700000000);
+    vi.mocked(verifyEvent).mockClear();
+    await h.first.receive(["EVENT", route[1], event]);
+    expect(verifyEvent).toHaveBeenCalledTimes(1);
+    await h.first.receive(["EOSE", route[1]]);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    const replay = next.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(replay);
+    vi.mocked(verifyEvent).mockClear();
+    h.callbacks.receive.mockClear();
+    // The resume window sends it again, as fresh wire bytes.
+    await next.receive(["EVENT", replay[1], JSON.parse(JSON.stringify(event))]);
+    expect(verifyEvent).not.toHaveBeenCalled();
+    expect(h.callbacks.receive).toHaveBeenCalledWith(
+      [event],
+      expect.anything(),
+    );
+    h.callbacks.receive.mockClear();
+    await next.receive([
+      "EVENT",
+      replay[1],
+      { ...event, content: "changed under the same id and signature" },
+    ]);
+    expect(h.callbacks.receive).not.toHaveBeenCalled();
+    expect(log.lines).toContain(
+      "warn relay.test dropped an undecodable live event",
+    );
+  } finally {
+    log.restore();
+    h.owner.dispose();
+  }
+});
 
 it("drops one undecodable event and keeps its batch route", async () => {
   vi.useFakeTimers();
