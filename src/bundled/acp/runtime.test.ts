@@ -1108,6 +1108,46 @@ describe("AcpRuntime", () => {
     expect(picks(cache, config).models.map((m) => m.id)).toEqual(["a", "b"]);
   });
 
+  it("runs a standalone wake on the saved model and effort, not the harness defaults", async () => {
+    const config = await confirmed({ model: "b", effort: "high" });
+    const select = (id: string, category: string, values: string[]) => ({
+      id,
+      name: id,
+      category,
+      type: "select",
+      currentValue: values[0],
+      options: values.map((value) => ({ value, name: value })),
+    });
+    const { fake, runtime, sync } = setup({
+      configOptions: [
+        select("model", "model", ["a", "b"]),
+        select("effort", "thought_level", ["low", "high"]),
+      ],
+    });
+    sync(config);
+    const delivery = {
+      agent: { pubkey: self, name: "Opal", owner: alice },
+      config,
+    } as unknown as Delivery;
+    const done = runtime.runOnce({
+      delivery,
+      key: "timer",
+      signal: new AbortController().signal,
+      prompt: async () => "wake",
+    });
+    await vi.waitFor(() => expect(fake.harnesses[0]?.turns).toHaveLength(1));
+    fake.harnesses[0]?.turns[0]?.finish();
+    await done;
+    const steps = (fake.harnesses[0]?.received ?? []).flatMap((m) =>
+      m.method === "session/set_config_option"
+        ? [m.params?.value]
+        : m.method === "session/prompt"
+          ? ["prompt"]
+          : [],
+    );
+    expect(steps).toEqual(["b", "high", "prompt"]);
+  });
+
   it("leaves nothing running when a delivery is cancelled while the harness starts", async () => {
     const config = await confirmed();
     const { fake, deliver, sync } = setup({

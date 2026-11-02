@@ -586,6 +586,8 @@ export class AgentSessions<S = unknown> {
     this.options.onChange?.();
     // Pinned like a conversation's, but never an owner: it saves nothing.
     const pinned = this.options.pin?.();
+    const claim = pinned && { epoch: 0, pinned };
+    const turn = this.turn(claim, undefined, undefined, undefined);
     const lease = pinned && this.options.process.hold?.(pinned.generation);
     const opening = this.open(
       key,
@@ -595,7 +597,7 @@ export class AgentSessions<S = unknown> {
         return this.once.has(key) && this.once.set(key, live);
       },
       undefined,
-      pinned && { claim: { epoch: 0, pinned }, fits: () => true },
+      claim && { claim, fits: () => true },
     );
     opening.catch(() => lease?.release());
     let live: Live | undefined;
@@ -608,9 +610,10 @@ export class AgentSessions<S = unknown> {
         live.session.send(
           text,
           { ...(current ? { current } : {}) },
-          undefined,
-          undefined,
+          turn.model,
+          turn.effort,
           kept,
+          turn,
         ),
         signal,
       );
