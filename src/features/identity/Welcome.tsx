@@ -50,6 +50,7 @@ import { KeyChoice } from "./KeyChoice";
 import { KeyImport } from "./KeyImport";
 import { KeyLost } from "./KeyLost";
 import { KeyRestore } from "./KeyRestore";
+import { useLegacyIdentityOffer } from "./LegacyIdentityOffer";
 import { OnboardingScreen } from "./OnboardingScreen";
 import { OnboardingWordmark } from "./OnboardingWordmark";
 import { ProfileStep } from "./ProfileStep";
@@ -258,6 +259,10 @@ export function Welcome({
     returnFocus.current = undefined;
     shown.current = page;
   }, [page]);
+  const legacyOffer = useLegacyIdentityOffer(
+    identity,
+    page === "landing" && auth.status !== "pending",
+  );
   if (state.status === "ready" && progress.status === "idle") return children;
   // The linked key is backed up: Welcome back offers a restore, and an
   // import of it skips the backup offer.
@@ -735,6 +740,7 @@ export function Welcome({
         <Button size="lg" variant="ghost" disabled>
           Scan a QR code — Coming soon
         </Button>
+        {legacyOffer}
       </OnboardingScreen>
     );
   // The key pages and Join a community bring their own onboarding layouts;

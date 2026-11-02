@@ -286,48 +286,6 @@ it("offers alternatives, passes exactly the imported key, and keeps secrets out 
   identity.dispose();
 });
 
-it("brings over installed old Buzz's identity only after an explicit click", async () => {
-  const imported = deferred<string>();
-  const legacy = deferred<boolean>();
-  vi.mocked(invoke).mockImplementation((command) => {
-    if (command === "identity_restore") return Promise.resolve(null);
-    if (command === "nsec_backup_available") return Promise.resolve(false);
-    if (command === "identity_legacy_available") return legacy.promise;
-    if (command === "identity_import_legacy") return imported.promise;
-    throw new Error("Unexpected command");
-  });
-  const identity = createIdentity();
-  const user = userEvent.setup();
-  render(
-    <IdentitySetup identity={identity}>
-      <p>Signed in</p>
-    </IdentitySetup>,
-  );
-  // A click must not reach Create before migration can be offered first.
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("identity_legacy_available"),
-  );
-  expect(
-    screen.queryByRole("button", { name: "Create a new identity" }),
-  ).toBeNull();
-  await act(async () => legacy.resolve(true));
-  const bringOver = await screen.findByRole("button", {
-    name: "Continue with your Buzz identity",
-  });
-  expect(invoke).not.toHaveBeenCalledWith("identity_import_legacy", {});
-  await user.click(bringOver);
-  expect(invoke).toHaveBeenCalledWith("identity_import_legacy", {});
-  expect(
-    screen.getByRole("button", { name: "Create a new identity" }),
-  ).toBeDisabled();
-  await act(async () => {
-    imported.resolve(viewer);
-  });
-  expect(await screen.findByText("Signed in")).toBeVisible();
-  expect(identity.snapshot()).toEqual({ status: "ready", viewer });
-  identity.dispose();
-});
-
 const previousViewer = "cd".repeat(32);
 function mountRecovery(
   result: RecoveryResult,
@@ -785,7 +743,7 @@ it("retires a browser sign-in that starts after setup is unmounted", async () =>
 });
 
 it("first launch offers email sign-in and a live community URL field, with QR scanning disabled", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce(null);
+  vi.mocked(invoke).mockResolvedValueOnce(null).mockResolvedValueOnce(false);
   const identity = createIdentity();
   render(
     <Welcome
@@ -819,7 +777,260 @@ it("first launch offers email sign-in and a live community URL field, with QR sc
   ).toBeNull();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
+  identity.dispose();
+});
+
+/**
+ * A first launch where installed old Buzz's data folder check answers
+ * `legacy` and its import answers `imported`; any other command throws.
+ */
+function legacyLaunch(
+  legacy: Promise<boolean>,
+  imported: () => Promise<string> = () =>
+    Promise.reject(new Error("Welcome read old Buzz's identity unasked")),
+  connect: ComponentProps<typeof Welcome>["connect"] = vi.fn(),
+) {
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return legacy;
+    if (command === "identity_import_legacy") return imported();
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const account = vi.fn(unlinked);
+  const identity = createIdentity();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={account}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  return { identity, account };
+}
+/**
+ * Settles once the folder check on `legacy` has answered: Welcome attached
+ * the same `.catch().then()` chain first, so its handler has run by now.
+ */
+const legacyChecked = (legacy: Promise<boolean>) =>
+  act(async () => {
+    await legacy.catch(() => false).then(() => {});
+  });
+const legacyOffer = () =>
+  screen.findByRole("alertdialog", {
+    name: "Continue with your Buzz identity?",
+  });
+const BRING_OVER = "Continue with your Buzz identity";
+/** Base UI moves focus into an opened dialog a frame later. */
+const focusInside = (dialog: HTMLElement) =>
+  waitFor(() =>
+    expect(dialog).toContainElement(document.activeElement as HTMLElement),
+  );
+const commands = () => vi.mocked(invoke).mock.calls.map(([command]) => command);
+
+it.each([
+  [
+    "absent",
+    (legacy: ReturnType<typeof deferred<boolean>>) => legacy.resolve(false),
+  ],
+  [
+    "unreadable",
+    (legacy: ReturnType<typeof deferred<boolean>>) =>
+      legacy.reject(new Error("Permission denied")),
+  ],
+])(
+  "no old Buzz offer shows when its data folder is %s",
+  async (_label, answer) => {
+    const legacy = deferred<boolean>();
+    const { identity } = legacyLaunch(legacy.promise);
+    expect(await screen.findByRole("button", { name: SIGN_IN })).toBeEnabled();
+    answer(legacy);
+    await legacyChecked(legacy.promise);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(connectButton()).toBeEnabled();
+    expect(commands()).toEqual([
+      "identity_restore",
+      "identity_legacy_available",
+    ]);
+    identity.dispose();
+  },
+);
+
+it("old Buzz's identity is offered over the landing once its folder is found, read only on Continue, and enters the app with no sign-in", async () => {
+  const legacy = deferred<boolean>();
+  const imported = deferred<string>();
+  const connect = vi.fn();
+  const { identity, account } = legacyLaunch(
+    legacy.promise,
+    () => imported.promise,
+    connect,
+  );
+  const user = userEvent.setup();
+  // The landing's actions do not wait on the folder check.
+  expect(await screen.findByRole("button", { name: SIGN_IN })).toBeEnabled();
+  expect(invoke).toHaveBeenCalledWith("identity_legacy_available");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  legacy.resolve(true);
+  const offer = await legacyOffer();
+  expect(offer).toHaveAccessibleDescription(
+    "Old Buzz was used on this device. Continue with the identity it saved instead of setting up a new one. Your computer may ask you to allow access.",
+  );
+  await focusInside(offer);
+  // Nothing reads old Buzz's secure storage before the click.
+  expect(invoke).not.toHaveBeenCalledWith("identity_import_legacy", {});
+  const bringOver = within(offer).getByRole("button", { name: BRING_OVER });
+  await user.click(bringOver);
+  expect(invoke).toHaveBeenCalledWith("identity_import_legacy", {});
+  // While it runs the dialog stays: Continue is busy, and Not now and Escape do nothing.
+  expect(bringOver).toHaveAttribute("aria-busy", "true");
+  expect(within(offer).getByRole("button", { name: "Not now" })).toBeDisabled();
+  await user.keyboard("{Escape}");
+  expect(offer).toBeInTheDocument();
+  await act(async () => imported.resolve(viewer));
+  expect(await screen.findByText("Signed in")).toBeVisible();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(identity.snapshot()).toEqual({ status: "ready", viewer });
+  // No sign-in, account read, link or backup.
+  expect(connect).not.toHaveBeenCalled();
+  expect(account).not.toHaveBeenCalled();
+  expect(commands()).toEqual([
+    "identity_restore",
+    "identity_legacy_available",
+    "identity_import_legacy",
+  ]);
+  identity.dispose();
+});
+
+it.each(["Not now", "Escape"])(
+  "%s dismisses the old Buzz offer for this launch: the landing keeps focus on its heading, nothing is imported, and a return from another page does not reopen it",
+  async (dismissal) => {
+    const connect = vi
+      .fn()
+      .mockRejectedValue(new Error("Browser could not open."));
+    const { identity } = legacyLaunch(
+      Promise.resolve(true),
+      undefined,
+      connect,
+    );
+    const user = userEvent.setup();
+    const offer = await legacyOffer();
+    await focusInside(offer);
+    if (dismissal === "Escape") await user.keyboard("{Escape}");
+    else
+      await user.click(within(offer).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(welcomeHeading()).toHaveFocus());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(connectButton()).toBeEnabled();
+    await user.click(connectButton());
+    expect(
+      await screen.findByRole("heading", { name: "Couldn’t sign in" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(welcomeHeading()).toHaveFocus();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // The folder was checked once, and old Buzz's identity never read.
+    expect(commands()).toEqual([
+      "identity_restore",
+      "identity_legacy_available",
+    ]);
+    identity.dispose();
+  },
+);
+
+it("a failed bring-over shows its error in the dialog, and Continue tries again", async () => {
+  const imported = vi
+    .fn<() => Promise<string>>()
+    .mockRejectedValueOnce(
+      "The earlier Buzz app's identity is malformed; nothing was changed",
+    )
+    .mockResolvedValueOnce(viewer);
+  const { identity } = legacyLaunch(Promise.resolve(true), imported);
+  const user = userEvent.setup();
+  const offer = await legacyOffer();
+  const bringOver = within(offer).getByRole("button", { name: BRING_OVER });
+  await user.click(bringOver);
+  expect(await within(offer).findByRole("alert")).toHaveTextContent(
+    "The earlier Buzz app's identity is malformed; nothing was changed",
+  );
+  expect(bringOver).not.toHaveAttribute("aria-busy", "true");
+  expect(within(offer).getByRole("button", { name: "Not now" })).toBeEnabled();
+  expect(identity.snapshot().status).toBe("missing");
+  await user.click(bringOver);
+  expect(await screen.findByText("Signed in")).toBeVisible();
+  expect(commands()).toEqual([
+    "identity_restore",
+    "identity_legacy_available",
+    "identity_import_legacy",
+    "identity_import_legacy",
+  ]);
+  identity.dispose();
+});
+
+it("the old Buzz offer waits through a pending sign-in and setup, then opens with focus over the landing setup returns to, without setup's error", async () => {
+  const legacy = deferred<boolean>();
+  const attempt = deferred<Credential>();
+  const { identity } = legacyLaunch(
+    legacy.promise,
+    undefined,
+    () => attempt.promise,
+  );
+  const answers = vi.mocked(invoke).getMockImplementation();
+  if (!answers) throw new Error("legacyLaunch installed no answers");
+  vi.mocked(invoke).mockImplementation((command, args) =>
+    command === "identity_create"
+      ? Promise.reject("Keychain refused to save the key")
+      : answers(command, args),
+  );
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+  expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
+  legacy.resolve(true);
+  await legacyChecked(legacy.promise);
+  // An import now would lift the gate under the pending sign-in.
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  await act(async () => attempt.resolve(credential));
+  await createMyKey(user);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Keychain refused to save the key",
+  );
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  // The landing's heading focus yields to the dialog opening over it, and
+  // the failed creation's error stays out of it.
+  const offer = await legacyOffer();
+  await focusInside(offer);
+  expect(within(offer).queryByRole("alert")).toBeNull();
+  await user.click(within(offer).getByRole("button", { name: "Not now" }));
+  await waitFor(() => expect(welcomeHeading()).toHaveFocus());
+  expect(commands()).toEqual([
+    "identity_restore",
+    "identity_legacy_available",
+    "identity_create",
+  ]);
+  identity.dispose();
+});
+
+it("after Sign out, the next launch offers old Buzz's identity again while its folder remains", async () => {
+  const user = userEvent.setup();
+  const first = legacyLaunch(Promise.resolve(true), () =>
+    Promise.resolve(viewer),
+  );
+  await user.click(
+    within(await legacyOffer()).getByRole("button", { name: BRING_OVER }),
+  );
+  expect(await screen.findByText("Signed in")).toBeVisible();
+  // Sign out deletes the key and restarts the app; nothing records the bring-over.
+  cleanup();
+  first.identity.dispose();
+  vi.mocked(invoke).mockClear();
+  const { identity } = legacyLaunch(Promise.resolve(true));
+  expect(await legacyOffer()).toBeVisible();
+  expect(commands()).toEqual(["identity_restore", "identity_legacy_available"]);
   identity.dispose();
 });
 
@@ -838,6 +1049,7 @@ function landingRelay(
   const answer = (status: number, body = "") => ({ status, headers: {}, body });
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "identity_restore") return null;
+    if (command === "identity_legacy_available") return false;
     if (command === "identity_create") return created;
     if (command === "identity_import") return owned.pubkey;
     if (command === "identity_export") return key;
@@ -1042,6 +1254,7 @@ it("a landing URL no tenant hosts pauses on Connect to {host} with no sign-in an
   expect(identity.snapshot().status).toBe("missing");
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
   ]);
@@ -1117,6 +1330,7 @@ it("Sign in with email from the choice signs in at the build portal, runs the Co
   expect(relay.relayCalls).toEqual([...relay.lookup, ...relay.lookup]);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
     "identity_create",
@@ -1258,6 +1472,7 @@ it("I already have a key from the choice imports the key with no sign-in, no lin
   expect(relay.relayCalls).toEqual([...relay.lookup, ...relay.lookup]);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
     "identity_import",
@@ -1320,6 +1535,7 @@ it("a landing URL that cannot be reached fails before sign-in, and Cancel keeps 
   const relayCalls: unknown[] = [];
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "relay_http") {
       relayCalls.push(args);
       return Promise.reject(new Error("connection refused"));
@@ -1360,6 +1576,7 @@ it("a landing URL that cannot be reached fails before sign-in, and Cancel keeps 
   expect(identity.snapshot().status).toBe("missing");
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
   ]);
@@ -1526,6 +1743,7 @@ it("Sign in with email runs sign-in, creates the key mid-setup, and lands on Joi
   const created = deferred<string>();
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return created.promise;
     throw new Error("Unexpected command");
   });
@@ -1667,6 +1885,7 @@ it("Sign in with email runs sign-in, creates the key mid-setup, and lands on Joi
   expect(backupStatus).toHaveBeenCalledTimes(1);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -1675,6 +1894,7 @@ it("Sign in with email runs sign-in, creates the key mid-setup, and lands on Joi
 it("Use a different account on Set up your key signs the session out, returns to the landing with no key, and the next sign-in rebuilds the account reads", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     throw new Error(`Unexpected command ${command}`);
   });
   const second: Credential = {
@@ -1742,6 +1962,7 @@ it("Use a different account on Set up your key signs the session out, returns to
   expect(connect).toHaveBeenCalledTimes(1);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   // Signing in again runs a new sign-in and reads the new account, not the old.
   await user.click(connectButton());
@@ -1769,6 +1990,8 @@ it.each([
   async (_label, backupStatus) => {
     vi.mocked(invoke).mockImplementation((command) => {
       if (command === "identity_restore") return Promise.resolve(null);
+      if (command === "identity_legacy_available")
+        return Promise.resolve(false);
       throw new Error(`Unexpected command ${command}`);
     });
     const identity = createIdentity();
@@ -1804,6 +2027,7 @@ it.each([
 it("a link that fails after the key is created blocks setup with only Try again, which runs the link again and, once it succeeds, backs the key up and lands on Join a community", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -1871,6 +2095,7 @@ it("a link that fails after the key is created blocks setup with only Try again,
   expect(backUp.mock.calls).toEqual([[viewer]]);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -1938,6 +2163,7 @@ it("a backup that times out after Create my key offers Try again, which re-runs 
   expect(backupStatus).toHaveBeenCalledTimes(1);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
     "identity_create",
@@ -1951,6 +2177,7 @@ it("Join a community checks the typed URL, opens Finding community, and Cancel k
   const relayCalls: unknown[] = [];
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     if (command === "relay_http") {
       relayCalls.push(args);
@@ -2042,6 +2269,7 @@ it("a found community shows Join Community after exactly the two unauthenticated
     Promise.resolve({ status, headers: {}, body });
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     if (command === "relay_http") {
       relayCalls.push(args);
@@ -2152,6 +2380,7 @@ function nativeRelay(
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "get_os_idle_seconds") return 0;
     if (command === "identity_restore") return created ? member.pubkey : null;
+    if (command === "identity_legacy_available") return false;
     if (command === "identity_create") {
       created = true;
       return member.pubkey;
@@ -3505,6 +3734,7 @@ it("a device that will not keep the join's record names the storage failure befo
 it("a key creation failure stops setup and Back returns to the first-launch screen", async () => {
   vi.mocked(invoke)
     .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce(false)
     .mockRejectedValueOnce("Keychain refused to save the key");
   const connect = vi.fn().mockResolvedValue(credential);
   const { backupStatus, release } = gatedStatus();
@@ -3546,6 +3776,7 @@ it("a key creation failure stops setup and Back returns to the first-launch scre
   expect(connectButton()).toBeEnabled();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -3590,6 +3821,7 @@ async function keyImportPage(
 it("I already have a key opens Enter your private key, classifies what is pasted, and Back returns to the choice with nothing created", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     throw new Error(`Unexpected command ${command}`);
   });
   const identity = createIdentity();
@@ -3655,6 +3887,7 @@ it("I already have a key opens Enter your private key, classifies what is pasted
   expect(identity.snapshot().status).toBe("missing");
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   identity.dispose();
 });
@@ -3663,6 +3896,7 @@ it("Continue with this key imports the pasted nsec behind Importing your key, li
   const imported = deferred<string>();
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return imported.promise;
     throw new Error(`Unexpected command ${command}`);
   });
@@ -3713,6 +3947,7 @@ it("Continue with this key imports the pasted nsec behind Importing your key, li
   expect(backUp).not.toHaveBeenCalled();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_import",
   ]);
   identity.dispose();
@@ -3721,6 +3956,7 @@ it("Continue with this key imports the pasted nsec behind Importing your key, li
 it("a link that keeps failing after a key is imported for a new account stays on the failed page: Try again runs the link again, and nothing offers a way past it", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return Promise.resolve(owned.pubkey);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -3772,6 +4008,7 @@ it("a link that keeps failing after a key is imported for a new account stays on
 it("a native import refusal stays on the import page with the key kept, and Back still returns to the choice", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import")
       return Promise.reject(
         "An identity is already saved; nothing was overwritten",
@@ -3804,6 +4041,7 @@ it("a native import refusal stays on the import page with the key kept, and Back
   ).toBeVisible();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_import",
   ]);
   identity.dispose();
@@ -3812,6 +4050,7 @@ it("a native import refusal stays on the import page with the key kept, and Back
 it("a dropped or chosen key file fills the field from its first line, and an oversize file is refused", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     throw new Error(`Unexpected command ${command}`);
   });
   const identity = createIdentity();
@@ -3858,6 +4097,7 @@ it("a dropped or chosen key file fills the field from its first line, and an ove
   expect(continueWithKey()).toBeDisabled();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   identity.dispose();
 });
@@ -3901,6 +4141,7 @@ it("an imported key on the tenant path is offered a backup, and Not now lands on
   expect(screen.queryByText("Signed in")).toBeNull();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
     "identity_import",
@@ -3973,6 +4214,7 @@ it("a linked account is welcomed back with its npub, accepts only the linked key
   const imported = deferred<string>();
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return imported.promise;
     throw new Error(`Unexpected command ${command}`);
   });
@@ -4051,6 +4293,7 @@ it("a linked account is welcomed back with its npub, accepts only the linked key
   expect(screen.queryByRole("list")).toBeNull();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_import",
   ]);
   identity.dispose();
@@ -4059,6 +4302,7 @@ it("a linked account is welcomed back with its npub, accepts only the linked key
 it("Use a different account on Welcome back returns to the landing without touching the key, and the linked key is read again only at the next sign-in", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     throw new Error(`Unexpected command ${command}`);
   });
   const linkedKey = vi.fn(() => Promise.resolve(owned.pubkey));
@@ -4088,6 +4332,7 @@ it("Use a different account on Welcome back returns to the landing without touch
   expect(linkedKey).toHaveBeenCalledTimes(1);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   // The next sign-in reads the account again rather than reusing the answer.
   await user.click(connectButton());
@@ -4097,6 +4342,7 @@ it("Use a different account on Welcome back returns to the landing without touch
   expect(linkedKey).toHaveBeenCalledTimes(2);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   identity.dispose();
 });
@@ -4104,6 +4350,7 @@ it("Use a different account on Welcome back returns to the landing without touch
 it("Back it up on the backup offer backs the linked key up before Join a community", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return Promise.resolve(owned.pubkey);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -4127,6 +4374,7 @@ it("Back it up on the backup offer backs the linked key up before Join a communi
 it("a backup that fails twice after the key is imported offers Try again each time, and Continue without backup still lists the owned communities on Join a community", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return Promise.resolve(owned.pubkey);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -4191,6 +4439,7 @@ it("Back it up with the real account waits on the native uploader's pass for its
     ({ seq, pass, builderlab: true, ...settled }) as BackupStatus;
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "identity_restore") return null;
+    if (command === "identity_legacy_available") return false;
     if (command === "identity_import") return owned.pubkey;
     if (command === "nsec_backup_watch") {
       channels.push((args as { onEvent: (typeof channels)[number] }).onEvent);
@@ -4288,7 +4537,7 @@ it.each([
 ] as const)(
   "Welcome back offers Restore from backup only where backup status lists the linked key: status %s",
   async (_label, listed, restore) => {
-    vi.mocked(invoke).mockResolvedValueOnce(null);
+    vi.mocked(invoke).mockResolvedValueOnce(null).mockResolvedValueOnce(false);
     const identity = createIdentity();
     const user = userEvent.setup();
     await welcomeBackPage(
@@ -4311,6 +4560,7 @@ it.each([
 it("a backup status lookup that fails hides Restore from backup, and Enter your private key still reaches the backup offer", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return Promise.resolve(owned.pubkey);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -4336,6 +4586,7 @@ it("a backup status lookup that fails hides Restore from backup, and Enter your 
 it("importing a linked key backup status already lists skips the backup offer", async () => {
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return Promise.resolve(owned.pubkey);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -4375,6 +4626,7 @@ function backedUpAccount(
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "identity_restore") return null;
+    if (command === "identity_legacy_available") return false;
     if (command === "nsec_backup_watch") return undefined;
     if (command === "nsec_backup_state")
       return { seq: 1, pass: 0, builderlab: true, status: "idle" };
@@ -4468,6 +4720,7 @@ it("Restore from backup recovers through its own browser sign-in, offers only th
   // A restored key is already backed up: no offer, no uploader handoff.
   expect(recoveryCalls()).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "nsec_restore_begin",
     "nsec_restore_wait",
     "nsec_restore_install",
@@ -4523,6 +4776,7 @@ it.each([
     });
     expect(recoveryCalls()).toEqual([
       "identity_restore",
+      "identity_legacy_available",
       "nsec_restore_begin",
       "nsec_restore_wait",
       "nsec_restore_cancel",
@@ -4567,6 +4821,7 @@ it("a restore that fails for a reason a retry may clear offers Try recovery agai
   expect(identity.snapshot().status).toBe("missing");
   expect(recoveryCalls()).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "nsec_restore_begin",
     "nsec_restore_wait",
     "nsec_restore_cancel",
@@ -4601,6 +4856,7 @@ it("a restore whose backups do not hold the linked key installs nothing, and Bac
   expect(identity.snapshot().status).toBe("missing");
   expect(recoveryCalls()).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "nsec_restore_begin",
     "nsec_restore_wait",
     "nsec_restore_cancel",
@@ -4670,6 +4926,7 @@ it("a restore whose backups do not hold the linked key offers Enter your private
   });
   expect(recoveryCalls()).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "nsec_restore_begin",
     "nsec_restore_wait",
     "nsec_restore_cancel",
@@ -4719,6 +4976,7 @@ function callLog(created: Promise<string> = Promise.resolve(viewer)) {
   vi.mocked(invoke).mockImplementation((command) => {
     calls.push(command);
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return created;
     throw new Error(`Unexpected command ${command}`);
   });
@@ -4812,6 +5070,7 @@ it("I lost this key lists the communities the old key owns, Back returns to Welc
   expect(unbind.mock.calls).toEqual([[owned.pubkey, viewer]]);
   expect(calls).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
     `unbind ${owned.pubkey}`,
     `bind ${viewer}`,
@@ -4866,6 +5125,7 @@ it("a transient unlink failure after Start over keeps the new key, and Try again
   ).toBeVisible();
   expect(calls).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
     `unbind ${owned.pubkey}`,
     `unbind ${owned.pubkey}`,
@@ -4913,6 +5173,7 @@ it("an unlink refused after Start over offers only Try again, which runs the unl
   // the link waited for it, then the backup followed.
   expect(calls).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
     `unbind ${owned.pubkey}`,
     `unbind ${owned.pubkey}`,
@@ -4958,6 +5219,7 @@ it("a transient link failure after a successful unlink retries only the link, ne
   expect(unbind).toHaveBeenCalledTimes(1);
   expect(calls).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
     `unbind ${owned.pubkey}`,
     `bind ${viewer}`,
@@ -5062,6 +5324,7 @@ it("a linked account on the tenant path is welcomed back and its imported key la
   expect(screen.queryByText("Signed in")).toBeNull();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
     "identity_import",
@@ -5113,6 +5376,7 @@ it("Connect from the choice as a linked account is welcomed back at the build po
   expect(relay.relayCalls).toEqual([...relay.lookup, ...relay.lookup]);
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "relay_http",
     "relay_http",
     "identity_import",
@@ -5123,7 +5387,7 @@ it("Connect from the choice as a linked account is welcomed back at the build po
 });
 
 it("an account check that fails stops setup, and Back returns to the first-launch screen", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce(null);
+  vi.mocked(invoke).mockResolvedValueOnce(null).mockResolvedValueOnce(false);
   const backupStatus = vi.fn<FirstRunAccount["backupStatus"]>();
   const identity = createIdentity();
   const user = userEvent.setup();
@@ -5165,6 +5429,7 @@ it("an account check that fails stops setup, and Back returns to the first-launc
   expect(connectButton()).toBeEnabled();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   identity.dispose();
 });
@@ -5176,6 +5441,7 @@ it("the development seed answers the account reads in place of kgoose", async ()
   );
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     throw new Error(`Unexpected command ${command}`);
   });
   const identity = createIdentity();
@@ -5198,6 +5464,7 @@ it("the development seed answers the account reads in place of kgoose", async ()
   // No host request went anywhere: the seed replaced both reads.
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
   ]);
   identity.dispose();
 });
@@ -5206,6 +5473,7 @@ it("the development seed links and backs up a created key without a request, a n
   vi.stubEnv("VITE_BUZZ_FIRST_RUN_ACCOUNT", "unlinked");
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -5231,6 +5499,7 @@ it("the development seed links and backs up a created key without a request, a n
   // backup uploader (`nsec_backup_*`) was reached.
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -5240,6 +5509,7 @@ it("a development seed's backup kind fails the backup with that kind's page, sti
   vi.stubEnv("VITE_BUZZ_FIRST_RUN_ACCOUNT", '{"backup":"unreachable"}');
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -5267,6 +5537,7 @@ it("a development seed's backup kind fails the backup with that kind's page, sti
   ).toBeEnabled();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -5276,6 +5547,7 @@ it("a development seed's fail-once backup fails only the first backup, and Try a
   vi.stubEnv("VITE_BUZZ_FIRST_RUN_ACCOUNT", '{"backup":"fail-once"}');
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -5303,6 +5575,7 @@ it("a development seed's fail-once backup fails only the first backup, and Try a
   ).toBeVisible();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -5315,6 +5588,7 @@ it("a development seed's unlink status fails Start over's unlink as kgoose would
   );
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_create") return Promise.resolve(viewer);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -5338,6 +5612,7 @@ it("a development seed's unlink status fails Start over's unlink as kgoose would
   expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
     "identity_restore",
+    "identity_legacy_available",
     "identity_create",
   ]);
   identity.dispose();
@@ -5354,6 +5629,7 @@ it("the development seed restores its seeded key without a browser sign-in or a 
   );
   vi.mocked(invoke).mockImplementation((command) => {
     if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
     if (command === "identity_import") return Promise.resolve(owned.pubkey);
     throw new Error(`Unexpected command ${command}`);
   });
@@ -5374,13 +5650,14 @@ it("the development seed restores its seeded key without a browser sign-in or a 
   });
   expect(vi.mocked(invoke).mock.calls).toEqual([
     ["identity_restore", {}],
+    ["identity_legacy_available"],
     ["identity_import", { nsec: ownedNsec }],
   ]);
   identity.dispose();
 });
 
 it("a failed or canceled sign-in returns to the first-launch screen", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce(null);
+  vi.mocked(invoke).mockResolvedValueOnce(null).mockResolvedValueOnce(false);
   const released = deferred<Credential>();
   let signal: AbortSignal | undefined;
   const connect = vi

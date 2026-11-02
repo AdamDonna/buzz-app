@@ -436,16 +436,24 @@ isolation from other programs running as the same OS user.
 
 There is no file/environment fallback, automatic legacy migration or human key
 replacement. When installed old Buzz's data folder (`xyz.block.buzz.app`) exists,
-setup also offers **Continue with your Buzz identity**. Only that click reads old
-Buzz's `buzz-desktop`/`secrets` item, so any OS access prompt follows it; the
-offer itself checks only the folder. It takes the item's `identity` entry and
-saves it exactly as a pasted import would: validated, create-only, never over a
-saved key, and never writing the old item. The offer returns after Sign out while
-old Buzz's data remains. The human key is deleted from this device only by
-[Sign out of Buzz](#sign-out-of-buzz); no other command or plugin service can
-delete it. Agents' bring-over (`app_agent_port`) may read only the selected
-old Buzz service/account and copy the selected agent key into this app's separate
-agent namespace; it never writes the old blob.
+the welcome screen opens a **Continue with your Buzz identity?** dialog over
+itself. The landing's actions never wait for the folder check, and the dialog
+waits while a sign-in is pending or another first-run page shows. Only its
+**Continue with your Buzz identity** reads old Buzz's `buzz-desktop`/`secrets`
+item, so any OS access prompt follows that click; the offer itself checks only
+the folder. It takes the item's `identity` entry and saves it exactly as a
+pasted import would: validated, create-only, never over a saved key, and never
+writing the old item. A failed import shows its error in the dialog, where
+Continue tries again. Success enters the app with no Builderlab sign-in, link
+or backup, where that key's old communities are offered
+([Import from the previous desktop app](communities.md#import-from-the-previous-desktop-app)).
+**Not now** or Escape leaves the welcome screen as it was, with focus on its
+heading, and the dialog stays closed until the app next starts with no key. It
+returns after Sign out while old Buzz's data remains. The human key is deleted
+from this device only by [Sign out of Buzz](#sign-out-of-buzz); no other command
+or plugin service can delete it. Agents' bring-over (`app_agent_port`) may read
+only the selected old Buzz service/account and copy the selected agent key into
+this app's separate agent namespace; it never writes the old blob.
 No user key belongs in release configuration.
 
 ## Local restore helper on macOS
