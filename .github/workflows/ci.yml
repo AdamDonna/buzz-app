@@ -29,7 +29,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -58,7 +58,7 @@ jobs:
     # Native pinned runtime builds add cold compilation to the kernel fixtures.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -132,7 +132,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       # Hermit does not run on Windows. Use the same repository Rust pin with
@@ -169,7 +169,7 @@ jobs:
       HOME: /root
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Trust this container workspace
@@ -215,7 +215,7 @@ jobs:
     outputs:
       artifact-id: ${{ steps.fixture-upload.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -281,7 +281,7 @@ jobs:
           - { engine: chromium, shards: 9 }
           - { engine: webkit, shards: 14 }
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Trust this container workspace
@@ -325,7 +325,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -357,7 +357,7 @@ jobs:
       browser_shards: ${{ steps.select.outputs.browser_shards }}
       browser_shard_total: ${{ steps.select.outputs.browser_shard_total }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           # The merge commit's first parent is the base branch tip, so this
@@ -379,7 +379,7 @@ jobs:
       matrix:
         batch: [1, 2]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -422,7 +422,7 @@ jobs:
         # flake-check.mjs sizes this so a whole-file selection fits the timeout.
         shard: ${{ fromJSON(needs.flake_select.outputs.browser_shards) }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Trust this container workspace
