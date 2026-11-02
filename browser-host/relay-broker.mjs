@@ -1929,9 +1929,14 @@ export function relayBrokerPlugin({
                 const { interestRevision, singleton } = entry;
                 if (singleton) {
                   pendingEstablished.delete(first);
-                  write("established", { channelId: first, interestRevision });
+                  write("established", {
+                    channelId: first,
+                    ...(entry.continuous ? { continuous: [first] } : {}),
+                    interestRevision,
+                  });
                 } else {
                   const channels = [];
+                  const continuous = [];
                   for (const [id, pending] of pendingEstablished) {
                     if (
                       pending.interestRevision !== interestRevision ||
@@ -1940,9 +1945,14 @@ export function relayBrokerPlugin({
                       continue;
                     pendingEstablished.delete(id);
                     channels.push(id);
+                    if (pending.continuous) continuous.push(id);
                     if (channels.length === 512) break;
                   }
-                  write("established", { channels, interestRevision });
+                  write("established", {
+                    channels,
+                    ...(continuous.length ? { continuous } : {}),
+                    interestRevision,
+                  });
                 }
                 if (res.writableNeedDrain) return;
               }
@@ -2064,7 +2074,7 @@ export function relayBrokerPlugin({
                     ...state,
                     interestRevision: stream.interestRevision,
                   }),
-                established: (channelId, global) => {
+                established: (channelId, global, continuous) => {
                   if (statusDeltas && channelId !== undefined) {
                     for (const id of typeof channelId === "string"
                       ? [channelId]
@@ -2072,6 +2082,11 @@ export function relayBrokerPlugin({
                       pendingEstablished.set(id, {
                         interestRevision: stream.interestRevision,
                         singleton: typeof channelId === "string",
+                        // A coalesced establishment is continuous only if
+                        // every one it replaces was too.
+                        continuous:
+                          !!continuous?.includes(id) &&
+                          (pendingEstablished.get(id)?.continuous ?? true),
                       });
                     if (!res.writableNeedDrain) flushDeltas();
                   } else
@@ -2080,6 +2095,7 @@ export function relayBrokerPlugin({
                         ? { channels: channelId }
                         : { channelId }),
                       ...(global ? { global } : {}),
+                      ...(continuous ? { continuous } : {}),
                       interestRevision: stream.interestRevision,
                     });
                 },

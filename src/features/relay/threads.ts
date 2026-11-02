@@ -169,6 +169,9 @@ export function createThreadView({
   /** The stream is down: a completed refresh keeps `held`, taking one from
    * its replies if the view has none. Only its establishment refresh clears it. */
   let dropped = openedDropped;
+  /** The view was ready, with no read running, when the stream dropped: its
+   * replies reached the live stream then. Cleared by any establishment. */
+  let liveAtDrop = false;
   let controller: AbortController | undefined;
   /** A refresh requested while a read runs; the stream's return carries over. */
   let again: false | "refresh" | "established" = false;
@@ -369,6 +372,8 @@ export function createThreadView({
     publish();
   }
   function purge(clear = false) {
+    // A purged view no longer holds what the stream delivered before the drop.
+    liveAtDrop = false;
     controller?.abort();
     selectionController?.abort();
     selectionController = undefined;
@@ -552,6 +557,9 @@ export function createThreadView({
     if (!replace && (!snapshot.canLoadMore || snapshot.limited)) return;
     const owned = new AbortController();
     controller = owned;
+    // A read after the drop can fail or replace the rows the stream kept live,
+    // so only an untouched view may skip its establishment refresh.
+    liveAtDrop = false;
     // Cleared as this refresh starts, not when the stream came back: a refresh
     // it supersedes still completes against the replies held across the drop.
     if (established) dropped = false;
@@ -842,13 +850,30 @@ export function createThreadView({
     /** The stream dropped: the replies held now are what its establishment
      * refresh must reach. */
     stale() {
+      // Only the first drop: a later one keeps the views the first took.
+      if (!dropped)
+        liveAtDrop = snapshot.status === "ready" && !controller && !again;
       dropped = true;
       held ??= unverified();
       // A queued establishment was for the stream that just dropped.
       if (again === "established") again = "refresh";
     },
-    /** The stream is back: refresh, reaching the replies held across the drop. */
-    established: () => run(true, true),
+    /** The stream is back: refresh, reaching the replies held across the drop.
+     * When the channel's replay was continuous (`resumed`) and the view was
+     * live at the drop, the replay delivered every reply since: no read. */
+    established(resumed = false) {
+      const live =
+        resumed &&
+        liveAtDrop &&
+        dropped &&
+        !controller &&
+        snapshot.status === "ready";
+      liveAtDrop = false;
+      if (!live) return run(true, true);
+      dropped = false;
+      held = undefined;
+      return Promise.resolve();
+    },
     localChanged() {
       const next = localOperations();
       if (

@@ -221,6 +221,19 @@ export function liveGlobal(value: unknown): LiveGlobal | undefined {
     return undefined;
   return Object.freeze({ route, continuous });
 }
+/** Host-relayed continuous channels: only well-formed IDs of the channels
+ * established with them. Anything else reports none, so each channel catches
+ * up as if its replay was cut. */
+export function liveContinuous(
+  value: unknown,
+  channels: readonly string[],
+): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value)].filter(
+        (id): id is string => typeof id === "string" && channels.includes(id),
+      )
+    : [];
+}
 export type LiveCallbacks = {
   /** Legacy/missing provenance reconciles quietly; it is never implicitly fresh. */
   receive(events: readonly VerifiedEvent[], provenance?: LiveProvenance): void;
@@ -230,8 +243,15 @@ export type LiveCallbacks = {
   observer?(frame: ObserverFrame, generation: number): void;
   presence?(event: VerifiedEvent): void;
   state(snapshot: LiveSnapshot): void;
-  /** A global route (no channels) also reports whether it stayed continuous. */
-  established(channels?: string | readonly string[], global?: LiveGlobal): void;
+  /** A global route (no channels) also reports whether it stayed continuous.
+   * A channel route reports in `continuous` the channels whose replay resumed
+   * from an earlier connection's cursor and ended below the limit: it
+   * delivered every event in them since that connection last heard the relay. */
+  established(
+    channels?: string | readonly string[],
+    global?: LiveGlobal,
+    continuous?: readonly string[],
+  ): void;
   /** Periodic repair hint, not membership or historical-completeness evidence. */
   recover?(): void;
   denied(channelId: string, reason: string): void;
@@ -323,6 +343,11 @@ type Route = {
   /** Every key had a cursor when the route was created, so its replay starts
    * where an earlier connection's delivery could have stopped. */
   resumed?: boolean;
+  /** The channels whose key had a cursor when the route was created. */
+  resumedChannels?: ReadonlySet<string>;
+  /** Replay events per channel: each channel has its own filter and limit, so
+   * `count`, the route's total, cannot tell which one the limit cut. */
+  counts?: Map<string, number>;
   quotaRetries: number;
   /** Its REQ was sent before a grant for one of its channels arrived, so the
    * relay may have left that channel out. Re-send at its EOSE. */
@@ -580,6 +605,7 @@ export function subscribeRelayTraffic(
       status: "pending",
       liveOnly: !replayChannels?.length,
       count: 0,
+      counts: new Map(),
       quotaRetries: 0,
       ...(previous ? { previous, previousChannels } : {}),
     };
@@ -790,6 +816,9 @@ export function subscribeRelayTraffic(
         for (const id of ids) replayQueue.set(id, route.since);
       }
       route.resumed = cursorKeys(route).every((key) => cursors.has(key));
+      route.resumedChannels = new Set(
+        scope(route).filter((id) => cursors.has(`channel:${id}`)),
+      );
       // Presence and observer feeds establish nothing, so carry no obligation.
       if (
         carrying &&
@@ -953,8 +982,22 @@ export function subscribeRelayTraffic(
             !!route.resumed && !route.liveOnly && route.replay !== "limited",
         }),
       );
-    else if (route.id !== "observer" && route.id !== "presence")
-      callbacks.established(route.channelIds ?? route.channelId);
+    else if (route.id !== "observer" && route.id !== "presence") {
+      // A live-only route sends no replay, so it closes no gap; nor does a
+      // channel outside a re-sent route's replay subset.
+      const continuous = route.liveOnly
+        ? []
+        : scope(route).filter(
+            (id) =>
+              route.resumedChannels?.has(id) &&
+              (!route.replayChannels || route.replayChannels.includes(id)) &&
+              (route.counts?.get(id) ?? 0) < LIVE_REPLAY_LIMIT,
+          );
+      const channels = route.channelIds ?? route.channelId;
+      if (continuous.length)
+        callbacks.established(channels, undefined, continuous);
+      else callbacks.established(channels);
+    }
   };
   /** A renewal stays quiet only while every carried route keeps continuity.
    * Once one fails or stops, is replaced or replays a cut window, no
@@ -1605,7 +1648,14 @@ export function subscribeRelayTraffic(
           (!route.replayChannels ||
             !channelId ||
             route.replayChannels.includes(channelId));
-        if (replaying) route.count++;
+        if (replaying) {
+          route.count++;
+          // An event that names no single channel of the scope counts against
+          // each of them, so no channel's count is ever too low.
+          route.counts ??= new Map();
+          for (const id of channelId ? [channelId] : ids)
+            route.counts.set(id, (route.counts.get(id) ?? 0) + 1);
+        }
         if (route.id === "presence") {
           if (
             incoming.kind === 20001 &&
@@ -1912,6 +1962,7 @@ export function subscribeRelayTraffic(
           if (route.status !== "error") continue;
           route.status = "pending";
           route.count = 0;
+          route.counts = new Map();
           route.quotaRetries = 0;
         }
         pump();

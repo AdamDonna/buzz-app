@@ -68,6 +68,8 @@ export function policyRelay({
   }
   const heldEose = new Set();
   const pendingEose = [];
+  // Stored events the next replaying REQ for a channel sends before EOSE.
+  const replays = new Map();
   const pendingProfiles = [];
   const pendingUnread = [];
   const unreadHolds = [];
@@ -139,6 +141,13 @@ export function policyRelay({
     },
     holdEose(channel) {
       heldEose.add(channel);
+    },
+    /** Model a reconnect's replay: fixture events predate the client's
+     * wall-clock `since`, so the next REQ whose filter for `channel` asks for
+     * a replay (limit above zero) sends these events, up to that limit,
+     * before EOSE. Passing the limit or more cuts the replay. */
+    replayNext(community, channel, events) {
+      replays.set(`${community}/${channel}`, events);
     },
     releaseEose(channel) {
       heldEose.delete(channel);
@@ -680,6 +689,15 @@ export function policyRelay({
               }
             }
             this.routes.set(id, filters);
+            for (const filter of filters) {
+              const key = `${this.community}/${filter["#h"]?.[0]}`;
+              const events = replays.get(key);
+              if (!events || !(filter.limit > 0) || filter["#h"].length !== 1)
+                continue;
+              replays.delete(key);
+              for (const event of events.slice(0, filter.limit))
+                emit(this, ["EVENT", id, event]);
+            }
             if (routes.some((route) => heldEose.has(route)))
               pendingEose.push({ socket: this, id, routes });
             else if (eoseMs) setTimeout(() => emit(this, ["EOSE", id]), eoseMs);
