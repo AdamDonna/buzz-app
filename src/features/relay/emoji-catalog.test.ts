@@ -223,6 +223,22 @@ it("bounds what one relay answer and the session retain", async () => {
   );
 });
 
+it("keeps the newest entry for a shortcode when an older prefix answer is served again", async () => {
+  const older = entry("party", png("old"), { at: 100 });
+  const newer = entry("party", png("new"), { at: 200, key: bob });
+  const emoji = catalog(
+    relay(async (filters) =>
+      filters[0]?.search === "par" ? [older] : [newer],
+    ),
+  );
+  await emoji.search("par");
+  await emoji.search("party");
+  expect(emoji.cached("par")).toEqual([
+    { shortcode: "party", url: png("new") },
+  ]);
+  expect(emoji.known()).toEqual([{ shortcode: "party", url: png("new") }]);
+});
+
 it("fences a search that a clear overtakes", async () => {
   let release!: () => void;
   const reader = relay(

@@ -39,13 +39,17 @@ function fixture({
   entries?: readonly CustomEmoji[];
 } = {}) {
   vi.useFakeTimers();
-  const catalog = { status: "ready" as const, entries };
+  let catalog = { status: "ready" as const, entries };
+  const listeners = new Set<() => void>();
   let result: CompletionResult | undefined;
   const session = {
     media: (url: string) => url,
     emoji: {
       snapshot: () => catalog,
-      subscribe: () => () => {},
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       ensure: vi.fn(async () => {}),
       refresh: vi.fn(async () => {}),
       ...(search ? { search: vi.fn(search) } : {}),
@@ -73,6 +77,12 @@ function fixture({
     session,
     show,
     settle,
+    replaceCatalog: () => {
+      catalog = { ...catalog };
+      act(() => {
+        for (const listener of listeners) listener();
+      });
+    },
     unmount: view.unmount,
     result: () => {
       if (!result) throw new Error("Nothing published");
@@ -205,6 +215,19 @@ it("keeps loaded emoji, says the search failed, searches again after a cancelled
     signal: expect.any(AbortSignal),
     retry: false,
   });
+});
+
+it("drops relay results when the catalog is replaced and searches the open query again", async () => {
+  const h = fixture({ search: async () => [party] });
+  h.show("part");
+  await act(() => vi.advanceTimersByTimeAsync(EMOJI_SEARCH_DEBOUNCE_MS));
+  expect(h.labels()).toEqual([":party_parrot:"]);
+  h.replaceCatalog();
+  await h.settle();
+  expect(h.labels()).toEqual([]);
+  await act(() => vi.advanceTimersByTimeAsync(EMOJI_SEARCH_DEBOUNCE_MS));
+  expect(h.session.emoji.search).toHaveBeenCalledTimes(2);
+  expect(h.labels()).toEqual([":party_parrot:"]);
 });
 
 it("does not wait for the relay when it cannot hold the name or the host cannot search", async () => {

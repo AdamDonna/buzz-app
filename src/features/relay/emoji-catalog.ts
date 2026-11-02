@@ -63,27 +63,33 @@ function catalogEntry(event: RelayEvent): CatalogEntry | undefined {
   return { shortcode, url, id: event.id, createdAt: event.created_at };
 }
 
+/** Whether `entry` replaces `old` for a shortcode: newer wins, then the lowest
+ * event id, the relay's own tie-break. */
+const supersedes = (entry: CatalogEntry, old: CatalogEntry) =>
+  entry.createdAt > old.createdAt ||
+  (entry.createdAt === old.createdAt && entry.id < old.id);
+
+const plain = ({ shortcode, url }: CatalogEntry): CustomEmoji =>
+  Object.freeze({ shortcode, url });
+
+function collapseEntries(events: readonly RelayEvent[]): CatalogEntry[] {
+  const winners = new Map<string, CatalogEntry>();
+  for (const event of events) {
+    const entry = catalogEntry(event);
+    if (!entry) continue;
+    const old = winners.get(entry.shortcode);
+    if (!old || supersedes(entry, old)) winners.set(entry.shortcode, entry);
+  }
+  return [...winners.values()];
+}
+
 /** One emoji per shortcode: the newest entry across authors wins, then the lowest
  * event id, the relay's own tie-break. Malformed entries are skipped. Keeps the
  * order in which shortcodes first appear, so relay relevance survives. */
 export function collapseCatalog(
   events: readonly RelayEvent[],
 ): readonly CustomEmoji[] {
-  const winners = new Map<string, CatalogEntry>();
-  for (const event of events) {
-    const entry = catalogEntry(event);
-    if (!entry) continue;
-    const old = winners.get(entry.shortcode);
-    if (
-      !old ||
-      entry.createdAt > old.createdAt ||
-      (entry.createdAt === old.createdAt && entry.id < old.id)
-    )
-      winners.set(entry.shortcode, entry);
-  }
-  return [...winners.values()].map(({ shortcode, url }) =>
-    Object.freeze({ shortcode, url }),
-  );
+  return collapseEntries(events).map(plain);
 }
 
 /** Shortcodes the first list already has keep their entry. */
@@ -110,17 +116,18 @@ export function createEmojiCatalog(
 ) {
   const prefixes = new Map<
     string,
-    { at: number; entries: readonly CustomEmoji[] }
+    { at: number; entries: readonly CatalogEntry[] }
   >();
-  const known = new Map<string, CustomEmoji>();
+  const known = new Map<string, CatalogEntry>();
   let epoch = new AbortController();
   let failedAt: number | undefined;
   let closed = false;
 
-  function remember(entries: readonly CustomEmoji[]) {
+  function remember(entries: readonly CatalogEntry[]) {
     for (const entry of entries) {
+      const old = known.get(entry.shortcode);
       known.delete(entry.shortcode);
-      known.set(entry.shortcode, entry);
+      known.set(entry.shortcode, old && !supersedes(entry, old) ? old : entry);
     }
     for (const name of known.keys()) {
       if (known.size <= KNOWN_MAX) break;
@@ -139,7 +146,9 @@ export function createEmojiCatalog(
     prefixes.delete(text);
     prefixes.set(text, hit);
     remember(hit.entries);
-    return hit.entries;
+    return hit.entries.map((entry) =>
+      plain(known.get(entry.shortcode) ?? entry),
+    );
   }
 
   /** Entries whose shortcode has the typed prefix as a word prefix, relevance first.
@@ -171,7 +180,7 @@ export function createEmojiCatalog(
         { signal: owned, priority: "foreground" },
       );
       owned.throwIfAborted();
-      const entries = collapseCatalog(events).slice(0, EMOJI_SEARCH_LIMIT);
+      const entries = collapseEntries(events).slice(0, EMOJI_SEARCH_LIMIT);
       failedAt = undefined;
       prefixes.set(text, { at: now(), entries });
       for (const key of prefixes.keys()) {
@@ -179,7 +188,7 @@ export function createEmojiCatalog(
         prefixes.delete(key);
       }
       remember(entries);
-      return entries;
+      return entries.map(plain);
     } catch (error) {
       if (!owned.aborted && readErrorKind(error) !== "cancelled")
         failedAt = now();
@@ -198,7 +207,7 @@ export function createEmojiCatalog(
     search,
     cached,
     /** Catalog emoji already read from the relay this session, newest last. */
-    known: (): readonly CustomEmoji[] => [...known.values()],
+    known: (): readonly CustomEmoji[] => [...known.values()].map(plain),
     clear,
     dispose() {
       closed = true;

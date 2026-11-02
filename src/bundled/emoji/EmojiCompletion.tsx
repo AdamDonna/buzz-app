@@ -25,6 +25,7 @@ const SEARCH_FAILED =
   "Community emoji search unavailable; showing loaded emoji.";
 type RelaySearch = Readonly<{
   key: string;
+  catalog: object;
   entries?: readonly CustomEmojiEntry[];
   failed?: true;
 }>;
@@ -136,7 +137,8 @@ export function EmojiCompletion({
   const searchable =
     !!session.emoji.search && catalogSearchText(query.query) !== undefined;
   const searchKey = `${attempt}\n${query.query}`;
-  const found = relay?.key === searchKey ? relay : undefined;
+  const found =
+    relay?.key === searchKey && relay.catalog === catalog ? relay : undefined;
   useEffect(() => {
     void session.emoji.ensure("foreground");
   }, [session]);
@@ -155,7 +157,7 @@ export function EmojiCompletion({
           (entries) => {
             if (controller.signal.aborted) return;
             cancelledAt.current = undefined;
-            setRelay({ key: searchKey, entries });
+            setRelay({ key: searchKey, catalog, entries });
           },
           (error) => {
             if (controller.signal.aborted) return;
@@ -167,7 +169,7 @@ export function EmojiCompletion({
               searchAgain((value) => value + 1);
               return;
             }
-            setRelay({ key: searchKey, failed: true });
+            setRelay({ key: searchKey, catalog, failed: true });
           },
         );
     }, EMOJI_SEARCH_DEBOUNCE_MS);
@@ -175,7 +177,7 @@ export function EmojiCompletion({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [session, searchable, query.query, searchKey, again]);
+  }, [session, searchable, query.query, searchKey, again, catalog]);
   useEffect(() => {
     void attempt; // Explicit retry repeats this query even when catalog data is unchanged.
     let live = true;
