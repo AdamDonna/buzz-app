@@ -1103,24 +1103,28 @@ function ChannelWorkspace({
       if (!historyPanel(entry)) return;
       const pane = entryPane(tabState.mainEntries, entry);
       const fallback = closeTarget(pane, remaining);
-      if (!fallback || !navigator) trigger?.focus({ preventScroll: true });
+      const visits = tabState.detailVisits(entry.channelId, entry.target);
+      const from = navigator?.snapshot().entry.id;
+      // Retiring a retained panel need not leave the current visit.
+      const deferFocus = !!(
+        trigger &&
+        fallback &&
+        from &&
+        visits.includes(from)
+      );
       if (fallback) {
-        if (trigger && navigator)
+        if (deferFocus && trigger && from)
           returnFocus.current = {
             trigger,
             channelId: currentId,
             after: {
-              from: navigator.snapshot().entry.id,
+              from,
               target: targetKey(fallback),
             },
           };
-        dismissContent(
-          tabState.detailVisits(entry.channelId, entry.target),
-          fallback,
-          pane,
-          remaining,
-        );
+        dismissContent(visits, fallback, pane, remaining);
       }
+      return deferFocus;
     },
     onCloseThread: (tab, active, last) => {
       // X is explicit dismissal; Back/Forward never comes through this path.

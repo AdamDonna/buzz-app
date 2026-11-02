@@ -1101,6 +1101,21 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       ).toBeUndefined();
     }
   }
+  // Retained Profiles can outlive their routed visit. Closing one must not
+  // wait for a navigation that retiring only its older visits will not make.
+  await row.press("Enter");
+  await expect(profileTab).toBeFocused();
+  await page.evaluate(() => {
+    const navigation = window.profilesFixture.navigation;
+    const { detail: _detail, ...channel } = navigation.snapshot().entry.target;
+    return navigation.open(channel);
+  });
+  await expect(profileTab).toBeVisible();
+  await profileTab.focus();
+  await profileTab.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(members).toBeFocused();
+  await members.press("Enter");
   await dialog.getByRole("button", { name: "Close" }).click();
   await page.evaluate(() =>
     window.profilesFixture.change("disable", "buzz.profiles"),
