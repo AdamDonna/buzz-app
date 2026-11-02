@@ -89,6 +89,10 @@ function world(channel: ChannelSummary = summary(), options: Options = {}) {
     delivery: vi.fn((): string | undefined => undefined),
     people: vi.fn(),
   };
+  const profileMap = new Map<string, { name: string; isAgent?: boolean }>([
+    [robot.pubkey, { name: "Robot", isAgent: true }],
+  ]);
+  const ensureProfiles = vi.fn(async (_keys: readonly string[]) => {});
   const send = vi.fn(async () => "event-1");
   const dismiss = vi.fn(async () => {});
   const navigation = {
@@ -108,10 +112,7 @@ function world(channel: ChannelSummary = summary(), options: Options = {}) {
     messages: { send },
     outbox: { supports: () => true, dismiss },
     agentChoices: { snapshot: () => ({ identities: [] }) },
-    profiles: {
-      snapshot: () =>
-        new Map([[robot.pubkey, { name: "Robot", isAgent: true }]]),
-    },
+    profiles: { snapshot: () => profileMap, ensure: ensureProfiles },
   } as unknown as ComposerSession;
   return {
     channels,
@@ -120,6 +121,8 @@ function world(channel: ChannelSummary = summary(), options: Options = {}) {
     confirmChannelAction,
     preferences,
     directMessages,
+    profileMap,
+    ensureProfiles,
     send,
     dismiss,
     navigation,
@@ -528,21 +531,45 @@ describe("/dm", () => {
     expect(w.navigation.open).toHaveBeenCalledExactlyOnceWith(target);
   });
 
-  it("matches the longest name and an escaped name at the start", async () => {
+  it("reads the leading mentions against the draft's own, not by name", async () => {
     const w = world();
     const ann = { pubkey: "d".repeat(64), name: "Ann" };
     const annLee = { pubkey: "e".repeat(64), name: "Ann Lee" };
     const odd = { pubkey: "f".repeat(64), name: "Al_ice*" };
-    await commandsFor(w).run("dm", "@Ann Lee @Al\\_ice\\* hi", [
+    await commandsFor(w).run("dm", "@Ann Lee called; ask @Ann Lee", [
       ann,
       annLee,
-      odd,
     ]);
-    expect(w.directMessages.open.mock.calls[0]?.[0]).toEqual([
+    expect(w.directMessages.open.mock.calls[0]?.[0]).toEqual([ann.pubkey]);
+    expect(w.send).toHaveBeenLastCalledWith(
+      dmId,
+      "Lee called; ask @Ann Lee",
+      [],
+    );
+    await commandsFor(w).run("dm", "@Ann Lee @Al\\_ice\\* hi", [annLee, odd]);
+    expect(w.directMessages.open.mock.calls[1]?.[0]).toEqual([
       annLee.pubkey,
       odd.pubkey,
     ]);
-    expect(w.send).toHaveBeenCalledWith(dmId, "hi", []);
+    expect(w.send).toHaveBeenLastCalledWith(dmId, "hi", []);
+  });
+
+  it("consumes a repeated leading mention instead of sending it as text", async () => {
+    const w = world();
+    await commandsFor(w).run("dm", "@Alice @Alice @Bob hello", [
+      alice,
+      alice,
+      bob,
+    ]);
+    expect(w.directMessages.open.mock.calls[0]?.[0]).toEqual([
+      alice.pubkey,
+      bob.pubkey,
+    ]);
+    expect(w.send).toHaveBeenLastCalledWith(dmId, "hello", []);
+    w.send.mockClear();
+    await commandsFor(w).run("dm", "@Alice @Alice", [alice]);
+    expect(w.directMessages.open.mock.calls[1]?.[0]).toEqual([alice.pubkey]);
+    expect(w.send).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -586,6 +613,37 @@ describe("/dm", () => {
       commandsFor(w).run("dm", `${args} hello`, who),
     ).rejects.toThrow(message);
     expect(w.directMessages.open).not.toHaveBeenCalled();
+    expect(w.send).not.toHaveBeenCalled();
+  });
+
+  it("resolves a mentioned person's profile before deciding they are not an agent", async () => {
+    const w = world();
+    const stranger = { pubkey: "d".repeat(64), name: "Stranger" };
+    w.ensureProfiles.mockImplementationOnce(async () => {
+      w.profileMap.set(stranger.pubkey, { name: "Stranger", isAgent: true });
+    });
+    await expect(
+      commandsFor(w).run("dm", "@Stranger hi", [stranger]),
+    ).rejects.toThrow("Stranger isn't an agent you can message.");
+    expect(w.ensureProfiles).toHaveBeenCalledExactlyOnceWith([stranger.pubkey]);
+    expect(w.directMessages.open).not.toHaveBeenCalled();
+
+    w.ensureProfiles.mockRejectedValueOnce(new Error("Offline"));
+    await expect(
+      commandsFor(w).run("dm", "@Stranger hi", [stranger]),
+    ).rejects.toThrow("Couldn't check who you're messaging (Offline).");
+    expect(w.directMessages.open).not.toHaveBeenCalled();
+  });
+
+  it("rechecks agent eligibility after opening and before sending", async () => {
+    const w = world();
+    w.directMessages.open.mockImplementationOnce(async () => {
+      w.profileMap.set(alice.pubkey, { name: "Alice", isAgent: true });
+      return dmId;
+    });
+    await expect(
+      commandsFor(w).run("dm", "@Alice hi", [alice]),
+    ).rejects.toThrow("Alice isn't an agent you can message.");
     expect(w.send).not.toHaveBeenCalled();
   });
 

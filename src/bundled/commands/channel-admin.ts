@@ -1,4 +1,5 @@
 import { canMessageAgent } from "../../features/agents/choices";
+import type { ComposerSession } from "../../features/messages/composer-session";
 import { conversationTarget } from "../../features/channel-navigation/routes";
 import type {
   SlashCommand,
@@ -52,30 +53,54 @@ function channelName(args: string, recipients: readonly Person[]) {
 
 const DM_USAGE = "/dm @user… [message]";
 
-/** The leading mentions are who to message; whatever follows is the message. */
+/** The leading mentions are who to message; whatever follows is the message.
+ * `recipients` are the draft's mentions in the order they appear, so the
+ * leading `@name` tokens are read against them in turn instead of by name:
+ * plain text that merely spells another person's name never picks them. A
+ * leading mention of someone already named is consumed as a repeat. */
 function directMessageArguments(args: string, recipients: readonly Person[]) {
-  const pool = [...distinct(recipients)].sort(
-    (a, b) => b.name.length - a.name.length,
-  );
-  const people: Person[] = [];
+  const named: Person[] = [];
   let rest = args.trimStart();
+  let upcoming = 0;
+  const lengthOf = (person: Person) =>
+    new RegExp(`^@${optionallyEscaped(person.name)}(?=\\s|$)`).exec(rest)?.[0]
+      .length;
   for (;;) {
-    let consumed = 0;
-    const next = pool.find((person) => {
-      if (people.includes(person)) return false;
-      const hit = new RegExp(
-        `^@${optionallyEscaped(person.name)}(?=\\s|$)`,
-      ).exec(rest);
-      consumed = hit?.[0].length ?? 0;
-      return !!hit;
-    });
-    if (!next) break;
-    people.push(next);
-    rest = rest.slice(consumed).trimStart();
+    const person = [recipients[upcoming], ...named].find(
+      (candidate) => candidate && lengthOf(candidate),
+    );
+    if (!person) break;
+    if (person === recipients[upcoming]) upcoming += 1;
+    named.push(person);
+    rest = rest.slice(lengthOf(person)).trimStart();
   }
+  const people = distinct(named);
   if (!people.length)
     throw new Error(`Mention each person with @. Usage: ${DM_USAGE}`);
   return { people, message: rest.trim() };
+}
+
+/** Throws unless every person is a human or an agent this viewer may message,
+ * as the New message flow decides it from the current inventory and profiles. */
+function refuseUnavailableAgents(
+  session: Pick<ComposerSession, "agentChoices" | "profiles">,
+  people: readonly Person[],
+) {
+  const controlled = new Set(
+    session.agentChoices
+      .snapshot()
+      .identities.filter(canMessageAgent)
+      .map((agent) => agent.pubkey),
+  );
+  const profiles = session.profiles.snapshot();
+  const refused = people.filter(
+    ({ pubkey }) =>
+      profiles.get(pubkey)?.isAgent === true && !controlled.has(pubkey),
+  );
+  if (refused.length)
+    throw new Error(
+      `${listNames(refused.map(({ name }) => name))} ${refused.length === 1 ? "isn't an agent" : "aren't agents"} you can message.`,
+    );
 }
 
 /** `/rename`, `/archive`, `/mute` and `/dm` over the services the channel and
@@ -183,23 +208,19 @@ export function channelAdminCommands(navigation: Navigation): SlashCommand[] {
           throw new Error(`You can't message yourself. Usage: ${DM_USAGE}`);
         if (!validDirectMessageParticipants(keys, viewer))
           throw new Error("Choose between one and eight other people.");
-        const controlled = new Set(
-          session.agentChoices
-            .snapshot()
-            .identities.filter(canMessageAgent)
-            .map((agent) => agent.pubkey),
-        );
-        const profiles = session.profiles.snapshot();
-        const refused = people.filter(
-          ({ pubkey }) =>
-            profiles.get(pubkey)?.isAgent === true && !controlled.has(pubkey),
-        );
-        if (refused.length)
+        try {
+          await session.profiles.ensure(keys);
+        } catch (reason) {
+          signal.throwIfAborted();
           throw new Error(
-            `${listNames(refused.map(({ name }) => name))} ${refused.length === 1 ? "isn't an agent" : "aren't agents"} you can message.`,
+            `Couldn't check who you're messaging (${why(reason)}). Try again.`,
           );
+        }
+        signal.throwIfAborted();
+        refuseUnavailableAgents(session, people);
         const channelId = await directMessages.open(keys, signal);
         signal.throwIfAborted();
+        refuseUnavailableAgents(session, people);
         if (message) {
           const names = listNames(people.map(({ name }) => name));
           if (!directMessages.delivered)
