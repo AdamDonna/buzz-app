@@ -85,6 +85,8 @@ export type MemberAdditionIntent = {
   id?: string;
   confirmed?: boolean;
   dismissed?: boolean;
+  /** Adds the person as a guest, who can read but not post. */
+  role?: "guest";
 };
 
 /** Explicit single-person intent. Membership truth and pending writes stay session-owned. */
@@ -150,7 +152,10 @@ export async function addChannelMember(
               ) &&
               !event.tags.some(
                 ([tag, value]) =>
-                  tag === "role" && value !== "bot" && value !== "member",
+                  tag === "role" &&
+                  (intent.role
+                    ? value !== intent.role
+                    : value !== "bot" && value !== "member"),
               ),
         );
   const recovery = { key: `member-add:${channelId}:${pubkey}`, value: "1" };
@@ -212,13 +217,15 @@ export async function addChannelMember(
   const current = channel();
   // Private channel additions grant participation explicitly, even if an older
   // saved admission default is Guest. Solo and system admission stay separate.
-  const role = isAgent
-    ? "bot"
-    : !soloParticipant &&
-        current?.visibility === "private" &&
-        (current.channelType === "stream" || current.channelType === "forum")
-      ? "member"
-      : undefined;
+  const role = intent.role
+    ? intent.role
+    : isAgent
+      ? "bot"
+      : !soloParticipant &&
+          current?.visibility === "private" &&
+          (current.channelType === "stream" || current.channelType === "forum")
+        ? "member"
+        : undefined;
   beforeDispatch?.();
   const id =
     pending?.event.id ??

@@ -139,7 +139,10 @@ export function PrivateChannels({
     }
   };
   const add = (channels: readonly ChannelSummary[]) =>
-    run(channels, true, (id) => session.memberAdditions.add(id, bestie));
+    // Bestie reads these as a guest: it reports in your DM and can't post here.
+    run(channels, true, (id) =>
+      session.memberAdditions.add(id, bestie, { role: "guest" }),
+    );
   const remove = (channel: ChannelSummary) =>
     run([channel], false, (id) => removeMember(session, id, bestie));
   const adding = addable.some((channel) => busy.has(channel.id));
@@ -153,7 +156,7 @@ export function PrivateChannels({
     <>
       <InlineHeader
         title="Private channels Bestie can read"
-        subtitle="Bestie already reads every public channel. In a channel you add it to, it reads along but answers only when mentioned."
+        subtitle="Bestie already reads every public channel. In a channel you add it to, it reads along as a guest and can't post there."
       />
       <SettingsGroup>
         {joined.map((channel) => (

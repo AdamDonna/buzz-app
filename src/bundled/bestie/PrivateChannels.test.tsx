@@ -14,6 +14,7 @@ afterEach(cleanup);
 
 const YOU = "f".repeat(64);
 const BESTIE = "b".repeat(64);
+const GUEST = { role: "guest" };
 const OTHER = "c".repeat(64);
 const channel = (
   name: string,
@@ -135,7 +136,7 @@ it("adds Bestie to one channel, or to all after asking, and reports what didn't 
   const items = await screen.findAllByRole("menuitem");
   expect(items.map((item) => item.textContent)).toEqual(["#beta", "#alpha"]);
   await user.click(screen.getByRole("menuitem", { name: "#alpha" }));
-  expect(add).toHaveBeenCalledWith("id-alpha", BESTIE);
+  expect(add).toHaveBeenCalledWith("id-alpha", BESTIE, GUEST);
 
   add.mockClear();
   expect(screen.getByText(/2 channels without Bestie/)).toBeVisible();
@@ -148,9 +149,10 @@ it("adds Bestie to one channel, or to all after asking, and reports what didn't 
   });
   expect(add).not.toHaveBeenCalled();
   await user.click(within(ask).getByRole("button", { name: "Add to all" }));
+  // Bestie joins as a guest on both paths: it reads but can't post.
   expect(add.mock.calls).toEqual([
-    ["id-beta", BESTIE],
-    ["id-alpha", BESTIE],
+    ["id-beta", BESTIE, GUEST],
+    ["id-alpha", BESTIE, GUEST],
   ]);
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "#beta: Not confirmed. Try again.",
@@ -180,7 +182,7 @@ it("stops adding a Bestie that changed partway through Add to all", async () => 
   // Change makes another agent Bestie while the first add is pending.
   rerender(<PrivateChannels session={value} bestie={OTHER} />);
   await act(async () => done());
-  expect(add.mock.calls).toEqual([[expect.any(String), BESTIE]]);
+  expect(add.mock.calls).toEqual([[expect.any(String), BESTIE, GUEST]]);
 });
 
 it("says when a removal isn't confirmed, and offers none from a cached roster", async () => {
@@ -259,5 +261,5 @@ it("keeps the channels it knows from a partial roster, and holds Add to all", as
   // A channel that is known can still be added on its own.
   await user.click(screen.getByRole("button", { name: "Choose…" }));
   await user.click(await screen.findByRole("menuitem", { name: "#alpha" }));
-  expect(add).toHaveBeenCalledWith("id-alpha", BESTIE);
+  expect(add).toHaveBeenCalledWith("id-alpha", BESTIE, GUEST);
 });

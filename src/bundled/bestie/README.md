@@ -57,7 +57,8 @@ clear memory in the Memory tab.
 **Private channels Bestie can read** lists the private channels you share with
 Bestie, each with **Remove**. **Add to a channel** (**Choose…**) and **Add to
 all my private channels** add it to the private channels you are in, most
-recently active first; each channel's members see that you added it. Each
+recently active first; each channel's members see that you added it. Bestie
+joins as a guest, so it reads the channel but can't post there. Each
 action has a row of its own, so in a narrow panel its button wraps under it.
 Until your channel list has loaded in full, the section says so instead of
 saying Bestie is in none: a failed read offers **Retry**, the channels already

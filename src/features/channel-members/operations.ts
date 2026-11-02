@@ -48,7 +48,11 @@ export function createMemberAdditions(
         listeners.delete(listener);
       };
     },
-    add(channelId: string, pubkey: string): Promise<void> {
+    add(
+      channelId: string,
+      pubkey: string,
+      options: { role?: "guest" } = {},
+    ): Promise<void> {
       if (signal.aborted)
         return Promise.reject(new Error("The community connection closed."));
       const key = JSON.stringify([channelId, pubkey]);
@@ -59,6 +63,8 @@ export function createMemberAdditions(
       const previous = snapshot.find(matches);
       const intent = intents.get(key) ?? {};
       intents.set(key, intent);
+      if (options.role) intent.role = options.role;
+      else delete intent.role;
       let confirmed = previous?.confirmed ?? false;
       const update = (item?: Addition) => {
         if (!signal.aborted)

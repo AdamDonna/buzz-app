@@ -216,8 +216,8 @@ function setup(
         expect(owner.session.channels.list().status).toBe("ready"),
       );
     },
-    add: (signal = new AbortController().signal) =>
-      addChannelMember(owner.session, id, person.pubkey, signal),
+    add: (signal = new AbortController().signal, intent = {}) =>
+      addChannelMember(owner.session, id, person.pubkey, signal, intent),
   };
 }
 it("adds a private-channel participant explicitly and confirms the live roster using membership capability alone", async () => {
@@ -244,6 +244,15 @@ it("uses the bot role for an existing library agent", async () => {
   await t.setAgent();
   await t.add();
   expect(t.publish.mock.calls[0]?.[0].tags).toContainEqual(["role", "bot"]);
+});
+it("uses the guest role for an agent when the addition asks for it", async () => {
+  const t = setup();
+  await t.ready();
+  await t.setAgent();
+  await t.add(undefined, { role: "guest" });
+  const tags = t.publish.mock.calls[0]?.[0].tags;
+  expect(tags).toContainEqual(["role", "guest"]);
+  expect(tags).not.toContainEqual(["role", "bot"]);
 });
 it("adds a participant despite a private channel's saved Guest default", async () => {
   const t = setup("stream", "private", "guest");

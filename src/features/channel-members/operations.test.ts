@@ -48,3 +48,16 @@ it("session disposal cancels the continuation and clears recovery state", async 
     "connection closed",
   );
 });
+
+it("passes a requested guest role to the addition, and only to that one", async () => {
+  const roles: (string | undefined)[] = [];
+  const owner = createMemberAdditions(
+    new AbortController().signal,
+    async (_channel, _person, intent) => {
+      roles.push(intent.role);
+    },
+  );
+  await owner.add("channel", "agent", { role: "guest" });
+  await owner.add("other", "agent");
+  expect(roles).toEqual(["guest", undefined]);
+});
