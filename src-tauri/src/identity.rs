@@ -1136,9 +1136,8 @@ pub struct BuilderlabChallenge {
 }
 impl BuilderlabChallenge {
     /// block/buzz's `nostr_bind` checks and kind 24243 tags, pinned to production
-    /// Builderlab or a login origin the build grants (`builderlab_origins()`: the
-    /// `BUZZ_BUILDERLAB_URL` origin and each tenant's); never another origin.
-    fn template(self, now: u64, granted: &[String]) -> Result<EventTemplate> {
+    /// Builderlab or the `BUZZ_BUILDERLAB_URL` build origin; never another origin.
+    fn template(self, now: u64, configured: &str) -> Result<EventTemplate> {
         let nonce_ok = self.nonce.len() == 43
             && self
                 .nonce
@@ -1152,7 +1151,8 @@ impl BuilderlabChallenge {
             || !nonce_ok
             || self.verification_code.len() != 6
             || !self.verification_code.bytes().all(|b| b.is_ascii_digit())
-            || (self.origin != BUILDERLAB_ORIGIN && !granted.contains(&self.origin))
+            || (self.origin != BUILDERLAB_ORIGIN
+                && (configured.is_empty() || self.origin != configured))
             || expires <= i64::try_from(now).unwrap_or(i64::MAX)
         {
             return Err("Invalid Nostr identity challenge".into());
@@ -1186,7 +1186,7 @@ pub async fn identity_sign_builderlab_binding(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| "System clock is before 1970")?
         .as_secs();
-    host.sign(challenge.template(now, &buzzodz_plugins::builderlab_origins())?)
+    host.sign(challenge.template(now, buzzodz_plugins::BUILDERLAB_ORIGIN)?)
         .await
 }
 #[tauri::command]

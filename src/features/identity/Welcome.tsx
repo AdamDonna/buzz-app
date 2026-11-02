@@ -29,17 +29,13 @@ import type { Communities, PersonalProfile } from "../communities/service";
 import { readErrorKind } from "../relay/errors";
 import { Button } from "../../shared/design-system/ui/Button";
 import { BackupOffer } from "./BackupOffer";
+import { isBuilderlabHosted } from "./builderlab-hosted";
 import {
   builderlabAccount,
   type FirstRunAccount,
   type OwnedCommunity,
   seededAccount,
 } from "./builderlab-account";
-import {
-  type BuilderlabTenant,
-  configuredBuilderlabTenants,
-  discoverAuthentication,
-} from "./builderlab-tenants";
 import { CommunityUrlField } from "./CommunityUrlField";
 import { ConnectChoice } from "./ConnectChoice";
 import { InviteCodeField } from "./InviteCodeField";
@@ -77,20 +73,16 @@ import { WireframeScreen } from "./Wireframe";
 
 /**
  * The signed-in account: the development seed when a dev server set one
- * (production builds define it empty), else the tenant's kgoose through the
- * same bundled grant the sign-in used, and the identity's native uploader.
+ * (production builds define it empty), else the build URL's kgoose through
+ * the same bundled grant the sign-in used, and the identity's native uploader.
  */
-const firstRunAccount = (
-  credential: Credential,
-  origin: string | undefined,
-  identity: Identity,
-) => {
+const firstRunAccount = (credential: Credential, identity: Identity) => {
   const seed = parseFirstRunAccountSeed(
     import.meta.env.VITE_BUZZ_FIRST_RUN_ACCOUNT,
   );
   return seed
     ? seededAccount(seed, identity)
-    : builderlabAccount(credential, origin, bundledHost.request, identity);
+    : builderlabAccount(credential, bundledHost.request, identity);
 };
 
 /**
@@ -104,7 +96,6 @@ export function Welcome({
   children,
   connect = firstRunCredential,
   account = firstRunAccount,
-  tenants = configuredBuilderlabTenants,
 }: {
   identity: Identity;
   /** The live startup service: joining through it is what selects the community. */
@@ -115,24 +106,14 @@ export function Welcome({
    */
   invites: Pick<ReturnType<typeof createInviteIntent>, "open">;
   children: ReactNode;
-  /** `origin` is the tenant portal a community URL selected; the build default otherwise. */
-  connect?: (signal: AbortSignal, origin?: string) => Promise<Credential>;
-  /** The account for a credential `connect` returned, at the same origin. */
+  connect?: (signal: AbortSignal) => Promise<Credential>;
+  /** The account for a credential `connect` returned. */
   account?:
-    | ((
-        credential: Credential,
-        origin: string | undefined,
-        identity: Identity,
-      ) => FirstRunAccount)
+    | ((credential: Credential, identity: Identity) => FirstRunAccount)
     | undefined;
-  tenants?: readonly BuilderlabTenant[];
 }) {
   const state = useSyncExternalStore(identity.subscribe, identity.snapshot);
-  // Set by discovery before each sign-in; the session store never sees a URL.
-  const loginOrigin = useRef<string | undefined>(undefined);
-  const [login] = useState(() =>
-    createOAuthSession((signal) => connect(signal, loginOrigin.current)),
-  );
+  const [login] = useState(() => createOAuthSession(connect));
   // Counts canceled sign-ins: a sign-in continues only if none was canceled
   // since it started, since the session may by then hold a later sign-in.
   const cancels = useRef(0);
@@ -272,15 +253,14 @@ export function Welcome({
    * pauses on Welcome back, otherwise the key choice. The backed-up-key
    * lookup runs on both. Each choice below resumes setup with its own steps.
    */
-  const signIn = async (origin?: string) => {
+  const signIn = async () => {
     const attempt = cancels.current;
-    loginOrigin.current = origin;
-    // A canceled attempt still settles here, possibly after another sign-in
-    // succeeded at another origin; it must not read that one's credential.
+    // A canceled attempt still settles here, possibly after a later sign-in
+    // succeeded; it must not read that one's credential.
     await login.signIn();
     if (attempt !== cancels.current || login.snapshot().status !== "signed-in")
       return;
-    const current = account(login.credential(), origin, identity);
+    const current = account(login.credential(), identity);
     reads.current = current;
     void setup.start(
       [
@@ -515,7 +495,7 @@ export function Welcome({
   const skipped = failedAfterKey && !blocked ? SKIPPED_BACKUP : undefined;
   /**
    * The pages setup rests on. The first two may be reached before any sign-in,
-   * for a community no tenant hosts; the rest only after one. A pause this
+   * for a found community; the rest only after one. A pause this
    * component did not reach has nothing to render.
    */
   const paused = (at: SetupPause) => {
@@ -523,7 +503,7 @@ export function Welcome({
     switch (at) {
       case "connect-choice":
         // Connect is the landing's own sign-in: resetting first lets the
-        // landing show it pending, with Cancel sign-in, as for a tenant.
+        // landing show it pending, with Cancel sign-in.
         return finding ? (
           <ConnectChoice
             host={new URL(finding).host}
@@ -693,9 +673,8 @@ export function Welcome({
     );
   // Discovery: the same unauthenticated lookup Join Community runs after
   // setup, so a bad address fails here, before sign-in and before a key
-  // exists. A found community says which sign-in comes next: a Builderlab
-  // tenant's portal, or none, which asks the user whether to connect at the
-  // build portal or bring a key.
+  // exists. A Builderlab-hosted community signs in at once; any other asks
+  // the user whether to connect at the build portal or bring a key.
   if (progress.status === "idle" && !auth.error && !discovering)
     return (
       <OnboardingScreen
@@ -835,8 +814,7 @@ export function Welcome({
           url={finding}
           onCancel={backToLanding}
           onFound={(found) => {
-            const method = discoverAuthentication(found, tenants);
-            if (method.kind === "builderlab") void signIn(method.origin);
+            if (isBuilderlabHosted(found)) void signIn();
             else pause("connect-choice");
           }}
           titleId="welcome-title"

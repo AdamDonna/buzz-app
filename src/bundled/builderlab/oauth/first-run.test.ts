@@ -47,33 +47,27 @@ it("requests under the bundled Builderlab grant without a plugin owner", async (
   expect(await bundledHost.runCommand("any")).toBeNull();
 });
 
-it.each([
-  ["the configured build URL", undefined, "https://builderlab.example"],
-  ["a tenant origin", "https://tenant.example", "https://tenant.example"],
-])(
-  "starts the native browser handoff at %s",
-  async (_label, origin, expected) => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
-    vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
-    // A refused listener ends the attempt before any exchange request.
-    vi.mocked(invoke).mockRejectedValueOnce("listener unavailable");
-    await expect(
-      firstRunCredential(new AbortController().signal, origin),
-    ).rejects.toThrow("Could not complete");
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke).toHaveBeenNthCalledWith(1, "plugin_catalog");
-    expect(invoke).toHaveBeenNthCalledWith(
-      2,
-      "oauth_callback_begin",
-      expect.objectContaining({
-        authorizationUrl: expect.stringMatching(
-          new RegExp(`^${expected}/api/goose/v1/auth/login\\?`),
-        ),
-        useState: true,
-      }),
-    );
-  },
-);
+it("starts the native browser handoff at the configured build URL", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  vi.mocked(invoke).mockResolvedValueOnce(catalog(true));
+  // A refused listener ends the attempt before any exchange request.
+  vi.mocked(invoke).mockRejectedValueOnce("listener unavailable");
+  await expect(
+    firstRunCredential(new AbortController().signal),
+  ).rejects.toThrow("Could not complete");
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(invoke).toHaveBeenNthCalledWith(1, "plugin_catalog");
+  expect(invoke).toHaveBeenNthCalledWith(
+    2,
+    "oauth_callback_begin",
+    expect.objectContaining({
+      authorizationUrl: expect.stringMatching(
+        /^https:\/\/builderlab\.example\/api\/goose\/v1\/auth\/login\?/,
+      ),
+      useState: true,
+    }),
+  );
+});
 
 // A disabled bundled plugin has no native grant, so its code exchange fails.
 it.each([

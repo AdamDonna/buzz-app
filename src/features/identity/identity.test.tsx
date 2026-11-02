@@ -111,7 +111,7 @@ const unexpectedRecovery = () => {
 };
 /**
  * Every backup succeeding, as on the build's own portal; backup status
- * unavailable, as on most tenants, so nothing is restored.
+ * unavailable, as on most Builderlab deployments, so nothing is restored.
  */
 const backupAnswers = {
   backUp: () => Promise.resolve(),
@@ -1084,17 +1084,10 @@ const keySavedNote =
   "Your key is saved on this device, but it isn’t backed up yet.";
 const keyUnlinkedNote =
   "Your key is saved on this device, but it isn’t linked to your account or backed up yet.";
-/** The test table: relay.example.com (any subdomain, default port) signs in at tenant.example. */
-const tenants = [
-  { relayHost: "relay.example.com", loginOrigin: "https://tenant.example" },
-];
-
-it("a landing URL is looked up before sign-in, a tenant's relay signs in at that tenant's portal, setup then lands on Join Community, and Cancel reaches Join a community with the address kept", async () => {
+it("a landing URL is looked up before sign-in, Sign in with email from the connect choice leads to setup, setup then lands on Join Community, and Cancel reaches Join a community with the address kept", async () => {
   const relay = landingRelay("https://relay.example.com");
   const released = deferred<Credential>();
-  const connect = vi.fn(
-    (_signal: AbortSignal, _origin?: string) => released.promise,
-  );
+  const connect = vi.fn((_signal: AbortSignal) => released.promise);
   const { backupStatus, release } = gatedStatus();
   const identity = createIdentity();
   const user = userEvent.setup();
@@ -1105,7 +1098,6 @@ it("a landing URL is looked up before sign-in, a tenant's relay signs in at that
       invites={invites}
       account={unlinkedWith(() => Promise.resolve(), { backupStatus })}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -1129,14 +1121,12 @@ it("a landing URL is looked up before sign-in, a tenant's relay signs in at that
   expect(connect).not.toHaveBeenCalled();
   expect(invoke).not.toHaveBeenCalledWith("identity_create", {});
   await act(async () => relay.info.resolve());
-  // Found: the host matches the tenant row as a subdomain, so sign-in starts
-  // at once at that tenant's portal; the landing shows it pending with the
-  // typed address held in the disabled field.
+  // Found: the connect choice. Sign in with email starts the build portal's
+  // sign-in, shown pending on the landing with the typed address held in the
+  // disabled field.
+  expect(connect).not.toHaveBeenCalled();
+  await user.click(connectButton());
   expect(connect).toHaveBeenCalledTimes(1);
-  expect(connect).toHaveBeenCalledWith(
-    expect.any(AbortSignal),
-    "https://tenant.example",
-  );
   expect(
     screen.queryByRole("heading", { name: "Finding community" }),
   ).toBeNull();
@@ -1186,12 +1176,12 @@ it("a landing URL is looked up before sign-in, a tenant's relay signs in at that
   identity.dispose();
 });
 
-/** The connect choice a found community no tenant hosts pauses on. */
+/** The connect choice a found community pauses on. */
 const connectChoiceHeading = () =>
   screen.getByRole("heading", { name: "Connect to your community" });
 /** The found host, shown under the title rather than in it. */
 const connectChoiceHost = () => screen.getByText("relay.example.com:8443");
-/** Type the non-hosted address (the tenant's host on a non-default port) through to the choice. */
+/** Type an address on a non-default port through to the choice. */
 async function connectChoicePage(
   user: ReturnType<typeof userEvent.setup>,
   relay: ReturnType<typeof landingRelay>,
@@ -1207,7 +1197,7 @@ async function connectChoicePage(
   expect(connectChoiceHost()).toBeVisible();
 }
 
-it("a landing URL no tenant hosts pauses on Connect to {host} with no sign-in and no key, and Back keeps the address", async () => {
+it("a found landing URL pauses on Connect to {host} with no sign-in and no key, and Back keeps the address", async () => {
   const relay = landingRelay();
   const connect = vi.fn();
   const identity = createIdentity();
@@ -1219,13 +1209,12 @@ it("a landing URL no tenant hosts pauses on Connect to {host} with no sign-in an
       invites={invites}
       account={unlinked}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
   await connectChoicePage(user, relay);
-  // Found, but no tenant hosts it: nothing runs until the user says who
+  // Found: nothing runs until the user says who
   // provides the key. The body is one sentence: why a key is needed at all.
   expect(
     screen.getByText("Buzz relies on a key for your identity."),
@@ -1264,9 +1253,7 @@ it("a landing URL no tenant hosts pauses on Connect to {host} with no sign-in an
 it("Sign in with email from the choice signs in at the build portal, runs the Connect lane with its key backup, and lands on Join Community for the address", async () => {
   const relay = landingRelay();
   const released = deferred<Credential>();
-  const connect = vi.fn(
-    (_signal: AbortSignal, _origin?: string) => released.promise,
-  );
+  const connect = vi.fn((_signal: AbortSignal) => released.promise);
   const { backupStatus, release } = gatedStatus();
   const backUp = vi.fn((_pubkey: string) => Promise.resolve());
   const account = vi.fn(
@@ -1281,17 +1268,15 @@ it("Sign in with email from the choice signs in at the build portal, runs the Co
       invites={invites}
       account={account}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
   await connectChoicePage(user, relay);
   await user.click(connectButton());
-  // The landing's own sign-in, at the build portal (no tenant origin), shown
-  // pending on the landing with the address held, as for a tenant.
+  // The landing's own sign-in, at the build portal, shown pending on the
+  // landing with the address held.
   expect(connect).toHaveBeenCalledTimes(1);
-  expect(connect).toHaveBeenCalledWith(expect.any(AbortSignal), undefined);
   expect(screen.queryByRole("heading", { name: /^Connect to / })).toBeNull();
   expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeEnabled();
   expect(urlField()).toBeDisabled();
@@ -1301,7 +1286,7 @@ it("Sign in with email from the choice signs in at the build portal, runs the Co
   // The reads go to the build portal too, and the lane is Connect's: account
   // check, backed-up-key lookup, then the key choice.
   await waitFor(() =>
-    expect(account).toHaveBeenCalledWith(credential, undefined, identity),
+    expect(account).toHaveBeenCalledWith(credential, identity),
   );
   await waitFor(() =>
     expect(screen.getByRole("status")).toHaveTextContent(
@@ -1348,12 +1333,10 @@ it("Sign in with email from the choice signs in at the build portal, runs the Co
 it("Cancel sign-in after Connect from the choice returns to the landing with the address kept and no second lookup", async () => {
   const relay = landingRelay();
   let signal: AbortSignal | undefined;
-  const connect = vi.fn(
-    (current: AbortSignal, _origin?: string): Promise<Credential> => {
-      signal = current;
-      return new Promise(() => {});
-    },
-  );
+  const connect = vi.fn((current: AbortSignal): Promise<Credential> => {
+    signal = current;
+    return new Promise(() => {});
+  });
   const identity = createIdentity();
   const user = userEvent.setup();
   render(
@@ -1363,7 +1346,6 @@ it("Cancel sign-in after Connect from the choice returns to the landing with the
       invites={invites}
       account={unlinked}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -1371,7 +1353,7 @@ it("Cancel sign-in after Connect from the choice returns to the landing with the
   await connectChoicePage(user, relay);
   await user.click(connectButton());
   await screen.findByRole("button", { name: "Cancel sign-in" });
-  expect(connect).toHaveBeenCalledWith(expect.any(AbortSignal), undefined);
+  expect(connect).toHaveBeenCalledTimes(1);
   await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   expect(signal?.aborted).toBe(true);
   // The landing, not the choice: the address is editable again and neither
@@ -1411,7 +1393,6 @@ it("I already have a key from the choice imports the key with no sign-in, no lin
       invites={invites}
       account={account}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -1500,7 +1481,6 @@ it("a native import refusal from the choice stays under the field, and Back retu
       invites={invites}
       account={unlinked}
       connect={vi.fn()}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -1583,12 +1563,44 @@ it("a landing URL that cannot be reached fails before sign-in, and Cancel keeps 
   identity.dispose();
 });
 
+it("a Builderlab-hosted landing URL signs in at once, with no connect choice", async () => {
+  const relay = landingRelay("https://design.communities.buzz.xyz");
+  relay.info.resolve();
+  const connect = vi
+    .fn<(signal: AbortSignal) => Promise<Credential>>()
+    .mockImplementation(() => new Promise(() => {}));
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+  await screen.findByRole("button", { name: "Cancel sign-in" });
+  expect(connect).toHaveBeenCalledTimes(1);
+  expect(
+    screen.queryByRole("heading", { name: "Connect to your community" }),
+  ).toBeNull();
+  expect(urlField()).toHaveValue("design.communities.buzz.xyz");
+  expect(relay.relayCalls).toEqual(relay.lookup);
+  expect(identity.snapshot().status).toBe("missing");
+  identity.dispose();
+});
+
 it("canceling or failing sign-in after a landing URL returns to the landing with the address kept and no second lookup", async () => {
   const relay = landingRelay("https://relay.example.com");
   relay.info.resolve();
   let signal: AbortSignal | undefined;
   const connect = vi
-    .fn<(signal: AbortSignal, origin?: string) => Promise<Credential>>()
+    .fn<(signal: AbortSignal) => Promise<Credential>>()
     .mockImplementationOnce((current) => {
       signal = current;
       return new Promise(() => {});
@@ -1604,18 +1616,15 @@ it("canceling or failing sign-in after a landing URL returns to the landing with
       invites={invites}
       account={unlinked}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
   await screen.findByRole("button", { name: SIGN_IN });
   await user.type(urlField(), "relay.example.com{Enter}");
+  await screen.findByRole("heading", { name: "Connect to your community" });
+  await user.click(connectButton());
   await screen.findByRole("button", { name: "Cancel sign-in" });
-  expect(connect).toHaveBeenCalledWith(
-    expect.any(AbortSignal),
-    "https://tenant.example",
-  );
   expect(connect).toHaveBeenCalledTimes(1);
   expect(relay.relayCalls).toEqual(relay.lookup);
   await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -1630,18 +1639,18 @@ it("canceling or failing sign-in after a landing URL returns to the landing with
     screen.queryByRole("heading", { name: "Finding community" }),
   ).toBeNull();
   expect(relay.relayCalls).toEqual(relay.lookup);
-  // Connect without the URL: the tenant origin from the cancelled sign-in
-  // must not leak into this one.
+  // The landing's own Connect still signs in after the cancelled one.
   await user.click(connectButton());
   await screen.findByRole("button", { name: "Cancel sign-in" });
   expect(connect).toHaveBeenCalledTimes(2);
-  expect(connect).toHaveBeenLastCalledWith(expect.any(AbortSignal), undefined);
   await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   expect(welcomeHeading()).toBeVisible();
   expect(urlField()).toHaveValue("relay.example.com");
   expect(relay.relayCalls).toEqual(relay.lookup);
   // Continue again: a fresh lookup, then a sign-in that fails; Back behaves the same.
   await user.click(urlContinue());
+  await screen.findByRole("heading", { name: "Connect to your community" });
+  await user.click(connectButton());
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Browser could not open.",
   );
@@ -1661,18 +1670,21 @@ it("canceling or failing sign-in after a landing URL returns to the landing with
   identity.dispose();
 });
 
-it("a canceled tenant sign-in that returns after a later sign-in is ignored: setup is not restarted and the later credential is not read for the tenant", async () => {
-  const relay = landingRelay("https://relay.example.com");
-  relay.info.resolve();
+it("a canceled sign-in that returns after a later sign-in is ignored: setup is not restarted and the later credential is read once", async () => {
+  vi.mocked(invoke).mockImplementation((command) => {
+    if (command === "identity_restore") return Promise.resolve(null);
+    if (command === "identity_legacy_available") return Promise.resolve(false);
+    throw new Error(`Unexpected command ${command}`);
+  });
   const second: Credential = {
     value: "second-token",
     account: { ...credential.account, email: "b@example.com" },
   };
-  // The tenant exchange ignores the abort, as native HTTP does, and returns
+  // The first exchange ignores the abort, as native HTTP does, and returns
   // only after the next sign-in has finished.
   const stale = deferred<Credential>();
   const connect = vi
-    .fn((_signal: AbortSignal, _origin?: string) => Promise.resolve(second))
+    .fn((_signal: AbortSignal) => Promise.resolve(second))
     .mockImplementationOnce(() => stale.promise);
   const account = vi.fn(unlinked);
   const digest = vi.spyOn(crypto.subtle, "digest");
@@ -1685,29 +1697,24 @@ it("a canceled tenant sign-in that returns after a later sign-in is ignored: set
       invites={invites}
       account={account}
       connect={connect}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
-  await screen.findByRole("button", { name: SIGN_IN });
-  await user.type(urlField(), "relay.example.com{Enter}");
+  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
   await user.click(
     await screen.findByRole("button", { name: "Cancel sign-in" }),
   );
-  expect(connect).toHaveBeenLastCalledWith(
-    expect.any(AbortSignal),
-    "https://tenant.example",
-  );
-  // A sign-in at the build's portal reaches the key choice, and the user
-  // starts entering a key.
+  // A second sign-in reaches the key choice, and the user starts entering a
+  // key.
   await user.click(connectButton());
   await user.click(
     await screen.findByRole("button", { name: "I already have a key" }),
   );
   await user.type(keyField(), "nsec1draft");
+  expect(connect).toHaveBeenCalledTimes(2);
   expect(account).toHaveBeenCalledTimes(1);
-  expect(account).toHaveBeenCalledWith(second, undefined, identity);
+  expect(account).toHaveBeenCalledWith(second, identity);
   const digests = digest.mock.calls.length;
   await act(async () => {
     stale.resolve(credential);
@@ -1722,7 +1729,6 @@ it("a canceled tenant sign-in that returns after a later sign-in is ignored: set
   ).toBeVisible();
   expect(keyField()).toHaveValue("nsec1draft");
   expect(account).toHaveBeenCalledTimes(1);
-  expect(relay.relayCalls).toEqual(relay.lookup);
   identity.dispose();
 });
 
@@ -1788,8 +1794,6 @@ it("Sign in with email runs sign-in, creates the key mid-setup, and lands on Joi
   );
   await user.click(await screen.findByRole("button", { name: SIGN_IN }));
   expect(connect).toHaveBeenCalledTimes(1);
-  // No community URL chose a tenant, so sign-in uses the build's default origin.
-  expect(connect).toHaveBeenCalledWith(expect.any(AbortSignal), undefined);
   expect(screen.getByRole("status")).toHaveTextContent(
     "Finish sign-in in your browser",
   );
@@ -1803,7 +1807,7 @@ it("Sign in with email runs sign-in, creates the key mid-setup, and lands on Joi
     screen.getByRole("heading", { name: "Setting up Buzz" }),
   ).toHaveFocus();
   // The account check is real and runs first: it decides the lane.
-  expect(account).toHaveBeenCalledWith(credential, undefined, identity);
+  expect(account).toHaveBeenCalledWith(credential, identity);
   expect(screen.getByRole("status")).toHaveTextContent(
     "Checking your account…",
   );
@@ -1913,22 +1917,20 @@ it("Use a different account on Set up your key signs the session out, returns to
     vi.fn(() => Promise.resolve(null)),
   ];
   let signIns = 0;
-  const account = vi.fn(
-    (_credential: Credential, _origin: string | undefined, _id: Identity) => {
-      const linkedKey = linkedKeys[signIns++];
-      if (!linkedKey) throw new Error("A third sign-in");
-      return {
-        linkedKey,
-        ownedCommunities: () => Promise.resolve([]),
-        knownCommunities: () => Promise.resolve([]),
-        saveCommunity,
-        bind: () =>
-          Promise.reject(new Error("Welcome bound a key it never created")),
-        unbind: noUnlink,
-        ...backupAnswers,
-      };
-    },
-  );
+  const account = vi.fn((_credential: Credential, _id: Identity) => {
+    const linkedKey = linkedKeys[signIns++];
+    if (!linkedKey) throw new Error("A third sign-in");
+    return {
+      linkedKey,
+      ownedCommunities: () => Promise.resolve([]),
+      knownCommunities: () => Promise.resolve([]),
+      saveCommunity,
+      bind: () =>
+        Promise.reject(new Error("Welcome bound a key it never created")),
+      unbind: noUnlink,
+      ...backupAnswers,
+    };
+  });
   const identity = createIdentity();
   const user = userEvent.setup();
   render(
@@ -1972,7 +1974,7 @@ it("Use a different account on Set up your key signs the session out, returns to
     await screen.findByRole("heading", { name: "Set up your key" }),
   ).toBeVisible();
   expect(account).toHaveBeenCalledTimes(2);
-  expect(account).toHaveBeenNthCalledWith(2, second, undefined, identity);
+  expect(account).toHaveBeenNthCalledWith(2, second, identity);
   expect(linkedKeys[0]).toHaveBeenCalledTimes(1);
   expect(linkedKeys[1]).toHaveBeenCalledTimes(1);
   expect(screen.getByText("Signed in as b@example.com.")).toBeVisible();
@@ -2121,13 +2123,14 @@ it("a backup that times out after Create my key offers Try again, which re-runs 
       invites={invites}
       account={unlinkedWith(bind, { backUp, backupStatus })}
       connect={vi.fn().mockResolvedValue(credential)}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
   await screen.findByRole("button", { name: SIGN_IN });
   await user.type(urlField(), "relay.example.com{Enter}");
+  await screen.findByRole("heading", { name: "Connect to your community" });
+  await user.click(connectButton());
   expect(await screen.findByRole("status")).toHaveTextContent(
     "Checking for a backed-up key…",
   );
@@ -2744,7 +2747,6 @@ it("a key imported from Connect to {host} joins with no account to save the comm
       invites={invites}
       account={account}
       connect={vi.fn()}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -3018,8 +3020,8 @@ const restoreRead = (community: string, member: ReturnType<typeof keypair>) => [
 const callsTo = (relay: ReturnType<typeof nativeRelay>, community: string) =>
   relay.calls.filter((call) => call.community === community);
 /**
- * Sign in with email (from the connect choice when `typed` is given, as
- * no tenant hosts it) for an account that saved `known`, then Create my key.
+ * Sign in with email (from the connect choice when `typed` is given) for an
+ * account that saved `known`, then Create my key.
  */
 async function restoreLane(
   identity: Identity,
@@ -3457,7 +3459,6 @@ it("an invite link pasted on the landing is looked up at its origin, kept throug
       invites={invites}
       account={unlinked}
       connect={vi.fn().mockResolvedValue(credential)}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -4102,7 +4103,7 @@ it("a dropped or chosen key file fills the field from its first line, and an ove
   identity.dispose();
 });
 
-it("an imported key on the tenant path is offered a backup, and Not now lands on Join Community for the landing URL", async () => {
+it("an imported key after signing in from the connect choice is offered a backup, and Not now lands on Join Community for the landing URL", async () => {
   const relay = landingRelay("https://relay.example.com");
   relay.info.resolve();
   const identity = createIdentity();
@@ -4114,13 +4115,14 @@ it("an imported key on the tenant path is offered a backup, and Not now lands on
       invites={invites}
       account={unlinked}
       connect={vi.fn().mockResolvedValue(credential)}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
   await screen.findByRole("button", { name: SIGN_IN });
   await user.type(urlField(), "relay.example.com{Enter}");
+  await screen.findByRole("heading", { name: "Connect to your community" });
+  await user.click(connectButton());
   await user.click(
     await screen.findByRole("button", { name: "I already have a key" }),
   );
@@ -4474,8 +4476,8 @@ it("Back it up with the real account waits on the native uploader's pass for its
   );
   const identity = createIdentity();
   const user = userEvent.setup();
-  await welcomeBackPage(user, identity, (credential, origin, identity) =>
-    builderlabAccount(credential, origin, request, identity),
+  await welcomeBackPage(user, identity, (credential, identity) =>
+    builderlabAccount(credential, request, identity),
   );
   await importLinkedKey(user);
   await user.click(screen.getByRole("button", { name: "Back it up" }));
@@ -4651,8 +4653,8 @@ function backedUpAccount(
           : { communities: [] },
     ),
   }));
-  return (credential, origin, identity) =>
-    builderlabAccount(credential, origin, request, identity);
+  return (credential, identity) =>
+    builderlabAccount(credential, request, identity);
 }
 /** Native recovery's answer, holding a backup of each key. */
 const backupsOf = (...pubkeys: string[]): RecoveryResult => ({
@@ -5280,7 +5282,7 @@ it("a linked account's owned communities are offered on Join a community, and a 
   identity.dispose();
 });
 
-it("a linked account on the tenant path is welcomed back and its imported key lands on Join Community for the landing URL", async () => {
+it("a linked account signed in from the connect choice is welcomed back and its imported key lands on Join Community for the landing URL", async () => {
   const relay = landingRelay("https://relay.example.com");
   relay.info.resolve();
   const account = vi.fn(linkedTo(owned.pubkey));
@@ -5293,22 +5295,18 @@ it("a linked account on the tenant path is welcomed back and its imported key la
       invites={invites}
       connect={vi.fn().mockResolvedValue(credential)}
       account={account}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
   );
   await screen.findByRole("button", { name: SIGN_IN });
   await user.type(urlField(), "relay.example.com{Enter}");
+  await screen.findByRole("heading", { name: "Connect to your community" });
+  await user.click(connectButton());
   expect(
     await screen.findByRole("heading", { name: "Welcome back" }),
   ).toBeVisible();
-  // The reads go to the tenant that signed the user in.
-  expect(account).toHaveBeenCalledWith(
-    credential,
-    "https://tenant.example",
-    identity,
-  );
+  expect(account).toHaveBeenCalledWith(credential, identity);
   await importLinkedKey(user);
   await user.click(screen.getByRole("button", { name: "Not now" }));
   expect(
@@ -5346,7 +5344,6 @@ it("Connect from the choice as a linked account is welcomed back at the build po
       invites={invites}
       connect={vi.fn().mockResolvedValue(credential)}
       account={account}
-      tenants={tenants}
     >
       <p>Signed in</p>
     </Welcome>,
@@ -5357,7 +5354,7 @@ it("Connect from the choice as a linked account is welcomed back at the build po
     await screen.findByRole("heading", { name: "Welcome back" }),
   ).toBeVisible();
   // The reads go to the build portal, as Connect without a URL sends them.
-  expect(account).toHaveBeenCalledWith(credential, undefined, identity);
+  expect(account).toHaveBeenCalledWith(credential, identity);
   await importLinkedKey(user);
   await user.click(screen.getByRole("button", { name: "Not now" }));
   // The returning-user lane needs no branching of its own: it rests at done,

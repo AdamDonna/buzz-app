@@ -77,8 +77,7 @@ export type FirstRunAccount = Readonly<{
   unbind(old: string, replacement: string): Promise<void>;
   /**
    * Backs `pubkey` up and waits for the native uploader's result; rejects with
-   * a `BackupError` (`backUpWith`), "unavailable" for a tenant sign-in, which
-   * the uploader never receives (`backupOfferedFor`).
+   * a `BackupError` (`backUpWith`).
    */
   backUp(pubkey: string): Promise<void>;
   /**
@@ -292,27 +291,17 @@ function owned(community: NonNullable<Reply["communities"]>[number]) {
 }
 
 /**
- * Whether `origin` (the build's own portal when omitted, where Settings signs
- * in) is that portal: the native uploader accepts credentials only from it, so
- * a tenant's sign-in is never handed over. Throws without a Builderlab URL.
- */
-const ownPortal = (origin?: string) =>
-  new URL(oauthTarget(origin)).origin === new URL(oauthTarget()).origin;
-
-/**
- * Whether this build backs a key up for a Builderlab sign-in at `origin`: only
- * when it has a Builderlab URL (`oauthTarget` throws otherwise), the sign-in is
- * at the build's own portal (a tenant's status is never read) and the native
- * status says Builderlab backup is allowed. First run's backup and status
- * reads and Settings → Identity share this rule; `backUpWith` checks the
- * native status itself. Any error answers false.
+ * Whether this build backs a key up for a Builderlab sign-in: only when it has
+ * a Builderlab URL (`oauthTarget` throws otherwise) and the native status says
+ * Builderlab backup is allowed. First run's status read and Settings →
+ * Identity share this rule; `backUpWith` checks the native status itself.
+ * Any error answers false.
  */
 export async function backupOfferedFor(
   backup: Pick<Identity["backup"], "ready">,
-  origin?: string,
 ) {
   try {
-    if (!ownPortal(origin)) return false;
+    oauthTarget();
     return (await backup.ready()).builderlab;
   } catch {
     return false;
@@ -320,8 +309,8 @@ export async function backupOfferedFor(
 }
 
 /**
- * The real reads, binding and unlink, against the kgoose that signed the user
- * in (`<origin>/api/goose`; the build URL when no tenant was chosen),
+ * The real reads, binding and unlink, against the build URL's kgoose
+ * (`<BUZZ_BUILDERLAB_URL>/api/goose`),
  * authenticated with the first-run session credential and sent through the
  * bundled plugin's native grant like the sign-in itself. Routes and reply
  * shapes are the communities section's (`communities/native.ts` ROUTES
@@ -332,11 +321,10 @@ export async function backupOfferedFor(
  */
 export function builderlabAccount(
   credential: Credential,
-  origin: string | undefined,
   request: Host["request"],
   identity: BackupIdentity,
 ): FirstRunAccount {
-  const target = oauthTarget(origin);
+  const target = oauthTarget();
   const portal = new URL(target).origin;
   const post = (path: string, body: object = {}) =>
     request({
@@ -517,21 +505,11 @@ export function builderlabAccount(
         { community_url: relayAddress(url) },
       );
     },
-    // The uploader never checks where a credential came from, so a tenant's
-    // must not reach it; the native status is the uploader's own check.
-    async backUp(pubkey) {
-      let own = false;
-      try {
-        own = ownPortal(origin);
-      } catch {}
-      if (!own) throw new BackupError("unavailable");
-      await backUpWith(identity, pubkey, credential.value);
-    },
+    backUp: (pubkey) => backUpWith(identity, pubkey, credential.value),
     // Backup routes answer plain text, not the card's reply shape, so only
     // the status and a 2xx body are read.
     async backupStatus() {
-      if (!(await backupOfferedFor(identity.backup, origin)))
-        return "unavailable";
+      if (!(await backupOfferedFor(identity.backup))) return "unavailable";
       const path = "/v1/buzz/nsec-backups/status";
       const response = await post(path).catch(() => {
         throw new BackupError("unreachable");

@@ -55,7 +55,7 @@ function kgoose(...replies: Array<ReturnType<typeof answer> | Error | string>) {
   });
   return { request, sent };
 }
-type BackupIdentity = Parameters<typeof builderlabAccount>[3];
+type BackupIdentity = Parameters<typeof builderlabAccount>[2];
 /** Only Restore from backup drives native recovery. */
 const noRecovery = {
   subscribe: () => {
@@ -101,12 +101,7 @@ describe("linkedKey", () => {
         correlation_id: correlationId,
       }),
     );
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     expect(await account.linkedKey()).toBe(pubkey);
     expect(sent).toEqual([
       {
@@ -120,23 +115,6 @@ describe("linkedKey", () => {
         body: "{}",
       },
     ]);
-  });
-
-  it("POSTs at the tenant that signed the user in, with its Origin", async () => {
-    const { request, sent } = kgoose(
-      answer(200, { identity: { pubkey_hex: pubkey } }),
-    );
-    const account = builderlabAccount(
-      credential,
-      "https://tenant.example/",
-      request,
-      untouched,
-    );
-    expect(await account.linkedKey()).toBe(pubkey);
-    expect(sent[0]?.url).toBe(
-      "https://tenant.example/api/goose/v1/buzz/nostr-identities/current",
-    );
-    expect(sent[0]?.headers?.Origin).toBe("https://tenant.example");
   });
 
   // kgoose's `current` answers 200 with `identity` null or absent for an
@@ -158,12 +136,7 @@ describe("linkedKey", () => {
     ],
   ])("reads %s as not linked", async (_label, reply) => {
     const { request } = kgoose(reply);
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     expect(await account.linkedKey()).toBeNull();
   });
 
@@ -208,24 +181,14 @@ describe("linkedKey", () => {
     ["a transport error", new Error("offline"), /offline/],
   ])("fails on %s instead of answering", async (_label, reply, message) => {
     const { request } = kgoose(reply);
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     await expect(account.linkedKey()).rejects.toThrow(message);
   });
 
   it("warns in development with the route and status, never the body", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { request } = kgoose(answer(403, "secret body"));
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     await expect(account.linkedKey()).rejects.toThrow(/HTTP 403/);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.join(" ")).toBe(
@@ -253,12 +216,7 @@ describe("ownedCommunities", () => {
         ],
       }),
     );
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     expect(await account.ownedCommunities()).toEqual([
       { host: "design.example.com", url: "https://design.example.com" },
       { host: "buzz.example.org:8443", url: "https://buzz.example.org:8443" },
@@ -271,14 +229,12 @@ describe("ownedCommunities", () => {
   it("answers an unlinked account with no communities and fails on other errors", async () => {
     const unlinked = builderlabAccount(
       credential,
-      undefined,
       kgoose(answer(400, { error: { code: "missing_mapping" } })).request,
       untouched,
     );
     expect(await unlinked.ownedCommunities()).toEqual([]);
     const failing = builderlabAccount(
       credential,
-      undefined,
       kgoose(answer(503, { error: { code: "relay_unavailable" } })).request,
       untouched,
     );
@@ -287,7 +243,6 @@ describe("ownedCommunities", () => {
     );
     const unparseable = builderlabAccount(
       credential,
-      undefined,
       kgoose(answer(502, "<html>bad gateway</html>")).request,
       untouched,
     );
@@ -311,12 +266,7 @@ describe("knownCommunities", () => {
         ],
       }),
     );
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     expect(await account.knownCommunities()).toEqual([
       "wss://design.example.com",
       "wss://buzz.example.org:8443",
@@ -336,26 +286,11 @@ describe("knownCommunities", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("POSTs the list route at the tenant that signed the user in", async () => {
-    const { request, sent } = kgoose(answer(200, {}));
-    await builderlabAccount(
-      credential,
-      "https://tenant.example",
-      request,
-      untouched,
-    ).knownCommunities();
-    expect(sent[0]?.url).toBe(
-      "https://tenant.example/api/goose/v1/buzz/known-communities/list",
-    );
-    expect(sent[0]?.headers?.Origin).toBe("https://tenant.example");
-  });
-
   it("reads an omitted list as empty", async () => {
     const { request } = kgoose(answer(200, {}));
     expect(
       await builderlabAccount(
         credential,
-        undefined,
         request,
         untouched,
       ).knownCommunities(),
@@ -378,7 +313,6 @@ describe("knownCommunities", () => {
     expect(
       await builderlabAccount(
         credential,
-        undefined,
         kgoose(reply).request,
         untouched,
       ).knownCommunities(),
@@ -429,7 +363,6 @@ describe("knownCommunities", () => {
     const { request, sent } = kgoose(reply);
     const failed: unknown = await builderlabAccount(
       credential,
-      undefined,
       request,
       untouched,
     )
@@ -459,25 +392,11 @@ describe("saveCommunity", () => {
 
   it("POSTs the plugin's add route at the build URL with the session credential and the address in the device's spelling", async () => {
     const { request, sent } = kgoose(answer(200, {}));
-    await builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    ).saveCommunity("https://relay.example.com:8443");
+    await builderlabAccount(credential, request, untouched).saveCommunity(
+      "https://relay.example.com:8443",
+    );
     expect(sent).toEqual([add("https://t.example")]);
     expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("POSTs the add route at the tenant that signed the user in", async () => {
-    const { request, sent } = kgoose(answer(200, {}));
-    await builderlabAccount(
-      credential,
-      "https://tenant.example",
-      request,
-      untouched,
-    ).saveCommunity("https://relay.example.com:8443");
-    expect(sent).toEqual([add("https://tenant.example")]);
   });
 
   it.each([
@@ -504,7 +423,6 @@ describe("saveCommunity", () => {
     const { request, sent } = kgoose(reply);
     const failed: unknown = await builderlabAccount(
       credential,
-      undefined,
       request,
       untouched,
     )
@@ -576,12 +494,7 @@ describe("bind", () => {
       answer(200, { ...challenge, created_at: "2026-01-01T00:00:00Z" }),
       bound(pubkey),
     );
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     await account.bind(pubkey);
     const api = "https://t.example/api/goose/v1/buzz/nostr-identities";
     expect(sent).toEqual([
@@ -606,39 +519,9 @@ describe("bind", () => {
     ]);
   });
 
-  it("challenges and verifies at the tenant that signed the user in, for its origin", async () => {
-    vi.mocked(invoke).mockResolvedValue(event);
-    const tenant = "https://tenant.example";
-    const { request, sent } = kgoose(
-      unbound,
-      answer(200, { ...challenge, origin: tenant }),
-      bound(pubkey),
-    );
-    await builderlabAccount(credential, tenant, request, untouched).bind(
-      pubkey,
-    );
-    expect(sent.map(({ url }) => url)).toEqual(
-      ["current", "challenge", "verify"].map(
-        (path) => `${tenant}/api/goose/v1/buzz/nostr-identities/${path}`,
-      ),
-    );
-    expect(sent.map(({ headers }) => headers?.Origin)).toEqual(
-      Array(3).fill(tenant),
-    );
-    expect(sent[1]?.body).toBe(JSON.stringify({ origin: tenant }));
-    expect(vi.mocked(invoke).mock.calls).toEqual([
-      [
-        "identity_sign_builderlab_binding",
-        { challenge: { ...challenge, origin: tenant } },
-      ],
-    ]);
-  });
-
   it("sends nothing more when the account already holds this key", async () => {
     const { request, sent } = kgoose(bound(pubkey));
-    await builderlabAccount(credential, undefined, request, untouched).bind(
-      pubkey,
-    );
+    await builderlabAccount(credential, request, untouched).bind(pubkey);
     expect(sent.map(({ url }) => url)).toEqual([
       "https://t.example/api/goose/v1/buzz/nostr-identities/current",
     ]);
@@ -693,12 +576,7 @@ describe("bind", () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.mocked(invoke).mockResolvedValue(event);
       const { request, sent } = kgoose(unbound, ...replies);
-      const account = builderlabAccount(
-        credential,
-        undefined,
-        request,
-        untouched,
-      );
+      const account = builderlabAccount(credential, request, untouched);
       const failed = await account.bind(pubkey).catch((error: Error) => error);
       // Never kgoose's own message or its correlation ID.
       expect(failed).toBeInstanceOf(Error);
@@ -786,7 +664,6 @@ describe("bind", () => {
       );
       const failed: unknown = await builderlabAccount(
         credential,
-        undefined,
         request,
         untouched,
       )
@@ -819,7 +696,6 @@ describe("bind", () => {
       warn.mockClear();
       const failed: unknown = await builderlabAccount(
         credential,
-        undefined,
         kgoose(unbound, answer(200, challenge), refusal(status, code)).request,
         untouched,
       )
@@ -845,7 +721,6 @@ describe("bind", () => {
       vi.mocked(invoke).mockResolvedValue(event);
       const failed: unknown = await builderlabAccount(
         credential,
-        undefined,
         kgoose(...replies).request,
         untouched,
       )
@@ -860,12 +735,7 @@ describe("bind", () => {
   it("surfaces the native signer's refusal and never verifies", async () => {
     vi.mocked(invoke).mockRejectedValue("Invalid Nostr identity challenge");
     const { request, sent } = kgoose(unbound, answer(200, challenge));
-    const account = builderlabAccount(
-      credential,
-      undefined,
-      request,
-      untouched,
-    );
+    const account = builderlabAccount(credential, request, untouched);
     await expect(account.bind(pubkey)).rejects.toThrow(
       "Invalid Nostr identity challenge",
     );
@@ -881,7 +751,6 @@ describe("bind", () => {
     const { request, sent } = kgoose(unbound, answer(200, challenge));
     const failed: unknown = await builderlabAccount(
       credential,
-      undefined,
       request,
       untouched,
     )
@@ -908,7 +777,6 @@ describe("bind", () => {
     );
     const failed: unknown = await builderlabAccount(
       credential,
-      undefined,
       request,
       untouched,
     )
@@ -943,7 +811,6 @@ describe("bind", () => {
       vi.mocked(invoke).mockResolvedValue(event);
       const failed: unknown = await builderlabAccount(
         credential,
-        undefined,
         kgoose(unbound, ...replies).request,
         untouched,
       )
@@ -986,10 +853,7 @@ describe("unbind", () => {
 
   it("reads the bound key, then deletes the old key's binding at the build URL with the session credential and Origin", async () => {
     const { request, sent } = kgoose(bound(old), bound(old));
-    await builderlabAccount(credential, undefined, request, untouched).unbind(
-      old,
-      pubkey,
-    );
+    await builderlabAccount(credential, request, untouched).unbind(old, pubkey);
     const api = "https://t.example/api/goose/v1/buzz/nostr-identities";
     expect(sent).toEqual([
       { url: `${api}/current`, ...at("https://t.example") },
@@ -998,30 +862,12 @@ describe("unbind", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("deletes at the tenant that signed the user in, with its Origin", async () => {
-    const { request, sent } = kgoose(bound(old), bound(old));
-    await builderlabAccount(
-      credential,
-      "https://tenant.example",
-      request,
-      untouched,
-    ).unbind(old, pubkey);
-    const api = "https://tenant.example/api/goose/v1/buzz/nostr-identities";
-    expect(sent).toEqual([
-      { url: `${api}/current`, ...at("https://tenant.example") },
-      { url: `${api}/delete`, ...at("https://tenant.example") },
-    ]);
-  });
-
   it.each([
     ["no key", unbound],
     ["the new key, after a re-run", bound(pubkey)],
   ])("sends nothing more when the account holds %s", async (_label, reply) => {
     const { request, sent } = kgoose(reply);
-    await builderlabAccount(credential, undefined, request, untouched).unbind(
-      old,
-      pubkey,
-    );
+    await builderlabAccount(credential, request, untouched).unbind(old, pubkey);
     expect(sent.map(({ url }) => url)).toEqual([
       "https://t.example/api/goose/v1/buzz/nostr-identities/current",
     ]);
@@ -1031,7 +877,6 @@ describe("unbind", () => {
     const { request, sent } = kgoose(bound("12".repeat(32)));
     const failed: unknown = await builderlabAccount(
       credential,
-      undefined,
       request,
       untouched,
     )
@@ -1065,10 +910,7 @@ describe("unbind", () => {
     async (_deleted, _now, reply, now) => {
       const { request, sent } = kgoose(bound(old), reply, now);
       await expect(
-        builderlabAccount(credential, undefined, request, untouched).unbind(
-          old,
-          pubkey,
-        ),
+        builderlabAccount(credential, request, untouched).unbind(old, pubkey),
       ).resolves.toBeUndefined();
       expect(sent.map(({ url }) => url.split("/").at(-1))).toEqual([
         "current",
@@ -1100,7 +942,6 @@ describe("unbind", () => {
     async (_deleted, _now, reply, now, message) => {
       const failed: unknown = await builderlabAccount(
         credential,
-        undefined,
         kgoose(bound(old), reply, now).request,
         untouched,
       )
@@ -1116,7 +957,6 @@ describe("unbind", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const failed: unknown = await builderlabAccount(
       credential,
-      undefined,
       kgoose(bound(old), unbound, new Error("offline")).request,
       untouched,
     )
@@ -1176,7 +1016,6 @@ describe("unbind", () => {
       const { request, sent } = kgoose(bound(old), reply);
       const failed: unknown = await builderlabAccount(
         credential,
-        undefined,
         request,
         untouched,
       )
@@ -1228,7 +1067,6 @@ describe("backup", () => {
     );
     const account = builderlabAccount(
       credential,
-      undefined,
       kgoose().request,
       native.identity,
     );
@@ -1261,7 +1099,6 @@ describe("backup", () => {
     const native = host(status(1, 0, false));
     const failed = await builderlabAccount(
       credential,
-      undefined,
       kgoose().request,
       native.identity,
     )
@@ -1269,24 +1106,6 @@ describe("backup", () => {
       .catch((error: unknown) => error);
     expect(failed).toBeInstanceOf(BackupError);
     expect(failed).toMatchObject({ kind: "unavailable" });
-    expect(native.setBackupChoice).not.toHaveBeenCalled();
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("refuses a tenant sign-in with unavailable without reading the status, handing the uploader nothing", async () => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example/");
-    const native = host(status(1, 0));
-    const failed = await builderlabAccount(
-      credential,
-      "https://tenant.example",
-      kgoose().request,
-      native.identity,
-    )
-      .backUp(pubkey)
-      .catch((error: unknown) => error);
-    expect(failed).toBeInstanceOf(BackupError);
-    expect(failed).toMatchObject({ kind: "unavailable" });
-    expect(native.send).not.toHaveBeenCalled();
     expect(native.setBackupChoice).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -1298,7 +1117,6 @@ describe("backup", () => {
     );
     const failed = await builderlabAccount(
       credential,
-      undefined,
       kgoose().request,
       native.identity,
     )
@@ -1310,18 +1128,11 @@ describe("backup", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("is offered only for the build's own portal, and only where native backup runs", async () => {
-    const offered = (builderlab: boolean, origin?: string) =>
-      backupOfferedFor(host(status(1, 0, builderlab)).identity.backup, origin);
+  it("is offered only where native backup runs", async () => {
+    const offered = (builderlab: boolean) =>
+      backupOfferedFor(host(status(1, 0, builderlab)).identity.backup);
     expect(await offered(true)).toBe(true);
-    expect(await offered(true, "https://t.example")).toBe(true);
     expect(await offered(false)).toBe(false);
-    // A tenant's credential is never handed to the uploader, so the status is not read.
-    const tenant = host(status(1, 0));
-    expect(
-      await backupOfferedFor(tenant.identity.backup, "https://tenant.example"),
-    ).toBe(false);
-    expect(tenant.send).not.toHaveBeenCalled();
     // A status that cannot be read is not an offer.
     const refused = host(status(1, 0));
     refused.send.mockRejectedValueOnce(
@@ -1341,12 +1152,7 @@ describe("backup", () => {
       const native = host(status(1, 0));
       const { request, sent } = kgoose(...replies);
       return {
-        account: builderlabAccount(
-          credential,
-          undefined,
-          request,
-          native.identity,
-        ),
+        account: builderlabAccount(credential, request, native.identity),
         sent,
       };
     };
@@ -1386,20 +1192,14 @@ describe("backup", () => {
     });
 
     it("is unavailable without a request where backup is not offered", async () => {
-      for (const [origin, builderlab] of [
-        ["https://tenant.example", true],
-        [undefined, false],
-      ] as const) {
-        const { request } = kgoose();
-        const account = builderlabAccount(
-          credential,
-          origin,
-          request,
-          host(status(1, 0, builderlab)).identity,
-        );
-        expect(await account.backupStatus()).toBe("unavailable");
-        expect(request).not.toHaveBeenCalled();
-      }
+      const { request } = kgoose();
+      const account = builderlabAccount(
+        credential,
+        request,
+        host(status(1, 0, false)).identity,
+      );
+      expect(await account.backupStatus()).toBe("unavailable");
+      expect(request).not.toHaveBeenCalled();
     });
 
     it.each([

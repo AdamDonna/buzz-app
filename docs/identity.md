@@ -22,21 +22,20 @@ any key exists: **Continue** opens the same **Finding community** page described
 below, which sends only the two unauthenticated GETs, so a typo, an unreachable
 relay or a non-Buzz address fails there with the same classified copy; **Cancel**
 (and **Retry**, when offered) behave as below, except that Cancel returns to the
-welcome screen with the address kept in the field. A found community decides
-which sign-in follows: `discoverAuthentication` in
-`src/features/identity/builderlab-tenants.ts` matches the community's hostname,
-then its NIP-11 `self` key, against the
-[`BUZZ_BUILDERLAB_TENANTS` build table](configuration.md#builderlab-tenant-table-build-input).
-A match starts Builderlab sign-in at once at that tenant's portal (the same
-browser sign-in, exchange and account check, at the row's `loginOrigin` instead
-of `BUZZ_BUILDERLAB_URL`), and the welcome screen shows it pending (**Cancel
-sign-in**, with the field disabled). Cancel sign-in, and **Back** from a sign-in
-or setup failure, return to the welcome screen with the address kept and do not
-look it up again. A canceled sign-in that finishes later is ignored: it cannot
-restart setup or use a later sign-in's account. A community no row hosts is not
-known to be Builderlab-hosted, so it pauses on **Connect to {host}** instead of
-choosing a portal. The page
-says only that Buzz relies on a key for the user's identity; its choices are
+welcome screen with the address kept in the field. A Builderlab-hosted
+community (a host under `communities.buzz.xyz`, `block.builderlab.xyz` or
+`test.blockstaging.build` on the default port, or a relay publishing one of
+those deployments' NIP-11 `self` keys; `builderlab-hosted.ts`) requires
+Builderlab sign-in, so it starts at once at `BUZZ_BUILDERLAB_URL`, exactly as
+the welcome screen's own button does, and the welcome screen shows it pending
+(**Cancel sign-in**, with the field disabled); setup then lands on **Join
+Community** for the address, and it is never offered a key of the user's own
+instead. Cancel sign-in, and **Back** from a sign-in or setup failure, return
+to the welcome screen with the address kept and do not look it up again. A
+canceled sign-in that finishes later is ignored: it cannot restart setup or use
+a later sign-in's account. Any other found community pauses on **Connect to
+{host}**: nothing a relay publishes names its sign-in portal, so the user
+chooses. The page says only that Buzz relies on a key for the user's identity; its choices are
 **Sign in with email**, which signs in at `BUZZ_BUILDERLAB_URL` and
 continues exactly as the welcome screen's own button does (the landing shows
 the sign-in pending with the address held; the key it creates is linked to that
@@ -529,12 +528,10 @@ fails the step, since nothing would wake it again before first run ends. The
 failed page names the reason without any service response. The automatic choice
 stays on after a failure, Continue without backup included, so a later
 Builderlab sign-in may still finish the backup the user asked for. The step
-hands a sign-in over only when this build's uploader can back up to Builderlab
-and the user signed in at the build's own portal: a tenant's sign-in is never
-handed to the uploader. Anywhere else — a tenant sign-in, or a build without
-backup configured — the step fails at once as *Key backup isn’t available in
-this version of Buzz.* without saving the choice, and the user continues without
-backup.
+hands a sign-in over only when this build's uploader can back up to Builderlab.
+Anywhere else (a build without backup configured) the step fails at once as
+*Key backup isn’t available in this version of Buzz.* without saving the
+choice, and the user continues without backup.
 
 When secure storage confirms absence, native recovery commands support explicit
 browser sign-in. The session and recovered keys remain native; the renderer sees

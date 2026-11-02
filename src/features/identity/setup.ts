@@ -11,8 +11,8 @@ export type SetupStep = Readonly<{
   links?: boolean;
 }>;
 /**
- * Where setup rests for a decision: the connect choice for a community no
- * tenant hosts, the key choice, an import, the backup offer after an import,
+ * Where setup rests for a decision: the connect choice for a found
+ * community that is not Builderlab-hosted, the key choice, an import, the backup offer after an import,
  * or the returning-user pages (Welcome back, a restore from backup, the
  * start-over page for a lost key).
  */
