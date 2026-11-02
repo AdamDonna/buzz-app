@@ -5,6 +5,7 @@ import {
   SOLO_LABEL,
   soloChatLinkName,
   soloLabels,
+  soloOwner,
 } from "./labels";
 
 const id = "22222222-2222-4222-8222-222222222222";
@@ -31,4 +32,12 @@ it("files a Solo chat as the viewer's own only when its roster makes them owner"
     expect(ownSolo({ channelType: "solo", viewerRole })).toBe(false);
   expect(ownSolo({ channelType: "stream", viewerRole: "owner" })).toBe(false);
   expect(ownSolo(undefined)).toBe(false);
+});
+
+it("presents a Solo chat's roster owner, falling back to its creator", () => {
+  const solo = "solo" as const;
+  expect(soloOwner({ channelType: solo, owner: "a", creator: "b" })).toBe("a");
+  expect(soloOwner({ channelType: solo, creator: "b" })).toBe("b");
+  expect(soloOwner({ channelType: solo })).toBeUndefined();
+  expect(soloOwner({ channelType: "stream", owner: "a" })).toBeUndefined();
 });

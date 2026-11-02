@@ -81,7 +81,15 @@ it("leads a Solo chat with its owner and keeps the people icon until it is share
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  let list = {
+  let list: {
+    channels: {
+      id: string;
+      channelType: string;
+      owner?: string;
+      creator: string;
+      members: string[];
+    }[];
+  } = {
     channels: [
       { id: "chat", channelType: "solo", creator: "me", members: ["me"] },
     ],
@@ -126,4 +134,23 @@ it("leads a Solo chat with its owner and keeps the people icon until it is share
   expect(
     screen.getAllByTitle(/^(Owner|Alice|Me)$/).map((item) => item.title),
   ).toEqual(["Owner", "Alice", "Me"]);
+
+  // The roster's owner outranks the creator, who may have handed it on.
+  act(() => {
+    list = {
+      channels: [
+        {
+          id: "chat",
+          channelType: "solo",
+          owner: "alice",
+          creator: "owner",
+          members: ["alice", "me", "owner"],
+        },
+      ],
+    };
+    for (const listener of listeners) listener();
+  });
+  expect(
+    screen.getAllByTitle(/^(Owner|Alice|Me)$/).map((item) => item.title)[0],
+  ).toBe("Alice");
 });

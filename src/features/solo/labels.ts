@@ -26,6 +26,22 @@ export function ownSolo(
   return channel?.channelType === "solo" && channel.viewerRole === "owner";
 }
 
+/** Who owns a Solo chat, for presentation: the roster's owner, or its
+ * creator for an older chat whose roster names none. Never access. */
+export function soloOwner(
+  channel:
+    | Readonly<{
+        channelType?: string | undefined;
+        owner?: string | undefined;
+        creator?: string | undefined;
+      }>
+    | undefined,
+): string | undefined {
+  return channel?.channelType === "solo"
+    ? (channel.owner ?? channel.creator)
+    : undefined;
+}
+
 export function soloChatLinkName(channel: { id: string; name: string }) {
   // Unnamed chats still carry their starting title from the first prompt.
   return channel.name.trim() || channel.id.slice(0, 8);

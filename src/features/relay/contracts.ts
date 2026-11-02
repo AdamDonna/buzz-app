@@ -60,6 +60,9 @@ export type ChannelSummary = Readonly<{
   members?: readonly string[];
   /** Relay-published NIP-CL labels. Any channel admin can set them: grouping, never trust. */
   labels?: readonly string[];
+  /** The one member the relay-signed roster names owner; absent when it names
+   * none or several. */
+  owner?: string;
   /** Relay-written creator (NIP-CL `P`): the kind:9007 signer. Ownership can move later. */
   creator?: string;
   /** Relay-written creation time in Unix seconds; compare channel age with this. */

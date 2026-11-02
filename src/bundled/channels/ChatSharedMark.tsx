@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
-import { ownSolo } from "../../features/solo/labels";
+import { ownSolo, soloOwner } from "../../features/solo/labels";
 import { avatarMedia } from "../../shared/avatar-source";
 import { UsersIcon } from "../../shared/design-system/icons";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
@@ -43,7 +43,7 @@ export function useSharedWithPeople(
 }
 
 /** The person whose Solo chat another member is viewing. Absent in the
- * viewer's own chats and until the creator's profile is known. */
+ * viewer's own chats and until the owner's profile is known. */
 export function useSoloOwner(
   session: RelaySession,
   channel: ChannelSummary | undefined,
@@ -52,10 +52,9 @@ export function useSoloOwner(
     session.profiles.subscribe,
     session.profiles.snapshot,
   );
-  const creator = channel?.creator;
-  if (channel?.channelType !== "solo" || !creator || ownSolo(channel))
-    return undefined;
-  const profile = profiles.get(creator);
+  const owner = soloOwner(channel);
+  if (!owner || ownSolo(channel)) return undefined;
+  const profile = profiles.get(owner);
   if (!profile || profile.nameIsFallback) return undefined;
   return {
     name: profile.name,

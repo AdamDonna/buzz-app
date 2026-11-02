@@ -312,6 +312,17 @@ export class DiscoveryState {
     // metadata (the full pass reads names later) never lists as a channel.
     const roster = this.rosters.get(id);
     const viewerRole = this.authorized(id) ? this.viewerRole(id) : undefined;
+    const owners = new Set(
+      roster?.tags.flatMap(([name, value, , role]) =>
+        name === "p" &&
+        role === "owner" &&
+        value &&
+        /^[0-9a-f]{64}$/.test(value)
+          ? [value]
+          : [],
+      ),
+    );
+    const [owner] = owners.size === 1 ? owners : [];
     const type = this.isSolo(id)
       ? "solo"
       : event
@@ -370,6 +381,7 @@ export class DiscoveryState {
           ),
         ].sort(),
       ),
+      ...(owner ? { owner } : {}),
       ...(this.hidden(id) ? { hidden: true } : {}),
       ...(this.isPrivate(id) ? { private: true } : {}),
       ...(channelType ? { channelType } : {}),

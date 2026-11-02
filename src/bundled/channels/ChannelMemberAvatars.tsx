@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import { useIdentityNames } from "../../features/identity-names/react";
+import { soloOwner } from "../../features/solo/labels";
 import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
 import {
   IconButton,
@@ -72,7 +73,7 @@ export function ChannelMemberAvatars({
         .catch(() => {});
   }, [session, memberKey]);
   const agents = new Set(choices.identities.map((agent) => agent.pubkey));
-  const owner = channel?.channelType === "solo" ? channel.creator : undefined;
+  const owner = soloOwner(channel);
   const people = members
     .filter((id) => !agents.has(id) && !profiles.get(id)?.isAgent)
     // The owner first, then recognizable photos over key-only placeholders.

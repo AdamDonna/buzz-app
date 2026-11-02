@@ -147,3 +147,26 @@ it("does not grant writing through a contradictory duplicate guest entry", () =>
   expect(state.get(id)).toMatchObject({ viewerRole: "guest", readOnly: true });
   expect(state.canWrite(id)).toBe(false);
 });
+
+it("names the roster's one owner, and no one when it names several", () => {
+  const state = new DiscoveryState(viewer.pubkey, relay.pubkey);
+  const other = keypair();
+  const owned = (time: number, owners: readonly string[]) =>
+    signed(relay, {
+      kind: 39002,
+      content: "",
+      created_at: time,
+      tags: [
+        ["d", id],
+        ["p", viewer.pubkey, "", "member"],
+        ...owners.map((owner) => ["p", owner, "", "owner"]),
+      ],
+    });
+  state.accept(details("member", 10));
+  state.accept(owned(10, [other.pubkey]));
+  expect(state.get(id)?.owner).toBe(other.pubkey);
+  state.accept(owned(20, [other.pubkey, keypair().pubkey]));
+  expect(state.get(id)?.owner).toBeUndefined();
+  state.accept(owned(30, []));
+  expect(state.get(id)?.owner).toBeUndefined();
+});
