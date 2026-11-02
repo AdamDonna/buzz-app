@@ -268,26 +268,25 @@ it("late teams preserve the highlighted recipient and all 50 installed people", 
     );
   try {
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(50));
-    const initial = screen.getAllByRole("option").map((row) => row.textContent);
+    // Agent knowledge may arrive late and mark a row; the rows themselves stay.
+    const rows = () =>
+      screen
+        .getAllByRole("option")
+        .map((row) => row.textContent?.replace(/ Agent$/, ""));
+    const initial = rows();
     press("ArrowUp");
     expect(screen.getByRole("option", { selected: true })).toHaveTextContent(
       "Person 49",
     );
     h.loaded();
     await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
-    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual(
-      initial,
-    );
+    expect(rows()).toEqual(initial);
     expect(screen.getByRole("option", { selected: true })).toHaveTextContent(
       "Person 49",
     );
     press("Enter");
     expect(replace.mock.lastCall?.[0]).toEqual({ mention: h.people[49] });
-    await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Narrow your search",
-      ),
-    );
+    expect(screen.queryByText(/Narrow your search/)).not.toBeInTheDocument();
   } finally {
     view.unmount();
     input.remove();

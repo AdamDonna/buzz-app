@@ -15,6 +15,7 @@ import {
   AtIcon,
   CaretDownIcon,
   CheckIcon,
+  RobotIcon,
 } from "../../shared/design-system/icons/index";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTeamMentions } from "./use-team-mentions";
@@ -390,6 +391,7 @@ export function MentionPicker({
                   disabled: reason,
                   fullName,
                 }) => {
+                  const managedBy = model.managedBy.get(recipient.pubkey);
                   // Each addressed agent's row shows a check; fill is only
                   // the keyboard and pointer highlight.
                   const addressed = !!audience?.recipients.some(
@@ -408,7 +410,6 @@ export function MentionPicker({
                       highlighted={audience ? focused : false}
                       aria-current={false}
                       aria-pressed={audience ? addressed : undefined}
-                      aria-label={`${label} ${recipient.pubkey}`}
                       disabled={disabled || !!reason}
                       onClick={() => chooseRecipient(recipient)}
                       label={
@@ -420,14 +421,25 @@ export function MentionPicker({
                               label={label}
                               positions={matched(label)}
                             />
+                            {agent && (
+                              <span
+                                aria-hidden="true"
+                                className={styles.agentMark}
+                              >
+                                <RobotIcon />
+                              </span>
+                            )}
+                            {agent && <span className="sr-only"> Agent</span>}
                           </span>
                           {reason && <small>{reason}</small>}
                           {((fullName && fullName !== label) ||
+                            managedBy ||
                             !members?.includes(recipient.pubkey)) && (
                             <small className="text-caption text-subtle">
                               {/* A verified full name sits beside the detail. */}
                               {[
                                 fullName !== label ? fullName : undefined,
+                                managedBy,
                                 members?.includes(recipient.pubkey)
                                   ? undefined
                                   : inviteAgents
@@ -442,14 +454,8 @@ export function MentionPicker({
                           )}
                         </span>
                       }
-                      title={recipient.pubkey}
                       trailing={
-                        <span className="flex items-center gap-2">
-                          <code>{recipient.pubkey.slice(0, 12)}</code>
-                          {addressed && (
-                            <CheckIcon size={16} aria-hidden="true" />
-                          )}
-                        </span>
+                        addressed && <CheckIcon size={16} aria-hidden="true" />
                       }
                       icon={
                         <Avatar
@@ -505,9 +511,6 @@ export function MentionPicker({
                   onClick={() => chooseTeam(team)}
                 />
               ))}
-              {model.truncated && (
-                <p>Narrow your search to see more members.</p>
-              )}
               {members && !candidates.length && !teams.choices.length && (
                 <p>No matching channel members.</p>
               )}

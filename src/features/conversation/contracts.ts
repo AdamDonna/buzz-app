@@ -306,6 +306,8 @@ export type CompletionSuggestion = Readonly<{
   detail?: string;
   /** Decorative presentation only; the host owns option semantics and interaction. */
   preview?: import("react").ReactNode;
+  /** An agent, not a person: the host marks the name and announces it. */
+  agent?: boolean;
   edit: CompletionEdit;
   /** Keep an installed identity in place after eligibility is revoked. */
   disabled?: string | undefined;

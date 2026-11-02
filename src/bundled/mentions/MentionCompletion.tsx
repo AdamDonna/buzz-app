@@ -154,50 +154,55 @@ export function MentionCompletion({
         if (withdraw) withdraw();
       };
     }
-    // Each shown row asks both; one pass each instead of one scan per row.
+    // Each shown row asks; one pass instead of one scan per row.
     const memberKeys = new Set(members);
-    const agentKeys = new Set(
-      model.candidates.flatMap((c) => (c.agent ? [c.recipient.pubkey] : [])),
-    );
     const available = [
       ...matching.map(
-        ({ recipient, label, elsewhere, disabled, fullName }) => ({
-          disabled,
-          canSelect: (key: string) =>
-            (key !== " " || !teams.blocksSpace) &&
-            model.canSelect(recipient.pubkey, key === " "),
-          id: recipient.pubkey,
-          label,
-          detail:
+        ({ recipient, label, elsewhere, disabled, fullName, agent }) => {
+          const detail =
             disabled ??
             // A verified full name sits beside the detail.
-            [
+            ([
               fullName !== label ? fullName : undefined,
+              model.managedBy.get(recipient.pubkey),
               memberKeys.has(recipient.pubkey)
-                ? recipient.pubkey
+                ? undefined
                 : inviteAgents
-                  ? `${parentAdmission ? "Adds to channel" : "Adds to chat"} · ${recipient.pubkey}`
+                  ? parentAdmission
+                    ? "Adds to channel"
+                    : "Adds to chat"
                   : outsideMentionDetail(channel, elsewhere),
             ]
               .filter(Boolean)
-              .join(" · "),
-          preview: (
-            <Avatar
-              alt=""
-              fallback={label}
-              src={avatarMedia(
-                profiles.get(recipient.pubkey)?.picture ??
-                  model.directory.people.find(
-                    (person) => person.pubkey === recipient.pubkey,
-                  )?.picture,
-                session.media,
-              )}
-              size="default"
-              shape={agentKeys.has(recipient.pubkey) ? "squircle" : "circle"}
-            />
-          ),
-          edit: { mention: recipient },
-        }),
+              .join(" · ") ||
+              undefined);
+          return {
+            disabled,
+            canSelect: (key: string) =>
+              (key !== " " || !teams.blocksSpace) &&
+              model.canSelect(recipient.pubkey, key === " "),
+            id: recipient.pubkey,
+            label,
+            agent,
+            ...(detail ? { detail } : {}),
+            preview: (
+              <Avatar
+                alt=""
+                fallback={label}
+                src={avatarMedia(
+                  profiles.get(recipient.pubkey)?.picture ??
+                    model.directory.people.find(
+                      (person) => person.pubkey === recipient.pubkey,
+                    )?.picture,
+                  session.media,
+                )}
+                size="default"
+                shape={agent ? "squircle" : "circle"}
+              />
+            ),
+            edit: { mention: recipient },
+          };
+        },
       ),
       ...matchingTeams.map((team) => ({
         id: team.id,
@@ -302,15 +307,9 @@ export function MentionCompletion({
                         }
                       : model.directory.loading
                         ? { status: "Searching community…" }
-                        : model.directory.more ||
-                            model.truncated ||
-                            matching.length + matchingTeams.length > 50
-                          ? {
-                              status: "Narrow your search to see more members.",
-                            }
-                          : teams.status
-                            ? { status: teams.status }
-                            : {}),
+                        : teams.status
+                          ? { status: teams.status }
+                          : {}),
       ...((admitted && teams.canRetry) ||
       model.directory.error ||
       (admitted &&

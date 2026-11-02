@@ -69,6 +69,31 @@ afterEach(() => {
   vi.useRealTimers();
   Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
 });
+// A person row's accessible name is its label then its detail line (no key).
+// The lines are separate elements, so the gap between them may be empty.
+const rowName = (label: string, detail = "") => {
+  const escapeText = (text: string) =>
+    text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Agent rows also announce "Agent" after the name.
+  return new RegExp(
+    `^${escapeText(label)}(?:\\s*Agent)?\\s*${escapeText(detail)}$`,
+  );
+};
+// Which of these labelled rows are shown, in the order they appear.
+const rowsInOrder = (labels: readonly string[]) =>
+  labels
+    .flatMap((label) =>
+      screen
+        .queryAllByRole("button", { name: rowName(label) })
+        .map((button) => ({ button, label })),
+    )
+    .sort((a, b) =>
+      a.button.compareDocumentPosition(b.button) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+        ? -1
+        : 1,
+    )
+    .map(({ label }) => label);
 function setup(parent: boolean | null = true, archived = false) {
   const key = "b".repeat(64),
     member = "a".repeat(64);
@@ -202,12 +227,7 @@ it("uses the same alphabetical and prefix ordering for typed and button mentions
   );
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
-  const pickerNames = () =>
-    screen
-      .getAllByRole("button")
-      .map((button) => button.getAttribute("aria-label"))
-      .filter((label) => keys.some((key) => label?.endsWith(key)))
-      .map((label) => label?.slice(0, -65));
+  const pickerNames = () => rowsInOrder(names);
   expect(pickerNames()).toEqual(["Adam Avery", "Avery", "Zoe"]);
   await user.type(screen.getByRole("searchbox"), "avery");
   expect(pickerNames()).toEqual(["Avery", "Adam Avery"]);
@@ -228,7 +248,7 @@ it("offers outside agents in the Solo chat mention picker while ordinary channel
   );
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   expect(
-    screen.queryByRole("button", { name: `Outside agent ${test.key}` }),
+    screen.queryByRole("button", { name: /^Outside agent/ }),
   ).not.toBeInTheDocument();
   view.rerender(
     <MentionPicker
@@ -240,14 +260,58 @@ it("offers outside agents in the Solo chat mention picker while ordinary channel
       select={select}
     />,
   );
-  await user.click(
-    await screen.findByRole("button", { name: `Outside agent ${test.key}` }),
-  );
+  await user.click(await outsideRow());
   expect(select).toHaveBeenCalledWith({
     pubkey: test.key,
     name: "Outside agent",
   });
   view.unmount();
+  test.library.dispose();
+});
+it("marks agents, not people, in both mention menus", async () => {
+  const test = setup();
+  const publish = vi.fn();
+  const view = render(
+    <MentionCompletion
+      session={test.session}
+      scope="test"
+      channelId="parent"
+      inviteAgents
+      observation={{ revision: 1, text: "@", start: 1, end: 1 }}
+      query={{ start: 0, end: 1, query: "" }}
+      publish={publish}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      (publish.mock.lastCall?.[0] as CompletionResult | undefined)?.items.map(
+        ({ label, agent }) => [label, agent],
+      ),
+    ).toEqual([
+      ["Member", false],
+      ["Outside agent", true],
+    ]),
+  );
+  view.unmount();
+  render(
+    <MentionPicker
+      scope="test"
+      session={test.session}
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      select={() => true}
+    />,
+  );
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Mention a member" }));
+  expect(
+    await screen.findByRole("button", {
+      name: /^Outside agent\s*Agent\s*Adds to channel when you send$/,
+    }),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Member$/ })).toBeVisible();
   test.library.dispose();
 });
 function renderAudiencePicker(
@@ -272,8 +336,10 @@ function renderAudiencePicker(
   );
   return { view, only, toggle, focusDraft, select };
 }
-const outsideRow = (test: ReturnType<typeof setup>) =>
-  screen.findByRole("button", { name: `Outside agent ${test.key}` });
+const outsideRow = () =>
+  screen.findByRole("button", {
+    name: rowName("Outside agent", "Adds to channel when you send"),
+  });
 
 it("an agents-only audience pill replaces the mention button and never inserts a mention", async () => {
   const test = setup(),
@@ -284,7 +350,7 @@ it("an agents-only audience pill replaces the mention button and never inserts a
   });
   expect(screen.queryByRole("button", { name: "Mention a member" })).toBeNull();
   await userEvent.setup().click(pill);
-  await outsideRow(test);
+  await outsideRow();
   expect(select).not.toHaveBeenCalled();
   view.unmount();
   test.library.dispose();
@@ -296,7 +362,7 @@ it("clicking an agent row in the pill menu toggles that agent and keeps the menu
     agent = { pubkey: test.key, name: "Outside agent" };
   const { view, only, toggle } = renderAudiencePicker(test, []);
   await user.click(screen.getByRole("button", { name: "Choose agent" }));
-  await user.click(await outsideRow(test));
+  await user.click(await outsideRow());
   expect(toggle).toHaveBeenCalledExactlyOnceWith(agent);
   expect(only).not.toHaveBeenCalled();
   expect(screen.getByRole("searchbox")).toBeInTheDocument();
@@ -314,7 +380,7 @@ it("with one agent addressed, its row shows a check and is pressed, not filled",
       name: "Sending to Outside agent. Change agents",
     }),
   );
-  const row = await outsideRow(test);
+  const row = await outsideRow();
   expect(row).not.toHaveAttribute("data-selected");
   expect(row).toHaveAttribute("aria-pressed", "true");
   expect(row.querySelector("svg")).not.toBeNull();
@@ -335,7 +401,7 @@ it("with several agents addressed, the pill is a menu button and each addressed 
       name: "Sending to Outside agent, Another. Change agents",
     }),
   );
-  const row = await outsideRow(test);
+  const row = await outsideRow();
   expect(row).not.toHaveAttribute("data-selected");
   expect(row).toHaveAttribute("aria-pressed", "true");
   expect(row.querySelector("svg")).not.toBeNull();
@@ -356,7 +422,7 @@ it("picking an addressed row while several agents are addressed toggles it", asy
       name: "Sending to Outside agent, Another. Change agents",
     }),
   );
-  await user.click(await outsideRow(test));
+  await user.click(await outsideRow());
   expect(toggle).toHaveBeenCalledExactlyOnceWith(agent);
   expect(screen.getByRole("searchbox")).toBeInTheDocument();
   view.unmount();
@@ -369,12 +435,12 @@ it("closing the pill menu resumes typing in the draft, unless the click went els
   const { view, focusDraft } = renderAudiencePicker(test, []);
   const pill = screen.getByRole("button", { name: "Choose agent" });
   await user.click(pill);
-  await outsideRow(test);
+  await outsideRow();
   await user.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("searchbox")).toBeNull());
   await waitFor(() => expect(focusDraft).toHaveBeenCalledOnce());
   await user.click(pill);
-  await outsideRow(test);
+  await outsideRow();
   await user.click(document.body);
   await waitFor(() => expect(screen.queryByRole("searchbox")).toBeNull());
   expect(focusDraft).toHaveBeenCalledOnce();
@@ -405,9 +471,9 @@ it("the pill changing shape while its menu is open leaves focus in the menu", as
       name: "Sending to Outside agent. Change agents",
     }),
   );
-  await outsideRow(test);
+  await outsideRow();
   view.rerender(picker([agent, { pubkey: "c".repeat(64), name: "Another" }]));
-  await outsideRow(test);
+  await outsideRow();
   expect(focusDraft).not.toHaveBeenCalled();
   await user.keyboard("{Escape}");
   await waitFor(() => expect(focusDraft).toHaveBeenCalledOnce());
@@ -420,7 +486,7 @@ it("the pill menu highlights a row only while the pointer is on it", async () =>
     user = userEvent.setup();
   const { view } = renderAudiencePicker(test, []);
   await user.click(screen.getByRole("button", { name: "Choose agent" }));
-  const row = await outsideRow(test);
+  const row = await outsideRow();
   expect(row).not.toHaveAttribute("data-highlighted");
   const move = (clientX: number) =>
     fireEvent.pointerMove(row, { pointerType: "mouse", clientX, clientY: 4 });
@@ -442,7 +508,7 @@ it("in the pill menu, Enter on a row toggles that agent and keeps the menu open"
     agent = { pubkey: test.key, name: "Outside agent" };
   const { view, toggle } = renderAudiencePicker(test, []);
   await user.click(screen.getByRole("button", { name: "Choose agent" }));
-  const row = await outsideRow(test);
+  const row = await outsideRow();
   row.focus();
   await user.keyboard("{Enter}");
   expect(toggle).toHaveBeenCalledExactlyOnceWith(agent);
@@ -731,12 +797,11 @@ it("navigates namesakes with arrows and selects the highlighted exact identity w
     />,
   );
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
+  // Same name; the member row has no detail line, the outside agent does.
   const first = await screen.findByRole("button", {
-    name: `Outside agent ${test.member}`,
+    name: rowName("Outside agent"),
   });
-  const last = await screen.findByRole("button", {
-    name: `Outside agent ${test.key}`,
-  });
+  const last = await outsideRow();
   // Focus stays in search; the first row is highlighted before typing, and
   // the arrows wrap.
   const search = screen.getByRole("searchbox");
@@ -776,12 +841,11 @@ it("keeps focus on the highlighted row after Tab, for arrows and pointer", async
     />,
   );
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
+  // Same name; the member row has no detail line, the outside agent does.
   const first = await screen.findByRole("button", {
-    name: `Outside agent ${test.member}`,
+    name: rowName("Outside agent"),
   });
-  const last = await screen.findByRole("button", {
-    name: `Outside agent ${test.key}`,
-  });
+  const last = await outsideRow();
   for (let i = 0; i < 10 && document.activeElement !== first; i += 1)
     await user.tab();
   expect(first).toHaveFocus();
@@ -912,7 +976,7 @@ it("Solo picker discloses history access before selection", async () => {
   try {
     await user.click(screen.getByRole("button", { name: "Mention a member" }));
     const agent = await screen.findByRole("button", {
-      name: `Outside agent ${test.key}`,
+      name: rowName("Outside agent", "Adds to chat when you send"),
     });
     expect(
       screen.getByText(
@@ -953,9 +1017,7 @@ it.each([true, false, null])(
       expect(result?.items).toEqual([
         expect.objectContaining({
           id: test.key,
-          detail: expect.stringContaining(
-            parent ? "Adds to channel" : "Adds to chat ·",
-          ),
+          detail: parent ? "Adds to channel" : "Adds to chat",
           edit: { mention: { pubkey: test.key, name: "Outside agent" } },
         }),
       ]),
@@ -1124,7 +1186,9 @@ it.each(["picker", "completion"] as const)(
           screen.getByRole("button", { name: "Mention a member" }),
         );
         await user.click(
-          await screen.findByRole("button", { name: `Native Mic ${test.key}` }),
+          await screen.findByRole("button", {
+            name: rowName("Native Mic", "Adds to channel when you send"),
+          }),
         );
       } else {
         await waitFor(() => expect(result?.items[0]?.label).toBe("Native Mic"));
@@ -1336,6 +1400,8 @@ it("prioritizes the viewer-owned namesake in both menus and selects the exact ow
       snapshot: () => profiles,
       subscribe: () => () => {},
       ensure: async () => {},
+      // Only attested owners are named as managers.
+      owner: (key: string) => ({ [mine]: viewer, [test.key]: owner })[key],
     },
     channels: { ...test.session.channels, list: () => list },
   };
@@ -1375,19 +1441,84 @@ it("prioritizes the viewer-owned namesake in both menus and selects the exact ow
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   await user.type(screen.getByRole("searchbox"), "hon");
+  // Someone else's agent also says who manages it; your own does not.
+  const wes = await screen.findByRole("button", {
+    name: rowName("Wes’s Honey", "Managed by Wes"),
+  });
+  const own = screen.getByRole("button", { name: rowName("Honey") });
   expect(
-    screen
-      .getAllByRole("button")
-      .map((button) => button.getAttribute("aria-label"))
-      .filter((label) => label?.endsWith(mine) || label?.endsWith(test.key)),
-  ).toEqual([`Honey ${mine}`, `Wes’s Honey ${test.key}`]);
-  await user.click(
-    await screen.findByRole("button", { name: `Wes’s Honey ${test.key}` }),
-  );
+    own.compareDocumentPosition(wes) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  await user.click(wes);
   expect(select).toHaveBeenCalledWith({ pubkey: test.key, name: "Honey" });
   view.unmount();
   names.dispose();
   library.dispose();
+  test.library.dispose();
+});
+
+it("names a manager only once ownership is attested and the owner has a real name", async () => {
+  const test = setup();
+  const viewer = "1".repeat(64),
+    owner = "2".repeat(64),
+    unnamed = "3".repeat(64),
+    other = "e".repeat(64);
+  const profiles = new Map([
+    [viewer, { name: "Logan" }],
+    [owner, { name: "Wes" }],
+    [unnamed, { name: unnamed.slice(0, 10), nameIsFallback: true as const }],
+    [test.key, { name: "Honey", isAgent: true as const, ownerPubkey: owner }],
+    [other, { name: "Bee", isAgent: true as const, ownerPubkey: unnamed }],
+  ]);
+  const listeners = new Set<() => void>();
+  const attested = new Map<string, string>();
+  const list = {
+    status: "ready" as const,
+    channels: [{ id: "parent", name: "Parent", members: [test.key, other] }],
+  };
+  const session = {
+    ...test.session,
+    viewer,
+    profiles: {
+      snapshot: () => profiles,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      ensure: async () => {},
+      owner: (key: string) => attested.get(key),
+    },
+    channels: { ...test.session.channels, list: () => list },
+  };
+  const view = render(
+    <MentionPicker
+      scope="scope"
+      session={session}
+      channelId="parent"
+      disabled={false}
+      select={() => true}
+    />,
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Mention a member" }));
+  // A self-declared owner is not a manager.
+  expect(
+    await screen.findByRole("button", { name: rowName("Honey") }),
+  ).toBeVisible();
+  expect(screen.queryByText(/Managed by/)).toBeNull();
+  // Attestation settles later and notifies without a new profile snapshot.
+  act(() => {
+    attested.set(test.key, owner);
+    attested.set(other, unnamed);
+    for (const listener of listeners) listener();
+  });
+  expect(
+    screen.getByRole("button", { name: rowName("Honey", "Managed by Wes") }),
+  ).toBeVisible();
+  // An owner without a name never shows a key fragment instead.
+  expect(screen.getByRole("button", { name: rowName("Bee") })).toBeVisible();
+  expect(screen.queryByText(/Managed by 3/)).toBeNull();
+  view.unmount();
   test.library.dispose();
 });
 
@@ -1434,7 +1565,7 @@ it("keeps an outside namesake discoverable and qualifies the actual choice set",
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   expect(
-    await screen.findByRole("button", { name: `Larry ${member}` }),
+    await screen.findByRole("button", { name: rowName("Larry") }),
   ).toBeInTheDocument();
   view.rerender(
     <MentionPicker
@@ -1446,15 +1577,14 @@ it("keeps an outside namesake discoverable and qualifies the actual choice set",
       select={select}
     />,
   );
+  // Namesakes are qualified; only the outside agent has a detail line.
   const outsideButton = await screen.findByRole("button", {
-    name: new RegExp(`Larry · .+ ${outside}`),
+    name: /^Larry · \S+?\s*Adds to channel when you send$/,
   });
   expect(
-    screen.getByRole("button", { name: new RegExp(`Larry · .+ ${member}`) }),
+    screen.getByRole("button", { name: /^Larry · \S+$/ }),
   ).toBeInTheDocument();
-  expect(
-    screen.queryByRole("button", { name: new RegExp(unrelated) }),
-  ).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: /^Larry/ })).toHaveLength(2);
   await user.click(outsideButton);
   expect(select).toHaveBeenCalledWith({ pubkey: outside, name: "Larry" });
   view.unmount();
@@ -1507,9 +1637,9 @@ it("discovers outside humans from the selected directory in both menus, not cach
     .setup()
     .click(screen.getByRole("button", { name: "Mention a member" }));
   const row = await screen.findByRole("button", {
-    name: `${outsider.name} ${outsider.pubkey}`,
+    name: rowName(outsider.name, "Not in channel"),
   });
-  expect(row).toHaveTextContent("Choose whether to add");
+  expect(row).not.toHaveTextContent(outsider.pubkey);
   expect(
     screen.queryByRole("button", { name: new RegExp(cached) }),
   ).not.toBeInTheDocument();
@@ -1751,7 +1881,7 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
     pages.get("La")?.({ people: [lara, larry], hasMore: true }),
   );
   expect(labels()).toEqual(["Larkin", "Lara", "Larry Outside"]);
-  expect(last()?.status).toBe("Narrow your search to see more members.");
+  expect(last()?.status).toBeUndefined();
   // A new query keeps still-matching people from the last page while it loads.
   view.rerender(
     <MentionCompletion
@@ -1774,7 +1904,7 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
     <MentionCompletion {...props} query={{ start: 0, end: 3, query: "La" }} />,
   );
   expect(labels()).toEqual(["Larkin", "Lara", "Larry Outside"]);
-  expect(last()?.status).toBe("Narrow your search to see more members.");
+  expect(last()?.status).toBeUndefined();
   await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
 });
@@ -2023,7 +2153,7 @@ it("retains button rows while disabling an archived member, then hides it on reo
     />,
   );
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
-  const row = screen.getByRole("button", { name: `Member ${"a".repeat(64)}` });
+  const row = screen.getByRole("button", { name: rowName("Member") });
   act(() => {
     archive = { ...archive, archived: ["a".repeat(64)] };
     for (const fn of listeners) fn();
@@ -2034,7 +2164,7 @@ it("retains button rows while disabling an archived member, then hides it on reo
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   expect(
-    screen.queryByRole("button", { name: `Member ${"a".repeat(64)}` }),
+    screen.queryByRole("button", { name: /^Member/ }),
   ).not.toBeInTheDocument();
   test.library.dispose();
 });
@@ -2069,7 +2199,7 @@ it("offers usable partial agent choices without waiting for another source", asy
     .click(screen.getByRole("button", { name: "Mention a member" }));
   expect(
     await screen.findByRole("button", {
-      name: `Ready Agent ${"f".repeat(64)}`,
+      name: rowName("Ready Agent", "Adds to channel when you send"),
     }),
   ).toBeEnabled();
   view.unmount();
@@ -2285,7 +2415,7 @@ it("still searches a longer query when the page read for its prefix was truncate
   const { last, complete } = directoryCompletion(people);
   const view = render(complete("Mar"));
   await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
-  expect(last()?.status).toBe("Narrow your search to see more members.");
+  expect(last()?.status).toBeUndefined();
   // A truncated page may have left a match out: it answers only its own query.
   view.rerender(complete("Mary J"));
   expect(last()?.status).toBe("Searching community…");
@@ -2556,13 +2686,7 @@ it("uses base matches and visible lexical ties for Fizz in both chooser surfaces
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   await user.type(screen.getByRole("searchbox"), "fizz");
-  expect(
-    screen
-      .getAllByRole("button")
-      .map((button) => button.getAttribute("aria-label"))
-      .filter((label) => rows.some((row) => label?.endsWith(row.key)))
-      .map((label) => label?.slice(0, -65)),
-  ).toEqual(expected);
+  expect(rowsInOrder(rows.map((row) => row.label))).toEqual(expected);
   test.library.dispose();
 });
 
@@ -2623,11 +2747,11 @@ it("does not complete public keys in either menu", async () => {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Mention a member" }));
   await user.type(screen.getByRole("searchbox"), "h");
-  expect(screen.queryByRole("button", { name: `Bad Janet ${key}` })).toBeNull();
-  expect(screen.getByRole("button", { name: `Honey ${honey}` })).toBeVisible();
+  expect(screen.queryByRole("button", { name: /^Bad Janet/ })).toBeNull();
+  expect(screen.getByRole("button", { name: rowName("Honey") })).toBeVisible();
   await user.clear(screen.getByRole("searchbox"));
   await user.type(screen.getByRole("searchbox"), key);
-  expect(screen.queryByRole("button", { name: `Bad Janet ${key}` })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Bad Janet/ })).toBeNull();
   test.library.dispose();
 });
 
@@ -2771,7 +2895,7 @@ it("the persistent toolbar picker reads an empty search again after close and re
   expect(people).toHaveBeenLastCalledWith("Zed", 1, expect.any(AbortSignal));
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: `Zed ${"9".repeat(64)}` }),
+      screen.getByRole("button", { name: rowName("Zed", "Not in channel") }),
     ).toBeTruthy(),
   );
   t.library.dispose();
@@ -2824,9 +2948,9 @@ it("names the choice set only while the picker is shown, and qualifies namesakes
   await userEvent
     .setup()
     .click(screen.getByRole("button", { name: "Mention a member" }));
-  for (const [index, key] of [member, namesake].entries())
+  for (const label of labels)
     expect(
-      await screen.findByRole("button", { name: `${labels[index]} ${key}` }),
+      await screen.findByRole("button", { name: rowName(label) }),
     ).toBeInTheDocument();
   view.rerender(picker(true));
   scope.mockClear();
@@ -2896,9 +3020,7 @@ it.each([false, true])(
         .setup()
         .click(screen.getByRole("button", { name: "Mention a member" }));
       if (warm) {
-        await screen.findByRole("button", {
-          name: `Outside agent ${test.key}`,
-        });
+        await outsideRow();
         held = true;
         act(() => {
           void session.agentChoices.refresh();
@@ -2908,13 +3030,13 @@ it.each([false, true])(
       expect(session.agentChoices.snapshot().status).toBe("loading");
       if (warm) {
         expect(
-          screen.getByRole("button", { name: `Member ${test.member}` }),
+          screen.getByRole("button", { name: rowName("Member") }),
         ).toBeVisible();
         expect(screen.queryByText("Loading agents…")).not.toBeInTheDocument();
       } else {
         // A cold agent read does not hide the already-known channel member.
         expect(
-          screen.getByRole("button", { name: `Member ${test.member}` }),
+          screen.getByRole("button", { name: rowName("Member") }),
         ).toBeVisible();
         expect(screen.queryByText("Loading agents…")).not.toBeInTheDocument();
       }
@@ -2922,9 +3044,7 @@ it.each([false, true])(
       await waitFor(() =>
         expect(session.agentChoices.snapshot().status).toBe("ready"),
       );
-      expect(
-        screen.getByRole("button", { name: `Outside agent ${test.key}` }),
-      ).toBeEnabled();
+      expect(await outsideRow()).toBeEnabled();
       expect(screen.queryByText("Loading agents…")).not.toBeInTheDocument();
     } finally {
       await act(async () => release());
@@ -3152,7 +3272,7 @@ it.each([
   { options: { dm: true }, detail: "1 not in DM · Will not be notified" },
   {
     options: {},
-    detail: "1 not in channel · Choose whether to add when you send",
+    detail: "1 not in channel",
   },
 ])(
   "team choice explains destination consequences: $detail",
