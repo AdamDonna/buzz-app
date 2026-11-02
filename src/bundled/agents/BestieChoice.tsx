@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import type { AgentChoicesSnapshot } from "../../features/agents/choices";
 import type { RelaySession } from "../../features/relay/session";
@@ -26,11 +26,34 @@ export function useBestieChoice(session: RelaySession, scope: string) {
   }>();
   // Only the latest choice reports its failure.
   const latest = useRef(0);
+  // Closing the side panel unmounts the dialog without its close handler, so
+  // a failed replacement is abandoned on unmount too, and one still saving
+  // abandons itself when it fails.
+  const gone = useRef(false);
+  const abandon = useRef<() => void>(undefined);
+  useEffect(() => {
+    abandon.current =
+      error && replacement
+        ? () =>
+            restoreDefaultAgent(
+              scope,
+              replacement.replacing.pubkey,
+              replacement.current.pubkey,
+            )
+        : undefined;
+  }, [error, replacement, scope]);
+  useEffect(() => {
+    gone.current = false;
+    return () => {
+      gone.current = true;
+      abandon.current?.();
+    };
+  }, []);
   const eligible = (pubkey: string) =>
     session.agentChoices
       .snapshot()
       .selectable.find((agent) => agent.pubkey === pubkey);
-  const save = (pubkey: string) => {
+  const save = (pubkey: string, previous?: string) => {
     if (!eligible(pubkey)) return;
     const choice = ++latest.current;
     setError("");
@@ -40,7 +63,10 @@ export function useBestieChoice(session: RelaySession, scope: string) {
         if (choice === latest.current) setReplacement(undefined);
       })
       .catch((failure: Error) => {
-        if (choice === latest.current) setError(failure.message);
+        if (choice !== latest.current) return;
+        if (gone.current && previous)
+          restoreDefaultAgent(scope, pubkey, previous);
+        else setError(failure.message);
       })
       .finally(() => {
         if (choice === latest.current) setSavingBestie(false);
@@ -74,7 +100,7 @@ export function useBestieChoice(session: RelaySession, scope: string) {
           onChoose={() => {
             // A choice changed elsewhere while this dialog was open wins.
             if (saved === replacement.current.pubkey)
-              save(replacement.replacing.pubkey);
+              save(replacement.replacing.pubkey, replacement.current.pubkey);
             else setReplacement(undefined);
           }}
         />

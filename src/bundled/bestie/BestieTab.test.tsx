@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Agent } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
-import { writeView } from "../../shared/view-state";
+import { readView, writeView } from "../../shared/view-state";
 import { bestieTab } from "./BestieTab";
 
 afterEach(() => {
@@ -117,6 +117,62 @@ it("shows on the saved Bestie only, and moves when Change picks another", async 
   expect(tab.when?.(ada)).toBe(false);
   // The host is told, so the tab moves without a reload.
   expect(changed).toHaveBeenCalled();
+  stop?.();
+});
+
+const deviceChoice = () => readView(SCOPE, "solo:default-agent", null);
+
+/** Opens Change and confirms Bea in place of Ada. */
+async function switchToBea(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Change" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Bea" }));
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Bea your bestie?",
+  });
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Switch to Bea" }),
+  );
+  return confirmation;
+}
+
+it("puts this device back on the account's Bestie when a failed Change is closed with the panel", async () => {
+  const user = userEvent.setup();
+  const { relay, mainAgent } = community(ada.pubkey);
+  mainAgent.write.mockRejectedValueOnce(new Error("offline"));
+  const tab = bestieTab(relay);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(true));
+  const Tab = tab.component;
+  const { unmount } = render(<Tab agent={ada} />);
+  const confirmation = await switchToBea(user);
+  expect(await within(confirmation).findByRole("alert")).toBeVisible();
+  expect(deviceChoice()).toBe(bea.pubkey);
+  // Closing the side panel, not Keep.
+  unmount();
+  expect(deviceChoice()).toBe(ada.pubkey);
+  stop?.();
+});
+
+it("puts this device back when a Change still saving fails after the panel closes", async () => {
+  const user = userEvent.setup();
+  const { relay, mainAgent } = community(ada.pubkey);
+  let fail = (_: Error) => {};
+  mainAgent.write.mockImplementationOnce(
+    () =>
+      new Promise<void>((_, reject) => {
+        fail = reject;
+      }),
+  );
+  const tab = bestieTab(relay);
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(true));
+  const Tab = tab.component;
+  const { unmount } = render(<Tab agent={ada} />);
+  await switchToBea(user);
+  expect(deviceChoice()).toBe(bea.pubkey);
+  unmount();
+  await act(async () => fail(new Error("offline")));
+  expect(deviceChoice()).toBe(ada.pubkey);
   stop?.();
 });
 
