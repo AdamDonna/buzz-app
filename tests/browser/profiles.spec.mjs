@@ -1049,6 +1049,17 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
 
   // Browser-only: portal menus inside a modal must hand focus to the profile
   // panel, or restore the correct row control on Escape, without closing both.
+  const holdProfileReturn = () =>
+    page.evaluate(() => {
+      const go = history.go.bind(history);
+      const pending = [];
+      history.go = (delta) => pending.push(delta);
+      window.profileReturnPending = () => pending.length;
+      window.releaseProfileReturn = () => {
+        history.go = go;
+        for (const delta of pending) go(delta);
+      };
+    });
   for (const entry of ["ellipsis", "right-click", "Shift+F10", "ContextMenu"]) {
     if (entry === "ellipsis") await actions.press("Enter");
     else if (entry === "right-click") await row.click({ button: "right" });
@@ -1065,16 +1076,7 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
     await expect(dialog).toHaveCount(0);
     await expect(profileTab).toBeFocused();
     if (entry === "ContextMenu") {
-      await page.evaluate(() => {
-        const go = history.go.bind(history);
-        const pending = [];
-        history.go = (delta) => pending.push(delta);
-        window.profileReturnPending = () => pending.length;
-        window.releaseProfileReturn = () => {
-          history.go = go;
-          for (const delta of pending) go(delta);
-        };
-      });
+      await holdProfileReturn();
       try {
         await profileTab.press("Escape");
         await expect(panel).toHaveCount(0);
@@ -1083,7 +1085,11 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
           .toBe(1);
         // Local tab removal is not completion of native history traversal.
         // The opener becomes usable only after the return route commits.
-        await expect(members).not.toBeFocused();
+        await expect
+          .poll(() =>
+            page.evaluate(() => document.activeElement === document.body),
+          )
+          .toBe(true);
       } finally {
         await page.evaluate(() => window.releaseProfileReturn());
       }
@@ -1101,6 +1107,36 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       ).toBeUndefined();
     }
   }
+  // A person can choose a different control while the native return is held.
+  // Wait for the returned visit to complete before checking that focus stayed.
+  await row.press("Enter");
+  await expect(profileTab).toBeFocused();
+  const mic = page.getByRole("button", {
+    name: "View Mic profile",
+    exact: true,
+  });
+  await holdProfileReturn();
+  try {
+    await profileTab.press("Escape");
+    await expect(panel).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate(() => window.profileReturnPending()))
+      .toBe(1);
+    await mic.focus();
+    await expect(mic).toBeFocused();
+  } finally {
+    await page.evaluate(() => window.releaseProfileReturn());
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const { entry, status } = window.profilesFixture.navigation.snapshot();
+        return status === "opened" && !entry.target.detail;
+      }),
+    )
+    .toBe(true);
+  await expect(mic).toBeFocused();
+  await members.click();
   // Retained Profiles can outlive their routed visit. Closing one must not
   // wait for a navigation that retiring only its older visits will not make.
   await row.press("Enter");

@@ -922,7 +922,7 @@ function ChannelWorkspace({
     | {
         trigger: HTMLElement;
         channelId: string | undefined;
-        after?: { from: string; target: string };
+        after?: { from: string; target: string; closingFocus: Element | null };
       }
     | undefined
   >(undefined);
@@ -1120,6 +1120,7 @@ function ChannelWorkspace({
             after: {
               from,
               target: targetKey(fallback),
+              closingFocus: document.activeElement,
             },
           };
         dismissContent(visits, fallback, pane, remaining);
@@ -1249,15 +1250,16 @@ function ChannelWorkspace({
     }
     const pending = returnFocus.current;
     if (!pending) return;
-    // A restored opener must address the returned visit. Native history.go can
-    // still be pending after the local tab has unmounted.
+    // Restore only at the returned visit. History and the closed tab's DOM
+    // removal can commit in either order.
     if (pending.after) {
       if (!navigation || navigation.entryId === pending.after.from) return;
       if (
-        targetKey(navigation.target) !== pending.after.target &&
-        document.activeElement !== document.body
+        targetKey(navigation.target) !== pending.after.target ||
+        (document.activeElement !== document.body &&
+          document.activeElement !== pending.after.closingFocus)
       ) {
-        // A different destination that already owns focus wins the handoff.
+        // A different destination or a newer focus choice wins the handoff.
         returnFocus.current = undefined;
         return;
       }
