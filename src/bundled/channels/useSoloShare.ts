@@ -19,10 +19,18 @@ import {
 import { useIdentityNames } from "../../features/identity-names/react";
 import {
   canShareConversation,
-  shareChatsWithChannel,
+  destinationShareAudience,
   soloChatLinkMessage,
 } from "../../features/solo/share";
-import { soloChatLinkName } from "../../features/solo/labels";
+import { soloChatLinkName, soloLabels } from "../../features/solo/labels";
+import type {
+  ChannelDetails,
+  ChannelDetailsDraft,
+} from "../../features/relay/channel-details-protocol";
+import {
+  generalAccessValue,
+  generalAccessPolicy,
+} from "../../features/channels/general-access";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import { channelText } from "../../features/channels/channel-icon";
 
@@ -32,9 +40,8 @@ export type ShareChannel = Pick<
 >;
 
 /** Sharing a Solo chat to a channel, inside the access dialog. People are added
- * one at a time like any member. A channel share gives the channel's members
- * access, as sending a chat link there does, then posts the link; the Outbox
- * owns its delivery. */
+ * one at a time like any member. A channel share opens community reading without
+ * enrolling the destination's members, then posts the link through the Outbox. */
 export function useSoloShare({
   session,
   navigator: navigationController,
@@ -91,6 +98,16 @@ export function useSoloShare({
   const [progress, setProgress] = useState("");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [confirmation, setConfirmation] = useState<ChannelDetails>();
+  const running = useRef(false);
+  const requestedAccess = useRef<ChannelDetailsDraft | undefined>(undefined);
+  const accessAttempt = useSyncExternalStore(
+    session.channelDetails.subscribe,
+    () => session.channelDetails.snapshot(channelId),
+  );
+  const checkRequired =
+    accessAttempt?.status === "unconfirmed" &&
+    accessAttempt.draft === requestedAccess.current;
   const source = list.channels.find((item) => item.id === channelId);
   const eligible = canShareConversation(session, source);
   const chosen = list.channels.find(
@@ -269,8 +286,8 @@ export function useSoloShare({
     setFailed(false);
     input.current?.focus();
   };
-  const submit = async () => {
-    if (!visible() || busy) return;
+  const submit = async (confirmed?: ChannelDetails) => {
+    if (!visible() || running.current) return;
     if (!destination) {
       close();
       return;
@@ -281,17 +298,59 @@ export function useSoloShare({
       );
       return;
     }
+    running.current = true;
     setBusy(true);
     setError("");
-    setProgress("Giving channel members access…");
+    setProgress("Checking chat access…");
     const controller = new AbortController();
     const cancelled = () => controller.abort();
     signal?.addEventListener("abort", cancelled, { once: true });
+    if (signal?.aborted) controller.abort();
     const target = destination;
     try {
-      await shareChatsWithChannel(session, [channelId], target, {
-        signal: controller.signal,
-      });
+      const active = controller.signal;
+      // Reuse destination admission, without granting anyone membership.
+      await destinationShareAudience(session, target, active);
+      const details = session.channelDetails;
+      const pending = details.snapshot(channelId);
+      if (pending) {
+        if (
+          pending.status !== "unconfirmed" ||
+          pending.draft !== requestedAccess.current
+        )
+          throw new Error(
+            "Finish the existing General access change before sharing.",
+          );
+        setProgress("Checking save status…");
+        await details.check(channelId, active);
+      }
+      const base = await details.load(channelId, active);
+      active.throwIfAborted();
+      if (!visible()) return;
+      if (!base.canEdit || !soloLabels(base.labels))
+        throw new Error("You can no longer change this chat’s general access.");
+      if (generalAccessValue(base) !== "view-only") {
+        if (!confirmed) {
+          setConfirmation(base);
+          return;
+        }
+        setProgress("Making chat View only…");
+        const saving = details.save(
+          confirmed,
+          {
+            ...confirmed,
+            ...generalAccessPolicy("view-only", confirmed.joinRole),
+          },
+          active,
+          visible,
+        );
+        requestedAccess.current = details.snapshot(channelId)?.draft;
+        await saving;
+      }
+      active.throwIfAborted();
+      if (!visible()) return;
+      setConfirmation(undefined);
+      setProgress("Posting chat link…");
       const current = session.channels
         .list()
         .channels.find((item) => item.id === channelId);
@@ -329,11 +388,13 @@ export function useSoloShare({
       if (!visible()) return;
       setFailed(true);
       setError(
-        `${reason instanceof Error ? reason.message : "Couldn’t share this chat."} Anyone already given access keeps it. Retry adds whoever is still missing, then posts the link.`,
+        `${reason instanceof Error ? reason.message : "Couldn’t share this chat."} The link was not posted. Any access change already saved is kept.`,
       );
     } finally {
       signal?.removeEventListener("abort", cancelled);
+      running.current = false;
       if (visible()) {
+        if (confirmed) setConfirmation(undefined);
         setBusy(false);
         setProgress("");
       }
@@ -341,6 +402,10 @@ export function useSoloShare({
   };
   return {
     eligible,
+    confirmation,
+    cancelConfirmation: () => setConfirmation(undefined),
+    confirm: () => submit(confirmation),
+    checkRequired,
     busy,
     failed,
     destination,
@@ -349,7 +414,9 @@ export function useSoloShare({
     destinationRoster,
     retryDestination: () => setDestinationReload((value) => value + 1),
     removeDestination: () => {
+      if (running.current) return;
       setDestination("");
+      setConfirmation(undefined);
       setExpandedChannel("");
       setError("");
       setFailed(false);

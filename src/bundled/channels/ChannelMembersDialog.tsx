@@ -57,6 +57,8 @@ import {
   formatPublicKey,
   publicKeyLabels,
 } from "../../shared/identity/public-key";
+import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
+import { soloViewOnlyDisclosure } from "../../features/channels/general-access";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -1685,6 +1687,8 @@ export function ChannelMembersDialog({
       )}
     </>
   );
+  const shareAction = useRef<HTMLButtonElement>(null);
+  const cancelShare = useRef<HTMLButtonElement>(null);
   const copyAction = (
     <Tooltip
       content="Copying a link does not grant access."
@@ -1889,10 +1893,11 @@ export function ChannelMembersDialog({
           </>
         ) : solo ? (
           <Button
+            ref={shareAction}
             variant="prominent"
             title={
               share.destination
-                ? "Sharing grants access and posts a link in the selected channel."
+                ? "Sharing makes this chat View only and posts its link without adding members."
                 : undefined
             }
             loading={share.busy}
@@ -1900,9 +1905,11 @@ export function ChannelMembersDialog({
             onClick={() => void share.submit()}
           >
             {share.destination
-              ? share.failed
-                ? "Retry share"
-                : "Share"
+              ? share.checkRequired
+                ? "Check access and share"
+                : share.failed
+                  ? "Retry share"
+                  : "Share"
               : "Done"}
           </Button>
         ) : (
@@ -1986,6 +1993,10 @@ export function ChannelMembersDialog({
                 className={styles.stagedRow}
               >
                 <div className={styles.stagedName}>
+                  <p className="text-body-sm text-subtle">
+                    Share a View only link. People and agents in this channel
+                    won’t be added to the chat.
+                  </p>
                   <Accordion
                     key={chosen.id}
                     variant="form"
@@ -2371,6 +2382,34 @@ export function ChannelMembersDialog({
               ) : null)}
           </section>
         </div>
+      )}
+      {share.confirmation && chosen && (
+        <AlertDialog
+          title="Change general access?"
+          description={`${soloViewOnlyDisclosure(share.confirmation)} The chat will be View only, and its link will be posted in ${channelText(chosen)}. No channel members will be added to the chat.`}
+          pending={share.busy}
+          onClose={share.cancelConfirmation}
+          initialFocus={cancelShare}
+          finalFocus={shareAction}
+          actions={
+            <>
+              <Button
+                ref={cancelShare}
+                disabled={share.busy}
+                onClick={share.cancelConfirmation}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="prominent"
+                loading={share.busy}
+                onClick={() => void share.confirm()}
+              >
+                Share as View only
+              </Button>
+            </>
+          }
+        />
       )}
     </Dialog>
   );

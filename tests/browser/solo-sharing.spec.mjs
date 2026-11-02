@@ -150,215 +150,329 @@ async function reachable(locator, { scroll = true } = {}) {
     .toBe(true);
 }
 
-test("Share dialog keeps actions reachable across viewports and enlarged text and posts one link", async ({
-  page,
-  app,
-}) => {
-  // Pre-existing grants have no device-local provenance. Keep the large fallback
-  // collapsed, and prove real scrolling cannot push the fixed footer away.
-  const legacyPeople = Array.from({ length: 14 }, (_, index) =>
-    app.serveProfile(generateSecretKey(), {
-      name: `Existing person ${index + 1}`,
-    }),
-  );
-  await page.route("**/api/relay/**/query", async (route) => {
-    const filters = route.request().postDataJSON();
-    if (!filters.some((filter) => filter.kinds?.includes(39002)))
-      return route.continue();
-    const response = await route.fetch();
-    const events = await response.json();
-    await route.fulfill({
-      json: events.map((event) => {
-        if (
-          event.kind !== 39002 ||
-          !event.tags.some(([key, value]) => key === "d" && value === "beta")
-        )
-          return event;
-        return app.signRelay({
-          ...event,
-          tags: [
-            ...event.tags,
-            ...legacyPeople.map((person) => ["p", person.pubkey, "", "member"]),
-          ],
-        });
+// Signed metadata edits require an actual channel UUID and owner authority.
+test.describe("View only channel share", () => {
+  const sharedChatId = "44444444-4444-4444-8444-444444444444";
+  test.use({
+    channelIds: ["alpha", sharedChatId],
+    channelNames: { [sharedChatId]: "Beta" },
+    soloChannels: [sharedChatId],
+    ownSoloChannels: [sharedChatId],
+    historyCounts: { alpha: 2, [sharedChatId]: 2 },
+    channelWriteKinds: [9, 9000, 9002, 9007],
+  });
+  test("shares View only links with accessible disclosure", async ({
+    page,
+    app,
+  }, info) => {
+    // Pre-existing grants have no device-local provenance. Keep the large fallback
+    // collapsed, and prove real scrolling cannot push the fixed footer away.
+    const legacyPeople = Array.from({ length: 14 }, (_, index) =>
+      app.serveProfile(generateSecretKey(), {
+        name: `Existing person ${index + 1}`,
       }),
-    });
-  });
-  await page.goto(app.origin);
-  await openChat(page, app, "beta");
-  const trigger = page.getByRole("button", {
-    name: "Share access",
-    exact: true,
-  });
-  await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "Share access" });
-  const search = dialog.getByRole("searchbox", {
-    name: "Search people and channels",
-  });
-  await expect(search).toBeFocused();
-  // Access is grouped by role, like a channel: Bob and Carol are agents.
-  const agents = dialog.getByRole("region", { name: "Agents", exact: true });
-  await expect(agents.getByText("Bob Fixture", { exact: true })).toBeVisible();
-  await expect(
-    agents.getByText("Carol Fixture", { exact: true }),
-  ).toBeVisible();
-  // People holds the owner, the 14 legacy humans and Alice.
-  const people = dialog.getByRole("region", { name: "People", exact: true });
-  await expect(people.getByRole("heading")).toHaveText("People · 16");
-  await expect(
-    people.getByText("Existing person 14", { exact: true }),
-  ).toBeAttached();
-  await expect(
-    dialog.getByText(/^The original sharing destination/),
-  ).toHaveCount(0);
-  // The narrowest viewport is where a scrolling body can push the footer away.
-  await page.setViewportSize({ width: 390, height: 620 });
-  await reachable(dialog.getByRole("button", { name: "Done", exact: true }), {
-    scroll: false,
-  });
-  await dialog
-    .getByText("Existing person 14", { exact: true })
-    .scrollIntoViewIfNeeded();
-  await reachable(dialog.getByRole("button", { name: "Done", exact: true }), {
-    scroll: false,
-  });
-  await page.setViewportSize({ width: 1280, height: 850 });
-  await search.fill("Alpha");
-  await dialog
-    .getByRole("button", { name: "Select #Alpha", exact: true })
-    .click();
-  await expect(
-    dialog.getByRole("region", { name: "Selected channel" }),
-  ).toContainText("#Alpha");
-  const participants = dialog.getByRole("button", {
-    name: /#Alpha.*members/,
-  });
-  await expect(participants).toHaveAttribute("aria-expanded", "false");
-  await participants.click();
-  await expect(participants).toHaveAttribute("aria-expanded", "true");
-  await expect(
-    dialog
-      .getByRole("region", { name: "Selected channel" })
-      .getByText("Alice Fixture", { exact: true }),
-  ).toBeVisible();
-  await participants.press("Enter");
-  await expect(participants).toHaveAttribute("aria-expanded", "false");
-  const share = dialog.getByRole("button", {
-    name: "Share",
-    exact: true,
-  });
-  for (const [width, scale] of [
-    [1280, 1],
-    [390, 2],
-  ]) {
-    await page.setViewportSize({ width, height: 850 });
-    await page.evaluate(
-      (scale) =>
-        document.documentElement.style.setProperty(
-          "--buzz-text-scale",
-          String(scale),
-        ),
-      scale,
     );
-    const footer = dialog.locator(".buzz-dialog-actions");
-    const copy = dialog.getByRole("button", {
-      name: /^(Copy link|Link copied)$/,
-    });
-    // Each button gets its own flex item. Horizontal overflow is allowed
-    // only for a single oversized action, not the combined Copy/Share row.
-    await expect
-      .poll(() =>
-        footer.evaluate((el) => {
-          const widest = Math.max(
-            ...[...el.querySelectorAll("button")].map(
-              (button) => button.getBoundingClientRect().width,
-            ),
-          );
-          // Include the shared focus-ring inset around an oversized action.
-          const style = getComputedStyle(el);
-          const inset =
-            parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-          return el.scrollWidth - Math.max(el.clientWidth, widest + inset);
-        }),
-      )
-      .toBeLessThanOrEqual(1);
-    if (scale === 1) {
-      await expect
-        .poll(() => footer.evaluate((el) => el.scrollWidth - el.clientWidth))
-        .toBeLessThanOrEqual(1);
-      await reachable(share, { scroll: false });
-      await reachable(copy, { scroll: false });
-    } else {
-      await expect
-        .poll(async () => {
-          const shared = await share.boundingBox();
-          const copied = await copy.boundingBox();
-          return shared.y >= copied.y + copied.height;
-        })
-        .toBe(true);
-      // Real Tab still reaches both wrapped controls, without programmatic
-      // scrolling or focus bypassing the actual tab order.
-      for (const action of [share, copy]) {
-        for (
-          let step = 0;
-          !(await action.evaluate((el) => el === document.activeElement));
-          step++
-        ) {
-          // Every roster row has profile and actions stops before the footer.
-          expect(step).toBeLessThan(64);
-          await page.keyboard.press("Tab");
-          // Base UI returns focus from its guard on the next frame. Do not
-          // send another Tab while that handoff is still pending.
-          await expect
-            .poll(() =>
-              page.evaluate(() =>
-                document.activeElement?.hasAttribute(
-                  "data-base-ui-focus-guard",
-                ),
-              ),
+    await page.route("**/api/relay/**/query", async (route) => {
+      const filters = route.request().postDataJSON();
+      if (!filters.some((filter) => filter.kinds?.includes(39002)))
+        return route.continue();
+      const response = await route.fetch();
+      const events = await response.json();
+      await route.fulfill({
+        json: events.map((event) => {
+          if (
+            event.kind !== 39002 ||
+            !event.tags.some(
+              ([key, value]) => key === "d" && value === sharedChatId,
             )
-            .toBe(false);
-        }
-        await expect(action).toBeFocused();
-        await expect(action).toBeInViewport({ ratio: 1 });
-      }
-      await reachable(copy, { scroll: false });
-      await page.keyboard.press("Enter");
+          )
+            return event;
+          return app.signRelay({
+            ...event,
+            tags: [
+              ...event.tags,
+              ...legacyPeople.map((person) => [
+                "p",
+                person.pubkey,
+                "",
+                "member",
+              ]),
+            ],
+          });
+        }),
+      });
+    });
+    await page.goto(app.origin);
+    await openChat(page, app, sharedChatId);
+    const trigger = page.getByRole("button", {
+      name: "Share access",
+      exact: true,
+    });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Share access" });
+    const search = dialog.getByRole("searchbox", {
+      name: "Search people and channels",
+    });
+    await expect(search).toBeFocused();
+    // Access is grouped by role, like a channel: Bob and Carol are agents.
+    const agents = dialog.getByRole("region", { name: "Agents", exact: true });
+    await expect(
+      agents.getByText("Bob Fixture", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      agents.getByText("Carol Fixture", { exact: true }),
+    ).toBeVisible();
+    // People holds the owner, the 14 legacy humans and Alice.
+    const people = dialog.getByRole("region", { name: "People", exact: true });
+    await expect(people.getByRole("heading")).toHaveText("People · 16");
+    await expect(
+      people.getByText("Existing person 14", { exact: true }),
+    ).toBeAttached();
+    await expect(
+      dialog.getByText(/^The original sharing destination/),
+    ).toHaveCount(0);
+    // The narrowest viewport is where a scrolling body can push the footer away.
+    await page.setViewportSize({ width: 390, height: 620 });
+    await reachable(dialog.getByRole("button", { name: "Done", exact: true }), {
+      scroll: false,
+    });
+    await dialog
+      .getByText("Existing person 14", { exact: true })
+      .scrollIntoViewIfNeeded();
+    await reachable(dialog.getByRole("button", { name: "Done", exact: true }), {
+      scroll: false,
+    });
+    await page.setViewportSize({ width: 1280, height: 850 });
+    await search.fill("Alpha");
+    await dialog
+      .getByRole("button", { name: "Select #Alpha", exact: true })
+      .click();
+    await expect(
+      dialog.getByRole("region", { name: "Selected channel" }),
+    ).toContainText("#Alpha");
+    const participants = dialog.getByRole("button", {
+      name: /#Alpha.*members/,
+    });
+    await expect(participants).toHaveAttribute("aria-expanded", "false");
+    await participants.click();
+    await expect(participants).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      dialog
+        .getByRole("region", { name: "Selected channel" })
+        .getByText("Alice Fixture", { exact: true }),
+    ).toBeVisible();
+    await participants.press("Enter");
+    await expect(participants).toHaveAttribute("aria-expanded", "false");
+    const share = dialog.getByRole("button", {
+      name: "Share",
+      exact: true,
+    });
+    for (const [width, scale] of [
+      [1280, 1],
+      [390, 2],
+    ]) {
+      await page.setViewportSize({ width, height: 850 });
+      await page.evaluate(
+        (scale) =>
+          document.documentElement.style.setProperty(
+            "--buzz-text-scale",
+            String(scale),
+          ),
+        scale,
+      );
+      const footer = dialog.locator(".buzz-dialog-actions");
+      const copy = dialog.getByRole("button", {
+        name: /^(Copy link|Link copied)$/,
+      });
+      // Each button gets its own flex item. Horizontal overflow is allowed
+      // only for a single oversized action, not the combined Copy/Share row.
       await expect
-        .poll(
-          async () =>
-            (await copy.innerText()) === "Link copied" ||
-            (await dialog
-              .getByRole("alert")
-              .filter({ hasText: "Couldn’t copy the link." })
-              .count()) > 0,
+        .poll(() =>
+          footer.evaluate((el) => {
+            const widest = Math.max(
+              ...[...el.querySelectorAll("button")].map(
+                (button) => button.getBoundingClientRect().width,
+              ),
+            );
+            // Include the shared focus-ring inset around an oversized action.
+            const style = getComputedStyle(el);
+            const inset =
+              parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+            return el.scrollWidth - Math.max(el.clientWidth, widest + inset);
+          }),
         )
-        .toBe(true);
-      await expect(copy).toBeFocused();
+        .toBeLessThanOrEqual(1);
+      if (scale === 1) {
+        await expect
+          .poll(() => footer.evaluate((el) => el.scrollWidth - el.clientWidth))
+          .toBeLessThanOrEqual(1);
+        await reachable(share, { scroll: false });
+        await reachable(copy, { scroll: false });
+      } else {
+        await expect
+          .poll(async () => {
+            const shared = await share.boundingBox();
+            const copied = await copy.boundingBox();
+            return shared.y >= copied.y + copied.height;
+          })
+          .toBe(true);
+        // Real Tab still reaches both wrapped controls, without programmatic
+        // scrolling or focus bypassing the actual tab order.
+        for (const action of [share, copy]) {
+          for (
+            let step = 0;
+            !(await action.evaluate((el) => el === document.activeElement));
+            step++
+          ) {
+            // Every roster row has profile and actions stops before the footer.
+            expect(step).toBeLessThan(64);
+            await page.keyboard.press("Tab");
+            // Base UI returns focus from its guard on the next frame. Do not
+            // send another Tab while that handoff is still pending.
+            await expect
+              .poll(() =>
+                page.evaluate(() =>
+                  document.activeElement?.hasAttribute(
+                    "data-base-ui-focus-guard",
+                  ),
+                ),
+              )
+              .toBe(false);
+          }
+          await expect(action).toBeFocused();
+          await expect(action).toBeInViewport({ ratio: 1 });
+        }
+        await reachable(copy, { scroll: false });
+        await page.keyboard.press("Enter");
+        await expect
+          .poll(
+            async () =>
+              (await copy.innerText()) === "Link copied" ||
+              (await dialog
+                .getByRole("alert")
+                .filter({ hasText: "Couldn’t copy the link." })
+                .count()) > 0,
+          )
+          .toBe(true);
+        await expect(copy).toBeFocused();
+      }
     }
-  }
-  // Submit the wrapped primary action through its actual keyboard path too.
-  await page.keyboard.press("Tab");
-  await expect(share).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(dialog).not.toBeVisible();
-  await page.setViewportSize({ width: 1280, height: 850 });
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--buzz-text-scale", "1"),
-  );
-  await expect
-    .poll(
-      () =>
-        app.report.publications.filter(({ event }) => event.kind === 9).length,
-    )
-    .toBe(1);
-  const links = app.report.publications.filter(({ event }) => event.kind === 9);
-  expect(links[0].event.content).toBe("[Chat: Beta](buzz://channel/beta)");
-  expect(links[0].event.tags).toContainEqual(["h", "alpha"]);
-  expect(links[0].event.tags.filter(([key]) => key === "p")).toHaveLength(0);
-  expect(links[0].event.tags.some(([key]) => key === "t" || key === "s")).toBe(
-    false,
-  );
+    // Submit the wrapped primary action through its actual keyboard path too.
+    await page.keyboard.press("Tab");
+    await expect(share).toBeFocused();
+    await page.keyboard.press("Enter");
+    const confirmation = page.getByRole("alertdialog", {
+      name: "Change general access?",
+    });
+    await expect(confirmation).toContainText("full history and Canvas");
+    await confirmation
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await expect(share).toBeFocused();
+    expect(app.report.detailsPublications ?? []).toHaveLength(0);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9),
+    ).toHaveLength(0);
+    // Close retires this dialog visit before testing persisted appearance reloads.
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    // Keep actual appearance settings, nested modal focus, and action reachability
+    // in this browser journey; service and role matrices live in Vitest.
+    for (const [mode, width, scale] of [
+      ["dark", 1280, 1],
+      ["light", 1280, 1],
+      ["dark", 390, 1.5],
+      ["light", 390, 1.5],
+    ]) {
+      await page.setViewportSize({ width, height: width === 390 ? 720 : 850 });
+      await page.evaluate(
+        ({ mode, scale }) => {
+          localStorage.setItem("buzz-appearance.v1", mode);
+          localStorage.setItem("buzz-font-scale.v1", String(scale));
+        },
+        { mode, scale },
+      );
+      await page.reload();
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-color-mode",
+        mode,
+      );
+      await expect(page.locator("html")).toHaveCSS(
+        "--buzz-text-scale",
+        String(scale),
+      );
+      await trigger.click();
+      await expect(search).toBeFocused();
+      await search.fill("Alpha");
+      await dialog
+        .getByRole("button", { name: "Select #Alpha", exact: true })
+        .click();
+      await share.click();
+      const cancel = confirmation.getByRole("button", {
+        name: "Cancel",
+        exact: true,
+      });
+      await expect(cancel).toBeFocused();
+      const confirmShare = confirmation.getByRole("button", {
+        name: "Share as View only",
+        exact: true,
+      });
+      await reachable(confirmShare);
+      await expect(confirmShare).toBeInViewport({ ratio: 1 });
+      if (info.project.name === "chromium")
+        await confirmation.screenshot({
+          path: info.outputPath(`SOLO_SHARE_CONFIRM_${mode}_${width}.png`),
+        });
+      await page.keyboard.press("Escape");
+      await expect(confirmation).not.toBeVisible();
+      await expect(share).toBeFocused();
+      if (mode !== "light" || width !== 390) {
+        await dialog
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await expect(dialog).not.toBeVisible();
+      }
+    }
+    await share.press("Enter");
+    await confirmation
+      .getByRole("button", { name: "Share as View only", exact: true })
+      .click();
+    await expect(dialog).not.toBeVisible();
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(app.report.detailsPublications[0].tags).toContainEqual([
+      "visibility",
+      "open",
+    ]);
+    expect(app.report.detailsPublications[0].tags).toContainEqual([
+      "join_role",
+      "guest",
+    ]);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9000),
+    ).toHaveLength(0);
+    await page.setViewportSize({ width: 1280, height: 850 });
+    await page.evaluate(() =>
+      document.documentElement.style.setProperty("--buzz-text-scale", "1"),
+    );
+    await expect
+      .poll(
+        () =>
+          app.report.publications.filter(({ event }) => event.kind === 9)
+            .length,
+      )
+      .toBe(1);
+    const links = app.report.publications.filter(
+      ({ event }) => event.kind === 9,
+    );
+    expect(links[0].event.content).toBe(
+      `[Chat: Beta](buzz://channel/${sharedChatId})`,
+    );
+    expect(links[0].event.tags).toContainEqual(["h", "alpha"]);
+    expect(links[0].event.tags.filter(([key]) => key === "p")).toHaveLength(0);
+    expect(
+      links[0].event.tags.some(([key]) => key === "t" || key === "s"),
+    ).toBe(false);
+  });
 });
 
 test("People search holds loading, lists inline results and restores keyboard focus", async ({
