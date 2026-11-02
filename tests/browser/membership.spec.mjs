@@ -111,24 +111,25 @@ test("Channels renders grouped history and live membership without turning activ
   });
   // The real stream subscriber/filter/session must deliver additions and departures.
   await expect.poll(() => app.relay.hasRoute("primary", "alpha")).toBe(true);
+  // Each person shows once, on the row of their latest change in the run.
   app.membership("member_left", 0, 0);
   app.membership("member_left", 1, 1);
-  await expect(groups).toHaveCount(2);
   await expect(groups.last()).toContainText(
     "Pinky, along with Brain, left the channel",
   );
+  await expect(groups).toHaveCount(1);
   // A run's removals join its leaves on the one departures row.
   app.membership("member_removed", 0);
   await expect(groups.last()).toContainText("Pinky departed along with Brain");
-  await expect(groups).toHaveCount(2);
+  await expect(groups).toHaveCount(1);
   app.membership("member_joined", 0, -1, true);
   // Place a genuine message after the forgery: seeing it proves the batch was processed.
   const after = app.append("primary", "alpha", "After membership activity");
   await expect(feed.locator(`[data-message-id="${after.id}"]`)).toBeVisible();
-  await expect(groups).toHaveCount(2);
+  await expect(groups).toHaveCount(1);
   // A normal message is a grouping barrier, never swallowed by an activity cohort.
   app.membership("member_joined", 0);
-  await expect(groups).toHaveCount(3);
+  await expect(groups).toHaveCount(2);
   await expect(groups.last()).toContainText("Pinky added by you");
   await expect(groups.last()).toBeVisible();
   // Wait for the scheduled bottom-follow before leaving; an overscan count is
@@ -140,7 +141,7 @@ test("Channels renders grouped history and live membership without turning activ
     .toBeLessThan(2);
   await page.getByRole("button", { name: "Beta", exact: true }).click();
   await page.getByRole("button", { name: "Alpha", exact: true }).click();
-  await expect(groups).toHaveCount(3);
+  await expect(groups).toHaveCount(2);
   await expect(groups.last()).toBeVisible();
 });
 

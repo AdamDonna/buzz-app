@@ -34,10 +34,12 @@ const departure = (change: MembershipChange | undefined) =>
   change?.type === "member_left" || change?.type === "member_removed";
 
 /** Each run of adjacent membership changes, whatever its span, shows as at
- * most two rows: arrivals and departures. Only a message breaks a run. A row
- * keeps its newest change's key, so prepended history never renames it, and
- * takes its oldest change's time; the row whose kind came first leads, so
- * rows and day dividers stay in order. */
+ * most two rows: arrivals and departures. Only a message breaks a run. Each
+ * person shows once, on the row of their latest change in the run, so the rows
+ * tell who is in the channel after it. A row keeps its newest change's key, so
+ * prepended history never renames it, and takes its oldest change's time; the
+ * row holding the run's first change leads, so rows and day dividers stay in
+ * order. */
 export function membershipRows(
   rows: readonly ChannelMessage[],
 ): readonly TimelineRow[] {
@@ -63,15 +65,15 @@ export function membershipRows(
     let end = index;
     while (rows[end + 1]?.membership) end++;
     const run = rows.slice(index, end + 1);
-    const arrivals = group(
-      run.filter((member) => !departure(member.membership)),
+    const latest = new Map(
+      run.map((member) => [member.membership?.target, member.membership]),
     );
-    const departures = group(
-      run.filter((member) => departure(member.membership)),
-    );
-    // The kind that happened first leads, even when both share a second.
+    const leaving = (member: ChannelMessage) =>
+      departure(latest.get(member.membership?.target));
+    const arrivals = group(run.filter((member) => !leaving(member)));
+    const departures = group(run.filter(leaving));
     result.push(
-      ...(departure(row.membership)
+      ...(leaving(row)
         ? [...departures, ...arrivals]
         : [...arrivals, ...departures]),
     );
@@ -89,12 +91,14 @@ export function membershipDescription(
   viewer?: string,
   resolveName?: (id: string, fallback: string) => string,
 ) {
-  const changes = rows.flatMap((row) =>
-    row.membership ? [row.membership] : [],
-  );
+  // Each person is described by their latest change, in order of first mention.
+  const latest = new Map<string, MembershipChange>();
+  for (const row of rows)
+    if (row.membership) latest.set(row.membership.target, row.membership);
+  const changes = [...latest.values()];
   const first = changes[0];
   if (!first) return { targets: [], parts: [], text: "", title: "" };
-  const targets = [...new Set(changes.map((change) => change.target))];
+  const targets = [...latest.keys()];
   const name = (id: string, subject = false): MembershipPart => ({
     id,
     text:

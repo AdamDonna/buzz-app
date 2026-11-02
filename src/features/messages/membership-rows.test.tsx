@@ -135,29 +135,35 @@ it("only a message breaks a run: days, gaps and alternation collapse to two rows
     row("j3", joined(brain, brain), midnight + 20_000),
   ];
   const grouped = membershipRows(run);
-  // Each row keeps its newest change's key and its oldest change's time.
+  // Pinky ends removed and Brain ends joined. Each row keeps its newest
+  // change's key and its oldest change's time; the run's first change leads.
   expect(grouped.map((r) => [r.id, r.createdAt])).toEqual([
-    ["j3", midnight - 90_000],
-    ["l2", midnight - 80_000],
+    ["l2", midnight - 90_000],
+    ["j3", midnight - 80_000],
   ]);
   expect(grouped.map((r) => r.membershipRows?.map((m) => m.id))).toEqual([
-    ["j1", "j2", "j3"],
-    ["l1", "l2"],
+    ["j1", "l2"],
+    ["l1", "j2", "j3"],
   ]);
+  expect(
+    grouped.map(
+      (r) => membershipDescription(r.membershipRows ?? [r], profiles).text,
+    ),
+  ).toEqual(["Pinky was removed by Wes", "Brain joined"]);
   // Older history extends the rows without renaming them.
   const older = [
     row("j0", joined(wes, wes), midnight - 200_000),
     row("l0", left(wes), midnight - 100_000),
   ];
   expect(membershipRows([...older, ...run]).map((r) => r.id)).toEqual([
-    "j3",
     "l2",
+    "j3",
   ]);
   const message = row("chat", undefined, midnight + 30_000);
   const later = row("j4", joined(wes, wes), midnight + 40_000);
   expect(membershipRows([...run, message, later]).map((r) => r.id)).toEqual([
-    "j3",
     "l2",
+    "j3",
     "chat",
     "j4",
   ]);
@@ -166,32 +172,33 @@ it("only a message breaks a run: days, gaps and alternation collapse to two rows
     1,
   );
 });
-it("a join and a departure in one run show on separate rows", () => {
-  const rows = [
+it("each person shows once, on the row of their latest change", () => {
+  const back = [
     row("1", joined(pinky, pinky)),
-    row("2", joined(pinky, pinky)),
-    row("3", left(pinky)),
+    row("2", left(pinky)),
+    row("3", joined(pinky, pinky)),
   ];
-  const grouped = membershipRows(rows);
-  expect(grouped.map((r) => r.membershipRows ?? [r])).toEqual([
-    rows.slice(0, 2),
-    [rows[2]],
-  ]);
-  expect(membershipDescription(rows.slice(0, 2), profiles).text).toBe(
-    "Pinky joined",
+  const rejoined = membershipRows(back);
+  expect(rejoined.map((r) => r.id)).toEqual(["3"]);
+  expect(rejoined[0]?.membershipRows).toEqual(back);
+  expect(membershipDescription(back, profiles).text).toBe("Pinky joined");
+  const gone = membershipRows(back.slice(0, 2));
+  expect(gone.map((r) => r.id)).toEqual(["2"]);
+  expect(membershipDescription(back.slice(0, 2), profiles).text).toBe(
+    "Pinky left the channel",
   );
-});
-it("the kind of change that came first leads, even within one second", () => {
-  const grouped = membershipRows([
-    row("left", left(pinky), 100),
-    row("back", joined(pinky, pinky), 100),
-  ]);
-  expect(grouped.map((r) => r.id)).toEqual(["left", "back"]);
-  // An older page can put the other kind first; both rows keep their keys.
+  // Within one second the input order decides, and the first change leads.
   expect(
     membershipRows([
-      row("earlier", joined(brain, brain), 50),
-      row("left", left(pinky), 100),
+      row("left", left(brain), 100),
+      row("back", joined(pinky, pinky), 100),
+    ]).map((r) => r.id),
+  ).toEqual(["left", "back"]);
+  // An older page can put the other row first; both rows keep their keys.
+  expect(
+    membershipRows([
+      row("earlier", joined(wes, wes), 50),
+      row("left", left(brain), 100),
       row("back", joined(pinky, pinky), 100),
     ]).map((r) => r.id),
   ).toEqual(["back", "left"]);
@@ -213,26 +220,32 @@ it("every grouped input remains represented for mixed three-event sequences", ()
         const rows = [row("a", a, 1), row("b", b, 2), row("c", c, 3)];
         const groups = membershipRows(rows);
         expect(groups.length).toBeLessThanOrEqual(2);
+        const members = groups.map((r) => r.membershipRows ?? [r]);
         expect(
-          groups
-            .flatMap((r) => r.membershipRows ?? [r])
+          members
+            .flat()
             .map((r) => r.id)
             .sort(),
         ).toEqual(["a", "b", "c"]);
         expect(groups.map((r) => r.createdAt)).toEqual(
           [...groups.map((r) => r.createdAt)].sort((x, y) => x - y),
         );
-        for (const group of groups) {
-          const members = group.membershipRows ?? [group];
-          const kinds = new Set(
-            members.map((r) => r.membership?.type === "member_joined"),
-          );
-          expect(kinds.size).toBe(1);
-          const description = membershipDescription(members, profiles);
+        const targets = members.map((group) => [
+          ...new Set(group.map((r) => r.membership?.target)),
+        ]);
+        // Nobody appears on both rows.
+        expect(new Set(targets.flat()).size).toBe(targets.flat().length);
+        for (const group of members) {
+          const latest = group.at(-1)?.membership;
+          const description = membershipDescription(group, profiles);
           expect(description.text).not.toBe("");
-          expect(description.targets).toEqual([
-            ...new Set(members.map((r) => r.membership?.target)),
-          ]);
+          expect(description.targets).toEqual(targets[members.indexOf(group)]);
+          // Each row's kind is its people's final state.
+          expect(
+            description.text.includes("left") ||
+              description.text.includes("removed") ||
+              description.text.includes("departed"),
+          ).toBe(latest?.type !== "member_joined");
         }
       }
 });
