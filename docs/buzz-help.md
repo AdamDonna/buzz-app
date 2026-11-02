@@ -139,3 +139,7 @@ the interface unless an available tool actually supports that action.
   When helping someone explore a community, use only your available access and
   say when information is incomplete or inaccessible. Never join, invite, share,
   or change community content merely to explain how Buzz works.
+
+### Builderlab in development
+
+With the pinned-viewer development server, Settings → Plugins → Builderlab manages one sign-in for hosted communities, remote agents and apps. It survives app reloads while the server runs. Signing out or session expiry signs all three out. The credential stays on the server and is not saved to disk.
