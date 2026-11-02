@@ -888,6 +888,7 @@ function MessageRowContent({
       <div
         ref={rowRef}
         className={styles.message}
+        data-highlight-surface=""
         data-layout={layout}
         data-stack-previous={stackPrevious || undefined}
         data-stack-next={stackNext || undefined}
@@ -1427,6 +1428,7 @@ function AgentsMessageRow(props: MessageRowProps) {
             open={open}
             onOpenChange={setOpen}
             className={styles.audienceEntry}
+            data-highlight-surface=""
             // One stable anchor survives both animation directions. Not the
             // button: revealing an anchor takes it out of the Tab order.
             data-message-id={row.id}
