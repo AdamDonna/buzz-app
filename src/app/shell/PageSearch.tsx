@@ -22,7 +22,7 @@ import {
 import type { ShortcutBindingsSnapshot } from "../../features/shortcuts/preferences";
 import type { AppServices } from "../services";
 import { HOST_SHORTCUT_ORDER } from "../shortcuts";
-import { conversationComposerFocusTarget } from "../focus-navigation";
+import { conversationFocusTarget } from "../focus-navigation";
 import { orderPages, shellPresentation } from "./presentation";
 import { matchName } from "../../features/search/match";
 import {
@@ -208,7 +208,7 @@ export function PageSearch({
         finalFocus={() =>
           returnFocus.current?.id === "main-content"
             ? (composerChannel.current &&
-                conversationComposerFocusTarget(composerChannel.current)) ||
+                conversationFocusTarget(composerChannel.current)) ||
               false
             : returnFocus.current
         }
@@ -229,7 +229,7 @@ export function PageSearch({
           )
             (
               (composerChannel.current &&
-                conversationComposerFocusTarget(composerChannel.current)) ||
+                conversationFocusTarget(composerChannel.current)) ||
               main
             ).focus({ preventScroll: true });
         }}
