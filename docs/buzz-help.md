@@ -140,6 +140,10 @@ the interface unless an available tool actually supports that action.
   say when information is incomplete or inaccessible. Never join, invite, share,
   or change community content merely to explain how Buzz works.
 
+On macOS, debug builds can use a trusted local credential helper for human restore
+and agent creation, restore, and deletion. See [local helper setup](identity.md#local-restore-helper-on-macos).
+Release builds ignore this optional helper.
+
 ### Builderlab in development
 
 With the pinned-viewer development server, Settings → Plugins → Builderlab manages one sign-in for hosted communities, remote agents and apps. It survives app reloads while the server runs. Signing out or session expiry signs all three out. The credential stays on the server and is not saved to disk.
