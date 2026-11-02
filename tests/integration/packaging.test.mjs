@@ -129,6 +129,24 @@ test("all-platform releases preserve candidate isolation and read-only installer
   ).run;
   assert.match(build, /target-libdir --target "\$TARGET"/);
   assert.match(build, /pnpm tauri build .*--target "\$TARGET"/);
+  // Each leg checks the app and every bundled helper against its own architecture.
+  const verification = jobs.build.steps.find(
+    (step) => step.name === "Verify release DMG",
+  );
+  assert.match(verification.env.LIPO_ARCH, /^\$\{\{ matrix\.lipo \}\}$/);
+  for (const binary of [
+    "$app/Contents/MacOS/Buzz",
+    "$goose",
+    "$command",
+    "$cli",
+  ])
+    assert.ok(
+      verification.run.includes(
+        `test "$(lipo -archs "${binary}")" = "$LIPO_ARCH"`,
+      ),
+      binary,
+    );
+  assert.doesNotMatch(verification.run, /arm64|x86_64/);
   const macos = jobs.build.steps.at(-1).with.name;
   assert.deepEqual(
     downloads.map((step) => step.with.name),

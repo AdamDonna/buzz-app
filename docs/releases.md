@@ -37,13 +37,12 @@ gh workflow run release.yml --repo block/buzz-app --ref main
 ```
 
 The macOS builds run on Apple Silicon `macos-latest` with the repository's
-pinned toolchain; the Intel build cross-compiles `x86_64-apple-darwin` with the
-same Rust release from rustup, because Hermit's Rust ships only the host's
-standard library. Each publishes an Apple-signed/notarized DMG and a separately
-Tauri-signed updater `.app.tar.gz` and `.sig`. The updater archive is
-rebuilt from the verified app in the signed DMG; built-in Tauri artifact
-creation remains disabled because this DMG-only build does not emit an updater
-archive.
+pinned toolchain; the Intel build cross-compiles `x86_64-apple-darwin` after
+adding that target's standard library to the pinned Rust release. Each
+publishes an Apple-signed/notarized DMG and a separately Tauri-signed updater
+`.app.tar.gz` and `.sig`. The updater archive is rebuilt from the verified app
+in the signed DMG; built-in Tauri artifact creation remains disabled because
+this DMG-only build does not emit an updater archive.
 
 Windows and Linux installers are built with the same updater configuration.
 Their jobs never receive the Tauri signing key: each checks that its installed or
@@ -76,10 +75,11 @@ Neither endpoint is `releases/latest`: versioned builds are prereleases.
 **Auto-promotion begins as soon as this workflow lands on `main`.** Install an
 updater-enabled build manually first (older installed builds lack the updater),
 and verify its embedded public key and preview endpoint match the release
-configuration. Those values are checked in each candidate's macOS binary at
-promotion and in the Windows/Linux binaries by their build jobs, but nothing
-validates a live old→new install before publishing. For manual recovery or a controlled repromotion, dispatch
-an existing version from `main`:
+configuration. The macOS build job checks those values in both the Apple
+Silicon and Intel binaries, promotion rechecks only the Apple Silicon binary,
+and the Windows/Linux build jobs check their binaries, but nothing validates a
+live old→new install before publishing. For manual recovery or a controlled
+repromotion, dispatch an existing version from `main`:
 
 ```sh
 gh workflow run release.yml --repo block/buzz-app --ref main \

@@ -68,8 +68,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      # Hermit's Rust ships only the runner's (Apple Silicon) standard library.
-      # Cross-compile with the same pinned release from rustup, as Windows does.
+      # Hermit's rustup proxies select the rust-toolchain.toml release, which has
+      # only the runner's (Apple Silicon) standard library. Add the Intel one to
+      # that toolchain and keep nested builds on it.
       - name: Select pinned Rust with the Intel standard library
         if: matrix.arch == 'x64'
         run: |
@@ -159,7 +160,7 @@ jobs:
             -R '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[subject.OU] = EYF346PHUG' "$command"
           cli="$app/Contents/Resources/bin/buzz"
           test -x "$cli" || { echo '::error::Signed app is missing buzz'; exit 1; }
-          test "$(lipo -archs "$cli")" = arm64 || { echo '::error::buzz is not arm64'; exit 1; }
+          test "$(lipo -archs "$cli")" = "$LIPO_ARCH" || { echo "::error::buzz is not $LIPO_ARCH"; exit 1; }
           codesign --verify --strict --verbose=2 \
             -R '=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = EYF346PHUG' "$cli"
           codesign --display --verbose=2 "$cli" 2>&1 | grep 'flags=.*runtime' > /dev/null || { echo '::error::buzz lacks the hardened runtime'; exit 1; }
