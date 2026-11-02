@@ -77,10 +77,15 @@ function Rows({
     [archiveRevision],
   );
   // The unread engine gives each shared chat one row, built only from tags;
-  // archiving it in Inbox clears it here too.
+  // archiving it in Inbox clears it here too, even while it is open.
+  const archived = new Set(
+    inbox.items
+      .filter((item) => isArchived(archives, item))
+      .map((item) => item.channelId),
+  );
   const tagged = new Set(
     inbox.items
-      .filter((item) => item.unreadCount > 0 && !isArchived(archives, item))
+      .filter((item) => item.unreadCount > 0 && !archived.has(item.channelId))
       .map((item) => item.channelId),
   );
   const chats = list.channels.filter(
@@ -89,7 +94,9 @@ function Rows({
   // Reading the open chat clears its tag; keep its row until the viewer
   // moves on, so it doesn't vanish underfoot.
   const holding =
-    open && (tagged.has(open) || held === open) ? open : undefined;
+    open && (tagged.has(open) || (held === open && !archived.has(open)))
+      ? open
+      : undefined;
   useEffect(() => setHeld(holding), [holding, setHeld]);
   return chats
     .filter((channel) => tagged.has(channel.id) || channel.id === holding)

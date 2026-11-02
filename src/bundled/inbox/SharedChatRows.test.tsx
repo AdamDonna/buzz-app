@@ -189,4 +189,12 @@ it("pulls in someone else's chat only while it has an unread tag or stays open a
   expect(names()).toEqual([]);
   h.tag("shared", 2);
   expect(names()).toEqual(["Alex's API question"]);
+
+  // Archiving it elsewhere, such as in another window, retires the row even
+  // while the chat is open.
+  h.go("shared");
+  h.tag("shared", 0);
+  expect(names()).toEqual(["Alex's API question"]);
+  h.archive("shared");
+  expect(names()).toEqual([]);
 });
