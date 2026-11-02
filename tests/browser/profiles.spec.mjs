@@ -430,8 +430,9 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     await expect(key).toHaveText(npubs.viewer);
     if (pointerVisit !== "stationary") await page.mouse.move(0, 0);
     if (pointerVisit === "back") {
-      const rect = await avatar.boundingBox();
-      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      // Profile pushes the avatar aside. Hover waits for it to settle, so the
+      // pointer rests on the pushed avatar, not where Escape puts it back.
+      await avatar.hover();
       // Complete this hover while Profile is still open. Otherwise its timer
       // can fire after Escape and legitimately count as a fresh hover visit.
       await page.clock.runFor(300);

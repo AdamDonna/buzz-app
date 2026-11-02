@@ -1697,7 +1697,16 @@ test("audio settings mirror device choices between compact and window controls",
     page.getByRole("combobox", { name: "Microphone", exact: true }),
   ).toContainText("USB microphone");
   await page.getByRole("combobox", { name: "Speakers", exact: true }).click();
-  await page.getByRole("option", { name: "Headphones", exact: true }).click();
+  // The popup can flip between a pointer pick's press and release, and Base UI
+  // ignores that split click. The microphone pick above covers the pointer.
+  await expect(
+    page.getByRole("option", { name: "System default", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(
+    page.getByRole("option", { name: "Headphones", exact: true }),
+  ).toHaveAttribute("data-highlighted", "");
+  await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("dialog", { name: "Audio settings", exact: true }),
