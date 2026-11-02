@@ -27,6 +27,8 @@ function applied() {
     pluginOwner: { id: "buzz.codex", revision: "r1" },
     host: { spawn: vi.fn(), request: vi.fn() },
     agents: {
+      executionBinding: () => undefined,
+      execution: async () => undefined,
       register: (registered: AgentType) => {
         type = registered;
       },
@@ -127,6 +129,8 @@ it("stops agents that stop running even when the agent list could not be read", 
     pluginOwner: { id: "buzz.codex" },
     host: { spawn: vi.fn(), request: vi.fn() },
     agents: {
+      executionBinding: () => undefined,
+      execution: async () => undefined,
       register: () => undefined,
       snapshot: () => state,
       relay: () => undefined,
@@ -191,6 +195,8 @@ it("starts the server once Codex is updated and checked, only while a Codex agen
     pluginOwner: { id: "buzz.codex" },
     host: { spawn: vi.fn(), request: vi.fn() },
     agents: {
+      executionBinding: () => undefined,
+      execution: async () => undefined,
       register: () => undefined,
       snapshot: () => state,
       relay: () => undefined,

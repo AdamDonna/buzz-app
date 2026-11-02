@@ -60,6 +60,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
           },
         }
       : undefined,
+    (key) => ctx.agents.execution(key),
   );
   /** A Codex agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */
@@ -74,7 +75,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     // Once loaded, and when the first Codex agent runs, the copy is brought
     // up to date; that is also when a first copy is downloaded.
     const was = needed;
-    needed = running.length > 0;
+    needed = running.some((agent) => !ctx.agents.executionBinding(agent.key));
     if (spawn && (was === undefined || (needed && !was))) {
       const updated = setup.update(needed);
       // Then, after the check that follows it (two first starts of Codex
@@ -120,6 +121,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   } = createTabs(providerController, runtime, start, setup);
   ctx.agents.register<Config>({
     id: TYPE_ID,
+    execution: true,
     hooks: { events: CODEX_HOOK_EVENTS },
     title: "Codex",
     icon: CodexLogoIcon,
@@ -216,7 +218,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
       },
     ],
     // A mention during the first download waits for it, within its deadline.
-    ...codexRun(runtime, async (signal) => {
+    ...codexRun(runtime, async (signal, agent) => {
+      if (await ctx.agents.execution(agent)) return;
       await setup.installed(signal);
       if (providerController.snapshot().readiness === "checking")
         await providerController.check();

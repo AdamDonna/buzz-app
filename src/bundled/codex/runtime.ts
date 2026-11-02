@@ -1,3 +1,5 @@
+import type { AgentExecution } from "../../features/agents/execution";
+import { CodexExecution } from "./execution";
 import { callbackHookArgs, openHookBridge } from "./hook-bridge";
 import type { Host } from "../../features/host/service";
 import { nativeHookState } from "./hooks";
@@ -239,6 +241,11 @@ function textOf(event: EventData, name: string) {
  * thread carrying its agent's workspace, instructions and tools, and tool
  * calls find their agent by thread and turn. */
 export class CodexRuntime {
+  private remote = new Map<
+    AgentKey,
+    { runtime: CodexRuntime; execution: AgentExecution }
+  >();
+  private disposed = false;
   private entries = new Map<AgentKey, Entry>();
   private server: Server | undefined;
   private stopping = new Map<AgentKey, Promise<void>>();
@@ -272,7 +279,52 @@ export class CodexRuntime {
         input: unknown,
       ): Promise<Record<string, unknown>>;
     },
+    private readonly execution?: (
+      agent: AgentKey,
+    ) => Promise<AgentExecution | undefined>,
+    private readonly target?: AgentExecution,
   ) {}
+  private async connection(agent: AgentKey): Promise<CodexRuntime> {
+    if (this.disposed) throw new Error("Codex runtime is disposed");
+    const execution = await this.execution?.(agent);
+    if (this.disposed) {
+      await execution?.dispose();
+      throw new Error("Codex runtime is disposed");
+    }
+    if (!execution) return this;
+    execution.signal.throwIfAborted();
+    const held = this.remote.get(agent);
+    if (held?.execution === execution) return held.runtime;
+    const transport = new CodexExecution(execution);
+    const runtime = new CodexRuntime(
+      transport.spawn,
+      (key) => (key === agent ? this.reads(key) : undefined),
+      this.core,
+      this.storage,
+      (raw) => ({
+        ...this.resolveConfig(raw),
+        workspace: execution.binding.workspace,
+      }),
+      this.added,
+      () => "",
+      this.hooks && { serve: transport.serve, run: this.hooks.run },
+      undefined,
+      execution,
+    );
+    runtime.subscribe(() => {
+      for (const listener of this.listeners) listener();
+    });
+    this.remote.set(agent, { runtime, execution });
+    execution.signal.addEventListener(
+      "abort",
+      () => {
+        this.previews.delete(agent);
+        runtime.dispose();
+      },
+      { once: true },
+    );
+    return runtime;
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -280,7 +332,9 @@ export class CodexRuntime {
     };
   };
   sessions = (agent: AgentKey): readonly SessionView[] =>
-    this.views.get(agent) ?? EMPTY;
+    this.remote.get(agent)?.runtime.sessions(agent) ??
+    this.views.get(agent) ??
+    EMPTY;
   private readonly controls = new SessionControls(() => {
     for (const listener of this.listeners) listener();
   });
@@ -293,6 +347,8 @@ export class CodexRuntime {
     ]);
   }
   sessionState(agent: Agent, place: SessionPlace): SessionState {
+    const remote = this.remote.get(agent.key);
+    if (remote) return remote.runtime.sessionState(agent, place);
     const key = this.controlKey(agent, place);
     if (this.controls.compacting(`${agent.key}/${key}`)) return "compacting";
     return this.controls.active(`${agent.key}/${key}`) ||
@@ -304,7 +360,9 @@ export class CodexRuntime {
     agent: Agent,
     place: SessionPlace,
     action: SessionControlAction,
-  ) {
+  ): Promise<void> {
+    const runtime = await this.connection(agent.key);
+    if (runtime !== this) return runtime.session(agent, place, action);
     const reads = this.reads(agent.key);
     if (!reads) throw new Error("Connect to the agent's community first.");
     const key = this.controlKey(agent, place);
@@ -376,14 +434,16 @@ export class CodexRuntime {
       }
     });
   }
-  preview(agent: Agent) {
+  preview(agent: Agent): Promise<Models> {
     const settings = this.resolveConfig(agent.config);
     const key = JSON.stringify([settings.model, settings.effort]);
     const existing = this.previews.get(agent.key);
     if (existing?.key === key) return existing.ready;
-    const server = this.open();
-    const rpc = server.rpc;
     const ready = (async () => {
+      const runtime = await this.connection(agent.key);
+      if (runtime !== this) return runtime.preview(agent);
+      const server = this.open();
+      const rpc = server.rpc;
       await server.opening;
       const models = await listModels(rpc);
       const model = resolveModel(settings.model, models);
@@ -422,6 +482,8 @@ export class CodexRuntime {
   }
 
   private async workspace(path: string) {
+    if (this.target)
+      return this.target.resolveDirectory(this.target.binding.workspace);
     if (absoluteWorkspace(path)) return path;
     let directory = "";
     const process = await this.spawn("workspace", {
@@ -438,6 +500,7 @@ export class CodexRuntime {
   }
   /** Copies `threadId` from the user's Codex home, if it is there. */
   private async adopt(threadId: string) {
+    if (this.target) return;
     const process = await this.spawn("adopt", { args: [threadId] });
     await process.exited;
   }
@@ -462,6 +525,13 @@ export class CodexRuntime {
     for (const listener of this.listeners) listener();
   }
   sync(agents: readonly Agent[]) {
+    for (const [key, remote] of this.remote) {
+      if (!agents.some((agent) => agent.key === key)) {
+        this.remote.delete(key);
+        remote.runtime.dispose();
+        void remote.execution.dispose();
+      }
+    }
     const present = new Set(agents.map((agent) => agent.key));
     for (const key of this.previews.keys())
       if (!present.has(key)) {
@@ -509,6 +579,12 @@ export class CodexRuntime {
     });
   }
   dispose() {
+    this.disposed = true;
+    for (const remote of this.remote.values()) {
+      remote.runtime.dispose();
+      void remote.execution.dispose();
+    }
+    this.remote.clear();
     this.previews.clear();
     for (const entry of this.entries.values()) entry.abort.abort();
     this.entries.clear();
@@ -536,7 +612,7 @@ export class CodexRuntime {
             ...options,
             args: [
               ...(options?.args ?? []),
-              ...(this.hooks ? callbackHookArgs : []),
+              ...(this.hooks && !this.target ? callbackHookArgs : []),
             ],
           }),
         defaults.workspace,
@@ -590,6 +666,8 @@ export class CodexRuntime {
   }
   /** The agent's bindings in this community, most recently used first. */
   conversations(agent: AgentKey): SavedConversation[] {
+    const remote = this.remote.get(agent);
+    if (remote) return remote.runtime.conversations(agent);
     const reads = this.reads(agent);
     const saved =
       this.entries.get(agent)?.saved ??
@@ -629,6 +707,9 @@ export class CodexRuntime {
     place: Readonly<{ channelId: string; root?: string }>,
     signal: AbortSignal,
   ): Promise<SavedConversation | undefined> {
+    const runtime = await this.connection(agent.key);
+    if (runtime !== this) return runtime.find(agent, place, signal);
+    if (this.target) return;
     const label = this.reads(agent.key)?.channelLabel(place.channelId);
     const found = await findConversation(
       this.spawn,
@@ -658,7 +739,7 @@ export class CodexRuntime {
     // canvas_set; v15 removes message keywords; v16 splits channel and
     // channels into the channel_* tools; v17 splits members into the
     // member_* tools.
-    return `buzz.codex.sessions.v17:${scope}:${agent}`;
+    return `buzz.codex.sessions.v17:${scope}:${agent}${this.target ? `:${JSON.stringify(this.target.binding)}` : ""}`;
   }
   private save(request: Request, entry: Entry, key: string, saved: Saved) {
     // Reinserted so the bounded set keeps the most recently used bindings.
@@ -684,7 +765,9 @@ export class CodexRuntime {
     this.save(request, entry, key, { ...saved, at: Date.now() });
     for (const listener of this.listeners) listener();
   }
-  async run(delivery: Delivery) {
+  async run(delivery: Delivery): Promise<void> {
+    const runtime = await this.connection(delivery.agent.key);
+    if (runtime !== this) return runtime.run(delivery);
     delivery.signal.throwIfAborted();
     const { trigger, agent } = delivery;
     // Unaddressed watches and timers come as standalone turns (`runOnce`).
@@ -924,6 +1007,9 @@ export class CodexRuntime {
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
     const { agent } = delivery;
+    const runtime = await this.connection(agent.key);
+    if (runtime !== this)
+      return runtime.runOnce({ delivery, key, signal: turnSignal, prompt });
     const reads = this.reads(agent.key);
     if (!reads)
       return { ok: false, error: "Connect to the agent's community first" };
@@ -1239,7 +1325,10 @@ export class CodexRuntime {
     const client = appClient(agent, {
       relayAuthor: this.reads(agent.key)?.relayAuthor?.(),
       signingAuthority: this.reads(agent.key)?.workflowAuthority(),
-      read: (path) => readFile(this.spawn, turn.workspace, path, turn.signal),
+      read: (path) =>
+        this.target
+          ? this.target.readFile(path, { cwd: turn.workspace })
+          : readFile(this.spawn, turn.workspace, path, turn.signal),
       check,
       signal: turn.signal,
       memories: async (slug) => {

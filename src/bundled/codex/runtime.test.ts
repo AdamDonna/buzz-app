@@ -1,3 +1,4 @@
+import type { AgentExecution } from "../../features/agents/execution";
 import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
@@ -59,6 +60,7 @@ function fixture(
   } = {},
   repositories?: (scope: string | undefined) => string,
   hooks?: ConstructorParameters<typeof CodexRuntime>[7],
+  execution?: ConstructorParameters<typeof CodexRuntime>[8],
 ) {
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
@@ -339,6 +341,7 @@ function fixture(
     () => added,
     repositories,
     hooks,
+    execution,
   );
   runtimes.push(runtime);
   const events: EventData[] = [];
@@ -459,6 +462,8 @@ function fixture(
     apply({
       host: { spawn },
       agents: {
+        executionBinding: () => undefined,
+        execution: async () => undefined,
         snapshot: () => ({ status: "ready", agents: [], running }),
         relay: () => relay,
         core,
@@ -4603,4 +4608,83 @@ it("keeps interrupting an idle existing conversation a no-op", async () => {
   await expect(
     f.runtime.session(agent, { channelId: "channel", root }, "interrupt"),
   ).resolves.toBeUndefined();
+});
+
+it("runs bound Codex tools in the guest workspace, resumes, and stops on provider unload", async () => {
+  vi.useFakeTimers();
+  try {
+    const lifetime = new AbortController();
+    let f!: ReturnType<typeof fixture>;
+    const target: AgentExecution = {
+      binding: {
+        provider: "test/guest",
+        target: "one",
+        workspace: "/guest/project",
+      },
+      signal: lifetime.signal,
+      spawn: vi.fn(async (_program, options) => {
+        options?.onStdout?.(
+          `${JSON.stringify({ buzzCodexHook: "ready", url: "http://127.0.0.1:1234" })}\n`,
+        );
+        return f.spawn("app-server", options);
+      }),
+      resolveDirectory: vi.fn(async (path) => path),
+      readFile: vi.fn(async () => new TextEncoder().encode("GUEST FILE")),
+      dispose: vi.fn(async () => {
+        lifetime.abort(new Error("Provider unloaded"));
+      }),
+    };
+    const execution = vi.fn(async () => {
+      lifetime.signal.throwIfAborted();
+      return target;
+    });
+    f = fixture([], undefined, false, {}, undefined, undefined, execution);
+    await f.runtime.run(f.delivery("first"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(
+      f.sent.find((wire) => wire.method === "thread/start")?.params,
+    ).toMatchObject({ cwd: "/guest/project" });
+    expect(
+      (await f.tool("send", { audience: "everyone", path: "answer.txt" }))
+        ?.result,
+    ).toMatchObject({ success: true });
+    expect(target.readFile).toHaveBeenCalledWith("answer.txt", {
+      cwd: "/guest/project",
+    });
+    expect(f.fileReads).toEqual([]);
+    expect(
+      (
+        await f.tool("send", { audience: "everyone", text: "wrong turn" }, 0, {
+          turnId: "wrong",
+        })
+      )?.result,
+    ).toMatchObject({ success: false });
+    await f.complete();
+    await vi.waitFor(() =>
+      expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
+    );
+    await f.runtime.run(f.delivery("resume"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    expect(f.sent.some((wire) => wire.method === "thread/resume")).toBe(true);
+    const delivery = f.delivery("unused");
+    await f.runtime.session(
+      { ...delivery.agent, config: delivery.config } as unknown as Agent,
+      { channelId: "channel", root },
+      "interrupt",
+    );
+    expect(f.sent.some((wire) => wire.method === "turn/interrupt")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Stopped");
+    await f.runtime.run(f.delivery("active at unload"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
+    await target.dispose();
+    await vi.waitFor(() => expect(f.process.end).toHaveBeenCalled());
+    await expect(f.runtime.run(f.delivery("provider missing"))).rejects.toThrow(
+      "Provider unloaded",
+    );
+    expect(target.spawn).toHaveBeenCalledTimes(1);
+    expect(f.spawn.mock.calls.every(([id]) => id === "app-server")).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
 });
