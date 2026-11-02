@@ -135,6 +135,10 @@ export class AgentSessions {
   /** One-off turns running or starting, by label. */
   private readonly once = new Map<string, Live | undefined>();
   private onceCount = 0;
+  /** Sessions opening, which `shutdown` waits for. */
+  private readonly opens = new Set<Promise<Live>>();
+  /** Sessions closed or closing, until a close of each is acknowledged. */
+  private readonly closing = new Set<Live>();
   /** Conversations whose session is opening, and the turn it opened for. */
   private readonly opening = new Map<
     string,
@@ -165,6 +169,10 @@ export class AgentSessions {
   }
   active(key: string) {
     return this.opening.has(key) || !!this.live.get(key)?.session.working;
+  }
+  /** The harness session serving a conversation or one-off turn. */
+  sessionId(key: string) {
+    return (this.live.get(key) ?? this.once.get(key))?.session.id;
   }
   /** Conversations with a session, whether each is working, and when each
    * last took in a message or ended a turn. */
@@ -275,10 +283,7 @@ export class AgentSessions {
         (live) => this.disposed || this.adopt(key, live),
         naming,
       );
-      if (this.disposed) {
-        void this.close(live);
-        throw new Error(`${this.options.label} was stopped`);
-      }
+      if (this.disposed) throw new Error(`${this.options.label} was stopped`);
       if (signal?.aborted) return {};
       if (current && !current())
         return {
@@ -441,6 +446,18 @@ export class AgentSessions {
       if (!live.session.busy && this.stale(live)) this.drop(key, live);
   }
 
+  /** Like `dispose()`, then resolves once every session it opened, or was
+   * opening, is closed or its process has exited; rejects if one cannot be. */
+  async shutdown() {
+    this.dispose();
+    await Promise.allSettled(this.opens);
+    const closed = await Promise.allSettled(
+      [...this.closing].map((live) => this.strict(live)),
+    );
+    this.options.onChange?.();
+    const failed = closed.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
   /** Closes its sessions, ending their turns; the process keeps serving other
    * agents. */
   dispose() {
@@ -469,7 +486,19 @@ export class AgentSessions {
 
   /** Opens a session for `key` in the agent's workspace, which `use` records
    * as its user's. */
-  private async open(
+  private open(
+    key: string,
+    title: string | undefined,
+    use: (live: Live) => unknown,
+    named?: (title: string) => void,
+  ) {
+    const opening = this.start(key, title, use, named);
+    this.opens.add(opening);
+    const done = () => this.opens.delete(opening);
+    opening.then(done, done);
+    return opening;
+  }
+  private async start(
     key: string,
     title: string | undefined,
     use: (live: Live) => unknown,
@@ -496,8 +525,10 @@ export class AgentSessions {
     // Busy until it is adopted as a conversation's.
     const slot: Slot = { idle: () => false, evict: async () => undefined };
     const room = pool.take(slot);
+    let opened: AcpSession | undefined;
     const start = () =>
       process.open({
+        onSession: (session) => (opened = session),
         cwd,
         systemPrompt: launch.systemPrompt,
         ...(title ? { title } : {}),
@@ -519,6 +550,15 @@ export class AgentSessions {
       });
     } catch (error) {
       pool.release(slot);
+      // Opened but not set up: its close is retired like any other.
+      if (opened)
+        void this.close({
+          session: opened,
+          process,
+          fingerprint,
+          slot,
+          at: Date.now(),
+        });
       throw error;
     }
     const released = () => pool.release(slot);
@@ -531,6 +571,8 @@ export class AgentSessions {
       return this.open(key, title, use, named);
     }
     this.options.started?.(session.id, launch.systemPrompt);
+    // Removed meanwhile: the callers are gone, and `shutdown` waits for this.
+    if (this.disposed) void this.close(live);
     use(live);
     return live;
   }
@@ -615,8 +657,16 @@ export class AgentSessions {
     }
     void this.close(live);
   }
+  /** Closes the session, failing only for a caller that needs the harness to
+   * have acknowledged it. */
+  private strict(live: Live) {
+    this.closing.add(live);
+    return live.process
+      .close(live.session, true)
+      .then(() => void this.closing.delete(live));
+  }
   private close(live: Live) {
-    return live.process.close(live.session);
+    return this.strict(live).catch(() => undefined);
   }
 }
 

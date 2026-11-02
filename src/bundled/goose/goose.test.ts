@@ -73,6 +73,26 @@ afterEach(() => {
 });
 
 describe("GooseProcess", () => {
+  it.each([false, true])(
+    "suppresses auxiliary title inference only for protected workers (%s)",
+    async (protectedWorker) => {
+      const fake = fakeSpawn();
+      const goose = await GooseProcess.start(fake.spawn, {
+        cwd: "/work",
+        protected: protectedWorker,
+        env: { GOOSE_DISABLE_SESSION_NAMING: "false" },
+      });
+      try {
+        expect(fake.geese[0]?.env.GOOSE_DISABLE_SESSION_NAMING).toBe(
+          protectedWorker ? "true" : "false",
+        );
+      } finally {
+        await goose.kill();
+        await goose.exited;
+      }
+    },
+  );
+
   it("starts goose-acp without the app's Buzz identity or goose choice", async () => {
     const { process } = await start();
     expect(process.options.cwd).toBe("/work");
@@ -1454,4 +1474,63 @@ it("lets new work steer while a stopped Attention refresh is still pending", asy
     await goose.close(session);
     await Promise.all([first, stopped, next, later]);
   }
+});
+
+it("does not acknowledge strict retirement when the native session refuses to close", async () => {
+  const { goose, release, waiting } = await slow("session/close", true);
+  const session = await goose.open({
+    cwd: "/work",
+    systemPrompt: "",
+    tools: ok,
+  });
+  const closing = goose.close(session, true);
+  const failed = expect(closing).rejects.toThrow("No active run");
+  await vi.waitFor(() => expect(waiting()).toBe(1));
+  release();
+  await failed;
+});
+
+it.each([false, true])(
+  "makes a close wait for one already in flight (strict: %s)",
+  async (strict) => {
+    const { goose, release, waiting } = await slow("session/close");
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+    });
+    const first = goose.close(session);
+    await vi.waitFor(() => expect(waiting()).toBe(1));
+    let settled = false;
+    const second = goose.close(session, strict).then(() => {
+      settled = true;
+    });
+    await flush(30);
+    expect(settled).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(waiting()).toBe(1);
+  },
+);
+
+it("keeps a failed close failed for a strict one while goose runs, and counts it closed once goose has exited", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const { goose, process, release, waiting } = await slow(
+    "session/close",
+    true,
+  );
+  const session = await goose.open({
+    cwd: "/work",
+    systemPrompt: "",
+    tools: ok,
+  });
+  const closing = goose.close(session);
+  await vi.waitFor(() => expect(waiting()).toBe(1));
+  release();
+  await closing;
+  await expect(goose.close(session, true)).rejects.toThrow("No active run");
+  await expect(goose.close(session, true)).rejects.toThrow("No active run");
+  process.exit(null);
+  await goose.exited;
+  await expect(goose.close(session, true)).resolves.toBeUndefined();
 });
