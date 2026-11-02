@@ -122,7 +122,11 @@ the interface unless an available tool actually supports that action.
 - **Attention**, when available, lets agents use Interests, watches, and timers
   to follow work. Its tab in an agent's profile shows what that agent is watching
   and whether Attention is on for this device. A mention can still wake an agent
-  when Attention is off; turning Attention on does not grant new access.
+  when Attention is off; turning Attention on does not grant new access. When a
+  timer or watch that delivers to a conversation wakes the agent but its turn
+  can't start, the agent posts a ⚠️ notice there that mentions its owner. That
+  occurrence is used, not retried, and a wake that keeps failing is reported
+  again only after one of its turns starts.
 - **Solo workers**: where a plugin offers it, an owner can authorize one agent to
   start, message, read, stop, and archive the owner's workers in Solo chats. The
   agent asks the owner's Buzz in a private channel with only the two of them;
