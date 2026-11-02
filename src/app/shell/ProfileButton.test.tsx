@@ -15,11 +15,24 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AccountActionsService } from "../../features/account-actions/service";
 import type { Communities } from "../../features/communities/service";
 import { APPEARANCE_KEY, createAppearance } from "../../shared/theme/service";
+import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { ProfileButton } from "./ProfileButton";
+
+const devBuild = vi.hoisted(() => ({
+  runAgentsHere: undefined as (() => Promise<void>) | undefined,
+}));
+vi.mock("../../features/agents/native", () => ({
+  get runAgentsHere() {
+    return devBuild.runAgentsHere;
+  },
+}));
 
 const testAppearance = createAppearance(window);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  devBuild.runAgentsHere = undefined;
+});
 
 it("keeps the header cutout and menu status in sync with presence", () => {
   const listeners = new Set<() => void>();
@@ -1139,3 +1152,69 @@ it.each([
     else expect(item).not.toHaveTextContent("recommended");
   },
 );
+
+it("moves agents to this dev build from the menu and reports the outcome", async () => {
+  const user = userEvent.setup();
+  const subscribe = () => () => {};
+  const actions: readonly [] = [];
+  const accountActions = {
+    subscribe,
+    snapshot: () => actions,
+  } as unknown as AccountActionsService;
+  const snapshot = {
+    profile: { name: "Fixture", picture: "" },
+    viewer: null,
+  };
+  const presence = { status: "online", preference: "auto", error: null };
+  const connection = { status: "unavailable", session: undefined, scope: "" };
+  const communities = {
+    subscribe,
+    snapshot: () => snapshot,
+    presence: { subscribe, snapshot: () => presence },
+    relay: { subscribe, snapshot: () => connection },
+  } as unknown as Communities;
+  const menu = () =>
+    render(
+      <ProfileButton
+        communities={communities}
+        accountActions={accountActions}
+        appearance={testAppearance}
+        settingsSelected={false}
+        onSettings={() => {}}
+      />,
+      { wrapper: ToastProvider },
+    );
+  // Absent outside a dev build.
+  menu();
+  await user.click(screen.getByRole("button", { name: "Your profile" }));
+  await screen.findByRole("menu", { name: "Fixture" });
+  expect(
+    screen.queryByRole("menuitem", { name: "Run agents here" }),
+  ).not.toBeInTheDocument();
+  cleanup();
+
+  const run = vi
+    .fn<() => Promise<void>>()
+    .mockResolvedValueOnce()
+    .mockRejectedValueOnce("Could not save agent hosting");
+  devBuild.runAgentsHere = run;
+  menu();
+  const trigger = screen.getByRole("button", { name: "Your profile" });
+  await user.click(trigger);
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Run agents here" }),
+  );
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(
+    await screen.findByText(
+      "Your agents will run in this build in a few seconds.",
+    ),
+  ).toBeInTheDocument();
+  await user.click(trigger);
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Run agents here" }),
+  );
+  expect(
+    await screen.findByText("Could not save agent hosting"),
+  ).toBeInTheDocument();
+});

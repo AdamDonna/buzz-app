@@ -7,6 +7,8 @@ import { useUserStatus } from "../../features/user-status/useUserStatus";
 import { useStatusEditor } from "../../features/user-status/useStatusEditor";
 import { StatusEmoji } from "../../features/user-status/StatusEmoji";
 import { Button } from "../../shared/design-system/ui/Button";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
+import { runAgentsHere } from "../../features/agents/native";
 import { StatusEditor } from "../../features/user-status/StatusEditor";
 import {
   useCallback,
@@ -23,6 +25,7 @@ import {
   GearIcon,
   UserIcon,
   PlugIcon,
+  RobotIcon,
   SquaresFourIcon,
   SunIcon,
   MoonIcon,
@@ -212,6 +215,7 @@ export function ProfileButton({
   const ActionDialog = actions.find(
     (action) => action === selectedAction,
   )?.component;
+  const notify = useToastNotification();
   const accountLabel = useId();
   const statusUnavailable = useId();
   const avatar = (
@@ -519,6 +523,31 @@ export function ProfileButton({
               </MenuTrailing>
             )}
           </MenuItem>
+          {runAgentsHere && (
+            <MenuItem
+              onClick={() => {
+                runAgentsHere?.().then(
+                  () =>
+                    notify(
+                      "Your agents will run in this build in a few seconds.",
+                      "success",
+                    ),
+                  (error: unknown) =>
+                    notify(
+                      typeof error === "string"
+                        ? error
+                        : "Couldn’t move your agents to this build.",
+                      "error",
+                    ),
+                );
+              }}
+            >
+              <MenuIcon>
+                <RobotIcon aria-hidden="true" size={16} />
+              </MenuIcon>
+              Run agents here
+            </MenuItem>
+          )}
           {actions.length > 0 && <MenuSeparator />}
           {actions.map((action) => (
             <MenuItem

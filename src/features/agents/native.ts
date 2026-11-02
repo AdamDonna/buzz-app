@@ -4,6 +4,7 @@ import type {
 } from "../agent-protection/service";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { eventsDto, type RelayEvent } from "../relay/events";
+import { developerMode } from "../developer/mode";
 
 /** A plugin agent's identity in one community as native custody reports it;
  * never the key. The saved identities are the agent list: one for each
@@ -210,6 +211,13 @@ export type AgentsNative = {
   /** Keeps this Mac from idle sleep, or lets it sleep again. */
   keepAwake(hold: boolean): Promise<void>;
 };
+
+/** In a dev build, moves every agent here from any other dev build, while
+ * this one stays open. The installed app still runs what it can. */
+export const runAgentsHere =
+  developerMode && isTauri()
+    ? () => invoke<void>("app_agents_run_here")
+    : undefined;
 
 export const nativeAgents = (): AgentsNative | undefined =>
   isTauri()
