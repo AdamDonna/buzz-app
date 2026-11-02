@@ -27,6 +27,8 @@ it.each([
   [42, "buzz"],
   ["buzz", "buzz"],
   ["relax", "relax"],
+  ["utmost", "utmost"],
+  ["Utmost", "buzz"],
 ])("parses %j as %s", (value, expected) => {
   expect(parseTheme(value)).toBe(expected);
 });
@@ -36,6 +38,8 @@ it("opens a dark frame scope only on a light page for a dark-frame theme", () =>
   expect(frameScope("buzz", "dark")).toBeUndefined();
   expect(frameScope("relax", "light")).toBe("dark");
   expect(frameScope("relax", "dark")).toBeUndefined();
+  expect(frameScope("utmost", "light")).toBe("dark");
+  expect(frameScope("utmost", "dark")).toBeUndefined();
 });
 
 const tokens = readFileSync(
@@ -60,6 +64,21 @@ it("keeps every theme in step with its stylesheet block", () => {
     }
   }
   expect(themeBlock(DEFAULT_THEME)).toBeUndefined();
+});
+
+it.each(
+  THEMES.filter((theme) => theme !== DEFAULT_THEME).map(
+    (id) => [id, THEME_DEFINITIONS[id].accentFamily] as const,
+  ),
+)("points the %s Theme accent at its %s family", (id, family) => {
+  const body = themeBlock(id) ?? "";
+  for (const mode of ["light", "dark"]) {
+    for (const step of ["1", "9", "12", "contrast", "ink", "link"]) {
+      expect(body).toContain(
+        `--theme-accent-${step}-${mode}: var(--${family}-${step}-${mode});`,
+      );
+    }
+  }
 });
 
 it("resets every slot a role reads for a scope that previews the baseline", () => {

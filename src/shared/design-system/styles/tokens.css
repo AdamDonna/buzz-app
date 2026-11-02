@@ -3121,6 +3121,158 @@
   --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
 }
 
+/* Utmost: a steady navy sidebar, a crisp white page and a confident blue. Its
+   accent slots point at the Cobalt family; every other value is a palette
+   step from LAYER 0. */
+[data-theme="utmost"] {
+  --theme-neutral-1-light: var(--utmost-neutral-1-light);
+  --theme-neutral-2-light: var(--utmost-neutral-2-light);
+  --theme-neutral-3-light: var(--utmost-neutral-3-light);
+  --theme-neutral-4-light: var(--utmost-neutral-4-light);
+  --theme-neutral-5-light: var(--utmost-neutral-5-light);
+  --theme-neutral-6-light: var(--utmost-neutral-6-light);
+  --theme-neutral-7-light: var(--utmost-neutral-7-light);
+  --theme-neutral-8-light: var(--utmost-neutral-8-light);
+  --theme-neutral-9-light: var(--utmost-neutral-9-light);
+  --theme-neutral-10-light: var(--utmost-neutral-10-light);
+  --theme-neutral-11-light: var(--utmost-neutral-11-light);
+  --theme-neutral-12-light: var(--utmost-neutral-12-light);
+  --theme-neutral-standard-text-light: var(
+    --utmost-neutral-standard-text-light
+  );
+  --theme-neutral-navigation-text-light: var(
+    --utmost-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --utmost-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --utmost-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--utmost-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --utmost-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --utmost-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--utmost-bubble-neutral-light);
+  --theme-bubble-received-light: var(--utmost-bubble-received-light);
+  --theme-canvas-light: var(--utmost-frame-canvas-light);
+  --theme-sidebar-light: var(--utmost-frame-sidebar-light);
+  --theme-accent-1-light: var(--cobalt-1-light);
+  --theme-accent-2-light: var(--cobalt-2-light);
+  --theme-accent-3-light: var(--cobalt-3-light);
+  --theme-accent-4-light: var(--cobalt-4-light);
+  --theme-accent-5-light: var(--cobalt-5-light);
+  --theme-accent-6-light: var(--cobalt-6-light);
+  --theme-accent-7-light: var(--cobalt-7-light);
+  --theme-accent-8-light: var(--cobalt-8-light);
+  --theme-accent-9-light: var(--cobalt-9-light);
+  --theme-accent-10-light: var(--cobalt-10-light);
+  --theme-accent-11-light: var(--cobalt-11-light);
+  --theme-accent-12-light: var(--cobalt-12-light);
+  --theme-accent-contrast-light: var(--cobalt-contrast-light);
+  --theme-accent-ink-light: var(--cobalt-ink-light);
+  --theme-accent-pressed-light: var(--cobalt-pressed-light);
+  --theme-accent-link-light: var(--cobalt-link-light);
+  --theme-accent-link-hover-light: var(--cobalt-link-hover-light);
+  --theme-accent-overlay-light: var(--shade-strong-fill);
+  --theme-accent-overlay-hover-light: var(--shade-strong-hover-fill);
+  --theme-accent-overlay-soft-light: var(--shade-soft-fill);
+  --theme-accent-overlay-quiet-light: var(--shade-quiet-fill);
+  --theme-accent-overlay-highlight-light: var(--shade-fill);
+  --theme-sidebar-selected-light: var(--utmost-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(
+    --utmost-sidebar-selected-text-light
+  );
+  --theme-sidebar-hover-light: var(--utmost-sidebar-hover-light);
+  --theme-sidebar-hover-text-light: var(--utmost-frame-neutral-12-light);
+  --theme-badge-light: var(--utmost-badge-light);
+  --theme-badge-text-light: var(--utmost-badge-text-light);
+  --theme-status-online-light: var(--utmost-status-online-light);
+  --theme-status-away-light: var(--utmost-status-away-light);
+
+  --theme-neutral-1-dark: var(--utmost-neutral-1-dark);
+  --theme-neutral-2-dark: var(--utmost-neutral-2-dark);
+  --theme-neutral-3-dark: var(--utmost-neutral-3-dark);
+  --theme-neutral-4-dark: var(--utmost-neutral-4-dark);
+  --theme-neutral-5-dark: var(--utmost-neutral-5-dark);
+  --theme-neutral-6-dark: var(--utmost-neutral-6-dark);
+  --theme-neutral-7-dark: var(--utmost-neutral-7-dark);
+  --theme-neutral-8-dark: var(--utmost-neutral-8-dark);
+  --theme-neutral-9-dark: var(--utmost-neutral-9-dark);
+  --theme-neutral-10-dark: var(--utmost-neutral-10-dark);
+  --theme-neutral-11-dark: var(--utmost-neutral-11-dark);
+  --theme-neutral-12-dark: var(--utmost-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --utmost-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--utmost-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--utmost-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(
+    --utmost-neutral-action-pressed-dark
+  );
+  --theme-bubble-neutral-dark: var(--utmost-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--utmost-bubble-received-dark);
+  --theme-canvas-dark: var(--utmost-frame-canvas-dark);
+  --theme-sidebar-dark: var(--utmost-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--cobalt-1-dark);
+  --theme-accent-2-dark: var(--cobalt-2-dark);
+  --theme-accent-3-dark: var(--cobalt-3-dark);
+  --theme-accent-4-dark: var(--cobalt-4-dark);
+  --theme-accent-5-dark: var(--cobalt-5-dark);
+  --theme-accent-6-dark: var(--cobalt-6-dark);
+  --theme-accent-7-dark: var(--cobalt-7-dark);
+  --theme-accent-8-dark: var(--cobalt-8-dark);
+  --theme-accent-9-dark: var(--cobalt-9-dark);
+  --theme-accent-10-dark: var(--cobalt-10-dark);
+  --theme-accent-11-dark: var(--cobalt-11-dark);
+  --theme-accent-12-dark: var(--cobalt-12-dark);
+  --theme-accent-contrast-dark: var(--cobalt-contrast-dark);
+  --theme-accent-ink-dark: var(--cobalt-ink-dark);
+  --theme-accent-pressed-dark: var(--cobalt-pressed-dark);
+  --theme-accent-link-dark: var(--cobalt-link-dark);
+  --theme-accent-link-hover-dark: var(--cobalt-link-hover-dark);
+  --theme-accent-overlay-dark: var(--shade-strong-fill);
+  --theme-accent-overlay-hover-dark: var(--shade-strong-hover-fill);
+  --theme-accent-overlay-soft-dark: var(--shade-soft-fill);
+  --theme-accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --theme-accent-overlay-highlight-dark: var(--shade-fill);
+  --theme-sidebar-selected-dark: var(--utmost-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--utmost-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--utmost-sidebar-hover-dark);
+  --theme-sidebar-hover-text-dark: var(--utmost-neutral-12-dark);
+  --theme-badge-dark: var(--utmost-badge-dark);
+  --theme-badge-text-dark: var(--utmost-badge-text-dark);
+  --theme-status-online-dark: var(--utmost-status-online-dark);
+  --theme-status-away-dark: var(--utmost-status-away-dark);
+  --theme-frame-neutral-1-light: var(--utmost-frame-neutral-1-light);
+  --theme-frame-neutral-2-light: var(--utmost-frame-neutral-2-light);
+  --theme-frame-neutral-3-light: var(--utmost-frame-neutral-3-light);
+  --theme-frame-neutral-4-light: var(--utmost-frame-neutral-4-light);
+  --theme-frame-neutral-5-light: var(--utmost-frame-neutral-5-light);
+  --theme-frame-neutral-6-light: var(--utmost-frame-neutral-6-light);
+  --theme-frame-neutral-7-light: var(--utmost-frame-neutral-7-light);
+  --theme-frame-neutral-8-light: var(--utmost-frame-neutral-8-light);
+  --theme-frame-neutral-9-light: var(--utmost-frame-neutral-9-light);
+  --theme-frame-neutral-10-light: var(--utmost-frame-neutral-10-light);
+  --theme-frame-neutral-11-light: var(--utmost-frame-neutral-11-light);
+  --theme-frame-neutral-12-light: var(--utmost-frame-neutral-12-light);
+  --theme-frame-neutral-navigation-quiet-light: var(
+    --utmost-frame-neutral-navigation-quiet-light
+  );
+  --theme-frame-neutral-quiet-hover-light: var(
+    --utmost-frame-neutral-quiet-hover-light
+  );
+  --theme-frame-neutral-raised-light: var(--utmost-frame-neutral-raised-light);
+  --theme-frame-neutral-action-pressed-light: var(
+    --utmost-frame-neutral-action-pressed-light
+  );
+  --theme-frame-canvas-light: var(--utmost-frame-canvas-light);
+  --theme-frame-sidebar-light: var(--utmost-frame-sidebar-light);
+}
+
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
 :root[data-color-level="touch"],
 [data-color-level="touch"] .light {

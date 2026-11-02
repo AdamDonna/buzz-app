@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import { createAppearance } from "../shared/theme/service";
+import { THEMES } from "../shared/theme/themes";
 import { AppearanceSettings } from "./AppearanceSettings";
 
 import {
@@ -316,7 +317,14 @@ it("chooses a theme by pointer and keyboard, saves only the theme, and recovers 
   expect(relax).toHaveAccessibleDescription(
     "Deep plum frame around a bright, open workspace.",
   );
-  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(2);
+  expect(
+    within(group).getByRole("radio", { name: "Utmost" }),
+  ).toHaveAccessibleDescription(
+    "A steady navy sidebar, a crisp white page and a confident blue.",
+  );
+  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(
+    THEMES.length,
+  );
   expect(
     group.querySelector("svg[data-theme='relax'][data-color-mode]"),
   ).not.toBeNull();
