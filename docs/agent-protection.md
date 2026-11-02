@@ -33,6 +33,15 @@ protection `stateKey` with each saved thread and resumes it only under the same
 key, so a policy change, or moving between unprotected and protected, starts a
 new thread.
 
+Codex records a turn's input before it is checked, so a refused input stays in
+that thread and is checked again on each later turn there. If the protection
+plugin saved the denial, each of those turns is refused at once. To continue,
+start a new session in that conversation, or have the plugin forget its saved
+denials (the security plugin's **Forget denied messages**, which clears them for
+every agent) so the input is checked again. An input too large to check is
+refused the same way, by Codex or by Claude, which resumes its saved session;
+forgetting does not help, and a new session clears it.
+
 Protected Codex runs in Buzz's Codex home, like unprotected Codex. Its security
 reviews run in a separate Buzz review home, which the security plugin keeps
 read-only to contained workers. That home holds only links to the sign-in and to

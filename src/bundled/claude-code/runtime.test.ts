@@ -30,6 +30,7 @@ import { RESUMED_PROMPT, TOP_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
 import { ClaudeRuntime, config, DEFAULT_CONFIG, modelName } from "./runtime";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { AgentSessions, localSessions } from "./sessions";
+import { quoted } from "../../features/agent-harness/turn-records";
 import { wake } from "../../features/agent-harness/wakes";
 import { workspaceCanvas } from "../../features/solo/workspace";
 
@@ -356,11 +357,16 @@ it("hands a mention to its thread's session", async () => {
   const claude = claudes().find((process) => process.prompts.length);
   const prompt = claude?.prompts[0] ?? "";
   expect(prompt).toContain(`Thread root: ${root.id}`);
-  expect(prompt).toContain('<thread-context included="1" total="2"');
+  expect(prompt).toMatch(/^<thread-context>\n\{.*"total":2,/);
   expect(prompt).toContain(
-    `Alice (${alice}) (1970-01-01T00:01:40.000Z): Build is red`,
+    quoted({
+      id: root.id,
+      pubkey: root.pubkey,
+      created_at: root.created_at,
+      content: "Build is red",
+    }),
   );
-  expect(prompt).toContain("Content: @Claude can you look?");
+  expect(prompt).toContain(`Request: ${quoted("@Claude can you look?")}`);
   expect(prompt).not.toContain(RESUMED_PROMPT);
   // The process holds no key: it acts through the tools.
   expect(claude?.options).not.toHaveProperty("agent");
@@ -749,7 +755,7 @@ it("tells a turn a reload stopped to carry on where it left off", async () => {
   await flush(10);
   const prompt =
     claudes().find((process) => process.prompts.length)?.prompts[0] ?? "";
-  expect(prompt).toContain("Content: @Claude fix the build");
+  expect(prompt).toContain(`Request: ${quoted("@Claude fix the build")}`);
   expect(prompt).toContain(RESUMED_PROMPT);
 });
 
@@ -1168,7 +1174,7 @@ it("starts each session from the host's core memory, reading only recent notes f
   const asked = (id: string) =>
     systemPromptOf(
       claudes().find((process) =>
-        process.prompts[0]?.includes(`Content: @Claude ${id}`),
+        process.prompts[0]?.includes(`Request: ${quoted(`@Claude ${id}`)}`),
       ),
     );
   core.mockResolvedValueOnce("I am Claude.");
@@ -1812,9 +1818,7 @@ it.each(["thread", "channel"] as const)(
     const fresh = claudes().find((process) => process.prompts.length);
     expect(lost?.options.args).toContain("lost");
     expect(lost?.prompts).toEqual([]);
-    expect(fresh?.prompts[0]).toContain(
-      '<thread-context included="1" total="2"',
-    );
+    expect(fresh?.prompts[0]).toMatch(/^<thread-context>\n\{.*"total":2,/);
   },
 );
 
@@ -2188,7 +2192,7 @@ it("always offers attention tools, on search, and says in each turn whether atte
     });
   const asked = (id: string) =>
     claudes().find((process) =>
-      process.prompts[0]?.includes(`Content: @Claude ${id}`),
+      process.prompts[0]?.includes(`Request: ${quoted(`@Claude ${id}`)}`),
     );
   const tools = async (claude: FakeClaude | undefined, id: number) =>
     (
@@ -2265,7 +2269,7 @@ it("offers the tools plugins add, runs them as the agent, and replaces an idle s
   const asked = (id: string) =>
     claudes().find((process) =>
       process.prompts.some((prompt) =>
-        prompt.includes(`Content: @Claude ${id}`),
+        prompt.includes(`Request: ${quoted(`@Claude ${id}`)}`),
       ),
     );
   const names = async (claude: FakeClaude | undefined, id: number) =>
@@ -2454,7 +2458,7 @@ it("continues an owner's Solo chat as one channel session posted at the top leve
     [{ kinds: [9, 40002], "#h": [channel], limit: 13 }],
     expect.anything(),
   );
-  expect(prompt).toContain('<conversation-context included="1"');
+  expect(prompt).toMatch(/^<conversation-context>\n\{/);
   expect(prompt).toContain("Earlier in the chat");
   await send(claude, "call-1", { text: "Looking now" });
   expect(await send(claude, "call-2", { text: "x", reply: first.id })).toEqual({
@@ -2667,7 +2671,7 @@ it("dates a recreated memory entry after the tombstone the native read reports",
   expect(remember).toHaveBeenCalledWith("mem/gone", "back", 4_000_000_001);
 });
 
-it("method calls: a session launch makes no config call on the relay session; only the conversation name lookup (launch-boundary.test.ts runs the real service path)", async () => {
+it("method calls: a session launch makes no call on the relay session (launch-boundary.test.ts runs the real service path)", async () => {
   const f = setup();
   // Every relay-facing call the runtime can make, by name.
   const requests = {
@@ -2700,17 +2704,13 @@ it("method calls: a session launch makes no config call on the relay session; on
   expect(f.claudes()).toHaveLength(1);
   expect(systemPromptOf(f.claudes()[0])).toContain("I am Claude.");
   // The start makes no config requests. The only calls are the agent's
-  // recent notes, by slug, and the conversation's name lookup for the sender
-  // and mentioned agent, which requests only profiles missing from the cache
-  // (none when both are cached).
+  // recent notes, by slug; a prompt names no one, so it reads no profiles.
   const { "agentMemories.read": notes, ...rest } = made();
   expect(notes?.map(([pubkey, , slug]) => [pubkey, slug])).toEqual([
     [self, expect.stringMatching(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/)],
     [self, expect.stringMatching(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/)],
   ]);
-  expect(rest).toEqual({
-    "profiles.ensure": [[[alice, self], "foreground"]],
-  });
+  expect(rest).toEqual({});
 });
 
 it("a failed first Solo chat turn releases naming so a successful retry can offer Claude's title", async () => {

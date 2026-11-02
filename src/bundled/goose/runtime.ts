@@ -86,7 +86,7 @@ export const config = (value: unknown): Config => ({
   ...(value && typeof value === "object" ? (value as Partial<Config>) : {}),
 });
 
-const NAMES_TIMEOUT_MS = 2_000;
+const CONVERSATION_READ_TIMEOUT_MS = 4_000;
 const CHAT = [9, 40002];
 const TITLE_LIMIT = 80;
 
@@ -282,6 +282,15 @@ export class GooseRuntime {
     }
     return view;
   }
+  /** A person's name in the agent's community, if known. */
+  name(agent: AgentKey, pubkey: string) {
+    const snapshot = this.relay(agent)?.snapshot();
+    const session = snapshot?.status === "ready" ? snapshot.session : undefined;
+    return (
+      session?.names.resolve(pubkey) ??
+      session?.profiles.snapshot().get(pubkey)?.name
+    );
+  }
   /** The agent's saved conversations, most recently used first. Removing an
    * agent keeps them. */
   conversations(agent: AgentKey) {
@@ -436,7 +445,6 @@ export class GooseRuntime {
       const text = turnPrompt({
         ...turn,
         agent: agent.key,
-        label: "@mention",
         channelLevel: topLevel && !solo,
         ...(wake
           ? { wake: { ...wake, text: (await wakeText?.()) ?? wake.text } }
@@ -723,7 +731,7 @@ export class GooseRuntime {
                 { kinds: CHAT, "#h": [channelId], "#e": [rootId], limit: 200 },
               ]
             : [{ kinds: CHAT, "#h": [channelId], limit: CONTEXT_LIMIT + 1 }],
-          { signal: AbortSignal.timeout(NAMES_TIMEOUT_MS * 2) },
+          { signal: AbortSignal.timeout(CONVERSATION_READ_TIMEOUT_MS) },
         );
         earlier = events
           .filter(
@@ -744,21 +752,6 @@ export class GooseRuntime {
       (item) =>
         item.created_at > seen && (!seen || item.pubkey !== agent.pubkey),
     );
-    const pubkeys = [
-      ...new Set([
-        event.pubkey,
-        ...unseen.map((item) => item.pubkey),
-        ...event.tags
-          .filter((tag) => tag[0] === "p")
-          .map((tag) => tag[1] ?? ""),
-      ]),
-    ].filter(Boolean);
-    if (session)
-      await Promise.race([
-        session.profiles.ensure(pubkeys, "foreground").catch(() => undefined),
-        new Promise((resolve) => setTimeout(resolve, NAMES_TIMEOUT_MS)),
-      ]);
-    const members = summary?.members ?? [];
     const project = (await reading)?.section;
     return {
       key,
@@ -782,10 +775,6 @@ export class GooseRuntime {
               ...unseen.map((item) => item.created_at),
             ),
       total: earlier.length + 1,
-      name: (pubkey: string) =>
-        session?.names.resolve(pubkey, undefined, members) ??
-        session?.profiles.snapshot().get(pubkey)?.name ??
-        undefined,
       ...(project ? { project } : {}),
     };
   }
