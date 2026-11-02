@@ -59,6 +59,7 @@ import type { UnreadDmPreview } from "../../bundled/channels/SidebarUnread";
 import {
   ChannelSidebarDnd,
   DraggableChannel,
+  DraggableConversation,
   DroppableSidebarSection,
 } from "./ChannelSidebarDnd";
 import { channelIcon } from "../channels/channel-icon";
@@ -74,7 +75,7 @@ import {
   sidebarSections,
   contributedSidebarSectionKey,
   isChannelSectionKey,
-  isChannelDropSectionKey,
+  sidebarDropRowKinds,
   orderContributedSidebarSections,
 } from "../../bundled/channels/sidebar-sections";
 import { SidebarContributionSection } from "./SidebarContributionSection";
@@ -1219,8 +1220,9 @@ export function ChannelInventory({
               }
               groupIndex={groupIds.indexOf(section.key.slice("group:".length))}
               disabled={
-                !placementWritable || !isChannelDropSectionKey(section.key)
+                !placementWritable || !sidebarDropRowKinds(section.key).length
               }
+              accepts={sidebarDropRowKinds(section.key)}
               reorderable={orderWritable && section.key.startsWith("group:")}
               move={
                 orderWritable && section.key.startsWith("group:")
@@ -1397,10 +1399,11 @@ export function ChannelInventory({
                     menuEnabled
                     sectionKey={section.key}
                     selectFrame={
-                      channel.channelType !== "dm" &&
-                      isChannelDropSectionKey(section.key)
-                        ? DraggableChannel
-                        : undefined
+                      !sidebarDropRowKinds(section.key).length
+                        ? undefined
+                        : channel.channelType === "dm"
+                          ? DraggableConversation
+                          : DraggableChannel
                     }
                     onOpenMenu={openRowMenu}
                     menuOpen={menuOpen}

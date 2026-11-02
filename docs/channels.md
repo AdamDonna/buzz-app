@@ -147,10 +147,12 @@ sidebar coordinates must match what the sidebar signer produces, and every
 other coordinate must satisfy the recipe contract.
 
 Move channel, Create new, exclusive Starred placement and startup presentation also
-belong to this persistent sidebar. Rows in saved groups, **Starred** and **Channels**
-can also be dragged with a pointer onto another saved group, **Starred** or
-**Channels**; the drop is the same Move intent, with the same gate, optimistic
-placement, rollback notice and Retry.
+belong to this persistent sidebar. Rows in saved groups, **Starred**, **Channels**
+and **Direct messages** can also be dragged with a pointer onto another saved
+group or **Starred**, or back to their own home section: channels to **Channels**
+and DMs to **Direct messages**. Neither home section accepts the other's rows. The
+drop is the same Move intent, with the same gate, optimistic placement, rollback
+notice and Retry.
 The **Channels** ellipsis menu also offers **Create section**, which creates an
 empty section without moving a channel. Its dialog retains the name and section
 ID after an attempted write fails and waits for confirmation before closing.
@@ -163,7 +165,7 @@ an accepted save stays visible even after Cancel. If that read fails too, new
 creation is gated across menu, drop and create-and-move paths, and Retry retains
 writer routing until reconciliation succeeds. Recovery waits for all queued
 preference writes and repeats a writer read invalidated by a concurrent write.
-Ordinary startup remains replica-eligible. Dragging a channel into
+Ordinary startup remains replica-eligible. Dragging a channel or DM into
 the gap above the first custom section expands an **Add to new section** drop
 target inside the sidebar. With no custom sections, the target is above
 **Channels**; **Starred** keeps its pinned position. The created section appears
@@ -173,12 +175,12 @@ Dropping there opens the existing create-and-move dialog; cancelling leaves the
 channel in place, and no preference is written until submission. These entry
 points supplement the per-channel **Move channel → Create new…** route and use
 the existing gated preference queue and encrypted section record.
-Only a channel's select surface starts a drag, the surface its row menu wraps.
+Only a row's select surface starts a drag, the surface its row menu wraps.
 **Starred** accepts drops only when it is already visible; starting a drag does
 not reveal an empty section. Use the row menu to star the first channel.
 Dropping into Starred stars the channel; dropping out assigns the destination
-and clears its star, just like the row menu. Forums and Direct
-messages take no part in dragging, and the row menu remains the keyboard path.
+and clears its star, just like the row menu. Forums take no part in dragging,
+and the row menu remains the keyboard path.
 A saved group also drags by its header, expanded or collapsed, onto another saved
 group; an accent line shows where it lands, and Escape cancels. Its section menu's
 **Move up** and **Move down** are the keyboard and single-pointer path. Each move
