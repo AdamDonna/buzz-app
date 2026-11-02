@@ -1,7 +1,5 @@
 import {
-  closeSync,
   mkdtempSync,
-  openSync,
   mkdirSync,
   readFileSync,
   copyFileSync,
@@ -41,21 +39,12 @@ function check(css) {
       join(fixture, "src/shared/design-system/styles/tokens.css"),
       css,
     );
-    // A piped stream loses what is unflushed at process.exit, which cuts the
-    // report off at 64 KiB; a file keeps all of it however many themes there are.
-    const log = join(fixture, "report.txt");
-    const fd = openSync(log, "w");
-    let result;
-    try {
-      result = spawnSync(
-        process.execPath,
-        [join(fixture, "scripts/design-system/check-contrast.mjs")],
-        { stdio: ["ignore", fd, fd] },
-      );
-    } finally {
-      closeSync(fd);
-    }
-    return { status: result.status, output: readFileSync(log, "utf8") };
+    const result = spawnSync(
+      process.execPath,
+      [join(fixture, "scripts/design-system/check-contrast.mjs")],
+      { encoding: "utf8" },
+    );
+    return { status: result.status, output: result.stdout + result.stderr };
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
