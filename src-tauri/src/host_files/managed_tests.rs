@@ -26,6 +26,8 @@ impl Fixture {
             "id":"example.bytes", "name":"Byte fixture", "apiVersion":1,
             "host":{"managedFiles":managed,"files":files,"networkOrigins":["https://example.test"]}
         })).unwrap()).unwrap();
+        buzzodz_plugins::sign_release(&source, &nostr::key::SecretKey::generate().to_secret_hex())
+            .unwrap();
         let catalog = manager.install(&source).unwrap();
         let revision = catalog
             .plugins

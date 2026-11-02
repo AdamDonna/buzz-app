@@ -3,6 +3,13 @@ use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder as _};
 use nostr::key::SecretKey;
 use std::{fs, path::PathBuf};
 
+// Public, synthetic fixture key; never read a saved Buzz identity in these tests.
+const TEST_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+
+fn sign(source: &std::path::Path) {
+    sign_release(source, TEST_KEY).unwrap();
+}
+
 fn png(width: u32, height: u32) -> Vec<u8> {
     let mut encoded = vec![];
     PngEncoder::new(&mut encoded)
@@ -132,6 +139,7 @@ fn jpeg_only_packages_validate_type_decode_and_resource_bounds() {
     let (_temp, manager, source) = fixture();
     let bytes = jpg(1, 1);
     fs::write(source.join("icon.jpg"), &bytes).unwrap();
+    sign(&source);
     let plugin = manager
         .install(&source)
         .unwrap()
@@ -154,7 +162,9 @@ fn jpeg_only_packages_validate_type_decode_and_resource_bounds() {
     ] {
         fs::write(source.join("icon.jpg"), bytes).unwrap();
         assert!(
-            install_error(&manager, &source).contains(expected),
+            sign_release(&source, TEST_KEY)
+                .unwrap_err()
+                .contains(expected),
             "{expected}"
         );
     }
@@ -170,8 +180,28 @@ fn fixture() -> (tempfile::TempDir, Manager, PathBuf) {
     )
     .unwrap();
     fs::write(source.join("plugin.js"), "export function apply() {}").unwrap();
+    sign(&source);
     (temp, manager, source)
 }
+
+#[test]
+fn unsigned_external_packages_are_rejected_without_affecting_bundled_plugins() {
+    let (_temp, manager, source) = fixture();
+    for name in ["plugin.artifact.json", "plugin.signature.json"] {
+        fs::remove_file(source.join(name)).unwrap();
+    }
+    assert!(install_error(&manager, &source).contains("External plugins require a signed release"));
+    let catalog = manager.catalog().unwrap();
+    assert_eq!(catalog.plugins.len(), bundled_manifests().len());
+    assert!(catalog
+        .plugins
+        .iter()
+        .any(|plugin| plugin.manifest.id == "buzz.channels" && plugin.enabled));
+    sign(&source);
+    manager.install(&source).unwrap();
+    manager.change("enable", "example.page").unwrap();
+}
+
 #[test]
 fn install_enable_update_rollback_and_remove_survive_restart() {
     let (temp, manager, source) = fixture();
@@ -194,6 +224,7 @@ fn install_enable_update_rollback_and_remove_survive_restart() {
     assert!(manager.module("example.page", &first).is_err());
     manager.change("enable", "example.page").unwrap();
     fs::write(source.join("plugin.js"), "export const second = true;").unwrap();
+    sign(&source);
     let next = manager.install(&source).unwrap();
     assert!(
         next.plugins
@@ -246,6 +277,7 @@ fn readme_and_icon_are_versioned_read_on_demand_and_preserved_by_rollback() {
     let first_icon = png(2, 1);
     fs::write(source.join("README.md"), "# First\n").unwrap();
     fs::write(source.join("icon.png"), &first_icon).unwrap();
+    sign(&source);
     let first = manager
         .install(&source)
         .unwrap()
@@ -265,6 +297,7 @@ fn readme_and_icon_are_versioned_read_on_demand_and_preserved_by_rollback() {
     let second_icon = png(1, 2);
     fs::write(source.join("README.md"), "# Second\n").unwrap();
     fs::write(source.join("icon.png"), &second_icon).unwrap();
+    sign(&source);
     let second = manager
         .install(&source)
         .unwrap()
@@ -321,23 +354,35 @@ fn package_assets_are_optional_and_reject_invalid_boundaries() {
     }
 
     fs::write(source.join("README.md"), [0xff]).unwrap();
-    assert!(install_error(&manager, &source).contains("UTF-8"));
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("UTF-8"));
     fs::write(source.join("README.md"), vec![b'x'; 256 * 1024 + 1]).unwrap();
-    assert!(install_error(&manager, &source).contains("size limit"));
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("size limit"));
     fs::remove_file(source.join("README.md")).unwrap();
 
     fs::write(source.join("icon.png"), b"not a png").unwrap();
-    assert!(install_error(&manager, &source).contains("PNG"));
+    assert!(sign_release(&source, TEST_KEY).unwrap_err().contains("PNG"));
     let mut corrupt = b"\x89PNG\r\n\x1a\n".to_vec();
     corrupt.extend_from_slice(b"broken");
     fs::write(source.join("icon.png"), corrupt).unwrap();
-    assert!(install_error(&manager, &source).contains("valid PNG"));
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("valid PNG"));
     fs::write(source.join("icon.png"), vec![0; 1024 * 1024 + 1]).unwrap();
-    assert!(install_error(&manager, &source).contains("size limit"));
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("size limit"));
     fs::write(source.join("icon.png"), png(4097, 1)).unwrap();
-    assert!(install_error(&manager, &source).contains("dimensions"));
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("dimensions"));
     fs::write(source.join("icon.png"), png(1025, 1024)).unwrap();
-    assert!(install_error(&manager, &source).contains("1,048,576"));
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("1,048,576"));
 }
 
 #[test]
@@ -405,6 +450,7 @@ fn folder_reload_updates_current_revision_and_preserves_disabled_state() {
         .revision
         .clone();
     fs::write(source.join("plugin.js"), "export const reloaded = true;").unwrap();
+    sign(&source);
     let catalog = manager.reload("example.page").unwrap();
     let plugin = catalog
         .plugins
@@ -433,6 +479,7 @@ fn live_reload_preserves_enabled_state_and_rejects_stale_module_reads() {
         .find(|p| p.manifest.id == "example.page")
         .unwrap();
     fs::write(source.join("plugin.js"), "export const reloaded = true;").unwrap();
+    sign(&source);
     let next = manager
         .reload_live("example.page")
         .unwrap()
@@ -494,6 +541,7 @@ fn folder_reload_compares_effective_output_limits() {
                 manifest["host"]["commands"][0]["maxOutputBytes"] = serde_json::json!(limit);
             }
             fs::write(source.join("manifest.json"), manifest.to_string()).unwrap();
+            sign(&source);
         };
         write_manifest(before);
         let first = manager
@@ -556,6 +604,8 @@ fn reload_rejects_invalid_sources_without_changing_revision() {
     assert!(manager.reload("example.page").is_err());
     manager.change("disable", "example.page").unwrap();
     fs::remove_file(source.join("plugin.js")).unwrap();
+    assert!(sign_release(&source, TEST_KEY).is_err());
+    fs::remove_file(source.join("plugin.artifact.json")).unwrap();
     assert!(manager.reload("example.page").is_err());
     fs::write(source.join("plugin.js"), "export function apply() {}").unwrap();
     fs::write(
@@ -563,6 +613,7 @@ fn reload_rejects_invalid_sources_without_changing_revision() {
         r#"{"id":"example.other","name":"Other","apiVersion":1}"#,
     )
     .unwrap();
+    sign(&source);
     assert!(manager.reload("example.page").is_err());
     assert_eq!(
         manager
@@ -583,7 +634,7 @@ fn reload_rejects_invalid_sources_without_changing_revision() {
     assert!(manager.reload("example.page").is_err());
 }
 #[test]
-fn reload_rejects_nonconforming_reserved_asset_until_source_migrates() {
+fn signing_rejects_nonconforming_reserved_asset_until_source_migrates() {
     let (_temp, manager, source) = fixture();
     let installed = |manager: &Manager| {
         manager
@@ -598,18 +649,19 @@ fn reload_rejects_nonconforming_reserved_asset_until_source_migrates() {
     let first = installed(&manager);
     // Older hosts ignored this filename; it is now a reserved package asset.
     fs::write(source.join("icon.png"), png(2048, 2048)).unwrap();
-    let Err(error) = manager.reload("example.page") else {
-        panic!("reload should reject the nonconforming icon");
-    };
+    let error = sign_release(&source, TEST_KEY).unwrap_err();
     assert!(error.contains("icon.png"), "{error}");
-    assert!(install_error(&manager, &source).contains("icon.png"));
+    // Failed signing preserves the previous signed release and installed revision.
+    manager.reload("example.page").unwrap();
     assert_eq!(installed(&manager).revision, first.revision);
     assert!(installed(&manager).icon_png_revision.is_none());
 
     fs::rename(source.join("icon.png"), source.join("icon-2048.png")).unwrap();
+    sign(&source);
     manager.reload("example.page").unwrap();
     assert_eq!(installed(&manager).revision, first.revision);
     fs::write(source.join("icon.png"), png(1024, 1024)).unwrap();
+    sign(&source);
     manager.reload("example.page").unwrap();
     let migrated = installed(&manager);
     assert_ne!(migrated.revision, first.revision);
@@ -641,6 +693,7 @@ fn reload_rejects_replaced_source_folder_symlink() {
         "export const escaped = true;",
     )
     .unwrap();
+    sign(&replacement);
     std::os::unix::fs::symlink(&replacement, &source).unwrap();
     assert!(manager.reload("example.page").is_err());
     assert_eq!(
@@ -679,6 +732,7 @@ fn rollback_restores_reload_source_and_same_byte_reload_refreshes_source() {
         "export const second = true;",
     )
     .unwrap();
+    sign(&second_source);
     let second = manager
         .install(&second_source)
         .unwrap()
@@ -706,6 +760,7 @@ fn rollback_restores_reload_source_and_same_byte_reload_refreshes_source() {
         .unwrap()
         .contains("No previous revision"));
     fs::write(source.join("plugin.js"), "export const firstReload = true;").unwrap();
+    sign(&source);
     let catalog = manager.reload("example.page").unwrap();
     let plugin = catalog
         .plugins
@@ -726,6 +781,7 @@ fn rollback_restores_reload_source_and_same_byte_reload_refreshes_source() {
         "export const firstReload = true;",
     )
     .unwrap();
+    sign(&third_source);
     let same = manager.install(&third_source).unwrap();
     let plugin = same
         .plugins
@@ -736,6 +792,7 @@ fn rollback_restores_reload_source_and_same_byte_reload_refreshes_source() {
     assert!(plugin.reloadable);
     let changed = "export const thirdReload = true;";
     fs::write(third_source.join("plugin.js"), changed).unwrap();
+    sign(&third_source);
     let catalog = manager.reload("example.page").unwrap();
     let reloaded = catalog
         .plugins
@@ -767,6 +824,7 @@ fn reload_from_exact_folder(name: &str, with_trimmed_sibling: bool) {
         )
         .unwrap();
         fs::write(folder.join("plugin.js"), code).unwrap();
+        sign(&folder);
     }
     let prepared = buzzodz_plugins::imports::prepare_folder(&root).unwrap();
     let first = prepared
@@ -779,6 +837,7 @@ fn reload_from_exact_folder(name: &str, with_trimmed_sibling: bool) {
     assert!(!first.enabled);
     assert!(first.reloadable);
     fs::write(root.join(name).join("plugin.js"), "export const exact = 2;").unwrap();
+    sign(&root.join(name));
     let reloaded = manager
         .reload("example.page")
         .unwrap()
@@ -812,12 +871,16 @@ fn invalid_install_preserves_working_revision() {
         .unwrap()
         .revision
         .clone();
+    for name in ["plugin.artifact.json", "plugin.signature.json"] {
+        fs::remove_file(source.join(name)).unwrap();
+    }
     for metadata in [
         r#"{"id":"../escape","name":"Invalid","apiVersion":1}"#,
         r#"{"id":"example.page","name":"Invalid","apiVersion":2}"#,
         "{broken}",
     ] {
         fs::write(source.join("manifest.json"), metadata).unwrap();
+        assert!(sign_release(&source, TEST_KEY).is_err());
         assert!(manager.install(&source).is_err());
         assert_eq!(
             manager
@@ -955,6 +1018,7 @@ fn management_never_executes_code_and_protects_bundled_identity() {
         "throw new Error('broken'); while(true) {}",
     )
     .unwrap();
+    sign(&source);
     manager.install(&source).unwrap();
     manager.change("enable", "example.page").unwrap();
     manager.change("disable", "example.page").unwrap();
@@ -964,6 +1028,12 @@ fn management_never_executes_code_and_protects_bundled_identity() {
         serde_json::to_vec(&bundled_manifests()[0]).unwrap(),
     )
     .unwrap();
+    assert!(sign_release(&source, TEST_KEY)
+        .unwrap_err()
+        .contains("Cannot replace a bundled plugin"));
+    for name in ["plugin.artifact.json", "plugin.signature.json"] {
+        fs::remove_file(source.join(name)).unwrap();
+    }
     assert!(manager.install(&source).is_err());
     assert!(manager
         .change("remove", &bundled_manifests()[0].id)
@@ -973,6 +1043,9 @@ fn management_never_executes_code_and_protects_bundled_identity() {
 #[test]
 fn bundled_plugins_have_independent_flags_and_all_ids_are_reserved() {
     let (root, manager, source) = fixture();
+    for name in ["plugin.artifact.json", "plugin.signature.json"] {
+        fs::remove_file(source.join(name)).unwrap();
+    }
     manager.change("disable", "buzz.github").unwrap();
     let catalog = manager.catalog().unwrap();
     assert!(

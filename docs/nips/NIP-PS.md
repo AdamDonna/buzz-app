@@ -49,14 +49,21 @@ signature, and this draft defines no URL or MIME tag.
 
 ## Verification and trust
 
+Every external plugin requires a signed release, including local development
+builds. Only plugins compiled into Buzz are exempt. Missing signatures fail
+verification; existing unsigned installations remain manageable but cannot run.
+
 Before import and each load, verify the NIP-01 event ID and signature, kind,
 empty content, required tags, and `x` against the exact artifact bytes. Parse
 and validate the artifact manifest and module as usual. The publisher is only
 the verified event `pubkey`, never a URL, manifest claim, or unsigned field.
 
 An installed signed plugin may update only under the same manifest ID and
-publisher key; it cannot silently downgrade to unsigned. Users decide whether
-to trust a publisher. Signing does not sandbox plugin code.
+publisher key; it cannot downgrade to unsigned or roll back to an unsigned
+revision. An existing unsigned installation may be replaced with a signed
+release. Users decide whether to trust a publisher; a valid signature from any
+publisher key satisfies this verification policy. Signing does not sandbox
+plugin code.
 
 The file pair can be distributed through a folder or Git repository without a
 relay. Any later relay publication requires relay support for kind `1064`.

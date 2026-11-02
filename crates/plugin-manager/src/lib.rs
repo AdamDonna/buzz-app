@@ -636,7 +636,9 @@ struct Release {
 }
 const RELEASE_MARKER: &str = "buzz-plugin-release-v1";
 const RELEASE_KIND: Kind = Kind::Custom(1064);
-const SIGNED_ROLLBACK_ERROR: &str = "Cannot roll back a signed plugin to an unsigned revision";
+const UNSIGNED_PLUGIN_ERROR: &str =
+    "External plugins require a signed release (plugin.artifact.json and plugin.signature.json)";
+const SIGNED_ROLLBACK_ERROR: &str = "Cannot roll back to an unsigned revision";
 
 fn publisher(bytes: &[u8], signature: &Event) -> Result<String> {
     publisher_for_hash(&hash(bytes), signature)
@@ -911,9 +913,7 @@ impl Manager {
                 "Installed artifact failed its integrity check; reinstall or roll back".into(),
             );
         }
-        if let Some(signature) = signature {
-            publisher(text.as_bytes(), signature)?;
-        }
+        publisher(text.as_bytes(), signature.ok_or(UNSIGNED_PLUGIN_ERROR)?)?;
         let a: Artifact = serde_json::from_str(&text).map_err(err)?;
         a.manifest.validate()?;
         if a.manifest.id != id {
@@ -957,22 +957,25 @@ impl Manager {
         for (id, p) in registry.installed {
             // Catalog polling stays cheap; verify content hashes before enabling/loading.
             let has_signature = p.current_signature.is_some();
-            let rollback_blocked_reason =
-                (has_signature && p.previous.is_some() && p.previous_signature.is_none())
-                    .then_some(SIGNED_ROLLBACK_ERROR);
+            let rollback_blocked_reason = (p.previous.is_some() && p.previous_signature.is_none())
+                .then_some(SIGNED_ROLLBACK_ERROR);
             let mut error = fs::metadata(self.artifact_path(&id, &p.current))
                 .map_err(err)
                 .err();
             let publisher = if error.is_none() {
-                p.current_signature.as_ref().and_then(|signature| {
-                    match publisher_for_hash(&p.current, signature) {
-                        Ok(key) => Some(key),
-                        Err(reason) => {
-                            error = Some(reason);
-                            None
-                        }
+                match p
+                    .current_signature
+                    .as_ref()
+                    .ok_or(UNSIGNED_PLUGIN_ERROR)
+                    .map_err(str::to_owned)
+                    .and_then(|signature| publisher_for_hash(&p.current, signature))
+                {
+                    Ok(key) => Some(key),
+                    Err(reason) => {
+                        error = Some(reason);
+                        None
                     }
-                })
+                }
             } else {
                 None
             };
@@ -1103,7 +1106,7 @@ impl Manager {
                     }
                     "rollback" => {
                         let previous = p.previous.clone().ok_or("No previous revision")?;
-                        if p.current_signature.is_some() && p.previous_signature.is_none() {
+                        if p.previous_signature.is_none() {
                             return Err(SIGNED_ROLLBACK_ERROR.into());
                         }
                         let a = self.artifact(id, &previous, p.previous_signature.as_ref())?;
@@ -1337,13 +1340,11 @@ impl Release {
         if is_reserved(&artifact.manifest.id) || artifact.code.trim().is_empty() {
             return Err("Invalid plugin artifact".into());
         }
-        // IMPORTANT: We allow unsigned plugins currently. Before release, we should add UI to restrict the public keys we trust; and also allowlist Block plugins.
-        if let Some(signature) = &self.signature {
-            if serde_json::to_vec(signature).map_err(err)?.len() > 64 * 1024 {
-                return Err("Plugin release signature exceeds 64 KiB".into());
-            }
-            publisher(&self.bytes, signature)?;
+        let signature = self.signature.as_ref().ok_or(UNSIGNED_PLUGIN_ERROR)?;
+        if serde_json::to_vec(signature).map_err(err)?.len() > 64 * 1024 {
+            return Err("Plugin release signature exceeds 64 KiB".into());
         }
+        publisher(&self.bytes, signature)?;
         Ok(artifact)
     }
     fn validate(&self) -> Result<Manifest> {
@@ -1558,6 +1559,10 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    fn sign_source(directory: &Path) {
+        super::sign_release(directory, &"01".repeat(32)).unwrap();
+    }
+
     #[test]
     fn compressed_png_profile_is_bounded_before_header_decode() {
         use image::{ImageDecoder as _, ImageEncoder as _};
@@ -1671,10 +1676,19 @@ mod tests {
 
     #[test]
     fn legacy_manifest_and_code_artifacts_remain_compatible() {
-        let release = Release {
-            bytes: br#"{"manifest":{"id":"example.page","name":"Example","apiVersion":1},"code":"export function apply() {}"}"#.to_vec(),
-            signature: None,
-        };
+        let source = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("manifest.json"),
+            r#"{"id":"example.page","name":"Example","apiVersion":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("plugin.js"),
+            "export function apply() {}",
+        )
+        .unwrap();
+        sign_source(source.path());
+        let release = super::prepare_artifact(source.path()).unwrap();
         let artifact = release.artifact().unwrap();
         assert_eq!(artifact.manifest.id, "example.page");
         assert!(artifact.readme.is_none());
@@ -1756,6 +1770,133 @@ mod tests {
             .module("example.saved", &plugin.revision)
             .unwrap()
             .contains("saved = true"));
+    }
+
+    #[test]
+    fn persisted_missing_or_invalid_signatures_block_execution_and_host_access() {
+        let home = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("manifest.json"),
+            r#"{"id":"example.page","name":"Example","apiVersion":1,"host":{"files":true}}"#,
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("plugin.js"),
+            "export function apply() {}",
+        )
+        .unwrap();
+        sign_source(source.path());
+        let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        manager.install(source.path()).unwrap();
+        manager.change("enable", "example.page").unwrap();
+        let original = manager.read().unwrap();
+        let revision = original.installed["example.page"].current.clone();
+        assert!(manager.module("example.page", &revision).is_ok());
+
+        for missing in [true, false] {
+            let mut registry = manager.read().unwrap();
+            let installed = registry.installed.get_mut("example.page").unwrap();
+            installed.current_signature =
+                original.installed["example.page"].current_signature.clone();
+            if missing {
+                installed.current_signature = None;
+            } else {
+                installed.current_signature.as_mut().unwrap().content = "altered".into();
+            }
+            manager.save(&registry).unwrap();
+            let reopened = Manager::open(Some(home.path().into()), "test", false).unwrap();
+            let catalog = reopened.catalog().unwrap();
+            let plugin = catalog
+                .plugins
+                .iter()
+                .find(|p| p.manifest.id == "example.page")
+                .unwrap();
+            assert!(plugin.enabled, "retain the user's setting for repair");
+            assert!(plugin.error.is_some());
+            assert!(plugin.publisher.is_none());
+            let expected = if missing {
+                super::UNSIGNED_PLUGIN_ERROR
+            } else {
+                "Invalid plugin release event ID or signature"
+            };
+            assert_eq!(plugin.error.as_deref(), Some(expected));
+            assert_eq!(
+                reopened.module("example.page", &revision).err().as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                reopened.content("example.page", &revision).err().as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                reopened
+                    .host_grants("example.page", &revision)
+                    .err()
+                    .as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                reopened.change("enable", "example.page").err().as_deref(),
+                Some(expected)
+            );
+        }
+        manager.change("disable", "example.page").unwrap();
+        manager.change("remove", "example.page").unwrap();
+        manager.install(source.path()).unwrap();
+        manager.change("enable", "example.page").unwrap();
+        assert!(manager.module("example.page", &revision).is_ok());
+    }
+
+    #[test]
+    fn unsigned_legacy_installation_can_be_replaced_with_a_signed_release() {
+        let home = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("manifest.json"),
+            r#"{"id":"example.page","name":"Example","apiVersion":1}"#,
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("plugin.js"),
+            "export function apply() {}",
+        )
+        .unwrap();
+        sign_source(source.path());
+        let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        manager.install(source.path()).unwrap();
+        manager.change("enable", "example.page").unwrap();
+        let mut registry = manager.read().unwrap();
+        let installed = registry.installed.get_mut("example.page").unwrap();
+        installed.current_signature = None;
+        installed.previous = Some(installed.current.clone());
+        installed.previous_signature = None;
+        manager.save(&registry).unwrap();
+
+        let catalog = manager.catalog().unwrap();
+        let plugin = catalog
+            .plugins
+            .iter()
+            .find(|p| p.manifest.id == "example.page")
+            .unwrap();
+        assert_eq!(
+            plugin.rollback_blocked_reason,
+            Some(super::SIGNED_ROLLBACK_ERROR)
+        );
+        assert_eq!(
+            manager.change("rollback", "example.page").err().as_deref(),
+            Some(super::SIGNED_ROLLBACK_ERROR)
+        );
+        let repaired = manager.install(source.path()).unwrap();
+        let plugin = repaired
+            .plugins
+            .iter()
+            .find(|p| p.manifest.id == "example.page")
+            .unwrap();
+        assert!(plugin.enabled);
+        assert!(plugin.error.is_none());
+        assert!(plugin.publisher.is_some());
+        assert!(manager.module("example.page", &plugin.revision).is_ok());
     }
 
     #[test]
@@ -2197,6 +2338,7 @@ mod tests {
             r#"{"id":"example.page","name":"Example","apiVersion":1,"host":{"commands":[{"id":"first","program":"example-cli","args":["status"]}],"networkOrigins":["https://one.example"]}}"#,
         )
         .unwrap();
+        sign_source(&source);
         let first = manager
             .install(&source)
             .unwrap()
@@ -2224,6 +2366,7 @@ mod tests {
             r#"{"id":"example.page","name":"Example","apiVersion":1,"host":{"commands":[{"id":"second","program":"example-cli","args":["status","--json"],"maxOutputBytes":65536}],"networkOrigins":["https://two.example"],"managedFiles":true}}"#,
         )
         .unwrap();
+        sign_source(&source);
         let second = manager
             .install(&source)
             .unwrap()
@@ -2343,6 +2486,7 @@ mod tests {
             r#"{"id":"example.page","name":"Example","apiVersion":1}"#,
         )
         .unwrap();
+        sign_source(&source);
         let first = manager
             .install(&source)
             .unwrap()
@@ -2358,6 +2502,7 @@ mod tests {
             r#"{"id":"example.page","name":"Example","apiVersion":1,"host":{"commands":[{"id":"status","program":"example-cli","args":["status"]}]}}"#,
         )
         .unwrap();
+        sign_source(&source);
         let error = match manager.reload("example.page") {
             Ok(_) => panic!("reload should reject changed host grants"),
             Err(error) => error,
@@ -2369,6 +2514,7 @@ mod tests {
             r#"{"id":"example.page","name":"Example","apiVersion":1,"host":{"managedFiles":true}}"#,
         )
         .unwrap();
+        sign_source(&source);
         assert!(manager
             .reload("example.page")
             .err()
@@ -2568,6 +2714,7 @@ mod tests {
         )
         .unwrap();
         fs::write(source.join("plugin.js"), "export function apply() {}").unwrap();
+        sign_source(&source);
         let first = manager
             .install(&source)
             .unwrap()
@@ -2578,6 +2725,7 @@ mod tests {
             .revision
             .clone();
         fs::write(source.join("plugin.js"), "export const reloaded = true;").unwrap();
+        sign_source(&source);
 
         let error = match manager.reload_with_commit_hook("example.page", false, || {
             manager.change("enable", "example.page").unwrap();

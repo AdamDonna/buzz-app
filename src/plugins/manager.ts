@@ -124,6 +124,7 @@ export function createPluginManager(
         ? current.catalog.plugins.filter(
             (plugin) =>
               plugin.enabled &&
+              !plugin.error &&
               !builtInIds.has(plugin.manifest.id) &&
               !(current.externalPluginsPaused && plugin.source === "external"),
           )

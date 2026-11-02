@@ -523,8 +523,59 @@ it("rejects retry while busy, disabled, paused, or carrying an artifact error", 
     plugin.error = "Artifact unavailable";
   vi.mocked(installation.getCatalog).mockResolvedValue(broken);
   await vi.advanceTimersByTimeAsync(1000);
-  expect(plugins.snapshot().activation.example?.status).toBe("failed");
+  expect(plugins.snapshot().activation.example).toBeUndefined();
   expect(plugins.retryPlugin("example")).toBe(false);
+});
+
+it("does not load an enabled external plugin with a verification error", async () => {
+  const catalog = ready();
+  if (catalog.status !== "ready") throw new Error("fixture");
+  const entry = catalog.catalog.plugins[0];
+  if (!entry) throw new Error("fixture");
+  entry.source = "external";
+  entry.error = "External plugins require a signed release";
+  const { plugins, installation } = harness({
+    getCatalog: async () => catalog,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(installation.readModule).not.toHaveBeenCalled();
+  expect(plugins.snapshot().activation.example).toBeUndefined();
+  expect(plugins.retryPlugin("example")).toBe(false);
+});
+
+it("disposes an active plugin when its unchanged revision fails verification", async () => {
+  const code = `export const inject = ["pages"];
+export function apply(ctx) {
+  ctx.pages.register({ id: "main", title: "External", component: () => null });
+}`;
+  const objectUrl = vi
+    .spyOn(URL, "createObjectURL")
+    .mockReturnValue(`data:text/javascript,${encodeURIComponent(code)}`);
+  try {
+    const catalog = ready();
+    if (catalog.status !== "ready") throw new Error("fixture");
+    const entry = catalog.catalog.plugins[0];
+    if (!entry) throw new Error("fixture");
+    entry.source = "external";
+    const { plugins, pages, installation } = harness({
+      getCatalog: vi.fn(async () => catalog),
+      readModule: vi.fn(async () => code),
+    });
+    await vi.waitFor(() => expect(pages.snapshot()).toHaveLength(1));
+    expect(plugins.snapshot().activation.example?.status).toBe("active");
+    const broken = structuredClone(catalog);
+    const brokenEntry = broken.catalog.plugins[0];
+    if (!brokenEntry) throw new Error("fixture");
+    brokenEntry.error = "Invalid plugin release event ID or signature";
+    vi.mocked(installation.getCatalog).mockResolvedValue(broken);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(pages.snapshot()).toHaveLength(0);
+    expect(plugins.snapshot().activation.example).toBeUndefined();
+    expect(plugins.retryPlugin("example")).toBe(false);
+    expect(installation.readModule).toHaveBeenCalledTimes(1);
+  } finally {
+    objectUrl.mockRestore();
+  }
 });
 
 it("loads an enabled external plugin regardless of its id", async () => {
