@@ -3707,3 +3707,271 @@ it("backs off a relay's sign-in refusal and stops on a local terminal one", asyn
   expect(forbidden.sockets).toHaveLength(1);
   forbidden.owner.dispose();
 });
+
+/** Authenticate, send every route, and establish each one. */
+async function establish(socket: Socket) {
+  await socket.auth();
+  await vi.advanceTimersByTimeAsync(750);
+  for (const request of socket.requests())
+    await socket.receive(["EOSE", request[1]]);
+}
+/** The native socket's planned federated renewal of an admitted connection. */
+function renew(socket: Socket) {
+  socket.readyState = 3;
+  (socket.onclose as (event: { renew: true }) => void)({ renew: true });
+}
+it("keeps a planned renewal connected and skips catch-up for carried routes", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    h.owner.update(["a", "b", "c"], ["a", "b"]);
+    await establish(h.first);
+    // A batch for a and b, a singleton for c, and both globals.
+    expect(h.callbacks.established).toHaveBeenCalledTimes(4);
+    // Long enough that the cursor, not the first connect, bounds the resume.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    // Each recovery tick renews the batch; establish its latest replacement.
+    for (const request of h.first.requests())
+      await h.first.receive(["EOSE", request[1]]);
+    h.callbacks.established.mockClear();
+    h.callbacks.state.mockClear();
+    renew(h.first);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const batch = second.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(batch);
+    // The new batch replays from its cursor, with the drift overlap.
+    const resumed = filtersOf(batch)[0];
+    expect(resumed?.limit).toBe(500);
+    const lag = Math.floor(Date.now() / 1000) - (resumed?.since ?? 0);
+    expect(lag).toBeGreaterThan(960);
+    expect(lag).toBeLessThanOrEqual(1100);
+    const event = message(keypair(), "a", "during renewal", 1700000000);
+    await second.receive(["EVENT", batch[1], event]);
+    expect(h.callbacks.receive).toHaveBeenLastCalledWith([event], {
+      phase: "replay",
+      channelId: "a",
+    });
+    for (const request of second.requests())
+      await second.receive(["EOSE", request[1]]);
+    expect(h.callbacks.established).not.toHaveBeenCalled();
+    const states = h.callbacks.state.mock.calls.map(([state]) => state);
+    expect(states.length).toBeGreaterThan(0);
+    for (const state of states) {
+      expect(state.status).toBe("connected");
+      for (const route of state.routes)
+        expect(route, JSON.stringify(state)).toMatchObject({ status: "live" });
+    }
+  } finally {
+    h.owner.dispose();
+  }
+  expect(vi.getTimerCount()).toBe(0);
+});
+it("recovers like an outage after a renewal whose replay hit the limit", async () => {
+  vi.useFakeTimers();
+  const h = setup(["a", "b"]);
+  try {
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    renew(h.first);
+    h.callbacks.state.mockClear();
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const a = second.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(a);
+    const event = message(keypair(), "a", "busy", 1700000000);
+    for (let i = 0; i < 500; i++) await second.receive(["EVENT", a[1], event]);
+    for (const request of second.requests())
+      if (request[1] !== a[1]) await second.receive(["EOSE", request[1]]);
+    expect(h.callbacks.established).not.toHaveBeenCalled();
+    await second.receive(["EOSE", a[1]]);
+    // The cut replay reports the hidden drop, so session and agent consumers
+    // run their outage recovery, and every live route establishes again.
+    const statuses = h.callbacks.state.mock.calls.map(
+      ([state]) => state.status,
+    );
+    expect(statuses.slice(-2)).toEqual(["connecting", "connected"]);
+    expect(statuses.slice(0, -2)).not.toContain("connecting");
+    expect(h.callbacks.established.mock.calls).toEqual(
+      expect.arrayContaining([[undefined], [undefined], ["b"], ["a"]]),
+    );
+    expect(h.callbacks.established).toHaveBeenCalledTimes(4);
+  } finally {
+    h.owner.dispose();
+  }
+});
+it("falls back to the outage path when a renewal's new socket fails", async () => {
+  vi.useFakeTimers();
+  const h = setup(["a"]);
+  try {
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    h.callbacks.state.mockClear();
+    renew(h.first);
+    const second = h.sockets[1];
+    assert.exists(second);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connected");
+    second.close(1006);
+    const failed = h.callbacks.state.mock.lastCall?.[0];
+    expect(failed?.status).toBe("retrying");
+    expect(failed?.routes.map((route) => route.status)).not.toContain("live");
+    await vi.advanceTimersByTimeAsync(1000);
+    const third = h.sockets[2];
+    assert.exists(third);
+    await establish(third);
+    // A real outage: every route catches up again.
+    expect(h.callbacks.established).toHaveBeenCalledWith("a");
+    expect(h.callbacks.established).toHaveBeenCalledTimes(3);
+  } finally {
+    h.owner.dispose();
+  }
+});
+it.each(["complete", "cut", "closed", "renewed"] as const)(
+  "runs the session's outage recovery after a renewal only when continuity breaks (%s)",
+  async (mode) => {
+    vi.useFakeTimers();
+    const h = setup([]);
+    const relay = keypair();
+    const wire = scriptedTransport(h.key.pubkey, relay.pubkey);
+    const rosters = ["a", "b"].map((id) => roster(relay, id, [h.key.pubkey]));
+    const owner = createRelaySession({
+      ...wire.transport,
+      subscribe(callbacks) {
+        h.callbacks.receive.mockImplementation(callbacks.receive);
+        h.callbacks.state.mockImplementation(callbacks.state);
+        h.callbacks.established.mockImplementation(callbacks.established);
+        return h.owner;
+      },
+    });
+    /** Answers every read: rosters for membership reads, nothing otherwise. */
+    const answer = async (reads: (readonly unknown[])[] = []) => {
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(50);
+        for (const entry of wire.pending.splice(0)) {
+          reads.push(entry.filters);
+          entry.respond(
+            entry.filters.some((f) => f.kinds?.includes(39002)) ? rosters : [],
+          );
+        }
+      }
+      return reads;
+    };
+    try {
+      h.callbacks.receive(rosters);
+      owner.session.channels.ensure("a");
+      await answer();
+      await establish(h.first);
+      await answer();
+      // What Attention and reminders watch: the session's live status.
+      const seen: string[] = [];
+      const stopSeen = owner.session.live.subscribe(() =>
+        seen.push(owner.session.live.snapshot().status),
+      );
+      renew(h.first);
+      h.callbacks.state.mockClear();
+      const second = h.sockets[1];
+      assert.exists(second);
+      await second.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      const a = second.requests().find((r) => scopeOf(r).includes("a"));
+      assert.exists(a);
+      const event = message(keypair(), "a", "busy", 1700000000);
+      if (mode === "cut")
+        for (let i = 0; i < 500; i++)
+          await second.receive(["EVENT", a[1], event]);
+      let socket = second;
+      if (mode === "closed") {
+        // The carried route fails after AUTH; a retry then establishes it.
+        await second.receive(["CLOSED", a[1], "error: shutting down"]);
+        h.owner.retry();
+        await vi.advanceTimersByTimeAsync(750);
+      } else if (mode === "renewed") {
+        // A second renewal arrives before the first one's replay completed.
+        renew(second);
+        const third = h.sockets[2];
+        assert.exists(third);
+        await third.auth();
+        await vi.advanceTimersByTimeAsync(750);
+        socket = third;
+      }
+      for (const request of socket.requests())
+        await socket.receive(["EOSE", request[1]]);
+      const reads = await answer();
+      // A complete replay needs no read. A broken one re-reads the roster and
+      // the open channel's head, as after any outage.
+      stopSeen();
+      if (mode === "complete") {
+        expect(reads).toEqual([]);
+        expect(new Set(seen)).toEqual(new Set(["connected"]));
+      } else {
+        // Agents start a new catch-up epoch on this drop and reconnect.
+        expect(seen).toContain("connecting");
+        expect(seen.at(-1)).toBe("connected");
+        expect(reads).toContainEqual([
+          expect.objectContaining({ kinds: [39002] }),
+        ]);
+        expect(reads).toContainEqual([
+          expect.objectContaining({ "#h": ["a"], top_level: true }),
+        ]);
+      }
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+it("ends a renewal's quiet state when a cooldown stops unsent carried routes", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    // Singleton routes, so setup concurrency leaves b and c unsent.
+    h.owner.update(["a", "b", "c"]);
+    h.owner.watchPresence?.([keypair().pubkey]);
+    await establish(h.first);
+    // Setup concurrency sent b and c only after earlier routes went live.
+    for (const request of h.first.requests().slice(-2))
+      await h.first.receive(["EOSE", request[1]]);
+    renew(h.first);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    const presence = second
+      .requests()
+      .find((r) => (r[2] as { kinds?: number[] }).kinds?.[0] === 20001);
+    assert.exists(presence);
+    h.callbacks.state.mockClear();
+    await second.receive([
+      "CLOSED",
+      presence[1],
+      "rate-limited: quota exceeded; retry in 120s",
+    ]);
+    // Presence carries nothing, but the carried routes it stopped lost continuity.
+    expect(
+      h.callbacks.state.mock.calls.map(([state]) => state.status),
+    ).toContain("connecting");
+  } finally {
+    h.owner.dispose();
+  }
+});
+it("ends a renewal's quiet state when an interest change replaces a carried batch", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    h.owner.update(["a", "b", "c"], ["a", "b", "c"]);
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    renew(h.first);
+    const second = h.sockets[1];
+    assert.exists(second);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connected");
+    h.owner.update(["a", "b"], ["a", "b"]);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connecting");
+    await establish(second);
+    expect(h.callbacks.established).toHaveBeenCalledWith(["a", "b"]);
+  } finally {
+    h.owner.dispose();
+  }
+});

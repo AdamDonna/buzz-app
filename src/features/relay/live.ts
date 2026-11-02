@@ -277,6 +277,9 @@ type Route = {
   liveOnly?: boolean;
   previous?: Route;
   retryRenewal?: boolean;
+  /** Live on the socket a planned renewal replaced, over the same scope. Its
+   * replay resumes from the cursor, so its EOSE needs no catch-up. */
+  carried?: boolean;
   quotaRetries: number;
   /** Consecutive refusals that need action, and when the recover tick may retry. */
   refusals?: number;
@@ -342,6 +345,13 @@ export function subscribeRelayTraffic(
   // admission restores it, so a post-admission denial cannot loop.
   let policyRecovery = true;
   let connection: LiveSnapshot["status"] = "connecting";
+  // A planned renewal of an admitted socket is not an outage: until the new
+  // socket fails, it reports the connection and its carried routes as live.
+  let renewing = false;
+  // While a renewal rebuilds its routes: the cursor keys live on the old socket.
+  let carrying: ReadonlySet<string> | undefined;
+  // A carried route lost continuity before its replay completed (see `settle`).
+  let broken = false;
   let connectionError: string | undefined;
   let interests: string[] = [];
   let joined: string[] = [];
@@ -400,15 +410,16 @@ export function subscribeRelayTraffic(
     if (closed) return;
     callbacks.state(
       Object.freeze({
-        status: connection,
+        status:
+          renewing && connection === "connecting" ? "connected" : connection,
         routes: Object.freeze(
           [...routes.values()].flatMap(
-            ({ id, channelId, channelIds, status, replay, error }) =>
+            ({ id, channelId, channelIds, status, replay, error, carried }) =>
               (channelIds ?? [channelId]).map((channelId) =>
                 Object.freeze({
                   id: channelId ? `channel:${channelId}` : id,
                   ...(channelId ? { channelId } : {}),
-                  status,
+                  status: carried && status === "pending" ? "live" : status,
                   replay,
                   ...(error ? { error } : {}),
                 }),
@@ -438,6 +449,7 @@ export function subscribeRelayTraffic(
     delete route.previous;
   }
   function remove(route: Route) {
+    if (route.carried) broken = true;
     closeWire(route);
     routes.delete(route.id);
   }
@@ -462,6 +474,9 @@ export function subscribeRelayTraffic(
     delete next.wire;
     delete next.deadline;
     delete next.retryRenewal;
+    // A narrowed replacement is live-only, so it has no replay to rely on.
+    if (route.carried) broken = true;
+    delete next.carried;
     routes.set(next.id, next);
     return next;
   }
@@ -511,6 +526,7 @@ export function subscribeRelayTraffic(
     }
     pump();
     notify();
+    settle();
     if (closed || generation !== current) return;
     try {
       callbacks.recover?.();
@@ -585,6 +601,14 @@ export function subscribeRelayTraffic(
         since: Math.floor(Date.now() / 1000) - 300,
       };
       route.since = resumeSince(route);
+      // Presence and observer feeds establish nothing, so carry no obligation.
+      if (
+        carrying &&
+        id !== "presence" &&
+        id !== "observer" &&
+        cursorKeys(route).every((key) => carrying?.has(key))
+      )
+        route.carried = true;
       routes.set(id, route);
       return route;
     };
@@ -607,9 +631,12 @@ export function subscribeRelayTraffic(
       add(`batch:${++serial}`, batch.slice(i, i + LIVE_BATCH_SIZE), true);
     pump();
     notify();
+    settle();
   }
   /** A stop waits for manual Retry, so an earlier refusal's deadline must not revive it. */
   function stop(route: Route, reason: string) {
+    if (route.carried) broken = true;
+    delete route.carried;
     route.status = "error";
     route.error = reason;
     delete route.retryAt;
@@ -627,6 +654,8 @@ export function subscribeRelayTraffic(
       JSON.stringify(scope(previous)) === JSON.stringify(scope(route));
     if (retain) delete route.previous;
     closeWire(route);
+    if (route.carried) broken = true;
+    delete route.carried;
     delete route.retryRenewal;
     delete route.retryAt;
     if (retain) {
@@ -685,6 +714,38 @@ export function subscribeRelayTraffic(
       }
     } else notify();
     pump();
+    settle();
+  }
+  const establish = (route: Route) => {
+    if (route.id !== "observer" && route.id !== "presence")
+      callbacks.established(route.channelIds ?? route.channelId);
+  };
+  /** A renewal stays quiet only while every carried route keeps continuity.
+   * Once one fails or stops, is replaced or replays a cut window, no
+   * consumer may rely on it: report the drop the renewal hid, as after any
+   * outage, and establish every live route again. Before AUTH, the state still due
+   * reports the drop, and each route establishes at its own EOSE. */
+  function settle() {
+    if (!broken || closed) return;
+    broken = false;
+    for (const route of routes.values()) delete route.carried;
+    if (renewing) {
+      renewing = false;
+      notify();
+      return;
+    }
+    if (!authenticated) return;
+    const current = generation;
+    connection = "connecting";
+    notify();
+    if (closed || generation !== current) return;
+    connection = "connected";
+    notify();
+    for (const route of [...routes.values()]) {
+      if (closed || generation !== current) return;
+      if (route.status === "live" && routes.get(route.id) === route)
+        establish(route);
+    }
   }
   function pump() {
     clearTimeout(dispatchTimer);
@@ -851,13 +912,32 @@ export function subscribeRelayTraffic(
     socket?.close();
     socket = undefined;
   }
-  function connect() {
+  function connect(renewal = false) {
     if (closed) return;
+    // A renewal before the last one's carried routes completed their replay
+    // cannot prove continuity for them: it is an ordinary reconnect.
+    if ([...routes.values()].some((route) => route.carried)) renewal = false;
+    broken = false;
+    // Only a route live on the admitted socket, with no pending replacement,
+    // is carried: its cursor is current and its scope is unchanged.
+    const carried = renewal
+      ? new Set(
+          [...routes.values()]
+            .filter((route) => route.status === "live" && !route.previous)
+            .flatMap(cursorKeys),
+        )
+      : undefined;
     clearSocket();
     routes.clear();
+    renewing = renewal;
     connection = "connecting";
     connectionError = undefined;
-    sync();
+    carrying = carried;
+    try {
+      sync();
+    } finally {
+      carrying = undefined;
+    }
     const used = new Set([...routes.values()].flatMap(cursorKeys));
     for (const key of cursors.keys()) if (!used.has(key)) cursors.delete(key);
     const current = generation;
@@ -868,6 +948,9 @@ export function subscribeRelayTraffic(
       if (!valid()) return;
       log.warn(`${peer} ${reason}`);
       clearSocket();
+      renewing = false;
+      broken = false;
+      for (const route of routes.values()) delete route.carried;
       connection = "retrying";
       connectionError = reason;
       for (const route of routes.values())
@@ -877,7 +960,7 @@ export function subscribeRelayTraffic(
       // reconnects while retaining a minimum delay under sustained failure.
       const delay = liveReconnectDelay(closeCode, reconnectDelay, random);
       reconnectDelay = Math.min(MAX_RECONNECT_DELAY, reconnectDelay * 2);
-      retryTimer = setTimeout(connect, delay);
+      retryTimer = setTimeout(() => connect(), delay);
     };
     unresponsive = reconnect;
     // The error stays in state. Recovery treats it as settled, so only this
@@ -886,11 +969,17 @@ export function subscribeRelayTraffic(
       if (!valid()) return;
       log.error(`${peer} ${reason}`);
       clearSocket();
+      renewing = false;
+      broken = false;
+      for (const route of routes.values()) delete route.carried;
       connection = "error";
       connectionError = reason;
       notify();
       if (retryable)
-        retryTimer = setTimeout(connect, liveSlowRetryDelay(++authFailures));
+        retryTimer = setTimeout(
+          () => connect(),
+          liveSlowRetryDelay(++authFailures),
+        );
     };
     let ws: LiveSocket;
     try {
@@ -994,6 +1083,7 @@ export function subscribeRelayTraffic(
         heardAt = provenAt = tickedAt = Date.now();
         authFailures = 0;
         policyRecovery = true;
+        renewing = false;
         connection = "connected";
         recoveryTimer = setTimeout(recover, LIVE_RECOVERY_INTERVAL);
         pump();
@@ -1150,10 +1240,17 @@ export function subscribeRelayTraffic(
         delete route.error;
         delete route.refusals;
         route.replay = route.count >= LIVE_REPLAY_LIMIT ? "limited" : "unknown";
+        // A carried route's replay covered the renewal unless the limit cut it.
+        const caughtUp = route.carried && route.replay !== "limited";
+        if (route.carried && !caughtUp) broken = true;
+        delete route.carried;
         notify();
-        if (!valid() || wires.get(route.wire ?? "") !== route) return;
-        if (route.id !== "observer" && route.id !== "presence")
-          callbacks.established(route.channelIds ?? route.channelId);
+        if (!valid()) return;
+        // A cut replay establishes every live route, this one included, even
+        // if a listener retired it meanwhile.
+        if (broken) settle();
+        else if (!caughtUp && wires.get(route.wire ?? "") === route)
+          establish(route);
         if (valid()) pump();
       } else if (data[0] === "CLOSED") {
         const reason =
@@ -1189,7 +1286,7 @@ export function subscribeRelayTraffic(
       // authenticated takes the ordinary backoff, so it cannot spin.
       if (authenticated && (event as { renew?: true } | undefined)?.renew) {
         log.info(`${peer} renewing federated authorization`);
-        return connect();
+        return connect(true);
       }
       const reason = event?.code
         ? `Live connection closed (${event.code}${event.reason ? `: ${event.reason}` : ""})`
