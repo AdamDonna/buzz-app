@@ -4610,6 +4610,45 @@ it("keeps interrupting an idle existing conversation a no-op", async () => {
   ).resolves.toBeUndefined();
 });
 
+it("rejects an execution open that completes after the agent retires", async () => {
+  const opened = deferred<AgentExecution>();
+  const started = deferred<void>();
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => {
+      started.resolve();
+      return opened.promise;
+    },
+  );
+  const lifetime = new AbortController();
+  const target: AgentExecution = {
+    binding: {
+      provider: "test/guest",
+      target: "one",
+      workspace: "/guest/project",
+    },
+    signal: lifetime.signal,
+    spawn: f.spawn,
+    resolveDirectory: async (path) => path,
+    readFile: async () => new Uint8Array(),
+    dispose: vi.fn(async () => {
+      lifetime.abort();
+    }),
+  };
+  const result = f.runtime.catalog(pubkey);
+  await started.promise;
+  f.runtime.sync([]);
+  opened.resolve(target);
+  await expect(result).rejects.toThrow("Codex runtime is retired");
+  expect(target.dispose).toHaveBeenCalledOnce();
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
 it("runs bound Codex tools in the guest workspace, resumes, and stops on provider unload", async () => {
   vi.useFakeTimers();
   try {

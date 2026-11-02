@@ -247,6 +247,7 @@ export class CodexRuntime {
     { runtime: CodexRuntime; execution: AgentExecution }
   >();
   private disposed = false;
+  private opening = new Set<{ agent: AgentKey; retired: boolean }>();
   private entries = new Map<AgentKey, Entry>();
   private server: Server | undefined;
   private stopping = new Map<AgentKey, Promise<void>>();
@@ -290,10 +291,17 @@ export class CodexRuntime {
   ) {}
   private async connection(agent: AgentKey): Promise<CodexRuntime> {
     if (this.disposed) throw new Error("Codex runtime is disposed");
-    const execution = await this.execution?.(agent);
-    if (this.disposed) {
+    const opening = { agent, retired: false };
+    this.opening.add(opening);
+    let execution: AgentExecution | undefined;
+    try {
+      execution = await this.execution?.(agent);
+    } finally {
+      this.opening.delete(opening);
+    }
+    if (this.disposed || opening.retired) {
       await execution?.dispose();
-      throw new Error("Codex runtime is disposed");
+      throw new Error("Codex runtime is retired");
     }
     if (!execution) return this;
     execution.signal.throwIfAborted();
@@ -540,6 +548,9 @@ export class CodexRuntime {
     for (const listener of this.listeners) listener();
   }
   sync(agents: readonly Agent[]) {
+    for (const opening of this.opening)
+      if (!agents.some((agent) => agent.key === opening.agent))
+        opening.retired = true;
     for (const [key, remote] of this.remote) {
       if (!agents.some((agent) => agent.key === key)) {
         this.remote.delete(key);
