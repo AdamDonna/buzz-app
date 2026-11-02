@@ -33,6 +33,7 @@ export interface HeadPersistence {
 const DB = "buzz-channel-heads-v1";
 const STORE = "heads";
 const STARTUP = "startup";
+const MIRROR = ":profiles";
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_HEADS = 64;
 const MAX_AGE = 24 * 60 * 60 * 1000;
@@ -43,7 +44,7 @@ export function createHeadPersistence(
   relay: string,
 ): HeadPersistence {
   const scope = `${viewer}:${relay}`;
-  const profiles = `${scope}:profiles`;
+  const profiles = `${scope}${MIRROR}`;
   let closed = false;
   let opening: Promise<IDBDatabase> | undefined;
   function database() {
@@ -85,15 +86,23 @@ export function createHeadPersistence(
   }
   /** `handler` must issue follow-up requests synchronously (IDB auto-commits). */
   type Then = <R>(request: IDBRequest<R>, handler: (result: R) => void) => void;
-  /** Keep the startup store, across identities, within its byte budget. */
+  /** Keep the startup store, across identities, within its byte budget.
+   * Optional profile mirrors give way before any saved roster. */
   function prune(store: IDBObjectStore, then: Then) {
-    then(store.getAll(), (rows) => {
-      let total = 0;
-      for (const row of rows.sort((a, b) => b.savedAt - a.savedAt)) {
-        total += row.bytes;
-        if (total > MAX_BYTES) store.delete(row.key);
-      }
-    });
+    then(
+      store.getAll(),
+      (rows: { key: string; bytes: number; savedAt: number }[]) => {
+        const mirror = (row: { key: string }) =>
+          Number(row.key.endsWith(MIRROR));
+        let total = 0;
+        for (const row of rows.sort(
+          (a, b) => mirror(a) - mirror(b) || b.savedAt - a.savedAt,
+        )) {
+          total += row.bytes;
+          if (total > MAX_BYTES) store.delete(row.key);
+        }
+      },
+    );
   }
   async function transact<T>(
     mode: IDBTransactionMode,
