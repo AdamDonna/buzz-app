@@ -90,6 +90,8 @@ export function PageSearch({
     place: SearchPlace;
     at: number;
   }>(undefined);
+  // Kept text opens selected, so typing something new replaces it.
+  const selectKept = useRef(false);
   const latest = useRef({ query, tab, scopedChannelId });
   latest.current = { query, tab, scopedChannelId };
   const currentTarget = useSyncExternalStore(
@@ -123,11 +125,28 @@ export function PageSearch({
     const memory = remembered.current;
     const kept = memory && Date.now() - memory.at < SEARCH_MEMORY;
     setQuery(kept ? memory.query : "");
+    selectKept.current = !!kept && !!memory.query;
     setTab(kept ? memory.tab : "all");
     place.current = kept ? { ...memory.place } : { top: 0, key: "" };
     setScopedChannelId(undefined);
     setSearchOpen(true);
   }, [setSearchOpen]);
+  useEffect(() => {
+    if (!open || !selectKept.current) return;
+    selectKept.current = false;
+    const field = input.current;
+    if (field instanceof HTMLInputElement && document.activeElement === field)
+      return void field.select();
+    // The field usually mounts and takes focus after the dialog opens.
+    const focused = ({ target }: FocusEvent) => {
+      if (target !== input.current || !(target instanceof HTMLInputElement))
+        return;
+      target.select();
+      document.removeEventListener("focusin", focused);
+    };
+    document.addEventListener("focusin", focused);
+    return () => document.removeEventListener("focusin", focused);
+  }, [open]);
   const beginScoped = useCallback(() => {
     if (currentTarget?.kind !== "conversation") return;
     composerChannel.current = undefined;

@@ -232,10 +232,14 @@ const openSearch = async () => {
   return screen.findByRole("dialog", { name: "Search Buzz" });
 };
 const field = () => screen.getByRole("combobox", { name: "Search Buzz" });
+// A selector, not a role query: role queries over 500 rows are too slow.
 const rows = () =>
-  within(screen.getByRole("listbox", { name: "Channels" }))
-    .queryAllByRole("option")
-    .map((row) => row.textContent);
+  Array.from(
+    screen
+      .getByRole("listbox", { name: "Channels" })
+      .querySelectorAll('[role="option"]'),
+    (row) => row.textContent,
+  );
 
 it("opens on All, and the Channels tab browses open channels to join A–Z", async () => {
   const t = connected();
@@ -413,6 +417,12 @@ it("reopens where it was left after opening a channel, and fresh after Escape or
     ).toBeVisible();
     expect(field()).toHaveValue("crit");
     await waitFor(() => expect(rows()).toEqual(["design-crit1 member"]));
+    // The kept text is selected, so new typing replaces it.
+    await waitFor(() => expect(field()).toHaveFocus());
+    expect(field()).toHaveProperty("selectionStart", 0);
+    expect(field()).toHaveProperty("selectionEnd", 4);
+    await userEvent.keyboard("release");
+    expect(field()).toHaveValue("release");
     // With nothing typed, the row last chosen is still the one Enter picks.
     await userEvent.clear(field());
     await waitFor(() => expect(rows()).toHaveLength(3));
@@ -484,15 +494,17 @@ it("shows the directory's first page while the rest loads", async () => {
     await openSearch();
     await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
     // The newest 500 arrive first and show while the older page is held.
-    await waitFor(() => expect(rows()).toHaveLength(500));
+    // A full first page is the store's 500 rows: slow to draw in jsdom.
+    await waitFor(() => expect(rows()).toHaveLength(500), { timeout: 5_000 });
     expect(rows()[0]).toContain("team-000");
     expect(screen.getByText("Loading more channels…")).toBeVisible();
     expect(rows()).not.toContainEqual(
       expect.stringContaining("buzz-community"),
     );
     release();
-    await waitFor(() =>
-      expect(screen.queryByText("Loading more channels…")).toBeNull(),
+    await waitFor(
+      () => expect(screen.queryByText("Loading more channels…")).toBeNull(),
+      { timeout: 5_000 },
     );
     // The older page joins below them rather than reshuffling the rows
     // already shown, A–Z among itself.
@@ -506,9 +518,11 @@ it("shows the directory's first page while the rest loads", async () => {
     // Opened again on the finished read, the whole list is A–Z.
     await userEvent.click(screen.getByRole("tab", { name: "All" }));
     await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
-    await waitFor(() => expect(rows()[0]).toContain("buzz-community"));
+    await waitFor(() => expect(rows()[0]).toContain("buzz-community"), {
+      timeout: 5_000,
+    });
   } finally {
     release();
     await t.dispose();
   }
-});
+}, 20_000);
