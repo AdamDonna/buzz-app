@@ -213,6 +213,29 @@ it("batches and deduplicates subjects, retains retractions, and fences retired c
   }
 });
 
+it("notifies once per replay, then once per live change", async () => {
+  const h = harness();
+  try {
+    h.directory.ensure([alice.pubkey, bob.pubkey]);
+    await Promise.resolve();
+    const sink = h.subscriptions[0]?.sink;
+    assert(sink);
+    h.changed.mockClear();
+    sink.event(projection(10));
+    sink.event(projection(10, bob.pubkey));
+    expect(h.changed).not.toHaveBeenCalled();
+    expect(h.directory.snapshot().size).toBe(2);
+    sink.eose();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    sink.event(projection(10)); // Unchanged head.
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    sink.event(projection(11));
+    expect(h.changed).toHaveBeenCalledTimes(2);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
 it("a newer malformed projection invalidates an older valid name", async () => {
   const h = harness();
   try {
