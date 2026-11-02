@@ -117,17 +117,18 @@ test("Channels renders grouped history and live membership without turning activ
   await expect(groups.last()).toContainText(
     "Pinky, along with Brain, left the channel",
   );
+  // A run's removals join its leaves on the one departures row.
   app.membership("member_removed", 0);
-  await expect(groups).toHaveCount(3);
-  await expect(groups.last()).toContainText("Pinky was removed by you");
+  await expect(groups.last()).toContainText("Pinky departed along with Brain");
+  await expect(groups).toHaveCount(2);
   app.membership("member_joined", 0, -1, true);
   // Place a genuine message after the forgery: seeing it proves the batch was processed.
   const after = app.append("primary", "alpha", "After membership activity");
   await expect(feed.locator(`[data-message-id="${after.id}"]`)).toBeVisible();
-  await expect(groups).toHaveCount(3);
+  await expect(groups).toHaveCount(2);
   // A normal message is a grouping barrier, never swallowed by an activity cohort.
   app.membership("member_joined", 0);
-  await expect(groups).toHaveCount(4);
+  await expect(groups).toHaveCount(3);
   await expect(groups.last()).toContainText("Pinky added by you");
   await expect(groups.last()).toBeVisible();
   // Wait for the scheduled bottom-follow before leaving; an overscan count is
@@ -139,7 +140,7 @@ test("Channels renders grouped history and live membership without turning activ
     .toBeLessThan(2);
   await page.getByRole("button", { name: "Beta", exact: true }).click();
   await page.getByRole("button", { name: "Alpha", exact: true }).click();
-  await expect(groups).toHaveCount(4);
+  await expect(groups).toHaveCount(3);
   await expect(groups.last()).toBeVisible();
 });
 

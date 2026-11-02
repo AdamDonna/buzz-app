@@ -97,55 +97,104 @@ it("matches the grouped invitation wording and keeps pronouns grammatical", () =
     membershipDescription([row("1", removed(pinky, wes))], profiles, wes).text,
   ).toBe("You were removed by Pinky");
 });
-it("groups departures/removals without attributing a removal to the wrong actor", () => {
+it("one departures row names leaves and removals without misattributing a remover", () => {
+  const leaves = [row("1", left(pinky)), row("2", left(brain))];
+  expect(membershipDescription(leaves, profiles).text).toBe(
+    "Pinky, along with Brain, left the channel",
+  );
   const rows = [
-    row("1", left(pinky)),
-    row("2", left(brain)),
+    ...leaves,
     row("3", removed(wes, pinky)),
     row("4", removed(brain, wes)),
   ];
-  expect(membershipRows(rows).map((r) => r.id)).toEqual(["2", "3", "4"]);
-  expect(membershipDescription(rows.slice(0, 2), profiles).text).toBe(
-    "Pinky, along with Brain, left the channel",
+  expect(membershipRows(rows).map((r) => r.id)).toEqual(["4"]);
+  expect(membershipDescription(rows, profiles, wes).text).toBe(
+    "Pinky departed along with Brain and you",
+  );
+  expect(
+    membershipDescription(
+      [row("1", removed(wes, pinky)), row("2", removed(brain, wes))],
+      profiles,
+      wes,
+    ).text,
+  ).toBe("Pinky was removed along with you");
+  expect(
+    membershipDescription(
+      [row("1", removed(wes, pinky)), row("2", removed(wes, brain))],
+      profiles,
+    ).text,
+  ).toBe("Pinky was removed by Wes, along with Brain");
+});
+it("only a message breaks a run: days, gaps and alternation collapse to two rows", () => {
+  const midnight = new Date(2026, 8, 12).getTime() / 1000;
+  const run = [
+    row("j1", joined(pinky, pinky), midnight - 90_000),
+    row("l1", left(brain), midnight - 80_000),
+    row("j2", joined(wes, brain), midnight - 3_000),
+    row("l2", removed(wes, pinky), midnight + 5_000),
+    row("j3", joined(brain, brain), midnight + 20_000),
+  ];
+  const grouped = membershipRows(run);
+  // Each row keeps its newest change's key and its oldest change's time.
+  expect(grouped.map((r) => [r.id, r.createdAt])).toEqual([
+    ["j3", midnight - 90_000],
+    ["l2", midnight - 80_000],
+  ]);
+  expect(grouped.map((r) => r.membershipRows?.map((m) => m.id))).toEqual([
+    ["j1", "j2", "j3"],
+    ["l1", "l2"],
+  ]);
+  // Older history extends the rows without renaming them.
+  const older = [
+    row("j0", joined(wes, wes), midnight - 200_000),
+    row("l0", left(wes), midnight - 100_000),
+  ];
+  expect(membershipRows([...older, ...run]).map((r) => r.id)).toEqual([
+    "j3",
+    "l2",
+  ]);
+  const message = row("chat", undefined, midnight + 30_000);
+  const later = row("j4", joined(wes, wes), midnight + 40_000);
+  expect(membershipRows([...run, message, later]).map((r) => r.id)).toEqual([
+    "j3",
+    "l2",
+    "chat",
+    "j4",
+  ]);
+  // A run with one kind of change stays one row.
+  expect(membershipRows(run.filter((r) => r.id.startsWith("j")))).toHaveLength(
+    1,
   );
 });
-it("messages, day boundaries and one-hour gaps break groups; older pages keep existing keys", () => {
-  const a = row("a", joined(wes, pinky), 200),
-    b = row("b", joined(wes, brain), 210);
-  expect(membershipRows([a, b]).map((r) => r.id)).toEqual(["b"]);
-  const old = row("old", joined(pinky, pinky), 100);
-  expect(membershipRows([old, a, b]).map((r) => r.id)).toEqual(["b"]);
-  expect(membershipRows([a, row("chat"), b])).toHaveLength(3);
-  expect(
-    membershipRows([a, { ...b, createdAt: a.createdAt + 3601 }]),
-  ).toHaveLength(2);
-  expect(
-    membershipRows([a, { ...b, createdAt: a.createdAt + 3600 }]),
-  ).toHaveLength(1);
-  const midnight = new Date(2026, 8, 12).getTime() / 1000;
-  expect(
-    membershipRows([
-      { ...a, createdAt: midnight - 1 },
-      { ...b, createdAt: midnight },
-    ]),
-  ).toHaveLength(2);
-});
-it("repeated self-joins followed by departure preserve the complete lifecycle", () => {
+it("a join and a departure in one run show on separate rows", () => {
   const rows = [
     row("1", joined(pinky, pinky)),
     row("2", joined(pinky, pinky)),
     row("3", left(pinky)),
   ];
   const grouped = membershipRows(rows);
-  expect(grouped).toHaveLength(1);
-  expect(grouped[0]?.membershipRows).toEqual(rows);
-  expect(membershipDescription(rows, profiles).text).toBe(
-    "Pinky joined and left the channel",
+  expect(grouped.map((r) => r.membershipRows ?? [r])).toEqual([
+    rows.slice(0, 2),
+    [rows[2]],
+  ]);
+  expect(membershipDescription(rows.slice(0, 2), profiles).text).toBe(
+    "Pinky joined",
   );
-  // An addition is not a self-join; a departure must remain visible separately.
+});
+it("the kind of change that came first leads, even within one second", () => {
+  const grouped = membershipRows([
+    row("left", left(pinky), 100),
+    row("back", joined(pinky, pinky), 100),
+  ]);
+  expect(grouped.map((r) => r.id)).toEqual(["left", "back"]);
+  // An older page can put the other kind first; both rows keep their keys.
   expect(
-    membershipRows([row("1", joined(wes, pinky)), row("2", left(pinky))]),
-  ).toHaveLength(2);
+    membershipRows([
+      row("earlier", joined(brain, brain), 50),
+      row("left", left(pinky), 100),
+      row("back", joined(pinky, pinky), 100),
+    ]).map((r) => r.id),
+  ).toEqual(["back", "left"]);
 });
 it("every grouped input remains represented for mixed three-event sequences", () => {
   const changes = [
@@ -161,21 +210,28 @@ it("every grouped input remains represented for mixed three-event sequences", ()
   for (const a of changes)
     for (const b of changes)
       for (const c of changes) {
-        const rows = [row("a", a), row("b", b), row("c", c)];
+        const rows = [row("a", a, 1), row("b", b, 2), row("c", c, 3)];
         const groups = membershipRows(rows);
-        expect(groups.flatMap((r) => r.membershipRows ?? [r])).toEqual(rows);
+        expect(groups.length).toBeLessThanOrEqual(2);
+        expect(
+          groups
+            .flatMap((r) => r.membershipRows ?? [r])
+            .map((r) => r.id)
+            .sort(),
+        ).toEqual(["a", "b", "c"]);
+        expect(groups.map((r) => r.createdAt)).toEqual(
+          [...groups.map((r) => r.createdAt)].sort((x, y) => x - y),
+        );
         for (const group of groups) {
-          const description = membershipDescription(
-            group.membershipRows ?? [group],
-            profiles,
+          const members = group.membershipRows ?? [group];
+          const kinds = new Set(
+            members.map((r) => r.membership?.type === "member_joined"),
           );
+          expect(kinds.size).toBe(1);
+          const description = membershipDescription(members, profiles);
           expect(description.text).not.toBe("");
           expect(description.targets).toEqual([
-            ...new Set(
-              (group.membershipRows ?? [group]).map(
-                (r) => r.membership?.target,
-              ),
-            ),
+            ...new Set(members.map((r) => r.membership?.target)),
           ]);
         }
       }

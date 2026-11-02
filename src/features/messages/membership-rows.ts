@@ -7,16 +7,6 @@ import type {
 export type TimelineRow = ChannelMessage & {
   membershipRows?: readonly ChannelMessage[];
 };
-const sameDay = (a: ChannelMessage, b: ChannelMessage) =>
-  new Date(a.createdAt * 1000).toDateString() ===
-  new Date(b.createdAt * 1000).toDateString();
-function compatible(older: MembershipChange, newest: MembershipChange) {
-  if (newest.type === "member_joined") return older.type === "member_joined";
-  if (newest.type === "member_removed")
-    return older.type === newest.type && older.actor === newest.actor;
-  return older.type === "member_left";
-}
-
 /** A Solo chat implies the agents its owner started it with; omit the owner's
  * agent additions and removals before the first message once history reaches
  * the chat's start. Later changes, people and agents added by someone else
@@ -40,56 +30,54 @@ export function withoutStartingAgents(
     : rows;
 }
 
-/** Newest-anchored groups keep loaded keys stable when history is prepended.
- * Messages, local days and adjacent gaps over one hour always break a group. */
+const departure = (change: MembershipChange | undefined) =>
+  change?.type === "member_left" || change?.type === "member_removed";
+
+/** Each run of adjacent membership changes, whatever its span, shows as at
+ * most two rows: arrivals and departures. Only a message breaks a run. A row
+ * keeps its newest change's key, so prepended history never renames it, and
+ * takes its oldest change's time; the row whose kind came first leads, so
+ * rows and day dividers stay in order. */
 export function membershipRows(
   rows: readonly ChannelMessage[],
 ): readonly TimelineRow[] {
   const result: TimelineRow[] = [];
-  for (let end = rows.length - 1; end >= 0; ) {
-    const newest = rows[end];
-    if (!newest) break;
-    let start = end;
-    const change = newest.membership;
-    // Like the existing desktop, repeated self-joins followed by that person's
-    // departure describe one lifecycle, not an arrival that silently hides a leave.
-    const previous = rows[end - 1]?.membership;
-    const lifecycle =
-      change?.type === "member_left" &&
-      previous?.type === "member_joined" &&
-      previous.actor === previous.target &&
-      previous.target === change.target;
-    while (change && start > 0) {
-      const candidate = rows[start - 1],
-        next = rows[start];
-      const older = candidate?.membership;
-      if (
-        !candidate ||
-        !next ||
-        !older ||
-        !sameDay(candidate, next) ||
-        next.createdAt - candidate.createdAt > 3600 ||
-        !(lifecycle
-          ? older.type === "member_joined" &&
-            older.actor === older.target &&
-            older.target === change.target
-          : compatible(older, change))
-      )
-        break;
-      start--;
-    }
-    result.push(
-      start === end
+  const group = (members: readonly ChannelMessage[]): TimelineRow[] => {
+    const newest = members.at(-1);
+    const oldest = members[0];
+    if (!newest || !oldest) return [];
+    return [
+      members.length === 1
         ? newest
-        : {
-            ...newest,
-            createdAt: rows[start]?.createdAt ?? newest.createdAt,
-            membershipRows: rows.slice(start, end + 1),
-          },
+        : { ...newest, createdAt: oldest.createdAt, membershipRows: members },
+    ];
+  };
+  for (let index = 0; index < rows.length; ) {
+    const row = rows[index];
+    if (!row) break;
+    if (!row.membership) {
+      result.push(row);
+      index++;
+      continue;
+    }
+    let end = index;
+    while (rows[end + 1]?.membership) end++;
+    const run = rows.slice(index, end + 1);
+    const arrivals = group(
+      run.filter((member) => !departure(member.membership)),
     );
-    end = start - 1;
+    const departures = group(
+      run.filter((member) => departure(member.membership)),
+    );
+    // The kind that happened first leads, even when both share a second.
+    result.push(
+      ...(departure(row.membership)
+        ? [...departures, ...arrivals]
+        : [...arrivals, ...departures]),
+    );
+    index = end + 1;
   }
-  return result.reverse();
+  return result;
 }
 
 /** A prose segment; `id` marks a member name that may open that profile. */
@@ -141,25 +129,29 @@ export function membershipDescription(
   ]);
   const alongWith = (separator = "") =>
     rest.length ? [plain(`${separator} along with `), ...rest] : [];
+  const be = first.target === viewer ? "were" : "was";
   let parts: MembershipPart[];
-  if (
-    first.type === "member_joined" &&
-    changes.at(-1)?.type === "member_left"
-  ) {
-    parts = [lead, plain(" joined and left the channel")];
-  } else if (first.type === "member_left") {
-    parts = [
-      lead,
-      ...(rest.length ? [...alongWith(","), plain(",")] : []),
-      plain(" left the channel"),
-    ];
-  } else if (first.type === "member_removed") {
-    parts = [
-      lead,
-      plain(` ${first.target === viewer ? "were" : "was"} removed by `),
-      name(first.actor),
-      ...alongWith(","),
-    ];
+  if (departure(first)) {
+    // One row holds a run's departures: leaves, removals or both.
+    const removals = changes.every(({ type }) => type === "member_removed");
+    const sameRemover =
+      removals && changes.every(({ actor }) => actor === first.actor);
+    parts = changes.every(({ type }) => type === "member_left")
+      ? [
+          lead,
+          ...(rest.length ? [...alongWith(","), plain(",")] : []),
+          plain(" left the channel"),
+        ]
+      : sameRemover
+        ? [
+            lead,
+            plain(` ${be} removed by `),
+            name(first.actor),
+            ...alongWith(","),
+          ]
+        : removals
+          ? [lead, plain(` ${be} removed`), ...alongWith()]
+          : [lead, plain(" departed"), ...alongWith()];
   } else {
     const allSelf = changes.every(({ actor, target }) => actor === target);
     const allAdded = changes.every(({ actor, target }) => actor !== target);
@@ -173,7 +165,7 @@ export function membershipDescription(
             name(first.actor),
           ]
         : allAdded
-          ? [plain(` ${first.target === viewer ? "were" : "was"} added`)]
+          ? [plain(` ${be} added`)]
           : [plain(" arrived")];
     parts = [lead, ...action, ...alongWith(sameAdder ? "," : "")];
   }
