@@ -730,6 +730,10 @@ for (const width of [1492, 1280, 1024, 700, 390])
     // disclosure reveals every reply in history order.
     const expandAll = async () => {
       const branch = branchFor(ids[0]);
+      // Keyboard presses skip actionability checks; wait for initial positioning.
+      await expect(panel.locator("[data-thread-rows]")).not.toHaveAttribute(
+        "inert",
+      );
       await expect(branch).toHaveAttribute("data-open", "false");
       await branch
         .locator(":scope > div")
