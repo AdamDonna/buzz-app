@@ -71,12 +71,7 @@ export function JoinCommunity({
         </>
       }
     >
-      <Button size="lg" variant="ghost" disabled>
-        Scan a QR code — Coming soon
-      </Button>
-      <Button size="lg" variant="ghost" disabled>
-        Create a community — Coming soon
-      </Button>
+      {null}
     </OnboardingScreen>
   );
 }

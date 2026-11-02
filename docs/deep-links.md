@@ -64,7 +64,9 @@ selected or no identity is known. `buzz://join` is the separate invitation form.
 It holds through identity setup and opens the
 existing join dialog with the relay and code prefilled; it never claims or saves
 membership until the user completes discovery, policy acceptance, claim and profile
-confirmation. The relay's HTTPS `/invite/<code>` page supplies that `buzz://join`
+confirmation. The first-run welcome screen hands an address (and invite code)
+typed there to the same intent when it enters the app on a restored community
+instead ([identity](identity.md)), so one dialog serves both. The relay's HTTPS `/invite/<code>` page supplies that `buzz://join`
 link; HTTPS itself is not registered as an OS handler. `buzz://connect`
 (the relay website's **Open in Buzz**) and `buzz://add-community` (hosted
 community **Open in Buzz**; `name` is ignored) are the same form without a code:

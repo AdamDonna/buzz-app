@@ -1,6 +1,6 @@
 // FOUNDATION: Startup, navigation, contributed pages, and built-in Settings.
 import { AgentAvatarArtworkProvider } from "../features/agents/AgentAvatarArtworkProvider";
-import { IdentitySetup } from "../features/identity/IdentitySetup";
+import { Welcome } from "../features/identity/Welcome";
 import { NewMenu } from "./shell/NewMenu";
 import { PrimarySidebar } from "./shell/PrimarySidebar";
 import { ChannelNavigationProvider } from "../features/channel-navigation/ChannelNavigationState";
@@ -84,14 +84,18 @@ export function App({ services }: { services: AppServices }) {
       >
         <LaunchWindowControls />
         {services.identity ? (
-          <IdentitySetup identity={services.identity}>
+          <Welcome
+            identity={services.identity}
+            communities={services.communities}
+            invites={services.invites}
+          >
             <LaunchSignIn identity={services.federatedIdentity}>
               <ConnectedApp services={services} />
               {!launching && (
                 <LegacyCommunityImport communities={services.communities} />
               )}
             </LaunchSignIn>
-          </IdentitySetup>
+          </Welcome>
         ) : (
           <ConnectedApp services={services} />
         )}
