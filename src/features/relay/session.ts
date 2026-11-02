@@ -28,6 +28,7 @@ import { createWorkflows } from "../workflows/capability";
 import { isWorkflowOperation } from "../workflows/protocol";
 import {
   createRelayReader,
+  type Priority,
   type ReadOptions,
   type RelayReader,
 } from "./reader";
@@ -2326,7 +2327,7 @@ export function createRelaySession(
     thread(
       channelId: string,
       messageId: string,
-      options?: { exact?: boolean },
+      options?: { exact?: boolean; priority?: Priority },
     ) {
       if (closed || views.size >= 64)
         throw new Error("Relay view capacity unavailable");
@@ -2377,6 +2378,7 @@ export function createRelaySession(
         targetReader,
         admitTarget: (events) => accept(events, false),
         exact: options?.exact ?? false,
+        priority: options?.priority,
         admit: options?.exact ? (events) => accept(events, false) : undefined,
         seed: recent.peek(messageId)?.event ?? retainedEvent(messageId),
         local: localViews,

@@ -10,7 +10,7 @@ export { threadReference } from "./thread-reference";
 import type { ChannelMessage } from "./contracts";
 import type { EventData, ReadFilter, RelayEvent } from "./events";
 import type { LocalEvents } from "./outbox";
-import type { RelayReader } from "./reader";
+import type { Priority, RelayReader } from "./reader";
 import { listByteSize } from "./budget";
 import { foldMessages } from "./fold";
 import { compareMessages, MessageClock } from "./message-order";
@@ -81,6 +81,7 @@ export function createThreadView({
   visible,
   notify,
   exact = false,
+  priority = "foreground",
   admit = (events) => events,
   clock = new MessageClock(),
   dropped: openedDropped = false,
@@ -102,6 +103,10 @@ export function createThreadView({
   visible(events: readonly RelayEvent[]): readonly RelayEvent[];
   notify(listener: () => void): void;
   exact?: boolean;
+  /** Admission for every read this view makes. A passive reader, one that
+   * only decorates a link, takes `background` so an opened or previewed
+   * conversation's reads start ahead of it. */
+  priority?: Priority | undefined;
   /** The session's send clock; rendered replies raise its channel watermark. */
   clock?: MessageClock;
   /** Exact finite reads enter session reconciliation only after a complete fold. */
@@ -117,7 +122,7 @@ export function createThreadView({
   const retrying = (source: RelayReader): RelayReader => ({
     read: (filters, settings) =>
       retryRead(
-        (signal) => source.read(filters, { ...settings, signal }),
+        (signal) => source.read(filters, { priority, ...settings, signal }),
         settings?.signal ?? new AbortController().signal,
         (error) => canRefresh() && isRetryableRead(error),
       ),
