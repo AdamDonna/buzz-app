@@ -33,14 +33,23 @@ export async function parseStatus(
 
 /** A community emoji stays `:code:`, which the status write path gives its
  * image URL; any other name must be a Unicode shortcode or alias. */
-async function resolveShortcode(session: ComposerSession, code: string) {
-  await session.emoji.ensure();
+async function resolveShortcode(
+  session: ComposerSession,
+  code: string,
+  signal: AbortSignal,
+) {
+  const { emoji } = session;
+  await (emoji.snapshot().status === "error"
+    ? emoji.refresh()
+    : emoji.ensure("foreground"));
+  signal.throwIfAborted();
   const name = code.toLowerCase();
-  const catalog = session.emoji.snapshot();
+  const catalog = emoji.snapshot();
   if (catalog.entries.some(({ shortcode }) => shortcode === name))
     return `:${name}:`;
   const standard = await standardEmojiFor(code);
-  if (!standard && catalog.status === "error")
+  signal.throwIfAborted();
+  if (!standard && catalog.status !== "ready")
     throw new Error("Could not load community emoji. Try again.");
   return standard;
 }
@@ -50,10 +59,12 @@ export async function runStatus(
   args: string,
   session: ComposerSession,
   sheet: StatusSheet,
+  signal: AbortSignal,
 ) {
   const request = await parseStatus(args, (code) =>
-    resolveShortcode(session, code),
+    resolveShortcode(session, code, signal),
   );
+  signal.throwIfAborted();
   if (request.kind === "open") {
     if (!sheet.open())
       throw new Error("Status updates are unavailable in this community.");

@@ -8,7 +8,8 @@ import type {
 import { listSlashCommands, slashQuery } from "./slash-query";
 import { shrug } from "./shrug";
 import { choosePresence } from "./presence";
-import { parseStatus } from "./status";
+import { parseStatus, runStatus } from "./status";
+import type { ComposerSession } from "../../features/messages/composer-session";
 import type { PresenceControl } from "../../features/presence/activity";
 
 const wire = "¯" + "\\".repeat(3) + "_(ツ)" + "\\" + "_/¯";
@@ -134,6 +135,80 @@ it("asks the resolver only about a lone :shortcode: first argument", async () =>
   await parseStatus("🎉 :tada:", resolve);
   await parseStatus(":a:b: x", resolve);
   expect(resolve.mock.calls).toEqual([["tada"]]);
+});
+
+const statusSession = (
+  catalog: { status: "ready" | "error"; entries: { shortcode: string }[] },
+  after?: (status: "ready" | "error") => void,
+) => {
+  let current = catalog;
+  const settle = async () => {
+    if (after) {
+      after("ready");
+      current = { status: "ready", entries: [{ shortcode: "party" }] };
+    }
+  };
+  const save = vi.fn(async () => {});
+  const emoji = {
+    snapshot: () => current,
+    ensure: vi.fn(() => settle()),
+    refresh: vi.fn(() => settle()),
+  };
+  return {
+    emoji,
+    save,
+    session: { emoji, statuses: { save } } as unknown as ComposerSession,
+  };
+};
+const sheet = { open: () => true };
+
+it("retries a failed emoji catalog before reading an unknown shortcode, and refuses to guess while it is not ready", async () => {
+  const recovering = statusSession({ status: "error", entries: [] }, () => {});
+  await expect(
+    runStatus(
+      ":party: ship",
+      recovering.session,
+      sheet,
+      new AbortController().signal,
+    ),
+  ).resolves.toBe("Status set");
+  expect(recovering.emoji.refresh).toHaveBeenCalledTimes(1);
+  expect(recovering.emoji.ensure).not.toHaveBeenCalled();
+  expect(recovering.save).toHaveBeenCalledWith({
+    text: "ship",
+    emoji: ":party:",
+  });
+
+  const stuck = statusSession({ status: "error", entries: [] });
+  await expect(
+    runStatus(
+      ":nope: ship",
+      stuck.session,
+      sheet,
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("Could not load community emoji. Try again.");
+  expect(stuck.save).not.toHaveBeenCalled();
+});
+
+it("does not save a status once the command is aborted", async () => {
+  const controller = new AbortController();
+  const aborting = statusSession({ status: "ready", entries: [] });
+  aborting.emoji.ensure.mockImplementation(async () => {
+    controller.abort();
+  });
+  await expect(
+    runStatus(":tada: ship", aborting.session, sheet, controller.signal),
+  ).rejects.toThrow();
+  expect(aborting.save).not.toHaveBeenCalled();
+
+  const plain = statusSession({ status: "ready", entries: [] });
+  const early = new AbortController();
+  early.abort();
+  await expect(
+    runStatus("clear", plain.session, sheet, early.signal),
+  ).rejects.toThrow();
+  expect(plain.save).not.toHaveBeenCalled();
 });
 
 const control = (

@@ -49,8 +49,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
     name: "status",
     usage: "/status [emoji] <text> | clear",
     description: "Set or clear your status",
-    run: async ({ args, session }) => {
-      const notice = await runStatus(args, session, statusSheet);
+    run: async ({ args, session, signal }) => {
+      const notice = await runStatus(args, session, statusSheet, signal);
       return notice ? { done: true, notice } : { done: true };
     },
   });
