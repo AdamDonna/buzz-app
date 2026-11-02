@@ -23,6 +23,7 @@ import {
   useOpenTranscript,
 } from "../../features/agents/OpenedConversation";
 import type {
+  Agents,
   AgentCreateProps,
   AgentViewProps,
 } from "../../features/agents/service";
@@ -193,8 +194,10 @@ const effortAfter = (
 export function createTabs({
   setup,
   runtime,
+  binding = () => undefined,
 }: Readonly<{
   setup: PiSetup;
+  binding?: Agents["executionBinding"];
   runtime: Pick<
     PiRuntime,
     | "setupFor"
@@ -900,6 +903,7 @@ export function createTabs({
     const source = settingsHost?.pendingSave
       ? setup
       : runtime.setupFor(agent.key);
+    const bound = settingsHost?.pendingSave ? undefined : binding(agent.key);
     const form = useId();
     const saved = readConfig(agent.config);
     const [draft, setDraft] = useState(saved);
@@ -930,7 +934,10 @@ export function createTabs({
       try {
         await save({
           ...draft,
-          workspace: draft.workspace.trim() || DEFAULT_CONFIG.workspace,
+          workspace:
+            bound?.workspace ||
+            draft.workspace.trim() ||
+            DEFAULT_CONFIG.workspace,
         });
       } catch (reason) {
         setError(errorText(reason));
@@ -1020,10 +1027,15 @@ export function createTabs({
             />
             <Field
               label="Workspace"
-              description="The folder Pi works in. Use ~/ for your home folder."
+              description={
+                bound
+                  ? "The execution binding fixes this workspace on the target computer."
+                  : "The folder Pi works in. Use ~/ for your home folder."
+              }
             >
               <Input
-                value={draft.workspace}
+                value={bound?.workspace ?? draft.workspace}
+                readOnly={!!bound}
                 onValueChange={(workspace) => setDraft({ ...draft, workspace })}
               />
             </Field>

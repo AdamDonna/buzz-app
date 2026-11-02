@@ -1486,7 +1486,7 @@ const wssOf = (origin: string) =>
 export class AgentsService extends Service implements Agents {
   private readonly executions;
   private async checkExecution(key: AgentKey, type: string) {
-    if (!(await this.executions.binding(key))) return;
+    if (!this.executions.read(key)) return;
     if (!this.types().find((kind) => kind.key === type)?.execution)
       throw new Error(
         "This runtime does not support the saved execution binding",

@@ -494,6 +494,30 @@ it("loads Pi setup before a pending harness change is saved", async () => {
   expect(await screen.findByText("Anthropic is set up in Pi.")).toBeVisible();
 });
 
+it("shows a bound agent's fixed workspace as read-only", async () => {
+  const { SettingsTab } = createTabs({
+    setup: new PiSetup(fakePi()),
+    runtime: fakeRuntime(),
+    binding: () => ({
+      provider: "internal/remote",
+      target: "guest-1",
+      workspace: "/remote/task",
+    }),
+  });
+  render(
+    <SettingsTab
+      agent={AGENT}
+      save={vi.fn(async () => {})}
+      settingsSection="runtime"
+    />,
+  );
+  const workspace = screen.getByRole("textbox", { name: "Workspace" });
+  expect(workspace).toHaveValue("/remote/task");
+  expect(workspace).toHaveAttribute("readonly");
+  await userEvent.setup().type(workspace, "/other");
+  expect(workspace).toHaveValue("/remote/task");
+});
+
 it("shows the provider, model and thinking level in Identity, and the provider's setup in Settings", async () => {
   const { SettingsTab } = createTabs({
     setup: new PiSetup(fakePi()),

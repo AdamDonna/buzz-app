@@ -460,6 +460,7 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     type: "example/native",
     name: "Dedicated",
   });
+  await service.retype(agent.key, "example/native");
   await adapter.agents.bindExecution(agent.key, {
     id: "remote",
     target: "guest-1",

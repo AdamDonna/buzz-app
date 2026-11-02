@@ -363,12 +363,15 @@ export class PiRuntime {
   }
 
   private disposed = false;
+  private readonly connectionLifetimes = new Map<AgentKey, object>();
   private async connection(agent: AgentKey) {
     if (this.disposed) throw new Error("Pi runtime is disposed");
+    const lifetime = this.connectionLifetimes.get(agent) ?? {};
+    this.connectionLifetimes.set(agent, lifetime);
     const execution = await this.execution?.(agent);
-    if (this.disposed) {
+    if (this.disposed || this.connectionLifetimes.get(agent) !== lifetime) {
       await execution?.dispose();
-      throw new Error("Pi runtime is disposed");
+      throw new Error("Pi runtime is disposed or the agent was retired");
     }
     if (!execution) return { pi: this.pi, setup: this.setup };
     execution.signal.throwIfAborted();
@@ -404,6 +407,7 @@ export class PiRuntime {
   }
 
   async retire(pubkey: string) {
+    this.connectionLifetimes.delete(pubkey);
     const entry = this.agents.get(pubkey);
     if (entry) {
       entry.closed = true;
