@@ -65,6 +65,10 @@ type WindowState = {
    * replays its last minutes before catch-up; those rows are newer than any
    * gap, not overlap with it. */
   kept?: Set<string> | undefined;
+  /** The window was verified when the stream dropped and `kept` was taken:
+   * its rows reached the live stream then. A continuous replay of the channel
+   * closes the gap from them, so `resume` needs no read. */
+  keptLive?: boolean | undefined;
   /** Relay membership notices, read apart from the pages (see `fillNotices`). */
   notices: Map<string, RelayEvent>;
   /** Where the next older notice read starts: null once a read reached the
@@ -589,7 +593,10 @@ export function createChannelStore(
     state.events = head.events;
     state.atHead = true;
     state.restored = head.restored === true;
-    if (dropped) state.kept = rowIds(state);
+    if (dropped) {
+      state.kept = rowIds(state);
+      state.keptLive = false;
+    }
     setWindow(state, patchFromHead(head));
     void fillNotices(state, true);
   }
@@ -898,7 +905,10 @@ export function createChannelStore(
       state.atHead = !cursor;
       moveCursor(state, page.cursor);
       state.restored = false;
-      if (dropped && !cursor) state.kept = rowIds(state);
+      if (dropped && !cursor) {
+        state.kept = rowIds(state);
+        state.keptLive = false;
+      }
       setWindow(state, {
         status: "ready",
         rows,
@@ -3353,7 +3363,10 @@ export function createChannelStore(
       for (const [id, head] of heads.entries())
         heads.set(id, { ...head, cached: true });
       for (const state of windows.values()) {
-        state.kept ??= rowIds(state);
+        if (!state.kept) {
+          state.kept = rowIds(state);
+          state.keptLive = state.snapshot.freshness === "verified";
+        }
         setWindow(state, {
           freshness: "cached",
           ...(state.snapshot.status === "loading" &&
@@ -3493,6 +3506,22 @@ export function createChannelStore(
         error: describe(error),
       });
     },
+    /** The stream re-established a channel whose replay was continuous: it
+     * delivered every event in the channel since the connection that dropped
+     * last heard the relay. A window whose rows reached the live stream when it
+     * dropped is then contiguous to live again, so it is verified with no
+     * read. Any other window returns false and catches up. */
+    resume(channelId: string): boolean {
+      const state = windows.get(channelId);
+      if (disposed || !state?.keptLive || !authorized(channelId)) return false;
+      dropped = false;
+      const head = heads.peek(channelId);
+      if (head) heads.set(channelId, { ...head, cached: true });
+      state.kept = undefined;
+      state.keptLive = undefined;
+      setWindow(state, { freshness: "verified" });
+      return true;
+    },
     retainedChannels: () => [...windows.keys()],
     retainedEvent(id: string) {
       for (const state of windows.values()) {
@@ -3522,12 +3551,15 @@ export function createChannelStore(
       const head = heads.peek(channelId);
       if (head) heads.set(channelId, { ...head, cached: true });
       const state = windows.get(channelId);
-      if (state)
+      if (state) {
+        // This establishment's replay may stop short of the kept rows.
+        state.keptLive = false;
         setWindow(state, {
           freshness: "cached",
           error: undefined,
           ...(state.snapshot.rows.length ? {} : { status: "loading" }),
         });
+      }
     },
     diagnostics: () => ({
       heads: heads.stats(),

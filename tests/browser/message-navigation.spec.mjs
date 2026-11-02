@@ -1140,6 +1140,14 @@ liveTest(
       // retained-range repair finished, not merely that its first lookup returned.
       app.relay.disconnect("primary");
       const missedReply = app.reply(app.exact.root.id, false, false);
+      // A busy gap: the replay reaches its limit without the reply, so only
+      // the thread's repair read can restore it.
+      const channel = app.exact.root.tags.find(([key]) => key === "h")[1];
+      app.relay.replayNext(
+        "primary",
+        channel,
+        Array.from({ length: 500 }, () => app.exact.root),
+      );
       await seen.promise;
       await expect
         .poll(() => app.relay.hasRoute("primary", "alpha"))

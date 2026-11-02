@@ -1935,12 +1935,13 @@ export function relayBrokerPlugin({
                     ...state,
                     interestRevision: stream.interestRevision,
                   }),
-                established: (channelId, global) =>
+                established: (channelId, global, continuous) =>
                   write("established", {
                     ...(Array.isArray(channelId)
                       ? { channels: channelId }
                       : { channelId }),
                     ...(global ? { global } : {}),
+                    ...(continuous ? { continuous } : {}),
                     interestRevision: stream.interestRevision,
                   }),
                 recover: () => write("recover", {}),

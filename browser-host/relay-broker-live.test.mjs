@@ -1139,6 +1139,37 @@ test("lost publication receipt stays unknown; reconnect never automatically repu
   }
 });
 
+test("a reconnect's continuous channel replays cross the real HTTP boundary", async () => {
+  const h = await harness();
+  let traffic;
+  try {
+    browserFetch(h.base);
+    const transport = await connectBrokerTransport(h.base);
+    const established = vi.fn();
+    traffic = transport.subscribe({ ...callbacks, established });
+    traffic.update(["a", "b", "c"], ["a", "b"]);
+    const channels = () =>
+      established.mock.calls.filter(([ids]) => ids !== undefined);
+    await until(() => channels().length === 2);
+    // A first connection has no cursor: no channel reports continuity.
+    expect(channels()).toEqual(expect.arrayContaining([[["a", "b"]], ["c"]]));
+    established.mockClear();
+    h.sockets[0].close();
+    await until(() => channels().length === 2);
+    // The quiet replays resumed from their cursors, below the limit.
+    expect(channels()).toEqual(
+      expect.arrayContaining([
+        [["a", "b"], undefined, ["a", "b"]],
+        ["c", undefined, ["c"]],
+      ]),
+    );
+  } finally {
+    traffic?.dispose();
+    vi.unstubAllGlobals();
+    await h.close();
+  }
+});
+
 test("read-only profile lookup needs no live owner; a not-yet-ready session fails publication without HTTP fallback", async () => {
   const h = await harness();
   try {

@@ -3406,7 +3406,7 @@ export function createRelaySession(
       revalidatePreviews(previews);
       publishLive();
     },
-    established(channelId, global) {
+    established(channelId, global, continuous) {
       if (closed) return;
       streamDropped = false;
       if (!channelId) {
@@ -3445,17 +3445,24 @@ export function createRelaySession(
         ? [channelId]
         : channelId) {
         if (!channels.canAccess(id)) continue;
+        // The replay delivered every event in the channel since the dropped
+        // connection last heard the relay: a view live at the drop is
+        // contiguous again with no read. Any other view catches up.
+        const resumed = !!continuous?.includes(id);
         for (const thread of threads)
-          if (thread.channelId === id) void thread.established();
+          if (thread.channelId === id) void thread.established(resumed);
         const job = {
           generation: liveGeneration,
           state: "pending" as "pending" | "verified" | "deferred" | "error",
           error: undefined as string | undefined,
         };
-        channels.catchUpQueued(id);
         catchups.set(id, job);
-        if (channels.retainedChannels().includes(id)) catchupQueue.add(id);
-        else job.state = "deferred";
+        if (resumed && channels.resume(id)) job.state = "verified";
+        else {
+          channels.catchUpQueued(id);
+          if (channels.retainedChannels().includes(id)) catchupQueue.add(id);
+          else job.state = "deferred";
+        }
       }
       publishLive();
       queueMicrotask(() => void catchUpNext());

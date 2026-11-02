@@ -1828,6 +1828,96 @@ it("reports a global route continuous only when it resumed from a cursor and its
   }
 });
 
+it("reports per channel which replays closed their gap: a cursor and fewer events than the limit", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  const channels = () =>
+    h.callbacks.established.mock.calls.flatMap((call) =>
+      call[0] === undefined ? [] : [call],
+    );
+  // The count is of frames: one signed event per channel set, sent repeatedly.
+  const author = keypair(),
+    at = 1_700_000_000;
+  const inA = message(author, "a", "in a", at),
+    inB = message(author, "b", "in b", at),
+    inBoth = message(author, "a", "in a and b", at, [["h", "b"]]);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await establish(h.first);
+    // The first connection has no cursor.
+    expect(channels()).toEqual([[["a", "b"]]]);
+    h.callbacks.established.mockClear();
+    h.first.close();
+    // Joined while the stream is down: c has no cursor yet.
+    h.owner.update(["a", "b", "c"], ["a", "b", "c"]);
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const batch = second.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(batch);
+    // One filter and one limit per channel, so the counts are per channel.
+    expect(filtersOf(batch).map((filter) => filter.limit)).toEqual([
+      500, 500, 500,
+    ]);
+    for (let i = 0; i < 500; i++)
+      await second.receive(["EVENT", batch[1], inA]);
+    for (let i = 0; i < 3; i++) await second.receive(["EVENT", batch[1], inB]);
+    for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
+    // The limit cut a's replay; c had no cursor; b's replay closed its gap.
+    expect(channels()).toEqual([[["a", "b", "c"], undefined, ["b"]]]);
+    h.callbacks.established.mockClear();
+    // The recovery tick's live-only renewal replays nothing.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const renewal = second
+      .requests()
+      .find((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 0);
+    assert.exists(renewal);
+    await second.receive(["EOSE", renewal[1]]);
+    expect(channels()).toEqual([[["a", "b", "c"]]]);
+    h.callbacks.established.mockClear();
+    second.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    const third = h.sockets[2];
+    assert.exists(third);
+    await third.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const next = third.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(next);
+    // An event in two channels of the batch counts against both.
+    for (let i = 0; i < 499; i++) {
+      await third.receive(["EVENT", next[1], inA]);
+      await third.receive(["EVENT", next[1], inB]);
+    }
+    await third.receive(["EVENT", next[1], inBoth]);
+    for (const [, id] of third.requests()) await third.receive(["EOSE", id]);
+    expect(channels()).toEqual([[["a", "b", "c"], undefined, ["c"]]]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("reports a singleton channel route's continuity with its establishment", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await establish(h.first);
+    expect(h.callbacks.established).toHaveBeenCalledWith("a");
+    h.callbacks.established.mockClear();
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await establish(second);
+    expect(h.callbacks.established).toHaveBeenCalledWith("a", undefined, ["a"]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
 it("forgets the cursor of a channel that left the interests before a rebuild", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup(["a", "b"], undefined, () => 0.5);
@@ -3840,7 +3930,8 @@ it("recovers like an outage after a renewal whose replay hit the limit", async (
     expect(h.callbacks.established).not.toHaveBeenCalled();
     await second.receive(["EOSE", a[1]]);
     // The cut replay reports the hidden drop, so session and agent consumers
-    // run their outage recovery, and every live route establishes again.
+    // run their outage recovery, and every live route establishes again. Only
+    // b's replay closed its gap: a's hit the limit.
     const statuses = h.callbacks.state.mock.calls.map(
       ([state]) => state.status,
     );
@@ -3850,7 +3941,7 @@ it("recovers like an outage after a renewal whose replay hit the limit", async (
       expect.arrayContaining([
         [undefined, { route: "profiles", continuous: true }],
         [undefined, { route: "membership", continuous: true }],
-        ["b"],
+        ["b", undefined, ["b"]],
         ["a"],
       ]),
     );
@@ -3878,8 +3969,9 @@ it("falls back to the outage path when a renewal's new socket fails", async () =
     const third = h.sockets[2];
     assert.exists(third);
     await establish(third);
-    // A real outage: every route catches up again.
-    expect(h.callbacks.established).toHaveBeenCalledWith("a");
+    // A real outage: every route establishes again. The replay resumed from
+    // the first socket's cursor and ended below the limit, so it closed the gap.
+    expect(h.callbacks.established).toHaveBeenCalledWith("a", undefined, ["a"]);
     expect(h.callbacks.established).toHaveBeenCalledTimes(3);
   } finally {
     h.owner.dispose();
@@ -4026,7 +4118,12 @@ it("ends a renewal's quiet state when an interest change replaces a carried batc
     h.owner.update(["a", "b"], ["a", "b"]);
     expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connecting");
     await establish(second);
-    expect(h.callbacks.established).toHaveBeenCalledWith(["a", "b"]);
+    // The narrowed batch was never sent, so it replays from both cursors.
+    expect(h.callbacks.established).toHaveBeenCalledWith(
+      ["a", "b"],
+      undefined,
+      ["a", "b"],
+    );
   } finally {
     h.owner.dispose();
   }

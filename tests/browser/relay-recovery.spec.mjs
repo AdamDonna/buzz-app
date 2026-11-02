@@ -33,6 +33,14 @@ test("relay reads recover automatically after the network returns", async ({
 
   offline = true;
   app.relay.disconnect("primary");
+  // A long sleep: the reconnect replay reaches its limit, so the open
+  // channel needs a read to catch up, and that read meets the outage.
+  const missed = app.append("primary", "alpha", "Missed while asleep", false);
+  app.relay.replayNext(
+    "primary",
+    "alpha",
+    Array.from({ length: 500 }, () => missed),
+  );
   // With a conversation open, the notice sits inline above the composer.
   const notice = page.getByRole("status", {
     name: "Reconnecting to relay…",

@@ -917,6 +917,26 @@ them, within the thread page bound. Past it, the replies it never reached go
 and the view settles back on the range the reader had, so later refreshes stay
 proportional to it.
 
+A channel route also reports at establishment which of its channels stayed
+continuous: the channel resumed from an earlier connection's cursor and its own
+filter's replay ended below that filter's limit (an event that names no single
+channel of a batch counts against each of them). A retained window that was
+verified when the stream dropped, and a thread view that was settled then, skip
+the head, page, notice and thread reads for such a channel: the replay already
+delivered every channel event since the drop, including ones backdated within
+the resume lag, and the live stream had delivered everything before it. The
+window becomes verified at once. Any other case keeps the catch-up above: a
+replay at the limit, a channel with no cursor, a window restored or read before
+the stream was up, a window still owed a catch-up from an earlier drop, and a
+live-only renewal (it replays nothing, so it proves nothing). An event that
+neither the live stream nor the replay carries is no longer repaired by that
+reconnect's head read for a continuous channel. Two known cases: the relay
+omits a channel deleted during the outage from the replay without a frame, so
+it reports continuous (the recovery tick's roster read removes it); and a
+reaction or deletion whose `h` tag names another channel takes one of the
+filter's SQL slots and is then dropped, so a replay the limit cut can arrive
+with fewer events than the limit.
+
 Removing a batch member rebuilds only that batch's survivor scope. One established
 source overlaps its zero-replay replacement until EOSE; another removal supersedes
 the pending replacement, not that established source. Removed IDs are fenced
