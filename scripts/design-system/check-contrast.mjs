@@ -295,45 +295,74 @@ const TINT_PAIRS = [
 ];
 
 const css = readFileSync(TOKENS, "utf8");
+/** The theme accent resolves to Citrus under the Buzz theme, so Citrus is the baseline. */
 const DEFAULT_ACCENT = "citrus";
+const DEFAULT_THEME = "buzz";
 /** Exceptions are approved against the neutral role layer. */
 const BASELINE_LEVEL = "neutral";
+
+const BLOCKS = [
+  ...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g),
+].map(([, selector, body]) => ({
+  selector,
+  owner: selector.trim().split(/,\s*/).at(-1),
+  family: /\[data-accent="([a-z]+)"\]/.exec(selector)?.[1],
+  theme: /\[data-theme="([a-z]+)"\]/.exec(selector)?.[1],
+  frame: selector.includes("[data-theme-frame]"),
+  levels: [...selector.matchAll(/\[data-color-level="([a-z]+)"\]/g)].map(
+    (match) => match[1],
+  ),
+  declarations: [...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(
+    ([, name, value]) => [name, value.trim()],
+  ),
+}));
+
+/** Themes the stylesheet defines. Buzz is the unthemed baseline and has no block. */
+const THEME_BLOCKS = new Map(
+  BLOCKS.filter((block) => block.theme).map((block) => [block.theme, block]),
+);
+/** A theme with a dark frame over a light page defines its frame slots. */
+const hasDarkFrame = (theme) =>
+  THEME_BLOCKS.get(theme)?.declarations.some(([name]) =>
+    name.startsWith("--theme-frame-"),
+  ) ?? false;
 
 /**
  * Collects declarations per mode, honouring source order so a later block wins
  * exactly as the cascade would. `.dark` inherits `:root` and overrides it, so
- * dark is light-then-dark rather than dark alone.
+ * dark is light-then-dark rather than dark alone. A theme block assigns slots
+ * on the root, so it applies to both modes. With `frame`, the dark map also
+ * takes the `.dark[data-theme-frame]` block last: the scope a dark frame
+ * renders in on a light page.
  */
 function declarationsByMode(
-  source = css,
   accent = DEFAULT_ACCENT,
   level = BASELINE_LEVEL,
+  theme = DEFAULT_THEME,
+  frame = false,
 ) {
   const light = new Map();
   const dark = new Map();
-  const text = source.replace(/\/\*[\s\S]*?\*\//g, "");
-  // Top-level mode owners in cascade order, plus the selected accent family
-  // and color level. The neutral level is the role layer without overrides.
-  for (const [, selector, body] of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const owner = selector.trim().split(/,\s*/).at(-1);
-    if (
-      owner !== ":root" &&
-      owner !== ".dark" &&
-      !/\[data-(?:accent|color-level)="/.test(selector)
-    )
-      continue;
-    const family = /\[data-accent="([a-z]+)"\]/.exec(selector)?.[1];
-    if (family && family !== accent) continue;
-    const blockLevels = [
-      ...selector.matchAll(/\[data-color-level="([a-z]+)"\]/g),
-    ].map((match) => match[1]);
-    if (blockLevels.length && !blockLevels.includes(level)) continue;
+  for (const block of BLOCKS) {
+    const { owner, selector } = block;
+    const owned =
+      owner === ":root" ||
+      owner === ".dark" ||
+      (block.frame && frame) ||
+      /\[data-(?:accent|color-level|theme)="/.test(selector);
+    if (!owned) continue;
+    if (block.frame && !frame) continue;
+    if (block.family && block.family !== accent) continue;
+    if (block.theme && block.theme !== theme) continue;
+    if (block.levels.length && !block.levels.includes(level)) continue;
     // Dark starts from the light value and is overridden by dark owners.
     const isDark =
-      owner.endsWith(".dark") || selector.includes('[data-color-mode="dark"]');
-    for (const [, name, value] of body.matchAll(/(--[\w-]+):\s*([^;]+);/g)) {
-      if (!isDark) light.set(name, value.trim());
-      dark.set(name, value.trim());
+      block.frame ||
+      owner.endsWith(".dark") ||
+      selector.includes('[data-color-mode="dark"]');
+    for (const [name, value] of block.declarations) {
+      if (!isDark) light.set(name, value);
+      dark.set(name, value);
     }
   }
   return { light, dark };
@@ -368,16 +397,32 @@ function channels(hex) {
 }
 
 /**
+ * Substitutes `var()` references as the browser does: a reference to a name
+ * nothing declares takes its fallback, and one with no fallback is invalid.
+ */
+function lookup(map, name, depth = 0) {
+  if (depth > 10) return undefined;
+  const value = map.get(name);
+  return value === undefined ? undefined : substitute(map, value, depth);
+}
+function substitute(map, value, depth) {
+  const reference = /^var\(\s*(--[\w-]+)\s*(?:,\s*([\s\S]+))?\)$/.exec(value);
+  if (!reference) return value;
+  const found = lookup(map, reference[1], depth + 1);
+  if (found !== undefined) return found;
+  return reference[2] === undefined
+    ? undefined
+    : substitute(map, reference[2].trim(), depth + 1);
+}
+
+/**
  * Follows a `var()` chain to its literal, or null if it is not a plain colour.
  * An `rgb(r g b / a%)` overlay resolves only for a role in `SITS_ON`, as the
  * flat colour it composites to over its surface.
  */
-function resolve(map, name, depth = 0, role = name) {
-  if (depth > 10) return null;
-  const value = map.get(name);
+function resolve(map, name, role = name) {
+  const value = lookup(map, name);
   if (!value) return null;
-  const single = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value);
-  if (single) return resolve(map, single[1], depth + 1, role);
   if (/^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/.test(value)) return value;
   const overlay = /^rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*([\d.]+)%\s*\)$/.exec(
     value,
@@ -515,6 +560,18 @@ function audit(mode, map, baseline) {
 for (const [mode, map] of Object.entries(declarationsByMode()))
   audit(mode, map, true);
 const approvedAwayFloor = Math.min(...acceptedAwayMeasurements.values());
+const THEMES = [DEFAULT_THEME, ...THEME_BLOCKS.keys()];
+/** Every scope a theme renders in: both page modes, and a dark frame if it has one. */
+function scopes(family, level, theme) {
+  const prefix = theme === DEFAULT_THEME ? "" : `${theme}/`;
+  const modes = Object.entries(declarationsByMode(family, level, theme));
+  if (hasDarkFrame(theme))
+    modes.push(["frame", declarationsByMode(family, level, theme, true).dark]);
+  return modes.map(([mode, map]) => [
+    `${prefix}${family}/${level}/${mode}`,
+    map,
+  ]);
+}
 const LEVELS = [
   ...new Set(
     [...css.matchAll(/\[data-color-level="([a-z]+)"\]/g)].map((m) => m[1]),
@@ -529,11 +586,20 @@ const accentFamilies = [
     [...css.matchAll(/\[data-accent="([a-z]+)"\]/g)].map((match) => match[1]),
   ),
 ];
+/** The canvas and sidebar host focus rings and selections too. */
+const FRAME_SURFACES = [...BOUNDARY_SURFACES, "--surface-sidebar", "--bg-app"];
 const ACCENT_PAIRS = [
   ["--text-on-selection", "--surface-text-selection"],
   ["--text-on-selection-own", "--surface-text-selection-own"],
   ["--text-sidebar-selected", "--surface-sidebar-selected"],
   ["--text-sidebar-hover", "--affordance-sidebar-hover"],
+  ["--text-navigation", "--affordance-sidebar-hover"],
+  ["--text-navigation-unread", "--affordance-sidebar-hover"],
+  ["--text-sidebar-hover", "--surface-sidebar"],
+  ["--text-navigation", "--surface-sidebar"],
+  ["--text-navigation-unread", "--surface-sidebar"],
+  ["--text-metadata", "--surface-sidebar"],
+  ["--text-on-badge", "--surface-badge"],
   ["--text-message-link", "--surface-message"],
   ["--text-standard", "--surface-message"],
   ["--text-navigation-selected", "--surface-navigation-selected"],
@@ -558,85 +624,86 @@ const ACCENT_PAIRS = [
     surface,
   ]),
 ];
-for (const family of accentFamilies) {
-  for (const level of [BASELINE_LEVEL, ...LEVELS]) {
-    if (level !== BASELINE_LEVEL || family !== DEFAULT_ACCENT)
-      for (const [mode, map] of Object.entries(
-        declarationsByMode(css, family, level),
-      ))
-        audit(`${family}/${level}/${mode}`, map, false);
-    for (const [mode, map] of Object.entries(
-      declarationsByMode(css, family, level),
-    )) {
-      for (const [textRole, surfaceRole] of ACCENT_PAIRS) {
-        const text = resolve(map, textRole);
-        const surface = resolve(map, surfaceRole);
-        if (!text || !surface) {
-          boundaryFailures.push(
-            `${family}/${level}/${mode}: unresolved accent pair ${textRole} on ${surfaceRole}`,
-          );
-          continue;
-        }
-        const lc = Math.abs(apcaContrast(text, surface));
-        const target = META_ROLES.has(textRole) ? TARGET_META : TARGET_BODY;
-        const wcag = wcagRatio(text, surface);
-        if (lc < target || wcag < 4.5)
-          failures.push({
-            mode: `${family}/${level}/${mode}`,
-            textRole,
-            text,
-            surfaceRole,
-            surface,
-            lc,
-            target,
-            wcag,
-          });
-      }
-      for (const surfaceRole of [
-        ...BOUNDARY_SURFACES,
-        "--surface-message",
-        "--surface-message-own",
-        "--affordance-mention",
-        "--affordance-mention-own",
-      ]) {
-        const selectionRole = surfaceRole.endsWith("-own")
-          ? "--surface-text-selection-own"
-          : "--surface-text-selection";
-        const selection = resolve(map, selectionRole);
-        const surface = resolve(map, surfaceRole);
-        const ratio =
-          selection && surface ? wcagRatio(selection, surface) : null;
-        if (ratio === null || ratio < 3)
-          boundaryFailures.push(
-            `${family}/${level}/${mode}: ${selectionRole} on ${surfaceRole} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
-          );
-      }
-      for (const surfaceRole of BOUNDARY_SURFACES) {
-        const border = resolve(map, "--border-accent");
-        const surface = resolve(map, surfaceRole);
-        const ratio = border && surface ? wcagRatio(border, surface) : null;
-        if (ratio === null || ratio < 3)
-          boundaryFailures.push(
-            `${family}/${level}/${mode}: --border-accent on ${surfaceRole} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
-          );
-      }
-      for (const baseRole of MESSAGE_ICON_ROLES) {
-        for (const [role, surfaceRole] of [
-          [baseRole, "--surface-message"],
-          [`${baseRole}-own`, "--surface-message-own"],
-        ]) {
-          const icon = resolve(map, role);
+for (const theme of THEMES)
+  for (const family of accentFamilies) {
+    for (const level of [BASELINE_LEVEL, ...LEVELS]) {
+      const measured = scopes(family, level, theme);
+      if (
+        theme !== DEFAULT_THEME ||
+        level !== BASELINE_LEVEL ||
+        family !== DEFAULT_ACCENT
+      )
+        for (const [label, map] of measured) audit(label, map, false);
+      for (const [label, map] of measured) {
+        for (const [textRole, surfaceRole] of ACCENT_PAIRS) {
+          const text = resolve(map, textRole);
           const surface = resolve(map, surfaceRole);
-          const ratio = icon && surface ? wcagRatio(icon, surface) : null;
+          if (!text || !surface) {
+            boundaryFailures.push(
+              `${label}: unresolved accent pair ${textRole} on ${surfaceRole}`,
+            );
+            continue;
+          }
+          const lc = Math.abs(apcaContrast(text, surface));
+          const target = META_ROLES.has(textRole) ? TARGET_META : TARGET_BODY;
+          const wcag = wcagRatio(text, surface);
+          if (lc < target || wcag < 4.5)
+            failures.push({
+              mode: `${label}`,
+              textRole,
+              text,
+              surfaceRole,
+              surface,
+              lc,
+              target,
+              wcag,
+            });
+        }
+        for (const surfaceRole of [
+          ...FRAME_SURFACES,
+          "--surface-message",
+          "--surface-message-own",
+          "--affordance-mention",
+          "--affordance-mention-own",
+        ]) {
+          const selectionRole = surfaceRole.endsWith("-own")
+            ? "--surface-text-selection-own"
+            : "--surface-text-selection";
+          const selection = resolve(map, selectionRole);
+          const surface = resolve(map, surfaceRole);
+          const ratio =
+            selection && surface ? wcagRatio(selection, surface) : null;
           if (ratio === null || ratio < 3)
             boundaryFailures.push(
-              `${family}/${level}/${mode}: ${role} on ${surfaceRole} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
+              `${label}: ${selectionRole} on ${surfaceRole} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
             );
+        }
+        for (const surfaceRole of FRAME_SURFACES) {
+          const border = resolve(map, "--border-accent");
+          const surface = resolve(map, surfaceRole);
+          const ratio = border && surface ? wcagRatio(border, surface) : null;
+          if (ratio === null || ratio < 3)
+            boundaryFailures.push(
+              `${label}: --border-accent on ${surfaceRole} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
+            );
+        }
+        for (const baseRole of MESSAGE_ICON_ROLES) {
+          for (const [role, surfaceRole] of [
+            [baseRole, "--surface-message"],
+            [`${baseRole}-own`, "--surface-message-own"],
+          ]) {
+            const icon = resolve(map, role);
+            const surface = resolve(map, surfaceRole);
+            const ratio = icon && surface ? wcagRatio(icon, surface) : null;
+            if (ratio === null || ratio < 3)
+              boundaryFailures.push(
+                `${label}: ${role} on ${surfaceRole} — ${ratio === null ? "unresolved color" : `${ratio.toFixed(3)}:1`}, needs 3:1`,
+              );
+          }
         }
       }
     }
   }
-}
 
 // Gray never sits on an accent ground. A role that stays gray while the
 // background beneath it turned accent is a missing color group, not a style
@@ -753,19 +820,18 @@ const GROUNDED = [
   ),
 ];
 const grayOnAccent = [];
-for (const family of accentFamilies)
-  for (const level of [BASELINE_LEVEL, ...LEVELS])
-    for (const [mode, map] of Object.entries(
-      declarationsByMode(css, family, level),
-    ))
-      for (const [fgRole, groundRole] of GROUNDED) {
-        const fg = resolve(map, fgRole);
-        const ground = resolve(map, groundRole);
-        if (fg && ground && isAccent(ground) && isGray(fg))
-          grayOnAccent.push(
-            `${family}/${level}/${mode}: ${fgRole} ${fg} is gray on ${groundRole} ${ground}`,
-          );
-      }
+for (const theme of THEMES)
+  for (const family of accentFamilies)
+    for (const level of [BASELINE_LEVEL, ...LEVELS])
+      for (const [label, map] of scopes(family, level, theme))
+        for (const [fgRole, groundRole] of GROUNDED) {
+          const fg = resolve(map, fgRole);
+          const ground = resolve(map, groundRole);
+          if (fg && ground && isAccent(ground) && isGray(fg))
+            grayOnAccent.push(
+              `${label}: ${fgRole} ${fg} is gray on ${groundRole} ${ground}`,
+            );
+        }
 if (grayOnAccent.length)
   boundaryFailures.push(
     `Gray on an accent ground — move the role into the color group of its ground:\n    ${grayOnAccent.join("\n    ")}`,

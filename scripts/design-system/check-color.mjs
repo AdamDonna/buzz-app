@@ -106,6 +106,16 @@ const PALETTE_HUES = [
   "orange",
 ];
 
+/**
+ * A theme assigns `--theme-*` slots and nothing else. A palette step may hold its
+ * literal as the slot's fallback, and a role may point at a shared token as the
+ * slot's fallback, so a theme that leaves a slot unset changes nothing.
+ */
+const THEMED_LITERAL =
+  /^(?:#[0-9a-f]{6}|var\(--theme-[a-z0-9-]+,\s*#[0-9a-f]{6}\))$/i;
+const THEMED_REFERENCE =
+  /^var\(--(?:theme-[a-z0-9-]+,\s*var\(--[a-z0-9-]+\)|[a-z0-9-]+)\)$/;
+
 /** Glass is consumed as a complete material, never as a bare fill. Direct
  * palette consumption in production is checked by check-adoption.mjs; viewer
  * swatches may inspect the palette. */
@@ -313,11 +323,11 @@ function auditLayers() {
             found: name,
             why: "Missing. Every palette step must be authored in both modes.",
           });
-        } else if (!/^#[0-9a-f]{6}$/i.test(value)) {
+        } else if (!THEMED_LITERAL.test(value)) {
           failures.push({
             at: `${rel} (${mode})`,
             found: `${name}: ${value}`,
-            why: "A palette step holds a literal. Values live here and nowhere else.",
+            why: "A palette step holds a literal, optionally behind a theme slot. Values live here and nowhere else.",
           });
         }
       }
@@ -376,7 +386,7 @@ function auditLayers() {
       const value =
         read(code, name) ??
         (mode === "dark" ? read(modes.light, name) : undefined);
-      if (!value || !/^var\(--[a-z0-9-]+\)$/.test(value)) {
+      if (!value || !THEMED_REFERENCE.test(value)) {
         failures.push({
           at: rel,
           found: `${name} (${mode}): ${value ?? "missing"}`,

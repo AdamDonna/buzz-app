@@ -47,6 +47,14 @@ function check(css) {
   }
 }
 
+/** Replaces the selected sidebar ink in both modes' owners. */
+function mutateSelectedInk(declaration) {
+  const owners =
+    /--text-sidebar-selected: var\(--theme-sidebar-selected-text-(?:light|dark), var\(--accent-contrast\)\);/g;
+  expect(tokens).toMatch(owners);
+  return tokens.replace(owners, declaration);
+}
+
 describe("semantic contrast contract", () => {
   it("checks the current text and state-boundary pairs in both modes", () => {
     const result = check(tokens);
@@ -75,14 +83,14 @@ describe("semantic contrast contract", () => {
     ],
     [
       "light surface",
-      "--neutral-3: #e8e8e8;",
-      "--neutral-3: #999999;",
+      "--neutral-3: var(--theme-neutral-3-light, #e8e8e8);",
+      "--neutral-3: var(--theme-neutral-3-light, #999999);",
       "on --affordance-selected",
     ],
     [
       "dark surface",
-      "--neutral-raised: #282828;",
-      "--neutral-raised: #a4a4a4;",
+      "--neutral-raised: var(--theme-neutral-raised-dark, #282828);",
+      "--neutral-raised: var(--theme-neutral-raised-dark, #a4a4a4);",
       "on --surface-popover",
     ],
     [
@@ -99,8 +107,8 @@ describe("semantic contrast contract", () => {
     ],
     [
       "hover color",
-      "--neutral-quiet-hover: #f1f1f2;",
-      "--neutral-quiet-hover: #737373;",
+      "--neutral-quiet-hover: var(--theme-neutral-quiet-hover-light, #f1f1f2);",
+      "--neutral-quiet-hover: var(--theme-neutral-quiet-hover-light, #737373);",
       "on --affordance-link-hover",
     ],
   ])(
@@ -172,7 +180,8 @@ describe("semantic contrast contract", () => {
   });
 
   it("checks shared color groups at every applicable level", () => {
-    const from = "--text-sidebar-hover: var(--accent-12);";
+    const from =
+      "--text-sidebar-hover: var(--theme-sidebar-hover-text-light, var(--accent-12));";
     expect(tokens).toContain(from);
     const result = check(
       tokens.replaceAll(from, "--text-sidebar-hover: var(--accent-6);"),
@@ -185,10 +194,8 @@ describe("semantic contrast contract", () => {
   });
 
   it("rejects a gray role left on an accent ground", () => {
-    const from = "--text-sidebar-selected: var(--accent-contrast);";
-    expect(tokens).toContain(from);
     const result = check(
-      tokens.replaceAll(from, "--text-sidebar-selected: var(--neutral-10);"),
+      mutateSelectedInk("--text-sidebar-selected: var(--neutral-10);"),
     );
     expect(result.status, result.output).toBe(1);
     expect(result.output).toContain(
@@ -203,10 +210,8 @@ describe("semantic contrast contract", () => {
   ])(
     "distinguishes black ink %s from gray on the brand-filled selection",
     (ink, gray) => {
-      const from = "--text-sidebar-selected: var(--accent-contrast);";
-      expect(tokens).toContain(from);
       const result = check(
-        tokens.replaceAll(from, `--text-sidebar-selected: ${ink};`),
+        mutateSelectedInk(`--text-sidebar-selected: ${ink};`),
       );
       if (gray) {
         expect(result.status, result.output).toBe(1);
@@ -226,7 +231,7 @@ describe("semantic contrast contract", () => {
   it("rejects a shell color that hides navigation text", () => {
     const result = check(
       tokens.replace(
-        "--bg-app: var(--neutral-quiet-hover);",
+        "--bg-app: var(--theme-canvas-light, var(--neutral-quiet-hover));",
         "--bg-app: var(--neutral-7);",
       ),
     );
@@ -250,8 +255,8 @@ describe("semantic contrast contract", () => {
   it.each([
     [
       "metadata",
-      "--neutral-9: #5f5f5f;",
-      "--neutral-9: #666666;",
+      "--neutral-9: var(--theme-neutral-9-light, #5f5f5f);",
+      "--neutral-9: var(--theme-neutral-9-light, #666666);",
       "--text-metadata",
     ],
     [
@@ -337,7 +342,10 @@ describe("semantic contrast contract", () => {
   ])("checks %s status on supported surfaces in both modes", (role, hue) => {
     const result = check(
       tokens.replaceAll(
-        new RegExp(`--status-${role}: var\\(--${hue}-\\d+\\);`, "g"),
+        new RegExp(
+          `--status-${role}: (?:var\\(--theme-status-${role}-(?:light|dark), )?var\\(--${hue}-\\d+\\)\\)?;`,
+          "g",
+        ),
         `--status-${role}: var(--${hue}-5);`,
       ),
     );
@@ -375,8 +383,8 @@ describe("semantic contrast contract", () => {
     ],
     [
       "surface",
-      "--neutral-4: #dadada;",
-      "--neutral-4: #dbdbdb;",
+      "--neutral-4: var(--theme-neutral-4-light, #dadada);",
+      "--neutral-4: var(--theme-neutral-4-light, #dbdbdb);",
       "light: --status-away on --neutral-4",
     ],
     [
