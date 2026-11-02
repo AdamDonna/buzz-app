@@ -703,6 +703,7 @@ export function createTabs({
     conversation,
     initialTranscript,
     close,
+    openConversation,
   }: AgentViewProps<Config>) {
     const rows = useSyncExternalStore(runtime.subscribe, () =>
       runtime.conversations(agent.key),
@@ -793,6 +794,7 @@ export function createTabs({
             <ActivityTranscript
               transcript={read.transcript}
               agentName={agent.name}
+              openConversation={openConversation}
               state={() => undefined}
             />
           )}

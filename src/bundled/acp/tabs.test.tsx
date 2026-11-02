@@ -566,6 +566,36 @@ describe("History focus", () => {
     expect(transcript).toHaveBeenCalledWith("p1", "c1", expect.anything());
   });
 
+  it("opens a transcript turn's conversation from its label", async () => {
+    const openConversation = vi.fn();
+    history(
+      async () => ({
+        turns: [
+          {
+            turnId: "t1",
+            channelId: "c1",
+            threadRootId: "r".repeat(64),
+            triggeringEventIds: [],
+            newSession: false,
+            config: [],
+            startedAt: 0,
+            endedAt: 1,
+            partial: false,
+            items: [],
+          },
+        ],
+      }),
+      undefined,
+      { openConversation },
+    );
+    actions()[0]?.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Thread rrrrrrrr" }),
+    );
+    expect(openConversation).toHaveBeenCalledWith("c1", "r".repeat(64));
+  });
+
   it("returns focus to the list when no Transcript action is left", async () => {
     let replays: boolean | undefined;
     history(
