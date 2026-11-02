@@ -912,12 +912,12 @@
   --cacophony-neutral-quiet-hover-dark: #313340;
   --cacophony-neutral-action-pressed-dark: #b6bac5;
   --cacophony-bubble-neutral-dark: #3a3c45;
-  --cacophony-bubble-received-dark: #393b45;
+  --cacophony-bubble-received-dark: #2c2e38;
 
   --cacophony-frame-canvas-light: #e1e3ea;
   --cacophony-frame-sidebar-light: #f0f1f5;
   --cacophony-frame-canvas-dark: #121318;
-  --cacophony-frame-sidebar-dark: #292b34;
+  --cacophony-frame-sidebar-dark: #191a21;
 
   --cacophony-sidebar-selected-light: #d6d9e2;
   --cacophony-sidebar-selected-text-light: #1e2029;

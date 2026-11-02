@@ -251,10 +251,25 @@ test("Cacophony keeps its frame in the page mode and stacks three distinct dark 
   };
   expect(layers).toEqual({
     canvas: "rgb(18, 19, 24)",
-    sidebar: "rgb(41, 43, 52)",
+    sidebar: "rgb(25, 26, 33)",
     main: "rgb(32, 33, 43)",
   });
-  expect(new Set(Object.values(layers)).size).toBe(3);
+  const brightness = (color) =>
+    color.match(/\d+/g).reduce((sum, channel) => sum + Number(channel), 0);
+  expect(brightness(layers.canvas)).toBeLessThan(brightness(layers.sidebar));
+  expect(brightness(layers.sidebar)).toBeLessThan(brightness(layers.main));
+  const bubbles = {
+    received: await resolved(page, "--bubble-received", "body"),
+    own: await resolved(page, "--bubble-neutral", "body"),
+  };
+  expect(bubbles).toEqual({
+    received: "rgb(44, 46, 56)",
+    own: "rgb(58, 60, 69)",
+  });
+  expect(
+    new Set([...Object.values(bubbles), layers.main]).size,
+    "the bubbles and the main pane are three distinct steps",
+  ).toBe(3);
   expect(
     await background(page.locator("#shell-navigation .panel[data-sidebar]")),
   ).toBe(layers.sidebar);
