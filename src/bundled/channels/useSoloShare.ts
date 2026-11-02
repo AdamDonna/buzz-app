@@ -19,18 +19,15 @@ import {
 import { useIdentityNames } from "../../features/identity-names/react";
 import {
   canShareConversation,
-  destinationShareAudience,
+  checkShareDestination,
+  shareSoloChatAccess,
   soloChatLinkMessage,
 } from "../../features/solo/share";
-import { soloChatLinkName, soloLabels } from "../../features/solo/labels";
+import { soloChatLinkName } from "../../features/solo/labels";
 import type {
   ChannelDetails,
   ChannelDetailsDraft,
 } from "../../features/relay/channel-details-protocol";
-import {
-  generalAccessValue,
-  generalAccessPolicy,
-} from "../../features/channels/general-access";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import { channelText } from "../../features/channels/channel-icon";
 
@@ -100,14 +97,14 @@ export function useSoloShare({
   const [failed, setFailed] = useState(false);
   const [confirmation, setConfirmation] = useState<ChannelDetails>();
   const running = useRef(false);
-  const requestedAccess = useRef<ChannelDetailsDraft | undefined>(undefined);
+  const requestedAccess = useRef(new Map<string, ChannelDetailsDraft>());
   const accessAttempt = useSyncExternalStore(
     session.channelDetails.subscribe,
     () => session.channelDetails.snapshot(channelId),
   );
   const checkRequired =
     accessAttempt?.status === "unconfirmed" &&
-    accessAttempt.draft === requestedAccess.current;
+    accessAttempt.draft === requestedAccess.current.get(channelId);
   const source = list.channels.find((item) => item.id === channelId);
   const eligible = canShareConversation(session, source);
   const chosen = list.channels.find(
@@ -309,43 +306,20 @@ export function useSoloShare({
     const target = destination;
     try {
       const active = controller.signal;
-      // Reuse destination admission, without granting anyone membership.
-      await destinationShareAudience(session, target, active);
-      const details = session.channelDetails;
-      const pending = details.snapshot(channelId);
-      if (pending) {
-        if (
-          pending.status !== "unconfirmed" ||
-          pending.draft !== requestedAccess.current
-        )
-          throw new Error(
-            "Finish the existing General access change before sharing.",
-          );
-        setProgress("Checking save status…");
-        await details.check(channelId, active);
-      }
-      const base = await details.load(channelId, active);
-      active.throwIfAborted();
-      if (!visible()) return;
-      if (!base.canEdit || !soloLabels(base.labels))
-        throw new Error("You can no longer change this chat’s general access.");
-      if (generalAccessValue(base) !== "view-only") {
-        if (!confirmed) {
-          setConfirmation(base);
-          return;
-        }
-        setProgress("Making chat View only…");
-        const saving = details.save(
-          confirmed,
-          {
-            ...confirmed,
-            ...generalAccessPolicy("view-only", confirmed.joinRole),
-          },
-          active,
-          visible,
-        );
-        requestedAccess.current = details.snapshot(channelId)?.draft;
-        await saving;
+      await checkShareDestination(session, target, active);
+      const confirmation = await shareSoloChatAccess(session, channelId, {
+        signal: active,
+        confirmed,
+        attempts: requestedAccess.current,
+        check: () => {
+          active.throwIfAborted();
+          if (!visible())
+            throw new DOMException("Share cancelled", "AbortError");
+        },
+      });
+      if (confirmation) {
+        setConfirmation(confirmation);
+        return;
       }
       active.throwIfAborted();
       if (!visible()) return;

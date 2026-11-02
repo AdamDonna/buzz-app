@@ -25,10 +25,8 @@ import { matchesEvent } from "../../features/relay/projection";
 import type { RelayEvent } from "../../features/relay/events";
 import type { RelayWriter } from "../../features/relay/transport";
 import { createRelayProfiler } from "../../features/relay/profiling";
-import {
-  grantSoloChatAccess,
-  soloChatLinkMessage,
-} from "../../features/solo/share";
+import { soloChatLinkMessage } from "../../features/solo/share";
+import { addChannelMember } from "../../features/channel-members/members";
 import { OutboxStatus } from "./OutboxStatus";
 
 afterEach(cleanup);
@@ -254,13 +252,14 @@ it.each(
       ).rejects.toThrow(/tagging them/);
       expect(publish).not.toHaveBeenCalled();
       await expect(
-        grantSoloChatAccess(
+        addChannelMember(
           owner.session,
           channelId,
-          [agent.pubkey],
-          new Map(),
+          agent.pubkey,
           new AbortController().signal,
-          () => {},
+          {},
+          owner.session.outbox,
+          true,
           true,
         ),
       ).rejects.toThrow();

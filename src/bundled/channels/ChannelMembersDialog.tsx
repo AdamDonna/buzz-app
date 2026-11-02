@@ -51,14 +51,13 @@ import {
   canAddMembers,
   canShareSoloChat,
 } from "../../features/channel-members/members";
-import { ownSolo } from "../../features/solo/labels";
+import { ownSolo, SOLO_ACCESS_DISCLOSURE } from "../../features/solo/labels";
 import { soloChatLink } from "../../features/solo/share";
 import {
   formatPublicKey,
   publicKeyLabels,
 } from "../../shared/identity/public-key";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
-import { soloViewOnlyDisclosure } from "../../features/channels/general-access";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -1897,7 +1896,7 @@ export function ChannelMembersDialog({
             variant="prominent"
             title={
               share.destination
-                ? "Sharing makes this chat View only and posts its link without adding members."
+                ? "Sharing opens Private chats as View only and posts a link without adding members."
                 : undefined
             }
             loading={share.busy}
@@ -1994,8 +1993,8 @@ export function ChannelMembersDialog({
               >
                 <div className={styles.stagedName}>
                   <p className="text-body-sm text-subtle">
-                    Share a View only link. People and agents in this channel
-                    won’t be added to the chat.
+                    Share a link. Private chats become View only. People and
+                    agents in this channel won’t be added to the chat.
                   </p>
                   <Accordion
                     key={chosen.id}
@@ -2386,7 +2385,7 @@ export function ChannelMembersDialog({
       {share.confirmation && chosen && (
         <AlertDialog
           title="Change general access?"
-          description={`${soloViewOnlyDisclosure(share.confirmation)} The chat will be View only, and its link will be posted in ${channelText(chosen)}. No channel members will be added to the chat.`}
+          description={`${SOLO_ACCESS_DISCLOSURE} The chat will be View only, and its link will be posted in ${channelText(chosen)}. No channel members will be added to the chat.`}
           pending={share.busy}
           onClose={share.cancelConfirmation}
           initialFocus={cancelShare}

@@ -1,4 +1,3 @@
-import { SOLO_ACCESS_DISCLOSURE } from "../solo/labels";
 import type { ChannelDetailsDraft } from "../relay/channel-details-protocol";
 
 export const generalAccessOptions = {
@@ -44,16 +43,4 @@ export function generalAccessPolicy(
           ? "guest"
           : "member",
   };
-}
-
-/** Keep Solo's community-history disclosure identical across access changes and sharing. */
-export function soloViewOnlyDisclosure(policy: Policy) {
-  return [
-    SOLO_ACCESS_DISCLOSURE,
-    generalAccessValue(policy) === "public"
-      ? "People already in the chat keep their access."
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
 }

@@ -178,12 +178,14 @@ that agent in Buzz; they do not notify the external app through this connection.
   scrolling does not navigate.
 - **Sharing a Solo chat** grants access to its conversation history, not only
   the next message. In its access dialog, choosing a channel and **Share** makes
-  the chat **View only** and posts a link there. Changing Private or Public
-  (existing) requires confirming community access to the full history and Canvas.
+  a Private chat **View only** and posts a link there, after confirming community
+  access to the full history and Canvas. Public and View only chats keep their
+  current access and just post the link.
   It does not add channel members or their agents to the chat or their sidebar.
-  An already View only chat only posts the link. Direct invitations still add
-  members. The separate pasted-link composer prompt retains its explicit
-  **Share and send** membership grant. The access dialog offers **View only** for community reading
+  Direct invitations still add members. Pasting a link to a Private chat you own into a channel, thread or DM
+  uses the same confirmation, then sends your original message. Other chat links
+  send without changing access; recipients still need permission to read.
+  The access dialog offers **View only** for community reading
   or **Private** for people added to the chat. Public is not offered in
   this UI; a Public policy set through another client appears as
   **Public (existing)**. This is not protocol enforcement. View-only visitors
@@ -191,7 +193,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   about retained viewers unless verified roles show no Guests, including while
   roles load or fail to load; remove them in People to end their access. Public
   (existing) → Private also warns that joined members retain their access.
-  Public (existing) → View only confirms that existing
+  Manually changing Public (existing) to View only confirms that existing
   members keep their access. Agents the owner adds through
   access search or a composer mention receive Bot access so they can reply,
   including with a Guest admission default. Conversion to a channel offers

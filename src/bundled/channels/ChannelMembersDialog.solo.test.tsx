@@ -739,13 +739,10 @@ it("Copy alone neither saves selections nor grants access", async () => {
   expect(t.publish).not.toHaveBeenCalled();
 });
 
-it.each([
-  ["Private", { visibility: "private", joinRole: "member" }],
-  ["Public (existing)", { visibility: "public", joinRole: "member" }],
-] as const)(
-  "shares a %s chat as View only after disclosure, without adding channel members",
-  async (_policy, access) => {
-    const t = fixture(true, access);
+it.each(["member", "guest"] as const)(
+  "shares a Private chat (%s) as View only after disclosure, without adding channel members",
+  async (joinRole) => {
+    const t = fixture(true, { visibility: "private", joinRole });
     await t.ready();
     t.addDestination(t.aria.pubkey);
     const before = [...(t.members.get(source) ?? [])];
@@ -760,10 +757,6 @@ it.each([
     expect(confirmation).toHaveAccessibleName("Change general access?");
     expect(confirmation).toHaveTextContent("full history and Canvas");
     expect(confirmation).toHaveTextContent("No channel members will be added");
-    if (access.visibility === "public")
-      expect(confirmation).toHaveTextContent(
-        "People already in the chat keep their access.",
-      );
     expect(t.published).toHaveLength(0);
     await user.click(
       within(confirmation).getByRole("button", { name: "Cancel" }),
@@ -782,9 +775,9 @@ it.each([
     await waitFor(() =>
       expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
     );
-    if (access.visibility === "private")
-      expect(t.published[0]?.tags).toContainEqual(["visibility", "open"]);
-    expect(t.published[0]?.tags).toContainEqual(["join_role", "guest"]);
+    expect(t.published[0]?.tags).toContainEqual(["visibility", "open"]);
+    if (joinRole === "member")
+      expect(t.published[0]?.tags).toContainEqual(["join_role", "guest"]);
     expect(t.published[1]?.content).toContain(`buzz://channel/${source}`);
     expect(t.published[1]?.tags.some(([name]) => name === "p")).toBe(false);
     expect(t.members.get(source)).toEqual(before);
@@ -797,23 +790,27 @@ it.each([
   },
 );
 
-it("an already View only chat posts just the link, without another confirmation or access write", async () => {
-  const t = fixture(true, { visibility: "public", joinRole: "guest" });
-  await t.ready();
-  t.addDestination(t.aria.pubkey);
-  const user = userEvent.setup();
-  t.mount();
-  await user.click(screen.getByRole("button", { name: "Access" }));
-  const dialog = screen.getByRole("dialog", { name: "Share access" });
-  await chooseDestination(user, dialog);
-  await user.click(within(dialog).getByRole("button", { name: "Share" }));
-  await waitFor(() => expect(dialog).not.toBeInTheDocument());
-  await waitFor(() =>
-    expect(t.published.map((event) => event.kind)).toEqual([9]),
-  );
-  expect(screen.queryByRole("alertdialog")).toBeNull();
-  expect(t.members.get(source)).toEqual([t.viewer.pubkey]);
-});
+it.each(["member", "guest"] as const)(
+  "an already open chat (%s) posts just the link, without confirmation or access changes",
+  async (joinRole) => {
+    const t = fixture(true, { visibility: "public", joinRole });
+    await t.ready();
+    t.addDestination(t.aria.pubkey);
+    const user = userEvent.setup();
+    t.mount();
+    await user.click(screen.getByRole("button", { name: "Access" }));
+    const dialog = screen.getByRole("dialog", { name: "Share access" });
+    await chooseDestination(user, dialog);
+    await user.click(within(dialog).getByRole("button", { name: "Share" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(t.published.map((event) => event.kind)).toEqual([9]),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(t.channel()?.joinRole).toBe(joinRole);
+    expect(t.members.get(source)).toEqual([t.viewer.pubkey]);
+  },
+);
 
 it("a refused access change posts nothing and retry asks for confirmation again", async () => {
   const t = fixture(true);

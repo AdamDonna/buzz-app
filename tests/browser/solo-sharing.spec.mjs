@@ -473,6 +473,137 @@ test.describe("View only channel share", () => {
       links[0].event.tags.some(([key]) => key === "t" || key === "s"),
     ).toBe(false);
   });
+
+  // Browser-only: clipboard -> Solo card -> real composer consent/focus -> one
+  // original message through the broker. Policy/failure matrices stay in Vitest.
+  test("pasted owned chats use Private consent and preserve Public access", async ({
+    page,
+    app,
+  }, info) => {
+    await open(page, app);
+    const input = page.getByRole("textbox", {
+      name: "Message #Alpha",
+      exact: true,
+    });
+    const pasteLink = async () => {
+      // A visible cold composer can still be disabled until signed membership loads.
+      await expect(input).toBeEditable();
+      await expect(input).toBeEnabled();
+      await input.focus();
+      await input.evaluate((element, link) => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData("text/plain", `${link}\n\nPlease look at this`);
+        element.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData,
+          }),
+        );
+      }, `buzz://channel/${sharedChatId}`);
+      await expect(input).toContainText("Please look at this");
+    };
+    await pasteLink();
+    const send = page.getByRole("button", {
+      name: "Send message",
+      exact: true,
+    });
+    const confirmation = page.getByRole("alertdialog", {
+      name: "Change general access?",
+    });
+    const primary = confirmation.getByRole("button", {
+      name: "Share as View only",
+      exact: true,
+    });
+    for (const [mode, width, scale] of [
+      ["dark", 1280, 1],
+      ["light", 390, 1.5],
+    ]) {
+      await page.setViewportSize({ width, height: width === 390 ? 720 : 850 });
+      await page.evaluate(
+        ({ mode, scale }) => {
+          localStorage.setItem("buzz-appearance.v1", mode);
+          localStorage.setItem("buzz-font-scale.v1", String(scale));
+        },
+        { mode, scale },
+      );
+      await page.reload();
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-color-mode",
+        mode,
+      );
+      await expect(input).toBeVisible();
+      await send.click();
+      await expect(confirmation).toContainText("full history and Canvas");
+      await expect(confirmation).toContainText("No one will be added");
+      await expect(
+        confirmation.getByRole("button", { name: "Cancel", exact: true }),
+      ).toBeFocused();
+      await reachable(primary);
+      await expect(primary).toBeInViewport({ ratio: 1 });
+      if (info.project.name === "chromium")
+        await confirmation.screenshot({
+          path: info.outputPath(`SOLO_PASTE_CONFIRM_${mode}_${width}.png`),
+        });
+      await page.keyboard.press("Escape");
+      await expect(confirmation).not.toBeVisible();
+      await expect(input).toBeFocused();
+      await expect(input).toContainText("Please look at this");
+      expect(app.report.detailsPublications ?? []).toHaveLength(0);
+    }
+    await send.click();
+    await primary.click();
+    await expect(confirmation).not.toBeVisible();
+    await expect
+      .poll(
+        () =>
+          app.report.publications.filter(({ event }) => event.kind === 9)
+            .length,
+      )
+      .toBe(1);
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(app.report.detailsPublications[0].tags).toContainEqual([
+      "visibility",
+      "open",
+    ]);
+    expect(app.report.detailsPublications[0].tags).toContainEqual([
+      "join_role",
+      "guest",
+    ]);
+    const message = app.report.publications.find(
+      ({ event }) => event.kind === 9,
+    ).event;
+    expect(message.content).toContain(`buzz://channel/${sharedChatId}`);
+    expect(message.content).toContain("Please look at this");
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9000),
+    ).toHaveLength(0);
+
+    app.setChannelMetadata(sharedChatId, [
+      ["t", "stream"],
+      ["t", "buzz.solo"],
+      ["P", app.viewer],
+      ["name", "Beta"],
+      ["public"],
+      ["join_role", "member"],
+    ]);
+    await page.reload();
+    await expect(input).toBeVisible();
+    await pasteLink();
+    await send.click();
+    await expect
+      .poll(
+        () =>
+          app.report.publications.filter(({ event }) => event.kind === 9)
+            .length,
+      )
+      .toBe(2);
+    await expect(confirmation).not.toBeVisible();
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9000),
+    ).toHaveLength(0);
+  });
 });
 
 test("People search holds loading, lists inline results and restores keyboard focus", async ({
