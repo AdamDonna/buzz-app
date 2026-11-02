@@ -22,6 +22,24 @@
   flex-shrink: 0;
 }
 
+/* A failed row's whole error, selectable and scrolled within a fixed height. */
+.errorDetail {
+  padding-inline: var(--space-2);
+}
+.errorDetail > pre {
+  max-height: 12rem;
+  overflow: auto;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 /* One glanceable line each, ending in an ellipsis; the profile's Activity tab
  * has the full text. NavigationItem's label truncation applies per line. */
 .preview {

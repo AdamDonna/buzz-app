@@ -50,6 +50,17 @@ export function allow(params: Record<string, unknown>) {
 }
 
 /** The JSON-RPC code of a harness's error answer, when `error` is one. */
+/** A failure Buzz itself raised, with what the owner can do about it. Only
+ * our own code throws one, so a harness's text can never pose as its hint. */
+export class HintedError extends Error {
+  constructor(
+    message: string,
+    readonly hint: string,
+  ) {
+    super(message);
+  }
+}
+
 export function codeOf(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === "number" ? code : undefined;

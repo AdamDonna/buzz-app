@@ -464,6 +464,8 @@ pub fn bundled_manifests() -> Vec<Manifest> {
             .expect("goose manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/pi/manifest.json"))
             .expect("pi manifest"),
+        serde_json::from_str(include_str!("../../../src/bundled/acp/manifest.json"))
+            .expect("acp manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/workflows/manifest.json"))
             .expect("workflows manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/feedback/manifest.json"))

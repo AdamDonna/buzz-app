@@ -212,11 +212,21 @@ it("carries a verified mention through host handover into all three scopes witho
     expect(
       snapshot().local?.find((work) => work.messageId === root.id),
     ).toMatchObject({ state: "superseded" });
-    finish({ ok: false, error: "Provider unavailable" });
+    // A long error keeps its summary for the row and its whole text, past
+    // the summary's cut, as this device's detail.
+    const error = `Provider unavailable: ${"x".repeat(500)} key=SENTINEL`;
+    finish({ ok: false, error });
     await vi.waitFor(() =>
       expect(messageActivity(snapshot(), channel, followup.id)[0]?.state).toBe(
         "error",
       ),
+    );
+    const failed = messageActivity(snapshot(), channel, followup.id)[0];
+    expect(failed?.reason).toBe(error.slice(0, 500));
+    expect(failed?.detail).toBe(error);
+    // Nothing the agent or the owner's session published carries it.
+    expect(JSON.stringify(vi.mocked(native.publish).mock.calls)).not.toContain(
+      "SENTINEL",
     );
     expect(workingAgents(snapshot(), channel)).toEqual([]);
     expect(threadWorkingAgents(snapshot(), [], channel, root.id)).toEqual([]);

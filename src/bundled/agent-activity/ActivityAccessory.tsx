@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -121,6 +122,7 @@ export function ActivityAccessory(props: ActivityProps) {
       working: entry.working,
       state: entry.state,
       reason: entry.reason,
+      ...(entry.detail ? { detail: entry.detail } : {}),
       ...(entry.step ? { step: entry.step } : {}),
       ...(entry.stoppable ? { stoppable: true } : {}),
       ...(entry.retryable ? { retryable: true } : {}),
@@ -239,6 +241,7 @@ type Entry = {
   working: boolean;
   state: RequestWork["state"];
   reason: string | undefined;
+  detail?: string;
   step?: WorkStep;
   stoppable?: boolean;
   retryable?: boolean;
@@ -524,106 +527,126 @@ function ActivityBubble({
                 : undefined;
               const stopping = stops.has(entry.agent);
               return (
-                <div key={entry.agent} className={styles.row}>
-                  <NavigationItem
-                    variant="option"
-                    aria-label={`View activity for ${entry.name}`}
-                    disabled={!target || !props.canOpen(target)}
-                    onClick={() => {
-                      if (target && props.canOpen(target) && props.open(target))
-                        setExpanded(false);
-                    }}
-                    icon={
-                      <ActivityAvatar
-                        session={props.session}
-                        entry={entry}
-                        size="small"
-                      />
-                    }
-                    label={
-                      <span
-                        className={`text-body-sm ${styles.preview}`}
-                        data-error={
-                          entry.lifecycle && entry.state === "error"
-                            ? ""
-                            : undefined
-                        }
-                      >
-                        <ShimmerText
-                          active={stopping || entry.working || starting(entry)}
+                <Fragment key={entry.agent}>
+                  <div className={styles.row}>
+                    <NavigationItem
+                      variant="option"
+                      aria-label={`View activity for ${entry.name}`}
+                      disabled={!target || !props.canOpen(target)}
+                      onClick={() => {
+                        if (
+                          target &&
+                          props.canOpen(target) &&
+                          props.open(target)
+                        )
+                          setExpanded(false);
+                      }}
+                      icon={
+                        <ActivityAvatar
+                          session={props.session}
+                          entry={entry}
+                          size="small"
+                        />
+                      }
+                      label={
+                        <span
+                          className={`text-body-sm ${styles.preview}`}
+                          data-error={
+                            entry.lifecycle && entry.state === "error"
+                              ? ""
+                              : undefined
+                          }
                         >
-                          {(stopping ? "Stopping…" : undefined) ??
-                            (entry.lifecycle
-                              ? label(entry)
-                              : !entry.working
-                                ? "Activity interrupted or out of date"
-                                : (preview?.title ??
-                                  "Waiting for activity details"))}
-                        </ShimmerText>
-                        {preview?.detail && (
-                          <span className={styles.detail}>
-                            <ShimmerText active={entry.working}>
-                              {preview.detail}
-                            </ShimmerText>
-                          </span>
+                          <ShimmerText
+                            active={
+                              stopping || entry.working || starting(entry)
+                            }
+                          >
+                            {(stopping ? "Stopping…" : undefined) ??
+                              (entry.lifecycle
+                                ? label(entry)
+                                : !entry.working
+                                  ? "Activity interrupted or out of date"
+                                  : (preview?.title ??
+                                    "Waiting for activity details"))}
+                          </ShimmerText>
+                          {preview?.detail && (
+                            <span className={styles.detail}>
+                              <ShimmerText active={entry.working}>
+                                {preview.detail}
+                              </ShimmerText>
+                            </span>
+                          )}
+                        </span>
+                      }
+                    />
+                    {entry.lifecycle && entry.state === "error" ? (
+                      <span className={styles.action}>
+                        {entry.retryable && (
+                          <Button
+                            size="sm"
+                            variant="subtle"
+                            aria-label={`Retry ${entry.name}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              retry(entry);
+                            }}
+                          >
+                            Retry
+                          </Button>
                         )}
+                        <IconButton
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Dismiss error from ${entry.name}`}
+                          icon={<XIcon />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            // Retirement owns the last popup's close and focus
+                            // handoff; keep its focused contents until that effect.
+                            if (props.message)
+                              props.session.agentActivity.dismissError?.(
+                                entry.agent,
+                                props.channelId,
+                                props.message.id,
+                              );
+                          }}
+                        />
                       </span>
-                    }
-                  />
-                  {entry.lifecycle && entry.state === "error" ? (
-                    <span className={styles.action}>
-                      {entry.retryable && (
+                    ) : stoppable(entry) ? (
+                      <span className={styles.action}>
                         <Button
                           size="sm"
                           variant="subtle"
-                          aria-label={`Retry ${entry.name}`}
+                          aria-label={`Stop ${entry.name}`}
+                          loading={stopping}
                           onClick={(event) => {
                             event.stopPropagation();
-                            retry(entry);
+                            stop(entry);
                           }}
                         >
-                          Retry
+                          <OctagonIcon
+                            className={styles.stopIcon}
+                            aria-hidden="true"
+                          />
+                          <span>Stop</span>
                         </Button>
-                      )}
-                      <IconButton
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Dismiss error from ${entry.name}`}
-                        icon={<XIcon />}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          // Retirement owns the last popup's close and focus
-                          // handoff; keep its focused contents until that effect.
-                          if (props.message)
-                            props.session.agentActivity.dismissError?.(
-                              entry.agent,
-                              props.channelId,
-                              props.message.id,
-                            );
-                        }}
-                      />
-                    </span>
-                  ) : stoppable(entry) ? (
-                    <span className={styles.action}>
-                      <Button
-                        size="sm"
-                        variant="subtle"
-                        aria-label={`Stop ${entry.name}`}
-                        loading={stopping}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          stop(entry);
-                        }}
-                      >
-                        <OctagonIcon
-                          className={styles.stopIcon}
-                          aria-hidden="true"
-                        />
-                        <span>Stop</span>
-                      </Button>
-                    </span>
-                  ) : undefined}
-                </div>
+                      </span>
+                    ) : undefined}
+                  </div>
+                  {entry.lifecycle &&
+                    entry.state === "error" &&
+                    entry.detail && (
+                      // The whole error, local to this device: the row and the
+                      // channel show only a summary.
+                      <details className={styles.errorDetail}>
+                        <summary className="text-body-sm text-secondary">
+                          Details
+                        </summary>
+                        <pre>{entry.detail}</pre>
+                      </details>
+                    )}
+                </Fragment>
               );
             })}
           </div>

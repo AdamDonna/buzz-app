@@ -22,6 +22,9 @@ export type LocalWork = Readonly<{
   state: LocalWorkState;
   startedAt: number;
   error?: string;
+  /** The whole error, up to `DETAIL_LIMIT`, when `error` had to be cut. Kept
+   * on this device for the owner; never published. */
+  detail?: string;
   /** Latest live step, as the harness named it; display only. */
   step?: WorkStep;
   /** The owner hid this error here; the outcome remains as evidence. */
@@ -31,6 +34,9 @@ export type LocalWork = Readonly<{
   /** It can be asked again once it fails. */
   retryable?: true;
 }>;
+/** How much of an error a row shows, and keeps as its detail. */
+const ERROR_LIMIT = 500;
+export const DETAIL_LIMIT = 8_000;
 const settled = (state: LocalWorkState) =>
   state === "done" ||
   state === "error" ||
@@ -186,14 +192,17 @@ export function createLocalAgentActivity() {
           current.step?.target === next?.target
         )
           return;
-        const { step: _step, stoppable, ...rest } = current;
+        const { step: _step, stoppable, detail: _detail, ...rest } = current;
         entries.set(
           id,
           Object.freeze({
             ...rest,
             ...(stoppable && !settled(state) ? { stoppable } : {}),
             state,
-            ...(error ? { error: error.slice(0, 500) } : {}),
+            ...(error ? { error: error.slice(0, ERROR_LIMIT) } : {}),
+            ...(error && error.length > ERROR_LIMIT
+              ? { detail: error.slice(0, DETAIL_LIMIT) }
+              : {}),
             ...(next ? { step: next } : {}),
           }),
         );

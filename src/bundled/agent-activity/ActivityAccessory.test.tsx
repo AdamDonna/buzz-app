@@ -941,6 +941,34 @@ it("says why a failed request could not be retried, keeping it to try again or d
   }
 });
 
+it("shows a long error's whole text under Details, and no Details for a short one", () => {
+  const local = createLocalAgentActivity();
+  const f = fixture(local);
+  const view = render(<ActivityAccessory {...f.props} />);
+  const begin = (agent: string) =>
+    local.begin({
+      scope: "test",
+      channelId: "c",
+      threadRootId: root,
+      messageId: root,
+      agent,
+    });
+  const long = `Provider unavailable: ${"x".repeat(500)} key=SENTINEL`;
+  try {
+    act(() => {
+      begin(A).finish({ ok: false, error: long });
+      begin(B).finish({ ok: false, error: "Provider unavailable" });
+    });
+    openBubble();
+    const details = screen.getAllByText("Details");
+    expect(details).toHaveLength(1);
+    expect(screen.getByText(long, { selector: "pre" })).toBeInTheDocument();
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});
+
 it("stops a hosted agent's turn through its provider in this thread", async () => {
   const f = fixture();
   const agents = hosted(true);
