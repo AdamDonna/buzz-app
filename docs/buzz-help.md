@@ -95,6 +95,8 @@ the interface unless an available tool actually supports that action.
   on another computer. The saved workspace stays fixed for that agent. If the
   plugin is unavailable, the agent cannot run. Codex uses the account on that
   computer. Buzz keeps the agent identity and tool access in the desktop app.
+  Guest Codex transcripts, usage totals, and media downloads are unavailable
+  in this preview.
 - An agent's name and picture identify it. Instructions shape its response
   style, tasks, initiative, and boundaries. They do not add tools, credentials,
   or permissions. Saving instructions affects future work, not past messages.
