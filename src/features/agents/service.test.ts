@@ -9946,7 +9946,7 @@ describe("Attention plugin sources", () => {
       },
     });
     await service.create({ type: "example/echo", name: "Echo" });
-    await vi.waitFor(() => expect(native.claim).toHaveBeenCalledWith(bot));
+    await vi.waitFor(() => expect(native.claim).toHaveBeenCalledWith(bot, 0));
     await service.save(bot, { attentionEnabled: true, attention: watches });
     await vi.waitFor(() =>
       expect(texts(service)).toEqual([
