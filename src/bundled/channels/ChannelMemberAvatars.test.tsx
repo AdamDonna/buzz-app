@@ -87,7 +87,7 @@ it("leads a Solo chat with its owner and keeps the people icon until it is share
     channels: {
       id: string;
       channelType: string;
-      owner?: string;
+      owners?: string[];
       creator: string;
       members: string[];
     }[];
@@ -170,7 +170,7 @@ it("leads a Solo chat with its owner and keeps the people icon until it is share
         {
           id: "chat",
           channelType: "solo",
-          owner: "alice",
+          owners: ["alice"],
           creator: "owner",
           members: ["alice", "me", "owner"],
         },

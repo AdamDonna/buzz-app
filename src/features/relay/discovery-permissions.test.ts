@@ -148,7 +148,7 @@ it("does not grant writing through a contradictory duplicate guest entry", () =>
   expect(state.canWrite(id)).toBe(false);
 });
 
-it("names the roster's one owner, and no one when it names several", () => {
+it("names the roster's owners, sorted", () => {
   const state = new DiscoveryState(viewer.pubkey, relay.pubkey);
   const other = keypair();
   const owned = (time: number, owners: readonly string[]) =>
@@ -164,9 +164,10 @@ it("names the roster's one owner, and no one when it names several", () => {
     });
   state.accept(details("member", 10));
   state.accept(owned(10, [other.pubkey]));
-  expect(state.get(id)?.owner).toBe(other.pubkey);
-  state.accept(owned(20, [other.pubkey, keypair().pubkey]));
-  expect(state.get(id)?.owner).toBeUndefined();
+  expect(state.get(id)?.owners).toEqual([other.pubkey]);
+  const third = keypair().pubkey;
+  state.accept(owned(20, [other.pubkey, third]));
+  expect(state.get(id)?.owners).toEqual([other.pubkey, third].sort());
   state.accept(owned(30, []));
-  expect(state.get(id)?.owner).toBeUndefined();
+  expect(state.get(id)?.owners).toBeUndefined();
 });

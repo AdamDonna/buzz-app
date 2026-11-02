@@ -36,8 +36,17 @@ it("files a Solo chat as the viewer's own only when its roster makes them owner"
 
 it("presents a Solo chat's roster owner, falling back to its creator", () => {
   const solo = "solo" as const;
-  expect(soloOwner({ channelType: solo, owner: "a", creator: "b" })).toBe("a");
+  expect(soloOwner({ channelType: solo, owners: ["a"], creator: "b" })).toBe(
+    "a",
+  );
+  // A creator who handed ownership to several people is no longer shown.
+  expect(
+    soloOwner({ channelType: solo, owners: ["c", "d"], creator: "b" }),
+  ).toBe("c");
+  expect(
+    soloOwner({ channelType: solo, owners: ["a", "b"], creator: "b" }),
+  ).toBe("b");
   expect(soloOwner({ channelType: solo, creator: "b" })).toBe("b");
   expect(soloOwner({ channelType: solo })).toBeUndefined();
-  expect(soloOwner({ channelType: "stream", owner: "a" })).toBeUndefined();
+  expect(soloOwner({ channelType: "stream", owners: ["a"] })).toBeUndefined();
 });

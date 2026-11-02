@@ -26,20 +26,22 @@ export function ownSolo(
   return channel?.channelType === "solo" && channel.viewerRole === "owner";
 }
 
-/** Who owns a Solo chat, for presentation: the roster's owner, or its
- * creator for an older chat whose roster names none. Never access. */
+/** Who owns a Solo chat, for presentation: its creator while still an owner,
+ * else the roster's first owner, or the creator for an older chat whose roster
+ * names none. Never access. */
 export function soloOwner(
   channel:
     | Readonly<{
         channelType?: string | undefined;
-        owner?: string | undefined;
+        owners?: readonly string[] | undefined;
         creator?: string | undefined;
       }>
     | undefined,
 ): string | undefined {
-  return channel?.channelType === "solo"
-    ? (channel.owner ?? channel.creator)
-    : undefined;
+  if (channel?.channelType !== "solo") return undefined;
+  const { owners, creator } = channel;
+  if (!owners?.length) return creator;
+  return creator && owners.includes(creator) ? creator : owners[0];
 }
 
 export function soloChatLinkName(channel: { id: string; name: string }) {

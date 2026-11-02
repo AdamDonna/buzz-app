@@ -322,7 +322,6 @@ export class DiscoveryState {
           : [],
       ),
     );
-    const [owner] = owners.size === 1 ? owners : [];
     const type = this.isSolo(id)
       ? "solo"
       : event
@@ -381,7 +380,7 @@ export class DiscoveryState {
           ),
         ].sort(),
       ),
-      ...(owner ? { owner } : {}),
+      ...(owners.size ? { owners: Object.freeze([...owners].sort()) } : {}),
       ...(this.hidden(id) ? { hidden: true } : {}),
       ...(this.isPrivate(id) ? { private: true } : {}),
       ...(channelType ? { channelType } : {}),
