@@ -825,7 +825,7 @@ const legacyOffer = () =>
   screen.findByRole("alertdialog", {
     name: "Continue with your Buzz identity?",
   });
-const BRING_OVER = "Continue with your Buzz identity";
+const BRING_OVER = "Continue";
 /** Base UI moves focus into an opened dialog a frame later. */
 const focusInside = (dialog: HTMLElement) =>
   waitFor(() =>

@@ -53,7 +53,7 @@ export function useLegacyIdentityOffer(identity: Identity, open: boolean) {
               void identity.importLegacy();
             }}
           >
-            Continue with your Buzz identity
+            Continue
           </Button>
         </>
       }

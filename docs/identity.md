@@ -439,12 +439,11 @@ replacement. When installed old Buzz's data folder (`xyz.block.buzz.app`) exists
 the welcome screen opens a **Continue with your Buzz identity?** dialog over
 itself. The landing's actions never wait for the folder check, and the dialog
 waits while a sign-in is pending or another first-run page shows. Only its
-**Continue with your Buzz identity** reads old Buzz's `buzz-desktop`/`secrets`
-item, so any OS access prompt follows that click; the offer itself checks only
-the folder. It takes the item's `identity` entry and saves it exactly as a
-pasted import would: validated, create-only, never over a saved key, and never
-writing the old item. A failed import shows its error in the dialog, where
-Continue tries again. Success enters the app with no Builderlab sign-in, link
+**Continue** reads old Buzz's `buzz-desktop`/`secrets` item, so any OS access
+prompt follows that click; the offer itself checks only the folder. It takes
+the item's `identity` entry and saves it exactly as a pasted import would:
+validated, create-only, never over a saved key, and never writing the old item.
+A failed import shows its error in the dialog, where Continue tries again. Success enters the app with no Builderlab sign-in, link
 or backup, where that key's old communities are offered
 ([Import from the previous desktop app](communities.md#import-from-the-previous-desktop-app)).
 **Not now** or Escape leaves the welcome screen as it was, with focus on its
