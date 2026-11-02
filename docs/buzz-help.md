@@ -21,12 +21,11 @@ the interface unless an available tool actually supports that action.
   **Sign in with email** or a **Community URL** (an address or invite link).
   Setup then creates a new key or takes an existing private key, and may link
   it to the signed-in account and back it up; a returning account may restore
-  its backed-up key where the build and account allow it. A community run by a
-  different Builderlab than this app's can be joined here only with an existing
-  key. If the older Buzz app was used on this computer, a **Continue with your
-  Buzz identity?** dialog brings that identity over without signing in; **Not
-  now** keeps the welcome screen, and the offer returns after signing out. Use
-  the options actually shown; do not invent a setup sequence.
+  its backed-up key where the build and account allow it. If the older Buzz app
+  was used on this computer, a **Continue with your Buzz identity?** dialog
+  brings that identity over without signing in; **Not now** keeps the welcome
+  screen, and the offer returns after signing out. Use the options actually
+  shown; do not invent a setup sequence.
 - The **public key** identifies someone and is safe to share. The **private
   key**, shown as an `nsec`, lets someone act as that identity. Never ask anyone
   to paste a private key into a conversation or send it to you.

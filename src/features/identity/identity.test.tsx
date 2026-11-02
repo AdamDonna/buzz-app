@@ -1563,19 +1563,48 @@ it("a landing URL that cannot be reached fails before sign-in, and Cancel keeps 
   identity.dispose();
 });
 
+it("a landing URL hosted by this build's Builderlab signs in at once, with no connect choice", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
+  const relay = landingRelay("https://design.communities.buzz.xyz");
+  relay.info.resolve();
+  const connect = vi
+    .fn<(signal: AbortSignal) => Promise<Credential>>()
+    .mockImplementation(() => new Promise(() => {}));
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={unlinked}
+      connect={connect}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "design.communities.buzz.xyz{Enter}");
+  await screen.findByRole("button", { name: "Cancel sign-in" });
+  expect(connect).toHaveBeenCalledTimes(1);
+  expect(
+    screen.queryByRole("heading", { name: "Connect to your community" }),
+  ).toBeNull();
+  expect(urlField()).toHaveValue("design.communities.buzz.xyz");
+  expect(relay.relayCalls).toEqual(relay.lookup);
+  expect(identity.snapshot().status).toBe("missing");
+  identity.dispose();
+});
+
 it.each([
-  ["https://app.builderlab.xyz", "design.communities.buzz.xyz"],
-  ["https://block.builderlab.xyz", "buzz.block.builderlab.xyz"],
-  ["https://test.blockstaging.build", "buzz.test.blockstaging.build"],
+  ["https://app.builderlab.xyz", "buzz.block.builderlab.xyz"],
+  ["", "design.communities.buzz.xyz"],
 ])(
-  "a landing URL hosted by this build's Builderlab (%s) signs in at once, with no connect choice: %s",
+  "a build whose Builderlab (%j) does not host a landing URL pauses on the ordinary connect choice: %s",
   async (build, host) => {
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", build);
     const relay = landingRelay(`https://${host}`);
-    relay.info.resolve();
-    const connect = vi
-      .fn<(signal: AbortSignal) => Promise<Credential>>()
-      .mockImplementation(() => new Promise(() => {}));
+    const connect = vi.fn();
     const identity = createIdentity();
     const user = userEvent.setup();
     render(
@@ -1591,106 +1620,17 @@ it.each([
     );
     await screen.findByRole("button", { name: SIGN_IN });
     await user.type(urlField(), `${host}{Enter}`);
-    await screen.findByRole("button", { name: "Cancel sign-in" });
-    expect(connect).toHaveBeenCalledTimes(1);
-    expect(
-      screen.queryByRole("heading", { name: "Connect to your community" }),
-    ).toBeNull();
-    expect(urlField()).toHaveValue(host);
-    expect(relay.relayCalls).toEqual(relay.lookup);
-    expect(identity.snapshot().status).toBe("missing");
-    identity.dispose();
-  },
-);
-
-it.each([
-  [
-    "https://app.builderlab.xyz",
-    "buzz.block.builderlab.xyz",
-    "block.builderlab.xyz",
-  ],
-  [
-    "https://block.builderlab.xyz",
-    "design.communities.buzz.xyz",
-    "app.builderlab.xyz",
-  ],
-])(
-  "a landing URL hosted by another Builderlab than this build's (%s) offers only a key, which reaches Join Community with nothing sent to Builderlab: %s",
-  async (build, host, portal) => {
-    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", build);
-    const relay = landingRelay(`https://${host}`);
-    const connect = vi.fn();
-    const account = vi.fn(unlinked);
-    const identity = createIdentity();
-    const user = userEvent.setup();
-    render(
-      <Welcome
-        identity={identity}
-        communities={noJoin}
-        invites={invites}
-        account={account}
-        connect={connect}
-      >
-        <p>Signed in</p>
-      </Welcome>,
-    );
-    await screen.findByRole("button", { name: SIGN_IN });
-    await user.type(urlField(), `${host}{Enter}`);
-    expect(relay.relayCalls).toEqual(relay.lookup);
     await act(async () => relay.info.resolve());
-    // Found: this build must not sign in for another deployment's community,
-    // so the choice names that portal and a key is the only way on.
     expect(connectChoiceHeading()).toBeVisible();
     expect(screen.getByText(host)).toBeVisible();
     expect(
-      screen.getByText(
-        `This community belongs to a different Builderlab, at ${portal}. Sign in with that organization’s Buzz app, or continue here with a key you already have.`,
-      ),
+      screen.getByText("Buzz relies on a key for your identity."),
     ).toBeVisible();
-    expect(screen.queryByRole("button", { name: SIGN_IN })).toBeNull();
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["I already have a key", "Back"]);
-    await user.click(
-      screen.getByRole("button", { name: "I already have a key" }),
-    );
-    expect(
-      screen.getByRole("heading", { name: "Enter your private key" }),
-    ).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(connectChoiceHeading()).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "I already have a key" }),
-    ).toHaveFocus();
-    await user.click(
-      screen.getByRole("button", { name: "I already have a key" }),
-    );
-    await user.paste(ownedNsec);
-    await user.click(continueWithKey());
-    expect(
-      await screen.findByRole("heading", { name: "Join Community" }),
-    ).toBeVisible();
-    expect(identity.snapshot()).toEqual({
-      status: "ready",
-      viewer: owned.pubkey,
-    });
-    expect(
-      screen.queryByRole("heading", { name: "Back up this key?" }),
-    ).toBeNull();
-    // Builderlab is reached only through these: nothing was sent to it, and
-    // every relay call went to the typed community.
+    ).toEqual([SIGN_IN, "I already have a key", "Back"]);
     expect(connect).not.toHaveBeenCalled();
-    expect(account).not.toHaveBeenCalled();
-    expect(relay.relayCalls).toEqual([...relay.lookup, ...relay.lookup]);
-    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
-      "identity_restore",
-      "identity_legacy_available",
-      "relay_http",
-      "relay_http",
-      "identity_import",
-      "relay_http",
-      "relay_http",
-    ]);
+    expect(relay.relayCalls).toEqual(relay.lookup);
     identity.dispose();
   },
 );
@@ -2819,45 +2759,6 @@ it("an account that refuses to save the join still enters the app on the communi
     memberships: [expect.objectContaining({ id: relay.origin })],
     selected: relay.origin,
   });
-  identity.dispose();
-});
-
-it("a join of another Builderlab's community after signing in here is not saved to this account", async () => {
-  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
-  const member = keypair();
-  const block = "https://buzz.block.builderlab.xyz";
-  nativeRelay(member, {
-    [block]: {
-      admitted: true,
-      profile: profile(member, { name: "Ada", picture: "" }),
-    },
-  });
-  // The fixture's NIP-11 for another relay carries only its `self`; the
-  // lookup also needs a Buzz relay's name and a host-bound field.
-  const relayAnswers = vi.mocked(invoke).getMockImplementation();
-  if (!relayAnswers) throw new Error("nativeRelay installed no answers");
-  vi.mocked(invoke).mockImplementation(async (command, args) => {
-    const answer = await relayAnswers(command, args);
-    const { community, path } = (args ?? {}) as Record<string, unknown>;
-    if (command !== "relay_http" || community !== block || path !== "/")
-      return answer;
-    const { body, ...rest } = answer as { body: string };
-    const info = { ...JSON.parse(body), name: "Buzz Relay", icon: "" };
-    return { ...rest, body: JSON.stringify(info) };
-  });
-  const identity = createIdentity();
-  const { communities, user } = await joinCommunityPage(
-    identity,
-    "",
-    "buzz.block.builderlab.xyz",
-  );
-  await user.click(screen.getByRole("button", { name: "Join" }));
-  expect(await screen.findByText("Signed in")).toBeVisible();
-  expect(communities.snapshot()).toMatchObject({
-    memberships: [expect.objectContaining({ id: block })],
-    selected: block,
-  });
-  expect(saveCommunity).not.toHaveBeenCalled();
   identity.dispose();
 });
 

@@ -1,13 +1,11 @@
 import { expect, it } from "vitest";
 import { relayOrigin } from "../communities/destination";
 import type { FoundCommunity } from "../communities/find-community";
-import { builderlabHosting } from "./builderlab-hosted";
+import { hostedByThisBuilderlab } from "./builderlab-hosted";
 
 const PUBLIC = "https://app.builderlab.xyz";
-const BLOCK = "https://block.builderlab.xyz";
-const STAGING = "https://test.blockstaging.build";
-const BLOCK_SELF =
-  "76aa9daa7edc9c2e1dc6a2a90dbce10c1bd52f060fa6506ba7bad4f50240fc01";
+const PUBLIC_SELF =
+  "12f6870117eff1a6318bd38c82a65d51dd19879b7489f57247114d0ee8a96de3";
 /** As `findCommunity` reports it: the canonical origin, plus `self` when given. */
 const found = (input: string, self?: string): FoundCommunity => ({
   url: relayOrigin(input),
@@ -15,20 +13,17 @@ const found = (input: string, self?: string): FoundCommunity => ({
   self,
   policy: null,
 });
-/** The portal hosting `input`, whatever the build. */
-const portal = (input: string, self?: string) =>
-  builderlabHosting(found(input, self), "")?.portal;
+/** Whether a public build signs in for `input` at once. */
+const hosted = (input: string, self?: string) =>
+  hostedByThisBuilderlab(found(input, self), PUBLIC);
 
 it.each([
-  ["wss://communities.buzz.xyz", PUBLIC],
-  ["https://design.communities.buzz.xyz", PUBLIC],
-  ["wss://buzz.block.builderlab.xyz", BLOCK],
-  ["wss://acme.communities.block.builderlab.xyz", BLOCK],
-  ["wss://buzz.test.blockstaging.build", STAGING],
-  ["WSS://Design.Communities.BUZZ.xyz.", PUBLIC],
-  ["https://communities.buzz.xyz:443", PUBLIC],
-])("%s is hosted by %s", (input, expected) => {
-  expect(portal(input)).toBe(expected);
+  "wss://communities.buzz.xyz",
+  "https://design.communities.buzz.xyz",
+  "WSS://Design.Communities.BUZZ.xyz.",
+  "https://communities.buzz.xyz:443",
+])("%s is hosted by a public build's Builderlab", (input) => {
+  expect(hosted(input)).toBe(true);
 });
 
 it.each([
@@ -36,25 +31,12 @@ it.each([
   "wss://notcommunities.buzz.xyz",
   "wss://xcommunities.buzz.xyz",
   "wss://buzz.xyz",
+  "wss://buzz.block.builderlab.xyz",
   "wss://buzz.acme.builderlab.xyz",
   "wss://relay.example.com",
   "https://communities.buzz.xyz:8443",
-])("%s is not Builderlab-hosted", (input) => {
-  expect(builderlabHosting(found(input), PUBLIC)).toBeUndefined();
-});
-
-it.each(
-  [
-    "wss://design.communities.buzz.xyz",
-    "wss://buzz.block.builderlab.xyz",
-    "wss://buzz.test.blockstaging.build",
-  ].flatMap((input, row) =>
-    [PUBLIC, BLOCK, STAGING].map(
-      (build, column) => [input, build, row === column] as const,
-    ),
-  ),
-)("%s in a %s build is here: %s", (input, build, here) => {
-  expect(builderlabHosting(found(input), build)?.here).toBe(here);
+])("%s is not hosted by a public build's Builderlab", (input) => {
+  expect(hosted(input)).toBe(false);
 });
 
 it.each([
@@ -62,15 +44,19 @@ it.each([
   ["not a url", false],
   // Only the origin counts: the build URL carries the API's base path.
   ["https://app.builderlab.xyz/api/goose/", true],
-])("a build URL of %j is this portal: %s", (build, here) => {
-  expect(builderlabHosting(found("wss://communities.buzz.xyz"), build)).toEqual(
-    { portal: PUBLIC, here },
-  );
+  // Another deployment's portal, as a federated-identity build derives it.
+  ["https://block.builderlab.xyz", false],
+])("a build URL of %j hosts communities.buzz.xyz: %s", (build, expected) => {
+  expect(
+    hostedByThisBuilderlab(found("wss://design.communities.buzz.xyz"), build),
+  ).toBe(expected);
 });
 
 it("falls back to the relay key when the hostname is unknown, on the default port only", () => {
   // A deployment moved to a new domain keeps its relay key.
-  expect(portal("wss://buzz.block.example", BLOCK_SELF)).toBe(BLOCK);
-  expect(portal("https://buzz.block.example:8443", BLOCK_SELF)).toBeUndefined();
-  expect(portal("wss://buzz.block.example", "ab".repeat(32))).toBeUndefined();
+  expect(hosted("wss://buzz.example", PUBLIC_SELF)).toBe(true);
+  expect(hosted("https://buzz.example:8443", PUBLIC_SELF)).toBe(false);
+  expect(hosted("wss://buzz.example", "ab".repeat(32))).toBe(false);
+  // An unknown relay with no `self` never matches, even with no build URL.
+  expect(hostedByThisBuilderlab(found("wss://buzz.example"), "")).toBe(false);
 });
