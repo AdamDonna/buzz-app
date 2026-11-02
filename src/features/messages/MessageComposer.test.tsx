@@ -13137,7 +13137,6 @@ it("releases the composer when a retarget abandons a command that ignores its si
   await waitFor(() => expect(service.held.runs).toBe(1));
   h.retarget({ threadRootId: "root", replyParentId: "parent" });
   expect(service.held.signals[0]?.aborted).toBe(true);
-  await act(async () => {});
   h.fill("plain reply");
   h.submit();
   await waitFor(() => expect(h.messages.reply).toHaveBeenCalledOnce());

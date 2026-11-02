@@ -142,10 +142,7 @@ import { formatMediaTime, mediaTimeReply } from "./media-timecode";
 import { RichComposerInput } from "./RichComposerInput";
 import type { MessageLinkOrigin } from "./MessageRow";
 import { composerMarkdown } from "./composer-markdown";
-import {
-  recognizeSlashCommand,
-  untilAborted,
-} from "../conversation/slash-command";
+import { recognizeSlashCommand } from "../conversation/slash-command";
 import type {
   ComposerInputElement,
   ComposerLinkEdit,
@@ -2519,8 +2516,15 @@ function Composer({
       if (command) {
         setSending(true);
         setError(undefined);
-        const result = await untilAborted(
-          command.command.run({
+        const release = () => {
+          if (sendAttempt.current !== attempt) return;
+          sendAttempt.current = null;
+          if (live.current) setSending(false);
+        };
+        attempt.signal.addEventListener("abort", release, { once: true });
+        let result: Awaited<ReturnType<typeof command.command.run>>;
+        try {
+          result = await command.command.run({
             session,
             scope,
             channelId,
@@ -2531,9 +2535,10 @@ function Composer({
               name,
             })),
             signal: attempt.signal,
-          }),
-          attempt.signal,
-        );
+          });
+        } finally {
+          attempt.signal.removeEventListener("abort", release);
+        }
         attempt.signal.throwIfAborted();
         if (
           valueRef.current !== captured ||

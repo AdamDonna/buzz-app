@@ -28,22 +28,3 @@ export function recognizeSlashCommand(
     match && slashNames(commands).get(match[1]?.toLowerCase() ?? "");
   return command ? { command, args: (match[2] ?? "").trim() } : undefined;
 }
-
-/** Rejects with the signal's reason as soon as it aborts, even when `work`
- * ignores the signal, so a caller never waits on an abandoned command. */
-export function untilAborted<T>(
-  work: T | Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const abort = () => reject(signal.reason);
-    signal.addEventListener("abort", abort, { once: true });
-    Promise.resolve(work)
-      .then(resolve, reject)
-      .finally(() => signal.removeEventListener("abort", abort));
-  });
-}
