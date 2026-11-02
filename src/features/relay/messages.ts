@@ -233,28 +233,42 @@ export function createMessages(
         : undefined);
     const first = originals[0];
     const channelId = first ? channel(first) : undefined;
-    if (!channelId || originals.some((event) => channel(event) !== channelId))
+    if (
+      !first ||
+      !channelId ||
+      originals.some((event) => channel(event) !== channelId)
+    )
       throw new Error("Removal must belong to one loaded conversation");
     // Deleting a thread reply or its sent-to-channel copy removes the author's
     // other linked copies too, so none lingers as an orphan.
-    const linked = originals
-      .flatMap((event) => linkedCopies(event, channelId))
-      .filter((event) => !ids.includes(event.id));
-    const all = [...ids, ...new Set(linked.map((event) => event.id))];
-    const removed = all.length <= 100 ? all : ids;
-    const targets = [...originals, ...(all.length <= 100 ? linked : [])];
-    return writer(5, channelId, authorization).send({
-      kind: 5,
-      content: "",
-      tags: [
-        ["h", channelId],
-        ...removed.map((id) => ["e", id]),
-        ...[...new Set(targets.map((event) => event.kind))].map((kind) => [
-          "k",
-          String(kind),
-        ]),
-      ],
-    });
+    const linked = [
+      ...new Map(
+        originals
+          .flatMap((event) => linkedCopies(event, channelId))
+          .filter((event) => !ids.includes(event.id))
+          .map((event) => [event.id, event]),
+      ).values(),
+    ];
+    const rest = [
+      ...originals.slice(1),
+      ...(ids.length + linked.length <= 100 ? linked : []),
+    ];
+    // The relay accepts exactly one target per kind 5, so each target gets its
+    // own deletion. The caller's operation is the first chosen event's, queued
+    // last: if the outbox refuses any deletion, the caller sees the error and
+    // can retry instead of receiving an operation that hides the refusal.
+    const deletion = (event: EventData) =>
+      writer(5, channelId, authorization).send({
+        kind: 5,
+        content: "",
+        tags: [
+          ["h", channelId],
+          ["e", event.id],
+          ["k", String(event.kind)],
+        ],
+      });
+    for (const event of rest) deletion(event);
+    return deletion(first);
   };
   return Object.freeze({
     send(

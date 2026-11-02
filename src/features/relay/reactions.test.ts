@@ -144,7 +144,7 @@ it("incremental channel projection applies delete-of-reaction and rejects an own
   ).toEqual([]);
 });
 
-it("removal validates every loaded author and conversation before queuing one deletion", () => {
+it("removal validates every loaded author and conversation before queuing any deletion", () => {
   const mine = reaction(),
     duplicate = reaction(viewer, 3),
     theirs = reaction(other);
@@ -177,16 +177,67 @@ it("removal validates every loaded author and conversation before queuing one de
   expect(() => messages.remove(["missing"])).toThrow(/Load/);
   expect(send).not.toHaveBeenCalled();
   messages.remove([mine.id, duplicate.id, mine.id]);
-  expect(send).toHaveBeenCalledExactlyOnceWith({
-    kind: 5,
-    content: "",
-    tags: [
-      ["h", "c"],
-      ["e", mine.id],
-      ["e", duplicate.id],
-      ["k", "7"],
+  // The relay accepts exactly one target per kind 5; the chosen one goes last.
+  expect(send.mock.calls).toEqual([
+    [
+      {
+        kind: 5,
+        content: "",
+        tags: [
+          ["h", "c"],
+          ["e", duplicate.id],
+          ["k", "7"],
+        ],
+      },
     ],
+    [
+      {
+        kind: 5,
+        content: "",
+        tags: [
+          ["h", "c"],
+          ["e", mine.id],
+          ["k", "7"],
+        ],
+      },
+    ],
+  ]);
+});
+
+it("a refused deletion surfaces before the chosen target's operation is returned", () => {
+  const mine = reaction(),
+    duplicate = reaction(viewer, 3);
+  const events = [root, mine, duplicate];
+  // The outbox admits one more operation, then refuses until space frees up.
+  let room = 1;
+  const send = vi.fn((input: { tags: string[][] }) => {
+    if (room-- <= 0) throw new Error("Too many outstanding operations");
+    return input.tags.find(([name]) => name === "e")?.[1] ?? "";
   });
+  const messages = createMessages(
+    {
+      ready: async () => {},
+      recover: async () => {},
+      acknowledge: async () => {},
+      supports: () => true,
+      send,
+      retry() {},
+      dismiss: async () => {},
+      snapshot: () => [],
+      subscribe: () => () => {},
+      observeDismiss: () => () => {},
+      observeSend: () => () => {},
+    },
+    viewer.pubkey,
+    (id) => events.find((item) => item.id === id),
+    () => [],
+    () => {},
+  );
+  expect(() => messages.remove([mine.id, duplicate.id])).toThrow(
+    /Too many outstanding/,
+  );
+  room = 2;
+  expect(messages.remove([mine.id, duplicate.id])).toBe(mine.id);
 });
 
 it("requires matching viewer and agent identities to remove agent messages", () => {

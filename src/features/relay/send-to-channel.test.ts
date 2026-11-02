@@ -333,15 +333,18 @@ function linkedSetup() {
     copies.push(event);
     return event;
   };
+  // One target per event: the relay rejects a kind 5 naming several.
   const targets = (before: number, kind: number) =>
     outbox
       .snapshot()
       .slice(before)
       .map((item) => item.event)
       .filter((event) => event.kind === kind)
-      .flatMap((event) =>
-        event.tags.filter(([n]) => n === "e").map(([, id]) => id),
-      )
+      .map((event) => {
+        const ids = event.tags.filter(([n]) => n === "e").map(([, id]) => id);
+        expect(ids).toHaveLength(1);
+        return ids[0];
+      })
       .sort();
   return { messages, outbox, send, targets, copies };
 }
@@ -366,8 +369,15 @@ it("deleting the reply or either copy removes every linked copy", async () => {
   assert.exists(a);
   assert.exists(b);
   const before = outbox.snapshot().length;
-  messages.remove([a.id]);
+  const operation = messages.remove([a.id]);
   expect(targets(before, 5)).toEqual([a.id, b.id, reply.id].sort());
+  // The caller tracks the deletion of the message it chose.
+  expect(
+    outbox
+      .snapshot()
+      .find((item) => item.event.id === operation)
+      ?.event.tags.find(([n]) => n === "e")?.[1],
+  ).toBe(a.id);
   const next = outbox.snapshot().length;
   messages.remove([reply.id]);
   expect(targets(next, 5)).toEqual([a.id, b.id, reply.id].sort());
