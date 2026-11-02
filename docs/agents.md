@@ -81,8 +81,9 @@ Attention itself (the runtime, tools, storage and sources) is core, but it runs 
 Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run
 behavior for its agents. Plugins can add a tab to every local agent with
-`ctx.agents.registerTab`; the Attention plugin's Attention tab holds the
-device Attention switch.
+`ctx.agents.registerTab`, or to some of them with its optional `when(agent)`;
+the Attention plugin's Attention tab holds the device Attention switch, and the
+Bestie plugin's Bestie tab shows only on your Bestie.
 
 Attention is shared by every harness, and a harness has no attention code.
 `src/buzz-mcp/session-tools.ts` exports `BUZZ_SESSION`: the Buzz tools and the

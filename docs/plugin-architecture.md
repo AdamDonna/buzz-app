@@ -320,9 +320,9 @@ active registered types appear there; plugin activation remains owned by
 Settings → Plugins → Manage plugins. Provider defaults are versioned device preferences, not
 agent-record migrations; blank per-agent values inherit them.
 
-A plugin, bundled or installed, can add a tab to the settings of every agent
-running on this device, whatever its type, with
-`ctx.agents.registerTab({ id, title, component })`. The component receives
+A plugin, bundled or installed, can add a tab to the settings of agents
+running on this device, whatever their type, with
+`ctx.agents.registerTab({ id, title, component, when, subscribe })`. The component receives
 `{ agent }`; it reads and saves through the plugin's own `ctx.agents`. An
 optional `when(agent)` limits the tab to the agents it returns true for, and an
 optional `subscribe(listener)` tells the host when `when` may answer
