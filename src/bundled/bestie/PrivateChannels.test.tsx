@@ -118,12 +118,8 @@ it("removes Bestie from a channel it is in, as the Members dialog does", async (
     role: "remove",
   });
   expect(screen.queryByRole("alert")).toBeNull();
-  // Creating channels with Bestie is shown, not offered yet.
-  expect(
-    screen.getByRole("switch", {
-      name: "Also add Bestie to private channels I create",
-    }),
-  ).toHaveAttribute("aria-disabled", "true");
+  // Adding Bestie to channels you create isn't offered yet.
+  expect(screen.queryByRole("switch")).toBeNull();
 });
 
 it("adds Bestie to one channel, or to all after asking, and reports what didn't confirm", async () => {

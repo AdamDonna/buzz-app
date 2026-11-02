@@ -14,7 +14,6 @@ import {
 } from "../../shared/design-system/ui/Menu";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
-import { SwitchPreferenceRow } from "../../shared/design-system/ui/SwitchPreferenceRow";
 import { compareRecent } from "../channels/sidebar-sections";
 
 /** The private channels `viewer` is in, most recent first: those `bestie` is
@@ -245,12 +244,6 @@ export function PrivateChannels({
             />
           </>
         )}
-        <SwitchPreferenceRow
-          label="Also add Bestie to private channels I create"
-          description="Coming later."
-          checked={false}
-          disabled
-        />
       </SettingsGroup>
       {problems.length > 0 && (
         <div role="alert" className="buzz-field-error">
