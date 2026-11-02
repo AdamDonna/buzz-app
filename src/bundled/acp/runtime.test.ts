@@ -1246,6 +1246,42 @@ describe("AcpRuntime", () => {
     );
   });
 
+  it("runs a synced effort the harness offers in a group, already current", async () => {
+    const config = await confirmed();
+    const { fake, deliver, sync } = setup({
+      configOptions: [
+        {
+          id: "effort",
+          name: "Effort",
+          category: "thought_level",
+          type: "select",
+          currentValue: "high",
+          options: [
+            {
+              group: "fast",
+              name: "Fast",
+              options: [{ value: "low", name: "low" }],
+            },
+            {
+              group: "deep",
+              name: "Deep",
+              options: [{ value: "high", name: "high" }],
+            },
+          ],
+        },
+      ],
+    });
+    sync(config);
+    const signal = new AbortController().signal;
+    void deliver(message("1", "@Opal think"), config, signal, {
+      synced: { effort: "high" },
+    }).run;
+    await vi.waitFor(() =>
+      expect(fake.harnesses[0]?.sent("session/prompt")).toHaveLength(1),
+    );
+    expect(fake.harnesses[0]?.sent("session/set_config_option")).toEqual([]);
+  });
+
   it("leaves nothing running when a delivery is cancelled while the harness starts", async () => {
     const config = await confirmed();
     const { fake, deliver, sync } = setup({

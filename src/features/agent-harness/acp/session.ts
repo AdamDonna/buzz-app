@@ -430,7 +430,7 @@ export class AcpSession {
           await this.select(model, effort);
           // A harness may ignore a level its model lacks, and keep one across
           // a model switch without its being set again.
-          if (kept && !this.levels.includes(kept))
+          if (kept && !this.offered.includes(kept))
             throw new Error(
               unsupportedSynced(
                 "effort",
@@ -575,8 +575,14 @@ export class AcpSession {
   replace(raw: unknown) {
     if (raw === undefined) return;
     this.state = optionState(raw);
-    this.levels = this.state.effort?.options.map(({ value }) => value) ?? [];
     if (!this.replaying) this.parity?.onState?.(this.state);
+  }
+
+  /** The levels a kept one must be among: a pinned session's whole option
+   * state, groups flattened, else what the last config answer listed. */
+  private get offered() {
+    if (!this.parity) return this.levels;
+    return this.state.effort?.options.map(({ value }) => value) ?? [];
   }
 
   private ranAs(runId: string | undefined) {
