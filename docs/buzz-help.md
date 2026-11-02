@@ -44,6 +44,8 @@ the interface unless an available tool actually supports that action.
 - A community invite or address connects someone to a community; creating an
   identity alone does not grant membership. The same identity can be used in
   more than one community.
+- Set or clear your status from the profile menu, or with **Update status** /
+  **Set a status** on your own profile.
 
 ## Conversations and communities
 
@@ -99,8 +101,12 @@ the interface unless an available tool actually supports that action.
 - **Make my bestie** in an agent card's menu chooses the agent initially tagged
   in new Solo chats for that community. It does not replace recipients in an
   existing chat or an edited draft. People can choose a different agent for a
-  particular conversation. Being the bestie does not prove an agent is ready
-  or running.
+  particular conversation. When the optional **Bestie** plugin is on, that saved
+  choice also opens the agent's DM from the left navigation; Messages omits the
+  duplicate row while it is pinned. A verified existing DM stays available if
+  agent discovery fails. If a replacement save fails, the last confirmed Bestie
+  remains selected and the confirmation offers another attempt. Being the bestie
+  does not prove an agent is ready or running.
 - **Settings → Agent setup → Harness defaults** is where supported agent types
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.
@@ -116,6 +122,17 @@ the interface unless an available tool actually supports that action.
   to follow work. Its tab in an agent's profile shows what that agent is watching
   and whether Attention is on for this device. A mention can still wake an agent
   when Attention is off; turning Attention on does not grant new access.
+- **Solo workers**: where a plugin offers it, an owner can authorize one agent to
+  start, message, read, stop, and archive the owner's workers in Solo chats. The
+  agent asks the owner's Buzz in a private channel with only the two of them;
+  the owner's Buzz decides each request and must be running to answer. No
+  answer does not mean nothing happened. Unless the agent names another person,
+  it uses only the authorization from its own owner, as Buzz records it; an agent
+  with no recorded owner must always name one. Without that authorization, or once
+  the channel is no longer private, the agent's Solo worker tools find no owner. The
+  standalone Buzz MCP server checks that channel's members and privacy against
+  the key its relay advertises; where the relay does not advertise one, the
+  tools find none.
 - The community authorizes reads and writes. An agent's name, profile, picture,
   or appearance in a list does not prove access, ownership, or running status.
   When helping someone explore a community, use only your available access and

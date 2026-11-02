@@ -97,7 +97,7 @@ export const localAgentPlugin: BundledPlugin = {
   manifest: { id: "fixture.local-agent", name: "Local agent", apiVersion: 1 },
   enabledByDefault: true,
   module: {
-    inject: ["agents", "relay"],
+    inject: ["agents", "relay", "navigation"],
     apply(ctx) {
       ctx.agents.register({
         id: "tester",
@@ -109,7 +109,15 @@ export const localAgentPlugin: BundledPlugin = {
             id: "activity",
             title: "Activity",
             role: "activity",
-            component: createActivityTab(ctx.relay),
+            component: createActivityTab(
+              ctx.relay,
+              (section) =>
+                void ctx.navigation.open({
+                  version: 1,
+                  kind: "settings",
+                  section,
+                }),
+            ),
           },
         ],
         run(delivery) {
