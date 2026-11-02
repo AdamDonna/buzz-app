@@ -216,7 +216,9 @@ export class AcpProcess {
   /** Whether `initialize` advertised `sessionCapabilities[name]`. */
   advertises(name: string) {
     const session = this.capabilities.sessionCapabilities as
-      Record<string, unknown> | null | undefined;
+      | Record<string, unknown>
+      | null
+      | undefined;
     const value = session?.[name];
     return typeof value === "object" && value !== null;
   }

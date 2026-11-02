@@ -756,7 +756,8 @@ export function createTabs({
       return () => abort.abort();
     }, [agent.pubkey, open]);
     // Focus follows the view: into Back, then back to the opened row's action.
-    const here = useRef<HTMLDivElement>(null);
+    // Whichever view is shown: a div, or the list's fieldset.
+    const here = useRef<HTMLDivElement & HTMLFieldSetElement>(null);
     const opened = useRef<string>(undefined);
     useEffect(() => {
       const view = here.current;
@@ -802,10 +803,9 @@ export function createTabs({
         </div>
       );
     return (
-      <div
+      <fieldset
         ref={here}
         tabIndex={-1}
-        role="group"
         aria-label="Conversations"
         className="grid gap-2"
       >
@@ -830,7 +830,7 @@ export function createTabs({
             </li>
           ))}
         </ul>
-      </div>
+      </fieldset>
     );
   }
 
