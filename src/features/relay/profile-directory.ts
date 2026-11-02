@@ -27,9 +27,11 @@ export interface ProfileQueries {
   unnamed?(): ReadonlySet<string>;
   /** Cryptographically verified owner of the retained signed profile head. */
   owner?(pubkey: string): string | undefined;
-  /** Moves each time an access purge drops every loaded profile. A view that
-   * ensured the identities it shows must ensure them again: the purge notifies
-   * after it removes denied content, so only names still on screen are reread. */
+  /** Moves each time a full cache clear or dispose drops every loaded profile.
+   * A channel access change keeps profiles, so it does not move this. A view
+   * that ensured the identities it shows must ensure them again: the clear
+   * notifies after it removes content, so only names still on screen are
+   * reread. */
   generation?(): number;
 }
 

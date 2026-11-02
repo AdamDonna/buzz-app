@@ -140,7 +140,6 @@ export type EventViewSnapshot = Readonly<{
   error?: string | undefined;
 }>;
 
-/** Compose once per relay/viewer. Plugins get one interface; the host owns disposal. */
 /** A read of named authors' profiles only. Profiles do not depend on channels,
  * so no channel access change, including a denied channel list, can stale it. */
 function isProfileFilter(filter: ReadFilter) {
@@ -159,6 +158,7 @@ function isProfileRead(filters: readonly ReadFilter[]) {
   return filters.length > 0 && filters.every(isProfileFilter);
 }
 
+/** Compose once per relay/viewer. Plugins get one interface; the host owns disposal. */
 export function createRelaySession(
   transport: ReadTransport | null,
   options: ChannelStoreOptions & {
@@ -708,12 +708,8 @@ export function createRelaySession(
         "Reconnect to refresh conversation access.",
       );
     const epoch = accessEpoch;
-    const cleared = cacheClearEpoch;
     const events = await requests.reader.read(filters, settings);
-    if (
-      closed ||
-      (epoch !== accessEpoch && !profileReadSurvives(filters, cleared))
-    )
+    if (closed || epoch !== accessEpoch)
       throw new DOMException("Stale relay read", "AbortError");
     return events.filter((event) => event.kind !== PRODUCT_FEEDBACK_KIND);
   }
@@ -2560,7 +2556,6 @@ export function createRelaySession(
      * merging live observations or local outbox intent into paging evidence. */
     async readRemote(filters: readonly ReadFilter[], settings?: ReadOptions) {
       const epoch = accessEpoch;
-      const cleared = cacheClearEpoch;
       const signal = settings?.signal
         ? AbortSignal.any([settings.signal, lifetime.signal])
         : lifetime.signal;
@@ -2572,8 +2567,7 @@ export function createRelaySession(
       );
       signal.throwIfAborted();
       // Applying discovery can revoke access itself. As with read(), let
-      // authority-only and profile reads finish; mixed/content reads must
-      // remain fenced.
+      // authority-only reads finish; mixed/content reads must remain fenced.
       const discoveryOnly =
         filters.length > 0 &&
         filters.every(
@@ -2581,12 +2575,7 @@ export function createRelaySession(
             !!filter.kinds?.length &&
             filter.kinds.every((kind) => [39000, 39002].includes(kind)),
         );
-      if (
-        closed ||
-        (epoch !== accessEpoch &&
-          !discoveryOnly &&
-          !profileReadSurvives(filters, cleared))
-      )
+      if (closed || (epoch !== accessEpoch && !discoveryOnly))
         throw new DOMException("Stale relay read", "AbortError");
       return result;
     },
