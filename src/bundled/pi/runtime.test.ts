@@ -404,7 +404,7 @@ it("disposes execution that resolves after the agent retires", async () => {
     pending.resolve(execution);
     await rejected;
     expect(execution.dispose).toHaveBeenCalledOnce();
-    expect(remote.spawn).not.toHaveBeenCalled();
+    expect(remote.processes).toHaveLength(0);
   } finally {
     pending.resolve(execution);
     f.runtime.dispose();
