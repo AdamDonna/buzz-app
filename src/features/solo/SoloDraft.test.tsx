@@ -23,6 +23,10 @@ import { createOutbox } from "../relay/outbox";
 import { keypair, signed } from "../relay/testing";
 import { SOLO_LABEL } from "./labels";
 import { attachmentDraft } from "../messages/attachment-draft";
+import type {
+  ComposerToolProps,
+  ConversationExtensions,
+} from "../conversation/contracts";
 import { createAgentChoices } from "../agents/choices";
 import { createAgentLibrary } from "../agents/library";
 import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
@@ -67,6 +71,33 @@ function taggedDraft(
   };
 }
 const noOperations: readonly never[] = [];
+/** Stands in for the mentions picker's pill: same name, same audience contract. */
+function Audience({ audience }: ComposerToolProps) {
+  return audience ? (
+    <output
+      aria-label={`Sending to ${audience.recipients
+        .map((person) => person.name)
+        .join(", ")}. Change agents`}
+    />
+  ) : null;
+}
+const pillTools = [
+  {
+    id: "audience",
+    key: "test/audience",
+    pluginId: "test",
+    revision: "1",
+    title: "Audience",
+    component: Audience,
+  },
+];
+const noInline: readonly never[] = [];
+const withPill = {
+  inline: { snapshot: () => noInline, subscribe: () => () => {} },
+  tools: { snapshot: () => pillTools, subscribe: () => () => {} },
+} as unknown as ConversationExtensions;
+const sendingTo = (names: string) =>
+  screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
 function setup(available = true) {
   const rows = [
     { pubkey: "a".repeat(64), name: "Member agent" },
@@ -309,7 +340,7 @@ it("opens the chat and sends its message before the relay confirms the create", 
   expect(test.channelWrites.delivered).not.toHaveBeenCalled();
   expect(test.messages.send).toHaveBeenCalledWith(
     test.channelWrites.create.mock.calls[0]?.[0],
-    "Right away@Member agent ",
+    "Right away",
     ["a".repeat(64)],
   );
 });
@@ -469,7 +500,7 @@ it("edits draft settings before creation, restores them, and applies Canvas once
   expect(order).toEqual(["send", "canvas"]);
 });
 
-it("a new Solo chat for a named agent starts tagged with it, not the default", async () => {
+it("a new Solo chat for a named agent starts with it in the pill, not the default", async () => {
   const f = setup();
   const user = userEvent.setup();
   const started = vi.fn();
@@ -479,76 +510,91 @@ it("a new Solo chat for a named agent starts tagged with it, not the default", a
       agent={agent}
       session={f.session}
       scope="me-route-agent"
+      extensions={withPill}
       onStarted={started}
     />,
   );
   const input = screen.getByRole("textbox");
-  await waitFor(() => expect(input).toHaveTextContent("@Outside agent"));
-  expect(input).not.toHaveTextContent("@Member agent");
+  await waitFor(() => expect(sendingTo("Outside agent")).toBeInTheDocument());
+  // The agent is never inserted into the text.
+  expect(input).not.toHaveTextContent("@");
   await user.type(input, "Hello");
   await user.click(screen.getByRole("button", { name: "Send message" }));
   await waitFor(() => expect(started).toHaveBeenCalledOnce());
   const [id] = started.mock.calls[0] ?? [];
-  expect(f.messages.send).toHaveBeenCalledExactlyOnceWith(
-    id,
-    expect.stringContaining("Hello"),
-    [agent],
-  );
+  expect(f.messages.send).toHaveBeenCalledExactlyOnceWith(id, "Hello", [agent]);
 });
 
 it("a named agent replaces a saved new-chat draft that holds only another agent's tag", async () => {
   const f = setup();
   const scope = "me-route-agent-after-default";
-  const first = render(
-    <SoloDraft session={f.session} scope={scope} onStarted={vi.fn()} />,
-  );
-  const initial = screen.getByRole("textbox");
-  await waitFor(() => expect(initial).toHaveTextContent("@Member agent"));
-  first.unmount();
+  // A draft saved by an earlier default that tagged its agent in the text.
+  writeView(scope, "solo:new-draft", taggedDraft(""));
   render(
     <SoloDraft
       agent={"b".repeat(64)}
       session={f.session}
       scope={scope}
+      extensions={withPill}
       onStarted={vi.fn()}
     />,
   );
   const input = screen.getByRole("textbox");
-  await waitFor(() => expect(input).toHaveTextContent("@Outside agent"));
+  await waitFor(() => expect(sendingTo("Outside agent")).toBeInTheDocument());
   expect(input).not.toHaveTextContent("@Member agent");
 });
 
-it("a named agent keeps a saved new-chat draft that has the person's own text", async () => {
+it("a named agent keeps a saved new-chat draft that has the person's own text, whose mention is the recipient", async () => {
   const f = setup();
   const user = userEvent.setup();
+  const started = vi.fn();
   const scope = "me-route-agent-after-text";
-  const first = render(
-    <SoloDraft session={f.session} scope={scope} onStarted={vi.fn()} />,
-  );
-  const initial = screen.getByRole("textbox");
-  await waitFor(() => expect(initial).toHaveTextContent("@Member agent"));
-  await user.type(initial, "Keep this");
-  first.unmount();
+  writeView(scope, "solo:new-draft", taggedDraft("Keep this"));
   render(
     <SoloDraft
       agent={"b".repeat(64)}
       session={f.session}
       scope={scope}
-      onStarted={vi.fn()}
+      extensions={withPill}
+      onStarted={started}
     />,
   );
   const input = screen.getByRole("textbox");
   await waitFor(() => expect(input).toHaveTextContent("Keep this"));
   expect(input).toHaveTextContent("@Member agent");
   expect(input).not.toHaveTextContent("@Outside agent");
+  // Its inline mention decides who hears it; the named agent steps aside.
+  expect(sendingTo("Member agent")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(started).toHaveBeenCalledOnce());
+  expect(f.messages.send).toHaveBeenCalledExactlyOnceWith(
+    started.mock.calls[0]?.[0],
+    expect.stringContaining("Keep this"),
+    ["a".repeat(64)],
+  );
 });
 
 it("a new Solo chat needs a tagged agent to send", async () => {
   const f = setup();
+  // No agent is available, so nothing seeds the pill.
+  const none = {
+    status: "ready",
+    complete: true,
+    identities: [],
+    selectable: [],
+    archives: { status: "unavailable" as const, archived: [] },
+  };
+  Object.assign(f.session.agentChoices, { snapshot: () => none });
   const user = userEvent.setup();
   render(
-    <SoloDraft session={f.session} scope="me-untagged" onStarted={vi.fn()} />,
+    <SoloDraft
+      session={f.session}
+      scope="me-untagged"
+      extensions={withPill}
+      onStarted={vi.fn()}
+    />,
   );
+  expect(sendingTo("")).toBeInTheDocument();
   const input = screen.getByRole("textbox") as HTMLTextAreaElement;
   input.value = "Start here";
   fireEvent.input(input);
@@ -1203,7 +1249,7 @@ it("starting titles omit structured leading tags but retain literal @ text", asy
 });
 
 it.each(["remember", "off"])(
-  "first Solo send transfers all tagged agents into the saved chat draft (%s)",
+  "first Solo send reaches all tagged agents and leaves the chat's next draft empty, as every routed send does (%s)",
   async (mode) => {
     const { setRememberAgentsPreference } = await import(
       "../messages/mention-preferences"
@@ -1236,9 +1282,10 @@ it.each(["remember", "off"])(
       expect(f.messages.send).toHaveBeenCalledOnce();
       expect(f.channelWrites.create).toHaveBeenCalledOnce();
       const id = started.mock.calls[0]?.[0];
-      expect(readView("first-followup", `draft:${id}`, null)).toEqual(
-        mode === "off" ? { text: "", recipients: [] } : tags,
-      );
+      expect(readView("first-followup", `draft:${id}`, null)).toEqual({
+        text: "",
+        recipients: [],
+      });
       expect(f.messages.send.mock.calls[0]?.[2]).toEqual(
         recipients.map((r) => r.pubkey),
       );
@@ -1247,6 +1294,29 @@ it.each(["remember", "off"])(
     }
   },
 );
+
+it("a routed first send leaves the chat's follow-up draft empty", async () => {
+  const f = setup();
+  const started = vi.fn();
+  render(
+    <SoloDraft
+      session={f.session}
+      scope="routed-followup"
+      extensions={withPill}
+      onStarted={started}
+    />,
+  );
+  await waitFor(() => expect(sendingTo("Member agent")).toBeInTheDocument());
+  await userEvent.type(screen.getByRole("textbox"), "Start here");
+  await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(started).toHaveBeenCalledOnce());
+  const id = started.mock.calls[0]?.[0];
+  expect(f.messages.send.mock.calls[0]?.[2]).toEqual(["a".repeat(64)]);
+  expect(readView("routed-followup", `draft:${id}`, null)).toEqual({
+    text: "",
+    recipients: [],
+  });
+});
 
 const notes = {
   name: "notes.txt",
@@ -1401,7 +1471,7 @@ it("resumes a new chat's interrupted upload after navigating away and back", asy
   );
 });
 
-it("shows an editable ordinary source link and sends it with the default agent", async () => {
+it("shows an editable ordinary source link and sends it to the pill's default agent", async () => {
   const t = setup();
   const linkedId = "22222222-2222-4222-8222-222222222222";
   const source: LinkedChat = {
@@ -1416,14 +1486,14 @@ it("shows an editable ordinary source link and sends it with the default agent",
       scope="test"
       linkedId={linkedId}
       source={source}
+      extensions={withPill}
       onStarted={started}
     />,
   );
-  await waitFor(() =>
-    expect(screen.getByRole("textbox")).toHaveTextContent("@Member agent"),
-  );
+  await waitFor(() => expect(sendingTo("Member agent")).toBeInTheDocument());
   const input = screen.getByRole("textbox") as HTMLTextAreaElement;
   expect(input.value).toContain(source.link);
+  expect(input.value).not.toContain("@Member agent");
   expect(t.channelWrites.create).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "Send message" }));
   await waitFor(() => expect(started).toHaveBeenCalledOnce());
@@ -1457,19 +1527,18 @@ it("types prose after a seeded source link instead of extending it", async () =>
       linkedId={linkedId}
       source={source}
       focusRequest={1}
+      extensions={withPill}
       onStarted={vi.fn()}
     />,
   );
-  await waitFor(() =>
-    expect(screen.getByRole("textbox")).toHaveTextContent("@Member agent"),
-  );
+  await waitFor(() => expect(sendingTo("Member agent")).toBeInTheDocument());
   const input = screen.getByRole("textbox") as HTMLTextAreaElement;
-  expect(input.value).toBe(`@Member agent ${source.link} `);
+  expect(input.value).toBe(`${source.link} `);
   expect(input.selectionStart).toBe(input.value.length);
   await userEvent.keyboard("Investigate");
-  expect(input.value).toBe(`@Member agent ${source.link} Investigate`);
+  expect(input.value).toBe(`${source.link} Investigate`);
 });
-it("starting again from a sent source seeds its link and default agent again", async () => {
+it("starting again from a sent source seeds its link and the pill's default agent again", async () => {
   const t = setup();
   const linkedId = "22222222-2222-4222-8222-222222222222";
   const source: LinkedChat = {
@@ -1484,27 +1553,24 @@ it("starting again from a sent source seeds its link and default agent again", a
         scope="test"
         linkedId={linkedId}
         source={source}
+        extensions={withPill}
         onStarted={started}
       />,
     );
   };
   const started = vi.fn();
   const first = start();
-  await waitFor(() =>
-    expect(screen.getByRole("textbox")).toHaveTextContent("@Member agent"),
-  );
+  await waitFor(() => expect(sendingTo("Member agent")).toBeInTheDocument());
   await userEvent.click(screen.getByRole("button", { name: "Send message" }));
   await waitFor(() => expect(started).toHaveBeenCalledOnce());
   first.unmount();
   start();
-  await waitFor(() =>
-    expect(screen.getByRole("textbox")).toHaveTextContent("@Member agent"),
-  );
-  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toContain(
-    source.link,
-  );
+  await waitFor(() => expect(sendingTo("Member agent")).toBeInTheDocument());
+  const again = screen.getByRole("textbox") as HTMLTextAreaElement;
+  expect(again.value).toContain(source.link);
+  expect(again.value).not.toContain("@Member agent");
 });
-it("keeps a removed default tag when the linked draft is reopened", async () => {
+it("keeps the pill's default agent out of the text when the linked draft is reopened", async () => {
   const t = setup();
   const linkedId = "22222222-2222-4222-8222-222222222222";
   const source: LinkedChat = {
@@ -1518,13 +1584,12 @@ it("keeps a removed default tag when the linked draft is reopened", async () => 
       scope="test"
       linkedId={linkedId}
       source={source}
+      extensions={withPill}
       onStarted={vi.fn()}
     />
   );
   const first = render(draft());
-  await waitFor(() =>
-    expect(screen.getByRole("textbox")).toHaveTextContent("@Member agent"),
-  );
+  await waitFor(() => expect(sendingTo("Member agent")).toBeInTheDocument());
   const input = screen.getByRole("textbox") as HTMLTextAreaElement;
   await userEvent.clear(input);
   await userEvent.type(input, source.link);
@@ -1543,6 +1608,8 @@ it("keeps a removed default tag when the linked draft is reopened", async () => 
   expect(reopened.value).toBe(source.link);
   await new Promise((resolve) => setTimeout(resolve, 50));
   expect(reopened.value).not.toContain("@Member agent");
+  // The pill still holds the default agent; it is never a removable tag.
+  expect(sendingTo("Member agent")).toBeInTheDocument();
 });
 it("keeps an edited linked draft instead of reinserting its removed source", async () => {
   const t = setup();
@@ -1693,4 +1760,25 @@ it("tags an agent whose name was typed with Space while a retry after a failed i
     release();
     draft.dispose();
   }
+});
+
+it("does not start a named Solo chat from a file alone", async () => {
+  const test = setup(),
+    user = userEvent.setup();
+  const uploadForNewChat = vi.fn(async () => notes);
+  Object.assign(test.session, { attachments: { uploadForNewChat } });
+  render(<SoloDraft session={test.session} scope="test" onStarted={vi.fn()} />);
+  await user.clear(screen.getByRole("textbox"));
+  await user.upload(
+    screen.getByLabelText("Choose attachments"),
+    new File(["notes"], "notes.txt", { type: "text/plain" }),
+  );
+  await waitFor(() => expect(uploadForNewChat).toHaveBeenCalledOnce());
+  // The pill addresses the main agent, so only the missing text disables Send.
+  expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  const form = screen.getByRole("textbox").closest("form");
+  if (!form) throw new Error("Expected composer form");
+  fireEvent.submit(form);
+  expect(test.channelWrites.create).not.toHaveBeenCalled();
+  expect(test.messages.send).not.toHaveBeenCalled();
 });

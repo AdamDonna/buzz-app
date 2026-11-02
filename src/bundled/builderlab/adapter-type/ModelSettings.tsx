@@ -1,17 +1,18 @@
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { AgentSaveButton } from "../../../features/agents/AgentSaveButton";
 import { ModelFamilyMenu } from "../../../features/agents/ModelFamilyMenu";
-import { CaretDownIcon } from "../../../shared/design-system/icons";
+import { BuilderlabLogoIcon } from "../../../shared/design-system/icons";
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Field } from "../../../shared/design-system/ui/Field";
 import { LoadingRegion } from "../../../shared/design-system/ui/LoadingRegion";
 import { PreferenceRow } from "../../../shared/design-system/ui/PreferenceRow";
-import {
-  PopoverRoot,
-  PopoverTrigger,
-  PopoverPopup,
-  PopoverDescription,
-} from "../../../shared/design-system/ui/Popover";
 import { Select } from "../../../shared/design-system/ui/Select";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import { Textarea } from "../../../shared/design-system/ui/Textarea";
@@ -23,7 +24,8 @@ import {
   type RemoteAgent,
   type RemoteAgentModel,
 } from "../agents/client";
-import type { OAuthSession } from "../oauth/session";
+import type { BuilderlabSession } from "../session";
+import { AccountRecoverySheet, SettingsErrorSheet } from "./SignInFooter";
 import { effortLabel, modelChoice } from "./models";
 
 const statuses = {
@@ -37,23 +39,35 @@ const statuses = {
 };
 const message = (reason: unknown) =>
   reason instanceof Error ? reason.message : "Could not load model settings.";
+const accountMismatchMessage =
+  "Sign in to the Builderlab account that loaded these settings.";
 
 export function ModelSettings({
   client,
   session,
   settings,
+  harnessControl,
+  openIdentity,
 }: {
   client: AgentClient;
-  session: OAuthSession;
+  session: BuilderlabSession;
+  openIdentity?: (() => void) | undefined;
+  harnessControl?: ReactNode;
   settings:
-    | { agent: RemoteAgent; subject: string }
+    | { agent: RemoteAgent; subject: string; email?: string }
     | { pending: boolean; error: string; retry(): void };
 }) {
+  const login = useSyncExternalStore(session.subscribe, session.snapshot);
+  const signedIn = login.status === "signed-in";
   const agent = "agent" in settings ? settings.agent : undefined;
   const subject = "subject" in settings ? settings.subject : undefined;
+  const mismatch =
+    signedIn && subject !== undefined && login.account?.subject !== subject;
+  const accountProblem =
+    signedIn && (mismatch || login.account?.canUseRemoteAgents === false);
+  const hasAccess = signedIn && !accountProblem;
+  const email = mismatch && "email" in settings ? settings.email : undefined;
   const form = useId();
-  const harnessHelp = useId();
-  const [harnessHelpOpen, setHarnessHelpOpen] = useState(false);
   const notify = useToastNotification();
   const [saved, setSaved] = useState(agent);
   const [models, setModels] = useState<readonly RemoteAgentModel[]>();
@@ -62,8 +76,11 @@ export function ModelSettings({
   const [instructions, setInstructions] = useState(agent?.instructions ?? "");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const busy = !saved || loading || saving;
+  const busy = !saved || loading || saving || !hasAccess;
   const [error, setError] = useState("");
+  useEffect(() => {
+    if (!signedIn) setError("");
+  }, [signedIn]);
   const [catalogError, setCatalogError] = useState("");
   const [revision, setRevision] = useState(0);
   const controller = useRef<AbortController | null>(null);
@@ -81,7 +98,11 @@ export function ModelSettings({
   }, [agent]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision retries a failed catalog request while keeping the draft.
   useEffect(() => {
-    if (!agent) return;
+    if (!agent || login.status !== "signed-in") return;
+    if (!hasAccess) {
+      setLoading(false);
+      return;
+    }
     const current = new AbortController();
     setLoading(true);
     setCatalogError("");
@@ -99,7 +120,7 @@ export function ModelSettings({
         if (!current.signal.aborted) setLoading(false);
       });
     return () => current.abort();
-  }, [client, agent, revision]);
+  }, [client, agent, revision, login, hasAccess]);
   const model = models?.find((choice) => choice.id === modelId);
   const valid = !!model?.supportedReasoningEfforts.includes(effort);
   const modelChanged =
@@ -110,6 +131,7 @@ export function ModelSettings({
     modelChanged ||
     (!instructionsChanged && saved?.modelSelectionStatus !== "valid");
   const disabled =
+    !hasAccess ||
     !saved ||
     saving ||
     !validInstructions(instructions) ||
@@ -122,11 +144,8 @@ export function ModelSettings({
     setSaving(true);
     setError("");
     try {
-      await session.ensureSignedIn(signal);
       if (session.credential().account.subject !== subject)
-        throw new Error(
-          "Sign in to the Builderlab account that loaded these settings.",
-        );
+        throw new Error(accountMismatchMessage);
       if (saved.status !== "Active")
         throw new Error("Only Active agents can have their settings edited.");
       if (saveModel && instructionsChanged)
@@ -161,31 +180,84 @@ export function ModelSettings({
       if (remote.modelSelectionStatus === "valid")
         notify("Model preferences saved", "success");
     } catch (reason) {
-      if (!signal.aborted) setError(message(reason));
+      if (!signal.aborted && session.snapshot().status === "signed-in")
+        setError(message(reason));
     } finally {
       if (!signal.aborted) setSaving(false);
     }
   };
-  const pending = "pending" in settings ? settings.pending : loading;
-  const placeholder = pending ? "…" : "Unavailable";
+  const pending =
+    hasAccess && ("pending" in settings ? settings.pending : loading);
+  const [slow, setSlow] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each agent/catalog retry starts a new loading phase, even if pending stays true.
+  useEffect(() => {
+    setSlow(false);
+    if (!pending) return;
+    const timer = setTimeout(() => setSlow(true), 3000);
+    return () => clearTimeout(timer);
+  }, [pending, agent, revision]);
+  const placeholder =
+    login.status !== "signed-in"
+      ? ""
+      : pending
+        ? slow
+          ? "Still loading…"
+          : "…"
+        : "Unavailable";
+  const loadError = "error" in settings ? settings.error : "";
+  const failure = hasAccess ? loadError || error || catalogError : "";
   return (
     <LoadingRegion
       pending={pending}
       label={agent ? "Loading models…" : "Loading settings…"}
       statusVisibility="screen-reader"
       feedback={
-        "error" in settings && settings.error ? (
-          <div className="grid gap-2">
-            <p role="alert" className="m-0 text-body-sm text-danger">
-              {settings.error}
+        hasAccess && !failure && slow && pending ? (
+          <div className="grid justify-items-start gap-2">
+            <p role="status" className="m-0 text-body-sm text-secondary">
+              {agent
+                ? "Models are taking longer to load."
+                : "Settings are taking longer to load."}
             </p>
-            <div>
-              <Button onClick={settings.retry}>Retry</Button>
-            </div>
+            <Button
+              onClick={() => {
+                if ("retry" in settings) settings.retry();
+                else setRevision((value) => value + 1);
+              }}
+            >
+              {agent ? "Retry models" : "Retry"}
+            </Button>
           </div>
         ) : undefined
       }
     >
+      <AccountRecoverySheet
+        session={session}
+        openIdentity={openIdentity}
+        active={accountProblem}
+        email={email}
+        mismatch={mismatch}
+      />
+      <SettingsErrorSheet
+        active={!!failure}
+        title={
+          loadError
+            ? "Couldn’t load settings"
+            : error
+              ? "Couldn’t save changes"
+              : "Couldn’t load models"
+        }
+        message={failure}
+        action={{
+          label: loadError ? "Retry" : error ? "Try again" : "Retry models",
+          disabled: loadError ? false : error ? disabled : busy,
+          run: () => {
+            if (loadError && "retry" in settings) settings.retry();
+            else if (error) void save();
+            else setRevision((value) => value + 1);
+          },
+        }}
+      />
       <form
         id={form}
         className="grid gap-4"
@@ -194,7 +266,7 @@ export function ModelSettings({
           void save();
         }}
       >
-        {saved && saved.modelSelectionStatus !== "valid" && (
+        {hasAccess && saved && saved.modelSelectionStatus !== "valid" && (
           <p role="status" className="m-0 text-body-sm text-warning">
             {statuses[saved.modelSelectionStatus ?? "unknown"]}
             {saved.modelId &&
@@ -204,73 +276,17 @@ export function ModelSettings({
           </p>
         )}
         <SettingsGroup>
-          <PreferenceRow
-            title="Harness"
-            trailing={
-              <div className="buzz-select" data-variant="compact">
-                <PopoverRoot
-                  open={harnessHelpOpen}
-                  onOpenChange={(open, details) => {
-                    if (!open && details.reason === "trigger-press") {
-                      details.cancel();
-                      return;
-                    }
-                    setHarnessHelpOpen(open);
-                  }}
-                >
-                  <PopoverTrigger
-                    openOnHover="preview"
-                    nativeButton={false}
-                    role="presentation"
-                    tabIndex={-1}
-                    aria-haspopup={false}
-                    aria-expanded={undefined}
-                    aria-controls={undefined}
-                    onKeyDownCapture={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setHarnessHelpOpen(true);
-                      }
-                    }}
-                    render={
-                      <span className="inline-flex">
-                        <Button
-                          variant="outline"
-                          shape="control"
-                          size="sm"
-                          disabled
-                          focusableWhenDisabled
-                          aria-label="Harness: Builderlab"
-                          aria-haspopup="dialog"
-                          aria-expanded={harnessHelpOpen}
-                          aria-describedby={
-                            harnessHelpOpen ? harnessHelp : undefined
-                          }
-                          onFocus={() => setHarnessHelpOpen(true)}
-                        >
-                          Builderlab
-                          <CaretDownIcon size={14} aria-hidden="true" />
-                        </Button>
-                      </span>
-                    }
-                  />
-                  <PopoverPopup
-                    side="top"
-                    align="end"
-                    aria-label="Builderlab harness"
-                    initialFocus={false}
-                    finalFocus={false}
-                  >
-                    <PopoverDescription id={harnessHelp}>
-                      Builderlab holds this agent’s signing key. Buzz can’t move
-                      that identity to a local harness yet. To run locally,
-                      create a new agent.
-                    </PopoverDescription>
-                  </PopoverPopup>
-                </PopoverRoot>
-              </div>
-            }
-          />
+          {harnessControl ?? (
+            <PreferenceRow
+              title="Harness"
+              trailing={
+                <span className="flex min-w-0 items-center gap-2">
+                  <BuilderlabLogoIcon size={20} aria-hidden="true" />
+                  Builderlab
+                </span>
+              }
+            />
+          )}
           <ModelFamilyMenu
             label="Model"
             align="end"
@@ -307,7 +323,7 @@ export function ModelSettings({
             onValueChange={setEffort}
           />
         </SettingsGroup>
-        {models?.length === 0 && (
+        {hasAccess && models?.length === 0 && (
           <p className="m-0 text-body-sm text-secondary">
             No models are available. Retry when the catalog is available.
           </p>
@@ -315,7 +331,7 @@ export function ModelSettings({
         <Field
           label="Instructions"
           error={
-            !validInstructions(instructions)
+            hasAccess && !validInstructions(instructions)
               ? "Use text or leave this empty."
               : undefined
           }
@@ -324,7 +340,7 @@ export function ModelSettings({
             appearance="outlined"
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
-            disabled={!saved || saving}
+            disabled={!saved || saving || !hasAccess}
             placeholder={!saved ? placeholder : undefined}
             rows={8}
             maxLength={MAX_INSTRUCTIONS_LENGTH}
@@ -336,20 +352,13 @@ export function ModelSettings({
           disabled={disabled}
           dirty={modelChanged || instructionsChanged}
         />
-        {(catalogError || error) && (
-          <p role="alert" className="m-0 text-body-sm text-danger">
-            {error || catalogError}
-          </p>
-        )}
-        {(catalogError || error || models?.length === 0) && (
+        {hasAccess && !failure && models?.length === 0 && (
           <div>
             <Button
               disabled={busy}
               onClick={() => setRevision((value) => value + 1)}
             >
-              {catalogError || models?.length === 0
-                ? "Retry models"
-                : "Refresh models"}
+              Retry models
             </Button>
           </div>
         )}

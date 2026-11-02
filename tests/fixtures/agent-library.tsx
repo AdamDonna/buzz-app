@@ -24,6 +24,7 @@ import { CreateModelChoices } from "../../src/features/agents/CreateModelChoices
 import { ModelPicker } from "../../src/features/agents/ModelPicker";
 import "../../src/shared/styles/globals.css";
 
+const harness = new URLSearchParams(location.search).get("harness");
 const importing = new URLSearchParams(location.search).has("import");
 const teamImport = new URLSearchParams(location.search).has("teamImport");
 if (importing || teamImport) createAppearance();
@@ -177,16 +178,45 @@ const other: RegisteredAgentType = {
   id: "other",
   title: "Other",
 };
+const hosted: RegisteredAgentType = {
+  ...type,
+  key: "fixture/hosted",
+  id: "hosted",
+  title: "Builderlab",
+  remote: {
+    provision: async () => {
+      throw new Error("Unexpected remote provision");
+    },
+    activate: async () => {
+      throw new Error("Unexpected remote activation");
+    },
+    profile: async () => {
+      throw new Error("Unexpected remote profile write");
+    },
+    remove: async () => {
+      throw new Error("Unexpected remote removal");
+    },
+  },
+};
+if (harness === "hosted") {
+  snapshot.agents = snapshot.agents.map((agent) => ({
+    ...agent,
+    place: "hosted",
+    type: hosted.key,
+  }));
+}
 const reviewing = new URLSearchParams(location.search).has("review");
 const changing = new URLSearchParams(location.search).has("change");
-const types = importing
-  ? [
-      { ...type, title: "Alternative" },
-      { ...other, title: "Claude Code", icon: ClaudeLogoIcon },
-    ]
-  : changing
-    ? [type, other]
-    : [type];
+const types = harness
+  ? [type, other, hosted]
+  : importing
+    ? [
+        { ...type, title: "Alternative" },
+        { ...other, title: "Claude Code", icon: ClaudeLogoIcon },
+      ]
+    : changing
+      ? [type, other]
+      : [type];
 if (changing) snapshot.running = snapshot.agents;
 let updates: readonly AgentUpdateRequest[] = changing
   ? [

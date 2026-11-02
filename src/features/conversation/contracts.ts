@@ -30,6 +30,23 @@ export type ComposerToolProps = Readonly<{
   /** Read-only: who the draft mentions, in draft order. The tool re-renders when
    * this changes; the array keeps its identity while only the prose changes. */
   recipients: readonly Readonly<{ pubkey: string; name: string }>[];
+  /** Solo, alone with agents: who hears the message. Inline mentions decide
+   * when there are any; otherwise the toolbar's agents stand in. `only`
+   * replaces those stand-ins with a non-empty list and `toggle` adds or
+   * removes one, never the last; they also follow each send. While inline
+   * mentions decide, `toggle` adds or removes that mention instead. Absent
+   * elsewhere, where mentions alone decide. */
+  audience?:
+    | Readonly<{
+        recipients: readonly Readonly<{ pubkey: string; name: string }>[];
+        /** True while inline mentions in the text decide, so picks only change the stand-ins. */
+        named: boolean;
+        only(
+          recipients: readonly Readonly<{ pubkey: string; name: string }>[],
+        ): void;
+        toggle(recipient: Readonly<{ pubkey: string; name: string }>): void;
+      }>
+    | undefined;
   /** False after removal, destination change, read-only state or a rejected edit. */
   insertText(text: string): boolean;
   /** Atomically insert display text and explicit notification intent at the caret.

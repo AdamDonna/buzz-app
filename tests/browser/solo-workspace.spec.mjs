@@ -1,3 +1,4 @@
+import { pauseClock } from "./clock.mjs";
 import { pluginAction } from "./plugin-settings.mjs";
 import { generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools";
 import { test, expect } from "./fixture.mjs";
@@ -7,6 +8,7 @@ import {
   openPage,
   openSettings,
   selectSettingsSection,
+  sendOnlyTo,
 } from "./navigation.mjs";
 import { npubEncode } from "nostr-tools/nip19";
 const id = "33333333-3333-4333-8333-333333333333";
@@ -374,10 +376,7 @@ test("Solo sidebar shares working activity, keyboard preview and local panel nav
   await closeProfile(page).click();
   await expect(alpha).toBeFocused();
   // Hold wall time while pausing so command latency cannot pass the target.
-  const pauseTime = await page.evaluate(() => Date.now());
-  await page.clock.setFixedTime(pauseTime);
-  await page.clock.pauseAt(pauseTime);
-  await page.clock.setSystemTime(pauseTime);
+  await pauseClock(page);
   // Cross the closed trigger, then reopen by keyboard before hover dismissal.
   await alpha.hover();
   await page.mouse.move(0, 0);
@@ -600,33 +599,17 @@ test.describe("personal recipients", () => {
         name: "Message your agents",
         exact: true,
       });
-      const [honey, brain, outsider] = app.soloAgents;
-      const tag = (agent) =>
-        workspace.getByRole("button", {
-          name: `Remove mention ${agent.name} ${agent.pubkey}`,
-          exact: true,
-        });
-      await expect(tag(honey)).toHaveCount(0);
-      // Existing chats do not seed the account default; choose an owned recipient.
-      await composer.fill("");
-      await workspace
-        .getByRole("button", { name: "Mention a member", exact: true })
-        .click();
-      const picker = page.getByRole("dialog", {
-        name: "Mention a member or agent",
-      });
-      await expect(
-        picker.getByRole("button", {
-          name: `${brain.name} ${brain.pubkey}`,
-          exact: true,
-        }),
-      ).toBeVisible();
-      await picker
-        .getByRole("button", {
-          name: `${brain.name} ${brain.pubkey}`,
-          exact: true,
-        })
-        .click();
+      const [, brain, outsider] = app.soloAgents;
+      // Agents-only Solo chats address agents from the composer's pill.
+      const pill = (scope) =>
+        scope.getByRole("button", { name: /Change agents$|^Choose agent$/ });
+      await expect(composer).toHaveText("");
+      // An existing chat starts addressed to one of its agents.
+      await expect(pill(workspace)).toHaveAccessibleName(
+        /^Sending to .+\. Change agents$/,
+      );
+      // Choose an owned recipient from the pill.
+      await sendOnlyTo(page, pill(workspace), brain);
       await composer.press("End");
       await page.keyboard.insertText("Only this agent from Beta");
       await composer.press("Enter");
@@ -639,9 +622,12 @@ test.describe("personal recipients", () => {
       expect(sent.tags.filter(([key]) => key === "p")).toEqual([
         ["p", brain.pubkey],
       ]);
-      // The next draft retains the last notified agent, not the account default.
-      await expect(tag(honey)).toHaveCount(0);
-      await expect(tag(brain)).toBeVisible();
+      // The next draft retains the last notified agent, not the account
+      // default, and keeps it out of the text.
+      await expect(pill(workspace)).toHaveAccessibleName(
+        `Sending to ${brain.name}. Change agents`,
+      );
+      await expect(composer).toHaveText("");
       // A draft from the ordinary Messages reader may retain a channel member
       // who isn't in the owner's inventory. A Solo chat must reject that explicit recipient.
       await composer.fill("");
@@ -660,9 +646,7 @@ test.describe("personal recipients", () => {
       });
       // The linked tab follows the same Solo policy as the main reader: the
       // channel member outside the owner's inventory is not offered.
-      await linkedChat
-        .getByRole("button", { name: "Mention a member", exact: true })
-        .click();
+      await pill(linkedChat).click();
       const linkedPicker = page.getByRole("dialog", {
         name: "Mention a member or agent",
       });

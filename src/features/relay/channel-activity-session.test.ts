@@ -2,6 +2,7 @@ import { assert, expect, it, vi } from "vitest";
 import type { EventTemplate } from "nostr-tools";
 import { createRelaySession } from "./session";
 import { PublishRejected } from "./outbox";
+import { ReadError } from "./errors";
 import {
   flush,
   keypair,
@@ -332,6 +333,43 @@ it("retries failed Recent activity after an explicit roster refresh", async () =
       h.channels.list().channels.find((c) => c.id === "beta")?.lastActivityAt,
     ).toBe(100);
   } finally {
+    h.owner.dispose();
+  }
+});
+it("retries a transient activity failure quietly and reports a lasting one at once", async () => {
+  const h = setup();
+  try {
+    await h.initial();
+    vi.useFakeTimers();
+    void h.preferences.setSort("channels", "recent", []);
+    await vi.advanceTimersByTimeAsync(0);
+    take(h.pending).reject(
+      new ReadError("unavailable", "Relay read failed (502)"),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // No error while the quiet retry waits (at most the first 1 s delay).
+    expect(h.channels.list().activityStatus).toBe("loading");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.activity).toHaveBeenCalledTimes(2);
+    take(h.pending).resolve([message(h.peer, "beta", "recovered", 100)]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.channels.list().activityStatus).toBe("ready");
+    expect(
+      h.channels.list().channels.find((c) => c.id === "beta")?.lastActivityAt,
+    ).toBe(100);
+
+    // A denial cannot clear on retry: the sidebar reports it without a retry.
+    void h.preferences.setSort("channels", "alpha", []);
+    await vi.advanceTimersByTimeAsync(0);
+    void h.preferences.setSort("channels", "recent", []);
+    await vi.advanceTimersByTimeAsync(0);
+    take(h.pending).reject(new ReadError("denied", "Relay read failed (403)"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.channels.list().activityStatus).toBe("error");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.activity).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.useRealTimers();
     h.owner.dispose();
   }
 });

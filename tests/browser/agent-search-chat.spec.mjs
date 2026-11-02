@@ -21,6 +21,15 @@ test("search opens a new Solo chat with one of the viewer's agents", async ({
   app,
 }, testInfo) => {
   await page.goto(app.origin);
+  // The same unproven ordering mitigation for the WebKit lost-fill failure as
+  // the public search destination test in global-search.spec.mjs, which waits
+  // for a rendered conversation. This page opens none, so wait for the
+  // sidebar's Solo chats instead.
+  await expect(
+    page
+      .getByRole("navigation", { name: "Solo conversations" })
+      .getByRole("button", { name: "Earlier with Honey", exact: true }),
+  ).toBeVisible();
   // Navigation load can finish before React mounts the shell shortcut owner.
   const search = page.getByRole("button", { name: "Search Buzz", exact: true });
   await search.focus();
@@ -30,7 +39,11 @@ test("search opens a new Solo chat with one of the viewer's agents", async ({
   );
   await page.keyboard.press(`${modifier}+k`);
   const dialog = page.getByRole("dialog", { name: "Search Buzz" });
-  await dialog.getByRole("combobox", { name: "Search Buzz" }).fill("honey");
+  const input = dialog.getByRole("combobox", { name: "Search Buzz" });
+  await input.fill("honey");
+  // fill() selects in the page, then inserts over the protocol; a rare WebKit
+  // run has shown an empty palette afterwards. Fail here, not on the results.
+  await expect(input).toHaveValue("honey");
   // Result groups are listboxes, or grids when rows carry controls.
   const result = (group, name) =>
     dialog
@@ -59,14 +72,15 @@ test("search opens a new Solo chat with one of the viewer's agents", async ({
     exact: true,
   });
   await expect(composer).toBeFocused();
-  // The new chat starts tagged with the chosen agent.
+  // The new chat starts addressed to the chosen agent, in the composer's pill.
   const [agent] = app.soloAgents;
   await expect(
     page.getByRole("button", {
-      name: `Remove mention ${agent.name} ${agent.pubkey}`,
+      name: `Sending to ${agent.name}. Change agents`,
       exact: true,
     }),
   ).toBeVisible();
+  await expect(composer).toHaveText("");
   // This browser fixture cannot start Solo chats (it says so below the
   // composer). SoloDraft tests cover the first message.
   await page.screenshot({

@@ -4,6 +4,7 @@ import { createRelaySession } from "./session";
 import type { ChannelStoreOptions } from "./store";
 import type { RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
+import { headRecovering } from "./live-recovery";
 import {
   bounds,
   flush,
@@ -149,6 +150,68 @@ it("a skipped warm head cannot hide the stream gap behind its freshness lease", 
     ).toBe("verified");
     live.state({ status: "retrying", routes: [] });
     expect(owner.session.channels.window("a").freshness).toBe("cached");
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("keeps a failed head recovery-owned from a dropped stream until the re-established head settles", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  let live!: LiveCallbacks;
+  const owner = createRelaySession({
+    ...wire.transport,
+    subscribe(callbacks) {
+      live = callbacks;
+      return { update() {}, retry() {}, dispose() {} };
+    },
+  });
+  const route = (status: "pending" | "live") => ({
+    id: "channel:a",
+    channelId: "a",
+    status,
+    replay: "unknown" as const,
+  });
+  const owned = () => headRecovering(owner.session.live.snapshot(), "a");
+  try {
+    live.receive([roster(relay, "a", [viewer.pubkey])]);
+    owner.session.channels.ensure("a");
+    wire
+      .next()
+      .respond([
+        bounds(relay, "a", "head", { has_more: false, next_cursor: null }),
+      ]);
+    await flush();
+    live.state({ status: "connected", routes: [route("live")] });
+    live.established("a");
+    await flush();
+    wire.next().fail(new ReadError("unavailable", "Bad gateway", 502));
+    await flush();
+    expect(owned()).toBe(true);
+    // The drop clears catch-up entries; reconnecting re-reads the head.
+    live.state({ status: "retrying", routes: [route("pending")] });
+    expect(owner.session.live.snapshot().heads).toEqual([]);
+    expect(owned()).toBe(true);
+    // Authenticated before the channel's EOSE: no entry yet, route pending.
+    live.state({ status: "connected", routes: [route("pending")] });
+    expect(owner.session.live.snapshot().heads).toEqual([]);
+    expect(owned()).toBe(true);
+    live.state({ status: "connected", routes: [route("live")] });
+    live.established("a");
+    await flush();
+    expect(owned()).toBe(true);
+    wire
+      .next()
+      .respond([
+        bounds(relay, "a", "head", { has_more: false, next_cursor: null }),
+      ]);
+    await flush();
+    expect(
+      owner.session.live.snapshot().heads.find((h) => h.channelId === "a")
+        ?.state,
+    ).toBe("verified");
+    expect(owned()).toBe(false);
   } finally {
     owner.dispose();
   }

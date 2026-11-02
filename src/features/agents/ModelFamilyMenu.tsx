@@ -177,7 +177,9 @@ export function ModelFamilyMenu({
                         value={model.id}
                         closeOnClick
                       >
-                        {model.label}
+                        {model.unlisted && model.description
+                          ? `${model.label} · ${model.description}`
+                          : model.label}
                       </MenuRadioItem>
                     ),
                   )}

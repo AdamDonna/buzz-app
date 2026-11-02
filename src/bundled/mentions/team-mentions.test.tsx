@@ -43,6 +43,7 @@ function fixture({
   loading = false,
   failure = false,
   dm = false,
+  team = 1,
 } = {}) {
   const people = Array.from({ length: count }, (_, i) => ({
     pubkey: (i + 1).toString(16).padStart(64, "0"),
@@ -50,7 +51,11 @@ function fixture({
   }));
   const agent = people[0];
   if (!agent) throw new Error("Fixture needs at least one person");
-  const read = vi.fn(async () => ({ definitions: [], identities: [agent] }));
+  const teamAgents = people.slice(0, team);
+  const read = vi.fn(async () => ({
+    definitions: [],
+    identities: teamAgents,
+  }));
   if (failure) read.mockRejectedValueOnce(new Error("temporary read failure"));
   const library = createAgentLibrary(read);
   const choices = createAgentChoices({
@@ -92,7 +97,7 @@ function fixture({
           type: "team",
           id: "team",
           name: "Team",
-          agents: [agent.pubkey],
+          agents: teamAgents.map((person) => person.pubkey),
         },
       },
     },
@@ -344,6 +349,41 @@ it("teams retain installed membership through rerenders and stale acceptance unt
     expect(menu.team()?.detail).toContain("Adds 1");
   } finally {
     menu.view.unmount();
+    h.library.dispose();
+  }
+});
+
+it("a team pick in an agents-only audience replaces the audience with the team", async () => {
+  const h = fixture({ count: 2, team: 2 }),
+    user = userEvent.setup(),
+    only = vi.fn();
+  const view = render(
+    <MentionPicker
+      session={h.session}
+      scope="test"
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      audience={{ recipients: [], named: false, only, toggle: vi.fn() }}
+      select={() => true}
+      selectTeam={() => true}
+    />,
+  );
+  try {
+    await user.click(screen.getByRole("button", { name: "Choose agent" }));
+    const team = await screen.findByRole("button", {
+      name: /Team.*Saved team/,
+    });
+    await waitFor(() => expect(team).toBeEnabled());
+    await user.click(team);
+    const [first, second] = [
+      { pubkey: "1".padStart(64, "0"), name: "Person 00" },
+      { pubkey: "2".padStart(64, "0"), name: "Person 01" },
+    ];
+    expect(only).toHaveBeenCalledExactlyOnceWith([first, second]);
+    await waitFor(() => expect(screen.queryByRole("searchbox")).toBeNull());
+  } finally {
+    view.unmount();
     h.library.dispose();
   }
 });
@@ -633,5 +673,35 @@ it("directory pages rebuild the name index only for people they add", async () =
   await type("person");
   expect(starts).not.toHaveBeenCalled();
   view.unmount();
+  h.library.dispose();
+});
+
+it("an open chooser relabels choices when only names change", async () => {
+  const h = fixture();
+  let name = "Before";
+  let revision = 0;
+  const listeners = new Set<() => void>();
+  Object.assign(h.session, {
+    names: {
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      snapshot: () => revision,
+      scope: () => () => ({ name, source: "agent-directory" }),
+    },
+  });
+  function Chooser() {
+    const model = useMentionChoices(h.session, "parent", false, "", "open");
+    return <>{model.candidates.map((choice) => choice.label).join(",")}</>;
+  }
+  render(<Chooser />);
+  await waitFor(() => expect(screen.getByText("Before")).toBeInTheDocument());
+  act(() => {
+    name = "After";
+    revision++;
+    for (const listener of listeners) listener();
+  });
+  expect(screen.getByText("After")).toBeInTheDocument();
   h.library.dispose();
 });

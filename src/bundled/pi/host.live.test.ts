@@ -32,9 +32,10 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import lockfile from "proper-lockfile";
 import { AuthFile, serve } from "./host.mjs";
 import { Harness } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 const originalOpen = Harness.open;
-let openedHarness;
-Harness.open = async (...args) => { openedHarness = await originalOpen(...args); return openedHarness; };
+let openedHarness, report;
+Harness.open = async (...args) => { report = args[1].onReport; openedHarness = await originalOpen(...args); return openedHarness; };
 const data = process.argv[2];
 const faux = fauxProvider();
 const models = createModels();
@@ -110,6 +111,11 @@ try { out.cleanupFailure = await pi.rpc("wait", { agent, submission: b.submissio
 finally { openedHarness.commit = commit; }
 // What a transcript and usage read: the places, and the entries without schemas.
 out.places = (await pi.rpc("places", { agent })).places;
+// Another membership of the same identity has its own durable storage.
+const secondary = agent + "@secondary.example%3A7447";
+await pi.rpc("open", { agent: secondary, tools });
+out.secondaryPlaces = (await pi.rpc("places", { agent: secondary })).places;
+await pi.rpc("close", { agent: secondary });
 out.recorded = Object.keys((await pi.rpc("recorded", { agent, conversation: a.conversation })).models);
 out.entries = (await pi.rpc("entries", { agent, conversation: a.conversation })).entries.map((entry) => [entry.kind, ...(entry.model ?? []).map((message) => message.role + (message.usage ? "+usage" : ""))]);
 // A policy enabled after the process started blocks the same live tool path.
@@ -166,6 +172,17 @@ const g1 = await pi.rpc("deliver", turn("G", "ninth"));
 await asking.gate;
 await pi.rpc("abort", { agent, conversation: g1.conversation });
 out.aborted = await pi.rpc("wait", { agent, submission: g1.submission });
+// A run whose task Pi parked, as crashes cut it off too often, ends at the
+// next wait, with what is queued for it: each fails, saying why.
+const pk = held(), parking = held();
+faux.setResponses([async (_context, options) => { parking.release(); await abortable(pk.gate, options?.signal); return fauxAssistantMessage("never"); }]);
+const pk1 = await pi.rpc("deliver", turn("PK1", "parked"));
+await parking.gate;
+const pk2 = await pi.rpc("deliver", turn("PK2", "queued"));
+const { tasks } = await openedHarness.inspect(BACKGROUND_CONTEXT);
+const parkedTask = tasks.find(({ record }) => record.conversationId === pk1.conversation && !record.owner).record;
+report(new Error("Parked"), { type: "task_parked", task: { id: parkedTask.id, kind: parkedTask.kind, conversationId: pk1.conversation } });
+out.parked = await Promise.all([pk1, pk2].map((x) => pi.rpc("wait", { agent, submission: x.submission })));
 // Session controls act on a conversation key's Pi conversation.
 const s = held(), running = held();
 faux.setResponses([async (_context, options) => { running.release(); await abortable(s.gate, options?.signal); return fauxAssistantMessage("never"); }]);
@@ -562,6 +579,14 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       text: "Plain answer",
     });
     expect(out.recorded).toEqual(["faux/faux-1"]);
+    expect(out.secondaryPlaces).toEqual([]);
+    expect(
+      (
+        await stat(
+          join(agents, `${"b".repeat(64)}@secondary.example%3A7447.sqlite`),
+        )
+      ).isFile(),
+    ).toBe(true);
     expect(out.places).toEqual([
       { key: "chan/root", conversation: out.a.conversation, seen: 100 },
     ]);
@@ -627,6 +652,12 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       status: "unanswered",
       reason: "aborted",
     });
+    const parked = {
+      status: "unanswered",
+      reason: "restart_limit",
+      detail: expect.stringContaining("crashed"),
+    };
+    expect(out.parked).toEqual([parked, parked]);
     expect(out.interrupted).toMatchObject({
       status: "unanswered",
       reason: "aborted",

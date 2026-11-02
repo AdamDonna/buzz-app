@@ -417,6 +417,39 @@ it("lists open channels after joined ones, each ranked by match", async () => {
     vi.useRealTimers();
   }
 });
+it("completes open channels by word runs, without scattered letters", async () => {
+  vi.useFakeTimers();
+  try {
+    const runs = channel("runs", {
+      name: "buzz-community",
+      members: [],
+      readOnly: true,
+    });
+    const scattered = channel("scattered", {
+      name: "lobster-cat",
+      members: [],
+      readOnly: true,
+    });
+    const t = fixture([]);
+    const previews = new Map(
+      [runs, scattered].map((entry) => [entry.id, entry]),
+    );
+    Object.assign(t.session.channels, {
+      // The store's answer may hold scattered-letter matches; completion
+      // drops them, as it does for joined channels.
+      searchPublic: vi.fn(async () => ({
+        channels: [runs, scattered],
+        partial: false,
+      })),
+      get: (id: string) => previews.get(id),
+    });
+    render(t.element("bc"));
+    await act(async () => vi.advanceTimersByTime(180));
+    expect(t.result().items.map((item) => item.id)).toEqual(["runs"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 it("finds multi-word open channel names by prefix", async () => {
   vi.useFakeTimers();
   try {

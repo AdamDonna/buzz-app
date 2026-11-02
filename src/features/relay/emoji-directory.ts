@@ -4,16 +4,15 @@ import { byteSize } from "./budget";
 import {
   EMOJI_SET,
   EMOJI_SET_KIND,
+  communityEmoji,
+  contentEmojiTags,
   emojiTags,
-  emojiMatches,
-  linkPart,
-  messageParts,
   normalizeShortcode,
   referencedEmoji,
   type CustomEmoji,
 } from "./emoji";
 import { eventDto, newer, type RelayEvent } from "./events";
-import type { RelayReader } from "./reader";
+import type { Priority, RelayReader } from "./reader";
 import type { RelayWriter } from "./transport";
 
 export type EmojiSnapshot = Readonly<{
@@ -45,6 +44,7 @@ export function createEmojiDirectory(
     limited = false;
   let controller: AbortController | undefined;
   let pending: Promise<void> | undefined;
+  let pendingPriority: Priority = "background";
   const lifetime = new AbortController();
   let editing: Promise<unknown> = Promise.resolve();
   let snapshot: EmojiSnapshot = Object.freeze({
@@ -87,32 +87,25 @@ export function createEmojiDirectory(
       changed = true;
     }
     if (!changed) return;
-    const winners = new Map<string, { emoji: CustomEmoji; time: number }>();
-    for (const { event } of sets.values())
-      for (const emoji of emojiTags(event)) {
-        const old = winners.get(emoji.shortcode);
-        if (
-          !old ||
-          event.created_at > old.time ||
-          (event.created_at === old.time && emoji.url < old.emoji.url)
-        )
-          winners.set(emoji.shortcode, { emoji, time: event.created_at });
-      }
     publish({
       entries: Object.freeze(
-        [...winners.values()]
-          .map(({ emoji }) => emoji)
-          .sort((a, b) => a.shortcode.localeCompare(b.shortcode)),
+        communityEmoji([...sets.values()].map(({ event }) => event)),
       ),
       mine: viewer
         ? emojiTags(sets.get(viewer)?.event ?? { tags: [] })
         : snapshot.mine,
     });
   }
-  function refresh(): Promise<void> {
+  /** Passive demand yields to other reads. An explicit retry runs in the
+   * foreground and supersedes a passive load, which can spend its whole deadline
+   * queued behind background profile reads without reaching the relay. */
+  function load(priority: Priority): Promise<void> {
     if (closed) return Promise.resolve();
     requested = true;
-    if (pending) return pending;
+    if (pending && (priority === "background" || pendingPriority === priority))
+      return pending;
+    controller?.abort();
+    pendingPriority = priority;
     // Explicit recovery starts a new bounded read after overflow. Never expose a
     // partially retained set as ready; live replacements during this read still win.
     if (limited) {
@@ -133,7 +126,7 @@ export function createEmojiDirectory(
           (signal) =>
             reader.read([{ kinds: [30030], "#d": [EMOJI_SET], limit: LIMIT }], {
               signal,
-              priority: "background",
+              priority,
             }),
           owned.signal,
         );
@@ -165,8 +158,18 @@ export function createEmojiDirectory(
     })();
     return pending;
   }
-  function ensure() {
-    if (snapshot.status === "idle") return refresh();
+  const refresh = () => load("foreground");
+  function ensure(priority: Priority = "background") {
+    // Active controls may remount on every keystroke. Promote passive demand
+    // once; after an active failure, keep the error and explicit Retry stable.
+    if (
+      !limited &&
+      (snapshot.status === "idle" ||
+        (priority === "foreground" &&
+          pendingPriority === "background" &&
+          snapshot.status !== "ready"))
+    )
+      return load(priority);
     return pending ?? Promise.resolve();
   }
   /** Read-modify-write of the viewer's own set; an absent URL removes the shortcode. */
@@ -324,14 +327,14 @@ export function createEmojiDirectory(
       controller?.abort();
       controller = undefined;
       pending = undefined;
-      void refresh();
+      void load("background");
     },
     tags(content: string): string[][] {
       const codes = referencedEmoji(content);
       if (!codes.length) return [];
       if (closed) throw new Error("Community session is closed");
       if (snapshot.status !== "ready") {
-        // Only a send retries a cold failure, so passive mounts cannot repeat
+        // A send retries a cold failure, but passive mounts cannot repeat
         // reads; refresh() shares a pending one. Overflow would repeat on every
         // read, so it waits for an explicit retry. The composer keeps this text
         // after the read settles, so it must not claim the read is still running.
@@ -342,13 +345,7 @@ export function createEmojiDirectory(
             : "Community emoji isn't ready. Your draft is kept; try sending again shortly.",
         );
       }
-      const used = new Map<string, string>();
-      for (const part of messageParts(content)) {
-        if (linkPart(part)) continue;
-        for (const { emoji } of emojiMatches(part, snapshot.entries))
-          used.set(emoji.shortcode, emoji.url);
-      }
-      return [...used].map(([code, url]) => ["emoji", code, url]);
+      return contentEmojiTags(content, snapshot.entries);
     },
     dispose() {
       closed = true;

@@ -84,3 +84,41 @@ export function latestOwnMessage(
       return row;
   }
 }
+
+/** Who a Solo chat's toolbar holds before it has an audience, whatever the
+ * remember-agents preference says. Waits for complete agent choices.
+ *
+ * Every agent the viewer's latest top-level message in the loaded window
+ * tagged that can still be tagged. Without one: the main agent if it is a
+ * member; else the first member agent that runs on this computer; else all the
+ * chat's usable agent members; else the main agent. */
+export function seedAgents(
+  session: ComposerSession,
+  channelId: string,
+  rows: readonly ChannelMessage[],
+  admits: (pubkey: string) => boolean,
+  main?: string,
+): readonly string[] {
+  const choices = session.agentChoices.snapshot();
+  if (!choices.complete) return [];
+  const agents = knownAgentPubkeys(session.profiles.snapshot(), choices);
+  const usable = (key: string) => agents.has(key) && admits(key);
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index];
+    if (!row || row.authorId !== session.viewer || row.threadRootId) continue;
+    const tagged = [...new Set(row.mentions.filter(usable))];
+    if (tagged.length) return tagged;
+  }
+  const members = (
+    session.channels.list().channels.find((item) => item.id === channelId)
+      ?.members ?? []
+  ).filter(usable);
+  const mainMember = members.find((key) => key === main);
+  if (mainMember) return [mainMember];
+  const local = choices.selectable.find(
+    (choice) => choice.managed && members.includes(choice.pubkey),
+  );
+  if (local) return [local.pubkey];
+  if (members.length) return members;
+  return main && admits(main) ? [main] : [];
+}

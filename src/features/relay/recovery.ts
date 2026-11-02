@@ -21,8 +21,9 @@ export type RecoverySnapshot = Readonly<{
   recovering: boolean;
   /** Backoff index. retryNow restarts it; it does not hide the notice. */
   attempt: number;
-  /** True from the first automatic retry until every source settles. Kept
-   * apart from `attempt` so a manual or signal retry keeps the notice up. */
+  /** True once recovery has lasted RECOVERY_NOTICE_DELAY_MS, until every
+   * source settles. Kept apart from `attempt` so a manual or signal retry
+   * keeps the notice up. */
   shown: boolean;
   /** Counts credential changes (retryAll). A finite read owned outside
    * recovery retries its failure when this moves; see useReauthorizedRetry. */
@@ -79,6 +80,10 @@ export function reauthorizedOnce(
 export const RECOVERY_DELAYS_MS = Object.freeze([
   1_000, 2_000, 4_000, 8_000, 16_000, 30_000,
 ]);
+/** Recovery shows its notice only once it lasts this long, so a socket blip
+ * or a failure that the first retries fix stays quiet. Its own timer, not a
+ * retry, starts it: a retry that hangs still shows the notice. */
+export const RECOVERY_NOTICE_DELAY_MS = 3_000;
 
 export function createRecovery(
   sources: readonly RecoverySource[],
@@ -106,6 +111,7 @@ export function createRecovery(
     attempt = 0,
     shown = false,
     timer: unknown,
+    notice: unknown,
     running = false,
     disposed = false;
   const publish = (next: RecoverySnapshot) => {
@@ -123,6 +129,11 @@ export function createRecovery(
     if (timer === undefined) return;
     timers.clearTimeout(timer);
     timer = undefined;
+  };
+  const cancelNotice = () => {
+    if (notice === undefined) return;
+    timers.clearTimeout(notice);
+    notice = undefined;
   };
   function evaluate() {
     if (disposed || running) return;
@@ -146,12 +157,22 @@ export function createRecovery(
         );
         return;
       }
+      cancelNotice();
       attempt = 0;
       shown = false;
       publish(idle());
       return;
     }
     publish(Object.freeze({ recovering: true, attempt, shown, reauthorized }));
+    if (!shown && notice === undefined)
+      notice = timers.setTimeout(() => {
+        notice = undefined;
+        if (disposed || !snapshot.recovering) return;
+        shown = true;
+        publish(
+          Object.freeze({ recovering: true, attempt, shown, reauthorized }),
+        );
+      }, RECOVERY_NOTICE_DELAY_MS);
     if (timer !== undefined) return;
     const delay =
       RECOVERY_DELAYS_MS[Math.min(attempt, RECOVERY_DELAYS_MS.length - 1)] ??
@@ -159,7 +180,6 @@ export function createRecovery(
     timer = timers.setTimeout(() => {
       timer = undefined;
       attempt++;
-      shown = true;
       run();
     }, delay);
   }
@@ -211,6 +231,7 @@ export function createRecovery(
     dispose() {
       disposed = true;
       cancel();
+      cancelNotice();
       stale.clear();
       for (const stop of stops) stop();
       listeners.clear();

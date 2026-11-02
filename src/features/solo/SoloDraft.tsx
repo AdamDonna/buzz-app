@@ -30,8 +30,10 @@ import { rememberedMentions } from "../messages/remembered-mentions";
 import { composerMarkdown } from "../messages/composer-markdown";
 import {
   addressingOnly,
+  followupDraft,
   mentionDraft,
   type MentionDraft,
+  type MentionRecipient,
 } from "../messages/mention-draft";
 import type { ComposerInputElement } from "../messages/composer-dom";
 import {
@@ -194,14 +196,22 @@ export function SoloDraft({
       mounted.current = false;
     };
   }, []);
-  async function start(draft: MentionDraft, files: AttachmentDraft) {
+  async function start(
+    draft: MentionDraft,
+    files: AttachmentDraft,
+    addressed?: readonly MentionRecipient[],
+  ) {
     const text = composerMarkdown(draft);
     if (submitting.current || !text.trim() || !available) return;
     submitting.current = true;
     setBusy(true);
     setError(undefined);
     const recipients = [
-      ...new Set(mentionDraft(draft).recipients.map((item) => item.pubkey)),
+      ...new Set(
+        (addressed ?? mentionDraft(draft).recipients).map(
+          (item) => item.pubkey,
+        ),
+      ),
     ];
     const named =
       typeof draftSettings.name === "string" &&
@@ -303,7 +313,10 @@ export function SoloDraft({
         writeView(
           scope,
           `draft:${channelId}`,
-          rememberedMentions(session, draft, recipients),
+          // The toolbar keeps the agents when it routed the send.
+          addressed
+            ? followupDraft([])
+            : rememberedMentions(session, draft, recipients),
         );
       } catch (reason) {
         // The chat still starts; its own composer keeps the message to send.
@@ -379,8 +392,8 @@ export function SoloDraft({
           locked: busy,
           disabled: busy || !available,
           attachments: true,
-          submit: (draft, files) => {
-            void start(draft, files);
+          submit: (draft, files, addressed) => {
+            void start(draft, files, addressed);
           },
         }}
       />

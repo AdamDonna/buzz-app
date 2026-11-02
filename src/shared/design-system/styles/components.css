@@ -116,6 +116,13 @@
     width: var(--space-4);
     height: var(--space-4);
   }
+  /* Small identity buttons: leading avatars sit as close to the leading
+     edge as to the top and bottom, and a trailing icon tucks in to match. */
+  .buzz-button[data-size="sm"]:has(
+    > .buzz-button-label > [data-avatar-stack]:first-child
+  ) {
+    padding-inline: var(--space-1h) var(--space-3);
+  }
   .buzz-button[data-size="lg"] {
     min-height: var(--size-control-lg);
     padding-block: calc(var(--space-3) + var(--space-half));
@@ -590,6 +597,9 @@
   ) {
     background: var(--affordance-danger-pressed);
     color: var(--text-danger);
+  }
+  .buzz-button[data-icon-variant="inset"] {
+    --interaction-fill: var(--surface-inset);
   }
   .buzz-button[data-icon-variant="chrome"] {
     background: transparent;
@@ -1099,6 +1109,14 @@
     padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-pill);
     color: var(--text-subtle);
+  }
+  .buzz-tabs:is(
+      [data-variant="segmented"],
+      [data-variant="segmented-icons"]
+    ):where([data-size="sm"])
+    .buzz-tabs-tab {
+    min-height: calc(var(--size-control-sm) - 2 * var(--space-1));
+    padding-block: 0;
   }
   .buzz-tabs:is([data-variant="segmented"], [data-variant="segmented-icons"])
     .buzz-tabs-tab:hover:not([data-selected], [data-disabled]) {
@@ -1989,8 +2007,8 @@
   }
   /* Floating rows need more separation than controls on a darker panel.
      Supporting copy follows the brighter fill so it remains readable. */
-  .buzz-menu-item[data-highlighted],
-  .buzz-menu-item[data-popup-open],
+  .buzz-menu-item[data-highlighted]:not([data-disabled]),
+  .buzz-menu-item[data-popup-open]:not([data-disabled]),
   .buzz-select-option[data-highlighted] {
     --text-subtle: var(--text-standard);
     --text-metadata: var(--text-standard);
@@ -2044,13 +2062,14 @@
     color: var(--text-subtle);
   }
   .buzz-menu-group-label {
-    padding: var(--space-2) var(--space-2) var(--space-1);
+    padding: var(--space-2) var(--space-3) var(--space-1);
     color: var(--text-subtle);
   }
   .buzz-menu-group-label[data-emphasis="quiet"] {
     color: var(--text-metadata);
   }
-  .buzz-menu-separator {
+  .buzz-menu-separator,
+  .buzz-select-separator {
     height: 1px;
     margin: var(--space-1) 0;
     background: var(--border-standard);
@@ -2087,6 +2106,9 @@
     --floating-inset: var(--space-half);
     padding: var(--space-half);
   }
+  .buzz-menu-popup[data-size="compact"] .buzz-menu-group-label {
+    padding-inline: var(--space-2);
+  }
   .buzz-menu-popup[data-size="compact"] .buzz-menu-item {
     padding: var(--space-1) var(--space-2);
   }
@@ -2122,6 +2144,7 @@
     min-width: 0;
     align-items: center;
     gap: var(--space-row-gap);
+    color: inherit;
   }
   .buzz-choice-row-leading {
     display: flex;

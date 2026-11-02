@@ -31,6 +31,11 @@
       color var(--duration-state) var(--easing-state);
   }
 
+  .inline-chip[data-kind="person"],
+  .inline-chip[data-kind="agent"] {
+    border-radius: var(--radius-pill);
+  }
+
   button.inline-chip {
     cursor: pointer;
   }

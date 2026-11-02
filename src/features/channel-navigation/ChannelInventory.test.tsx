@@ -17,6 +17,7 @@ import { huddleDescription } from "../huddle/lifecycle";
 import { createRelaySession } from "../relay/session";
 import { createChannelLifecycle } from "../relay/channel-lifecycle";
 import { ReadError } from "../relay/errors";
+import { createRecovery, RECOVERY_NOTICE_DELAY_MS } from "../relay/recovery";
 import { createSidebarPreferencesStore } from "../relay/sidebar-preferences-store";
 import type {
   SidebarGroups,
@@ -294,6 +295,72 @@ it("keeps visibility recovery quiet, then offers the existing retry after exhaus
     cleanup();
     lifecycle.dispose();
     random.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+it("keeps a roster failure quiet while recovery retries it, but not a denial while another read recovers", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  // Another background read (sidebar preferences) keeps recovery running.
+  const recovery = createRecovery([
+    { status: () => "failed", subscribe: () => () => {}, retry() {} },
+  ]);
+  const live = f.session.live;
+  // A stable snapshot, as the session's live view keeps between changes.
+  let view = {
+    ...live.snapshot(),
+    roster: { state: "error", transient: true } as {
+      state: string;
+      transient?: true;
+    },
+  };
+  const liveListeners = new Set<() => void>();
+  f.session.live = {
+    ...live,
+    snapshot: () => view,
+    subscribe(listener) {
+      liveListeners.add(listener);
+      return () => liveListeners.delete(listener);
+    },
+  } as typeof live;
+  const failed: ChannelList = {
+    status: "error",
+    error: "Channels could not be loaded.",
+    channels: [],
+  };
+  f.session.recovery = recovery;
+  f.session.channels = { ...f.session.channels, list: () => failed };
+  try {
+    render(f.view("alpha"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(recovery.snapshot()).toMatchObject({
+      recovering: true,
+      shown: false,
+    });
+    expect(
+      screen.queryByText("Channels could not be loaded."),
+    ).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(RECOVERY_NOTICE_DELAY_MS - 1));
+    expect(
+      screen.queryByText("Channels could not be loaded."),
+    ).not.toBeInTheDocument();
+    // A denial is not recovery's to retry: the channel and Solo inventories
+    // each report it at once, though recovery still runs for the other read.
+    view = { ...view, roster: { state: "error" } };
+    act(() => {
+      for (const listener of liveListeners) listener();
+    });
+    expect(recovery.snapshot()).toMatchObject({
+      recovering: true,
+      shown: false,
+    });
+    const alerts = screen.getAllByText("Channels could not be loaded.");
+    expect(alerts).toHaveLength(2);
+    for (const alert of alerts) expect(alert).toHaveAttribute("role", "alert");
+  } finally {
+    cleanup();
+    recovery.dispose();
     vi.useRealTimers();
   }
 });

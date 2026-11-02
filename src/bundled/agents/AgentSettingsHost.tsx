@@ -89,7 +89,9 @@ export function useAgentSettingsHost({
       }
     : undefined;
   const showTypeControl =
-    agent?.place === "here" && types.some((item) => item.key !== agent.type);
+    (agent?.place === "here" ||
+      (agent?.place === "hosted" && Boolean(type?.remote))) &&
+    types.some((item) => item.key !== agent.type);
   return {
     agent: settingsAgent,
     type: settingsType,
@@ -141,11 +143,12 @@ function TypeField({
   selected: string;
   onSelect(type: { key: string; config: unknown } | undefined): void;
 }) {
-  const available = agent.place === "here" ? types : [];
-  const others = available.filter((item) => item.key !== agent.type);
-  const selectedType = available.find((item) => item.key === selected) ?? type;
+  const others = types.filter((item) => item.key !== agent.type);
+  const unavailable = others.filter((item) => type?.remote || item.remote);
+  const selectedType = types.find((item) => item.key === selected) ?? type;
   const TypeIcon = selectedType?.icon;
   const [error, setError] = useState("");
+  const [helpOpen, setHelpOpen] = useState(false);
   const providerButton = useRef<HTMLButtonElement>(null);
   const [checking, setChecking] = useState(false);
   const [configuring, setConfiguring] = useState(false);
@@ -154,12 +157,13 @@ function TypeField({
     preview: ReturnType<Agents["previewRetype"]>;
   }>();
   const choose = (next: string) => {
+    if (agent.place !== "here") return;
     if (next === selected) return;
     if (next === agent.type) {
       onSelect(undefined);
       return;
     }
-    const target = available.find((item) => item.key === next);
+    const target = types.find((item) => item.key === next);
     if (!target || target.remote) return;
     setError("");
     try {
@@ -207,7 +211,12 @@ function TypeField({
         trailing={
           others.length > 0 ? (
             <div className="buzz-select" data-variant="compact">
-              <MenuRoot onOpenChange={(open) => open && setError("")}>
+              <MenuRoot
+                onOpenChange={(open) => {
+                  if (open) setError("");
+                  else setHelpOpen(false);
+                }}
+              >
                 <MenuTrigger
                   aria-label={`Change harness from ${selectedType?.title ?? "unavailable harness"}`}
                   render={
@@ -222,31 +231,47 @@ function TypeField({
                     </Button>
                   }
                 />
-                <MenuPopup>
+                <MenuPopup
+                  onKeyDownCapture={(event) => {
+                    // WebKit keeps focus on the menu root after pointer entry.
+                    // Consume the help's Escape here, including that focus path.
+                    if (event.key === "Escape" && helpOpen) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setHelpOpen(false);
+                    }
+                  }}
+                >
                   <MenuRadioGroup
                     value={selected}
                     onValueChange={(next) => choose(String(next))}
                   >
-                    {available.map((item) => {
-                      if (item.remote)
+                    {types
+                      .filter((item) => !unavailable.includes(item))
+                      .map((item) => {
+                        const Icon = item.icon;
                         return (
-                          <HostedHarnessChoice key={item.key} type={item} />
+                          <MenuRadioItem
+                            key={item.key}
+                            value={item.key}
+                            selection="highlight"
+                            closeOnClick
+                          >
+                            <ChoiceRow
+                              label={item.title}
+                              leading={Icon ? <Icon size={20} /> : undefined}
+                            />
+                          </MenuRadioItem>
                         );
-                      const Icon = item.icon;
-                      return (
-                        <MenuRadioItem
-                          key={item.key}
-                          value={item.key}
-                          selection="highlight"
-                          closeOnClick
-                        >
-                          <ChoiceRow
-                            label={item.title}
-                            leading={Icon ? <Icon size={20} /> : undefined}
-                          />
-                        </MenuRadioItem>
-                      );
-                    })}
+                      })}
+                    {unavailable.length > 0 && (
+                      <UnavailableHarnessChoices
+                        types={unavailable}
+                        source={type}
+                        open={helpOpen}
+                        onOpenChange={setHelpOpen}
+                      />
+                    )}
                   </MenuRadioGroup>
                 </MenuPopup>
               </MenuRoot>
@@ -316,12 +341,22 @@ function TypeField({
   );
 }
 
-function HostedHarnessChoice({ type }: { type: RegisteredAgentType }) {
+function UnavailableHarnessChoices({
+  types,
+  source,
+  open,
+  onOpenChange,
+}: {
+  types: readonly RegisteredAgentType[];
+  source: RegisteredAgentType | undefined;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+}) {
   const triggerId = useId();
-  const trigger = useRef<HTMLElement>(null);
+  const trigger = useRef<HTMLDivElement>(null);
   const description = useId();
-  const [open, setOpen] = useState(false);
-  const Icon = type.icon;
+  // Builderlab is currently the only registered remote harness.
+  const hosted = types[0];
   return (
     <PopoverRoot
       open={open}
@@ -338,53 +373,73 @@ function HostedHarnessChoice({ type }: { type: RegisteredAgentType }) {
           details.cancel();
           return;
         }
-        setOpen(next);
+        onOpenChange(next);
       }}
     >
       <PopoverTrigger
         id={triggerId}
-        openOnHover="preview"
+        openOnHover="control"
         nativeButton={false}
-        role="menuitemradio"
+        role="group"
+        aria-label="Unavailable harnesses"
+        aria-haspopup={false}
+        aria-expanded={undefined}
+        tabIndex={-1}
         onFocus={(event) => {
-          if (event.currentTarget.matches(":focus-visible")) setOpen(true);
+          if (
+            event.target instanceof HTMLElement &&
+            event.target.matches(":focus-visible")
+          )
+            onOpenChange(true);
         }}
         onKeyDownCapture={(event) => {
-          if (event.key === "Escape" && open) {
+          if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            event.stopPropagation();
-            setOpen(false);
-          } else if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setOpen(true);
+            onOpenChange(true);
           }
         }}
-        aria-describedby={open ? description : undefined}
         render={
-          <MenuRadioItem
-            ref={trigger}
-            value={type.key}
-            selection="highlight"
-            disabled
-          >
-            <ChoiceRow
-              label={type.title}
-              leading={Icon ? <Icon size={20} /> : undefined}
-            />
-          </MenuRadioItem>
+          <div ref={trigger}>
+            {types.map((item) => {
+              const Icon = item.icon;
+              return (
+                <MenuRadioItem
+                  key={item.key}
+                  value={item.key}
+                  selection="highlight"
+                  disabled
+                  aria-describedby={open ? description : undefined}
+                >
+                  <ChoiceRow
+                    label={item.title}
+                    leading={Icon ? <Icon size={20} /> : undefined}
+                  />
+                </MenuRadioItem>
+              );
+            })}
+          </div>
         }
       />
       <PopoverPopup
         side="right"
         align="start"
-        aria-label={`${type.title} hosting`}
+        aria-label="Harness availability"
         initialFocus={false}
         finalFocus={false}
       >
         <PopoverDescription id={description}>
-          This agent’s signing key is stored on this device. Buzz can’t move
-          that identity to {type.title} yet. To run hosted, create a new{" "}
-          {type.title} agent.
+          {source?.remote ? (
+            <>
+              This agent runs on {source.title}. You can’t switch it to a local
+              harness yet. To run locally, create a new agent.
+            </>
+          ) : (
+            <>
+              This agent runs on your device. You can’t switch it to{" "}
+              {hosted?.title} yet. To run hosted, create a new {hosted?.title}{" "}
+              agent.
+            </>
+          )}
         </PopoverDescription>
       </PopoverPopup>
     </PopoverRoot>

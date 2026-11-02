@@ -108,6 +108,8 @@ export function fakeSpawn(
     page?: number;
     /** Whether goose's config turns session naming off. */
     namingDisabled?: boolean;
+    /** goose's `DATABRICKS_MODEL_FILTER`, as its config reads it. */
+    modelFilter?: unknown;
     /** Requests each process never answers. */
     silent?: readonly string[];
     /** The thinking levels a session lists on each model, `""` being the
@@ -358,7 +360,9 @@ export function fakeSpawn(
                   )
                 : params.key === "GOOSE_DISABLE_SESSION_NAMING"
                   ? (options.namingDisabled ?? null)
-                  : null,
+                  : params.key === "DATABRICKS_MODEL_FILTER"
+                    ? (options.modelFilter ?? null)
+                    : null,
           });
         case "_goose/unstable/defaults/read":
           return reply(id, defaults ?? {});

@@ -2,6 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import { isSignInRefusal, type RelayRecovery } from "./recovery";
+import type { RelaySession } from "./session";
 
 const NONE = Object.freeze({
   recovering: false,
@@ -34,8 +35,8 @@ const changeClaims = (recovery: RelayRecovery, delta: number) => {
 };
 
 /** Recovery state for one surface. `shown` is true while the notice is
- * visible; `recovering` is true from the first failure, including the quiet
- * first second before the notice appears. */
+ * visible; `recovering` is true from the first failure, including the
+ * quiet RECOVERY_NOTICE_DELAY_MS before the notice appears. */
 export function useRecovery(recovery: RelayRecovery | undefined) {
   const state = useSyncExternalStore(
     recovery?.subscribe ?? subscribeNone,
@@ -44,7 +45,7 @@ export function useRecovery(recovery: RelayRecovery | undefined) {
   );
   return {
     recovering: !!recovery && state.recovering,
-    // Stay hidden for a failure that the first automatic retry fixes.
+    // Stay hidden for a failure that recovery fixes before the notice delay.
     shown: !!recovery && state.shown,
   };
 }
@@ -96,10 +97,20 @@ export function useReauthorizedRetry(
   }).current;
 }
 
-/** True while the one recovery notice is visible. Surfaces whose failure
- * the notice already reports hide their own copy of it. */
-export function useRecoveryShown(recovery: RelayRecovery | undefined) {
-  return useRecovery(recovery).shown;
+/** True while recovery retries this surface's own read, from its first
+ * failure and through the quiet delay before the notice. The surface then
+ * hides its own copy of the failure; the notice is the one report. `owns`
+ * picks the read from the live view (rosterRecovering, headRecovering). A
+ * failure recovery does not retry, such as a denial, stays visible even while
+ * another source recovers. */
+export function useRecoveryOwns(
+  session: Pick<RelaySession, "recovery" | "live">,
+  owns: (live: ReturnType<RelaySession["live"]["snapshot"]>) => boolean,
+) {
+  const { recovering } = useRecovery(session.recovery);
+  const read = () => owns(session.live.snapshot());
+  const owned = useSyncExternalStore(session.live.subscribe, read, read);
+  return recovering && owned;
 }
 
 /** Claim the notice for an inline surface while it is mounted. */
@@ -128,7 +139,7 @@ export function RecoveryNotice({
 }: {
   recovery: RelayRecovery | undefined;
 }) {
-  const shown = useRecoveryShown(recovery);
+  const { shown } = useRecovery(recovery);
   const inline = useSyncExternalStore(
     recovery
       ? (listener: () => void) => {

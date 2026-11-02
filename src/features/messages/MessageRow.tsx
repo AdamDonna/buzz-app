@@ -74,7 +74,7 @@ import { AttachmentDownloadContext } from "./AttachmentDownloadContext";
 import { isNativeMediaSource, isProxySource } from "./attachment-source";
 import { FileAttachment } from "./FileAttachment";
 import { useReferenceDirectory } from "./ReferenceText";
-import { MessageMarkdown } from "./MessageMarkdown";
+import { EditedMarker, MessageMarkdown } from "./MessageMarkdown";
 import { safeMessageUrl } from "../relay/message-content";
 import styles from "./Messages.module.css";
 import { usesLargeEmojiPresentation } from "./emoji-size";
@@ -102,6 +102,9 @@ export type MessageRowProps = {
   row: ChannelMessage;
   getThreadRoot?: (() => ChannelMessage | undefined) | undefined;
   session?: RelaySession | undefined;
+  /** Resolves names, channels and mentions where the row is shown without
+   * `session`, which would also offer its controls. */
+  references?: RelaySession | undefined;
   scope?: string | undefined;
   unread?: UnreadCapability | undefined;
   extensions?: ConversationExtensions | undefined;
@@ -171,6 +174,7 @@ function MessageRowContent({
   renderMessage,
   getThreadRoot,
   session,
+  references = session,
   scope,
   unread,
   extensions,
@@ -203,8 +207,8 @@ function MessageRowContent({
   agentPubkeys,
 }: MessageContentProps) {
   const [avatarFocused, setAvatarFocused] = useState(false);
-  const resolveName = useChannelIdentityNames(session, row.channelId);
-  const directory = useReferenceDirectory(session, participantProfiles);
+  const resolveName = useChannelIdentityNames(references, row.channelId);
+  const directory = useReferenceDirectory(references, participantProfiles);
   const reactions = row.reactions;
   const threadUnread = useThreadUnread(
     row.replyCount > 0 && onOpenThread ? unread : undefined,
@@ -450,6 +454,14 @@ function MessageRowContent({
     bodyShown && messageRenderer !== failedRenderer
       ? messageRenderer?.ownsAttachment
       : undefined;
+  // The host's Markdown marks an edit after the caption's last line. Plugin
+  // cards are marked inside their bubble; diffs and captionless rows after the
+  // payload.
+  const editedInBody =
+    bodyShown &&
+    !row.diff &&
+    !!displayRow.content.trim() &&
+    (!messageRenderer || messageRenderer === failedRenderer);
   const claimed = (attachment: ChannelMessage["attachments"][number]) => {
     try {
       return !!claims?.call(messageRenderer, row, attachment);
@@ -516,7 +528,7 @@ function MessageRowContent({
   ) : (
     <MessageMarkdown
       directory={directory}
-      session={session}
+      session={references}
       scope={scope}
       row={displayRow}
       extensions={extensions}
@@ -525,6 +537,7 @@ function MessageRowContent({
       canOpenLink={canOpenLink}
       participantProfiles={participantProfiles}
       largeEmoji={emojiOnly}
+      edited={editedInBody && displayRow.edited}
     />
   );
   const avatar = row.workflowOwnerId ? (
@@ -815,6 +828,8 @@ function MessageRowContent({
     !shownRow &&
     !emojiOnly &&
     !row.diff;
+  // A plugin card keeps reactions in its bubble, so its mark goes above them.
+  const editedInBubble = !editedInBody && reactionsInBubble;
   const reactionContent =
     session && scope && extensions ? (
       <MessageReactions
@@ -877,6 +892,7 @@ function MessageRowContent({
       <div
         ref={rowRef}
         className={styles.message}
+        data-highlight-surface=""
         data-layout={layout}
         data-stack-previous={stackPrevious || undefined}
         data-stack-next={stackNext || undefined}
@@ -1003,7 +1019,7 @@ function MessageRowContent({
                     <MessageMarkdown
                       key={card.start}
                       directory={directory}
-                      session={session}
+                      session={references}
                       scope={scope}
                       row={{
                         ...shown,
@@ -1070,6 +1086,7 @@ function MessageRowContent({
                   ) : (
                     body
                   )}
+                  {editedInBubble && shown.edited && <EditedMarker />}
                   {reactionsInBubble && reactionContent}
                 </div>
               )}
@@ -1265,6 +1282,9 @@ function MessageRowContent({
                   })}
                 </div>
               )}
+              {!editedInBody && !editedInBubble && shown.edited && (
+                <EditedMarker />
+              )}
             </MessageTimestampHint>
           </div>
           {!reactionsInBubble && reactionContent}
@@ -1336,13 +1356,14 @@ export const MessageRow = memo(function AudienceMessageRow(
 
 function AgentsMessageRow(props: MessageRowProps) {
   const { row, session, media, participantProfiles, agentPubkeys } = props;
+  const references = props.references ?? session;
   const [open, setOpen] = useState(false);
   const keepMounted = props.keepMounted;
   useEffect(() => {
     if (open) return keepMounted?.(row.id);
   }, [open, keepMounted, row.id]);
-  const resolveName = useChannelIdentityNames(session, row.channelId);
-  const directory = useReferenceDirectory(session, participantProfiles);
+  const resolveName = useChannelIdentityNames(references, row.channelId);
+  const directory = useReferenceDirectory(references, participantProfiles);
   const { recipients, body } = useMemo(
     () =>
       addressedMessage(
@@ -1412,6 +1433,7 @@ function AgentsMessageRow(props: MessageRowProps) {
             open={open}
             onOpenChange={setOpen}
             className={styles.audienceEntry}
+            data-highlight-surface=""
             // One stable anchor survives both animation directions. Not the
             // button: revealing an anchor takes it out of the Tab order.
             data-message-id={row.id}
@@ -1435,7 +1457,7 @@ function AgentsMessageRow(props: MessageRowProps) {
               ref={trigger}
               data-buzz-ui=""
               className={styles.audienceLine}
-              aria-label={`${author.name}${to.length ? ` to ${to.map((who) => who.name).join(", ")}` : ""}: ${preview}`}
+              aria-label={`${author.name}${to.length ? ` to ${to.map((who) => who.name).join(", ")}` : ""}: ${preview}${row.edited ? " (edited)" : ""}`}
             >
               {avatar(author)}
               {to.length > 0 && (
@@ -1451,6 +1473,7 @@ function AgentsMessageRow(props: MessageRowProps) {
               {!open && (
                 <span className={styles.audiencePreview}>{preview}</span>
               )}
+              {!open && row.edited && <EditedMarker />}
             </Collapsible.Trigger>
             <Collapsible.Panel
               className={`${styles.audiencePanel} ${styles.activityExpansion} ${styles.audienceBody}`}

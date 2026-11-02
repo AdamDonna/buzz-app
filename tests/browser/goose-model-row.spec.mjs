@@ -52,7 +52,7 @@ test("a long goose model name stays inside its Settings row", async ({
   for (const width of [520, 320]) {
     await page.goto(`${url}?width=${width}`);
     const model = page.getByRole("button", {
-      name: /^Model: claude-sonnet-5-5-extended-context-thinking-preview-2026-10/,
+      name: /^Model: Claude Sonnet 5\.5 Extended Context Thinking Preview 2026\.10/,
     });
     await expect(model).toBeEnabled();
     const geometry = await model.evaluate((button) => {

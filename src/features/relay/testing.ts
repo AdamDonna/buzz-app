@@ -130,14 +130,26 @@ export type Scripted = {
   fail: (error: unknown) => void;
   signal: AbortSignal | undefined;
 };
-/** A transport whose responses the test releases explicitly, so ordering and cancellation are observable. */
-export function scriptedTransport(viewer: string, relayAuthor: string) {
+/** A window's separate membership notice read (see `noticeFilter`). */
+export const isNoticeRead = (filters: readonly ReadFilter[]) =>
+  filters.length > 0 &&
+  filters.every(
+    (filter) => filter.kinds?.length === 1 && filter.kinds[0] === 40099,
+  );
+/** A transport whose responses the test releases explicitly, so ordering and cancellation are observable.
+ * Membership notice reads answer empty at once unless `notices` scripts them too. */
+export function scriptedTransport(
+  viewer: string,
+  relayAuthor: string,
+  { notices = false }: { notices?: boolean } = {},
+) {
   const pending: Scripted[] = [];
   const transport: ReadTransport = {
     viewer,
     relayAuthor,
     media: (url) => (/^https:\/\//.test(url) ? url : undefined),
     query(filters, signal) {
+      if (!notices && isNoticeRead(filters)) return Promise.resolve([]);
       return new Promise<RelayEvent[]>((resolve, reject) => {
         const entry: Scripted = {
           filters,

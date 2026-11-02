@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createRecovery,
   RECOVERY_DELAYS_MS,
+  RECOVERY_NOTICE_DELAY_MS,
   reauthorizedOnce,
   type RelayRecovery,
   type RecoveryStatus,
@@ -62,7 +63,7 @@ it("retries only the failed sources and clears once every source settles", () =>
   expect(recovery.snapshot()).toEqual({
     recovering: true,
     attempt: 1,
-    shown: true,
+    shown: false,
     reauthorized: 0,
   });
   failed.set("settled");
@@ -74,6 +75,35 @@ it("retries only the failed sources and clears once every source settles", () =>
   });
   vi.advanceTimersByTime(60_000);
   expect(failed.retry).toHaveBeenCalledTimes(1);
+  recovery.dispose();
+});
+
+it("shows the notice only once recovery lasts the notice delay", () => {
+  const read = source();
+  const recovery = createRecovery([read]);
+  read.set("failed");
+  vi.advanceTimersByTime(RECOVERY_NOTICE_DELAY_MS - 1);
+  // The first retry ran and still hangs: the notice timer does not wait on it.
+  expect(read.retry).toHaveBeenCalledTimes(1);
+  expect(read.status()).toBe("busy");
+  expect(recovery.snapshot().shown).toBe(false);
+  vi.advanceTimersByTime(1);
+  expect(recovery.snapshot()).toMatchObject({ recovering: true, shown: true });
+  read.set("settled");
+  expect(recovery.snapshot().shown).toBe(false);
+
+  // A failure that a retry fixes before the delay never shows the notice.
+  read.set("failed");
+  vi.advanceTimersByTime(RECOVERY_DELAYS_MS[0] ?? 0);
+  read.set("settled");
+  vi.advanceTimersByTime(60_000);
+  expect(recovery.snapshot().shown).toBe(false);
+  // The next failure gets the full delay again.
+  read.set("failed");
+  vi.advanceTimersByTime(RECOVERY_NOTICE_DELAY_MS - 1);
+  expect(recovery.snapshot().shown).toBe(false);
+  vi.advanceTimersByTime(1);
+  expect(recovery.snapshot().shown).toBe(true);
   recovery.dispose();
 });
 
@@ -99,11 +129,11 @@ it("keeps a shown notice up through retryNow until every source settles", () => 
   const read = source();
   const recovery = createRecovery([read]);
   read.set("failed");
-  // Before the first automatic retry a manual or signal retry stays quiet.
+  // Before the notice delay a manual or signal retry stays quiet.
   recovery.retryNow();
   expect(recovery.snapshot().shown).toBe(false);
   read.set("failed");
-  vi.advanceTimersByTime(RECOVERY_DELAYS_MS[0] ?? 0);
+  vi.advanceTimersByTime(RECOVERY_NOTICE_DELAY_MS);
   expect(recovery.snapshot().shown).toBe(true);
   // Retry now restarts the delay but must not hide the notice and its
   // focused button while the retried read is still running.
@@ -134,13 +164,14 @@ it("retryNow does no work while every source is healthy", () => {
   recovery.dispose();
 });
 
-it("dispose stops pending retries", () => {
+it("dispose stops pending retries and the notice", () => {
   const read = source();
   const recovery = createRecovery([read]);
   read.set("failed");
   recovery.dispose();
   vi.advanceTimersByTime(120_000);
   expect(read.retry).not.toHaveBeenCalled();
+  expect(recovery.snapshot().shown).toBe(false);
 });
 
 it("retries settled sources too when asked to retry all", () => {

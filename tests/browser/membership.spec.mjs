@@ -88,10 +88,19 @@ test("Channels renders grouped history and live membership without turning activ
     );
   });
   expect(centered).toBeLessThan(2);
+  // Pages leave notices out; the history activity came from its own read.
   expect(
     app.report.queries
       .filter(({ filter }) => filter.top_level)
-      .every(({ filter }) => filter.kinds.includes(40099)),
+      .some(({ filter }) => filter.kinds.includes(40099)),
+  ).toBe(false);
+  expect(
+    app.report.queries.some(
+      ({ filter }) =>
+        filter.kinds?.length === 1 &&
+        filter.kinds[0] === 40099 &&
+        filter["#h"]?.includes("alpha"),
+    ),
   ).toBe(true);
   await groups
     .first()
@@ -276,3 +285,39 @@ test("a restored membership anchor follows delayed group growth through resize a
     .poll(async () => Math.abs((await y()) - beforeResize))
     .toBeLessThan(2);
 });
+
+// A burst of joins newer than every message must not hold messages back:
+// pages leave notices out, and the notices follow in their own reads.
+const burstTest = test.extend({ membershipBurst: 600 });
+burstTest(
+  "a join burst longer than a page shows the newest messages first, then its joins",
+  async ({ page, app }, testInfo) => {
+    await openMessages(page, app);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    const feed = page.getByRole("region", { name: "Channel message history" });
+    const groups = feed.locator("[data-membership-row]");
+    await expect(
+      feed.getByText("primary alpha message 639", { exact: false }),
+    ).toBeInViewport();
+    await expect(
+      feed.getByText("primary alpha message 625", { exact: false }),
+    ).toBeVisible();
+    await expect(groups).toHaveCount(1);
+    await expect(groups).toContainText("497 others");
+    // The second notice read pages below the first by the composite cursor.
+    await expect.poll(() => app.pending.length).toBe(1);
+    const notices = app.pending.shift();
+    expect(notices.filter).toMatchObject({ kinds: [40099], "#h": ["alpha"] });
+    expect(notices.filter.until).toEqual(expect.any(Number));
+    notices.release();
+    await expect(groups).toContainText("599 others");
+    await expect(groups).toHaveCount(1);
+    await settle(page);
+    expect(app.pending).toHaveLength(0);
+    await page.screenshot({ path: testInfo.outputPath("join-burst.png") });
+    await testInfo.attach("join-burst", {
+      path: testInfo.outputPath("join-burst.png"),
+      contentType: "image/png",
+    });
+  },
+);

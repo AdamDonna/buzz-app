@@ -465,7 +465,7 @@ it("keeps a matching explicit pin distinct from inheritance as defaults change",
   ).toHaveAttribute("aria-selected", "true");
 });
 
-it("opens a family before selecting a model and strips only its display prefix", async () => {
+it("opens a family before selecting a model and formats only its display name", async () => {
   const onChange = vi.fn();
   const user = userEvent.setup();
   render(
@@ -484,10 +484,10 @@ it("opens a family before selecting a model and strips only its display prefix",
     />,
   );
   const trigger = screen.getByRole("button", { name: /^Model:/ });
-  expect(trigger).toHaveTextContent("gpt-6");
+  expect(trigger).toHaveTextContent("GPT-6");
   expect(trigger).not.toHaveTextContent("databricks-");
   await user.click(trigger);
-  expect(screen.queryByRole("menuitemradio", { name: "kimi-k2" })).toBeNull();
+  expect(screen.queryByRole("menuitemradio", { name: "Kimi K2" })).toBeNull();
   expect(await screen.findByRole("menuitem", { name: "OpenAI" })).toBeVisible();
   expect(screen.queryByRole("menuitem", { name: "Codex" })).toBeNull();
   expect(screen.queryByRole("menuitem", { name: "GPT" })).toBeNull();
@@ -495,12 +495,76 @@ it("opens a family before selecting a model and strips only its display prefix",
   screen.getByRole("menuitem", { name: "OpenAI" }).focus();
   await user.keyboard("{ArrowRight}");
   expect(
-    await screen.findByRole("menuitemradio", { name: "gpt-6" }),
+    await screen.findByRole("menuitemradio", { name: "GPT-6" }),
   ).toBeVisible();
   await user.click(
-    await screen.findByRole("menuitemradio", { name: "gpt-6-codex" }),
+    await screen.findByRole("menuitemradio", { name: "GPT-6 Codex" }),
   );
   expect(onChange).toHaveBeenCalledExactlyOnceWith("databricks-gpt-6-codex");
+});
+
+it("keeps the IDs of Databricks models whose names read the same", async () => {
+  const onChange = vi.fn();
+  const user = userEvent.setup();
+  const ids = [
+    "system.ai.gpt-6-1-sol",
+    "acme_models.goose.goose-gpt-6-1-sol",
+    "system.ai.gpt-6-luna",
+  ];
+  render(
+    <ModelPicker
+      groupByFamily
+      modelLabelPrefixes={["databricks-", "goose-"]}
+      models={ids.map((id) => ({ id, label: id }))}
+      value=""
+      defaultLabel="acme_models.goose.goose-gpt-6-1-sol"
+      onChange={onChange}
+    />,
+  );
+  await user.click(
+    screen.getByRole("button", {
+      name: "Model: acme_models.goose.goose-gpt-6-1-sol · Default",
+    }),
+  );
+  (await screen.findByRole("menuitem", { name: "OpenAI" })).focus();
+  await user.keyboard("{ArrowRight}");
+  expect(
+    await screen.findByRole("menuitemradio", { name: "GPT-6 Luna" }),
+  ).toBeVisible();
+  await user.click(
+    screen.getByRole("menuitemradio", { name: "system.ai.gpt-6-1-sol" }),
+  );
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("system.ai.gpt-6-1-sol");
+});
+
+it("marks a saved model the list lacks in the family menu", async () => {
+  const user = userEvent.setup();
+  render(
+    <ModelPicker
+      groupByFamily
+      allowCustomModel
+      modelLabelPrefixes={["databricks-", "goose-"]}
+      models={[
+        {
+          id: "acme_models.goose.goose-gpt-6-luna",
+          label: "acme_models.goose.goose-gpt-6-luna",
+        },
+      ]}
+      value="system.ai.gpt-6-1-sol"
+      defaultLabel="Provider default"
+      onChange={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Model: GPT-6.1 Sol" }));
+  (await screen.findByRole("menuitem", { name: "OpenAI" })).focus();
+  await user.keyboard("{ArrowRight}");
+  const saved = await screen.findByRole("menuitemradio", {
+    name: "GPT-6.1 Sol · Custom model",
+  });
+  expect(saved).toBeChecked();
+  expect(
+    screen.getByRole("menuitemradio", { name: "GPT-6 Luna" }),
+  ).toBeVisible();
 });
 
 it("uses a catalog-owned family for grouping and the selected model icon", async () => {

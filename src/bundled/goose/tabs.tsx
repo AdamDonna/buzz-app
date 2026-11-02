@@ -122,10 +122,6 @@ type Row = Readonly<{
   root?: string;
   at?: number;
 }>;
-const modelLabel = (provider: string | undefined, model: string | undefined) =>
-  provider?.startsWith("databricks")
-    ? model?.replace(/^(?:databricks|goose)-/i, "")
-    : model;
 const placeOf = (key: string): Place => {
   const [channelId = key, root] = key.split("/");
   return { channelId, ...(root ? { root } : {}) };
@@ -456,7 +452,7 @@ export function createTabs({
             models={models.value ?? []}
             loading={models.status === "loading"}
             value={value.model}
-            defaultLabel={modelLabel(id, modelDefault) || "Provider model"}
+            defaultLabel={modelDefault || "Provider model"}
             {...(!provider.configured
               ? { description: `Available once ${provider.name} is set up.` }
               : models.status === "error"
@@ -869,7 +865,7 @@ export function createTabs({
     const { open, show, back } = useOpenTranscript(
       conversation,
       label,
-      initialTranscript && { initial: here, ...initialTranscript },
+      initialTranscript && { initial: here, searching, ...initialTranscript },
       close,
     );
     const rows = (recent.value ?? [])
@@ -1136,7 +1132,7 @@ export function createTabs({
             models={choices}
             value={current.model}
             defaultModel={fallback}
-            defaultLabel={modelLabel(provider, fallback) || "Choose model"}
+            defaultLabel={fallback || "Choose model"}
             effort={current.effort}
             // A card's chip keeps its room for the model name; its menu
             // still shows and sets the level.

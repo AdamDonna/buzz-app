@@ -30,6 +30,9 @@ export type OpenResult = Readonly<
   | {
       status: "failed";
       reason: OpenFailure;
+      /** The page shows this failure in place, next to what failed; the host
+       * keeps the page on screen instead of replacing it. */
+      presented?: true;
       /** Reopen this visit once, while it is still the one shown: called
        * with that reopen, returns its cancel (see reauthorizedOnce). */
       reauthorize?: (reopen: () => void) => () => void;
@@ -52,12 +55,16 @@ export type OpenAttempt = Readonly<{
   entry: NavigationEntry;
   signal: AbortSignal;
   focus?: NavigationFocus;
+  /** History traversal returned to a visit it already held; not opened again. */
+  traversal?: true;
 }>;
 export type NavigationSnapshot = Readonly<{
   entry: NavigationEntry;
   attempt: OpenAttempt;
   status: "opening" | OpenResult["status"];
   reason?: OpenFailure;
+  /** The failed page presents its own failure in place. */
+  presented?: true;
   /** An incoming URL failed before it could create a history destination. */
   ingress?: boolean;
   retryable?: boolean;
@@ -159,9 +166,19 @@ export function createNavigationController(
     snapshot = Object.freeze({
       ...snapshot,
       status: result.status,
-      ...(result.status === "failed" ? { reason: result.reason } : {}),
+      ...(result.status === "failed"
+        ? {
+            reason: result.reason,
+            ...(result.presented ? { presented: true as const } : {}),
+          }
+        : {}),
     });
-    if (result.status !== "opened")
+    // A failure presented in place keeps its page's authority until the visit
+    // is left or replaced, as an opened visit does.
+    if (
+      result.status !== "opened" &&
+      !(result.status === "failed" && result.presented)
+    )
       effects.push(() => operation.controller.abort(NAVIGATION_ABORTED));
     const reauthorize = result.status === "failed" && result.reauthorize;
     if (reauthorize)
@@ -176,7 +193,10 @@ export function createNavigationController(
       });
     emit();
   }
-  function start(focus: NavigationFocus = "content"): Promise<OpenResult> {
+  function start(
+    focus: NavigationFocus = "content",
+    traversal = false,
+  ): Promise<OpenResult> {
     if (disposed) return Promise.resolve({ status: "cancelled" });
     ingressRetry = undefined;
     const old = active;
@@ -192,6 +212,7 @@ export function createNavigationController(
       entry: state.current,
       signal: controller.signal,
       focus,
+      ...(traversal && { traversal }),
     });
     let resolve: (result: OpenResult) => void = () => {};
     const promise = new Promise<OpenResult>((settle) => {
@@ -310,7 +331,13 @@ export function createNavigationController(
         }
         const focus = openingFocus ?? returningFocus;
         openingFocus = returningFocus = undefined;
-        start(focus);
+        // A return lands on a visit history already held. open() publishes
+        // while opening, and a driver mints a new visit for an edited address
+        // or a dismissal's fallback; none of those returns.
+        start(
+          focus,
+          !opening && !!snapshot.retainedVisits?.includes(state.current.id),
+        );
       }
     });
   });

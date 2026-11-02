@@ -53,6 +53,13 @@ export function matchName(
   // Spaces in typed text only separate words; they need not match.
   const letters = [...needle.replace(/\s+/g, "")];
   if (!letters.length) return undefined;
+  // Letters in order, the loosest rank. Without them nothing below matches,
+  // so a name that misses skips the word-run search.
+  const inOrder: number[] = [];
+  chars.forEach((char, j) => {
+    if (char === letters[inOrder.length]) inOrder.push(j);
+  });
+  if (inOrder.length < letters.length) return undefined;
   // Can letters[i..] match chars[j..] with every run starting at a word start?
   // `inRun` means the previous letter matched chars[j - 1].
   const memo = new Map<number, boolean>();
@@ -83,13 +90,7 @@ export function matchName(
     }
     return found(MatchRank.wordRuns, positions);
   }
-  const positions: number[] = [];
-  chars.forEach((char, j) => {
-    if (char === letters[positions.length]) positions.push(j);
-  });
-  return positions.length === letters.length
-    ? found(MatchRank.inOrder, positions)
-    : undefined;
+  return found(MatchRank.inOrder, inOrder);
 }
 
 export const matchRank = (label: string, needle: string) =>

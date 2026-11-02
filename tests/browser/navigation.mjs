@@ -26,8 +26,34 @@ export async function newChat(page) {
   await expect(
     page.getByRole("button", { name: /^Community switcher:/ }),
   ).toBeVisible();
+  if (page.viewportSize().width <= 650) {
+    await settleShellToggle(page);
+    const show = page.getByRole("button", {
+      name: "Show navigation",
+      exact: true,
+    });
+    if (await show.isVisible()) await show.click();
+  }
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: "New chat", exact: true }).click();
+}
+
+// The agents-only composer pill's menu adds and removes agents, never the
+// last, and stays open: add this agent, drop the rest, then dismiss it, which
+// returns typing to the draft.
+export async function sendOnlyTo(page, pill, agent) {
+  await pill.click();
+  const menu = page.getByRole("dialog", { name: "Mention a member or agent" });
+  const name = `${agent.name} ${agent.pubkey}`;
+  const row = menu.getByRole("button", { name, exact: true });
+  if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+  await expect(row).toHaveAttribute("aria-pressed", "true");
+  const others = menu.locator(
+    `[aria-pressed="true"]:not([aria-label="${name}"])`,
+  );
+  while (await others.count()) await others.first().click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
 }
 
 // Select from an already-open palette, including tests that inspect page order.

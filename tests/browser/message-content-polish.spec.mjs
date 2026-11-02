@@ -42,7 +42,7 @@ async function expectReadable(locator) {
 
 // An own table-only message drops its bubble fill but keeps its reactions in
 // the bubble, so the grouped count must take the panel's ink, not the bubble's.
-test("reaction counts under an unboxed own table stay readable", async ({
+test("reactions under an unboxed own table stay contained and readable", async ({
   page,
 }) => {
   await page.goto("/tests/fixtures/emoji.html?reactions&table-reactions");
@@ -51,6 +51,22 @@ test("reaction counts under an unboxed own table stay readable", async ({
     .filter({ has: page.getByRole("table") });
   const count = row.getByRole("button", { name: "👍: 9 people" });
   await expect(count).toContainText("9");
+  // Browser layout: an unboxed table has no padding for a reaction outdent.
+  await expect
+    .poll(async () => {
+      const table = await row.getByRole("table").boundingBox();
+      const strip = await row
+        .getByRole("group", { name: "Reactions", exact: true })
+        .boundingBox();
+      return (
+        !!table &&
+        !!strip &&
+        strip.x >= table.x &&
+        strip.x + strip.width <= table.x + table.width
+      );
+    })
+    .toBe(true);
+
   for (const theme of ["light", "dark"])
     for (const level of ["touch", "high"])
       for (const color of ACCENTS) {
@@ -73,6 +89,23 @@ test("reaction counts under an unboxed own table stay readable", async ({
         await expectReadable(count);
       }
 });
+
+for (const theme of ["light", "dark"]) {
+  test(`standalone table and diff hover stays transparent in ${theme}`, async ({
+    page,
+  }) => {
+    await page.goto(
+      `/tests/fixtures/message-gallery.html?group=references&theme=${theme}`,
+    );
+    for (const id of ["table-received", "table-links", "code-diff"]) {
+      const example = specimen(page, id);
+      const bubble = example.locator("[data-message-action-anchor]");
+      await bubble.hover();
+      await expect(example.locator("[data-actions-revealed]")).toBeVisible();
+      await expect(bubble).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    }
+  });
+}
 
 for (const theme of ["light", "dark"]) {
   test(`message references and inset surfaces remain legible in ${theme}`, async ({

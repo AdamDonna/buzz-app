@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import type { AgentViewProps } from "../../../features/agents/service";
 import { PreferenceRow } from "../../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import inlineStyles from "../../../shared/InlineReference.module.css";
 import type { AgentClient, RemoteAgent } from "../agents/client";
-import type { OAuthSession } from "../oauth/session";
+import type { BuilderlabSession } from "../session";
 import { ModelSettings } from "./ModelSettings";
 
 const message = (reason: unknown) =>
@@ -13,18 +18,37 @@ const message = (reason: unknown) =>
     : "Could not load Builderlab settings.";
 
 /** Hosted settings belong to Builderlab, rather than Agents' local config. */
-export function createSettingsTab(client: AgentClient, session: OAuthSession) {
-  function Editor({ pubkey, retry }: { pubkey: string; retry(): void }) {
+export function createSettingsTab(
+  client: AgentClient,
+  session: BuilderlabSession,
+  openIdentity?: () => void,
+) {
+  function Editor({
+    pubkey,
+    retry,
+    harnessControl,
+  }: {
+    pubkey: string;
+    retry(): void;
+    harnessControl: ReactNode;
+  }) {
+    const login = useSyncExternalStore(session.subscribe, session.snapshot);
     const [loaded, setLoaded] = useState<{
       agent: RemoteAgent;
       subject: string;
+      email: string;
     }>();
     const [busy, setBusy] = useState(true);
     const [error, setError] = useState("");
     useEffect(() => {
+      if (loaded || login.status !== "signed-in") return;
+      setBusy(true);
+      setError("");
       const current = new AbortController();
       const load = async () => {
-        await session.ensureSignedIn(current.signal);
+        // Retire a discarded mount before starting host I/O.
+        await Promise.resolve();
+        current.signal.throwIfAborted();
         const credential = session.credential();
         const remote = (await client.list(current.signal)).find(
           (row) => row.pubkey === pubkey,
@@ -36,7 +60,11 @@ export function createSettingsTab(client: AgentClient, session: OAuthSession) {
           throw new Error("Agent not found in this Builderlab account.");
         if (remote.status !== "Active")
           throw new Error("Only Active agents can have their settings edited.");
-        setLoaded({ agent: remote, subject: credential.account.subject });
+        setLoaded({
+          agent: remote,
+          subject: credential.account.subject,
+          email: credential.account.email,
+        });
       };
       void load()
         .catch((reason: unknown) => {
@@ -46,12 +74,20 @@ export function createSettingsTab(client: AgentClient, session: OAuthSession) {
           if (!current.signal.aborted) setBusy(false);
         });
       return () => current.abort();
-    }, [pubkey]);
+    }, [pubkey, login, loaded]);
     return (
       <ModelSettings
         client={client}
         session={session}
-        settings={loaded ?? { pending: busy, error, retry }}
+        openIdentity={openIdentity}
+        settings={
+          loaded ?? {
+            pending: busy && login.status === "signed-in",
+            error,
+            retry,
+          }
+        }
+        harnessControl={harnessControl}
       />
     );
   }
@@ -59,6 +95,7 @@ export function createSettingsTab(client: AgentClient, session: OAuthSession) {
     agent,
     settingsSection,
     settingsContent,
+    settingsHost,
   }: AgentViewProps) {
     const [revision, setRevision] = useState(0);
     return (
@@ -68,6 +105,7 @@ export function createSettingsTab(client: AgentClient, session: OAuthSession) {
             key={`${agent.pubkey}/${revision}`}
             pubkey={agent.pubkey}
             retry={() => setRevision((value) => value + 1)}
+            harnessControl={settingsHost?.typeControl?.(false)}
           />
         )}
         {settingsSection !== "identity" && (

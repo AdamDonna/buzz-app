@@ -114,19 +114,25 @@ describe("navigation attempts over one history driver", () => {
     host.complete(nav.snapshot().attempt, { status: "opened" });
     await expect(first).resolves.toEqual({ status: "opened" });
     void nav.open(page);
+    expect(nav.snapshot().attempt.traversal).toBeUndefined();
     nav.back();
     expect(nav.snapshot().entry).toBe(settingsEntry);
     expect(nav.snapshot().canGoForward).toBe(true);
+    // Traversal returns to a visit; retry and a same-target open open it again.
+    expect(nav.snapshot().attempt.traversal).toBe(true);
     const retry = nav.retry();
     expect(nav.snapshot().entry).toBe(settingsEntry);
     expect(nav.snapshot().canGoForward).toBe(true);
+    expect(nav.snapshot().attempt.traversal).toBeUndefined();
     const same = nav.open(settings);
     await expect(retry).resolves.toEqual({ status: "superseded" });
     expect(nav.snapshot().entry).toBe(settingsEntry);
     expect(nav.snapshot().canGoForward).toBe(true);
+    expect(nav.snapshot().attempt.traversal).toBeUndefined();
     nav.forward();
     await expect(same).resolves.toEqual({ status: "superseded" });
     expect(nav.snapshot().entry.target).toEqual(page);
+    expect(nav.snapshot().attempt.traversal).toBe(true);
     nav.back();
     nav.back();
     expect(nav.snapshot().entry).toBe(initial);
@@ -148,6 +154,22 @@ describe("navigation attempts over one history driver", () => {
     expect(nav.snapshot().canGoForward).toBe(false);
     nav.back();
     expect(nav.snapshot().entry).toBe(opener);
+  });
+  it("counts a return to a visit history held as traversal, not a dismissal's new fallback", () => {
+    const { navigation: nav } = setup();
+    void nav.open(page);
+    const opener = nav.snapshot().entry;
+    void nav.open(settings);
+    nav.dismiss([nav.snapshot().entry.id], page);
+    expect(nav.snapshot().entry).toBe(opener);
+    expect(nav.snapshot().attempt.traversal).toBe(true);
+    void nav.open(settings);
+    const dialog = nav.snapshot().entry.id;
+    // The fallback isn't the preceding visit, so it replaces the dialog anew.
+    nav.dismiss([dialog], homeTarget);
+    expect(nav.snapshot().entry.target).toEqual(homeTarget);
+    expect(nav.snapshot().entry.id).not.toBe(dialog);
+    expect(nav.snapshot().attempt.traversal).toBeUndefined();
   });
   it("rejects late acknowledgments and aborts obsolete work even after successful reveal", async () => {
     const { host, navigation: nav } = setup();
@@ -200,6 +222,23 @@ describe("navigation attempts over one history driver", () => {
     expect(attempt.signal.reason).toBe(NAVIGATION_ABORTED);
     await expect(cancelled).resolves.toEqual({ status: "cancelled" });
     expect(nav.snapshot().entry.target).toEqual(settings);
+  });
+  it("keeps a failure presented in place authoritative until its visit is left", async () => {
+    const { host, navigation: nav } = setup();
+    const opened = nav.open(settings);
+    const attempt = nav.snapshot().attempt;
+    host.complete(attempt, {
+      status: "failed",
+      reason: "unavailable",
+      presented: true,
+    });
+    await expect(opened).resolves.toMatchObject({ status: "failed" });
+    expect(nav.snapshot()).toMatchObject({ status: "failed", presented: true });
+    expect(attempt.signal.aborted).toBe(false);
+    expect(host.complete(attempt, { status: "opened" })).toBe(false);
+    void nav.open(page);
+    expect(attempt.signal.reason).toBe(NAVIGATION_ABORTED);
+    expect(nav.snapshot().presented).toBeUndefined();
   });
   it("rejects invalid targets before cancelling or moving the current intent", async () => {
     const { navigation: nav } = setup();
@@ -274,6 +313,7 @@ describe("navigation attempts over one history driver", () => {
     history.back();
     expect(nav.snapshot().entry.target).toEqual(settings);
     expect(nav.snapshot().canGoBack).toBe(false);
+    expect(nav.snapshot().attempt.traversal).toBe(true);
     history.back();
     expect(nav.snapshot().entry.target).toEqual(settings);
     history.forward();

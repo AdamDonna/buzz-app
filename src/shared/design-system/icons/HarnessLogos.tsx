@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { forwardRef, useId } from "react";
 import claudeLogoUrl from "./claude.png?inline";
 import hermesLogoUrl from "./hermes.png?inline";
 import kimiLogoUrl from "./kimi.png?inline";
@@ -206,6 +206,69 @@ export const KimiLogoArtwork = forwardRef<SVGSVGElement, IconProps>(
         {...props}
       >
         <image href={kimiLogoUrl} width="48" height="48" />
+      </svg>
+    );
+  },
+);
+
+/**
+ * Builderlab's small UI mark, intended for 16–32px harness choices and cards.
+ * Broaden the source's top-right and bottom-left curves to keep corners visibly
+ * rounded at these sizes. Preserve the soft letter but omit procedural grain
+ * and displacement: they alias and differ from Figma's rendering.
+ * Use a dedicated textured asset for larger branded surfaces; this icon is
+ * not the full event artwork. See NOTICE.md for source provenance.
+ */
+export const BuilderlabLogoArtwork = forwardRef<SVGSVGElement, IconProps>(
+  function BuilderlabLogoArtwork({ size = "1em", ...props }, ref) {
+    const id = useId();
+    const maskId = `${id}-builderlab-mask`;
+    const filterId = `${id}-builderlab-blur`;
+    return (
+      // biome-ignore lint/a11y/noSvgWithoutTitle: the public gateway supplies accessibility semantics.
+      <svg
+        ref={ref}
+        width={size}
+        height={size}
+        viewBox="-16.5 0 575 575"
+        xmlns="http://www.w3.org/2000/svg"
+        {...props}
+      >
+        <defs>
+          <filter
+            id={filterId}
+            x="31.9243"
+            y="232.487"
+            width="261.251"
+            height="313.239"
+            filterUnits="userSpaceOnUse"
+            colorInterpolationFilters="sRGB"
+          >
+            <feGaussianBlur stdDeviation="14.8277" />
+          </filter>
+          {/* The soft letter cuts through to any surface, including hovered rows. */}
+          <mask
+            id={maskId}
+            x="-16.5"
+            y="0"
+            width="575"
+            height="575"
+            maskUnits="userSpaceOnUse"
+            style={{ maskType: "luminance" }}
+          >
+            <rect x="-16.5" width="575" height="575" fill="white" />
+            <path
+              d="M61.5796 516.071V262.142H170.861C226.386 262.142 256.093 286.191 256.093 330.399C256.093 359.753 238.41 377.082 221.788 384.155C245.837 392.997 263.52 414.216 263.52 444.631C263.52 489.546 231.691 516.071 177.227 516.071H61.5796ZM118.165 363.996H164.849C187.837 363.996 200.568 354.801 200.568 337.118C200.568 319.435 187.837 310.594 164.849 310.594H118.165V363.996ZM118.165 409.972V467.266H171.922C194.556 467.266 206.934 455.595 206.934 438.619C206.934 421.643 194.556 409.972 171.922 409.972H118.165Z"
+              fill="black"
+              filter={`url(#${filterId})`}
+            />
+          </mask>
+        </defs>
+        <path
+          d="M541.308 303.245C541.091 262.795 541.453 140.03 541.128 101.3465C540.441 77.9476 536.757 59.0069 517.909 35.8608C495.697 3.81256 451.676 0.162565 407.329 0.920993C365.457 0.920993 280.403 1.28215 232.584 0.523721C170.464 1.02934 118.998 -10.022 78.4032 48.4853C63.0537 70.5519 48.6793 93.7382 34.0882 116.491C22.856 134.585 13.3574 148.092 7.72322 170.123C0.355452 199.846 -0.258529 233 0.0665193 262.904C0.6805 325.348 0.283218 444.529 0.391568 459.24C0.0304028 486.756 3.28089 513.478 18.4296 539.73C36.1065 565.569 71.7853 573.281 105.4416 574.654C116.47 575.521 239.41 574.437 310.993 574.834C327.065 574.437 341.837 575.701 357.295 574.148C373.872 571.873 390.269 565.264 405.691 555.982C423.532 544.895 433.212 532.904 446.864 517.952C461.852 501.122 478.068 482.198 491.359 466.524C502.989 452.691 513.607 440.954 523.178 424.052C543.583 390.934 542.392 341.022 541.38 303.498V303.245H541.308Z"
+          fill="currentColor"
+          mask={`url(#${maskId})`}
+        />
       </svg>
     );
   },

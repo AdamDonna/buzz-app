@@ -23,12 +23,15 @@ import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { ModelFamilyMenu } from "./ModelFamilyMenu";
+import { formatModelChoices } from "./formatModelDisplayName";
 import { Select } from "../../shared/design-system/ui/Select";
 
 export type ModelChoice = Readonly<{
   /** The model ID saved in the type's config. */
   id: string;
   label: string;
+  /** Absent from the listed models; the family menu shows its description. */
+  unlisted?: boolean;
   /** Catalog-owned family, when the plugin knows more than the ID/name matcher. */
   family?: string;
   description?: string | undefined;
@@ -200,31 +203,24 @@ export function ModelPicker({
     label: defaultChoice?.label ?? defaultLabel,
     description: defaultChoice?.description ?? defaultDescription,
   };
-  const items: ModelChoice[] = includeDefault
-    ? [
-        fallback,
-        ...models.filter(
-          (model) => model.id !== defaultModel || model.id === value,
-        ),
-      ]
+  const listed: ModelChoice[] = includeDefault
+    ? models.filter((model) => model.id !== defaultModel || model.id === value)
     : [...models];
-  if (value && !items.some((model) => model.id === value))
-    items.push({
+  if (value && !listed.some((model) => model.id === value))
+    listed.push({
       id: value,
       label: value,
       description: allowCustomModel ? "Custom model" : "Unavailable model",
+      unlisted: true,
     });
-  const shown = items.map((model) => {
-    const prefix = modelLabelPrefixes?.find((prefix) =>
-      model.label.toLowerCase().startsWith(prefix.toLowerCase()),
-    );
-    return {
-      ...model,
-      label: prefix ? model.label.slice(prefix.length) : model.label,
-    };
-  });
+  // The default takes part in telling names apart, even when it is not a row.
+  const [shownDefault = fallback, ...shownListed] = formatModelChoices(
+    [fallback, ...listed],
+    modelLabelPrefixes,
+  );
+  const shown = includeDefault ? [shownDefault, ...shownListed] : shownListed;
   const selected =
-    shown.find((model) => model.id === (value || defaultModel)) ?? fallback;
+    shown.find((model) => model.id === (value || defaultModel)) ?? shownDefault;
   const inherited = value === "";
   const selectedLabel = inherited
     ? `${selected.label} · Default`
@@ -268,7 +264,7 @@ export function ModelPicker({
             selected={
               discovering ? { ...selected, label: "Loading models…" } : selected
             }
-            defaultChoice={includeDefault ? fallback : undefined}
+            defaultChoice={includeDefault ? shownDefault : undefined}
             disabled={disabled}
             loading={loading || pending}
             description={description}

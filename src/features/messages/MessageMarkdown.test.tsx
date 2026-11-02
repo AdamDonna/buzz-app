@@ -43,10 +43,10 @@ vi.mock("react-markdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-markdown")>();
   return {
     ...actual,
+    // Hook-free, so the returned elements are the parse a caller keeps.
     default: (properties: ComponentProps<typeof actual.default>) => {
       markdownRenders();
-      const Markdown = actual.default;
-      return <Markdown {...properties} />;
+      return actual.default(properties);
     },
   };
 });
@@ -415,6 +415,71 @@ describe("mounted Markdown preparation", () => {
     );
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.getByText(":party_parrot:")).toBeInTheDocument();
+  });
+
+  it("reuses a remounted body's parse while each row reads its own inputs", () => {
+    const directory = (name: string) => ({
+      profiles: new Map(),
+      agents: [],
+      named: [],
+      channels: [{ id: "design", name, channelType: "forum" as const }],
+    });
+    const content = "<buzz://channel/design> **revisited**";
+    const first = renderDom(
+      <MessageMarkdown
+        {...props(content, { directory: directory("first") })}
+      />,
+    );
+    const parses = markdownRenders.mock.calls.length;
+    first.unmount();
+
+    renderDom(
+      <>
+        <MessageMarkdown
+          {...props(content, { directory: directory("second") })}
+        />
+        <MessageMarkdown
+          {...props(content, { directory: directory("third") })}
+        />
+      </>,
+    );
+    expect(markdownRenders).toHaveBeenCalledTimes(parses);
+    expect(screen.getByRole("link", { name: "#second" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "#third" })).toBeInTheDocument();
+    expect(screen.getAllByText("revisited")[0]?.tagName).toBe("STRONG");
+  });
+
+  it("parses a body again once many newer bodies have replaced it", () => {
+    render("**evicted**");
+    const parses = markdownRenders.mock.calls.length;
+    render("**evicted**");
+    expect(markdownRenders).toHaveBeenCalledTimes(parses);
+
+    for (let index = 0; index < 100; index++)
+      render(`${index} ${"*newer* ".repeat(40)}`);
+    const newer = markdownRenders.mock.calls.length;
+    expect(render("**evicted**")).toContain("<strong>evicted</strong>");
+    expect(markdownRenders).toHaveBeenCalledTimes(newer + 1);
+  });
+
+  it("weighs long bodies by their length, not only their elements", () => {
+    render("**evicted**");
+    const words = "word ".repeat(19_000);
+    for (let index = 0; index < 25; index++) render(`${index} ${words}`);
+    const newer = markdownRenders.mock.calls.length;
+    render("**evicted**");
+    expect(markdownRenders).toHaveBeenCalledTimes(newer + 1);
+  }, 20_000);
+
+  it("does not keep a body heavier than the whole cache", () => {
+    render("**kept**");
+    const huge = "*dense* ".repeat(5_000);
+    render(huge);
+    const parses = markdownRenders.mock.calls.length;
+    render("**kept**");
+    expect(markdownRenders).toHaveBeenCalledTimes(parses);
+    render(huge);
+    expect(markdownRenders).toHaveBeenCalledTimes(parses + 1);
   });
 
   it("crosses long and deep fallback boundaries after mount", () => {
@@ -868,6 +933,26 @@ it("renders tagged agent library names and profile names with the same agent ico
   ).not.toContain("data-mention-kind=");
 });
 
+describe("paragraph-leading profile capsules", () => {
+  it.each(["@Mic", `[@Mic](${profileTarget(mic)})`])(
+    "aligns %s only at the paragraph start",
+    (mention) => {
+      for (const [content, leading] of [
+        [mention, true],
+        [`Hello ${mention}`, false],
+        [`Hello  \n${mention}`, false],
+      ] as const) {
+        const view = renderDom(<MessageMarkdown {...props(content)} />);
+        const capsule = view.getByRole("button", { name: "View Mic profile" });
+        expect(capsule.closest("p")?.hasAttribute("data-leading-mention")).toBe(
+          leading,
+        );
+        view.unmount();
+      }
+    },
+  );
+});
+
 it("keeps explicit profile identities visible but inert when Profiles is unavailable", () => {
   const target = profileTarget(mic);
   const view = renderDom(
@@ -881,6 +966,7 @@ it("keeps explicit profile identities visible but inert when Profiles is unavail
   expect(screen.queryByRole("button")).toBeNull();
   expect(screen.queryByRole("link")).toBeNull();
   expect(view.container.textContent).toContain(target);
+  expect(view.container.querySelector("[data-leading-mention]")).toBeNull();
   view.rerender(
     <MessageMarkdown
       {...props(`[@Mic](${target})`, {
@@ -1391,4 +1477,17 @@ it("marks only a mention of the viewer as a mention of you", () => {
   expect(
     view.getByRole("button", { name: "View Mic profile" }),
   ).not.toHaveAttribute("data-mention-self");
+});
+
+it("opens a plugin page link in message content through the host opener", () => {
+  const href =
+    "buzz://plugin?id=com.example.catalog&page=detail&route.slug=hello";
+  const onOpenLink = vi.fn(() => true);
+  renderDom(
+    <ToastProvider>
+      <MessageMarkdown {...props(`See [the entry](${href})`, { onOpenLink })} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("link", { name: "the entry" }));
+  expect(onOpenLink).toHaveBeenCalledWith(href);
 });

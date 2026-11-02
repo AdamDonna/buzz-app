@@ -8,6 +8,7 @@ import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -39,6 +40,7 @@ import type {
 import { MentionPicker } from "../../bundled/mentions/MentionPicker";
 import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
 import { mentionQuery } from "../../bundled/mentions/mention-query";
+import { attachmentDraft } from "../messages/attachment-draft";
 import { NewMessage } from "./NewMessage";
 import { OutboxStatus } from "../../bundled/channels/OutboxStatus";
 import { createRelayProfiler } from "../relay/profiling";
@@ -166,6 +168,7 @@ function setup(
   const create = () => {
     const owner = createRelaySession(
       {
+        scope: "https://relay.example",
         viewer: viewer.pubkey,
         relayAuthor: relay.pubkey,
         media: () => undefined,
@@ -899,3 +902,203 @@ it.each([false, true])(
     expect(t.publish).not.toHaveBeenCalled();
   },
 );
+
+const photo = {
+  name: "photo.png",
+  url: `https://relay.example/media/${"f".repeat(64)}.png`,
+  type: "image/png",
+  size: 5,
+  sha256: "f".repeat(64),
+};
+function attachable(t: ReturnType<typeof setup>) {
+  const live = t.create();
+  const uploadForNewChat = vi.fn(async () => photo);
+  const owner = {
+    ...live,
+    session: {
+      ...live.session,
+      attachments: {
+        prepare: async (file: File) => file,
+        upload: vi.fn(),
+        uploadForNewChat,
+      },
+    },
+  };
+  const view = t.mount(owner);
+  const attach = () =>
+    t.user.upload(
+      screen.getByLabelText("Choose attachments"),
+      new File(["photo"], "photo.png", { type: "image/png" }),
+    );
+  return {
+    owner,
+    get files() {
+      return attachmentDraft(
+        owner.session,
+        `${scope}:direct-message:new-draft`,
+        channel,
+        true,
+      );
+    },
+    view,
+    uploadForNewChat,
+    attach,
+  };
+}
+
+it.each(["", "See attached"])(
+  "sends a photo with caption %j and clears files on delivery",
+  async (caption) => {
+    const t = setup();
+    const f = attachable(t);
+    await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+    if (caption) await t.user.type(screen.getByRole("textbox"), caption);
+    await f.attach();
+    await waitFor(() => expect(f.files.snapshot()[0]?.status).toBe("ready"));
+    expect(t.openDirectMessage).not.toHaveBeenCalled();
+    expect(send()).toBeEnabled();
+    await t.user.click(send());
+    await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+    const event = t.publish.mock.calls[0]?.[0];
+    expect(event?.content).toContain(`![photo.png](<${photo.url}>)`);
+    if (caption) expect(event?.content).toContain(caption);
+    expect(event?.tags).toContainEqual(
+      expect.arrayContaining(["imeta", `x ${photo.sha256}`]),
+    );
+    expect(f.files.snapshot()).toEqual([]);
+    f.view.unmount();
+    t.mount(f.owner);
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeEnabled());
+    expect(
+      screen.queryByRole("button", { name: "Remove photo.png" }),
+    ).not.toBeInTheDocument();
+    expect(send()).toBeDisabled();
+  },
+);
+
+it("waits for uploads before opening a DM and reports failure only on the chip", async () => {
+  const t = setup();
+  const f = attachable(t);
+  let rejectUpload = (_reason: Error) => {};
+  f.uploadForNewChat.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectUpload = reject;
+      }),
+  );
+  await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+  await f.attach();
+  await waitFor(() => expect(f.uploadForNewChat).toHaveBeenCalledOnce());
+  try {
+    await t.user.click(send());
+    expect(await screen.findByText("Uploading files…")).toBeVisible();
+    expect(t.openDirectMessage).not.toHaveBeenCalled();
+  } finally {
+    await act(async () =>
+      rejectUpload(new Error("Upload failed. Retry or remove this file.")),
+    );
+  }
+  expect(
+    await screen.findByRole("button", { name: "Retry photo.png" }),
+  ).toBeEnabled();
+  expect(
+    await screen.findByText(
+      "A file couldn’t upload. Retry or remove it, then send again.",
+    ),
+  ).toHaveAttribute("role", "status");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(send()).toBeDisabled();
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+  await t.user.click(screen.getByRole("button", { name: "Retry photo.png" }));
+  await waitFor(() => expect(f.files.snapshot()[0]?.status).toBe("ready"));
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+});
+
+it.each(["remove", "replace", "rename", "unchanged"])(
+  "uses the visible files after a failed send: %s",
+  async (change) => {
+    const t = setup();
+    t.publish.mockRejectedValueOnce(new PublishRejected("Not sent"));
+    const f = attachable(t);
+    await t.compose();
+    await f.attach();
+    await t.user.click(send());
+    await screen.findByRole("alert");
+    expect(f.files.snapshot()).toHaveLength(1);
+    const original = t.publish.mock.calls[0]?.[0];
+    if (change !== "unchanged") {
+      await t.user.click(
+        screen.getByRole("button", { name: "Remove photo.png" }),
+      );
+      if (change === "replace") {
+        f.uploadForNewChat.mockResolvedValue({
+          ...photo,
+          sha256: "e".repeat(64),
+          url: `https://relay.example/media/${"e".repeat(64)}.png`,
+        });
+        await f.attach();
+      } else if (change === "rename") {
+        f.uploadForNewChat.mockResolvedValue({ ...photo, name: "renamed.png" });
+        await t.user.upload(
+          screen.getByLabelText("Choose attachments"),
+          new File(["photo"], "renamed.png", { type: "image/png" }),
+        );
+      }
+    }
+    await t.user.click(send());
+    await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+    const retried = t.publish.mock.calls[1]?.[0];
+    if (change === "unchanged") expect(retried).toEqual(original);
+    else {
+      expect(retried?.id).not.toBe(original?.id);
+      if (change === "rename") {
+        expect(retried?.content).toContain(`![renamed.png](<${photo.url}>)`);
+        expect(retried?.tags).toContainEqual(
+          expect.arrayContaining(["imeta", "filename renamed.png"]),
+        );
+      } else expect(retried?.content).not.toContain(photo.url);
+      expect(retried?.tags.filter(([name]) => name === "imeta")).toHaveLength(
+        change === "remove" ? 0 : 1,
+      );
+    }
+  },
+);
+
+it("confirms a photo-only uncertain send after session restart without files or a replacement event", async () => {
+  const t = setup();
+  t.publish.mockRejectedValueOnce(new Error("Receipt lost"));
+  const f = attachable(t);
+  await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+  await f.attach();
+  await t.user.click(send());
+  await screen.findByRole("alert");
+  const original = t.publish.mock.calls[0]?.[0];
+  f.view.unmount();
+  f.owner.dispose();
+  t.mount(t.create());
+  await t.user.click(await screen.findByRole("button", { name: "Retry send" }));
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  expect(t.publish.mock.calls[1]?.[0]).toEqual(original);
+});
+
+it("drops files on the recipient header into the new DM composer", async () => {
+  const t = setup();
+  const f = attachable(t);
+  await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+  const header = screen.getByRole("combobox");
+  const dataTransfer = {
+    types: ["Files"],
+    files: [new File(["photo"], "photo.png", { type: "image/png" })],
+    dropEffect: "uninitialized",
+  };
+  fireEvent.dragEnter(header, { dataTransfer });
+  const overlay = await screen.findByText("Drop files into this conversation");
+  expect(overlay.parentElement?.parentElement).toBe(
+    screen.getByRole("region", { name: "New message" }),
+  );
+  fireEvent.drop(header, { dataTransfer });
+  await waitFor(() => expect(f.files.snapshot()[0]?.status).toBe("ready"));
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+});
