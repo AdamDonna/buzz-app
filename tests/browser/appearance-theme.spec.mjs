@@ -73,7 +73,7 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
 
   await appearance(page);
   const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
-  await expect(radios(page)).toHaveCount(2);
+  await expect(radios(page)).toHaveCount(3);
   await expect(group.getByRole("radio", { name: /^Buzz/ })).toBeChecked();
   await expect(group.getByRole("radio", { name: /^Relax/ })).not.toBeChecked();
   // The name and the description each have one owner; the thumbnail has none.
@@ -93,8 +93,9 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
   const cards = {
     buzz: await cardSidebar("buzz"),
     relax: await cardSidebar("relax"),
+    cacophony: await cardSidebar("cacophony"),
   };
-  expect(cards.buzz).not.toBe(cards.relax);
+  expect(new Set(Object.values(cards)).size).toBe(3);
 
   await group.getByRole("radio", { name: /^Buzz/ }).focus();
   await page.keyboard.press("ArrowRight");
@@ -113,7 +114,11 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
   ).toHaveAttribute("aria-pressed", "true");
 
   expect(
-    { buzz: await cardSidebar("buzz"), relax: await cardSidebar("relax") },
+    {
+      buzz: await cardSidebar("buzz"),
+      relax: await cardSidebar("relax"),
+      cacophony: await cardSidebar("cacophony"),
+    },
     "each card previews its own theme, not the page theme",
   ).toEqual(cards);
 
@@ -215,4 +220,43 @@ test("a saved manual accent stays when the theme changes", async ({
   await expect(
     page.getByRole("button", { name: "Cobalt accent color" }),
   ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("Cacophony keeps its frame in the page mode and stacks three distinct dark layers", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await appearance(page);
+  const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
+  await group.getByText("Cacophony", { exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "cacophony");
+  await expect(page.locator("html")).toHaveAttribute("data-accent", "theme");
+
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(240, 241, 245)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(225, 227, 234)",
+  );
+  expect(await resolved(page, "--accent-9", "body")).toBe("rgb(95, 85, 250)");
+
+  await chooseColorMode(page, "Dark");
+  await expectFramed(page, false);
+  const layers = {
+    canvas: await resolved(page, "--bg-app", "header.shell-header"),
+    sidebar: await resolved(page, "--surface-sidebar", "#shell-navigation"),
+    main: await resolved(page, "--surface-panel", "body"),
+  };
+  expect(layers).toEqual({
+    canvas: "rgb(18, 19, 24)",
+    sidebar: "rgb(41, 43, 52)",
+    main: "rgb(32, 33, 43)",
+  });
+  expect(new Set(Object.values(layers)).size).toBe(3);
+  expect(
+    await background(page.locator("#shell-navigation .panel[data-sidebar]")),
+  ).toBe(layers.sidebar);
+  expect(await resolved(page, "--accent-9", "body")).toBe("rgb(95, 85, 250)");
 });

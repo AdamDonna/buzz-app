@@ -312,14 +312,19 @@ it("chooses a theme by pointer and keyboard, saves only the theme, and recovers 
   const group = screen.getByRole("radiogroup", { name: "Theme" });
   const buzz = within(group).getByRole("radio", { name: "Buzz" });
   const relax = within(group).getByRole("radio", { name: "Relax" });
+  const cacophony = within(group).getByRole("radio", { name: "Cacophony" });
   expect(buzz).toBeChecked();
+  expect(cacophony).toHaveAccessibleDescription(
+    "Stacked slate panels with an electric violet glow.",
+  );
   expect(relax).toHaveAccessibleDescription(
     "Deep plum frame around a bright, open workspace.",
   );
-  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(2);
-  expect(
-    group.querySelector("svg[data-theme='relax'][data-color-mode]"),
-  ).not.toBeNull();
+  expect(group.querySelectorAll("svg[aria-hidden='true']")).toHaveLength(3);
+  for (const theme of ["relax", "cacophony"])
+    expect(
+      group.querySelector(`svg[data-theme='${theme}'][data-color-mode]`),
+    ).not.toBeNull();
 
   const save = vi
     .spyOn(Storage.prototype, "setItem")

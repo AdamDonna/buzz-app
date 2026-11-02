@@ -875,7 +875,7 @@
 
 :root {
   --cacophony-neutral-1-light: #ffffff;
-  --cacophony-neutral-2-light: #f0f2f5;
+  --cacophony-neutral-2-light: #f2f4f7;
   --cacophony-neutral-3-light: #dde0e7;
   --cacophony-neutral-4-light: #d8dbe2;
   --cacophony-neutral-5-light: #c9cdd5;
@@ -896,27 +896,27 @@
   --cacophony-bubble-neutral-light: #e8eaef;
   --cacophony-bubble-received-light: #f2f3f6;
   --cacophony-neutral-1-dark: #0b0b11;
-  --cacophony-neutral-2-dark: #242530;
-  --cacophony-neutral-3-dark: #2f303e;
+  --cacophony-neutral-2-dark: #1c1d26;
+  --cacophony-neutral-3-dark: #20212b;
   --cacophony-neutral-4-dark: #313340;
   --cacophony-neutral-5-dark: #40424c;
   --cacophony-neutral-6-dark: #474953;
   --cacophony-neutral-7-dark: #535560;
   --cacophony-neutral-8-dark: #5f626d;
   --cacophony-neutral-9-dark: #808491;
-  --cacophony-neutral-10-dark: #9ea2b0;
+  --cacophony-neutral-10-dark: #abafbb;
   --cacophony-neutral-11-dark: #c9ccd5;
   --cacophony-neutral-12-dark: #dddfe6;
   --cacophony-neutral-navigation-quiet-dark: #313340;
   --cacophony-neutral-raised-dark: #313340;
   --cacophony-neutral-quiet-hover-dark: #313340;
   --cacophony-neutral-action-pressed-dark: #b6bac5;
-  --cacophony-bubble-neutral-dark: #3f414b;
+  --cacophony-bubble-neutral-dark: #3a3c45;
   --cacophony-bubble-received-dark: #393b45;
 
   --cacophony-frame-canvas-light: #e1e3ea;
   --cacophony-frame-sidebar-light: #f0f1f5;
-  --cacophony-frame-canvas-dark: #1c1d24;
+  --cacophony-frame-canvas-dark: #121318;
   --cacophony-frame-sidebar-dark: #292b34;
 
   --cacophony-sidebar-selected-light: #d6d9e2;
@@ -3119,6 +3119,125 @@
   );
   --theme-frame-canvas-light: var(--relax-frame-canvas-light);
   --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
+}
+
+/* Cacophony: stacked slate panels with an electric violet glow. The frame follows
+   the page mode, so it defines no frame slots. The Theme accent is the Iris family. */
+[data-theme="cacophony"] {
+  --theme-neutral-1-light: var(--cacophony-neutral-1-light);
+  --theme-neutral-2-light: var(--cacophony-neutral-2-light);
+  --theme-neutral-3-light: var(--cacophony-neutral-3-light);
+  --theme-neutral-4-light: var(--cacophony-neutral-4-light);
+  --theme-neutral-5-light: var(--cacophony-neutral-5-light);
+  --theme-neutral-6-light: var(--cacophony-neutral-6-light);
+  --theme-neutral-7-light: var(--cacophony-neutral-7-light);
+  --theme-neutral-8-light: var(--cacophony-neutral-8-light);
+  --theme-neutral-9-light: var(--cacophony-neutral-9-light);
+  --theme-neutral-10-light: var(--cacophony-neutral-10-light);
+  --theme-neutral-11-light: var(--cacophony-neutral-11-light);
+  --theme-neutral-12-light: var(--cacophony-neutral-12-light);
+  --theme-neutral-standard-text-light: var(
+    --cacophony-neutral-standard-text-light
+  );
+  --theme-neutral-navigation-text-light: var(
+    --cacophony-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --cacophony-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --cacophony-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--cacophony-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --cacophony-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --cacophony-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--cacophony-bubble-neutral-light);
+  --theme-bubble-received-light: var(--cacophony-bubble-received-light);
+  --theme-canvas-light: var(--cacophony-frame-canvas-light);
+  --theme-sidebar-light: var(--cacophony-frame-sidebar-light);
+  --theme-accent-1-light: var(--iris-1-light);
+  --theme-accent-2-light: var(--iris-2-light);
+  --theme-accent-3-light: var(--iris-3-light);
+  --theme-accent-4-light: var(--iris-4-light);
+  --theme-accent-5-light: var(--iris-5-light);
+  --theme-accent-6-light: var(--iris-6-light);
+  --theme-accent-7-light: var(--iris-7-light);
+  --theme-accent-8-light: var(--iris-8-light);
+  --theme-accent-9-light: var(--iris-9-light);
+  --theme-accent-10-light: var(--iris-10-light);
+  --theme-accent-11-light: var(--iris-11-light);
+  --theme-accent-12-light: var(--iris-12-light);
+  --theme-accent-contrast-light: var(--iris-contrast-light);
+  --theme-accent-ink-light: var(--iris-ink-light);
+  --theme-accent-pressed-light: var(--iris-pressed-light);
+  --theme-accent-link-light: var(--iris-link-light);
+  --theme-accent-link-hover-light: var(--iris-link-hover-light);
+  --theme-sidebar-selected-light: var(--cacophony-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(
+    --cacophony-sidebar-selected-text-light
+  );
+  --theme-sidebar-hover-light: var(--cacophony-sidebar-hover-light);
+  --theme-sidebar-hover-text-light: var(--cacophony-neutral-12-light);
+  --theme-badge-light: var(--cacophony-badge-light);
+  --theme-badge-text-light: var(--cacophony-badge-text-light);
+  --theme-status-online-light: var(--cacophony-status-online-light);
+  --theme-status-away-light: var(--cacophony-status-away-light);
+
+  --theme-neutral-1-dark: var(--cacophony-neutral-1-dark);
+  --theme-neutral-2-dark: var(--cacophony-neutral-2-dark);
+  --theme-neutral-3-dark: var(--cacophony-neutral-3-dark);
+  --theme-neutral-4-dark: var(--cacophony-neutral-4-dark);
+  --theme-neutral-5-dark: var(--cacophony-neutral-5-dark);
+  --theme-neutral-6-dark: var(--cacophony-neutral-6-dark);
+  --theme-neutral-7-dark: var(--cacophony-neutral-7-dark);
+  --theme-neutral-8-dark: var(--cacophony-neutral-8-dark);
+  --theme-neutral-9-dark: var(--cacophony-neutral-9-dark);
+  --theme-neutral-10-dark: var(--cacophony-neutral-10-dark);
+  --theme-neutral-11-dark: var(--cacophony-neutral-11-dark);
+  --theme-neutral-12-dark: var(--cacophony-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --cacophony-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--cacophony-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--cacophony-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(
+    --cacophony-neutral-action-pressed-dark
+  );
+  --theme-bubble-neutral-dark: var(--cacophony-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--cacophony-bubble-received-dark);
+  --theme-canvas-dark: var(--cacophony-frame-canvas-dark);
+  --theme-sidebar-dark: var(--cacophony-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--iris-1-dark);
+  --theme-accent-2-dark: var(--iris-2-dark);
+  --theme-accent-3-dark: var(--iris-3-dark);
+  --theme-accent-4-dark: var(--iris-4-dark);
+  --theme-accent-5-dark: var(--iris-5-dark);
+  --theme-accent-6-dark: var(--iris-6-dark);
+  --theme-accent-7-dark: var(--iris-7-dark);
+  --theme-accent-8-dark: var(--iris-8-dark);
+  --theme-accent-9-dark: var(--iris-9-dark);
+  --theme-accent-10-dark: var(--iris-10-dark);
+  --theme-accent-11-dark: var(--iris-11-dark);
+  --theme-accent-12-dark: var(--iris-12-dark);
+  --theme-accent-contrast-dark: var(--iris-contrast-dark);
+  --theme-accent-ink-dark: var(--iris-ink-dark);
+  --theme-accent-pressed-dark: var(--iris-pressed-dark);
+  --theme-accent-link-dark: var(--iris-link-dark);
+  --theme-accent-link-hover-dark: var(--iris-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--cacophony-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(
+    --cacophony-sidebar-selected-text-dark
+  );
+  --theme-sidebar-hover-dark: var(--cacophony-sidebar-hover-dark);
+  --theme-sidebar-hover-text-dark: var(--cacophony-neutral-12-dark);
+  --theme-badge-dark: var(--cacophony-badge-dark);
+  --theme-badge-text-dark: var(--cacophony-badge-text-dark);
+  --theme-status-online-dark: var(--cacophony-status-online-dark);
+  --theme-status-away-dark: var(--cacophony-status-away-dark);
 }
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */

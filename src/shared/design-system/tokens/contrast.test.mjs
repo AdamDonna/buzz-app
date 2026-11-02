@@ -502,6 +502,24 @@ describe("semantic contrast contract", () => {
       "--theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-dark);",
       /relax\/theme\/neutral\/dark --text-sidebar-selected \(#\w+\) on --surface-sidebar-selected \(/,
     ],
+    [
+      "a page-mode sidebar under its navigation text",
+      "--theme-sidebar-light: var(--cacophony-frame-sidebar-light);",
+      "--theme-sidebar-light: var(--cacophony-neutral-12-light);",
+      /cacophony\/theme\/neutral\/light --text-navigation \(#\w+\) on --surface-sidebar \(/,
+    ],
+    [
+      "a dark main pane too light for the chart series",
+      "--cacophony-neutral-3-dark: #20212b;",
+      "--cacophony-neutral-3-dark: #2f303e;",
+      /cacophony\/theme\/neutral\/dark: --chart-series-2 on --surface-panel/,
+    ],
+    [
+      "a dark neutral bubble too light for its hovered mention",
+      "--cacophony-bubble-neutral-dark: #3a3c45;",
+      "--cacophony-bubble-neutral-dark: #3f414b;",
+      /cacophony\/theme\/neutral\/dark --text-mention-own \(#\w+\) on --affordance-mention-own-hover \(/,
+    ],
   ])("measures a theme in its own scope: %s", (_name, from, to, pairing) => {
     expect(tokens).toContain(from);
     const result = check(tokens.replaceAll(from, to));
@@ -509,13 +527,26 @@ describe("semantic contrast contract", () => {
     expect(result.output).toMatch(pairing);
   });
 
-  it("keeps the tinted-neutral allowance to a theme's own neutrals", () => {
-    const from = "--theme-canvas-dark: var(--relax-frame-canvas-dark);";
-    expect(tokens).toContain(from);
-    const result = check(
-      tokens.replaceAll(from, "--theme-canvas-dark: var(--relax-9-dark);"),
-    );
-    expect(result.status, result.output).toBe(1);
-    expect(result.output).toContain("is gray on --bg-app");
-  });
+  it.each([
+    [
+      "relax",
+      "--theme-canvas-dark: var(--relax-frame-canvas-dark);",
+      "--theme-canvas-dark: var(--relax-9-dark);",
+      "is gray on --bg-app",
+    ],
+    [
+      "cacophony",
+      "--theme-neutral-quiet-hover-dark: var(--cacophony-neutral-quiet-hover-dark);",
+      "--theme-neutral-quiet-hover-dark: var(--iris-9-dark);",
+      "is gray on --affordance-subtle-hover",
+    ],
+  ])(
+    "keeps the tinted-neutral allowance of %s to its own neutrals",
+    (_theme, from, to, message) => {
+      expect(tokens).toContain(from);
+      const result = check(tokens.replaceAll(from, to));
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain(message);
+    },
+  );
 });
