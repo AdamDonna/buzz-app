@@ -64,6 +64,8 @@ export function fakeHarness(
     /** The `configOptions` every session answers with; a set replaces the
      * chosen value. */
     configOptions?: readonly Record<string, unknown>[];
+    /** Updates `session/load` replays before it answers. */
+    replay?: readonly Record<string, unknown>[];
   }> = {},
 ) {
   const harnesses: FakeHarness[] = [];
@@ -200,6 +202,12 @@ export function fakeHarness(
           } else if (method === "session/load" || method === "session/resume") {
             const [buzz] = (params.mcpServers ?? []) as { url: string }[];
             if (buzz) declared.set(String(params.sessionId), buzz.url);
+            if (method === "session/load")
+              for (const update of options.replay ?? [])
+                send({
+                  method: "session/update",
+                  params: { sessionId: params.sessionId, update },
+                });
             send({ id, result: options_() });
           } else if (method === "session/set_config_option") {
             const option = chosen.get(String(params.configId));

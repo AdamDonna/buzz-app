@@ -13,6 +13,7 @@ import { approve, type Config, DEFAULT_CONFIG } from "./config";
 import { missing } from "./harness";
 import manifest from "./manifest.json";
 import { AcpRuntime } from "./runtime";
+import { localSessions } from "./sessions";
 
 const appClient = vi.hoisted(() => vi.fn());
 vi.mock("../../buzz-mcp/app-client", async (actual) => {
@@ -706,6 +707,38 @@ describe("AcpRuntime", () => {
       });
       expect(harness.sent("session/load")).toHaveLength(0);
       expect(harness.sent("session/new")).toHaveLength(1);
+    });
+
+    it("places each replayed transcript turn in its saved conversation", async () => {
+      const root = "a".repeat(64);
+      const reply = "b".repeat(64);
+      const said = (text: string, by = "user") => ({
+        sessionUpdate: `${by}_message_chunk`,
+        content: { type: "text", text },
+      });
+      const { runtime, storage, sync } = setup({
+        capabilities: resumable,
+        replay: [
+          said("hi"),
+          said("ok", "agent"),
+          said(`then pass \`reply: "${reply}"\``),
+        ],
+      });
+      sync(await confirmed());
+      const signal = new AbortController().signal;
+      const places = async (key: string) => {
+        localSessions(storage, self).set(key, { at: 1, id: "old" });
+        const read = await runtime.transcript(self, key, signal);
+        return read?.turns.map((t) => [t.channelId, t.threadRootId]);
+      };
+      expect(await places(`${channel}/${root}`)).toEqual([
+        [channel, root],
+        [channel, root],
+      ]);
+      expect(await places(channel)).toEqual([
+        [channel, undefined],
+        [channel, reply],
+      ]);
     });
   });
 

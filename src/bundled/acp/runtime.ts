@@ -832,7 +832,7 @@ export class AcpRuntime {
     if (!entry || !sessionId) return undefined;
     const launch = entry.config;
     const cwd = await this.resolveDirectory(launch.workspace);
-    const [, root] = key.split("/");
+    const [channelId, root] = key.split("/");
     const transcript = await readTranscript({
       start: (o) => start(this.spawn, launch, o),
       cwd,
@@ -842,7 +842,14 @@ export class AcpRuntime {
     });
     entry.replays = transcript !== undefined;
     this.notify();
-    return transcript;
+    return (
+      transcript && {
+        turns: transcript.turns.map((turn) => ({
+          ...turn,
+          channelId: channelId ?? null,
+        })),
+      }
+    );
   }
 
   /** The agent's memory, or only entry `slug`, read back through the owner's
