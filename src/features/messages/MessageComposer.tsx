@@ -142,7 +142,10 @@ import { formatMediaTime, mediaTimeReply } from "./media-timecode";
 import { RichComposerInput } from "./RichComposerInput";
 import type { MessageLinkOrigin } from "./MessageRow";
 import { composerMarkdown } from "./composer-markdown";
-import { recognizeSlashCommand } from "../conversation/slash-command";
+import {
+  recognizeSlashCommand,
+  untilAborted,
+} from "../conversation/slash-command";
 import type {
   ComposerInputElement,
   ComposerLinkEdit,
@@ -2516,20 +2519,30 @@ function Composer({
       if (command) {
         setSending(true);
         setError(undefined);
-        const result = await command.command.run({
-          session,
-          scope,
-          channelId,
-          threadRootId,
-          args: command.args,
-          recipients: captured.recipients.map(({ pubkey, name }) => ({
-            pubkey,
-            name,
-          })),
-          signal: attempt.signal,
-        });
+        const result = await untilAborted(
+          command.command.run({
+            session,
+            scope,
+            channelId,
+            threadRootId,
+            args: command.args,
+            recipients: captured.recipients.map(({ pubkey, name }) => ({
+              pubkey,
+              name,
+            })),
+            signal: attempt.signal,
+          }),
+          attempt.signal,
+        );
         attempt.signal.throwIfAborted();
-        if (valueRef.current !== captured) return;
+        if (
+          valueRef.current !== captured ||
+          !sameAttachmentSelection(
+            attachments.store.snapshot(),
+            capturedAttachments,
+          )
+        )
+          return;
         if (viewRevision(scope, draftKey) !== savedRevision) {
           setConflict(true);
           return;

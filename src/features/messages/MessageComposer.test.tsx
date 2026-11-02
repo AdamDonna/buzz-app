@@ -6,6 +6,7 @@ import * as emojiPlugin from "../../bundled/emoji";
 import * as commandsPlugin from "../../bundled/commands";
 import type { PluginModule } from "../../plugins/api";
 import { File as NodeFile } from "node:buffer";
+import { attachmentDraft } from "./attachment-draft";
 import { createMemberAdditions } from "../channel-members/operations";
 import { addChannelMember } from "../channel-members/members";
 import "@testing-library/jest-dom/vitest";
@@ -13122,6 +13123,50 @@ it("abandons a pending command when the composer unmounts, sending and reporting
   await act(async () => service.held.result.resolve({ send: "late" }));
   expect(h.messages.send).not.toHaveBeenCalled();
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("releases the composer when a retarget abandons a command that ignores its signal", async () => {
+  const service = await commandService();
+  const h = mount({
+    extensions: service,
+    slashCommands: true,
+    threadRootId: "root",
+  });
+  h.fill("/hold now");
+  h.submit();
+  await waitFor(() => expect(service.held.runs).toBe(1));
+  h.retarget({ threadRootId: "root", replyParentId: "parent" });
+  expect(service.held.signals[0]?.aborted).toBe(true);
+  await act(async () => {});
+  h.fill("plain reply");
+  h.submit();
+  await waitFor(() => expect(h.messages.reply).toHaveBeenCalledOnce());
+  await act(async () => service.held.result.resolve({ send: "late" }));
+  expect(h.messages.reply).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("keeps the draft and an attachment added while a command runs, and sends neither", async () => {
+  const service = await commandService();
+  const h = await mountUploadComposer({
+    extensions: service,
+    slashCommands: true,
+  });
+  fireEvent.input(h.input(), { target: { value: "/hold now" } });
+  await act(async () => {});
+  fireEvent.submit(h.form());
+  await waitFor(() => expect(service.held.runs).toBe(1));
+  act(() =>
+    attachmentDraft(h.owner.session, `${h.scope}:draft:channel`, "channel").add(
+      [attachmentFile()],
+    ),
+  );
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  await act(async () => service.held.result.resolve({ send: "done" }));
+  await act(async () => h.uploadCalls[0]?.result.resolve(uploadDescriptor()));
+  expect(h.publish).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("/hold now");
+  await waitFor(() => expect(screen.getByText("notes.txt")).toBeVisible());
 });
 
 it("chooses a typeahead option by pointer without running it", async () => {
