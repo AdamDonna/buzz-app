@@ -245,6 +245,7 @@ function FeatureSwitch({
   const config = (agent.config ?? {}) as { instructions?: unknown };
   const instructions =
     typeof config.instructions === "string" ? config.instructions : "";
+  const timer = feature.timer && agent.attention[watchSlug(feature.timer.id)];
   const required = FEATURES.find(({ id }) => id === feature.requires);
   const blocked = !!required && !featureOn(agent, instructions, required);
   const checked = featureOn(agent, instructions, feature);
@@ -306,8 +307,8 @@ function FeatureSwitch({
           channel,
         };
       }
-      // Attention first: if the instructions then fail to save, the half left
-      // reads as off, and the switch can finish either way.
+      // Attention first: if the instructions then fail to save, Off leaves
+      // a section without its timer, which reads as off.
       if (Object.keys(attention).length)
         await agents.save(agent.key, {
           attention,
@@ -315,18 +316,40 @@ function FeatureSwitch({
           // it on: the agent's other watches may need it.
           ...(timer && { attentionEnabled: true }),
         });
-      await agents.save(agent.key, {
-        config: {
-          ...config,
-          instructions: on
-            ? withFeature(instructions, feature, true)
-            : off.reduce(
-                (text, item) => withFeature(text, item, false),
-                instructions,
+      try {
+        await agents.save(agent.key, {
+          config: {
+            ...config,
+            instructions: on
+              ? withFeature(instructions, feature, true)
+              : off.reduce(
+                  (text, item) => withFeature(text, item, false),
+                  instructions,
+                ),
+          },
+          ...(agent.configBase && { base: agent.configBase }),
+        });
+      } catch (cause) {
+        // A failed On undoes what it saved, so no timer runs behind a switch
+        // that reads off. Attention goes back off only if this turned it on.
+        if (timer)
+          await agents
+            .save(agent.key, {
+              attention: Object.fromEntries(
+                Object.keys(attention).map((slug) => [
+                  slug,
+                  agent.attention[slug]?.value ?? null,
+                ]),
               ),
-        },
-        ...(agent.configBase && { base: agent.configBase }),
-      });
+              ...(!agent.attentionEnabled && { attentionEnabled: false }),
+            })
+            .catch(() => {
+              throw new Error(
+                `${cause instanceof Error ? cause.message : String(cause)} Its timer may still be saved; remove it below.`,
+              );
+            });
+        throw cause;
+      }
     });
   const alert = error && (
     <p role="alert" className="buzz-field-error">
@@ -367,17 +390,39 @@ function FeatureSwitch({
         description={
           blocked && required && !checked
             ? `Turn on ${required.title} first.`
-            : // Attention reads off while no plugin shows it, as when the
-              // Watching plugin is off, or while the agent's switch is off.
-              checked && feature.timer && !agent.attentionEnabled
-              ? "Paused: watches aren't running on this device. Turn on the Watching plugin and its Run watches switch."
-              : feature.description
+            : // Paused on its own in the Attention tab, which can't resume a
+              // timer: saving it again here does.
+              checked && timer?.value.type === "timer" && !timer.value.enabled
+              ? `Paused in Attention. Turn ${feature.title} off and on again to restart it.`
+              : // Attention reads off while no plugin shows it, as when the
+                // Watching plugin is off, or while the agent's switch is off.
+                checked && feature.timer && !agent.attentionEnabled
+                ? "Paused: watches aren't running on this device. Turn on the Watching plugin and its Run watches switch."
+                : feature.description
         }
         checked={checked}
         // A check-in left on without memory can still be turned off.
         disabled={saving || (blocked && !checked)}
         onCheckedChange={(on) => void save(on)}
       />
+      {/* A timer left without its section, as when undoing a failed On
+          failed too, still runs: Remove takes it away. */}
+      {timer && !checked && (
+        <PreferenceRow
+          title={`${feature.title}'s timer is still saved`}
+          subtitle="Its section in Instructions is missing, so it reads as off."
+          trailing={(label) => (
+            <Button
+              variant="outline"
+              aria-describedby={label["aria-labelledby"]}
+              disabled={saving}
+              onClick={() => void save(false)}
+            >
+              Remove
+            </Button>
+          )}
+        />
+      )}
       {alert}
     </>
   );
