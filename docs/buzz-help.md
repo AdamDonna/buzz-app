@@ -92,7 +92,7 @@ the interface unless an available tool actually supports that action.
   offers the same edit. Model, workspace, and other runtime options depend on
   its type. Do not assume someone can edit another person's agent.
 - In the desktop preview, a plugin can run a dedicated Pi or Codex agent in a workspace
-  on another computer. The saved workspace stays fixed for that agent. If the
+  on another computer. Settings shows its saved workspace as read-only. If the
   plugin is unavailable, the agent cannot run. Codex uses the account on that
   computer. Buzz keeps the agent identity and tool access in the desktop app.
   Guest Codex transcripts, usage totals, and media downloads are unavailable

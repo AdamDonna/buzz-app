@@ -66,6 +66,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const { ActivityTab, Create, CreateModel, SettingsTab } = createTabs({
     setup: runtime.setup,
     runtime,
+    binding: (key) => agents.executionBinding(key),
   });
   const sync = () => {
     const snapshot = agents.snapshot();

@@ -56,7 +56,9 @@ function setup(
   /** The channel's Canvas, as it reads now. */
   canvas?: { content: string; pubkey?: string },
   repositories?: (scope: string | undefined) => string,
-  execution?: (key: string) => AgentExecution | undefined,
+  execution?: (
+    key: string,
+  ) => AgentExecution | undefined | Promise<AgentExecution | undefined>,
   hook?: ConstructorParameters<typeof PiRuntime>[6],
 ) {
   let submissions = 0;
@@ -375,6 +377,38 @@ it("hands an owner's mention to its thread's Pi conversation", async () => {
   expect(String(delivered?.params.instructions)).toContain(self);
   expect(turn.workingUntil).toHaveBeenCalledTimes(1);
   expect(published).toEqual([]);
+});
+
+it("disposes execution that resolves after the agent retires", async () => {
+  const pending = deferred<AgentExecution>();
+  const resolveExecution = vi.fn(() => pending.promise);
+  const remote = fakeHost({ places: () => ({ places: [] }) });
+  const execution: AgentExecution = {
+    binding: {
+      provider: "internal/remote",
+      target: "guest-1",
+      workspace: "/remote/task",
+    },
+    signal: new AbortController().signal,
+    spawn: remote.spawn,
+    readFile: vi.fn(),
+    resolveDirectory: vi.fn(),
+    dispose: vi.fn(async () => {}),
+  };
+  const f = setup({}, [], undefined, undefined, resolveExecution);
+  const opening = f.runtime.places(self);
+  const rejected = expect(opening).rejects.toThrow("retired");
+  try {
+    expect(resolveExecution).toHaveBeenCalledOnce();
+    await f.runtime.retire(self);
+    pending.resolve(execution);
+    await rejected;
+    expect(execution.dispose).toHaveBeenCalledOnce();
+    expect(remote.processes).toHaveLength(0);
+  } finally {
+    pending.resolve(execution);
+    f.runtime.dispose();
+  }
 });
 
 it.each(["Stop", "adapter unload"] as const)(

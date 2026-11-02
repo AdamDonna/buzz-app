@@ -178,7 +178,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       }
     },
     async check(agent: AgentKey, harness: string) {
-      const saved = await binding(agent);
+      const saved = read(agent);
       if (saved) providerFor(saved, harness);
     },
     async open(
