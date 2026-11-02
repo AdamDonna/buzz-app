@@ -22,6 +22,7 @@ import type {
   Agent,
   Agents,
   AgentConversation,
+  AgentViewProps,
   RegisteredAgentType,
   TranscriptRequest,
 } from "../../features/agents/service";
@@ -85,6 +86,7 @@ export function AgentDetails({
   initialActivity,
   initialTranscript,
   close,
+  openConversation,
   communities,
   openSettings,
 }: {
@@ -101,6 +103,8 @@ export function AgentDetails({
   initialTranscript?: TranscriptRequest | undefined;
   /** Closes the panel showing the agent. */
   close?: () => void;
+  /** Opens a turn's conversation from its activity; see AgentViewProps. */
+  openConversation?: AgentViewProps["openConversation"];
   communities?: CommunityReader | undefined;
   openSettings?: ((section: string) => void) | undefined;
 }) {
@@ -484,6 +488,7 @@ export function AgentDetails({
               initialActivity={initialActivity}
               initialTranscript={initialTranscript}
               close={close}
+              openConversation={openConversation}
               settingsHost={settings.settingsHost}
               onDiscard={settings.discard}
               memories={memories}

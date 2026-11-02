@@ -114,7 +114,12 @@ import { Textarea } from "../../shared/design-system/ui/Textarea";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import { readView, writeView } from "../../shared/view-state";
-import { agentProviderRoute, agentProviderTarget, agentRoute } from "./routes";
+import {
+  agentProviderRoute,
+  agentProviderTarget,
+  agentRoute,
+  conversationOpener,
+} from "./routes";
 import { writeClipboardText } from "../../shared/clipboard";
 
 const message = (error: unknown) =>
@@ -524,6 +529,12 @@ export function AgentsPage({
         }
         onRemoved={() => browse()}
         openSettings={openSettings}
+        openConversation={conversationOpener(
+          navigator,
+          connection.viewer && connection.origin
+            ? { viewer: connection.viewer, communityOrigin: connection.origin }
+            : undefined,
+        )}
       />
     )
   ) : undefined;
