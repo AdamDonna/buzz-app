@@ -15,6 +15,7 @@ import {
   profileActivityViewTarget,
 } from "../../features/profiles/target";
 import { ProfilePanel } from "./ProfilePanel";
+import type { Navigation } from "../../features/navigation/controller";
 import type {
   Agent,
   Agents,
@@ -589,6 +590,63 @@ it("opens an agent's activity on its type's first tab when the type has no Activ
     expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
   } finally {
     dispose();
+  }
+});
+
+it("links an owned agent whose type's plugin is off to Manage plugins", async () => {
+  const owner = createRelaySession(null);
+  const snapshot = {
+    status: "ready" as const,
+    generation: 1,
+    session: owner.session,
+  };
+  const relay = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  const agent = {
+    key,
+    pubkey: key,
+    name: "Lou",
+    type: "test/off",
+    place: "here",
+    config: {},
+    attention: {},
+  } as unknown as Agent;
+  const types: RegisteredAgentType[] = [];
+  const agentsSnapshot = { agents: [agent], teams: [] };
+  const agents = {
+    subscribe: () => () => {},
+    snapshot: () => agentsSnapshot,
+    types: () => types,
+    find: (pubkey: string) => (pubkey === key ? agent : undefined),
+    memberships: () => [],
+    configHistory: () => undefined,
+    addedTabs: () => [],
+  } as unknown as Agents;
+  const navigation = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  try {
+    render(
+      <ProfilePanel
+        relay={relay}
+        agents={agents}
+        navigation={navigation}
+        target={profileTarget(key) ?? ""}
+        close={() => {}}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Manage plugins" }));
+    expect(navigation.open).toHaveBeenCalledExactlyOnceWith({
+      version: 1,
+      kind: "settings",
+      section: "plugins",
+    });
+  } finally {
+    cleanup();
+    owner.dispose();
   }
 });
 

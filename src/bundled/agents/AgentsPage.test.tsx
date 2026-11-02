@@ -2767,23 +2767,63 @@ it("offers New team again when the team being edited disappears", async () => {
 
 it("explains an unavailable harness without claiming the key is on another device", async () => {
   const user = userEvent.setup();
-  setup([
-    {
-      ...agent("Starf", 3),
-      type: "block.builderlab/builderlab",
-      place: "elsewhere",
-    },
-  ]);
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  setup(
+    [
+      {
+        ...agent("Starf", 3),
+        type: "block.builderlab/builderlab",
+        place: "elsewhere",
+      },
+    ],
+    { page: { navigator } },
+  );
   const grid = screen.getByRole("grid", { name: "Agents" });
   expect(within(grid).getByText("Harness unavailable")).toBeInTheDocument();
   expect(screen.queryByText("On another device")).not.toBeInTheDocument();
 
   await user.click(within(grid).getByText("Starf"));
-  expect(screen.getByText(/Check Settings → Plugins/)).toBeInTheDocument();
+  expect(screen.getByText(/harness is unavailable/)).toHaveTextContent(
+    "Check Manage plugins or use a build with this harness configured.",
+  );
   expect(screen.queryByText(/another of your devices/)).not.toBeInTheDocument();
   expect(
     screen.queryByRole("button", { name: "Delete agent" }),
   ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Manage plugins" }));
+  expect(navigator.open).toHaveBeenCalledExactlyOnceWith({
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+  });
+});
+
+it("links a profile whose type's plugin is off to Manage plugins", async () => {
+  const user = userEvent.setup();
+  const navigator = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  setup([{ ...agent("Lou", 3), type: "test/off" }], { page: { navigator } });
+
+  await user.click(
+    within(screen.getByRole("grid", { name: "Agents" })).getByText("Lou"),
+  );
+  const settings = screen.getByRole("region", { name: "Lou settings" });
+  expect(
+    within(settings).getByText(/provides this agent's type/),
+  ).toHaveTextContent(
+    "Enable the plugin that provides this agent's type in Manage plugins to change its settings.",
+  );
+  await user.click(
+    within(settings).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(navigator.open).toHaveBeenCalledExactlyOnceWith({
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+  });
 });
 
 it("shows a synced team only where its members are, after switching communities", async () => {
