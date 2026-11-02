@@ -2811,6 +2811,11 @@
    points their dark slots at the frame's light-mode values; a dark page
    already renders its frame dark and needs no wrapper. Portaled menus,
    popovers and toasts sit outside the wrapper and follow the page mode.
+
+   Accent overlays default to shade fills. A theme whose dark accent ink is
+   dark sets --theme-accent-overlay-dark, -hover-dark, -soft-dark, -quiet-dark
+   and -highlight-dark to --tint-fill, --tint-hover-fill, --tint-soft-fill,
+   --tint-quiet-fill and --tint-fill, so overlays lighten rather than darken.
    ============================================================ */
 
 .dark[data-theme-frame] {
@@ -2836,8 +2841,6 @@
   --theme-neutral-action-pressed-dark: var(
     --theme-frame-neutral-action-pressed-light
   );
-  --theme-bubble-neutral-dark: var(--theme-frame-bubble-neutral-light);
-  --theme-bubble-received-dark: var(--theme-frame-bubble-received-light);
   --theme-canvas-dark: var(--theme-frame-canvas-light);
   --theme-sidebar-dark: var(--theme-frame-sidebar-light);
   --theme-sidebar-selected-dark: var(--theme-sidebar-selected-light);
@@ -2848,6 +2851,141 @@
   --theme-badge-text-dark: var(--theme-badge-text-light);
   --theme-status-online-dark: var(--theme-status-online-light);
   --theme-status-away-dark: var(--theme-status-away-light);
+}
+
+/* Relax: a deep plum frame around a bright, open workspace. Every value is a
+   palette step from LAYER 0; a role is never restated here. */
+[data-theme="relax"] {
+  --theme-neutral-1-light: var(--relax-neutral-1-light);
+  --theme-neutral-2-light: var(--relax-neutral-2-light);
+  --theme-neutral-3-light: var(--relax-neutral-3-light);
+  --theme-neutral-4-light: var(--relax-neutral-4-light);
+  --theme-neutral-5-light: var(--relax-neutral-5-light);
+  --theme-neutral-6-light: var(--relax-neutral-6-light);
+  --theme-neutral-7-light: var(--relax-neutral-7-light);
+  --theme-neutral-8-light: var(--relax-neutral-8-light);
+  --theme-neutral-9-light: var(--relax-neutral-9-light);
+  --theme-neutral-10-light: var(--relax-neutral-10-light);
+  --theme-neutral-11-light: var(--relax-neutral-11-light);
+  --theme-neutral-12-light: var(--relax-neutral-12-light);
+  --theme-neutral-standard-text-light: var(--relax-neutral-standard-text-light);
+  --theme-neutral-navigation-text-light: var(
+    --relax-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --relax-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --relax-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--relax-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --relax-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --relax-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--relax-bubble-neutral-light);
+  --theme-bubble-received-light: var(--relax-bubble-received-light);
+  --theme-canvas-light: var(--relax-frame-canvas-light);
+  --theme-sidebar-light: var(--relax-frame-sidebar-light);
+  --theme-accent-1-light: var(--relax-1-light);
+  --theme-accent-2-light: var(--relax-2-light);
+  --theme-accent-3-light: var(--relax-3-light);
+  --theme-accent-4-light: var(--relax-4-light);
+  --theme-accent-5-light: var(--relax-5-light);
+  --theme-accent-6-light: var(--relax-6-light);
+  --theme-accent-7-light: var(--relax-7-light);
+  --theme-accent-8-light: var(--relax-8-light);
+  --theme-accent-9-light: var(--relax-9-light);
+  --theme-accent-10-light: var(--relax-10-light);
+  --theme-accent-11-light: var(--relax-11-light);
+  --theme-accent-12-light: var(--relax-12-light);
+  --theme-accent-contrast-light: var(--relax-contrast-light);
+  --theme-accent-ink-light: var(--relax-ink-light);
+  --theme-accent-pressed-light: var(--relax-pressed-light);
+  --theme-accent-link-light: var(--relax-link-light);
+  --theme-accent-link-hover-light: var(--relax-link-hover-light);
+  --theme-sidebar-selected-light: var(--relax-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(--relax-sidebar-selected-text-light);
+  --theme-sidebar-hover-light: var(--relax-sidebar-hover-light);
+  --theme-sidebar-hover-text-light: var(--relax-frame-neutral-12-light);
+  --theme-badge-light: var(--relax-badge-light);
+  --theme-badge-text-light: var(--relax-badge-text-light);
+  --theme-status-online-light: var(--relax-status-online-light);
+  --theme-status-away-light: var(--relax-status-away-light);
+
+  --theme-neutral-1-dark: var(--relax-neutral-1-dark);
+  --theme-neutral-2-dark: var(--relax-neutral-2-dark);
+  --theme-neutral-3-dark: var(--relax-neutral-3-dark);
+  --theme-neutral-4-dark: var(--relax-neutral-4-dark);
+  --theme-neutral-5-dark: var(--relax-neutral-5-dark);
+  --theme-neutral-6-dark: var(--relax-neutral-6-dark);
+  --theme-neutral-7-dark: var(--relax-neutral-7-dark);
+  --theme-neutral-8-dark: var(--relax-neutral-8-dark);
+  --theme-neutral-9-dark: var(--relax-neutral-9-dark);
+  --theme-neutral-10-dark: var(--relax-neutral-10-dark);
+  --theme-neutral-11-dark: var(--relax-neutral-11-dark);
+  --theme-neutral-12-dark: var(--relax-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --relax-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--relax-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--relax-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(--relax-neutral-action-pressed-dark);
+  --theme-bubble-neutral-dark: var(--relax-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--relax-bubble-received-dark);
+  --theme-canvas-dark: var(--relax-frame-canvas-dark);
+  --theme-sidebar-dark: var(--relax-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--relax-1-dark);
+  --theme-accent-2-dark: var(--relax-2-dark);
+  --theme-accent-3-dark: var(--relax-3-dark);
+  --theme-accent-4-dark: var(--relax-4-dark);
+  --theme-accent-5-dark: var(--relax-5-dark);
+  --theme-accent-6-dark: var(--relax-6-dark);
+  --theme-accent-7-dark: var(--relax-7-dark);
+  --theme-accent-8-dark: var(--relax-8-dark);
+  --theme-accent-9-dark: var(--relax-9-dark);
+  --theme-accent-10-dark: var(--relax-10-dark);
+  --theme-accent-11-dark: var(--relax-11-dark);
+  --theme-accent-12-dark: var(--relax-12-dark);
+  --theme-accent-contrast-dark: var(--relax-contrast-dark);
+  --theme-accent-ink-dark: var(--relax-ink-dark);
+  --theme-accent-pressed-dark: var(--relax-pressed-dark);
+  --theme-accent-link-dark: var(--relax-link-dark);
+  --theme-accent-link-hover-dark: var(--relax-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--relax-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--relax-sidebar-hover-dark);
+  --theme-sidebar-hover-text-dark: var(--relax-neutral-12-dark);
+  --theme-badge-dark: var(--relax-badge-dark);
+  --theme-badge-text-dark: var(--relax-badge-text-dark);
+  --theme-status-online-dark: var(--relax-status-online-dark);
+  --theme-status-away-dark: var(--relax-status-away-dark);
+  --theme-frame-neutral-1-light: var(--relax-frame-neutral-1-light);
+  --theme-frame-neutral-2-light: var(--relax-frame-neutral-2-light);
+  --theme-frame-neutral-3-light: var(--relax-frame-neutral-3-light);
+  --theme-frame-neutral-4-light: var(--relax-frame-neutral-4-light);
+  --theme-frame-neutral-5-light: var(--relax-frame-neutral-5-light);
+  --theme-frame-neutral-6-light: var(--relax-frame-neutral-6-light);
+  --theme-frame-neutral-7-light: var(--relax-frame-neutral-7-light);
+  --theme-frame-neutral-8-light: var(--relax-frame-neutral-8-light);
+  --theme-frame-neutral-9-light: var(--relax-frame-neutral-9-light);
+  --theme-frame-neutral-10-light: var(--relax-frame-neutral-10-light);
+  --theme-frame-neutral-11-light: var(--relax-frame-neutral-11-light);
+  --theme-frame-neutral-12-light: var(--relax-frame-neutral-12-light);
+  --theme-frame-neutral-navigation-quiet-light: var(
+    --relax-frame-neutral-navigation-quiet-light
+  );
+  --theme-frame-neutral-quiet-hover-light: var(
+    --relax-frame-neutral-quiet-hover-light
+  );
+  --theme-frame-neutral-raised-light: var(--relax-frame-neutral-raised-light);
+  --theme-frame-neutral-action-pressed-light: var(
+    --relax-frame-neutral-action-pressed-light
+  );
+  --theme-frame-canvas-light: var(--relax-frame-canvas-light);
+  --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
 }
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
