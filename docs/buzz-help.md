@@ -105,6 +105,35 @@ the interface unless an available tool actually supports that action.
 
 ## Optional features and limits
 
+- **Workflows** are saved, channel-scoped automations for recurring community
+  work. Open **Workflows** and choose **New workflow**; select its channel,
+  trigger, and steps, then review the draft before enabling it. Start with a
+  narrow trigger and a harmless action, especially for message or schedule
+  triggers. A saved enabled state does not prove that a run succeeded, and
+  deleting a workflow does not cancel work already running. The relay executes
+  workflows; permissions and available channels still apply. The page can run a
+  saved workflow on demand and show its run history where the relay provides it.
+- **Inbox** gathers recent DMs, mentions, and participating threads that need
+  attention. Use its filters to focus the list, and archive a conversation when
+  it is out of the active queue; archive is a personal, device-local view choice,
+  not deletion or a change to its unread state. Inbox's **Drafts** view lets
+  someone resume or delete meaningful saved composer drafts for that community.
+- **Reminders**, when enabled, let someone choose **Remind me** from a message's
+  menu and return to it later. They can snooze or complete it from the Reminders
+  page. A reminder is personal follow-up, not an assignment or notification to
+  other channel members.
+- **Todos**, when enabled, show channel tasks and assignees from Canvas. Keep
+  the task source of truth in the channel's Canvas; the Todos panel is a view of
+  that shared work, not a separate task system.
+- **Huddles**, when enabled on a supported desktop build, add audio calls to a
+  channel or DM. Use the headphone control in the conversation header to join
+  an existing Huddle or start one. Microphone access follows an explicit join,
+  and adding someone to a Huddle gives them access to that Huddle's room, not
+  automatically to the original conversation.
+- **GitHub and repository features**, when enabled, can render GitHub links in
+  conversations and offer repository, issue, pull-request, or commit details.
+  Available actions depend on the host and the signed-in GitHub account; do not
+  assume private repositories or write actions are available.
 - Plugins can add features. **Settings → Plugins → Manage plugins** controls
   them. Do not assume a particular optional plugin is on.
 - **Attention**, when available, lets agents use Interests, watches, and timers
