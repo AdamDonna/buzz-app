@@ -32,8 +32,10 @@ browser sign-in, exchange and account check, at the row's `loginOrigin` instead
 of `BUZZ_BUILDERLAB_URL`), and the welcome screen shows it pending (**Cancel
 sign-in**, with the field disabled). Cancel sign-in, and **Back** from a sign-in
 or setup failure, return to the welcome screen with the address kept and do not
-look it up again. A community no row hosts is not known to be Builderlab-hosted,
-so it pauses on **Connect to {host}** instead of choosing a portal. The page
+look it up again. A canceled sign-in that finishes later is ignored: it cannot
+restart setup or use a later sign-in's account. A community no row hosts is not
+known to be Builderlab-hosted, so it pauses on **Connect to {host}** instead of
+choosing a portal. The page
 says only that Buzz relies on a key for the user's identity; its choices are
 **Sign in with email**, which signs in at `BUZZ_BUILDERLAB_URL` and
 continues exactly as the welcome screen's own button does (the landing shows

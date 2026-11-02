@@ -1444,6 +1444,71 @@ it("canceling or failing sign-in after a landing URL returns to the landing with
   identity.dispose();
 });
 
+it("a canceled tenant sign-in that returns after a later sign-in is ignored: setup is not restarted and the later credential is not read for the tenant", async () => {
+  const relay = landingRelay("https://relay.example.com");
+  relay.info.resolve();
+  const second: Credential = {
+    value: "second-token",
+    account: { ...credential.account, email: "b@example.com" },
+  };
+  // The tenant exchange ignores the abort, as native HTTP does, and returns
+  // only after the next sign-in has finished.
+  const stale = deferred<Credential>();
+  const connect = vi
+    .fn((_signal: AbortSignal, _origin?: string) => Promise.resolve(second))
+    .mockImplementationOnce(() => stale.promise);
+  const account = vi.fn(unlinked);
+  const digest = vi.spyOn(crypto.subtle, "digest");
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      account={account}
+      connect={connect}
+      tenants={tenants}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await screen.findByRole("button", { name: SIGN_IN });
+  await user.type(urlField(), "relay.example.com{Enter}");
+  await user.click(
+    await screen.findByRole("button", { name: "Cancel sign-in" }),
+  );
+  expect(connect).toHaveBeenLastCalledWith(
+    expect.any(AbortSignal),
+    "https://tenant.example",
+  );
+  // A sign-in at the build's portal reaches the key choice, and the user
+  // starts entering a key.
+  await user.click(connectButton());
+  await user.click(
+    await screen.findByRole("button", { name: "I already have a key" }),
+  );
+  await user.type(keyField(), "nsec1draft");
+  expect(account).toHaveBeenCalledTimes(1);
+  expect(account).toHaveBeenCalledWith(second, undefined, identity);
+  const digests = digest.mock.calls.length;
+  await act(async () => {
+    stale.resolve(credential);
+    // The canceled attempt's last wait is its account digest; the rest is
+    // microtasks, which all run before the next macrotask.
+    await vi.waitFor(() => expect(digest).toHaveBeenCalledTimes(digests + 1));
+    await digest.mock.results[digests]?.value;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(
+    screen.getByRole("heading", { name: "Enter your private key" }),
+  ).toBeVisible();
+  expect(keyField()).toHaveValue("nsec1draft");
+  expect(account).toHaveBeenCalledTimes(1);
+  expect(relay.relayCalls).toEqual(relay.lookup);
+  identity.dispose();
+});
+
 /** Backup status that answers only once released, so the lookup step can be seen running. */
 function gatedStatus() {
   const answer = deferred<readonly string[] | "unavailable">();

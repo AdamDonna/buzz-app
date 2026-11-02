@@ -132,6 +132,9 @@ export function Welcome({
   const [login] = useState(() =>
     createOAuthSession((signal) => connect(signal, loginOrigin.current)),
   );
+  // Counts canceled sign-ins: a sign-in continues only if none was canceled
+  // since it started, since the session may by then hold a later sign-in.
+  const cancels = useRef(0);
   const auth = useSyncExternalStore(login.subscribe, login.snapshot);
   const [setup] = useState(createSetup);
   const progress = useSyncExternalStore(setup.subscribe, setup.snapshot);
@@ -265,9 +268,13 @@ export function Welcome({
    * lookup runs on both. Each choice below resumes setup with its own steps.
    */
   const signIn = async (origin?: string) => {
+    const attempt = cancels.current;
     loginOrigin.current = origin;
+    // A canceled attempt still settles here, possibly after another sign-in
+    // succeeded at another origin; it must not read that one's credential.
     await login.signIn();
-    if (login.snapshot().status !== "signed-in") return;
+    if (attempt !== cancels.current || login.snapshot().status !== "signed-in")
+      return;
     const current = account(login.credential(), origin, identity);
     reads.current = current;
     void setup.start(
@@ -360,6 +367,7 @@ export function Welcome({
     reads.current = undefined;
     known.current = undefined;
     setup.reset();
+    cancels.current++;
     login.cancel();
   };
   /**
