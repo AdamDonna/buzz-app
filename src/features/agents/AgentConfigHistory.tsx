@@ -243,13 +243,13 @@ export function AgentConfigHistory({
               !deleted && revisionProblem(expected, event, settings);
             return (
               <li className={styles.row} key={event.id}>
-                <span className={styles.label}>
-                  <span className="text-label">
+                <span className={`text-body-sm ${styles.label}`}>
+                  <span>
                     {artifactOp(event)}
                     {current ? " · Current" : ""}
                     {invalid ? " · Not valid" : ""}
                   </span>{" "}
-                  <span className="text-caption">
+                  <span className="text-secondary">
                     {new Date(event.created_at * 1000).toLocaleString()}
                   </span>
                 </span>

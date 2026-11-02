@@ -47,13 +47,13 @@ function HistoryRow({ history }: { history: ConfigHistory }) {
         {
           value: "Previous versions",
           title: (
-            <span className="grid gap-1 text-left">
+            <span className="flex items-center justify-between gap-3 text-body-sm text-left">
               <span>Previous versions</span>
-              <span className="text-caption text-secondary">{summary}</span>
+              <span className="text-secondary">{summary}</span>
             </span>
           ),
           content: (
-            <div className="grid gap-6">
+            <div className="grid gap-4">
               <p className="m-0 text-body-sm text-secondary">
                 Versions are kept automatically when changes are saved.
               </p>
