@@ -119,3 +119,22 @@
   border-radius: var(--radius-pill);
   background: var(--affordance-accent-prominent);
 }
+.framed {
+  background: var(--bg-app);
+}
+.framed .scene {
+  padding: var(--space-3);
+  gap: var(--space-3);
+}
+.framed .sidebar {
+  padding: var(--space-4) var(--space-3);
+  border-inline-end: 0;
+  border-radius: var(--radius-container);
+  background: var(--surface-sidebar);
+}
+.framed .conversation {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-container);
+  background: var(--surface-panel);
+  color: var(--text-standard);
+}

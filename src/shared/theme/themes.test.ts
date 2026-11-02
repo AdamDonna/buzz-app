@@ -61,3 +61,18 @@ it("keeps every theme in step with its stylesheet block", () => {
   }
   expect(themeBlock(DEFAULT_THEME)).toBeUndefined();
 });
+
+it("resets every slot a role reads for a scope that previews the baseline", () => {
+  const reads = new Set(
+    [...tokens.matchAll(/var\(\s*(--theme-[a-z0-9-]+)/g)].map((m) => m[1]),
+  );
+  const reset = new Set(
+    [
+      ...(
+        /\[data-theme-reset\]\s*\{([^}]*)\}/.exec(tokens)?.[1] ?? ""
+      ).matchAll(/(--theme-[a-z0-9-]+):\s*initial;/g),
+    ].map((m) => m[1]),
+  );
+  expect(reads.size).toBeGreaterThan(0);
+  expect([...reads].filter((slot) => !reset.has(slot))).toEqual([]);
+});

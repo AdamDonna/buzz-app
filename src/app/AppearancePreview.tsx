@@ -4,16 +4,20 @@ const FRAME = {
   "data-color-mode": "dark",
   "data-theme-frame": "",
 } as const;
+const PANE = { "data-color-mode": "light" } as const;
 
 /** Decorative app sketch using the same semantic colors as the live interface. */
 export function AppearancePreview({ framed = false }: { framed?: boolean }) {
   return (
-    <figure className={styles.preview} aria-label="Appearance preview">
+    <figure
+      {...(framed ? FRAME : undefined)}
+      className={
+        framed ? `${styles.preview} ${styles.framed} dark` : styles.preview
+      }
+      aria-label="Appearance preview"
+    >
       <div className={styles.scene} inert aria-hidden="true">
-        <div
-          {...(framed ? FRAME : undefined)}
-          className={`${styles.sidebar} ${framed ? "dark" : ""}`}
-        >
+        <div className={styles.sidebar}>
           <div className={styles.workspace}>
             <i />
             <span />
@@ -28,7 +32,12 @@ export function AppearancePreview({ framed = false }: { framed?: boolean }) {
             <span />
           </div>
         </div>
-        <div className={styles.conversation}>
+        <div
+          {...(framed ? PANE : undefined)}
+          className={
+            framed ? `${styles.conversation} light` : styles.conversation
+          }
+        >
           <div className={styles.heading}>
             <span />
           </div>
