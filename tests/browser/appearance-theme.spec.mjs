@@ -73,7 +73,7 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
 
   await appearance(page);
   const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
-  await expect(radios(page)).toHaveCount(2);
+  await expect(radios(page)).toHaveCount(3);
   await expect(group.getByRole("radio", { name: /^Buzz/ })).toBeChecked();
   await expect(group.getByRole("radio", { name: /^Relax/ })).not.toBeChecked();
   // The name and the description each have one owner; the thumbnail has none.
@@ -215,4 +215,54 @@ test("a saved manual accent stays when the theme changes", async ({
   await expect(
     page.getByRole("button", { name: "Cobalt accent color" }),
   ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a theme with a light frame keeps the shell unframed in both modes and the Theme accent follows its family", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await appearance(page);
+  const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
+  await group.getByText("Tundra", { exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "tundra");
+  await expect(page.locator("html")).toHaveAttribute("data-accent", "theme");
+  expect(await page.evaluate((k) => localStorage.getItem(k), themeKey)).toBe(
+    "tundra",
+  );
+  expect(
+    await page.evaluate((k) => localStorage.getItem(k), accentKey),
+  ).toBeNull();
+
+  await chooseColorMode(page, "Light");
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(247, 248, 250)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(236, 238, 242)",
+  );
+  expect(await resolved(page, "--surface-sidebar-selected")).toBe(
+    "rgb(70, 119, 172)",
+  );
+  expect(await resolved(page, "--accent-9")).toBe("rgb(63, 114, 168)");
+  expect(await resolved(page, "--accent-ink")).toBe("rgb(255, 255, 255)");
+
+  await chooseColorMode(page, "Dark");
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(27, 31, 37)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(19, 22, 27)",
+  );
+  expect(await resolved(page, "--surface-sidebar-selected")).toBe(
+    "rgb(58, 101, 151)",
+  );
+  expect(await resolved(page, "--accent-9")).toBe("rgb(143, 184, 226)");
+  expect(await resolved(page, "--accent-ink")).toBe("rgb(11, 22, 34)");
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "tundra");
+  await expectFramed(page, false);
 });

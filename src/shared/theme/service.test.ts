@@ -455,7 +455,7 @@ it("keeps contrast active on storage failure, retries, and follows other windows
   expect(b.root.dataset.colorLevel).toBe("touch");
 });
 
-it.each([null, "", "RELAX", "garbage", "buzz", "relax"])(
+it.each([null, "", "RELAX", "garbage", "buzz", "relax", "tundra"])(
   "bootstrap and service agree on stored theme %j",
   (value) => {
     const b = browser();

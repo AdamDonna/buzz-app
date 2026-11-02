@@ -502,6 +502,24 @@ describe("semantic contrast contract", () => {
       "--theme-sidebar-selected-text-dark: var(--relax-sidebar-selected-dark);",
       /relax\/theme\/neutral\/dark --text-sidebar-selected \(#\w+\) on --surface-sidebar-selected \(/,
     ],
+    [
+      "a tundra page canvas under its light text",
+      "--theme-canvas-light: var(--tundra-frame-canvas-light);",
+      "--theme-canvas-light: var(--tundra-neutral-12-light);",
+      /tundra\/theme\/neutral\/light --text-standard \(#\w+\) on --bg-app \(/,
+    ],
+    [
+      "an unreadable tundra coral badge in dark mode",
+      "--theme-badge-text-dark: var(--tundra-badge-text-dark);",
+      "--theme-badge-text-dark: var(--tundra-badge-dark);",
+      /tundra\/theme\/neutral\/dark --text-on-badge \(#\w+\) on --surface-badge \(/,
+    ],
+    [
+      "a tundra dark accent overlay that darkens under dark ink",
+      "--theme-accent-overlay-dark: var(--tint-fill);",
+      "--theme-accent-overlay-dark: var(--shade-fill);",
+      /tundra\/theme\/high\/dark --text-mention-own \(#\w+\) on --affordance-mention-own \(/,
+    ],
   ])("measures a theme in its own scope: %s", (_name, from, to, pairing) => {
     expect(tokens).toContain(from);
     const result = check(tokens.replaceAll(from, to));

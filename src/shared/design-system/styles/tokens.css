@@ -748,8 +748,8 @@
 
 /* ============================================================
    THEME PALETTES
-   Raw values for relax, cacophony, utmost, troupe, cable, howdy
-   and baton, named --<theme>-<role>-<mode>. A frame-neutral ramp
+   Raw values for relax, cacophony, utmost, troupe, cable, howdy,
+   baton and tundra, named --<theme>-<role>-<mode>. A frame-neutral ramp
    is the dark-scope ramp that a light-mode frame reads.
    ============================================================ */
 :root {
@@ -1433,6 +1433,107 @@
   --baton-status-online-dark: #2bd12b;
   --baton-status-away-dark: #f7a53a;
   --baton-status-busy-dark: #ff3b3b;
+}
+
+:root {
+  --tundra-neutral-1-light: #ffffff;
+  --tundra-neutral-2-light: #f3f5f8;
+  --tundra-neutral-3-light: #dde1e7;
+  --tundra-neutral-4-light: #d6dbe1;
+  --tundra-neutral-5-light: #c8cdd4;
+  --tundra-neutral-6-light: #adb4bd;
+  --tundra-neutral-7-light: #8e97a2;
+  --tundra-neutral-8-light: #78828e;
+  --tundra-neutral-9-light: #57616c;
+  --tundra-neutral-10-light: #4e5863;
+  --tundra-neutral-11-light: #262d36;
+  --tundra-neutral-12-light: #0a0d11;
+  --tundra-neutral-standard-text-light: #1f2630;
+  --tundra-neutral-navigation-text-light: #45505d;
+  --tundra-neutral-navigation-unread-light: #2c343e;
+  --tundra-neutral-navigation-quiet-light: #f0f2f6;
+  --tundra-neutral-quiet-hover-light: #eaedf1;
+  --tundra-neutral-action-pressed-light: #4e5863;
+  --tundra-neutral-avatar-on-white-light: #4e5863;
+  --tundra-bubble-neutral-light: #e9ecf1;
+  --tundra-bubble-received-light: #f2f4f7;
+  --tundra-neutral-1-dark: #080a0d;
+  --tundra-neutral-2-dark: #181b21;
+  --tundra-neutral-3-dark: #1e2128;
+  --tundra-neutral-4-dark: #292e36;
+  --tundra-neutral-5-dark: #343a43;
+  --tundra-neutral-6-dark: #3f464f;
+  --tundra-neutral-7-dark: #535b66;
+  --tundra-neutral-8-dark: #666e7a;
+  --tundra-neutral-9-dark: #848d99;
+  --tundra-neutral-10-dark: #a3acb7;
+  --tundra-neutral-11-dark: #cdd3db;
+  --tundra-neutral-12-dark: #eef1f5;
+  --tundra-neutral-navigation-quiet-dark: #292e36;
+  --tundra-neutral-raised-dark: #2d323b;
+  --tundra-neutral-quiet-hover-dark: #31373f;
+  --tundra-neutral-action-pressed-dark: #c4ccd6;
+  --tundra-bubble-neutral-dark: #343a43;
+  --tundra-bubble-received-dark: #2a2f37;
+
+  --tundra-frame-canvas-light: #eceef2;
+  --tundra-frame-sidebar-light: #f7f8fa;
+  --tundra-frame-canvas-dark: #13161b;
+  --tundra-frame-sidebar-dark: #1b1f25;
+
+  --tundra-1-light: #fbfdff;
+  --tundra-2-light: #f5f9fd;
+  --tundra-3-light: #ecf3fa;
+  --tundra-4-light: #e3ecf6;
+  --tundra-5-light: #d6e4f2;
+  --tundra-6-light: #c7d9ed;
+  --tundra-7-light: #b2cae4;
+  --tundra-8-light: #94b4d6;
+  --tundra-9-light: #3f72a8;
+  --tundra-10-light: #376699;
+  --tundra-11-light: #2f5683;
+  --tundra-12-light: #1f3f63;
+  --tundra-contrast-light: #ffffff;
+  --tundra-ink-light: #ffffff;
+  --tundra-pressed-light: #2e5b8d;
+  --tundra-link-light: #2c5282;
+  --tundra-link-hover-light: #ecf3fa;
+
+  --tundra-1-dark: #101318;
+  --tundra-2-dark: #141a21;
+  --tundra-3-dark: #1e2a3a;
+  --tundra-4-dark: #2a3e57;
+  --tundra-5-dark: #324a68;
+  --tundra-6-dark: #3b5779;
+  --tundra-7-dark: #476b94;
+  --tundra-8-dark: #5a84b0;
+  --tundra-9-dark: #8fb8e2;
+  --tundra-10-dark: #a3c6ea;
+  --tundra-11-dark: #bcd4ee;
+  --tundra-12-dark: #e8f0fa;
+  --tundra-contrast-dark: #0b1622;
+  --tundra-ink-dark: #0b1622;
+  --tundra-pressed-dark: #b4d0ee;
+  --tundra-link-dark: #b5d0ec;
+  --tundra-link-hover-dark: #1e2a3a;
+
+  --tundra-sidebar-selected-light: #4677ac;
+  --tundra-sidebar-selected-text-light: #ffffff;
+  --tundra-sidebar-hover-light: #e9ecf1;
+  --tundra-badge-light: #c24a35;
+  --tundra-badge-text-light: #ffffff;
+  --tundra-status-online-light: #3a9a35;
+  --tundra-status-away-light: #c98500;
+  --tundra-status-busy-light: #c8323c;
+
+  --tundra-sidebar-selected-dark: #3a6597;
+  --tundra-sidebar-selected-text-dark: #ffffff;
+  --tundra-sidebar-hover-dark: #262b33;
+  --tundra-badge-dark: #ff9478;
+  --tundra-badge-text-dark: #2a0d05;
+  --tundra-status-online-dark: #62c95a;
+  --tundra-status-away-dark: #e9a93a;
+  --tundra-status-busy-dark: #e5545c;
 }
 
 /* ============================================================
@@ -3120,6 +3221,127 @@
   );
   --theme-frame-canvas-light: var(--relax-frame-canvas-light);
   --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
+}
+
+/* Tundra: frosted gray sidebar, steel-blue highlights and a warm coral badge.
+   The frame follows the page mode. Every value is a palette step from LAYER 0;
+   a role is never restated here. */
+[data-theme="tundra"] {
+  --theme-neutral-1-light: var(--tundra-neutral-1-light);
+  --theme-neutral-2-light: var(--tundra-neutral-2-light);
+  --theme-neutral-3-light: var(--tundra-neutral-3-light);
+  --theme-neutral-4-light: var(--tundra-neutral-4-light);
+  --theme-neutral-5-light: var(--tundra-neutral-5-light);
+  --theme-neutral-6-light: var(--tundra-neutral-6-light);
+  --theme-neutral-7-light: var(--tundra-neutral-7-light);
+  --theme-neutral-8-light: var(--tundra-neutral-8-light);
+  --theme-neutral-9-light: var(--tundra-neutral-9-light);
+  --theme-neutral-10-light: var(--tundra-neutral-10-light);
+  --theme-neutral-11-light: var(--tundra-neutral-11-light);
+  --theme-neutral-12-light: var(--tundra-neutral-12-light);
+  --theme-neutral-standard-text-light: var(
+    --tundra-neutral-standard-text-light
+  );
+  --theme-neutral-navigation-text-light: var(
+    --tundra-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --tundra-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --tundra-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--tundra-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --tundra-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --tundra-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--tundra-bubble-neutral-light);
+  --theme-bubble-received-light: var(--tundra-bubble-received-light);
+  --theme-canvas-light: var(--tundra-frame-canvas-light);
+  --theme-sidebar-light: var(--tundra-frame-sidebar-light);
+  --theme-accent-1-light: var(--tundra-1-light);
+  --theme-accent-2-light: var(--tundra-2-light);
+  --theme-accent-3-light: var(--tundra-3-light);
+  --theme-accent-4-light: var(--tundra-4-light);
+  --theme-accent-5-light: var(--tundra-5-light);
+  --theme-accent-6-light: var(--tundra-6-light);
+  --theme-accent-7-light: var(--tundra-7-light);
+  --theme-accent-8-light: var(--tundra-8-light);
+  --theme-accent-9-light: var(--tundra-9-light);
+  --theme-accent-10-light: var(--tundra-10-light);
+  --theme-accent-11-light: var(--tundra-11-light);
+  --theme-accent-12-light: var(--tundra-12-light);
+  --theme-accent-contrast-light: var(--tundra-contrast-light);
+  --theme-accent-ink-light: var(--tundra-ink-light);
+  --theme-accent-pressed-light: var(--tundra-pressed-light);
+  --theme-accent-link-light: var(--tundra-link-light);
+  --theme-accent-link-hover-light: var(--tundra-link-hover-light);
+  --theme-sidebar-selected-light: var(--tundra-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(
+    --tundra-sidebar-selected-text-light
+  );
+  --theme-sidebar-hover-light: var(--tundra-sidebar-hover-light);
+  --theme-badge-light: var(--tundra-badge-light);
+  --theme-badge-text-light: var(--tundra-badge-text-light);
+  --theme-status-online-light: var(--tundra-status-online-light);
+  --theme-status-away-light: var(--tundra-status-away-light);
+
+  --theme-neutral-1-dark: var(--tundra-neutral-1-dark);
+  --theme-neutral-2-dark: var(--tundra-neutral-2-dark);
+  --theme-neutral-3-dark: var(--tundra-neutral-3-dark);
+  --theme-neutral-4-dark: var(--tundra-neutral-4-dark);
+  --theme-neutral-5-dark: var(--tundra-neutral-5-dark);
+  --theme-neutral-6-dark: var(--tundra-neutral-6-dark);
+  --theme-neutral-7-dark: var(--tundra-neutral-7-dark);
+  --theme-neutral-8-dark: var(--tundra-neutral-8-dark);
+  --theme-neutral-9-dark: var(--tundra-neutral-9-dark);
+  --theme-neutral-10-dark: var(--tundra-neutral-10-dark);
+  --theme-neutral-11-dark: var(--tundra-neutral-11-dark);
+  --theme-neutral-12-dark: var(--tundra-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --tundra-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--tundra-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--tundra-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(
+    --tundra-neutral-action-pressed-dark
+  );
+  --theme-bubble-neutral-dark: var(--tundra-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--tundra-bubble-received-dark);
+  --theme-canvas-dark: var(--tundra-frame-canvas-dark);
+  --theme-sidebar-dark: var(--tundra-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--tundra-1-dark);
+  --theme-accent-2-dark: var(--tundra-2-dark);
+  --theme-accent-3-dark: var(--tundra-3-dark);
+  --theme-accent-4-dark: var(--tundra-4-dark);
+  --theme-accent-5-dark: var(--tundra-5-dark);
+  --theme-accent-6-dark: var(--tundra-6-dark);
+  --theme-accent-7-dark: var(--tundra-7-dark);
+  --theme-accent-8-dark: var(--tundra-8-dark);
+  --theme-accent-9-dark: var(--tundra-9-dark);
+  --theme-accent-10-dark: var(--tundra-10-dark);
+  --theme-accent-11-dark: var(--tundra-11-dark);
+  --theme-accent-12-dark: var(--tundra-12-dark);
+  --theme-accent-contrast-dark: var(--tundra-contrast-dark);
+  --theme-accent-ink-dark: var(--tundra-ink-dark);
+  --theme-accent-pressed-dark: var(--tundra-pressed-dark);
+  --theme-accent-link-dark: var(--tundra-link-dark);
+  --theme-accent-link-hover-dark: var(--tundra-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--tundra-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--tundra-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--tundra-sidebar-hover-dark);
+  --theme-badge-dark: var(--tundra-badge-dark);
+  --theme-badge-text-dark: var(--tundra-badge-text-dark);
+  --theme-status-online-dark: var(--tundra-status-online-dark);
+  --theme-status-away-dark: var(--tundra-status-away-dark);
+  --theme-accent-overlay-dark: var(--tint-fill);
+  --theme-accent-overlay-hover-dark: var(--tint-hover-fill);
+  --theme-accent-overlay-soft-dark: var(--tint-soft-fill);
+  --theme-accent-overlay-quiet-dark: var(--tint-quiet-fill);
+  --theme-accent-overlay-highlight-dark: var(--tint-fill);
 }
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
