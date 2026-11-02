@@ -1654,7 +1654,8 @@ colors or use opacity to invent lighter shades.
 
 A theme is the one owner allowed to recolor the shell. Buzz, the default, is
 the neutral look described everywhere else in this file. Relax is a deep plum
-frame around a bright, open workspace. A theme changes only what these slots
+frame around a bright, open workspace. Troupe is soft periwinkle on calm, even
+grays, with its frame following the page mode. A theme changes only what these slots
 name; it never restates a role and never edits a component.
 
 - **Slots.** A theme assigns `--theme-*` custom properties, a light and a dark half each, in one `[data-theme]` block in `tokens.css`: the neutral ramps and named neutrals, `canvas`, `sidebar`, `sidebar-selected`, `sidebar-selected-text`, `sidebar-hover`, `sidebar-hover-text`, `badge`, `badge-text`, the online and away status dots, the accent family behind the Theme accent, and optional accent overlays and own-message fills. Every role reads its slot with the neutral value as the fallback, so a slot a theme leaves out changes nothing.

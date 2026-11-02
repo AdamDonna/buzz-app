@@ -73,7 +73,7 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
 
   await appearance(page);
   const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
-  await expect(radios(page)).toHaveCount(2);
+  await expect(radios(page)).toHaveCount(3);
   await expect(group.getByRole("radio", { name: /^Buzz/ })).toBeChecked();
   await expect(group.getByRole("radio", { name: /^Relax/ })).not.toBeChecked();
   // The name and the description each have one owner; the thumbnail has none.
@@ -215,4 +215,46 @@ test("a saved manual accent stays when the theme changes", async ({
   await expect(
     page.getByRole("button", { name: "Cobalt accent color" }),
   ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a theme with a light frame keeps the shell unframed in both modes and the Theme accent follows its family", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await appearance(page);
+  const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
+  await group.getByText("Troupe", { exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "troupe");
+  await expect(page.locator("html")).toHaveAttribute("data-accent", "theme");
+  expect(await page.evaluate((k) => localStorage.getItem(k), themeKey)).toBe(
+    "troupe",
+  );
+  expect(
+    await page.evaluate((k) => localStorage.getItem(k), accentKey),
+  ).toBeNull();
+
+  await chooseColorMode(page, "Light");
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(244, 244, 248)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(234, 234, 240)",
+  );
+  expect(await resolved(page, "--accent-9")).toBe("rgb(95, 98, 194)");
+
+  await chooseColorMode(page, "Dark");
+  await expectFramed(page, false);
+  expect(await resolved(page, "--surface-sidebar", "#shell-navigation")).toBe(
+    "rgb(30, 30, 34)",
+  );
+  expect(await resolved(page, "--bg-app", "header.shell-header")).toBe(
+    "rgb(17, 17, 20)",
+  );
+  expect(await resolved(page, "--accent-9")).toBe("rgb(98, 102, 217)");
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "troupe");
+  await expectFramed(page, false);
 });

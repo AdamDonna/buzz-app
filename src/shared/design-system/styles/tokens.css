@@ -1025,7 +1025,7 @@
 
 :root {
   --troupe-neutral-1-light: #ffffff;
-  --troupe-neutral-2-light: #f1f1f4;
+  --troupe-neutral-2-light: #f3f3f5;
   --troupe-neutral-3-light: #dedee5;
   --troupe-neutral-4-light: #d9d9e0;
   --troupe-neutral-5-light: #cbcbd2;
@@ -1047,7 +1047,7 @@
   --troupe-bubble-received-light: #f3f3f6;
   --troupe-neutral-1-dark: #050507;
   --troupe-neutral-2-dark: #1d1d21;
-  --troupe-neutral-3-dark: #28282d;
+  --troupe-neutral-3-dark: #222227;
   --troupe-neutral-4-dark: #2f2f34;
   --troupe-neutral-5-dark: #3a3a41;
   --troupe-neutral-6-dark: #45454c;
@@ -3119,6 +3119,121 @@
   );
   --theme-frame-canvas-light: var(--relax-frame-canvas-light);
   --theme-frame-sidebar-light: var(--relax-frame-sidebar-light);
+}
+
+/* Troupe: soft periwinkle on calm, even grays. The frame follows the page mode.
+   Every value is a palette step from LAYER 0; a role is never restated here. */
+[data-theme="troupe"] {
+  --theme-neutral-1-light: var(--troupe-neutral-1-light);
+  --theme-neutral-2-light: var(--troupe-neutral-2-light);
+  --theme-neutral-3-light: var(--troupe-neutral-3-light);
+  --theme-neutral-4-light: var(--troupe-neutral-4-light);
+  --theme-neutral-5-light: var(--troupe-neutral-5-light);
+  --theme-neutral-6-light: var(--troupe-neutral-6-light);
+  --theme-neutral-7-light: var(--troupe-neutral-7-light);
+  --theme-neutral-8-light: var(--troupe-neutral-8-light);
+  --theme-neutral-9-light: var(--troupe-neutral-9-light);
+  --theme-neutral-10-light: var(--troupe-neutral-10-light);
+  --theme-neutral-11-light: var(--troupe-neutral-11-light);
+  --theme-neutral-12-light: var(--troupe-neutral-12-light);
+  --theme-neutral-standard-text-light: var(
+    --troupe-neutral-standard-text-light
+  );
+  --theme-neutral-navigation-text-light: var(
+    --troupe-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --troupe-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --troupe-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--troupe-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --troupe-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --troupe-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--troupe-bubble-neutral-light);
+  --theme-bubble-received-light: var(--troupe-bubble-received-light);
+  --theme-canvas-light: var(--troupe-frame-canvas-light);
+  --theme-sidebar-light: var(--troupe-frame-sidebar-light);
+  --theme-accent-1-light: var(--troupe-1-light);
+  --theme-accent-2-light: var(--troupe-2-light);
+  --theme-accent-3-light: var(--troupe-3-light);
+  --theme-accent-4-light: var(--troupe-4-light);
+  --theme-accent-5-light: var(--troupe-5-light);
+  --theme-accent-6-light: var(--troupe-6-light);
+  --theme-accent-7-light: var(--troupe-7-light);
+  --theme-accent-8-light: var(--troupe-8-light);
+  --theme-accent-9-light: var(--troupe-9-light);
+  --theme-accent-10-light: var(--troupe-10-light);
+  --theme-accent-11-light: var(--troupe-11-light);
+  --theme-accent-12-light: var(--troupe-12-light);
+  --theme-accent-contrast-light: var(--troupe-contrast-light);
+  --theme-accent-ink-light: var(--troupe-ink-light);
+  --theme-accent-pressed-light: var(--troupe-pressed-light);
+  --theme-accent-link-light: var(--troupe-link-light);
+  --theme-accent-link-hover-light: var(--troupe-link-hover-light);
+  --theme-sidebar-selected-light: var(--troupe-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(
+    --troupe-sidebar-selected-text-light
+  );
+  --theme-sidebar-hover-light: var(--troupe-sidebar-hover-light);
+  --theme-badge-light: var(--troupe-badge-light);
+  --theme-badge-text-light: var(--troupe-badge-text-light);
+  --theme-status-online-light: var(--troupe-status-online-light);
+  --theme-status-away-light: var(--troupe-status-away-light);
+
+  --theme-neutral-1-dark: var(--troupe-neutral-1-dark);
+  --theme-neutral-2-dark: var(--troupe-neutral-2-dark);
+  --theme-neutral-3-dark: var(--troupe-neutral-3-dark);
+  --theme-neutral-4-dark: var(--troupe-neutral-4-dark);
+  --theme-neutral-5-dark: var(--troupe-neutral-5-dark);
+  --theme-neutral-6-dark: var(--troupe-neutral-6-dark);
+  --theme-neutral-7-dark: var(--troupe-neutral-7-dark);
+  --theme-neutral-8-dark: var(--troupe-neutral-8-dark);
+  --theme-neutral-9-dark: var(--troupe-neutral-9-dark);
+  --theme-neutral-10-dark: var(--troupe-neutral-10-dark);
+  --theme-neutral-11-dark: var(--troupe-neutral-11-dark);
+  --theme-neutral-12-dark: var(--troupe-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --troupe-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--troupe-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--troupe-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(
+    --troupe-neutral-action-pressed-dark
+  );
+  --theme-bubble-neutral-dark: var(--troupe-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--troupe-bubble-received-dark);
+  --theme-canvas-dark: var(--troupe-frame-canvas-dark);
+  --theme-sidebar-dark: var(--troupe-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--troupe-1-dark);
+  --theme-accent-2-dark: var(--troupe-2-dark);
+  --theme-accent-3-dark: var(--troupe-3-dark);
+  --theme-accent-4-dark: var(--troupe-4-dark);
+  --theme-accent-5-dark: var(--troupe-5-dark);
+  --theme-accent-6-dark: var(--troupe-6-dark);
+  --theme-accent-7-dark: var(--troupe-7-dark);
+  --theme-accent-8-dark: var(--troupe-8-dark);
+  --theme-accent-9-dark: var(--troupe-9-dark);
+  --theme-accent-10-dark: var(--troupe-10-dark);
+  --theme-accent-11-dark: var(--troupe-11-dark);
+  --theme-accent-12-dark: var(--troupe-12-dark);
+  --theme-accent-contrast-dark: var(--troupe-contrast-dark);
+  --theme-accent-ink-dark: var(--troupe-ink-dark);
+  --theme-accent-pressed-dark: var(--troupe-pressed-dark);
+  --theme-accent-link-dark: var(--troupe-link-dark);
+  --theme-accent-link-hover-dark: var(--troupe-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--troupe-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--troupe-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--troupe-sidebar-hover-dark);
+  --theme-badge-dark: var(--troupe-badge-dark);
+  --theme-badge-text-dark: var(--troupe-badge-text-dark);
+  --theme-status-online-dark: var(--troupe-status-online-dark);
+  --theme-status-away-dark: var(--troupe-status-away-dark);
 }
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
