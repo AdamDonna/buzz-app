@@ -114,6 +114,19 @@ function harness(
     },
   };
 }
+async function runConnected(
+  h: ReturnType<typeof harness>,
+  extra: Partial<SlashCommandContext> = {},
+  event: HuddleUpdate = { type: "connected", room, participants: [viewer] },
+) {
+  const opened = vi.mocked(h.bridge.open).mock.calls.length;
+  const run = h.run(extra);
+  await vi.waitFor(() =>
+    expect(h.bridge.open).toHaveBeenCalledTimes(opened + 1),
+  );
+  h.receive(event);
+  return run;
+}
 const announcement = (id: string) =>
   signed(keypair(), {
     kind: 48100,
@@ -139,7 +152,7 @@ it.each([
   async (_label, extra, channel) => {
     const h = harness([channel]);
     try {
-      await expect(h.run(extra)).resolves.toEqual({
+      await expect(runConnected(h, extra)).resolves.toEqual({
         done: true,
         notice: "Starting a huddle",
       });
@@ -158,7 +171,7 @@ it.each([
         expect.any(Function),
       );
       expect(h.huddles.snapshot()).toMatchObject({
-        phase: "connecting",
+        phase: "connected",
         destination: { channelId },
       });
     } finally {
@@ -171,7 +184,7 @@ it("joins the newest running huddle instead of starting another", async () => {
   const h = harness();
   h.read.mockResolvedValueOnce([announcement(room)]);
   try {
-    await expect(h.run()).resolves.toEqual({
+    await expect(runConnected(h)).resolves.toEqual({
       done: true,
       notice: "Joining the huddle",
     });
@@ -191,10 +204,11 @@ it("starts a new huddle when the running one is known to have ended", async () =
   const h = harness();
   h.read.mockResolvedValue([announcement(room)]);
   try {
-    await h.run();
-    h.receive({ type: "ended", error: "The huddle has ended." });
-    await vi.waitFor(() => expect(h.huddles.snapshot().phase).toBe("error"));
-    await expect(h.run()).resolves.toEqual({
+    await expect(
+      runConnected(h, {}, { type: "ended", error: "The huddle has ended." }),
+    ).rejects.toThrow("The huddle has ended.");
+    expect(h.huddles.snapshot().phase).toBe("error");
+    await expect(runConnected(h)).resolves.toEqual({
       done: true,
       notice: "Starting a huddle",
     });
@@ -204,6 +218,56 @@ it("starts a new huddle when the running one is known to have ended", async () =
       undefined,
       expect.any(Function),
     );
+  } finally {
+    await h.dispose();
+  }
+});
+
+it("reports a call that fails after it started connecting, and keeps the draft", async () => {
+  const h = harness();
+  try {
+    await expect(
+      runConnected(
+        h,
+        {},
+        { type: "ended", error: "The audio relay refused the join." },
+      ),
+    ).rejects.toThrow("The audio relay refused the join.");
+    expect(h.huddles.snapshot().phase).toBe("error");
+  } finally {
+    await h.dispose();
+  }
+});
+
+it("waits for the call to connect, and abandons the wait without leaving the call", async () => {
+  const h = harness();
+  let watching = 0;
+  const subscribe = h.huddles.subscribe;
+  const listeners = vi
+    .spyOn(h.huddles, "subscribe")
+    .mockImplementation((listener) => {
+      watching += 1;
+      const stop = subscribe(listener);
+      return () => {
+        watching -= 1;
+        stop();
+      };
+    });
+  try {
+    const controller = new AbortController();
+    let settled = false;
+    const run = Promise.resolve(h.run({ signal: controller.signal }));
+    run.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await vi.waitFor(() => expect(h.bridge.open).toHaveBeenCalled());
+    await vi.waitFor(() => expect(listeners).toHaveBeenCalled());
+    expect(settled).toBe(false);
+    controller.abort(new Error("cancelled"));
+    await expect(run).rejects.toThrow("cancelled");
+    expect(h.huddles.snapshot().phase).toBe("connecting");
+    expect(watching).toBe(0);
   } finally {
     await h.dispose();
   }

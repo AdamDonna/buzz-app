@@ -15,6 +15,31 @@ export function huddleCommand(deps: {
   showWindow(): Promise<void>;
 }): SlashCommand {
   const { relay, huddles, showWindow } = deps;
+  const connectionOutcome = (id: string | undefined, signal: AbortSignal) =>
+    new Promise<ReturnType<Huddles["snapshot"]>>((resolve, reject) => {
+      const stop = () => {
+        unsubscribe();
+        signal.removeEventListener("abort", abandon);
+      };
+      const check = () => {
+        const now = huddles.snapshot();
+        if (
+          now.id === id &&
+          (now.phase === "connecting" || now.phase === "leaving")
+        )
+          return;
+        stop();
+        resolve(now);
+      };
+      const abandon = () => {
+        stop();
+        reject(signal.reason);
+      };
+      const unsubscribe = huddles.subscribe(check);
+      signal.addEventListener("abort", abandon, { once: true });
+      if (signal.aborted) abandon();
+      else check();
+    });
   const refuseOrShowActive = async () => {
     const { phase } = huddles.snapshot();
     if (phase === "connecting")
@@ -75,16 +100,21 @@ export function huddleCommand(deps: {
         huddles.canJoin(scope, candidate.id),
       );
       await huddles.join(destination, room?.id);
-      const call = huddles.snapshot();
-      if (call.phase === "error")
-        throw new Error(call.error ?? "The huddle could not start.");
-      if (call.phase !== "connecting" && call.phase !== "connected")
+      const started = huddles.snapshot();
+      if (started.phase === "error")
+        throw new Error(started.error ?? "The huddle could not start.");
+      if (started.phase !== "connecting" && started.phase !== "connected")
         throw new Error("The huddle ended before it connected.");
       if (
-        call.destination?.scope !== scope ||
-        call.destination.channelId !== channelId
+        started.destination?.scope !== scope ||
+        started.destination.channelId !== channelId
       )
         throw new Error("Another huddle is already active.");
+      const call = await connectionOutcome(started.id, signal);
+      if (call.phase === "error")
+        throw new Error(call.error ?? "The huddle could not start.");
+      if (call.phase !== "connected")
+        throw new Error("The huddle ended before it connected.");
       return {
         done: true,
         notice: room ? "Joining the huddle" : "Starting a huddle",
