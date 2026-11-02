@@ -967,21 +967,23 @@ if (failures.length > 0) {
   console.error(
     "\nRaise the ramp step the role points at, or add a documented exception\nin scripts/check-contrast.mjs with a reason. See DESIGN.md § Contrast.\n",
   );
-  process.exit(1);
+  process.exitCode = 1;
 }
 
-if (boundaryFailures.length > 0) process.exit(1);
-console.log(
-  "✓ Contrast: checked text and control/state boundaries in both modes; accepted exceptions are listed explicitly",
-);
-for (const [role, why] of EXCEPTIONS) {
-  console.log(`  (exception) ${role} — ${why.split(";")[0]}`);
-}
+if (boundaryFailures.length > 0) process.exitCode = 1;
+if (process.exitCode !== 1) {
+  console.log(
+    "✓ Contrast: checked text and control/state boundaries in both modes; accepted exceptions are listed explicitly",
+  );
+  for (const [role, why] of EXCEPTIONS) {
+    console.log(`  (exception) ${role} — ${why.split(";")[0]}`);
+  }
 
-const stale = [...EXCEPTIONS.keys()].filter(
-  (key) => key.includes(" on ") && !claimedExceptions.has(key),
-);
-if (stale.length > 0) {
-  console.log("\nℹ Pairing exceptions no longer needed — delete them:");
-  for (const key of stale) console.log(`  ${key}`);
+  const stale = [...EXCEPTIONS.keys()].filter(
+    (key) => key.includes(" on ") && !claimedExceptions.has(key),
+  );
+  if (stale.length > 0) {
+    console.log("\nℹ Pairing exceptions no longer needed — delete them:");
+    for (const key of stale) console.log(`  ${key}`);
+  }
 }
