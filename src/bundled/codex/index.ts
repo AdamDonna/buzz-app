@@ -37,7 +37,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (key) => ownerReads(ctx.agents.relay(key), pubkeyOf(key)),
     (key, signal) => ctx.agents.core(key, signal),
     ctx.agents.storage,
-    (raw) => providerController.resolve(raw),
+    (raw, remote) => providerController.resolve(raw, remote),
     () => ctx.agents.tools(),
     repositoriesContext,
     ctx.host.serveMcp
@@ -118,7 +118,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ProviderDialogBody,
     SettingsTab,
     ActivityTab,
-  } = createTabs(providerController, runtime, start, setup);
+  } = createTabs(providerController, runtime, start, setup, (key) =>
+    ctx.agents.executionBinding(key),
+  );
   ctx.agents.register<Config>({
     id: TYPE_ID,
     execution: true,
@@ -173,8 +175,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
     summary: (agent) => config(agent.config).model || "Codex",
     ...(spawn &&
       readFile && {
-        usage: (agent, { since, signal }) =>
-          readUsage({ spawn, readFile }, agent, since, signal),
+        usage: async (agent, { since, signal }) => {
+          if (ctx.agents.executionBinding(agent.key))
+            throw new Error("Usage is unavailable for remote Codex agents.");
+          return readUsage({ spawn, readFile }, agent, since, signal);
+        },
       }),
     provider: {
       snapshot: providerController.snapshot,

@@ -1,3 +1,4 @@
+import type { AgentExecutionBinding } from "../../features/agents/execution";
 import { AgentTabs } from "../agents/AgentTabs";
 import type {
   Agents,
@@ -68,7 +69,9 @@ function fixture({
   configured = {},
   storage = localStore(),
   channels = [{ id: "channel", name: "general" }],
+  binding,
 }: {
+  binding?: AgentExecutionBinding;
   /** Agent storage, which keeps the provider defaults. */
   storage?: AgentStore;
   /** The community's channels, read each time they are listed. */
@@ -204,7 +207,7 @@ function fixture({
     sessions,
     (raw) => provider.resolve(raw),
   );
-  const tabs = createTabs(provider, runtime, spawn, setup);
+  const tabs = createTabs(provider, runtime, spawn, setup, () => binding);
   const props = (settings = defaults, save = vi.fn(async () => {})) =>
     ({
       agent: {
@@ -1735,4 +1738,75 @@ it("shows the recent empty state when only the current runtime session exists", 
     screen.getByText("No other conversations saved in this app yet."),
   ).toBeVisible();
   expect(screen.queryByRole("list")).not.toBeInTheDocument();
+});
+
+it("uses the guest catalog and keeps the bound workspace read-only", async () => {
+  const f = fixture({
+    binding: {
+      provider: "test/guest",
+      target: "one",
+      workspace: "/guest/project",
+    },
+  });
+  const catalog = vi.spyOn(f.runtime, "catalog").mockResolvedValue([
+    {
+      model: "guest",
+      displayName: "Guest model",
+      description: "",
+      isDefault: true,
+      defaultReasoningEffort: "high",
+      supportedReasoningEfforts: [{ reasoningEffort: "high", description: "" }],
+    },
+  ]);
+  render(<f.tabs.SettingsTab {...f.props()} />);
+  await waitFor(() => expect(screen.getByLabelText("Thinking")).toBeEnabled());
+  const workspace = screen.getByLabelText("Workspace");
+  expect(workspace).toHaveValue("/guest/project");
+  expect(workspace).toHaveAttribute("readonly");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("combobox", { name: "Model" }));
+  expect(
+    await screen.findByRole("option", { name: /Guest model/ }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("option", { name: /Model A/ }),
+  ).not.toBeInTheDocument();
+  expect(catalog).toHaveBeenCalledWith("a".repeat(64));
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
+it("loads bound conversations before listing them and never reads guest transcripts on the desktop", async () => {
+  const f = fixture({
+    binding: {
+      provider: "test/guest",
+      target: "one",
+      workspace: "/guest/project",
+    },
+  });
+  const loading = deferred<void>();
+  const load = vi
+    .spyOn(f.runtime, "loadSessions")
+    .mockReturnValue(loading.promise);
+  vi.spyOn(f.runtime, "conversations").mockReturnValue([
+    { key: "guest", channelId: "channel", threadId: "guest-thread" },
+  ]);
+  render(<f.tabs.ActivityTab {...f.props()} />);
+  try {
+    await waitFor(() => expect(load).toHaveBeenCalled());
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading saved conversations",
+    );
+    expect(
+      screen.queryByRole("button", { name: /View transcript/ }),
+    ).not.toBeInTheDocument();
+  } finally {
+    await act(async () => loading.resolve());
+  }
+  fireEvent.click(
+    await screen.findByRole("button", { name: /View transcript/ }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Transcripts are unavailable for remote Codex agents",
+  );
+  expect(f.spawn).not.toHaveBeenCalled();
 });

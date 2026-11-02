@@ -110,7 +110,9 @@ The target needs a configured Codex account. Its hook server listens on guest
 loopback. Hook requests share the process stdio connection and use the existing
 agent and session checks. No desktop endpoint or credentials go to the target.
 Codex saves session bindings per target. Guest history search is unavailable;
-saved sessions resume through the app-server.
+saved sessions resume through the app-server. Settings read the target catalog
+and show its fixed workspace. Guest transcripts, usage, and media downloads are
+unavailable in this preview.
 
 This preview supports Pi and Codex on a target with Node.js. It does not supply native
 containment, an HTTP MCP tunnel, or media download to the target. Protected agents cannot use it. Pi's coding

@@ -4659,6 +4659,10 @@ it("runs bound Codex tools in the guest workspace, resumes, and stops on provide
         })
       )?.result,
     ).toMatchObject({ success: false });
+    expect(
+      (await f.tool("media_get", { url: "clip.mp4" }))?.result,
+    ).toMatchObject({ success: false });
+    expect(f.media).not.toHaveBeenCalled();
     await f.complete();
     await vi.waitFor(() =>
       expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),

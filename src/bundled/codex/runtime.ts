@@ -50,6 +50,7 @@ import {
   defaults,
   absoluteWorkspace,
   effortName,
+  type Model,
   validWorkspace,
   type Config,
 } from "./config";
@@ -264,7 +265,10 @@ export class CodexRuntime {
     /** The agent's `core` memory as the host keeps it (`Agents.core`). */
     private readonly core: Agents["core"],
     private readonly storage: AgentStore = localStore(),
-    private readonly resolveConfig: (raw: unknown) => Config = config,
+    private readonly resolveConfig: (
+      raw: unknown,
+      remote?: boolean,
+    ) => Config = config,
     /** The tools plugins add to every thread now. */
     private readonly added: () => readonly AddedTool[] = () => [],
     /** Desktop-local repository instructions; standalone hosts keep their own layout. */
@@ -302,7 +306,7 @@ export class CodexRuntime {
       this.core,
       this.storage,
       (raw) => ({
-        ...this.resolveConfig(raw),
+        ...this.resolveConfig(raw, true),
         workspace: execution.binding.workspace,
       }),
       this.added,
@@ -324,6 +328,16 @@ export class CodexRuntime {
       { once: true },
     );
     return runtime;
+  }
+  async loadSessions(agent: AgentKey) {
+    await this.connection(agent);
+    for (const listener of this.listeners) listener();
+  }
+  async catalog(agent: AgentKey): Promise<Model[]> {
+    const runtime = await this.connection(agent);
+    if (runtime !== this) return runtime.catalog(agent);
+    const server = this.open();
+    return listModels(await server.opening);
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -1356,7 +1370,17 @@ export class CodexRuntime {
         }
       : {};
     const reply = await callSessionTool(
-      client,
+      this.target
+        ? {
+            ...client,
+            media: async () => {
+              this.target?.signal.throwIfAborted();
+              throw new Error(
+                "Media download is unavailable for remote Codex agents.",
+              );
+            },
+          }
+        : client,
       context,
       call.tool,
       args,
