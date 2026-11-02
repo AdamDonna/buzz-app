@@ -11,8 +11,7 @@ import {
 } from "./src/features/communities/destination.ts";
 import { parseFirstRunAccountSeed } from "./src/features/identity/first-run-seed.ts";
 
-function sharedBuilderlabUrl() {
-  const key = "BUZZ_BUILDERLAB_URL";
+function sharedBuilderlabInput(key: string) {
   if (process.env[key] !== undefined) return process.env[key];
   let local: string;
   try {
@@ -24,12 +23,10 @@ function sharedBuilderlabUrl() {
       "code" in error &&
       error.code === "ENOENT"
     )
-      return "https://app.builderlab.xyz";
+      return undefined;
     throw new Error("Could not read shared Builderlab build configuration.");
   }
-  return (
-    parseEnv(local.replace(/^\uFEFF/, ""))[key] ?? "https://app.builderlab.xyz"
-  );
+  return parseEnv(local.replace(/^\uFEFF/, ""))[key];
 }
 
 /** An FI build signs in to Builderlab through its NIP-FI identity origin and
@@ -55,10 +52,14 @@ function federatedBuilderlabUrl() {
 export default defineConfig(async ({ command, mode }) => {
   const env = loadEnv(mode, ".", "BUZZ_");
   // Native builds consume only process values and repository-root .env.local.
-  // Keep this frontend value on the same source so Vite mode files cannot
-  // select a different same-origin deployment path.
+  // Keep these frontend values on the same source so Vite mode files cannot
+  // select a different same-origin deployment path or Apps domain.
   const federatedUrl = federatedBuilderlabUrl();
-  const builderlabUrl = federatedUrl ?? sharedBuilderlabUrl();
+  const builderlabUrl =
+    federatedUrl ??
+    sharedBuilderlabInput("BUZZ_BUILDERLAB_URL") ??
+    "https://app.builderlab.xyz";
+  const appsDomain = sharedBuilderlabInput("BUZZ_BUILDERLAB_APPS_DOMAIN");
   // The development broker is the dev server's default: it runs whenever the
   // developer has pinned their public key. Production builds (`pnpm build`,
   // `pnpm tauri build`) never load it, regardless of .env.local contents.
@@ -147,7 +148,7 @@ export default defineConfig(async ({ command, mode }) => {
         federatedUrl === undefined ? "0" : "1",
       ),
       "import.meta.env.VITE_BUZZ_BUILDERLAB_APPS_DOMAIN":
-        JSON.stringify(env.BUZZ_BUILDERLAB_APPS_DOMAIN) ?? "undefined",
+        JSON.stringify(appsDomain) ?? "undefined",
       "import.meta.env.VITE_BUZZ_OPEN_RELAY": JSON.stringify(openOrigin),
       "import.meta.env.VITE_BUZZ_DATABRICKS_HOST":
         JSON.stringify(databricksHost),

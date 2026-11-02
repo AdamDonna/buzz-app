@@ -155,18 +155,38 @@ it("loads the broker's Vite config without native-compatibility warnings", () =>
               }
             }
             // Desktop shares .env.local/process inputs with the native build.
-            // Mode-specific values cannot point the renderer at another same-origin path.
-            writeFileSync('.env.local', String.fromCharCode(0xfeff) + 'BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz/');
-            writeFileSync('.env.development', 'BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz/staging');
-            writeFileSync('.env.production', 'BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz/staging');
-            for (const [command, mode] of [['serve', 'development'], ['build', 'production']]) {
-              delete process.env.BUZZ_BUILDERLAB_URL;
-              const result = await loadConfigFromFile({ command, mode }, configFile);
-              assert.equal(
-                result.config.define['import.meta.env.VITE_BUZZ_BUILDERLAB_URL'],
-                JSON.stringify('https://app.builderlab.xyz/'),
+            // Mode-specific values cannot point the renderer at another same-origin
+            // path or at an Apps domain the native build does not pair with it.
+            for (const file of ['.env.development', '.env.production', '.env.development.local', '.env.production.local'])
+              writeFileSync(file, 'BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz/staging\\nBUZZ_BUILDERLAB_APPS_DOMAIN=apps.mode.example');
+            for (const [local, override, domain] of [
+              ['apps.local.example', undefined, 'apps.local.example'],
+              // Unset stays unset, so the renderer derives it from the URL as native does.
+              [undefined, undefined, undefined],
+              ['apps.local.example', 'apps.process.example', 'apps.process.example'],
+              ['apps.local.example', '', ''],
+            ]) {
+              writeFileSync(
+                '.env.local',
+                String.fromCharCode(0xfeff) + 'BUZZ_BUILDERLAB_URL=https://app.builderlab.xyz/' +
+                  (local === undefined ? '' : '\\nBUZZ_BUILDERLAB_APPS_DOMAIN=' + local),
               );
+              if (override === undefined) delete process.env.BUZZ_BUILDERLAB_APPS_DOMAIN;
+              else process.env.BUZZ_BUILDERLAB_APPS_DOMAIN = override;
+              for (const [command, mode] of [['serve', 'development'], ['build', 'production']]) {
+                delete process.env.BUZZ_BUILDERLAB_URL;
+                const result = await loadConfigFromFile({ command, mode }, configFile);
+                assert.equal(
+                  result.config.define['import.meta.env.VITE_BUZZ_BUILDERLAB_URL'],
+                  JSON.stringify('https://app.builderlab.xyz/'),
+                );
+                assert.equal(
+                  result.config.define['import.meta.env.VITE_BUZZ_BUILDERLAB_APPS_DOMAIN'],
+                  JSON.stringify(domain) ?? 'undefined',
+                );
+              }
             }
+            delete process.env.BUZZ_BUILDERLAB_APPS_DOMAIN;
             // Process input still overrides the shared local value, including empty.
             for (const [command, override, expected] of [
               ['serve', undefined, 'https://app.builderlab.xyz/'],
