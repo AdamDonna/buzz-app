@@ -3057,6 +3057,17 @@ export function createRelaySession(
   // the sidebar page to mount and observe them.
   if (options.warm) void sidebarPreferences.queries.ensure();
   let refreshedGeneration = -1;
+  /** The connection whose held profiles are settled: read again, or proven
+   * current by a continuous profiles replay. */
+  let profilesGeneration = -1;
+  const rereadProfiles = () => {
+    profilesGeneration = liveGeneration;
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (!closed) void profiles.reconnect().catch(() => {});
+    }, 0);
+    timers.add(timer);
+  };
   /** No route has been established since the stream dropped, or ever: a
    * thread view opened now reads while it is down. */
   let streamDropped = true;
@@ -3335,6 +3346,16 @@ export function createRelaySession(
       )
         refreshRoster();
       liveSnapshot = snapshot;
+      // A profiles route that failed before it established proves nothing, so
+      // the finite reads stand in for its replay on this connection.
+      if (
+        snapshot.status === "connected" &&
+        profilesGeneration !== liveGeneration &&
+        snapshot.routes.some(
+          (route) => route.id === "profiles" && route.status === "error",
+        )
+      )
+        rereadProfiles();
       // Suspend every affected preview before any recheck: one revocation can
       // cancel another read, but must never leave its old public grant readable.
       const previews = snapshot.routes
@@ -3362,17 +3383,14 @@ export function createRelaySession(
         // The profiles route replays every profile change from its cursor. A
         // continuous replay already delivered each one since the last
         // connection heard the relay, so held profiles are not read again. A
-        // cut replay, a first connection, or a host that reports no route
-        // (once per connection) reads them all again.
-        if (
-          global ? global.route === "profiles" && !global.continuous : first
-        ) {
-          const timer = setTimeout(() => {
-            timers.delete(timer);
-            if (!closed) void profiles.reconnect().catch(() => {});
-          }, 0);
-          timers.add(timer);
-        }
+        // cut replay or a first connection reads them all again; so does a
+        // host that reports no route, once per connection, whatever order the
+        // routes arrive in.
+        if (global?.route === "profiles") {
+          if (global.continuous) profilesGeneration = liveGeneration;
+          else rereadProfiles();
+        } else if (!global && profilesGeneration !== liveGeneration)
+          rereadProfiles();
         if (first) {
           refreshedGeneration = liveGeneration;
           const generation = liveGeneration;
