@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { canAddMembers } from "../../features/channel-members/members";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import { useChannelList } from "../../features/relay/react";
@@ -94,6 +94,18 @@ export function PrivateChannels({
   >({});
   /** The channels Add to all asked about. */
   const [confirming, setConfirming] = useState<readonly ChannelSummary[]>();
+  /** The agent this section is for now, or none once it is gone, as after
+   * Change: changes still to run for an earlier one aren't sent. */
+  const current = useRef<string | undefined>(bestie);
+  current.current = bestie;
+  useEffect(() => {
+    // Set again here, as StrictMode and hidden panes run the cleanup and then
+    // this without a render in between.
+    current.current = bestie;
+    return () => {
+      current.current = undefined;
+    };
+  }, [bestie]);
 
   /** Runs `change` on each channel in turn, as adding several agents does,
    * and keeps why each one failed. */
@@ -109,7 +121,12 @@ export function PrivateChannels({
         Object.entries(current).filter(([id]) => !ids.has(id)),
       ),
     );
-    for (const { id, name } of channels) {
+    for (const [index, { id, name }] of channels.entries()) {
+      if (current.current !== bestie) {
+        const left = new Set(channels.slice(index).map((each) => each.id));
+        setBusy((now) => new Set([...now].filter((key) => !left.has(key))));
+        return;
+      }
       let error: string | undefined;
       try {
         await change(id);

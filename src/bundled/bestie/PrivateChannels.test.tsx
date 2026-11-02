@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
@@ -157,6 +157,32 @@ it("adds Bestie to one channel, or to all after asking, and reports what didn't 
   );
 });
 
+it("stops adding a Bestie that changed partway through Add to all", async () => {
+  const user = userEvent.setup();
+  const { value, add } = session([
+    channel("alpha", [YOU]),
+    channel("gamma", [YOU]),
+  ]);
+  let done = () => {};
+  add.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        done = resolve;
+      }),
+  );
+  const { rerender } = render(
+    <PrivateChannels session={value} bestie={BESTIE} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Add to all" }));
+  const ask = await screen.findByRole("alertdialog");
+  await user.click(within(ask).getByRole("button", { name: "Add to all" }));
+  expect(add).toHaveBeenCalledTimes(1);
+  // Change makes another agent Bestie while the first add is pending.
+  rerender(<PrivateChannels session={value} bestie={OTHER} />);
+  await act(async () => done());
+  expect(add.mock.calls).toEqual([[expect.any(String), BESTIE]]);
+});
+
 it("says when a removal isn't confirmed, and offers none from a cached roster", async () => {
   const user = userEvent.setup();
   const { value } = session(
@@ -176,6 +202,18 @@ it("says when a removal isn't confirmed, and offers none from a cached roster", 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "#shared: The change may have taken effect. Refresh to check.",
   );
+});
+
+it("removes Bestie on the first click after mounting under StrictMode", async () => {
+  const user = userEvent.setup();
+  const { value, run } = session([channel("shared", [YOU, BESTIE])]);
+  render(<PrivateChannels session={value} bestie={BESTIE} />, {
+    reactStrictMode: true,
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Remove Bestie from #shared" }),
+  );
+  expect(run).toHaveBeenCalledOnce();
 });
 
 it("doesn't call a roster it couldn't read empty, and retries it", async () => {
