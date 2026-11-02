@@ -96,6 +96,24 @@ it("forgets a highlight scrolled out of view, so Enter never opens a hidden row"
   expect(run).not.toHaveBeenCalled();
 });
 
+it("drops a highlight scrolled out of view while open, and arrows bring one back", () => {
+  render(choices({ top: 0, key: "" }));
+  const field = screen.getByRole("combobox");
+  const scroller = document.querySelector(".search-palette-scroll");
+  if (!scroller) throw new Error("No results scroller");
+  fireEvent.wheel(scroller);
+  scrollTop = 400;
+  fireEvent.scroll(scroller);
+  expect(screen.queryByRole("option", { selected: true })).toBeNull();
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(run).not.toHaveBeenCalled();
+  // The keyboard still picks a row, which reveals itself.
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  expect(screen.getByRole("option", { selected: true })).toBeVisible();
+  fireEvent.keyDown(field, { key: "Enter" });
+  expect(run).toHaveBeenCalledTimes(1);
+});
+
 it("keeps a highlight still in view at the kept place", () => {
   const place = { top: 0, key: "" };
   const first = render(choices(place));

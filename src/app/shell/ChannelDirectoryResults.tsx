@@ -70,11 +70,19 @@ export function ChannelDirectoryResults({
     arrival.current.directory = directory.directory;
     arrival.current.page += 1;
   }
-  const landed = (id: string) => {
-    const { seen, page } = arrival.current;
-    if (!seen.has(id)) seen.set(id, page);
-    return seen.get(id) ?? page;
-  };
+  // Every directory row takes the page it first landed on, before any
+  // filtering or sorting; joined rows rank as if there from the start.
+  for (const channel of directory.directory)
+    if (!arrival.current.seen.has(channel.id))
+      arrival.current.seen.set(channel.id, arrival.current.page);
+  const landed = ({
+    channel,
+    joined,
+  }: {
+    channel: ChannelSummary;
+    joined: boolean;
+  }) =>
+    joined ? 0 : (arrival.current.seen.get(channel.id) ?? arrival.current.page);
   const rows = [
     ...(needle
       ? joined.map((channel) => ({ channel, joined: true }) as const)
@@ -90,7 +98,7 @@ export function ChannelDirectoryResults({
     .sort(
       (a, b) =>
         (a.match?.rank ?? 0) - (b.match?.rank ?? 0) ||
-        landed(a.channel.id) - landed(b.channel.id) ||
+        landed(a) - landed(b) ||
         Number(b.joined) - Number(a.joined) ||
         a.channel.name.localeCompare(b.channel.name) ||
         a.channel.id.localeCompare(b.channel.id),

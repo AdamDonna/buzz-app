@@ -431,7 +431,10 @@ export function SearchChoices({
             restore.current = 0;
           }}
           onScroll={(event) => {
-            if (!place || restore.current) return;
+            if (restore.current) return;
+            // Enter never chooses a row scrolled out of sight.
+            if (selected && !inView(selected)) highlight.clear();
+            if (!place) return;
             place.top = event.currentTarget.scrollTop;
             keepPlace();
           }}

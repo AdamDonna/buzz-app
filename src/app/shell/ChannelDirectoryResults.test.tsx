@@ -67,6 +67,8 @@ function connected(
     fail?: boolean;
     /** Newer open channels, which fill the directory's first page. */
     newer?: number;
+    /** The newer channels' name prefix. */
+    prefix?: string;
     /** Holds the directory's later pages until it settles. */
     later?: Promise<void>;
     /** The directory's page size. */
@@ -123,7 +125,7 @@ function connected(
       metadata(
         relay,
         `bulk-${index}`,
-        `team-${String(index).padStart(3, "0")}`,
+        `${options.prefix ?? "team"}-${String(index).padStart(3, "0")}`,
         1700000100 + index,
         open,
       ),
@@ -524,6 +526,43 @@ it("shows the directory's first page while the rest loads", async () => {
     await userEvent.click(screen.getByRole("tab", { name: "All" }));
     await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
     await waitFor(() => expect(rows()[0]).toContain("buzz-community"));
+  } finally {
+    release();
+    await t.dispose();
+  }
+});
+
+it("puts joined matches first among equal matches after later pages land", async () => {
+  let release = () => {};
+  const later = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // The 4 newest fill the first page; design-crit lands on a later one while
+  // Channels shows, and joined channels never land at all.
+  const t = connected({ newer: 4, prefix: "design-new", page: 4, later });
+  try {
+    t.render();
+    await openSearch();
+    await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    release();
+    await waitFor(() =>
+      expect(screen.queryByText("Loading more channels…")).toBeNull(),
+    );
+    await userEvent.type(field(), "design-");
+    await waitFor(() =>
+      expect(rows().map((row) => row?.split(/Joined|\d+ members?/)[0])).toEqual(
+        [
+          "design-guests",
+          "design-private",
+          "design-new-000",
+          "design-new-001",
+          "design-new-002",
+          "design-new-003",
+          "design-crit",
+        ],
+      ),
+    );
   } finally {
     release();
     await t.dispose();
