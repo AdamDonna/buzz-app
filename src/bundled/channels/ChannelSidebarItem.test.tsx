@@ -611,13 +611,16 @@ it("quiets confirmed muted backlog, restores it on unmute, and preserves directe
   const row = () => view.container.querySelector("[data-channel-sidebar-row]");
   act(() => state.unread(2));
   expect(row()).toHaveAttribute("data-ordinary");
+  expect(row()).not.toHaveAttribute("data-muted");
   act(() => state.mute(true));
   expect(row()).not.toHaveAttribute("data-ordinary");
   expect(view.container.querySelector("[data-channel-unread]")).toBeNull();
+  expect(row()).toHaveAttribute("data-muted");
   act(() => state.unread(3));
   expect(row()).not.toHaveAttribute("data-ordinary");
   act(() => state.mute(false));
   expect(row()).toHaveAttribute("data-ordinary");
+  expect(row()).not.toHaveAttribute("data-muted");
   act(() => state.mute(true));
   act(() => state.unread(4, 1));
   expect(row()).not.toHaveAttribute("data-ordinary");

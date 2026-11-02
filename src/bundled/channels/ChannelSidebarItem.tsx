@@ -152,6 +152,7 @@ function ChannelSidebarItemCore({
       ? channel.participants[0]
       : undefined;
   const presence = usePresenceStatus(peer ? session.presence : undefined, peer);
+  const muted = useConfirmedMute(session, channel.id);
   // Keep the closing row's items through the popup's exit transition.
   const lastMenuContent = useRef<ReactNode>(undefined);
   useLayoutEffect(() => {
@@ -163,6 +164,7 @@ function ChannelSidebarItemCore({
       channel={channel}
       working={agents.length > 0}
       ordinary={ordinary}
+      muted={muted}
       dmVisualSpacing={channel.channelType === "dm"}
       icon={
         channel.channelType === "dm" ? (

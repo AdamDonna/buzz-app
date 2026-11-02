@@ -119,6 +119,10 @@
   color: var(--text-navigation-unread);
   font-weight: var(--type-weight-semibold);
 }
+/* Muted rows recede; unread attention and selection keep their own ink. */
+.row[data-muted]:not([data-selected], [data-ordinary]) :is(.label, .iconSpace) {
+  color: var(--text-unavailable);
+}
 /* The selected destination carries its fill's ink, which may be white on a
    saturated accent; the weight still marks it unread. */
 .row[data-selected][data-ordinary] .label {

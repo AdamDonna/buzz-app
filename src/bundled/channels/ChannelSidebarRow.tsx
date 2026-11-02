@@ -13,6 +13,7 @@ export function ChannelSidebarRow({
   badge,
   working = false,
   ordinary = false,
+  muted = false,
   dmVisualSpacing = false,
   wrapSelect,
   selected,
@@ -29,6 +30,8 @@ export function ChannelSidebarRow({
   working?: boolean;
   /** Ordinary unread backlog emphasises the label. */
   ordinary?: boolean;
+  /** Confirmed mute recedes the row. */
+  muted?: boolean;
   dmVisualSpacing?: boolean;
   wrapSelect?: ((trigger: ReactElement) => ReactNode) | undefined;
   selected?: string | undefined;
@@ -80,6 +83,7 @@ export function ChannelSidebarRow({
       className={styles.row}
       data-channel-sidebar-row=""
       data-ordinary={ordinary || undefined}
+      data-muted={muted || undefined}
       data-selected={selected === channel.id || undefined}
     >
       <div className={styles.select}>
