@@ -33,7 +33,8 @@ the interface unless an available tool actually supports that action.
   opens, and again when that sign-in ends. Before it ends, a notice offers
   **Sign in again** so Buzz stays open. Finish in the browser and Buzz opens.
   **Not now** opens Buzz anyway, but that organization's communities stay
-  unavailable until you sign in. Sign-in and sign-out also live under
+  unavailable until you sign in. Sign-in, sign-out and when the current
+  sign-in ends also live under
   **Settings → Buzz → Identity → Organization sign-in**.
 - A community invite or address connects someone to a community; creating an
   identity alone does not grant membership. The same identity can be used in
@@ -53,6 +54,12 @@ the interface unless an available tool actually supports that action.
 - **Communities** have their own channels, people, and agents. Switching
   communities changes the available context. You and the person asking may have
   different channel access. A link alone never grants access.
+- **Manage members** shows **General** access first in the member list. **Public**
+  lets people in the community read and new people participate; **View only**
+  lets them read; **Private** limits access to people added to the channel.
+  Changing this choice does not change existing members' roles. Ordinary
+  participants have no role caption; Owner, Admin, and Viewing only mark
+  exceptions. Use a person's actions menu to change their role when permitted.
 - **File sharing** is available through **Attach files** in the composer when
   uploads are available. Files and media are shared with the conversation's
   members. Do not promise support for every file type or size.

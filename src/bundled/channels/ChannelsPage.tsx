@@ -1910,7 +1910,6 @@ function ChannelWorkspace({
     >
       {current && membersOpen && (
         <ChannelMembersDialog
-          communityScope={scope}
           key={current.id}
           session={queries}
           channelId={current.id}

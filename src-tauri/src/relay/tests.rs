@@ -3918,7 +3918,13 @@ mod federated_header {
         .await
         .unwrap();
         assert_eq!(response.status, 200);
-        community.assert_carried(&server.heads().await[0]);
+        let head = &server.heads().await[0];
+        assert!(
+            head.lines()
+                .any(|line| line.eq_ignore_ascii_case("user-agent: Buzz")),
+            "{head}"
+        );
+        community.assert_carried(head);
     }
     #[tokio::test]
     async fn http_attaches_for_required_discovery() {

@@ -486,6 +486,60 @@ it("posts at the channel's top level when given a channel", async () => {
   expect(published[0]?.tags).toEqual([["h", "other"]]);
 });
 
+it("tags the community emoji a message or edit uses, as the composer does", async () => {
+  const stamp = "https://relay/media/stamp.png";
+  const emojiSet = (pubkey: string, created_at: number, entries: string[][]) =>
+    event({
+      id: `${created_at}`.padStart(64, "d"),
+      pubkey,
+      created_at,
+      kind: 30030,
+      tags: [
+        ["d", "buzz:custom-emoji"],
+        ...entries.map((e) => ["emoji", ...e]),
+      ],
+    });
+  const { client, published } = fake([
+    ...community,
+    // Alice's newer set replaces her older one, so its :gone: is not used.
+    emojiSet(alice, 10, [["gone", "https://relay/media/gone.png"]]),
+    emojiSet(alice, 20, [["pray-for-stamp", stamp]]),
+    emojiSet(bob, 15, [["wave", "https://relay/media/wave.png"]]),
+  ]);
+  await callTool(client, { channel: "chan" }, "send", {
+    audience: "everyone",
+    channel: "chan",
+    text: ":Pray-For-Stamp: :gone: :unknown: https://x.test/:wave: :pray-for-stamp:",
+  });
+  await callTool(client, { channel: "chan" }, "edit", {
+    id: root,
+    text: "now :wave:",
+  });
+  expect(published.map((p) => p.tags)).toEqual([
+    [
+      ["h", "chan"],
+      ["emoji", "pray-for-stamp", stamp],
+    ],
+    [
+      ["h", "chan"],
+      ["e", root],
+      ["emoji", "wave", "https://relay/media/wave.png"],
+    ],
+  ]);
+});
+
+it("reads no emoji sets for a message without a shortcode", async () => {
+  const { client } = fake(community);
+  await callTool(client, { channel: "chan" }, "send", {
+    audience: "everyone",
+    channel: "chan",
+    text: "at 10:30 see https://x.test/a:b:c",
+  });
+  expect(client.query).not.toHaveBeenCalledWith([
+    expect.objectContaining({ kinds: [30030] }),
+  ]);
+});
+
 it("keeps a top-level chat out of threads, wherever a reply would resolve", async () => {
   const elsewhere = "3".repeat(64);
   const { client, published } = fake([
