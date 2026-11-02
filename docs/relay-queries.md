@@ -575,8 +575,10 @@ its management snapshot still exposes those operations, while read overlays hide
 them until access returns. Confirmed evidence is not pending intent and is dropped
 when inaccessible. If revocation races initial outbox hydration, that load's entire
 confirmed cache is discarded conservatively; pending signed records are preserved.
-Shared signed profile projections and already-opened disk-head caches are also
-cleared conservatively because they can include cross-channel evidence. Disk-cache
+Already-opened disk-head caches are also cleared conservatively because they can
+include cross-channel evidence. Signed profiles (kind 0 and NIP-FI kind 30382) are
+kept: they are global relay events, not channel evidence, so a profile read in
+flight finishes too. Only a full cache clear empties the profile directory. Disk-cache
 failure does not reauthorize in-memory views. This does not erase copies already
 made by trusted plugins, cancel/re-sign durable writes, or replace relay-side checks.
 

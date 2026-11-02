@@ -1242,32 +1242,33 @@ in-place recovery, denial-by-omission and both document themes in Chromium/WebKi
 
 ## DM label recovery invariant
 
-Access-loss purges remain authoritative: never keep old profiles just to preserve
-sidebar names. After roster membership changes, visible DMs must reacquire their
-missing names through the shared profile directory at background priority, without
-blocking conversation opening. Recovery must cover both loaded profiles being
-purged and an initial profile read being cancelled before any name arrives.
+Access-loss purges remove channel content, not profiles. A kind 0 profile is a
+global relay event that any community member can read, so a lost channel does not
+make a name private; the profile directory keeps it, and a profile read in
+flight finishes. This holds for a denied channel list too: profiles do not
+depend on channels. Only a full cache clear (logout, community or scope change)
+empties the directory. After roster membership
+changes, visible DMs must reacquire missing names through the shared profile
+directory at background priority, without blocking conversation opening. Recovery
+covers a cleared directory (a full cache clear) and an initial profile read that
+comes back empty or fails.
 
 `ChannelsPage` passes the **full** roster to `useChannelLabels`; the hook filters
 visible conversations for display/profile demand, but derives its recovery trigger
-from all channel IDs. Deleting an already-hidden or archived channel can still
-invalidate shared profiles. Missing-profile and membership keys remain stable on
+from all channel IDs. Missing-profile and membership keys remain stable on
 ordinary message/preview updates: missing/failed responses must not start a
 render-driven request loop. Key fragments remain the fallback for unavailable names.
 
 `useChannelLabels.test.tsx` binds the mounted hook to real session roster omission,
-including hidden/archived deletion, stale in-flight replies and unsuccessful name
-reads. `tests/browser/dm-labels.spec.mjs` guards the production page wiring and DOM
+including hidden/archived deletion, a name read that finishes after the deletion,
+and empty or failed name reads that retry once on a roster change. `tests/browser/dm-labels.spec.mjs` guards the production page wiring and DOM
 labels through the real Refresh channels control and broker.
 
-Open channel timelines and mounted thread/media-comment views also recover: after
-an access-loss purge, each retained window and each mounted thread of a channel the
-viewer can still read requests its rows' names once, at background priority. Names
-whose only evidence was in the lost channel are not requested. A channel opened
-afterwards from a head read shortly before the purge is not covered: its next head
-read or an older page restores its names, while new traffic and the viewer's own
-sends restore only its latest rows. `revocation.test.ts` covers roster omission,
-denied reads and a mention that appears only in a thread reply.
+Open channel timelines and mounted thread/media-comment views need no recovery
+after access loss: their names stay in the directory. `revocation.test.ts` covers
+roster omission, denied channel reads and a denied channel list keeping names, a
+profile read in flight finishing, and a full cache clear still fencing a profile
+read.
 
 These are foundational recovery constraints, not a new shared-session API or a
 guarantee of general profile retry after every cache clear/network failure. See

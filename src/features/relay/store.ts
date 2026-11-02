@@ -745,9 +745,6 @@ export function createChannelStore(
           loadingOlder: false,
         });
       }
-      // Profiles may be shared by several windows; clearing this bounded private projection
-      // is conservative, and prevents denied-channel-only names from surviving visibly.
-      directory.clear();
       setList(
         {
           ...list,
@@ -1682,7 +1679,6 @@ export function createChannelStore(
           for (const state of [...windows.values()]) evict(state);
           heads.clear();
           tails.clear();
-          directory.clear();
           clearTimeout(discoverySave);
           discoverySave = undefined;
           void persistence?.clear().catch(() => {});
@@ -3328,13 +3324,6 @@ export function createChannelStore(
     canWrite: (id: string) => discovery?.canWrite(id) ?? false,
     unlisted,
     purgeAccess,
-    /** After an access purge's commit, reread names for retained authorized rows.
-     * One ensure per window, so one window over the directory budget spares the others. */
-    refetchWindowProfiles() {
-      for (const state of windows.values())
-        if (authorized(state.channelId))
-          void fetchProfiles(state.snapshot.rows);
-    },
     denyChannel,
     suspendPreviews(ids: readonly string[]) {
       let changed = false;

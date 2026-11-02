@@ -503,6 +503,85 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   }
 });
 
+it("keeps a verified name and its live check when channel access ends", async () => {
+  const { createRelaySession } = await import("./session");
+  const { roster, scriptedTransport } = await import("./testing");
+  const wire = scriptedTransport(alice.pubkey, relay.pubkey);
+  let live: import("./live").LiveCallbacks | undefined;
+  let sink: VerifiedProfileSink | undefined;
+  let subscribed = 0;
+  let stopped = 0;
+  const owner = createRelaySession({
+    ...wire.transport,
+    verifiedProfiles: { ...authority, multipleIssuers: false },
+    subscribe(callbacks) {
+      live = callbacks;
+      return {
+        update() {},
+        retry() {},
+        dispose() {},
+        syncVerifiedProfiles(_filter, next) {
+          subscribed++;
+          sink = next;
+          return () => {
+            stopped++;
+          };
+        },
+      };
+    },
+  });
+  const isProfileRead = (filters: readonly { kinds?: readonly number[] }[]) =>
+    filters.every(
+      (filter) => filter.kinds?.length === 1 && filter.kinds[0] === 0,
+    );
+  const denyPending = () => {
+    for (const entry of wire.pending.splice(0))
+      if (isProfileRead(entry.filters)) entry.respond([]);
+      else entry.fail(new Error("Relay read failed (403)"));
+  };
+  const verified = () =>
+    owner.session.profiles.snapshot().get(alice.pubkey)?.verified;
+  try {
+    assert(live);
+    live.state({ status: "connected", routes: [] });
+    const ensured = owner.session.profiles.ensure([alice.pubkey]);
+    await vi.waitFor(() =>
+      expect(wire.pending.some((entry) => isProfileRead(entry.filters))).toBe(
+        true,
+      ),
+    );
+    denyPending();
+    await ensured;
+    assert(sink);
+    sink.event(projection());
+    sink.eose();
+    expect(verified()).toMatchObject({
+      displayName: "Alice",
+      status: "checked",
+    });
+    // A denied channel, then a denied channel list: profiles do not depend on
+    // channels, so neither removes the verified name or stops its check.
+    live.receive(["a", "b"].map((id) => roster(relay, id, [alice.pubkey], 10)));
+    owner.session.channels.ensure("a");
+    await vi.waitFor(() => {
+      denyPending();
+      expect(owner.session.channels.window("a").status).toBe("error");
+    });
+    owner.session.channels.refreshList?.();
+    await vi.waitFor(() => {
+      denyPending();
+      expect(owner.session.channels.list().status).toBe("error");
+    });
+    expect(verified()).toMatchObject({
+      displayName: "Alice",
+      status: "checked",
+    });
+    expect([subscribed, stopped]).toEqual([1, 0]);
+  } finally {
+    owner.dispose();
+  }
+});
+
 it("keeps batch membership and checked status stable when subjects are added or evicted", async () => {
   const h = harness();
   const active = () => h.subscriptions.filter((item) => !item.stopped);
