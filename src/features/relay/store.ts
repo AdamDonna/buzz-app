@@ -1928,7 +1928,10 @@ export function createChannelStore(
         /** Settles when the next page lands or the read ends. */
         page: Promise<void>;
         read: Promise<{ partial: boolean }>;
-        /** The finished read's open channels, newest metadata per channel. */
+        /** A refresh of a finished read, whose names it keeps meanwhile. */
+        refresh: boolean;
+        /** The open channels read so far (the prior read's during a
+         * refresh), newest metadata per channel. */
         open?: ReturnType<NonNullable<ChannelQueries["openDirectory"]>>;
       }
     | undefined;
@@ -1958,6 +1961,9 @@ export function createChannelStore(
             name,
             ...(type === "stream" || type === "forum"
               ? { channelType: type }
+              : {}),
+            ...(tag(event, "about")
+              ? { description: tag(event, "about") }
               : {}),
             ...(hasTag(event, "archived", "true")
               ? { archived: true as const }
@@ -2017,24 +2023,13 @@ export function createChannelStore(
       cursor = { until: last.created_at, before_id: last.id };
     }
   }
-  async function searchPublic(
-    query: string,
-    settings?: ReadOptions & {
-      limit?: number;
-      exact?: boolean;
-      progress?: ((found: PublicChannelSearch) => void) | undefined;
-    },
-    recover = true,
-  ): Promise<PublicChannelSearch> {
-    if (disposed || !transport || !discovery || options.cachedOnly)
-      throw new Error("Relay is unavailable");
-    const needle = query.trim().toLowerCase().replace(/^#/, "");
-    if (!needle) return { channels: [], partial: false };
-    if (list.status !== "ready")
-      throw new Error("Channel list is not ready for channel search");
-    const generation = epoch;
-    // Candidates only: `resolve` below re-reads each match, so a reused page
-    // never grants access by itself.
+  /** The shared directory read for this epoch: the one in flight, a
+   * finished one still fresh, or a new full read or delta. Candidates only:
+   * a page never grants access by itself. */
+  function currentPublicDirectory(
+    relay: RelayReader & { relayAuthor: string },
+    generation: number,
+  ): NonNullable<typeof publicDirectory> {
     if (
       publicDirectory?.generation !== generation ||
       (publicDirectory.at !== undefined &&
@@ -2069,7 +2064,7 @@ export function createChannelStore(
       const next = () => new Promise<void>((settle) => (land = settle));
       const read = (since?: number) =>
         readPublicDirectory(
-          transport,
+          relay,
           generation,
           controller.signal,
           events,
@@ -2077,11 +2072,18 @@ export function createChannelStore(
             const landed = land;
             entry.page = next();
             landed();
+            // A first read names its channels a page at a time, so browsing
+            // starts on the first page; a refresh keeps the prior names whole.
+            if (!entry.refresh) {
+              entry.open = openDirectoryChannels(events);
+              notify(listListeners);
+            }
           },
           since,
         );
       const entry: NonNullable<typeof publicDirectory> = {
         generation,
+        refresh: !!prior?.open,
         started,
         fullAt: incremental ? prior.fullAt : started,
         incremental,
@@ -2128,7 +2130,127 @@ export function createChannelStore(
         },
       );
     }
-    const entry = publicDirectory;
+    return publicDirectory;
+  }
+  /** Read the whole open-channel directory, for browsing. Shares the search
+   * read; `openDirectory` then names its channels. Never resolves them. */
+  async function readDirectory(settings?: {
+    signal?: AbortSignal | undefined;
+  }): Promise<{ partial: boolean }> {
+    if (disposed || !transport || !discovery || options.cachedOnly)
+      throw new Error("Relay is unavailable");
+    if (list.status !== "ready")
+      throw new Error("Channel list is not ready for channel browsing");
+    const generation = epoch;
+    const signal = settings?.signal;
+    signal?.throwIfAborted();
+    const read = currentPublicDirectory(transport, generation).read;
+    const result = await (signal
+      ? Promise.race([
+          read,
+          new Promise<never>((_, reject) =>
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            }),
+          ),
+        ])
+      : read);
+    if (disposed || generation !== epoch)
+      throw new DOMException("Stale channel directory", "AbortError");
+    return result;
+  }
+  /** Recent member counts, by channel, for this epoch. */
+  let memberCounts:
+    | { generation: number; counts: Map<string, { count: number; at: number }> }
+    | undefined;
+  /** How many members each open channel has, for browsing. Joined channels
+   * answer from their roster; others read the relay-signed roster, which an
+   * open channel publishes to anyone. Display only: never grants access. */
+  async function readMemberCounts(
+    channelIds: readonly string[],
+    settings?: { signal?: AbortSignal | undefined },
+  ): Promise<ReadonlyMap<string, number>> {
+    if (disposed || !transport || !discovery || options.cachedOnly)
+      throw new Error("Relay is unavailable");
+    const generation = epoch;
+    if (memberCounts?.generation !== generation)
+      memberCounts = { generation, counts: new Map() };
+    const { counts } = memberCounts;
+    const answer = new Map<string, number>();
+    const missing: string[] = [];
+    for (const id of new Set(channelIds)) {
+      const members = discovery.authorized(id)
+        ? discovery.get(id)?.members?.length
+        : undefined;
+      const known = counts.get(id);
+      if (members) answer.set(id, members);
+      else if (known && now() - known.at < REFERENCE_TTL)
+        answer.set(id, known.count);
+      else missing.push(id);
+    }
+    for (let start = 0; start < missing.length; start += 100) {
+      const ids = missing.slice(start, start + 100);
+      const events = await transport.read(
+        [
+          {
+            kinds: [39002],
+            authors: [transport.relayAuthor],
+            "#d": ids,
+            limit: ids.length,
+          },
+        ],
+        {
+          ...(settings?.signal ? { signal: settings.signal } : {}),
+          // On screen now, so it doesn't queue behind background lookups.
+          priority: "foreground",
+          fresh: true,
+        },
+      );
+      settings?.signal?.throwIfAborted();
+      if (disposed || generation !== epoch)
+        throw new DOMException("Stale member counts", "AbortError");
+      const latest = new Map<string, RelayEvent>();
+      for (const event of events) {
+        const id = tag(event, "d");
+        if (
+          event.kind === 39002 &&
+          event.pubkey === transport.relayAuthor &&
+          id &&
+          ids.includes(id)
+        )
+          latest.set(id, newer(latest.get(id), event));
+      }
+      for (const [id, event] of latest) {
+        const count = new Set(
+          event.tags.flatMap(([name, value]) =>
+            name === "p" && value ? [value] : [],
+          ),
+        ).size;
+        counts.set(id, { count, at: now() });
+        answer.set(id, count);
+      }
+    }
+    return answer;
+  }
+  async function searchPublic(
+    query: string,
+    settings?: ReadOptions & {
+      limit?: number;
+      exact?: boolean;
+      progress?: ((found: PublicChannelSearch) => void) | undefined;
+    },
+    recover = true,
+  ): Promise<PublicChannelSearch> {
+    if (disposed || !transport || !discovery || options.cachedOnly)
+      throw new Error("Relay is unavailable");
+    const needle = query.trim().toLowerCase().replace(/^#/, "");
+    if (!needle) return { channels: [], partial: false };
+    if (list.status !== "ready")
+      throw new Error("Channel list is not ready for channel search");
+    const generation = epoch;
+    // Candidates only: `resolve` below re-reads each match, so a reused page
+    // never grants access by itself.
+    const entry = currentPublicDirectory(transport, generation);
     const signal = settings?.signal;
     const limit = settings?.limit ?? 8;
     const resolved = new Set<string>();
@@ -2807,6 +2929,11 @@ export function createChannelStore(
     searchPublic,
     findLabeled,
     matchPublic,
+    readDirectory,
+    readMemberCounts,
+    directoryComplete: () =>
+      publicDirectory?.generation === epoch &&
+      (publicDirectory.refresh || publicDirectory.at !== undefined),
     openDirectory: () =>
       publicDirectory?.generation === epoch
         ? (publicDirectory.open ?? noOpenDirectory)

@@ -22,6 +22,8 @@ export type SearchDestination = {
   key: string;
   label: string;
   detail?: string;
+  /** Quiet metadata at the row's end, such as a count. */
+  trailing?: ReactNode;
   /** Code points of `label` that match the typed text. */
   matches?: readonly number[];
   icon: typeof ChatCircleIcon;
@@ -34,6 +36,9 @@ export type SearchDestination = {
 
 export type SearchGroup = {
   label: string;
+  /** Name the group for assistive technology only, when the view's own tab
+   * already says what it holds. */
+  hideLabel?: boolean;
   /** Message-content scores are not comparable to named destinations. */
   rank?: number;
   destinations: readonly SearchDestination[];
@@ -59,6 +64,27 @@ export type SearchInputProps = {
   open?: boolean | undefined;
 };
 
+/** Views of one search, switched from the field with Ctrl+Tab and
+ * Ctrl+Shift+Tab, drawn between the field and the results. */
+export type SearchViews = {
+  tabs: ReactNode;
+  /** Names the results list for the view shown. */
+  resultsLabel: string;
+  onSwitch: (delta: 1 | -1) => void;
+  /** Where the results were: their scroll position and highlighted row,
+   * restored as the view mounts and kept as they change. */
+  place: SearchPlace;
+};
+
+/** A kept place in the results. `anchor` is the first row in view and how
+ * far above the view's top it sat, so a list whose order changed while
+ * closed reopens on the same rows rather than the same pixels. */
+export type SearchPlace = {
+  top: number;
+  key: string;
+  anchor?: { key: string; offset: number } | undefined;
+};
+
 export function SearchChoices({
   groups: originalGroups,
   query,
@@ -75,6 +101,9 @@ export function SearchChoices({
   open = true,
   pending = false,
   isAction,
+  views,
+  highlightEmpty = false,
+  onRowsShown,
 }: SearchInputProps & {
   groups: readonly SearchGroup[];
   children?: ReactNode;
@@ -84,7 +113,15 @@ export function SearchChoices({
   /** Whether a row acts on the search rather than being a result, so Enter
    * on it can wait for `pending` like Enter before any row. */
   isAction?: (key: string) => boolean;
+  views?: SearchViews | undefined;
+  /** Highlight the first row before anything is typed, for a view whose
+   * unfiltered list is the list to choose from. */
+  highlightEmpty?: boolean;
+  /** Hears the keys of rows scrolled into (or near) view, for details worth
+   * reading only for the rows someone can see. */
+  onRowsShown?: ((keys: readonly string[]) => void) | undefined;
 }) {
+  const palette = useRef<HTMLDivElement>(null);
   const resultsViewport = useRef<HTMLDivElement>(null);
   const resultsContent = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -144,22 +181,160 @@ export function SearchChoices({
   const shortcutNumbers = new Map(
     destinations.slice(0, 9).map(({ key }, index) => [key, index + 1]),
   );
+  const place = views?.place;
+  const keys = destinations.map(({ key }) => key);
   const highlight = useSearchHighlight({
     query,
-    keys: destinations.map(({ key }) => key),
+    keys,
     onChoose: (key) => destinations.find((row) => row.key === key)?.run(),
     open,
     pending,
     isAction,
+    highlightEmpty,
+    // A kept place keeps its row: Enter never chooses a row scrolled away.
+    ...(place?.key && keys.includes(place.key)
+      ? { initial: place.key }
+      : place?.top
+        ? { initial: "" }
+        : {}),
   });
   const selected = highlight.active;
+  // A highlight is kept only while its row is in view: one scrolled away
+  // would reopen with Enter choosing a row nobody can see.
+  useEffect(() => {
+    if (place) place.key = selected;
+  }, [place, selected]);
+  const rowBox = (key: string) =>
+    document.getElementById(highlight.rowId(key))?.getBoundingClientRect();
+  const inView = (key: string) => {
+    const content = resultsContent.current;
+    const box = key ? rowBox(key) : undefined;
+    if (!content || !box) return false;
+    const view = content.getBoundingClientRect();
+    return box.bottom > view.top && box.top < view.bottom;
+  };
+  const keepPlace = () => {
+    const content = resultsContent.current;
+    if (!place || !content) return;
+    place.key = inView(selected) ? selected : "";
+    // Rows stack in order: find the first one reaching into the view.
+    const top = content.getBoundingClientRect().top;
+    let low = 0;
+    let high = keys.length - 1;
+    let anchor: SearchPlace["anchor"];
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const key = keys[middle];
+      const box = key ? rowBox(key) : undefined;
+      if (!key || !box) break;
+      if (box.bottom > top) {
+        anchor = { key, offset: top - box.top };
+        high = middle - 1;
+      } else low = middle + 1;
+    }
+    place.anchor = anchor;
+  };
   useEffect(() => {
     input.current?.focus();
   }, [input]);
+  // macOS sends Ctrl+Tab from its menu as a request to the focused control.
+  const switchView = views?.onSwitch;
+  useEffect(() => {
+    const root = palette.current;
+    if (!root || !switchView) return;
+    const request = (delta: 1 | -1) => (event: Event) => {
+      event.preventDefault();
+      switchView(delta);
+    };
+    const next = request(1);
+    const previous = request(-1);
+    root.addEventListener("buzz:next-tab", next);
+    root.addEventListener("buzz:previous-tab", previous);
+    return () => {
+      root.removeEventListener("buzz:next-tab", next);
+      root.removeEventListener("buzz:previous-tab", previous);
+    };
+  }, [switchView]);
+  const resultsLabel = views?.resultsLabel ?? "Search results";
+  // A view returns to its kept position, waiting for late rows to make room
+  // until the person scrolls or moves the highlight themselves.
+  const restore = useRef(place?.top ?? 0);
+  const restoreScroll = () => {
+    const content = resultsContent.current;
+    if (!content || !restore.current) return;
+    const anchor = place?.anchor;
+    const box = anchor && rowBox(anchor.key);
+    const target =
+      anchor && box
+        ? content.scrollTop +
+          box.top -
+          content.getBoundingClientRect().top +
+          anchor.offset
+        : restore.current;
+    content.scrollTop = target;
+    if (Math.abs(content.scrollTop - target) <= 1) restore.current = 0;
+  };
+  /** Once the kept place is back, a highlight left out of view is dropped,
+   * so Enter never chooses a row nobody can see. */
+  const settling = useRef(!!place?.top);
+  const settle = () => {
+    if (!settling.current || restore.current) return;
+    settling.current = false;
+    if (selected && !inView(selected)) highlight.clear();
+  };
+  // Before paint, and again after the highlight reveals its first row.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Rows arriving give the kept position room.
+  useLayoutEffect(() => {
+    const target = restore.current;
+    restoreScroll();
+    restore.current = target;
+  }, [destinations.length]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Rows arriving give the kept position room.
+  useEffect(() => {
+    restoreScroll();
+    settle();
+  }, [destinations.length]);
+  const shown = useRef(onRowsShown);
+  shown.current = onRowsShown;
+  const watching = !!onRowsShown;
+  const rowKeys = destinations.map(({ key }) => key).join("\n");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: New rows need watching.
+  useEffect(() => {
+    const root = resultsContent.current;
+    if (!root || !watching) return;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-search-key]")];
+    const keys = (elements: readonly Element[]) =>
+      elements.flatMap((row) =>
+        row instanceof HTMLElement && row.dataset.searchKey
+          ? [row.dataset.searchKey]
+          : [],
+      );
+    if (typeof IntersectionObserver === "undefined") {
+      shown.current?.(keys(rows));
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = keys(
+          entries.flatMap((entry) =>
+            entry.isIntersecting ? [entry.target] : [],
+          ),
+        );
+        if (visible.length) shown.current?.(visible);
+      },
+      // Half a view ahead, so details are usually there before the row is.
+      { root, rootMargin: "50% 0px" },
+    );
+    for (const row of rows) observer.observe(row);
+    return () => observer.disconnect();
+  }, [watching, rowKeys]);
   return (
     <div
+      ref={palette}
       className="search-palette"
       data-search-palette=""
+      data-modal-tab-switch={views ? "" : undefined}
+      data-search-views={views ? "" : undefined}
       {...highlight.listProps}
     >
       {(scope || scopeAction) && (
@@ -228,16 +403,44 @@ export function SearchChoices({
             }
             return;
           }
+          if (event.key === "ArrowDown" || event.key === "ArrowUp")
+            restore.current = 0;
+          if (
+            views &&
+            event.key === "Tab" &&
+            event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey
+          ) {
+            event.preventDefault();
+            views.onSwitch(event.shiftKey ? -1 : 1);
+            return;
+          }
           highlight.keyDown(event);
         }}
       />
+      {views && <div className="search-palette-views">{views.tabs}</div>}
       <div ref={resultsViewport} className="search-palette-height">
-        <div ref={resultsContent} className="search-palette-scroll">
+        <div
+          ref={resultsContent}
+          className="search-palette-scroll"
+          onWheel={() => {
+            restore.current = 0;
+          }}
+          onPointerDown={() => {
+            restore.current = 0;
+          }}
+          onScroll={(event) => {
+            if (!place || restore.current) return;
+            place.top = event.currentTarget.scrollTop;
+            keepPlace();
+          }}
+        >
           {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: Both grid and listbox support an accessible label. */}
           <div
             id={highlight.listId}
             role={hasControls ? "grid" : "listbox"}
-            aria-label="Search results"
+            aria-label={resultsLabel}
             className="search-palette-results interaction-panel"
           >
             {groups
@@ -245,7 +448,7 @@ export function SearchChoices({
                 ({ destinations, empty }) =>
                   destinations.length || empty !== undefined,
               )
-              .map(({ label, destinations, empty, notice }) => (
+              .map(({ label, hideLabel, destinations, empty, notice }) => (
                 // biome-ignore lint/a11y/useAriaPropsSupportedByRole: Both grid rowgroups and listbox groups are named.
                 <div
                   key={label}
@@ -254,14 +457,16 @@ export function SearchChoices({
                   className="search-palette-group"
                 >
                   <div className="navigation-section" data-buzz-ui="">
-                    <div
-                      className="navigation-section-heading"
-                      aria-hidden={hasControls || undefined}
-                    >
-                      <h2 className="navigation-section-label text-body text-secondary">
-                        {label}
-                      </h2>
-                    </div>
+                    {!hideLabel && (
+                      <div
+                        className="navigation-section-heading"
+                        aria-hidden={hasControls || undefined}
+                      >
+                        <h2 className="navigation-section-label text-body text-secondary">
+                          {label}
+                        </h2>
+                      </div>
+                    )}
                     <div className="navigation-section-rows">
                       {destinations.map(
                         ({
@@ -269,6 +474,7 @@ export function SearchChoices({
                           key,
                           label,
                           detail,
+                          trailing,
                           matches,
                           icon,
                           image,
@@ -347,6 +553,7 @@ export function SearchChoices({
                               }
                               tabIndex={hasControls ? -1 : undefined}
                               data-search-result={hasControls ? "" : undefined}
+                              data-search-key={watching ? key : undefined}
                               data-highlighted={
                                 (hasControls && selected === key) || undefined
                               }
@@ -425,6 +632,7 @@ export function SearchChoices({
                                       )}
                                     </>
                                   }
+                                  trailing={trailing}
                                   onClick={() => highlight.choose(key)}
                                 />
                               </div>

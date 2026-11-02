@@ -1387,6 +1387,48 @@ it("orders public matches by the shared ranks, best first", async () => {
   expect(h.pending).toHaveLength(0);
 });
 
+it("reads the open directory for browsing with descriptions, sharing the search read", async () => {
+  const h = setup();
+  h.channels.ensureList();
+  await h.rosters(0);
+  await h.settled();
+  const id = (n: number) =>
+    `13000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const page = [
+    metadata(relay, id(0), "design", 1_700_000_000, [
+      ["public"],
+      ["t", "stream"],
+      ["about", "Critiques and crits"],
+    ]),
+    metadata(relay, id(1), "ops", 1_700_000_000, [["public"], ["t", "stream"]]),
+  ];
+  // A caller that stops waiting leaves the read for the next one.
+  const gaveUp = new AbortController();
+  const abandoned = h.channels.readDirectory?.({ signal: gaveUp.signal });
+  assert.exists(abandoned);
+  const request = await h.next(39000);
+  gaveUp.abort();
+  await expect(abandoned).rejects.toThrow();
+  const done = h.channels.readDirectory?.();
+  // A search while it runs joins the same read.
+  const search = h.channels.searchPublic?.("zzz");
+  request.respond(page);
+  expect(await done).toEqual({ partial: false });
+  expect(await search).toEqual({ channels: [], partial: false });
+  expect(h.channels.openDirectory?.()).toEqual([
+    {
+      id: id(0),
+      name: "design",
+      description: "Critiques and crits",
+      channelType: "stream",
+    },
+    { id: id(1), name: "ops", channelType: "stream" },
+  ]);
+  // Within the reuse window, browsing again reads nothing.
+  expect(await h.channels.readDirectory?.()).toEqual({ partial: false });
+  expect(h.pending).toHaveLength(0);
+});
+
 it("names the completed public directory's open channels for references, without reading", async () => {
   const h = setup();
   h.channels.ensureList();

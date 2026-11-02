@@ -12,7 +12,8 @@ import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Button } from "../../shared/design-system/ui/Button";
 import type { RegisteredPage } from "../../features/pages/service";
 import { communityDestination } from "../../features/communities/destination";
-import { useRelayConnection } from "../../features/relay/react";
+import { useChannelList, useRelayConnection } from "../../features/relay/react";
+import type { ChannelQueries } from "../../features/relay/contracts";
 import type { KeyBinding } from "../../features/shortcuts/bindings";
 import {
   formatBinding,
@@ -32,8 +33,11 @@ import {
   SearchChoices,
   type SearchInputProps,
   type SearchDestination,
+  type SearchPlace,
 } from "./SearchChoices";
 import { SearchResults } from "./SearchResults";
+import { ChannelDirectoryResults } from "./ChannelDirectoryResults";
+import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { soloDraftTarget } from "../../features/channel-navigation/routes";
 import { usageScope } from "../../features/search/usage";
 
@@ -54,6 +58,13 @@ const CONVERSATION_SEARCH_BINDING: KeyBinding = { key: "f", mod: true };
 const NO_OVERRIDES: ShortcutBindingsSnapshot = { overrides: {}, error: null };
 const noSubscribe = () => () => {};
 const noOverrides = () => NO_OVERRIDES;
+type SearchView = "all" | "channels";
+/** How long a closed search keeps its place for the next opening. */
+const SEARCH_MEMORY = 5 * 60_000;
+const SEARCH_VIEWS = [
+  { value: "all", label: "All" },
+  { value: "channels", label: "Channels" },
+] as const;
 
 export function PageSearch({
   pages,
@@ -67,7 +78,20 @@ export function PageSearch({
   const [open, setOpen] = useState(false);
   const [contentPresent, setContentPresent] = useState(false);
   const [query, setQuery] = useState("");
+  const [tab, setTab] = useState<SearchView>("all");
   const [scopedChannelId, setScopedChannelId] = useState<string>();
+  // Search reopens where it was left, so someone checking channels one by
+  // one returns to the same list. Escape, or a while away, starts fresh.
+  const place = useRef<SearchPlace>({ top: 0, key: "" });
+  const escaped = useRef(false);
+  const remembered = useRef<{
+    query: string;
+    tab: SearchView;
+    place: SearchPlace;
+    at: number;
+  }>(undefined);
+  const latest = useRef({ query, tab, scopedChannelId });
+  latest.current = { query, tab, scopedChannelId };
   const currentTarget = useSyncExternalStore(
     services?.navigation?.subscribe ?? noSubscribe,
     () => services?.navigation?.snapshot().entry.target ?? null,
@@ -78,6 +102,14 @@ export function PageSearch({
   const trigger = useRef<HTMLElement>(null);
   const openRef = useRef(false);
   const setSearchOpen = useCallback((next: boolean) => {
+    if (!next && openRef.current) {
+      const { query, tab, scopedChannelId } = latest.current;
+      remembered.current =
+        escaped.current || scopedChannelId
+          ? undefined
+          : { query, tab, place: { ...place.current }, at: Date.now() };
+      escaped.current = false;
+    }
     openRef.current = next;
     if (next) setContentPresent(true);
     setOpen(next);
@@ -88,7 +120,11 @@ export function PageSearch({
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : trigger.current;
-    setQuery("");
+    const memory = remembered.current;
+    const kept = memory && Date.now() - memory.at < SEARCH_MEMORY;
+    setQuery(kept ? memory.query : "");
+    setTab(kept ? memory.tab : "all");
+    place.current = kept ? { ...memory.place } : { top: 0, key: "" };
     setScopedChannelId(undefined);
     setSearchOpen(true);
   }, [setSearchOpen]);
@@ -100,6 +136,8 @@ export function PageSearch({
         ? document.activeElement
         : trigger.current;
     setQuery("");
+    setTab("all");
+    place.current = { top: 0, key: "" };
     setScopedChannelId(currentTarget.channelId);
     setSearchOpen(true);
   }, [currentTarget, setSearchOpen]);
@@ -182,6 +220,10 @@ export function PageSearch({
       <Dialog
         open={open}
         onOpenChange={setSearchOpen}
+        onEscape={() => {
+          escaped.current = true;
+          return false;
+        }}
         title={scopedChannelId ? "Search this conversation" : "Search Buzz"}
         footerGap="none"
         motion="default"
@@ -220,6 +262,12 @@ export function PageSearch({
         {contentPresent &&
           (services ? (
             <CommunitySearch
+              tab={tab}
+              onTabChange={(next) => {
+                place.current = { top: 0, key: "" };
+                setTab(next);
+              }}
+              place={place.current}
               services={services}
               pages={destinations}
               query={query}
@@ -260,6 +308,9 @@ export function PageSearch({
 }
 
 function CommunitySearch({
+  tab,
+  onTabChange,
+  place,
   services,
   pages,
   query,
@@ -273,6 +324,10 @@ function CommunitySearch({
   isOpen,
   close,
 }: {
+  tab: SearchView;
+  onTabChange: (tab: SearchView) => void;
+  /** Where the results were, kept for the next opening. */
+  place: SearchPlace;
   services: SearchServices;
   pages: readonly SearchDestination[];
   enabled: boolean;
@@ -298,6 +353,30 @@ function CommunitySearch({
     services.communities.snapshot,
   );
   const connection = useRelayConnection(services.communities.relay);
+  // A conversation scope has only All.
+  const view = scopedChannelId ? "all" : tab;
+  // Switching views remounts the results and their tab row. A switch made on
+  // the row keeps focus there; any other switch returns it to the field.
+  const pointer = useRef(false);
+  const focusTab = useRef(false);
+  const switchView = (delta: 1 | -1) => {
+    focusTab.current = false;
+    const index = SEARCH_VIEWS.findIndex(({ value }) => value === view);
+    onTabChange(
+      SEARCH_VIEWS[(index + delta + SEARCH_VIEWS.length) % SEARCH_VIEWS.length]
+        ?.value ?? "all",
+    );
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Runs after each switch's remount.
+  useEffect(() => {
+    if (!focusTab.current) return;
+    focusTab.current = false;
+    document
+      .querySelector<HTMLElement>(
+        '[data-search-palette] [role="tab"][aria-selected="true"]',
+      )
+      ?.focus();
+  }, [view]);
   if (
     !enabled ||
     !client.selected ||
@@ -370,57 +449,131 @@ function CommunitySearch({
     viewer: client.viewer,
     communityOrigin: communityDestination(client.selected).url,
   };
+  const current = () => {
+    const now = services.communities.snapshot();
+    return (
+      isOpen() &&
+      now.viewer === scope.viewer &&
+      now.selected === client.selected &&
+      services.communities.relay.snapshot().session === connection.session
+    );
+  };
+  const openConversation = (channelId: string, messageId?: string) => {
+    if (!current() || !connection.session.channels.get?.(channelId)) return;
+    close(messageId ? undefined : channelId);
+    void services.navigation.open({
+      version: 1,
+      kind: "conversation",
+      scope,
+      channelId,
+      ...(messageId ? { messageId } : {}),
+    });
+  };
+  const views =
+    !scopedChannelId && connection.session.channels.readDirectory
+      ? {
+          resultsLabel: view === "channels" ? "Channels" : "Search results",
+          onSwitch: switchView,
+          place,
+          tabs: (
+            // A pointer switch returns to the field: typing usually follows.
+            <div
+              onPointerDown={() => {
+                pointer.current = true;
+              }}
+            >
+              <Tabs
+                variant="panel"
+                label="Search in"
+                value={view}
+                items={SEARCH_VIEWS}
+                onValueChange={(next) => {
+                  focusTab.current =
+                    !pointer.current &&
+                    document.activeElement?.getAttribute("role") === "tab";
+                  pointer.current = false;
+                  onTabChange(next);
+                }}
+                onReselect={() => {
+                  pointer.current = false;
+                  input.current?.focus();
+                }}
+              />
+            </div>
+          ),
+        }
+      : undefined;
+  if (views && view === "channels")
+    return (
+      <ChannelDirectoryResults
+        key={`${client.selected}:${connection.scope}:${connection.generation}`}
+        session={connection.session}
+        query={query}
+        onQueryChange={onQueryChange}
+        input={input}
+        open={open}
+        views={views}
+        openConversation={openConversation}
+        openPreview={(channelId) => {
+          // Not a joined channel yet: its preview resolves it.
+          if (!current()) return;
+          close();
+          void services.navigation.open({
+            version: 1,
+            kind: "conversation",
+            scope,
+            channelId,
+          });
+        }}
+      />
+    );
   return (
-    <SearchResults
-      inlineSettings={inlineSettings}
-      key={`${client.selected}:${connection.scope}:${connection.generation}`}
-      session={connection.session}
-      query={query}
-      onQueryChange={onQueryChange}
-      input={input}
-      open={open}
-      pages={pages}
-      scopedChannelId={scopedChannelId}
-      currentChannelId={currentChannelId}
-      onScopeChange={onScopeChange}
-      usageScope={usageScope(scope)}
-      sidebarScope={connection.scope}
-      openConversation={(channelId, messageId) => {
-        const current = services.communities.snapshot();
-        if (
-          !isOpen() ||
-          current.viewer !== scope.viewer ||
-          current.selected !== client.selected ||
-          services.communities.relay.snapshot().session !==
-            connection.session ||
-          !connection.session.channels.get?.(channelId)
-        )
-          return;
-        close(messageId ? undefined : channelId);
-        void services.navigation.open({
-          version: 1,
-          kind: "conversation",
-          scope,
-          channelId,
-          ...(messageId ? { messageId } : {}),
-        });
-      }}
-      openAgentSession={(pubkey) => {
-        const current = services.communities.snapshot();
-        const relay = services.communities.relay.snapshot();
-        if (
-          !isOpen() ||
-          current.viewer !== scope.viewer ||
-          current.selected !== client.selected ||
-          relay.session !== connection.session ||
-          !relay.scope
-        )
-          return;
-        close();
-        void services.navigation.open(
-          soloDraftTarget(relay.scope, { agent: pubkey }),
-        );
-      }}
-    />
+    <>
+      {views && <PreloadDirectory channels={connection.session.channels} />}
+      <SearchResults
+        inlineSettings={inlineSettings}
+        key={`${client.selected}:${connection.scope}:${connection.generation}`}
+        session={connection.session}
+        query={query}
+        onQueryChange={onQueryChange}
+        input={input}
+        open={open}
+        pages={pages}
+        scopedChannelId={scopedChannelId}
+        currentChannelId={currentChannelId}
+        onScopeChange={onScopeChange}
+        usageScope={usageScope(scope)}
+        sidebarScope={connection.scope}
+        views={views}
+        openConversation={openConversation}
+        openAgentSession={(pubkey) => {
+          const current = services.communities.snapshot();
+          const relay = services.communities.relay.snapshot();
+          if (
+            !isOpen() ||
+            current.viewer !== scope.viewer ||
+            current.selected !== client.selected ||
+            relay.session !== connection.session ||
+            !relay.scope
+          )
+            return;
+          close();
+          void services.navigation.open(
+            soloDraftTarget(relay.scope, { agent: pubkey }),
+          );
+        }}
+      />
+    </>
   );
+}
+
+/** Starts the open-channel directory read as search opens, so the Channels
+ * tab usually has it by the time it's chosen. The store shares one read, and
+ * leaving search lets it finish for next time. */
+function PreloadDirectory({ channels }: { channels: ChannelQueries }) {
+  const ready = useChannelList(channels).status === "ready";
+  useEffect(() => {
+    if (ready) channels.readDirectory?.().catch(() => {});
+  }, [ready, channels]);
+  return null;
 }

@@ -40,6 +40,7 @@ import type {
   SearchDestination,
   SearchGroup,
   SearchInputProps,
+  SearchViews,
 } from "./SearchChoices";
 import { SearchChoices } from "./SearchChoices";
 import { MatchRank, matchName, matchRank } from "../../features/search/match";
@@ -113,8 +114,11 @@ export function SearchResults({
   openAgentSession,
   usageScope,
   sidebarScope,
+  views,
 }: {
   session: RelaySession;
+  /** Tabs that switch this search to other views of it. */
+  views?: SearchViews | undefined;
   pages: readonly SearchDestination[];
   scopedChannelId?: string | undefined;
   currentChannelId?: string | undefined;
@@ -1186,6 +1190,7 @@ export function SearchResults({
       inlineSettings={inlineSettings}
       query={query}
       onQueryChange={onQueryChange}
+      views={views}
       authorChip={
         showAuthorChip && selectedAuthor
           ? {

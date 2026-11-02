@@ -677,6 +677,39 @@ test("tab switching does nothing behind a modal or with a single tab", () => {
   expect(request.defaultPrevented).toBe(false);
 });
 
+test("a modal with its own tabs takes the request at its focused control, not the tabs behind it", () => {
+  visibleWorkspace();
+  const received: string[] = [];
+  render(
+    <>
+      <div role="dialog" aria-modal="true">
+        <div
+          data-modal-tab-switch=""
+          ref={(element) => {
+            element?.addEventListener("buzz:previous-tab", (event) => {
+              event.preventDefault();
+              received.push(event.type);
+            });
+          }}
+        >
+          <input aria-label="Search" />
+        </div>
+        <input aria-label="Other field" />
+      </div>
+      <Fixture />
+    </>,
+  );
+  screen.getByRole("textbox", { name: "Search" }).focus();
+  act(() => switchTab("buzz:previous-tab"));
+  expect(received).toEqual(["buzz:previous-tab"]);
+  expect(tab("Thread")).toHaveAttribute("aria-selected", "true");
+  // Outside the tabbed region, the modal still keeps the request.
+  screen.getByRole("textbox", { name: "Other field" }).focus();
+  act(() => switchTab("buzz:previous-tab"));
+  expect(received).toHaveLength(1);
+  expect(tab("Thread")).toHaveAttribute("aria-selected", "true");
+});
+
 test("a consumed tab switch request cannot switch another workspace", () => {
   visibleWorkspace();
   render(
