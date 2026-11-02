@@ -445,7 +445,7 @@ it.each(["buzz.profiles/profile", "buzz.github/object"])(
     expect(onVisitPanel).toHaveBeenLastCalledWith(first);
     onVisitPanel.mockClear();
     act(() => firstTab.close?.());
-    expect(onClosePanel).toHaveBeenCalledWith(first, [second]);
+    expect(onClosePanel).toHaveBeenCalledWith(first, [second], undefined);
     expect(onVisitPanel).not.toHaveBeenCalled();
     expect(h.result.current.items).toHaveLength(1);
   },
