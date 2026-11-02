@@ -45,8 +45,8 @@ const empty = (coordinate: Coordinate): Record<string, unknown> =>
         ? { version: 1, groups: {} }
         : { version: 1, channels: {} };
 const agentKey = /^[0-9a-f]{64}$/;
-/** The main agent the viewer chose. A null one, written by development
- * builds that cleared it, is read as none. */
+/** The main agent the viewer chose, or null when they saved none, as
+ * removing their Bestie does. */
 function mainAgent(value: Record<string, unknown>) {
   const { version, agent, ...rest } = value;
   if (
@@ -55,7 +55,7 @@ function mainAgent(value: Record<string, unknown>) {
     (agent !== null && !(typeof agent === "string" && agentKey.test(agent)))
   )
     throw new Error("Invalid main agent record");
-  return agent ?? undefined;
+  return agent as string | null;
 }
 const cancelled = (signal: AbortSignal) => signal.throwIfAborted();
 const same = (a: unknown, b: unknown) =>
@@ -150,7 +150,12 @@ export function nativeSidebar(transport: ReadTransport) {
   ): Promise<T> {
     const current = await head(coordinate, signal);
     const draft = prepare(current.payload, current.createdAt);
-    if (same(current.payload, draft.next)) return draft.result;
+    // A saved main agent of none matches the empty value but is still a
+    // record, unlike none at all, so it is written even then.
+    const unchanged =
+      same(current.payload, draft.next) &&
+      (current.createdAt > 0 || coordinate !== "main-agent");
+    if (unchanged) return draft.result;
     // Reject unsupported/over-budget writes at the existing projection boundary.
     if (coordinate === "main-agent") mainAgent(draft.next);
     else project(coordinate, draft.next);

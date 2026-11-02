@@ -163,8 +163,8 @@ export interface ReadTransport {
   readonly renameSidebarSection?: SidebarSectionRenameMutator;
   readonly writeSidebarStar?: SidebarStarMutator;
   /** Host-only private account record of the main agent the viewer chose:
-   * undefined when never saved. */
-  readMainAgent?(signal: AbortSignal): Promise<string | undefined>;
+   * null when they saved none, undefined when there is no record. */
+  readMainAgent?(signal: AbortSignal): Promise<string | null | undefined>;
   /** Null saves none. */
   writeMainAgent?(agent: string | null, signal: AbortSignal): Promise<void>;
   readonly profiling?: RelayProfiler;

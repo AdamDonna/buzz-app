@@ -44,9 +44,9 @@ const bea = agent("b");
 /** A community whose account read of the saved Bestie waits until `settle`,
  * or `fail`. */
 function community(channels: readonly ChannelSummary[] = [], account = true) {
-  let settle: (pubkey: string | undefined) => void = () => {};
+  let settle: (pubkey: string | null | undefined) => void = () => {};
   let fail: (error: Error) => void = () => {};
-  const read = new Promise<string | undefined>((resolve, reject) => {
+  const read = new Promise<string | null | undefined>((resolve, reject) => {
     settle = resolve;
     fail = reject;
   });
@@ -69,7 +69,8 @@ function community(channels: readonly ChannelSummary[] = [], account = true) {
     relay,
     write,
     snapshot: snapshot as unknown as RelaySnapshot,
-    settle: async (pubkey: string | undefined) => {
+    /** Settles the read with a Bestie, a saved none (null), or no record. */
+    settle: async (pubkey: string | null | undefined) => {
       settle(pubkey);
       await read;
       await Promise.resolve();
@@ -162,7 +163,7 @@ it("stops every agent's check-ins once the account is read to have no Bestie", a
   // Not while it is read.
   await Promise.resolve();
   expect(save).not.toHaveBeenCalled();
-  await none.settle(undefined);
+  await none.settle(null);
   await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(4));
   expect(new Set(save.mock.calls.map(([key]) => key))).toEqual(
     new Set([ada.key, cara.key]),
@@ -174,6 +175,19 @@ it("stops every agent's check-ins once the account is read to have no Bestie", a
   stop();
 });
 
+it("leaves every agent's check-ins alone on an account with no record", async () => {
+  const never = community();
+  const cara = agent("c", checkingIn, TIMER);
+  const { agents, save } = host([ada, cara]);
+  const stop = stopFormerCheckIns(never.relay, agents);
+  // Nobody ever chose a Bestie here; either agent may be Bestie in another
+  // community, which shares its instructions.
+  await never.settle(undefined);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(save).not.toHaveBeenCalled();
+  stop();
+});
+
 it("keeps the check-ins of an agent made Bestie while the account is read, or while none is stopped", async () => {
   const none = community();
   const cara = agent("c", checkingIn, TIMER);
@@ -182,7 +196,7 @@ it("keeps the check-ins of an agent made Bestie while the account is read, or wh
   const session = none.relay.snapshot().session as unknown as RelaySession;
   const stop = stopFormerCheckIns(none.relay, agents);
   // Chosen before the read settles: the read's none isn't known.
-  void none.settle(undefined);
+  void none.settle(null);
   await chooseDefaultAgent(session, SCOPE, cara.pubkey);
   await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   await new Promise((resolve) => setTimeout(resolve, 0));

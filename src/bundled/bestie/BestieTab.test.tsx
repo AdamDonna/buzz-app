@@ -49,8 +49,8 @@ function host(types = ["test/echo"], here: Agent[] = [ada, bea]) {
   return { agents, save };
 }
 
-function community(saved: string | undefined, agents = [ada, bea]) {
-  let record = saved;
+function community(saved: string | null | undefined, agents = [ada, bea]) {
+  let record: string | null | undefined = saved;
   const choice = (agent: Agent) => ({
     pubkey: agent.pubkey,
     name: agent.name,
@@ -66,9 +66,9 @@ function community(saved: string | undefined, agents = [ada, bea]) {
   };
   const mainAgent = {
     read: vi.fn(async () => record),
-    // None reads back as no record, as the account's reader does.
+    // None reads back as a saved none, as the account's reader does.
     write: vi.fn(async (agent: string | null) => {
-      record = agent ?? undefined;
+      record = agent;
     }),
   };
   const connection = {
@@ -748,6 +748,26 @@ it("shows no Former Bestie tab while the account's choice is unread or unreadabl
   await act(async () => {});
   expect(former.when?.(remembering)).toBe(false);
   stop?.();
+});
+
+it("shows a Former Bestie tab on an account that saved none, not on one with no record", async () => {
+  const remembering = {
+    ...ada,
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  for (const [record, shows] of [
+    [undefined, false],
+    [null, true],
+  ] as const) {
+    const { relay, mainAgent } = community(record);
+    const former = formerBestieTab(relay, host().agents);
+    const stop = former.subscribe?.(() => {});
+    await act(async () => {});
+    expect(mainAgent.read).toHaveBeenCalled();
+    expect(former.when?.(remembering)).toBe(shows);
+    stop?.();
+    cleanup();
+  }
 });
 
 it("offers no Remove without an account to save none to", async () => {

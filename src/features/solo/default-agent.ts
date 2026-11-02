@@ -11,8 +11,8 @@ import {
 
 // Cached on this device for the account and community (the view scope). A
 // choice made in Agents is also saved to the account, which every install
-// adopts once per session; automatic picks stay on the device, and nothing
-// else ever writes the account's.
+// adopts once per session, as is removing it, which saves none. Automatic
+// picks stay on the device and never write the account's.
 const KEY = "solo:default-agent";
 type Account = NonNullable<RelaySession["mainAgent"]>;
 const adopted = new WeakMap<Account, Promise<void>>();
@@ -33,6 +33,9 @@ const failedChoices = new WeakSet<Account>();
 // Accounts whose saved choice is known: read before any choice here, or
 // confirmed by a save here, and not while a save is pending.
 const known = new WeakSet<Account>();
+// Accounts known to hold a record: a choice or a saved none, read or saved
+// here. A read that found no record leaves an account out.
+const recorded = new WeakSet<Account>();
 const saving = new WeakMap<Account, number>();
 const listeners = new Set<() => void>();
 function notifySaved() {
@@ -54,6 +57,7 @@ async function save(account: Account, agent: string | null) {
     // A failed choice after this falls back to it, not to an older read.
     readValues.set(account, agent ?? undefined);
     known.add(account);
+    recorded.add(account);
   } finally {
     saving.set(account, (saving.get(account) ?? 1) - 1);
   }
@@ -180,7 +184,9 @@ function adopt(account: Account, scope: string) {
   if (!pending) {
     const started = revision(account);
     pending = account.read().then(
-      (agent) => {
+      (record) => {
+        const agent = record ?? undefined;
+        if (record !== undefined) recorded.add(account);
         readValues.set(account, agent);
         readFailures.delete(account);
         if (started !== revision(account)) {
@@ -280,6 +286,10 @@ export function savedAgentStore(session: RelaySession, scope: string) {
     /** Whether the account's choice is known, so an undefined snapshot means
      * none was saved rather than not read yet, or unreadable. */
     known: () => !!account && known.has(account) && !saving.get(account),
+    /** Whether the account is known to hold a record, of a choice or of none
+     * saved. Known without one, nobody ever chose there, which isn't the same
+     * as having removed a choice. */
+    recorded: () => !!account && recorded.has(account),
     subscribe(listener: () => void) {
       if (account) void adopt(account, scope);
       // The device's choice is browser storage; without a window there is none

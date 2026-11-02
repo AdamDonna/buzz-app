@@ -94,9 +94,10 @@ export function subscribePrivateMembers(
  * whenever the saved Bestie or the agents change. A choice made on another
  * device counts once this device reads the account again, which it does once
  * per connection. It acts only on the account's choice once known: a Bestie,
- * or none, when every agent here is stopped. While the choice is loading,
- * unreadable or being saved, or kept only on this device, where an automatic
- * pick looks the same, nobody counts as former. An agent also in another
+ * or a saved none, when every agent here is stopped. An account with no
+ * record never chose, so nobody counts as former, nor while the choice is
+ * loading, unreadable or being saved, or kept only on this device, where an
+ * automatic pick looks the same. An agent also in another
  * community, where it may be Bestie, loses only its timer here, as its
  * instructions are shared. Memory and channels stay as they are. */
 export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
@@ -122,6 +123,10 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
     // Not while the account is read, can't be, or a choice here is saved.
     if (!bestie.known()) return;
     const current = bestie.snapshot();
+    // An account with no record never chose a Bestie, so none is former. An
+    // agent here may be Bestie in another community, which shares its
+    // instructions.
+    if (!current && !bestie.recorded()) return;
     if (current && relaySnapshot.scope)
       rememberBestie(relaySnapshot.scope, current);
     const { agents: here, running = [] } = agents.snapshot();

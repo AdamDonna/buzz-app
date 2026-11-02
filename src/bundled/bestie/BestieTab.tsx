@@ -83,7 +83,7 @@ export function formerBestieTab(
       const current = bestie.snapshot();
       const snapshot = relay.snapshot();
       return (
-        (!!current || bestie.known()) &&
+        (!!current || (bestie.known() && bestie.recorded())) &&
         !!snapshot.session.mainAgent &&
         agent.pubkey !== current &&
         inCommunity(agent, snapshot) &&

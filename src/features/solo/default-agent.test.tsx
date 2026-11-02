@@ -363,7 +363,7 @@ it("a read begun before the delete can't bring the deleted main agent back", asy
 });
 
 function accountSession(
-  saved: string | undefined,
+  saved: string | null | undefined,
   archived: string[] = [],
   archives = "ready",
 ) {
@@ -388,12 +388,13 @@ function accountSession(
     // Resolves with the record as it was when the read began.
     read: vi.fn(() => {
       const record = saved;
-      return new Promise<string | undefined>((resolve) => {
+      return new Promise<string | null | undefined>((resolve) => {
         read = () => resolve(record);
       });
     }),
+    // None reads back as a saved none, as the account's reader does.
     write: vi.fn(async (agent: string | null) => {
-      saved = agent ?? undefined;
+      saved = agent;
     }),
     saved: () => saved,
     resolve: () => read(),
@@ -895,7 +896,7 @@ it("clears the main agent on this device and saves none to the account", async (
   expect(readView("clear", "solo:default-agent", null)).toBe("b".repeat(64));
   await clearDefaultAgent(session, "clear");
   expect(account.write).toHaveBeenLastCalledWith(null);
-  expect(account.saved()).toBeUndefined();
+  expect(account.saved()).toBeNull();
   expect(store.snapshot()).toBeUndefined();
   expect(store.known()).toBe(true);
   expect(readView("clear", "solo:default-agent", null)).toBeNull();
@@ -918,6 +919,34 @@ it("knows the account saved none only once its read succeeded", async () => {
   await act(async () => none.account.resolve());
   expect(read.known()).toBe(true);
   stopNone();
+});
+
+it("tells an account that saved none from one with no record", async () => {
+  const never = accountSession(undefined);
+  const empty = savedAgentStore(never.session, "never");
+  const stopNever = empty.subscribe(() => {});
+  await act(async () => never.account.resolve());
+  expect(empty.known()).toBe(true);
+  expect(empty.recorded()).toBe(false);
+  stopNever();
+
+  const removed = accountSession(null);
+  const none = savedAgentStore(removed.session, "removed");
+  const stopRemoved = none.subscribe(() => {});
+  await act(async () => removed.account.resolve());
+  expect(none.snapshot()).toBeUndefined();
+  expect(none.known()).toBe(true);
+  expect(none.recorded()).toBe(true);
+  stopRemoved();
+
+  // Removing a Bestie here saves a record of none.
+  const cleared = accountSession(undefined);
+  const store = savedAgentStore(cleared.session, "cleared");
+  const stop = store.subscribe(() => {});
+  await act(async () => cleared.account.resolve());
+  await clearDefaultAgent(cleared.session, "cleared");
+  expect(store.recorded()).toBe(true);
+  stop();
 });
 
 it("brings this device's choice back when none can't be saved to the account", async () => {

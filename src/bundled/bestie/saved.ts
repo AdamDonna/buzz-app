@@ -5,7 +5,8 @@ import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import { savedAgentStore } from "../../features/solo/default-agent";
 
 /** The saved Bestie in the connected community, across reconnections.
- * `known`: the account's choice was read, so without a Bestie it saved none. */
+ * `known`: the account's choice was read. `recorded`: the account holds a
+ * record, so known without a Bestie, it saved none rather than never chose. */
 export function savedBestie(relay: RelayData) {
   let current:
     | Readonly<{
@@ -26,10 +27,11 @@ export function savedBestie(relay: RelayData) {
     return current.store;
   };
   const state = (store: ReturnType<typeof savedAgentStore>) =>
-    `${store.snapshot()} ${store.known()}`;
+    `${store.snapshot()} ${store.known()} ${store.recorded()}`;
   return {
     snapshot: () => store().snapshot(),
     known: () => store().known(),
+    recorded: () => store().recorded(),
     subscribe(listener: () => void) {
       // The saved choice's sources also change for unrelated view state, so
       // only a different Bestie, or community, or its becoming known, is
