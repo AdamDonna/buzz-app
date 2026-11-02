@@ -473,7 +473,7 @@ export function createTabs({
       >
         {settingsHost?.typeControl?.(configChanged)}
         <SignInGuidance
-          agent={agent.pubkey}
+          agent={agent.key}
           presetId={saved.preset}
           runtime={runtime}
         />
@@ -703,10 +703,10 @@ export function createTabs({
     close,
   }: AgentViewProps<Config>) {
     const rows = useSyncExternalStore(runtime.subscribe, () =>
-      runtime.conversations(agent.pubkey),
+      runtime.conversations(agent.key),
     );
     const replays = useSyncExternalStore(runtime.subscribe, () =>
-      runtime.replays(agent.pubkey),
+      runtime.replays(agent.key),
     );
     const label = (row: Conversation) =>
       row.title ||
@@ -737,7 +737,7 @@ export function createTabs({
       const abort = new AbortController();
       setRead({ status: "loading" });
       runtime
-        .transcript(agent.pubkey, open, abort.signal)
+        .transcript(agent.key, open, abort.signal)
         .then((transcript) =>
           setRead(
             transcript
@@ -754,7 +754,7 @@ export function createTabs({
             setRead({ status: "error", error: message(reason) }),
         );
       return () => abort.abort();
-    }, [agent.pubkey, open]);
+    }, [agent.key, open]);
     // Focus follows the view: into Back, then back to the opened row's action.
     // Whichever view is shown: a div, or the list's fieldset.
     const here = useRef<HTMLDivElement & HTMLFieldSetElement>(null);

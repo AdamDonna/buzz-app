@@ -395,7 +395,7 @@ it("shows the harness's sign-in methods as its text and rechecks on demand", asy
   });
   render(
     <SettingsTab
-      agent={{ pubkey: "p1", config: start } as Agent<Config>}
+      agent={{ key: "p1", pubkey: "p1", config: start } as Agent<Config>}
       save={async () => {}}
     />,
   );
@@ -426,7 +426,7 @@ it("lists conversations and says when the harness can't replay them", async () =
   });
   render(
     <HistoryTab
-      agent={{ pubkey: "p1", config: start } as Agent<Config>}
+      agent={{ key: "p1", pubkey: "p1", config: start } as Agent<Config>}
       save={async () => {}}
     />,
   );
@@ -451,7 +451,7 @@ it("mounts Settings and History on the real runtime, which React calls unbound",
     cache: modelCache(localStorage),
     runtime,
   });
-  const agent = { pubkey: "p1", config: start } as Agent<Config>;
+  const agent = { key: "p1", pubkey: "p1", config: start } as Agent<Config>;
   render(<SettingsTab agent={agent} save={async () => {}} />);
   render(<HistoryTab agent={agent} save={async () => {}} />);
   expect(screen.getByRole("button", { name: "Confirm command" })).toBeVisible();
@@ -482,7 +482,7 @@ describe("History focus", () => {
     });
     render(
       <HistoryTab
-        agent={{ pubkey: "p1", config: start } as Agent<Config>}
+        agent={{ key: "p1", pubkey: "p1", config: start } as Agent<Config>}
         save={async () => {}}
         {...props}
       />,

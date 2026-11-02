@@ -154,6 +154,7 @@ function setup(
   );
   const published: { content: string; tags: string[][] }[] = [];
   const agent = {
+    key: self,
     pubkey: self,
     name: "Opal",
     owner: alice,
@@ -262,6 +263,27 @@ describe("AcpRuntime", () => {
         signingAuthority: "workflow-authority",
       }),
     );
+  });
+
+  it("keeps each community membership's handle for its own sessions' tools", async () => {
+    const config = await confirmed();
+    const { fake, deliver, sync } = setup();
+    sync(config);
+    await deliver(message("1", "@Opal hello"), config).run;
+    await vi.waitFor(() => expect(fake.harnesses[0]?.turns).toHaveLength(1));
+    const [home] = fake.harnesses;
+    const homeSession = home?.turns[0]?.sessionId ?? "";
+    // The same identity, delivered to in another community it belongs to.
+    const away = { key: `${self}@away.example`, pubkey: self, owner: alice };
+    await deliver(message("2", "@Opal over here"), config, undefined, {
+      agent: away,
+    } as Partial<Delivery>).run;
+    await home?.mcp(homeSession, "tools/list");
+    expect(appClient).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: self }),
+      expect.anything(),
+    );
+    expect(appClient).not.toHaveBeenLastCalledWith(away, expect.anything());
   });
 
   it("hands a Solo chat's Canvas to each turn, and a shared channel's to none", async () => {
@@ -1126,7 +1148,7 @@ describe("AcpRuntime", () => {
     });
     sync(config);
     const delivery = {
-      agent: { pubkey: self, name: "Opal", owner: alice },
+      agent: { key: self, pubkey: self, name: "Opal", owner: alice },
       config,
     } as unknown as Delivery;
     const done = runtime.runOnce({
@@ -1174,7 +1196,7 @@ describe("AcpRuntime", () => {
     // A watch or timer is checked the same way.
     const wake = await runtime.runOnce({
       delivery: {
-        agent: { pubkey: self, name: "Opal", owner: alice },
+        agent: { key: self, pubkey: self, name: "Opal", owner: alice },
         config,
         ...synced,
       } as unknown as Delivery,

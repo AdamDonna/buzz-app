@@ -6,6 +6,7 @@
 // native-held key; the runtime only reports a turn that fails.
 // The Buzz side (owner check, conversation context, memory, replies) follows
 // the goose runtime's.
+import { type AgentKey, pubkeyOf } from "../../features/agents/membership";
 import type { Context, Memories } from "../../buzz-mcp/client";
 import {
   abortable,
@@ -177,7 +178,7 @@ export class AcpRuntime {
   constructor(
     private readonly host: Host,
     /** The owner's connection to each agent's own community. */
-    private readonly relay: (pubkey: string) => RelayData | undefined,
+    private readonly relay: (key: AgentKey) => RelayData | undefined,
     /** The agent's `core` memory as the host keeps it (`Agents.core`). */
     private readonly core: Agents["core"],
     /** The tools plugins add to every session now. */
@@ -214,16 +215,16 @@ export class AcpRuntime {
    * starts the next generation, while a session still on the old one keeps
    * its process until it is done. Removed agents stop theirs. */
   sync(agents: readonly Agent[]) {
-    const current = new Set(agents.map((agent) => agent.pubkey));
-    for (const [pubkey, entry] of this.agents)
-      if (!current.has(pubkey)) {
+    const current = new Set(agents.map((agent) => agent.key));
+    for (const [key, entry] of this.agents)
+      if (!current.has(key)) {
         this.stop(entry);
-        this.agents.delete(pubkey);
+        this.agents.delete(key);
       }
     for (const agent of agents) {
       const next = config(agent.config);
-      const entry = this.agents.get(agent.pubkey);
-      if (!entry) this.entry(agent.pubkey, next).name = agent.name;
+      const entry = this.agents.get(agent.key);
+      if (!entry) this.entry(agent.key, next).name = agent.name;
       else if (
         JSON.stringify(entry.config) !== JSON.stringify(next) ||
         entry.name !== agent.name
@@ -240,11 +241,11 @@ export class AcpRuntime {
   }
 
   /** Conversations each agent has a session for, for its status view. */
-  sessions(pubkey: string) {
-    let view = this.views.get(pubkey);
+  sessions(agent: AgentKey) {
+    let view = this.views.get(agent);
     if (!view) {
-      view = this.agents.get(pubkey)?.sessions.snapshot() ?? [];
-      this.views.set(pubkey, view);
+      view = this.agents.get(agent)?.sessions.snapshot() ?? [];
+      this.views.set(agent, view);
     }
     return view;
   }
@@ -294,7 +295,7 @@ export class AcpRuntime {
     // The harness runs commands as you; mentions need owner or delegated
     // authority.
     {
-      const snapshot = this.relay(agent.pubkey)?.snapshot();
+      const snapshot = this.relay(agent.key)?.snapshot();
       if (
         !(await fromOwner(trigger.event, agent.owner, {
           agent: agent.pubkey,
@@ -313,7 +314,7 @@ export class AcpRuntime {
       }
       signal.throwIfAborted();
     }
-    const entry = this.entry(agent.pubkey, settings);
+    const entry = this.entry(agent.key, settings);
     entry.handle = agent;
     entry.team = team ?? "";
     const { event } = trigger;
@@ -322,12 +323,12 @@ export class AcpRuntime {
     if (!channel) return;
     // Frozen for the turn: its key, prompt, tools and posts all follow it.
     const topLevel = await soloChat(
-      () => this.relay(agent.pubkey),
+      () => this.relay(agent.key),
       agent.owner,
       channel,
       signal,
     );
-    const place = this.place(agent.pubkey, event, channel, topLevel);
+    const place = this.place(agent.key, event, channel, topLevel);
     // A live or opening session keeps the conversation it was opened for,
     // under its own pinned scope; only otherwise does today's scope decide.
     const key =
@@ -342,7 +343,7 @@ export class AcpRuntime {
     const first = !entry.sessions.seen(key);
     // Owed from now until a committed prompt has carried it: a turn that
     // fails, is refused or is stopped leaves it for the next prompt.
-    const owed = localOwed(this.storage, agent.pubkey);
+    const owed = localOwed(this.storage, agent.key);
     owed.set(key, [...owed.get(key).filter((id) => id !== event.id), event.id]);
     const done = entry.sessions.deliver(key, "", event.created_at, {
       // Built when it is sent, from what the session has definitely seen.
@@ -355,7 +356,7 @@ export class AcpRuntime {
         owed.set(key, unpaid);
         if (from.ids.includes(event.id)) return undefined;
         const turn = await this.turn(
-          agent.pubkey,
+          agent.key,
           event,
           channel,
           topLevel,
@@ -427,7 +428,7 @@ export class AcpRuntime {
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
     const { agent, team } = delivery;
-    const entry = this.entry(agent.pubkey, config(delivery.config));
+    const entry = this.entry(agent.key, config(delivery.config));
     entry.handle = agent;
     entry.team = team ?? "";
     const done = entry.sessions.runOnce(
@@ -617,7 +618,7 @@ export class AcpRuntime {
       (item) =>
         (item.created_at >= from.at || owed.includes(item.id)) &&
         !from.ids.includes(item.id) &&
-        (fresh || item.pubkey !== self),
+        (fresh || item.pubkey !== pubkeyOf(self)),
     );
     // Owed messages come first; the newest others fill what is left.
     const others = candidates.filter((item) => !owed.includes(item.id));
@@ -664,14 +665,15 @@ export class AcpRuntime {
   }
 
   /** The agent's entry, made from `initial` if it has none. */
-  private entry(pubkey: string, initial: Config): Entry {
-    const existing = this.agents.get(pubkey);
+  private entry(agent: AgentKey, initial: Config): Entry {
+    const pubkey = pubkeyOf(agent);
+    const existing = this.agents.get(agent);
     if (existing) return existing;
     const entry: Entry = {
       config: initial,
       team: "",
       generation: { id: ++this.generations, launch: initial },
-      store: localSessions(this.storage, pubkey),
+      store: localSessions(this.storage, agent),
       sessions: undefined as unknown as AgentSessions<Snap>,
       harness: new HarnessProcess(
         (id, options) => this.spawn(id, options),
@@ -689,15 +691,15 @@ export class AcpRuntime {
         entry.config.workspace;
       const client = handle && {
         ...appClient(handle, {
-          relayAuthor: this.relay(pubkey)?.snapshot().session.relayAuthor,
+          relayAuthor: this.relay(agent)?.snapshot().session.relayAuthor,
           signingAuthority:
-            this.relay(pubkey)?.snapshot().session.workflowAuthority,
+            this.relay(agent)?.snapshot().session.workflowAuthority,
           read: (path) => this.readFile(path, workspace),
-          memories: (slug) => this.memories(pubkey, slug),
+          memories: (slug) => this.memories(agent, slug),
         }),
         remember: async (slug: string, body: string, after: number) => {
           await handle.remember(slug, body, after);
-          this.forgetMemories(pubkey);
+          this.forgetMemories(agent);
         },
       };
       const context = (pinned && entry.places.get(pinned as Snap)) || {};
@@ -710,7 +712,7 @@ export class AcpRuntime {
       added: addedKey(this.added()),
     });
     const launchFor = async ({ config: c, team, name }: Snap) => {
-      const memory = await this.core(pubkey);
+      const memory = await this.core(agent);
       return {
         workspace: c.workspace,
         systemPrompt: systemPrompt({
@@ -760,19 +762,19 @@ export class AcpRuntime {
       launch: () => launchFor(snap()),
     };
     entry.sessions = new AgentSessions<Snap>(options);
-    this.agents.set(pubkey, entry);
+    this.agents.set(agent, entry);
     return entry;
   }
 
   /** Whether the agent's last turn asked its owner to sign in. */
-  signIn(pubkey: string) {
-    return this.agents.get(pubkey)?.signIn;
+  signIn(agent: AgentKey) {
+    return this.agents.get(agent)?.signIn;
   }
 
   /** Restarts the agent's harness after its owner signed in; the error, if
    * it still can't start. */
-  async recheck(pubkey: string): Promise<string | undefined> {
-    const entry = this.agents.get(pubkey);
+  async recheck(agent: AgentKey): Promise<string | undefined> {
+    const entry = this.agents.get(agent);
     if (!entry) return "This agent isn't running.";
     const result = await entry.sessions.reconnect();
     if (result.ok) entry.signIn = undefined;
@@ -782,13 +784,13 @@ export class AcpRuntime {
 
   /** The agent's conversations on this device, most recent first, with the
    * live ones' status. */
-  conversations(pubkey: string): readonly Conversation[] {
-    let list = this.lists.get(pubkey);
+  conversations(agent: AgentKey): readonly Conversation[] {
+    let list = this.lists.get(agent);
     if (list) return list;
-    const entry = this.agents.get(pubkey);
-    const live = new Map(this.sessions(pubkey).map((view) => [view.key, view]));
+    const entry = this.agents.get(agent);
+    const live = new Map(this.sessions(agent).map((view) => [view.key, view]));
     const saved = new Map(
-      (entry?.store ?? localSessions(this.storage, pubkey)).list(),
+      (entry?.store ?? localSessions(this.storage, agent)).list(),
     );
     const keys = new Set([...saved.keys(), ...live.keys()]);
     list = [...keys]
@@ -810,22 +812,22 @@ export class AcpRuntime {
         ];
       })
       .sort((a, b) => b.at - a.at);
-    this.lists.set(pubkey, list);
+    this.lists.set(agent, list);
     return list;
   }
 
-  replays(pubkey: string) {
-    return this.agents.get(pubkey)?.replays;
+  replays(agent: AgentKey) {
+    return this.agents.get(agent)?.replays;
   }
 
   /** A saved conversation's transcript, replayed by a short-lived harness
    * process on the current launch; undefined if the harness can't. */
   async transcript(
-    pubkey: string,
+    agent: AgentKey,
     key: string,
     signal: AbortSignal,
   ): Promise<Transcript | undefined> {
-    const entry = this.agents.get(pubkey);
+    const entry = this.agents.get(agent);
     const sessionId = entry?.store.load(key)?.id;
     if (!entry || !sessionId) return undefined;
     const launch = entry.config;
@@ -845,11 +847,11 @@ export class AcpRuntime {
 
   /** The agent's memory, or only entry `slug`, read back through the owner's
    * session: it is encrypted to the owner, so no agent key is needed. */
-  private memories(pubkey: string, slug?: string): Promise<Memories> {
-    const key = `${pubkey}\0${slug ?? ""}`;
+  private memories(agent: AgentKey, slug?: string): Promise<Memories> {
+    const key = `${agent}\0${slug ?? ""}`;
     let reading = this.reading.get(key);
     if (!reading) {
-      const started = this.readMemories(pubkey, slug).finally(() => {
+      const started = this.readMemories(agent, slug).finally(() => {
         if (this.reading.get(key) === started) this.reading.delete(key);
       });
       this.reading.set(key, started);
@@ -861,15 +863,18 @@ export class AcpRuntime {
   }
   /** After a memory write, a read that may have started before it is not
    * shared with later callers. */
-  private forgetMemories(pubkey: string) {
+  private forgetMemories(agent: AgentKey) {
     for (const key of this.reading.keys())
-      if (key.startsWith(`${pubkey}\0`)) this.reading.delete(key);
+      if (key.startsWith(`${agent}\0`)) this.reading.delete(key);
   }
-  private async readMemories(pubkey: string, slug?: string): Promise<Memories> {
-    const snapshot = this.relay(pubkey)?.snapshot();
+  private async readMemories(
+    agent: AgentKey,
+    slug?: string,
+  ): Promise<Memories> {
+    const snapshot = this.relay(agent)?.snapshot();
     if (snapshot?.status !== "ready") throw new Error("Buzz is not connected");
     return snapshot.session.agentMemories.read(
-      pubkey,
+      pubkeyOf(agent),
       AbortSignal.timeout(READ_TIMEOUT_MS),
       slug,
     );
