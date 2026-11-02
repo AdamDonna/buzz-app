@@ -2142,7 +2142,13 @@ it("does not read messages for punctuation-only operands after normalization", a
   }
 });
 
-it("reads no search for one typed character and says why", async () => {
+/** Message searches (not people or channel lookups) a session sends. */
+const isMessageSearch = (filters: readonly Filter[]) =>
+  filters.some(
+    (filter) => filter.search !== undefined && !!filter.kinds?.includes(9),
+  );
+
+it("reads no message search until the last word has three characters", async () => {
   vi.useFakeTimers();
   const relay = keypair(),
     viewer = keypair();
@@ -2150,46 +2156,63 @@ it("reads no search for one typed character and says why", async () => {
   const owner = createRelaySession({
     ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
     query(filters) {
-      if (filters.some((filter) => filter.search !== undefined))
+      if (isMessageSearch(filters as Filter[]))
         searches.push(filters as Filter[]);
       return Promise.resolve([]);
     },
   });
+  const props = {
+    session: owner.session,
+    onQueryChange: () => {},
+    input: createRef<HTMLInputElement>(),
+    pages: [],
+    openConversation: () => {},
+  };
   try {
-    render(
-      <SearchResults
-        session={owner.session}
-        query="a"
-        onQueryChange={() => {}}
-        input={createRef()}
-        pages={[]}
-        openConversation={() => {}}
-      />,
-    );
+    const view = render(<SearchResults {...props} query="ab" />);
     await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
     expect(searches).toHaveLength(0);
     expect(
-      screen.getByText("Type at least 2 characters to search messages."),
+      screen.getByText("Type at least 3 characters to search messages."),
     ).toBeVisible();
     expect(
       screen.queryByText("No matching messages in accessible conversations."),
     ).toBeNull();
+
+    // The relay prefix-matches the last word, so completed words before it
+    // do not make a short one searchable.
+    view.rerender(<SearchResults {...props} query="project pl" />);
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(searches).toHaveLength(0);
+    expect(
+      screen.getByText(
+        "Type at least 3 characters in the last word to search messages.",
+      ),
+    ).toBeVisible();
+
+    view.rerender(<SearchResults {...props} query="project pla" />);
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(searches).toEqual([
+      [expect.objectContaining({ search: "project pla" })],
+    ]);
   } finally {
     cleanup();
     owner.dispose();
   }
 });
 
-it("still searches one character of text narrowed by an in: operator", async () => {
+it("an in: operator does not lower the message search minimum", async () => {
   vi.useFakeTimers();
   const relay = keypair(),
     viewer = keypair();
-  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const searches: Filter[][] = [];
   const owner = createRelaySession({
-    ...wire.transport,
-    query(filters, signal) {
-      if (filters.some((filter) => filter.search !== undefined))
-        return wire.transport.query(filters, signal);
+    ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+    query(filters) {
+      if (isMessageSearch(filters as Filter[])) {
+        searches.push(filters as Filter[]);
+        return Promise.resolve([]);
+      }
       return Promise.resolve(
         [
           metadata(relay, "crew", "crew"),
@@ -2200,29 +2223,36 @@ it("still searches one character of text narrowed by an in: operator", async () 
       );
     },
   });
+  const props = {
+    session: owner.session,
+    onQueryChange: () => {},
+    input: createRef<HTMLInputElement>(),
+    pages: [],
+    openConversation: () => {},
+  };
   try {
-    render(
-      <SearchResults
-        session={owner.session}
-        query="in:#crew a"
-        onQueryChange={() => {}}
-        input={createRef()}
-        pages={[]}
-        openConversation={() => {}}
-      />,
-    );
+    const view = render(<SearchResults {...props} query="in:#crew ab" />);
     await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
-    expect(wire.next().filters).toEqual([
-      {
-        kinds: [40002, 40008, 9],
-        search: "a",
-        search_mode: "prefix",
-        limit: 20,
-        "#h": ["crew"],
-      },
+    expect(searches).toHaveLength(0);
+    expect(
+      screen.getByText("Type at least 3 characters to search messages."),
+    ).toBeVisible();
+
+    view.rerender(<SearchResults {...props} query="in:#crew abc" />);
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    expect(searches).toEqual([
+      [
+        {
+          kinds: [40002, 40008, 9],
+          search: "abc",
+          search_mode: "prefix",
+          limit: 20,
+          "#h": ["crew"],
+        },
+      ],
     ]);
     expect(
-      screen.queryByText("Type at least 2 characters to search messages."),
+      screen.queryByText("Type at least 3 characters to search messages."),
     ).toBeNull();
   } finally {
     cleanup();

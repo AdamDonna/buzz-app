@@ -73,6 +73,10 @@ the interface unless an available tool actually supports that action.
   Changing this choice does not change existing members' roles. Ordinary
   participants have no role caption; Owner, Admin, and Viewing only mark
   exceptions. Use a person's actions menu to change their role when permitted.
+- **Message search** treats the last word you type as the start of a word, so
+  it searches only once that word has at least three characters, even with
+  `from:` or `in:`. A shorter last word shows how many characters to type, not
+  "no results".
 - **File sharing** is available through **Attach files** in the composer when
   uploads are available. Files and media are shared with the conversation's
   members. Do not promise support for every file type or size.

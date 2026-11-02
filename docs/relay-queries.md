@@ -308,6 +308,13 @@ cannot grant a preview; read/capacity failures remain visible rather than becomi
 an empty successful page. Other search entities and feed queries retain their
 existing finite-read behavior.
 
+Message search text reaches the relay only once its last word has three
+characters, with or without `from:`/`in:` operators: the relay prefix-matches
+that word and ranks every match, so it answers a shorter one with no hits. Until
+then the palette says how many characters to type. Operators without text still
+read newest history, and people and channel lookups keep the shared
+two-character minimum.
+
 Only relay-authored explicit `public` metadata without `private`, `hidden`, or
 DM type grants nonmember reading. Signed membership still owns the joined roster.
 `channels.get(id)` exposes separately resolved summaries (`readOnly: true`), while
