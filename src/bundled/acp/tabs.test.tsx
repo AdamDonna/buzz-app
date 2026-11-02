@@ -100,6 +100,21 @@ it("confirms the exact launch without showing env values other than PATH", async
   expect(await screen.findByRole("status")).toHaveTextContent(READY);
 });
 
+it("keeps keyboard focus on Confirm command after confirming, and Tab goes on to Check", async () => {
+  const { saves } = mount();
+  const trigger = screen.getByRole("button", { name: "Confirm command" });
+  trigger.focus();
+  await userEvent.keyboard("{Enter}");
+  const confirm = await screen.findByRole("button", { name: "Confirm" });
+  confirm.focus();
+  await userEvent.keyboard("{Enter}");
+  await waitFor(() => expect(saves).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(trigger).toHaveFocus());
+  await userEvent.tab();
+  expect(screen.getByRole("button", { name: "Check" })).toHaveFocus();
+});
+
 it("drops the approval when a launch setting is saved changed", async () => {
   const { saves } = mount();
   await userEvent.click(

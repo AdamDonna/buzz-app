@@ -650,6 +650,8 @@ export function createTabs({
           </Button>
           <Button
             disabled={configChanged || current || problems(saved).length > 0}
+            // Confirming disables it, and focus comes back here from the dialog.
+            focusableWhenDisabled
             onClick={() => setConfirming(true)}
           >
             Confirm command
