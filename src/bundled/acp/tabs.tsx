@@ -10,6 +10,7 @@ import {
 import type { Transcript } from "../../features/agents/activity-transcript";
 import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
+import { useOpenTranscript } from "../../features/agents/OpenedConversation";
 import type {
   AgentCreateProps,
   AgentViewProps,
@@ -695,14 +696,37 @@ export function createTabs({
 
   /** The agent's conversations on this device, each with its transcript
    * when the harness can replay it. */
-  function HistoryTab({ agent }: AgentViewProps<Config>) {
+  function HistoryTab({
+    agent,
+    conversation,
+    initialTranscript,
+    close,
+  }: AgentViewProps<Config>) {
     const rows = useSyncExternalStore(runtime.subscribe, () =>
       runtime.conversations(agent.pubkey),
     );
     const replays = useSyncExternalStore(runtime.subscribe, () =>
       runtime.replays(agent.pubkey),
     );
-    const [open, setOpen] = useState<string>();
+    const label = (row: Conversation) =>
+      row.title ||
+      `${row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
+    // The conversation the agent was opened from: its thread, else its channel.
+    const at = (root?: string) =>
+      rows.find(
+        (row) =>
+          row.replayable &&
+          row.channelId === conversation?.channelId &&
+          row.root === root,
+      );
+    const from = conversation && (at(conversation.rootId) ?? at());
+    const transcript = useOpenTranscript(
+      conversation,
+      label,
+      initialTranscript && { initial: from, ...initialTranscript },
+      close,
+    );
+    const open = transcript.open?.key;
     const [read, setRead] = useState<
       | { status: "loading" }
       | { status: "done"; transcript: Transcript }
@@ -744,21 +768,15 @@ export function createTabs({
       (open !== undefined
         ? view?.querySelector<HTMLElement>("[data-back]")
         : (actions.find((action) => action.dataset.row === opened.current) ??
-          actions[0])
+          actions[0] ??
+          view)
       )?.focus();
     }, [open]);
-    const label = (row: Conversation) =>
-      row.title ||
-      `${row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
     if (open !== undefined)
       return (
         <div ref={here} className="grid gap-4">
           <div>
-            <Button
-              variant="ghost"
-              data-back
-              onClick={() => setOpen(undefined)}
-            >
+            <Button variant="ghost" data-back onClick={() => transcript.back()}>
               Back
             </Button>
           </div>
@@ -777,9 +795,20 @@ export function createTabs({
           )}
         </div>
       );
-    if (!rows.length) return <p>No conversations on this device yet.</p>;
+    if (!rows.length)
+      return (
+        <div ref={here} tabIndex={-1}>
+          No conversations on this device yet.
+        </div>
+      );
     return (
-      <div ref={here} className="grid gap-2">
+      <div
+        ref={here}
+        tabIndex={-1}
+        role="group"
+        aria-label="Conversations"
+        className="grid gap-2"
+      >
         {replays === false && <p>This harness can't replay its transcripts.</p>}
         <ul className="grid gap-1">
           {rows.map((row) => (
@@ -793,7 +822,7 @@ export function createTabs({
                 <Button
                   variant="ghost"
                   data-row={row.key}
-                  onClick={() => setOpen(row.key)}
+                  onClick={() => transcript.show(row)}
                 >
                   Transcript
                 </Button>

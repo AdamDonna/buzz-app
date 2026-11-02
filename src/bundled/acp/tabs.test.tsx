@@ -11,7 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Agent } from "../../features/agents/service";
+import type { Agent, AgentViewProps } from "../../features/agents/service";
 import { approve, approved, type Config, DEFAULT_CONFIG } from "./config";
 import { READY } from "./harness";
 import { launchKey, modelCache } from "./models";
@@ -467,8 +467,14 @@ describe("History focus", () => {
   function history(
     transcript: TabsRuntime["transcript"],
     rows = [row("c1"), row("c2")],
+    props: Partial<AgentViewProps<Config>> = {},
+    replays: TabsRuntime["replays"] = () => undefined,
   ) {
-    const runtime = fakeRuntime({ conversations: () => rows, transcript });
+    const runtime = fakeRuntime({
+      conversations: () => rows,
+      transcript,
+      replays,
+    });
     const { HistoryTab } = createTabs({
       check: vi.fn(),
       cache: modelCache(localStorage),
@@ -478,6 +484,7 @@ describe("History focus", () => {
       <HistoryTab
         agent={{ pubkey: "p1", config: start } as Agent<Config>}
         save={async () => {}}
+        {...props}
       />,
     );
     return rows;
@@ -515,5 +522,62 @@ describe("History focus", () => {
     await userEvent.keyboard("{Enter}");
     expect(actions()).toHaveLength(1);
     expect(actions()[0]).toHaveFocus();
+  });
+
+  it("opens the thread's transcript when it arrives from agent activity, then goes back", async () => {
+    const transcript = vi.fn(() => new Promise<never>(() => {}));
+    const done = vi.fn();
+    history(
+      transcript,
+      [row("c1"), { ...row("c1/r1"), channelId: "c1", root: "r1" }],
+      {
+        conversation: { channelId: "c1", rootId: "r1" },
+        initialTranscript: { opening: 1, done },
+      },
+    );
+    expect(transcript).toHaveBeenCalledWith("p1", "c1/r1", expect.anything());
+    expect(done).toHaveBeenCalled();
+    expect(back()).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(actions()[1]).toHaveFocus();
+  });
+
+  it("falls back to the channel's transcript when the thread has none", () => {
+    const transcript = vi.fn(() => new Promise<never>(() => {}));
+    history(transcript, [row("c1"), row("c2")], {
+      conversation: { channelId: "c1", rootId: "r9" },
+      initialTranscript: { opening: 1, done: () => {} },
+    });
+    expect(transcript).toHaveBeenCalledWith("p1", "c1", expect.anything());
+  });
+
+  it("returns focus to the list when no Transcript action is left", async () => {
+    let replays: boolean | undefined;
+    history(
+      async () => {
+        replays = false;
+        return undefined;
+      },
+      undefined,
+      {},
+      () => replays,
+    );
+    actions()[0]?.focus();
+    await userEvent.keyboard("{Enter}");
+    await screen.findByRole("alert");
+    await userEvent.keyboard("{Enter}");
+    expect(screen.queryByRole("button", { name: "Transcript" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Conversations" })).toHaveFocus();
+  });
+
+  it("returns focus to the empty state when every row is gone", async () => {
+    const rows = history(() => new Promise(() => {}));
+    actions()[0]?.focus();
+    await userEvent.keyboard("{Enter}");
+    rows.length = 0;
+    await userEvent.keyboard("{Enter}");
+    expect(
+      screen.getByText("No conversations on this device yet."),
+    ).toHaveFocus();
   });
 });
