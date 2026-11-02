@@ -1064,9 +1064,42 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
     await menu.getByRole("menuitem", { name: "View profile" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(profileTab).toBeFocused();
-    await profileTab.press("Escape");
+    if (entry === "ContextMenu") {
+      await page.evaluate(() => {
+        const go = history.go.bind(history);
+        const pending = [];
+        history.go = (delta) => pending.push(delta);
+        window.profileReturnPending = () => pending.length;
+        window.releaseProfileReturn = () => {
+          history.go = go;
+          for (const delta of pending) go(delta);
+        };
+      });
+      try {
+        await profileTab.press("Escape");
+        await expect(panel).toHaveCount(0);
+        await expect
+          .poll(() => page.evaluate(() => window.profileReturnPending()))
+          .toBe(1);
+        // Local tab removal is not completion of native history traversal.
+        // The opener becomes usable only after the return route commits.
+        await expect(members).not.toBeFocused();
+      } finally {
+        await page.evaluate(() => window.releaseProfileReturn());
+      }
+    } else await profileTab.press("Escape");
     await expect(members).toBeFocused();
     await members.press("Enter");
+    if (entry === "ContextMenu") {
+      await expect(dialog).toBeVisible();
+      expect(
+        (
+          await page.evaluate(() =>
+            window.profilesFixture.navigation.snapshot(),
+          )
+        ).entry.target.detail,
+      ).toBeUndefined();
+    }
   }
   await dialog.getByRole("button", { name: "Close" }).click();
   await page.evaluate(() =>
