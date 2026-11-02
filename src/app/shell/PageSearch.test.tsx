@@ -761,10 +761,10 @@ it("opens a Settings section from overall search, never from a conversation's", 
     // A community section names only its section; select() adds the
     // selected community's scope.
     await user.click(screen.getByRole("button", { name: "Search Buzz" }));
-    await user.type(
-      await screen.findByRole("combobox", { name: "Search Buzz" }),
-      "local settings",
-    );
+    // Search reopens on the kept text, selected, so typing replaces it.
+    const field = await screen.findByRole("combobox", { name: "Search Buzz" });
+    await vi.waitFor(() => expect(field).toHaveFocus());
+    await user.keyboard("local settings");
     await user.click(screen.getByRole("option", { name: /^Local settings/ }));
     expect(select).toHaveBeenLastCalledWith("settings", {
       section: "local-settings",
