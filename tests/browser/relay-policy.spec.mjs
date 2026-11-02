@@ -92,5 +92,8 @@ test("restores the pin before connecting and rejects a forbidden join and pinned
         };
       }),
     )
-    .toEqual({ selected: "secondary", ids: ["primary", "secondary"] });
+    .toEqual({
+      selected: "secondary",
+      ids: ["primary", "secondary", "https://blocked.example"],
+    });
 });
