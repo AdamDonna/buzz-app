@@ -433,6 +433,8 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     id: "native",
     title: "Native",
     execution: true,
+    protection: true,
+    retire: vi.fn(async () => {}),
     defaults: () => ({ config: {} }),
     run: vi.fn(),
   });
@@ -468,6 +470,14 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     target: "guest-1",
     workspace: "/work/task",
   });
+  const setProtection = vi.fn(async () => {});
+  Object.assign(native, { setProtection });
+  await expect(
+    plugin.agentProtection.saveAgent(agent.pubkey, 0, {}),
+  ).rejects.toThrow("Plugin execution does not support protected agents");
+  expect(setProtection).not.toHaveBeenCalled();
+  await plugin.agentProtection.saveAgent(agent.pubkey, 0, null);
+  expect(setProtection).toHaveBeenCalledWith(agent.pubkey, 0, "example", null);
   await expect(adapter.agents.execution(agent.key)).rejects.toThrow(
     "Only the native harness",
   );

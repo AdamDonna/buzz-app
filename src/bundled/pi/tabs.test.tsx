@@ -478,6 +478,22 @@ it("guards an invalid Pi provider draft through an agent tab switch", async () =
   expect(save).not.toHaveBeenCalled();
 });
 
+it("loads Pi setup before a pending harness change is saved", async () => {
+  const { SettingsTab } = createTabs({
+    setup: new PiSetup(fakePi()),
+    runtime: fakeRuntime(new PiSetup(fakePi({ providers: "Old harness" }))),
+  });
+  render(
+    <SettingsTab
+      agent={AGENT}
+      save={vi.fn(async () => {})}
+      settingsHost={{ pendingSave: vi.fn(async () => {}) }}
+      settingsSection="runtime"
+    />,
+  );
+  expect(await screen.findByText("Anthropic is set up in Pi.")).toBeVisible();
+});
+
 it("shows the provider, model and thinking level in Identity, and the provider's setup in Settings", async () => {
   const { SettingsTab } = createTabs({
     setup: new PiSetup(fakePi()),

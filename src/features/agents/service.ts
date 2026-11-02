@@ -1739,6 +1739,12 @@ export class AgentsService extends Service implements Agents {
               "This runtime cannot safely change protection while Buzz is open",
             );
           await this.runners.retype(agent.key, agent.name, async () => {
+            if (policy !== null)
+              for (const member of members)
+                if (await this.executions.binding(member.key))
+                  throw new Error(
+                    "Plugin execution does not support protected agents",
+                  );
             for (const member of members) await type.retire?.(member.key);
             await setProtection(pubkey, revision, provider, policy);
             await this.refresh();
