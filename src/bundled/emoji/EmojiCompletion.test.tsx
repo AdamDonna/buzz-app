@@ -77,6 +77,7 @@ function fixture({
     session,
     show,
     settle,
+    published: () => publish.mock.calls.length,
     replaceCatalog: () => {
       catalog = { ...catalog };
       act(() => {
@@ -228,6 +229,20 @@ it("drops relay results when the catalog is replaced and searches the open query
   await act(() => vi.advanceTimersByTimeAsync(EMOJI_SEARCH_DEBOUNCE_MS));
   expect(h.session.emoji.search).toHaveBeenCalledTimes(2);
   expect(h.labels()).toEqual([":party_parrot:"]);
+});
+
+it("leaves the shown suggestions alone when a relay search adds nothing", async () => {
+  const h = fixture({
+    entries: [legacy],
+    search: async () => [{ ...legacy, url: "https://relay.test/other" }],
+  });
+  h.show("part");
+  await h.settle();
+  const shown = h.published();
+  await act(() => vi.advanceTimersByTimeAsync(EMOJI_SEARCH_DEBOUNCE_MS));
+  expect(h.session.emoji.search).toHaveBeenCalledTimes(1);
+  expect(h.published()).toBe(shown);
+  expect(h.labels()).toEqual([":party_hat:"]);
 });
 
 it("does not wait for the relay when it cannot hold the name or the host cannot search", async () => {

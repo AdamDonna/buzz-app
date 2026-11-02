@@ -119,6 +119,21 @@ function NativeEmojiPreview({ emoji }: { emoji: string }) {
   );
 }
 
+/** The previous list while the new one names the same emoji, so an unchanged
+ * relay answer does not republish, and so rebuild, the open popup. */
+function useSameEmoji(next: readonly CustomEmojiEntry[]) {
+  const kept = useRef(next);
+  if (
+    kept.current.length !== next.length ||
+    kept.current.some(
+      (item, i) =>
+        item.shortcode !== next[i]?.shortcode || item.url !== next[i]?.url,
+    )
+  )
+    kept.current = next;
+  return kept.current;
+}
+
 export function EmojiCompletion({
   session,
   query,
@@ -139,6 +154,13 @@ export function EmojiCompletion({
   const searchKey = `${attempt}\n${query.query}`;
   const found =
     relay?.key === searchKey && relay.catalog === catalog ? relay : undefined;
+  const searchFailed = !!found?.failed;
+  const added = useSameEmoji(
+    (found?.entries ?? []).filter(
+      (item) =>
+        !catalog.entries.some((own) => own.shortcode === item.shortcode),
+    ),
+  );
   useEffect(() => {
     void session.emoji.ensure("foreground");
   }, [session]);
@@ -185,7 +207,7 @@ export function EmojiCompletion({
     // Relay results complete the legacy catalog; its entry wins for a shared name.
     const custom = mergeEmoji(
       mergeEmoji(catalog.entries, session.emoji.known?.() ?? []),
-      found?.entries ?? [],
+      added,
     ).filter((item) => !!session.media(item.url));
     const items = (matches: readonly EmojiMatch[]) => {
       const counts = new Map<string, number>();
@@ -231,7 +253,7 @@ export function EmojiCompletion({
                 status: "Community emoji unavailable; Unicode results shown.",
                 retry: retrySearch,
               }
-            : found?.failed
+            : searchFailed
               ? { status: SEARCH_FAILED, retry: retrySearch }
               : {}),
         });
@@ -254,6 +276,6 @@ export function EmojiCompletion({
       unsubscribe();
       if (withdraw) withdraw();
     };
-  }, [session, query.query, publish, catalog, attempt, found]);
+  }, [session, query.query, publish, catalog, attempt, added, searchFailed]);
   return null;
 }
