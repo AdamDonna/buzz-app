@@ -3,7 +3,6 @@ import { Radio, RadioGroup } from "../shared/design-system/ui/RadioGroup";
 import type { Accent } from "../shared/theme/accent";
 import type { ColorMode } from "../shared/theme/service";
 import {
-  DEFAULT_THEME,
   THEMES,
   THEME_DEFINITIONS,
   frameScope,
@@ -36,7 +35,7 @@ function ThemePreview({
       focusable="false"
       className={`buzz-theme-preview ${mode}`}
       data-theme={theme}
-      data-theme-reset={theme === DEFAULT_THEME ? "" : undefined}
+      data-theme-reset=""
       data-accent={accent}
       data-color-mode={mode}
     >
