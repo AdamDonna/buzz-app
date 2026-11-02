@@ -86,14 +86,16 @@ sleep it runs once, not once for each missed hour. Each
 check-in is a feature in `features.ts`, so another kind is one more entry.
 
 **Changing your Bestie.** Only your Bestie checks in: whenever the saved Bestie
-is known, on this device or synced from another, any other agent here has its
-check-ins removed, until the Bestie plugin is turned off: a removal under way
-then stops before its next save. Its memory section and channels stay. An agent
-this device makes Bestie starts with Remembers you on; a choice synced from
-elsewhere changes nothing, so memory turned off stays off. A former Bestie keeps
-a **Former Bestie** tab while it has a Bestie section, or, if this device saw it
-as Bestie, while it is in one of your private channels. The tab has the same
-switches, **Remove from all** for its channels, and **Make my Bestie again**.
+is known, chosen here or read from your account, any other agent here has its
+check-ins removed. A choice made on another device reaches this one when it next
+reads your account, once per connection. Turning the Bestie plugin off stops a
+removal under way before its next save. Its memory section and channels stay. An
+agent this device makes Bestie starts with Remembers you on; a choice synced
+from elsewhere changes nothing, so memory turned off stays off. A former Bestie
+keeps a **Former Bestie** tab while it has a Bestie section, or, if this device
+saw it as Bestie, while it is in one of your private channels. The tab has the
+same switches, **Remove from all** for its channels, and **Make my Bestie
+again**.
 
 ### Hosted setup fallback
 
