@@ -340,10 +340,9 @@ type Route = {
   /** Live on the socket a planned renewal replaced, over the same scope. Its
    * replay resumes from the cursor, so its EOSE needs no catch-up. */
   carried?: boolean;
-  /** Every key had a cursor when the route was created, so its replay starts
-   * where an earlier connection's delivery could have stopped. */
+  /** Every key had a cursor and the replay covers its full resume lag. */
   resumed?: boolean;
-  /** The channels whose key had a cursor when the route was created. */
+  /** Channels with a cursor whose full resume lag is covered by the replay. */
   resumedChannels?: ReadonlySet<string>;
   /** Replay events per channel: each channel has its own filter and limit, so
    * `count`, the route's total, cannot tell which one the limit cut. */
@@ -815,9 +814,15 @@ export function subscribeRelayTraffic(
         route.liveOnly = true;
         for (const id of ids) replayQueue.set(id, route.since);
       }
-      route.resumed = cursorKeys(route).every((key) => cursors.has(key));
+      const covered = (key: string) => {
+        const cursor = cursors.get(key);
+        // The startup floor can truncate the backdate allowance even when
+        // the replay has a cursor and ends below the event limit.
+        return !!cursor && route.since <= cursor.liveUntil - LIVE_RESUME_LAG;
+      };
+      route.resumed = cursorKeys(route).every(covered);
       route.resumedChannels = new Set(
-        scope(route).filter((id) => cursors.has(`channel:${id}`)),
+        scope(route).filter((id) => covered(`channel:${id}`)),
       );
       // Presence and observer feeds establish nothing, so carry no obligation.
       if (

@@ -950,7 +950,8 @@ and the view settles back on the range the reader had, so later refreshes stay
 proportional to it.
 
 A channel route also reports at establishment which of its channels stayed
-continuous: the channel resumed from an earlier connection's cursor and its own
+continuous: the channel resumed from an earlier connection's cursor, its replay
+covers the full 960 s resume lag before that cursor, and its own
 filter's replay ended below that filter's limit (an event that names no single
 channel of a batch counts against each of them). A retained window that was
 verified when the stream dropped, and a thread view that was settled then, skip
@@ -960,7 +961,10 @@ the resume lag, and the live stream had delivered everything before it. The
 window becomes verified at once. Any other case keeps the catch-up above: a
 replay at the limit, a channel with no cursor, a window restored or read before
 the stream was up, a window still owed a catch-up from an earlier drop, and a
-live-only renewal (it replays nothing, so it proves nothing). An event that
+live-only renewal (it replays nothing, so it proves nothing). While the session's
+initial five-minute floor truncates the resume lag, channel and global routes
+keep their reconnect repair reads even when the replay ends below the limit.
+An event that
 neither the live stream nor the replay carries is no longer repaired by that
 reconnect's head read for a continuous channel. Two known cases: the relay
 omits a channel deleted during the outage from the replay without a frame, so

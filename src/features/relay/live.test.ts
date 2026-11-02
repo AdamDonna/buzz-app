@@ -2179,6 +2179,38 @@ it("keeps a route's cursor through a connection that never established it", asyn
   }
 });
 
+it.each([
+  [0, false],
+  [659, false],
+  [660, true],
+  [661, true],
+] as const)(
+  "requires the full resume lag for channel and global continuity at session age %is",
+  async (seconds, continuous) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup(["a"], undefined, 10, () => 0.5);
+    try {
+      // The original replay starts 300s before startup; the cursor needs another
+      // 660s before its full 960s safety window fits beyond that floor.
+      vi.setSystemTime(Date.now() + seconds * 1000);
+      await establish(h.first);
+      h.callbacks.established.mockClear();
+      h.first.close();
+      await vi.advanceTimersByTimeAsync(500);
+      const next = h.sockets[1];
+      assert.exists(next);
+      await establish(next);
+      expect(h.callbacks.established.mock.calls).toEqual([
+        [undefined, { route: "profiles", continuous }],
+        [undefined, { route: "membership", continuous }],
+        continuous ? ["a", undefined, ["a"]] : ["a"],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
 it("reports a global route continuous only when it resumed from a cursor and its replay stayed under the limit", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup([], undefined, undefined, () => 0.5);
@@ -5080,6 +5112,7 @@ it("recovers like an outage after a renewal whose replay hit the limit", async (
   vi.useFakeTimers();
   const h = setup(["a", "b"]);
   try {
+    age();
     await establish(h.first);
     h.callbacks.established.mockClear();
     renew(h.first);
@@ -5121,6 +5154,7 @@ it("falls back to the outage path when a renewal's new socket fails", async () =
   vi.useFakeTimers();
   const h = setup(["a"]);
   try {
+    age();
     await establish(h.first);
     h.callbacks.established.mockClear();
     h.callbacks.state.mockClear();
@@ -5175,6 +5209,7 @@ it.each(["complete", "cut", "closed", "renewed"] as const)(
       return reads;
     };
     try {
+      age();
       h.callbacks.receive(rosters);
       owner.session.channels.ensure("a");
       await answer();
@@ -5275,6 +5310,7 @@ it("ends a renewal's quiet state when an interest change replaces a carried batc
   vi.useFakeTimers();
   const h = setup([]);
   try {
+    age();
     h.owner.update(["a", "b", "c"], ["a", "b", "c"]);
     await establish(h.first);
     h.callbacks.established.mockClear();
