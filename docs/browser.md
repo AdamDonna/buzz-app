@@ -37,6 +37,22 @@ A view with a `storage` also keeps its session for ten minutes after it unmounts
 
 Reloading Buzz's main document ends the website session. An attachment queued before that reload cannot replace a session opened by the new document.
 
+Builderlab's bundled app panel passes a `builderlab` viewer lifetime instead of a
+shared website sign-in. The browser host uses its credential only for a native
+request to the compile-time Builderlab API origin, then installs the restricted
+HttpOnly/Secure viewer cookie on the tenant's fixed Apps domain with the server's
+absolute expiry. This is the same cookie as browser login, so login/consent repair
+replaces it instead of creating a conflicting second cookie.
+If the native exchange is unconfigured or its endpoint returns 404, the same
+account-isolated guest opens through browser login. Other errors stay closed.
+The guest stays blank until installation or this fallback finishes and its account lifetime is checked. No
+credential or generic cookie/header capability is exposed to the guest. Each
+account selects its own storage, kept across sign-ins and restarts so a browser
+login made through this fallback persists. Each sign-in is a separate lifetime;
+aborting it closes its live and parked guests, including a guest whose attach
+finishes after cancellation.
+Normal website views retain the storage behavior above.
+
 ## Native ownership
 
 The controls are ordinary trusted React UI in Buzz's main webview. Website content is a separate raw Wry child view positioned over the panel's website viewport, created without a Tauri IPC handler, custom protocols or host initialization scripts. It uses a nonpersistent data store, or the named persistent store described above. The main window's content-security policy is unchanged.

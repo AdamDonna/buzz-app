@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { SOLO_LABEL } from "../solo/labels";
 import { createChannelWrites } from "./channel-writes";
 import type { Outbox, OutgoingEvent } from "./outbox";
@@ -1488,13 +1488,19 @@ it("creates a Solo chat in its single durable outbox command, with validated lif
     ],
   });
   h.service.create(id, "Work");
-  expect(h.outbox.send).toHaveBeenLastCalledWith(command([["t", SOLO_LABEL]]));
+  expect(h.outbox.send).toHaveBeenLastCalledWith(
+    command([["t", SOLO_LABEL]]),
+    undefined,
+    undefined,
+  );
   h.service.create(id, "Work", 600);
   expect(h.outbox.send).toHaveBeenLastCalledWith(
     command([
       ["ttl", "600"],
       ["t", SOLO_LABEL],
     ]),
+    undefined,
+    undefined,
   );
   h.service.create(id, "Work", 600, true);
   expect(h.outbox.send).toHaveBeenLastCalledWith(
@@ -1503,6 +1509,8 @@ it("creates a Solo chat in its single durable outbox command, with validated lif
       ["t", SOLO_LABEL],
       ["t", "buzz.session.named"],
     ]),
+    undefined,
+    undefined,
   );
   for (const ttl of [0, -1, 1.5, 2147483648, NaN])
     expect(() => h.service.create(id, "Work", ttl)).toThrow("duration");
@@ -1554,18 +1562,22 @@ describe("starting a Solo chat", () => {
     });
     const { create, ready } = test.service.start(id, "Work", [agent]);
     expect(create).toBe(event.id);
-    expect(test.outbox.send).toHaveBeenCalledExactlyOnceWith({
-      kind: 9007,
-      content: "",
-      tags: [
-        ["h", id],
-        ["name", "Work"],
-        ["visibility", "private"],
-        ["channel_type", "stream"],
-        ["t", SOLO_LABEL],
-        ["p", agent],
-      ],
-    });
+    expect(test.outbox.send).toHaveBeenCalledExactlyOnceWith(
+      {
+        kind: 9007,
+        content: "",
+        tags: [
+          ["h", id],
+          ["name", "Work"],
+          ["visibility", "private"],
+          ["channel_type", "stream"],
+          ["t", SOLO_LABEL],
+          ["p", agent],
+        ],
+      },
+      undefined,
+      undefined,
+    );
     expect(test.channels.start).toHaveBeenCalledExactlyOnceWith({
       id,
       name: "Work",
@@ -1672,4 +1684,78 @@ describe("starting a Solo chat", () => {
       vi.useRealTimers();
     }
   });
+});
+
+// The real signing boundary proves the Solo wrapper preserves the Outbox gate.
+it("cancels a guarded Solo create after signing starts and requires a fresh gate after restore", async () => {
+  const viewer = keypair(),
+    relay = keypair();
+  let active = true;
+  let release!: (event: RelayEvent) => void;
+  let template: Parameters<typeof signed>[1] | undefined;
+  let records: readonly OutgoingEvent[] = [];
+  const publish = vi.fn(async () => {});
+  const transport = {
+    viewer: viewer.pubkey,
+    relayAuthor: relay.pubkey,
+    channelIdentity: true as const,
+    media: () => undefined,
+    query: async () => [],
+    writer: {
+      kinds: [9007],
+      publish,
+      sign: (input: Parameters<typeof signed>[1]) => {
+        template = input;
+        return new Promise<RelayEvent>((resolve) => {
+          release = resolve;
+        });
+      },
+    },
+  };
+  const storage = {
+    load: () => structuredClone(records),
+    save: (next: readonly OutgoingEvent[]) => {
+      records = structuredClone(next);
+    },
+  };
+  const owner = createRelaySession(transport, { outboxStorage: storage });
+  try {
+    const outbox = owner.session.outbox;
+    assert.exists(outbox);
+    await outbox.ready();
+    const id = owner.session.channelWrites.create(
+      "11111111-1111-4111-8111-111111111111",
+      "Work",
+      undefined,
+      true,
+      [viewer.pubkey],
+      () => active,
+    );
+    await vi.waitFor(() => expect(template).toBeDefined());
+    expect(
+      outbox.snapshot().find((item) => item.event.id === id)?.guarded,
+    ).toBe(true);
+    active = false;
+    assert.exists(template);
+    release(signed(viewer, template));
+    await vi.waitFor(() =>
+      expect(
+        outbox.snapshot().find((item) => item.event.id === id)?.delivery,
+      ).toBe("failed"),
+    );
+    expect(publish).not.toHaveBeenCalled();
+    owner.dispose();
+    const restored = createRelaySession(transport, { outboxStorage: storage });
+    try {
+      const restoredOutbox = restored.session.outbox;
+      assert.exists(restoredOutbox);
+      await restoredOutbox.ready();
+      expect(() => restoredOutbox.retry(id)).toThrow(/cancelled/);
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      restored.dispose();
+    }
+  } finally {
+    owner.dispose();
+  }
 });

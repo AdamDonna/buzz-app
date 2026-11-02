@@ -14,24 +14,6 @@
         "program": "gh",
         "args": ["api", "graphql", "--hostname", "github.com", "--input", "-"]
       }
-    ],
-    "commands": [
-      {
-        "id": "pull",
-        "program": "gh",
-        "args": [
-          "api",
-          "graphql",
-          "--hostname",
-          "github.com",
-          "--input",
-          "-",
-          "--jq",
-          "walk(if type == \"object\" and (.body | type) == \"string\" then .body |= .[:1001] else . end)"
-        ],
-        "maxInputBytes": 4096,
-        "maxOutputBytes": 1048576
-      }
     ]
   }
 }

@@ -42,7 +42,10 @@ export function createMessages(
   find: (id: string) => EventData | undefined,
   emojiTags: (content: string) => string[][],
   validateMentions: (channelId: string, pubkeys: readonly string[]) => void,
-  canParticipate: (channelId: string) => boolean = () => true,
+  canWrite: (
+    channelId: string,
+    owner?: AgentOwnerAuthorization,
+  ) => boolean = () => true,
   relayOrigin?: string,
   /** Resolves on relay OK. Reports are never echoed, so they bypass the outbox. */
   publishReport?: (template: EventTemplate) => Promise<void>,
@@ -52,10 +55,16 @@ export function createMessages(
   /** Who a message in the channel addresses without a mention: a one-to-one
    * DM's other member. A pick may name them as well as a mention. */
   unmentionedRecipients: (channelId: string) => readonly string[] = () => [],
+  /** Events whose `buzz:copy-of` tag names this message id (sent-to-channel copies). */
+  copiesOf: (id: string) => readonly EventData[] = () => [],
 ) {
-  const writer = (kind: number, channelId: string) => {
-    if (!canParticipate(channelId))
-      throw new Error("Join the conversation before posting");
+  const writer = (
+    kind: number,
+    channelId: string,
+    owner?: AgentOwnerAuthorization,
+  ) => {
+    if (!canWrite(channelId, owner))
+      throw new Error("You don’t have write access to this conversation.");
     if (!outbox?.supports(kind))
       throw new Error("This connection cannot publish that operation");
     return outbox;
@@ -107,6 +116,28 @@ export function createMessages(
       ];
     });
   };
+  /** The author's other copies of a message: its source reply and every
+   * sent-to-channel copy of it, deduplicated, never the message itself. */
+  const linkedCopies = (message: EventData, channelId: string) => {
+    if (!ownedMessage(message) || message.kind !== 9) return [];
+    const sourceId = message.tags.find(
+      ([name, value]) => name === "buzz:copy-of" && value,
+    )?.[1];
+    const root = sourceId ? find(sourceId) : message;
+    const candidates = [
+      ...(root ? [root] : []),
+      ...copiesOf(sourceId ?? message.id),
+    ];
+    return [
+      ...new Map(candidates.map((event) => [event.id, event])).values(),
+    ].filter(
+      (other) =>
+        other.id !== message.id &&
+        other.kind === 9 &&
+        ownedMessage(other) &&
+        other.tags.some(([name, value]) => name === "h" && value === channelId),
+    );
+  };
   const edit = (
     messageId: string,
     content: string,
@@ -146,16 +177,28 @@ export function createMessages(
           !attachmentSource.tags.some(([name]) => name === "imeta")))
     )
       throw new Error("Reload the message before editing its attachments.");
-    return writer(40003, channelId).send({
-      kind: 40003,
-      content: text(content),
-      tags: [
-        ["h", channelId],
-        ["e", messageId],
-        ...attachmentSource.tags.filter((tag) => tag[0] === "imeta"),
-        ...emojiTags(content),
-      ],
-    });
+    const sendEdit = (targetId: string) =>
+      writer(40003, channelId, ownerEdit ? authorization : undefined).send({
+        kind: 40003,
+        content: text(content),
+        tags: [
+          ["h", channelId],
+          ["e", targetId],
+          ...attachmentSource.tags.filter((tag) => tag[0] === "imeta"),
+          ...emojiTags(content),
+        ],
+      });
+    const id = sendEdit(messageId);
+    // A sent-to-channel copy and its thread reply are one message to the author:
+    // mirror the edit onto the counterpart. Best effort; the primary edit stands.
+    for (const other of linkedCopies(original, channelId)) {
+      try {
+        sendEdit(other.id);
+      } catch {
+        // Counterpart unavailable; leave it as-is.
+      }
+    }
+    return id;
   };
   const remove = (
     eventIds: readonly string[],
@@ -192,13 +235,21 @@ export function createMessages(
     const channelId = first ? channel(first) : undefined;
     if (!channelId || originals.some((event) => channel(event) !== channelId))
       throw new Error("Removal must belong to one loaded conversation");
-    return writer(5, channelId).send({
+    // Deleting a thread reply or its sent-to-channel copy removes the author's
+    // other linked copies too, so none lingers as an orphan.
+    const linked = originals
+      .flatMap((event) => linkedCopies(event, channelId))
+      .filter((event) => !ids.includes(event.id));
+    const all = [...ids, ...new Set(linked.map((event) => event.id))];
+    const removed = all.length <= 100 ? all : ids;
+    const targets = [...originals, ...(all.length <= 100 ? linked : [])];
+    return writer(5, channelId, authorization).send({
       kind: 5,
       content: "",
       tags: [
         ["h", channelId],
-        ...ids.map((id) => ["e", id]),
-        ...[...new Set(originals.map((event) => event.kind))].map((kind) => [
+        ...removed.map((id) => ["e", id]),
+        ...[...new Set(targets.map((event) => event.kind))].map((kind) => [
           "k",
           String(kind),
         ]),
@@ -297,6 +348,8 @@ export function createMessages(
         tags: [
           ["h", channelId],
           ["buzz:sent-from-thread", thread.rootId, ...(label ? [label] : [])],
+          // Links the copy to its reply so later edits reach both.
+          ["buzz:copy-of", original.id],
           // Sharing does not notify the original recipients again. Preserve display binding only.
           ...referenceTags(
             row.edited

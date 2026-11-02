@@ -172,7 +172,7 @@ function fixture(
       subscribe: () => () => {},
     },
     agentChoices: createAgentLibrary(undefined).queries,
-    messages: { retry() {} },
+    messages: { retry() {}, canRetry: () => true },
     media: () => undefined,
     unread,
     outbox,

@@ -106,7 +106,7 @@ export function createOutbox(
   storage: OutboxStorage,
   {
     timeoutMs = 10_000,
-    onAccepted = (_event: RelayEvent) => {},
+    onAccepted = (_event: RelayEvent, _acknowledged: boolean) => {},
     profiling = createRelayProfiler(),
     notifyListener = (listener: () => void) => listener(),
     preparePublish,
@@ -121,7 +121,8 @@ export function createOutbox(
     /** Commands await their receipt even after a verified echo. Never persisted. */
     needsReceipt?: (event: EventData) => boolean;
     onReceipt?: (event: EventData, message: string | undefined) => void;
-    onAccepted?: (event: RelayEvent) => void;
+    /** `acknowledged` is false when the publisher was entered but delivery is `unknown`. */
+    onAccepted?: (event: RelayEvent, acknowledged: boolean) => void;
     profiling?: RelayProfiler;
     notifyListener?: (listener: () => void) => void;
     /** Read-only pre-dispatch work under the attempt deadline. The returned
@@ -559,7 +560,7 @@ export function createOutbox(
           error: undefined,
         });
       delivered(signed);
-      onAccepted(signed);
+      onAccepted(signed, true);
     } catch (error) {
       const latest = find(id);
       // A verified observation ends the attempt even if its HTTP ACK never arrives.
@@ -600,7 +601,7 @@ export function createOutbox(
               }${error instanceof Error ? error.message : String(error)}`,
         });
       if (publishing && latest?.signed && !(error instanceof PublishRejected))
-        onAccepted(latest.signed);
+        onAccepted(latest.signed, delivery !== "unknown");
     } finally {
       // Keep a failed invitation fenced for an explicit retry in this session.
       if (

@@ -14,7 +14,13 @@ import {
   isAttentionTool,
 } from "./attention";
 import type { BuzzClient, Context } from "./client";
-import { callTool, type Reply, TOOLS, type Tool } from "./tools";
+import {
+  callTool,
+  captureToolBody,
+  type Reply,
+  TOOLS,
+  type Tool,
+} from "./tools";
 
 /** A tool a plugin adds to every agent session in the app, listed after
  * the Buzz tools under the same server and loaded on search. Its name should
@@ -32,6 +38,15 @@ export type AddedTool = Readonly<{
   ): Promise<Reply>;
 }>;
 type Listed = Pick<AddedTool, "name" | "description" | "inputSchema">;
+
+/** The Buzz tools that post a message, and so take `final`. Each harness
+ * strips its own prefix from a tool's name before asking. */
+export const MESSAGE_TOOLS = ["send", "reply_in_subthread"] as const;
+export const isMessageTool = (name: unknown) =>
+  (MESSAGE_TOOLS as readonly unknown[]).includes(name);
+/** Whether a call posts a message marked final, which can end the turn. */
+export const isFinalMessage = (name: unknown, args: unknown) =>
+  isMessageTool(name) && (args as { final?: unknown } | null)?.final === true;
 
 export type BuzzSession = Readonly<{ tools: readonly Tool[] }>;
 
@@ -111,6 +126,53 @@ export async function callSessionTool(
   added: readonly AddedTool[] = [],
 ): Promise<Reply> {
   if (!client) throw new Error("Buzz is not ready yet. Try again.");
+  // Hold the reviewed destination and arguments while the checker waits.
+  if (client.protect) {
+    context = structuredClone(context);
+    args = structuredClone(args);
+  }
+  const session = JSON.stringify(context);
+  // Plugin tools own their argument semantics, even when shadowing a builtin.
+  if (client.protect && !added.some((tool) => tool.name === name))
+    await captureToolBody(client, name, args).catch((error) =>
+      checkedToolError(client, session, error),
+    );
+  await client.protect?.({
+    kind: "tool",
+    session,
+    content: { title: name, arguments: args },
+    ...(typeof args.command === "string" ? { command: args.command } : {}),
+  });
+  let reply: Reply;
+  try {
+    reply = await dispatchSessionTool(client, context, name, args, added);
+  } catch (error) {
+    return checkedToolError(client, session, error);
+  }
+  await client.protect?.({ kind: "tool-result", session, content: reply });
+  return reply;
+}
+
+/** File capture and dispatch errors cross the same tool-result boundary. */
+async function checkedToolError(
+  client: BuzzClient,
+  session: string,
+  error: unknown,
+): Promise<never> {
+  await client.protect?.({
+    kind: "tool-result",
+    session,
+    content: { error: error instanceof Error ? error.message : String(error) },
+  });
+  throw error;
+}
+async function dispatchSessionTool(
+  client: BuzzClient,
+  context: Context,
+  name: string,
+  args: Record<string, unknown>,
+  added: readonly AddedTool[],
+): Promise<Reply> {
   const tool = added.find((tool) => tool.name === name);
   if (tool) return tool.call(client, context, args);
   if (!isAttentionTool(name)) return callTool(client, context, name, args);
@@ -119,7 +181,7 @@ export async function callSessionTool(
   // The owner can turn attention off while the session runs.
   if (!attention.enabled())
     throw new Error(
-      `Attention is off for you: your owner turned it off, so these tools do nothing now.\n(classifier: ${attention.classifier()})`,
+      `Attention is off for you on this device, so these tools do nothing now.\n(classifier: ${attention.classifier()})`,
     );
   return callAttentionTool(attention, name, args);
 }

@@ -23,6 +23,7 @@ import {
   PopoverPopup,
 } from "../../shared/design-system/ui/Popover";
 import type { ComposerSession } from "../../features/messages/composer-session";
+import type { CustomEmoji } from "../../features/relay/emoji";
 import {
   communityFromScope,
   gifMarkdown,
@@ -38,6 +39,7 @@ const EMOJI_SLOT = 48;
 const PICKER_COLUMN_CHROME = 44;
 // Two balanced scrollbar lanes plus five gaps between six fixed-size slots.
 const PICKER_CHROME = 72;
+const NO_ENTRIES: readonly CustomEmoji[] = [];
 
 /** Reusable composer picker; data/signing remain owned by the community session. */
 export function EmojiPicker({
@@ -104,6 +106,8 @@ export function EmojiPicker({
     session.emoji.snapshot,
     session.emoji.snapshot,
   );
+  // Remount Emoji Mart for catalog contents, not for status-only publishes.
+  const entries = catalog.status === "ready" ? catalog.entries : NO_ENTRIES;
   useLayoutEffect(() => {
     if (!open) return;
     const origin = externalTrigger?.ref.current ?? controls.current;
@@ -241,7 +245,7 @@ export function EmojiPicker({
           searchChange: (value) => {
             search.current = value;
           },
-          entries: catalog.status === "ready" ? catalog.entries : [],
+          entries,
           media: session.media,
           select: (value) => {
             onInsert.current(value);
@@ -269,7 +273,7 @@ export function EmojiPicker({
     disabled,
     session,
     scope,
-    catalog,
+    entries,
     attempt,
     perLine,
     scale,
@@ -441,7 +445,7 @@ export function EmojiPicker({
         if (next) {
           accepted.current = false;
           escapeFocus.current = false;
-          void session.emoji.ensure();
+          void session.emoji.ensure("foreground");
           if (gifs !== true && gifAvailability?.community === community)
             setGifAvailability(undefined);
           setGifDiscoveryRequested(true);

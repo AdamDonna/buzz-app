@@ -88,7 +88,11 @@ export function validChannelCommand(event) {
   if (event.kind === 9000)
     return (
       event.content === "" &&
-      tags.length === 2 &&
+      (tags.length === 2 ||
+        (tags.length === 3 &&
+          tags[2].length === 2 &&
+          tags[2][0] === "role" &&
+          tags[2][1] === "member")) &&
       p?.length === 2 &&
       p[0] === "p" &&
       /^[0-9a-f]{64}$/.test(p[1])

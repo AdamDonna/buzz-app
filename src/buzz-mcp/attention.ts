@@ -92,12 +92,6 @@ const watchFields = {
     items: str,
     description: "Event watch: only events by these hex pubkeys.",
   },
-  keywords: {
-    type: "array",
-    items: str,
-    description:
-      "Event watch: match any case-insensitive literal substring in event content. 1 to 32 nonblank strings, up to 256 bytes each.",
-  },
   exclude_authors: {
     type: "array",
     items: str,
@@ -212,7 +206,6 @@ ${WRITES}`,
             "root",
             "authors",
             "exclude_authors",
-            "keywords",
             "tags",
             "is_reply",
             "classifier",
@@ -532,7 +525,6 @@ const EVENT = [
   "kinds",
   "authors",
   "exclude_authors",
-  "keywords",
   "tags",
   "is_reply",
   "classifier",
@@ -547,6 +539,11 @@ const TIMER = [
   "expires_at",
 ];
 function pick(args: Args, names: readonly string[], other: readonly string[]) {
+  // An older caller may still send it; dropping it would widen the watch.
+  if ("keywords" in args)
+    fail(
+      "keywords was removed from watches; narrow the watch with a classifier question, or with authors, exclude_authors, tags or is_reply",
+    );
   const wrong = other.filter((key) => !names.includes(key) && key in args);
   if (wrong.length) fail(`Not a field of this watch type: ${wrong.join(", ")}`);
   return Object.fromEntries(

@@ -1,19 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { describeWatch } from "./attention";
-import { AttentionPanel } from "./AttentionPanel";
-import type { AgentScopeReader } from "./AgentCommunityScope";
 import type { Agent } from "./service";
-
-afterEach(cleanup);
-
-const agents: AgentScopeReader = {
-  subscribe: () => () => {},
-  memberships: () => [],
-};
 
 const agent: Agent = {
   key: "a".repeat(64),
@@ -58,35 +47,4 @@ it("names watches by what and where they wake", () => {
   expect(describeWatch({ ...watch, channels: "all", kinds: [] })).toBe(
     "Any event in any channel",
   );
-});
-
-it("keeps the device runtime control and directs watch management to Agent Attention", async () => {
-  const save = vi.fn(async () => {});
-  render(<AttentionPanel agents={agents} agent={agent} save={save} />);
-  expect(
-    screen.getByText(/Manage Interests and watches in Agent Attention/),
-  ).toBeInTheDocument();
-  expect(screen.queryByText("Keep releases moving.")).not.toBeInTheDocument();
-  await userEvent
-    .setup()
-    .click(screen.getByRole("switch", { name: "Attention on this device" }));
-  expect(save).toHaveBeenCalledWith({ attentionEnabled: false });
-});
-
-it("keeps failed runtime changes visible for retry", async () => {
-  const save = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("Save failed"))
-    .mockResolvedValue(undefined);
-  render(<AttentionPanel agents={agents} agent={agent} save={save} />);
-  const user = userEvent.setup();
-  const toggle = screen.getByRole("switch", {
-    name: "Attention on this device",
-  });
-  await user.click(toggle);
-  expect(screen.getByRole("alert")).toHaveTextContent("Save failed");
-  expect(toggle).toBeChecked();
-  await user.click(toggle);
-  expect(save).toHaveBeenCalledTimes(2);
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });

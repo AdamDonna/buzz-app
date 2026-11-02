@@ -50,11 +50,11 @@ import {
   ArrowSquareOutIcon,
   ChatCircleIcon,
   TrashIcon,
-  HashIcon,
   XIcon,
 } from "../../shared/design-system/icons/index";
 import styles from "./Inbox.module.css";
 import { dmLabel } from "./dm-label";
+import { channelIcon, channelText } from "../../features/channels/channel-icon";
 import { avatarMedia } from "../../shared/avatar-source";
 
 export function DraftsView({
@@ -87,10 +87,16 @@ export function DraftsView({
     };
   }, [session]);
   const [selected, setSelected] = useState<string>();
-  const invoking = useRef<{ key: string; row: HTMLButtonElement }>(undefined);
+  const invoking = useRef<{
+    key: string;
+    row: HTMLButtonElement;
+    focus: { current: HTMLElement | null };
+  }>(undefined);
   const fallbackRow = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef<HTMLButtonElement>(null);
   const visit = invoking.current;
+  const coarse = !!window.matchMedia?.("(pointer: coarse)").matches;
+  const autoFocus = coarse ? false : (visit?.focus ?? false);
   const detailRef = useCallback((node: HTMLElement | null) => {
     if (!node) return;
     // Ref cleanup runs before removal, while focus ownership is still observable.
@@ -142,11 +148,20 @@ export function DraftsView({
   const [limit, setLimit] = useState(50);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const closeControl = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (selected) closeControl.current?.focus({ preventScroll: true });
-  }, [selected]);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
-  const deleteAction = useRef<HTMLButtonElement>(null);
+  const cancelDelete = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const entry = invoking.current;
+    if (!selected || !entry) return;
+    // The visit owns cancellation before a delayed root can mount its editor.
+    const moved = (event: FocusEvent) => {
+      if (event.target !== entry.focus.current) entry.focus.current = null;
+    };
+    document.addEventListener("focusin", moved, true);
+    if (coarse && entry.focus.current === entry.row)
+      closeControl.current?.focus({ preventScroll: true });
+    return () => document.removeEventListener("focusin", moved, true);
+  }, [selected, coarse]);
   const [error, setError] = useState<string>();
   // Selection owns editor lifetime, not the bounded list summary's eligibility.
   const coordinates = selected && draftCoordinates(selected);
@@ -213,12 +228,17 @@ export function DraftsView({
   }, [session, profileIds, list.status, list.asOf]);
   const destination = (channel: ChannelSummary | undefined) => {
     if (!channel) return "Unavailable conversation";
-    if (channel.channelType !== "dm") return `#${channel.name}`;
+    if (channel.channelType !== "dm") return channelText(channel);
     return dmLabel(channel.participants, profiles, name);
   };
   const activeChannel = active
     ? channelFor(active.coordinates.channelId)
     : undefined;
+  useEffect(() => {
+    if (selected && !activeChannel)
+      closeControl.current?.focus({ preventScroll: true });
+  }, [selected, activeChannel]);
+  const ActiveIcon = channelIcon(activeChannel);
   const title = !activeChannel
     ? "Unavailable conversation"
     : activeChannel.channelType === "dm"
@@ -301,6 +321,7 @@ export function DraftsView({
             const channel = channelFor(entry.coordinates.channelId);
             const label = destination(channel);
             const dm = channel?.channelType === "dm";
+            const Icon = channelIcon(channel);
             const first = dm ? channel.participants?.[0] : undefined;
             const artwork = first && profiles.get(first)?.picture;
             return (
@@ -325,7 +346,7 @@ export function DraftsView({
                         }
                       />
                     ) : (
-                      <HashIcon size={20} aria-hidden="true" />
+                      <Icon size={20} aria-hidden="true" />
                     )
                   }
                   label={
@@ -353,7 +374,10 @@ export function DraftsView({
                       >
                         {entry.draft.text.trim()
                           ? entry.draft.text
-                          : "Chat attachment"}
+                          : entry.draft.gifs?.length &&
+                              !entry.draft.chatCards?.length
+                            ? "GIF"
+                            : "Chat attachment"}
                       </span>
                     </span>
                   }
@@ -362,6 +386,7 @@ export function DraftsView({
                       invoking.current = {
                         key: entry.key,
                         row: event.currentTarget,
+                        focus: { current: event.currentTarget },
                       };
                     setSelected(entry.key);
                     setConfirmDelete(false);
@@ -413,13 +438,7 @@ export function DraftsView({
             title={
               <PanelHeaderLabel
                 title={title}
-                icon={
-                  activeChannel?.channelType === "dm" ? (
-                    <ChatCircleIcon size="1rem" />
-                  ) : (
-                    <HashIcon size="1rem" />
-                  )
-                }
+                icon={<ActiveIcon size="1rem" />}
               />
             }
             actions={
@@ -467,6 +486,7 @@ export function DraftsView({
                     <ConversationThread
                       messageId={active.coordinates.threadRootId}
                       requireReadyRoot
+                      autoFocus={autoFocus}
                       onDraftSaved={retire}
                     />
                   ) : (
@@ -477,6 +497,7 @@ export function DraftsView({
                           : activeChannel.name
                       }
                       draft
+                      autoFocus={autoFocus}
                       onDraftSaved={retire}
                     />
                   )}
@@ -490,7 +511,7 @@ export function DraftsView({
             {confirmDelete && (
               <AlertDialog
                 title="Delete draft?"
-                initialFocus={deleteAction}
+                initialFocus={cancelDelete}
                 description="Delete this saved draft and its attachments on this device? This cannot be undone."
                 onClose={() => setConfirmDelete(false)}
                 // On deletion, retirement restores the surviving list control.
@@ -500,16 +521,12 @@ export function DraftsView({
                 }
                 actions={
                   <>
-                    <Button
-                      ref={deleteAction}
-                      size="sm"
-                      variant="destructive"
-                      onClick={remove}
-                    >
+                    <Button size="sm" variant="destructive" onClick={remove}>
                       Delete draft
                     </Button>
                     <Button
                       size="sm"
+                      ref={cancelDelete}
                       variant="ghost"
                       onClick={() => setConfirmDelete(false)}
                     >

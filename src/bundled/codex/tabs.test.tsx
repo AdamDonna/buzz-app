@@ -16,7 +16,7 @@ import {
 } from "@testing-library/react";
 import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
 import {
@@ -26,6 +26,7 @@ import {
 } from "../../features/agents/state";
 import type { AgentViewProps } from "../../features/agents/service";
 import type { HostProcessOptions } from "../../features/host/service";
+import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData } from "../../features/relay/service";
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { defaults, type Config } from "./config";
@@ -66,9 +67,12 @@ function fixture({
   threads = [],
   configured = {},
   storage = localStore(),
+  channels = [{ id: "channel", name: "general" }],
 }: {
   /** Agent storage, which keeps the provider defaults. */
   storage?: AgentStore;
+  /** The community's channels, read each time they are listed. */
+  channels?: readonly ChannelSummary[];
   signedIn?: boolean;
   /** Whether the configured model provider needs an OpenAI sign-in. */
   requiresOpenaiAuth?: boolean;
@@ -184,7 +188,7 @@ function fixture({
       status: "ready",
       session: {
         channels: {
-          list: () => ({ channels: [{ id: "channel", name: "general" }] }),
+          list: () => ({ channels }),
         },
       },
     }),
@@ -274,7 +278,7 @@ it("lists saved conversations and shows one's Codex thread, or that Codex no lon
     screen.getAllByRole("button", { name: /^View transcript/ })[
       index
     ] as HTMLElement;
-  expect(screen.getByTitle("#general · thread eeeeeeee")).toBeVisible();
+  expect(screen.getByTitle("general · thread eeeeeeee")).toBeVisible();
   fireEvent.click(viewButton(0));
   expect(await screen.findByText("what changed?")).toBeVisible();
   expect(screen.getByText("Two files.")).toBeVisible();
@@ -320,7 +324,7 @@ it("sets the conversation the profile was opened from apart from recent conversa
   expect(
     within(opened).getByRole("button", { name: /^View transcript/ }),
   ).toBeVisible();
-  expect(screen.getByTitle("#general · channel")).toBeVisible();
+  expect(screen.getByTitle("general · channel")).toBeVisible();
   expect(screen.queryByText(/thread eeeeeeee/)).toBeNull();
 });
 
@@ -367,7 +371,7 @@ it("brings an open transcript's tab back, and closes it when the profile moves",
         { name: /^View transcript/ },
       ),
     );
-  const transcript = "#general · thread eeeeeeee";
+  const transcript = "general · thread eeeeeeee";
   await viewHere();
   expect(tab(transcript)).toHaveAttribute("aria-selected", "true");
   await user.click(tab("Sol"));
@@ -382,6 +386,147 @@ it("brings an open transcript's tab back, and closes it when the profile moves",
   expect(screen.queryByRole("tab", { name: transcript })).toBeNull();
   await viewHere();
   expect(tab(transcript)).toHaveAttribute("aria-selected", "true");
+});
+
+it("opens a channel's thread transcript when opened from one of its threads' activity", async () => {
+  // A channel-scoped agent keeps one thread per channel, so the opened
+  // thread's own lookup finds it only after the profile is shown.
+  const f = fixture({
+    saved: {
+      [JSON.stringify(["channel", "channel"])]: {
+        threadId: "kept",
+        workspace: "/w",
+        at: 2,
+      },
+    },
+    turns: () => ({
+      result: {
+        data: [
+          {
+            id: "turn-1",
+            status: "completed",
+            error: null,
+            startedAt: 1,
+            completedAt: 2,
+            items: [{ type: "agentMessage", id: "a", text: "Two files." }],
+          },
+        ],
+        nextCursor: null,
+      },
+    }),
+  });
+  const done = vi.fn();
+  render(
+    <f.tabs.ActivityTab
+      {...f.props()}
+      conversation={{ channelId: "channel", rootId: "e".repeat(64) }}
+      initialTranscript={{ opening: 1, done }}
+    />,
+  );
+  expect(await screen.findByText("Two files.")).toBeVisible();
+  expect(done).toHaveBeenCalledTimes(1);
+});
+
+describe("opened from activity", () => {
+  const root = "e".repeat(64);
+  const transcript = "general · thread eeeeeeee";
+  const opened = () => {
+    const f = fixture({
+      saved: {
+        [JSON.stringify(["channel", root])]: {
+          threadId: "kept",
+          workspace: "/w",
+          at: 2,
+        },
+      },
+    });
+    const close = vi.fn();
+    const done = vi.fn();
+    // Each call is a new opening, as each Working now click is.
+    let openings = 0;
+    const panel = (done?: () => void) => (
+      <PanelWorkspace
+        value="profile"
+        select={() => undefined}
+        tabMenu={{
+          key: "channel",
+          closeAll: () => false,
+          closeOthers: () => false,
+        }}
+        items={[
+          {
+            id: "profile",
+            label: "Sol",
+            close: () => undefined,
+            content: (
+              <f.tabs.ActivityTab
+                {...f.props()}
+                conversation={{ channelId: "channel", rootId: root }}
+                {...(done && {
+                  initialTranscript: { opening: ++openings, done },
+                })}
+                close={close}
+              />
+            ),
+          },
+        ]}
+      />
+    );
+    return { close, done, panel };
+  };
+
+  it("shows the transcript, and closing it closes the panel", async () => {
+    const { close, done, panel } = opened();
+    render(panel(done));
+    expect(
+      await screen.findByRole("tab", { name: transcript }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(done).toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Close ${transcript} tab` }),
+    );
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the panel when the profile's other tabs are closed", async () => {
+    const user = userEvent.setup();
+    const { close, done, panel } = opened();
+    render(panel(done));
+    await screen.findByRole("tab", { name: transcript });
+    await user.pointer({
+      target: screen.getByRole("tab", { name: "Sol" }),
+      keys: "[MouseRight]",
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Close other tabs" }),
+    );
+    expect(screen.queryByRole("tab", { name: transcript })).toBeNull();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("shows the transcript again when the kept profile is opened again", async () => {
+    const user = userEvent.setup();
+    const { done, panel } = opened();
+    const view = render(panel(done));
+    await screen.findByRole("tab", { name: transcript });
+    await user.pointer({
+      target: screen.getByRole("tab", { name: "Sol" }),
+      keys: "[MouseRight]",
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Close other tabs" }),
+    );
+    // The panel offered its request, so it no longer asks.
+    view.rerender(panel());
+    expect(screen.queryByRole("tab", { name: transcript })).toBeNull();
+    // Working now opens the same profile again: a new request.
+    const again = vi.fn();
+    view.rerender(panel(again));
+    expect(
+      await screen.findByRole("tab", { name: transcript }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(again).toHaveBeenCalledOnce();
+  });
 });
 
 it("finds the thread's Codex session another build started", async () => {
@@ -433,6 +578,44 @@ it("finds the thread's Codex session another build started", async () => {
     await within(opened).findByRole("button", { name: /^View transcript/ }),
   );
   expect(await screen.findByText("what changed?")).toBeVisible();
+});
+
+it("shows the channel's current kind for a session another build started", async () => {
+  const root = "f".repeat(64);
+  const tag = sessionTag("a".repeat(64), { channelId: "channel", root });
+  const channels: ChannelSummary[] = [
+    { id: "channel", name: "general", channelType: "stream", private: true },
+  ];
+  const f = fixture({
+    threads: [
+      {
+        id: "elsewhere",
+        name: `Buzz general · Sol · ${tag}`,
+        updatedAt: 5,
+      },
+    ],
+    channels,
+  });
+  // A new element each time, so that rerendering renders the tab again.
+  const shown = () => (
+    <f.tabs.ActivityTab
+      {...f.props()}
+      conversation={{ channelId: "channel", rootId: root }}
+    />
+  );
+  const view = render(shown());
+  const here = screen.getByRole("region", { name: "This thread" });
+  await within(here).findByRole("button", { name: /^View transcript/ });
+  expect(within(here).getByTitle("general").querySelector("svg")).toHaveClass(
+    "tabler-icon-lock",
+  );
+
+  // Made public, the lock found with the session does not stay.
+  channels[0] = { id: "channel", name: "general", channelType: "stream" };
+  view.rerender(shown());
+  expect(within(here).getByTitle("general").querySelector("svg")).toHaveClass(
+    "tabler-icon-hash",
+  );
 });
 
 it("reports when looking for another build's Codex session fails", async () => {
@@ -1415,6 +1598,9 @@ it.each(["Identity", "Settings"])(
     const agents = {
       save,
       configHistory: () => undefined,
+      addedTabs: () => [],
+      registerTab: () => {},
+      controlAttention: () => {},
       memberships: () => [],
       subscribe: () => () => {},
     } as unknown as Agents;

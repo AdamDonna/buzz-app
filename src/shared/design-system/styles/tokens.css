@@ -32,15 +32,17 @@
  *   - A component never references a palette step or a family step directly.
  *   - Opacity is never applied to a colour token to make a lighter or subtler
  *     shade. Reach for a different step. `scripts/check-color.mjs` enforces this.
- *   - Transparency for genuine see-through — glass — is a separate axis, and
- *     lives baked into its own values.
+ *   - Transparency for genuine see-through — glass, and chip overlays that
+ *     let a bubble's color show through — is a separate axis, and lives baked
+ *     into its own values.
  *   - Roles and semantic selections hold a light and a dark value under the
  *     same name. A named palette treatment is deliberately mode-specific when
  *     its paired dark scene is a different visual idea; `sky-field` does not
  *     pretend it is `night-garden` after dark mode switches on.
  *
- * Palette values are Radix Colors (MIT), transcribed rather than depended on.
+ * The utility hues are Radix Colors (MIT), transcribed rather than depended on.
  * Radix is not on Block's Tech Radar; this is a values-only copy, no package.
+ * The six accent families are Buzz's own values on the same twelve steps.
  * Its twelve-step contract is the one this system already described in comments,
  * step for step — the ramp was modelled on it before the values were.
  *
@@ -54,9 +56,11 @@
    component — families name the jobs, roles name the meanings.
    ============================================================ */
 
-/* Existing Appearance values, extracted unchanged. Explicit mode owners allow
-   a light specimen inside a dark page (and the reverse) without inheriting
-   the wrong resolved ramp. Numeric steps, ink, pressed and link colors keep their authored values. */
+/* Existing Appearance values. Explicit mode owners allow a light specimen
+   inside a dark page (and the reverse) without inheriting the wrong resolved
+   ramp. Numeric steps, ink and link colors keep their authored values, except
+   step 10 and pressed: each accent's hover and press, retuned to move clearly
+   off step 9 while staying clean rather than muddy. */
 :root {
   --magenta-1-light: #fffbfc;
   --magenta-2-light: #fff7fa;
@@ -67,12 +71,12 @@
   --magenta-7-light: #f1bbce;
   --magenta-8-light: #e7a4bd;
   --magenta-9-light: #df1e85;
-  --magenta-10-light: #db2984;
+  --magenta-10-light: #cf0c7a;
   --magenta-11-light: #6c3149;
   --magenta-12-light: #42242f;
   --magenta-contrast-light: #ffffff;
   --magenta-ink-light: #ffffff;
-  --magenta-pressed-light: #d12c7f;
+  --magenta-pressed-light: #c20272;
   --magenta-link-light: #84034b;
   --magenta-link-hover-light: #ffeef3;
   --magenta-1-dark: #120e10;
@@ -84,12 +88,12 @@
   --magenta-7-dark: #6b4754;
   --magenta-8-dark: #865a6a;
   --magenta-9-dark: #df1e85;
-  --magenta-10-dark: #db2984;
+  --magenta-10-dark: #cf0c7a;
   --magenta-11-dark: #f4bccf;
   --magenta-12-dark: #feeaf1;
   --magenta-contrast-dark: #ffffff;
   --magenta-ink-dark: #ffffff;
-  --magenta-pressed-dark: #d12c7f;
+  --magenta-pressed-dark: #c20272;
   --magenta-link-dark: #fdb6d0;
   --magenta-link-hover-dark: #2b1f23;
   --iris-1-light: #fbfcff;
@@ -101,12 +105,12 @@
   --iris-7-light: #c2c8f8;
   --iris-8-light: #aeb6f0;
   --iris-9-light: #5f55fa;
-  --iris-10-light: #5a4ef2;
+  --iris-10-light: #5949e5;
   --iris-11-light: #3d407a;
   --iris-12-light: #282b48;
   --iris-contrast-light: #ffffff;
   --iris-ink-light: #ffffff;
-  --iris-pressed-light: #5648ea;
+  --iris-pressed-light: #4f3bd7;
   --iris-link-light: #3c04c3;
   --iris-link-hover-light: #f0f2ff;
   --iris-1-dark: #0f0f13;
@@ -118,12 +122,12 @@
   --iris-7-dark: #4c4f72;
   --iris-8-dark: #60658f;
   --iris-9-dark: #5f55fa;
-  --iris-10-dark: #5a4ef2;
+  --iris-10-dark: #5949e5;
   --iris-11-dark: #c3cafb;
   --iris-12-dark: #edf0fe;
   --iris-contrast-dark: #ffffff;
   --iris-ink-dark: #ffffff;
-  --iris-pressed-dark: #5648ea;
+  --iris-pressed-dark: #4f3bd7;
   --iris-link-dark: #c2cafd;
   --iris-link-hover-dark: #20212e;
   --cobalt-1-light: #fafcff;
@@ -135,12 +139,12 @@
   --cobalt-7-light: #b0cff8;
   --cobalt-8-light: #97bdf0;
   --cobalt-9-light: #1475e1;
-  --cobalt-10-light: #2176d9;
+  --cobalt-10-light: #0968d6;
   --cobalt-11-light: #264975;
   --cobalt-12-light: #1e2f45;
   --cobalt-contrast-light: #ffffff;
   --cobalt-ink-light: #ffffff;
-  --cobalt-pressed-light: #2271cf;
+  --cobalt-pressed-light: #0161cc;
   --cobalt-link-light: #02468e;
   --cobalt-link-hover-light: #ecf4ff;
   --cobalt-1-dark: #0e1012;
@@ -152,12 +156,12 @@
   --cobalt-7-dark: #40546f;
   --cobalt-8-dark: #516b8c;
   --cobalt-9-dark: #1475e1;
-  --cobalt-10-dark: #2176d9;
+  --cobalt-10-dark: #0968d6;
   --cobalt-11-dark: #b1d1fa;
   --cobalt-12-dark: #e8f2fe;
   --cobalt-contrast-dark: #ffffff;
   --cobalt-ink-dark: #ffffff;
-  --cobalt-pressed-dark: #2271cf;
+  --cobalt-pressed-dark: #0161cc;
   --cobalt-link-dark: #afd1fe;
   --cobalt-link-hover-dark: #1c232c;
   --bee-1-light: #fdfcf8;
@@ -169,12 +173,12 @@
   --bee-7-light: #ddcb98;
   --bee-8-light: #d0b979;
   --bee-9-light: #f5c518;
-  --bee-10-light: #fdcd2a;
+  --bee-10-light: #f0b70c;
   --bee-11-light: #584504;
   --bee-12-light: #362d13;
   --bee-contrast-light: #000000;
   --bee-ink-light: #000000;
-  --bee-pressed-light: #ffd763;
+  --bee-pressed-light: #eba80c;
   --bee-link-light: #594501;
   --bee-link-hover-light: #faf3df;
   --bee-1-dark: #100f0c;
@@ -186,12 +190,12 @@
   --bee-7-dark: #5c5234;
   --bee-8-dark: #766842;
   --bee-9-dark: #f5c518;
-  --bee-10-dark: #fdcd2a;
+  --bee-10-dark: #f0b70c;
   --bee-11-dark: #e0cd97;
   --bee-12-dark: #f6f0df;
   --bee-contrast-dark: #000000;
   --bee-ink-dark: #000000;
-  --bee-pressed-dark: #ffd763;
+  --bee-pressed-dark: #eba80c;
   --bee-link-dark: #f2c94e;
   --bee-link-hover-dark: #252118;
   --citrus-1-light: #fcfdf7;
@@ -203,12 +207,12 @@
   --citrus-7-light: #c8d495;
   --citrus-8-light: #b6c378;
   --citrus-9-light: #beda36;
-  --citrus-10-light: #bdd836;
+  --citrus-10-light: #abcc29;
   --citrus-11-light: #485311;
   --citrus-12-light: #2b3110;
   --citrus-contrast-light: #000000;
   --citrus-ink-light: #000000;
-  --citrus-pressed-light: #bcd83a;
+  --citrus-pressed-light: #97bf13;
   --citrus-link-light: #485400;
   --citrus-link-hover-light: #f1f6de;
   --citrus-1-dark: #0f100c;
@@ -220,12 +224,12 @@
   --citrus-7-dark: #4f5827;
   --citrus-8-dark: #637033;
   --citrus-9-dark: #beda36;
-  --citrus-10-dark: #bdd836;
+  --citrus-10-dark: #abcc29;
   --citrus-11-dark: #cee28b;
   --citrus-12-dark: #edf7d2;
   --citrus-contrast-dark: #000000;
   --citrus-ink-dark: #000000;
-  --citrus-pressed-dark: #bcd83a;
+  --citrus-pressed-dark: #97bf13;
   --citrus-link-dark: #cbe648;
   --citrus-link-hover-dark: #202413;
   --mono-1-light: #fcfcfc;
@@ -237,12 +241,12 @@
   --mono-7-light: #cccccc;
   --mono-8-light: #bababa;
   --mono-9-light: #1a1a1a;
-  --mono-10-light: #141414;
+  --mono-10-light: #333333;
   --mono-11-light: #484848;
   --mono-12-light: #2e2e2e;
   --mono-contrast-light: #ffffff;
   --mono-ink-light: #ffffff;
-  --mono-pressed-light: #0f0f0f;
+  --mono-pressed-light: #4d4d4d;
   --mono-link-light: #484848;
   --mono-link-hover-light: #f3f3f3;
   --mono-1-dark: #0f0f0f;
@@ -254,12 +258,12 @@
   --mono-7-dark: #535353;
   --mono-8-dark: #696969;
   --mono-9-dark: #e6e6e6;
-  --mono-10-dark: #eeeeee;
+  --mono-10-dark: #d6d6d6;
   --mono-11-dark: #cecece;
   --mono-12-dark: #f0f0f0;
   --mono-contrast-dark: #000000;
   --mono-ink-dark: #000000;
-  --mono-pressed-dark: #f7f7f7;
+  --mono-pressed-dark: #c6c6c6;
   --mono-link-dark: #cecece;
   --mono-link-hover-dark: #222222;
   --flame-1-light: #fefcfc;
@@ -800,6 +804,23 @@
   --backdrop-hover-fill: rgb(0 0 0 / 6%);
   --backdrop-pressed-fill: rgb(0 0 0 / 10%);
 
+  /* Chip overlays let the bubble's own color show through. A shade sits on
+     light and mid-tone fills, a tint on dark ones. Same values in both modes.
+     Light text needs a stronger overlay to show: the tint always sits under
+     it, and a mid-tone fill with light text takes the strong shade. */
+  --shade-fill: rgb(0 0 0 / 10%);
+  --shade-hover-fill: rgb(0 0 0 / 14%);
+  --shade-strong-fill: rgb(0 0 0 / 16%);
+  --shade-strong-hover-fill: rgb(0 0 0 / 22%);
+  --tint-fill: rgb(255 255 255 / 16%);
+  --tint-hover-fill: rgb(255 255 255 / 20%);
+  /* A reaction strip sits between a bubble and its chips, and a whole bubble
+     under the pointer takes the quietest overlay of all. */
+  --shade-soft-fill: rgb(0 0 0 / 6%);
+  --tint-soft-fill: rgb(255 255 255 / 10%);
+  --shade-quiet-fill: rgb(0 0 0 / 4%);
+  --tint-quiet-fill: rgb(255 255 255 / 8%);
+
   /* --- Glass. A translucency ramp of fills. ---------------- */
   --glass-1: #ffffff5c; /* barely there   */
   --glass-2: #ffffff85; /* quiet glass    */
@@ -1070,13 +1091,24 @@
   --text-on-selection-own: var(--neutral-1);
   --surface-message: var(--bubble-received);
   --surface-message-own: var(--bubble-neutral);
+  --surface-message-hover: var(--bubble-hover);
+  --surface-message-own-hover: var(--bubble-own-hover);
+  --bubble-hover: color-mix(in srgb, var(--surface-message) 95%, black);
+  --bubble-own-hover: color-mix(in srgb, var(--surface-message-own) 95%, black);
   --text-message-own: var(--text-standard);
   --text-message-link-own: var(--text-link);
+  --affordance-message-own-hover: var(--shade-quiet-fill);
+  /* Arriving at a message lays the regular step across its bubble, about
+     twice hover, so the cue never reads as the pointer. */
+  --affordance-message-highlight: var(--shade-fill);
+  --affordance-message-own-highlight: var(--affordance-message-highlight);
+  --affordance-reaction: var(--shade-soft-fill);
+  --affordance-reaction-own: var(--affordance-reaction);
   /* Mentions are people, not links. Ordinary mentions stay neutral; a mention
      of you joins the strong group, because it asks for your attention. Own
      bubbles may override the -own trio to stay distinct from their fill. */
-  --affordance-mention: var(--neutral-4);
-  --affordance-mention-hover: var(--neutral-5);
+  --affordance-mention: var(--shade-fill);
+  --affordance-mention-hover: var(--shade-hover-fill);
   --text-mention: var(--text-standard);
   --affordance-mention-self: var(--affordance-accent-prominent);
   --affordance-mention-self-hover: var(--affordance-accent-prominent-hover);
@@ -1098,6 +1130,11 @@
   --text-success: var(--green-12);
   --icon-status-progress: var(--amber-10);
   --icon-status-complete: var(--green-10);
+  --icon-subtle: var(--text-subtle);
+  --icon-subtle-own: var(--icon-subtle);
+  --text-metadata-own: var(--text-metadata);
+  --icon-success: var(--green-11);
+  --icon-success-own: var(--icon-success);
   --status-online: var(--green-11);
   --status-availability-online: var(--green-10);
   --status-avatar-online: var(--green-10);
@@ -1112,6 +1149,8 @@
   --chart-series-4: var(--purple-9);
   --text-categorical-purple: var(--purple-12);
   --surface-categorical-purple: var(--purple-3);
+  --icon-categorical-purple: var(--purple-11);
+  --icon-categorical-purple-own: var(--icon-categorical-purple);
   --text-link: var(--text-standard);
   --affordance-link-hover: var(--affordance-subtle-hover);
   --border-standard: var(--neutral-3);
@@ -1191,17 +1230,25 @@
 .dark {
   --surface-message: var(--bubble-received);
   --surface-message-own: var(--bubble-neutral);
+  --surface-message-hover: var(--bubble-hover);
+  --surface-message-own-hover: var(--bubble-own-hover);
+  --bubble-hover: color-mix(in srgb, var(--surface-message) 95%, white);
+  --bubble-own-hover: color-mix(in srgb, var(--surface-message-own) 95%, white);
   --text-message-own: var(--text-standard);
   --text-message-link-own: var(--text-link);
-  /* Dark fills stay neutral; a mention of you carries the accent as ink,
-     as selected rows and links do. Neutral 7 drops warm accent inks below
-     AA, so hover settles one step back. */
-  --affordance-mention: var(--neutral-6);
-  --affordance-mention-hover: var(--neutral-5);
+  --affordance-message-own-hover: var(--tint-quiet-fill);
+  --affordance-message-highlight: var(--tint-fill);
+  --affordance-message-own-highlight: var(--affordance-message-highlight);
+  --affordance-reaction: var(--tint-soft-fill);
+  --affordance-reaction-own: var(--affordance-reaction);
+  /* Ordinary mentions tint the dark fill they sit on. A mention of you takes
+     the strong fill in both modes, because it asks for your attention. */
+  --affordance-mention: var(--tint-fill);
+  --affordance-mention-hover: var(--tint-hover-fill);
   --text-mention: var(--text-standard);
-  --affordance-mention-self: var(--neutral-6);
-  --affordance-mention-self-hover: var(--neutral-5);
-  --text-mention-self: var(--accent-11);
+  --affordance-mention-self: var(--affordance-accent-prominent);
+  --affordance-mention-self-hover: var(--affordance-accent-prominent-hover);
+  --text-mention-self: var(--text-on-accent);
   --affordance-mention-own: var(--affordance-mention);
   --affordance-mention-own-hover: var(--affordance-mention-hover);
   --text-mention-own: var(--text-mention);
@@ -1231,6 +1278,11 @@
   --text-success: var(--green-12);
   --icon-status-progress: var(--amber-10);
   --icon-status-complete: var(--green-10);
+  --icon-subtle: var(--text-subtle);
+  --icon-subtle-own: var(--icon-subtle);
+  --text-metadata-own: var(--text-metadata);
+  --icon-success: var(--green-11);
+  --icon-success-own: var(--icon-success);
   --status-online: var(--green-11);
   --status-availability-online: var(--green-10);
   --status-avatar-online: var(--green-10);
@@ -1244,6 +1296,8 @@
   --chart-series-4: var(--purple-10);
   --text-categorical-purple: var(--purple-12);
   --surface-categorical-purple: var(--purple-3);
+  --icon-categorical-purple: var(--purple-11);
+  --icon-categorical-purple-own: var(--icon-categorical-purple);
   --text-link: var(--text-standard);
   --affordance-link-hover: var(--affordance-subtle-hover);
   --border-standard: var(--neutral-5);
@@ -1535,6 +1589,11 @@
   --accent-pressed: var(--accent-pressed-light);
   --accent-link: var(--accent-link-light);
   --accent-link-hover: var(--accent-link-hover-light);
+  --accent-overlay: var(--accent-overlay-light);
+  --accent-overlay-hover: var(--accent-overlay-hover-light);
+  --accent-overlay-soft: var(--accent-overlay-soft-light);
+  --accent-overlay-quiet: var(--accent-overlay-quiet-light);
+  --accent-overlay-highlight: var(--accent-overlay-highlight-light);
   --text-accent: var(--text-standard);
   --border-accent: var(--border-focus);
   --affordance-accent: var(--affordance-subtle);
@@ -1570,6 +1629,11 @@
   --accent-pressed: var(--accent-pressed-dark);
   --accent-link: var(--accent-link-dark);
   --accent-link-hover: var(--accent-link-hover-dark);
+  --accent-overlay: var(--accent-overlay-dark);
+  --accent-overlay-hover: var(--accent-overlay-hover-dark);
+  --accent-overlay-soft: var(--accent-overlay-soft-dark);
+  --accent-overlay-quiet: var(--accent-overlay-quiet-dark);
+  --accent-overlay-highlight: var(--accent-overlay-highlight-dark);
   --text-accent: var(--text-standard);
   --border-accent: var(--border-focus);
   --affordance-accent: var(--affordance-subtle);
@@ -1605,6 +1669,11 @@
   --accent-pressed-light: var(--magenta-pressed-light);
   --accent-link-light: var(--magenta-link-light);
   --accent-link-hover-light: var(--magenta-link-hover-light);
+  --accent-overlay-light: var(--shade-strong-fill);
+  --accent-overlay-hover-light: var(--shade-strong-hover-fill);
+  --accent-overlay-soft-light: var(--shade-soft-fill);
+  --accent-overlay-quiet-light: var(--shade-quiet-fill);
+  --accent-overlay-highlight-light: var(--shade-fill);
   --accent-1-dark: var(--magenta-1-dark);
   --accent-2-dark: var(--magenta-2-dark);
   --accent-3-dark: var(--magenta-3-dark);
@@ -1622,6 +1691,11 @@
   --accent-pressed-dark: var(--magenta-pressed-dark);
   --accent-link-dark: var(--magenta-link-dark);
   --accent-link-hover-dark: var(--magenta-link-hover-dark);
+  --accent-overlay-dark: var(--shade-strong-fill);
+  --accent-overlay-hover-dark: var(--shade-strong-hover-fill);
+  --accent-overlay-soft-dark: var(--shade-soft-fill);
+  --accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --accent-overlay-highlight-dark: var(--shade-fill);
 }
 :root[data-accent="iris"],
 [data-accent="iris"] {
@@ -1642,6 +1716,11 @@
   --accent-pressed-light: var(--iris-pressed-light);
   --accent-link-light: var(--iris-link-light);
   --accent-link-hover-light: var(--iris-link-hover-light);
+  --accent-overlay-light: var(--shade-strong-fill);
+  --accent-overlay-hover-light: var(--shade-strong-hover-fill);
+  --accent-overlay-soft-light: var(--shade-soft-fill);
+  --accent-overlay-quiet-light: var(--shade-quiet-fill);
+  --accent-overlay-highlight-light: var(--shade-fill);
   --accent-1-dark: var(--iris-1-dark);
   --accent-2-dark: var(--iris-2-dark);
   --accent-3-dark: var(--iris-3-dark);
@@ -1659,6 +1738,11 @@
   --accent-pressed-dark: var(--iris-pressed-dark);
   --accent-link-dark: var(--iris-link-dark);
   --accent-link-hover-dark: var(--iris-link-hover-dark);
+  --accent-overlay-dark: var(--shade-strong-fill);
+  --accent-overlay-hover-dark: var(--shade-strong-hover-fill);
+  --accent-overlay-soft-dark: var(--shade-soft-fill);
+  --accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --accent-overlay-highlight-dark: var(--shade-fill);
 }
 :root[data-accent="cobalt"],
 [data-accent="cobalt"] {
@@ -1679,6 +1763,11 @@
   --accent-pressed-light: var(--cobalt-pressed-light);
   --accent-link-light: var(--cobalt-link-light);
   --accent-link-hover-light: var(--cobalt-link-hover-light);
+  --accent-overlay-light: var(--shade-strong-fill);
+  --accent-overlay-hover-light: var(--shade-strong-hover-fill);
+  --accent-overlay-soft-light: var(--shade-soft-fill);
+  --accent-overlay-quiet-light: var(--shade-quiet-fill);
+  --accent-overlay-highlight-light: var(--shade-fill);
   --accent-1-dark: var(--cobalt-1-dark);
   --accent-2-dark: var(--cobalt-2-dark);
   --accent-3-dark: var(--cobalt-3-dark);
@@ -1696,6 +1785,11 @@
   --accent-pressed-dark: var(--cobalt-pressed-dark);
   --accent-link-dark: var(--cobalt-link-dark);
   --accent-link-hover-dark: var(--cobalt-link-hover-dark);
+  --accent-overlay-dark: var(--shade-strong-fill);
+  --accent-overlay-hover-dark: var(--shade-strong-hover-fill);
+  --accent-overlay-soft-dark: var(--shade-soft-fill);
+  --accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --accent-overlay-highlight-dark: var(--shade-fill);
 }
 :root[data-accent="bee"],
 [data-accent="bee"] {
@@ -1716,6 +1810,11 @@
   --accent-pressed-light: var(--bee-pressed-light);
   --accent-link-light: var(--bee-link-light);
   --accent-link-hover-light: var(--bee-link-hover-light);
+  --accent-overlay-light: var(--shade-fill);
+  --accent-overlay-hover-light: var(--shade-hover-fill);
+  --accent-overlay-soft-light: var(--shade-soft-fill);
+  --accent-overlay-quiet-light: var(--shade-quiet-fill);
+  --accent-overlay-highlight-light: var(--shade-fill);
   --accent-1-dark: var(--bee-1-dark);
   --accent-2-dark: var(--bee-2-dark);
   --accent-3-dark: var(--bee-3-dark);
@@ -1733,6 +1832,11 @@
   --accent-pressed-dark: var(--bee-pressed-dark);
   --accent-link-dark: var(--bee-link-dark);
   --accent-link-hover-dark: var(--bee-link-hover-dark);
+  --accent-overlay-dark: var(--shade-fill);
+  --accent-overlay-hover-dark: var(--shade-hover-fill);
+  --accent-overlay-soft-dark: var(--shade-soft-fill);
+  --accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --accent-overlay-highlight-dark: var(--shade-fill);
 }
 :root[data-accent="citrus"],
 [data-accent="citrus"],
@@ -1754,6 +1858,11 @@
   --accent-pressed-light: var(--citrus-pressed-light);
   --accent-link-light: var(--citrus-link-light);
   --accent-link-hover-light: var(--citrus-link-hover-light);
+  --accent-overlay-light: var(--shade-fill);
+  --accent-overlay-hover-light: var(--shade-hover-fill);
+  --accent-overlay-soft-light: var(--shade-soft-fill);
+  --accent-overlay-quiet-light: var(--shade-quiet-fill);
+  --accent-overlay-highlight-light: var(--shade-fill);
   --accent-1-dark: var(--citrus-1-dark);
   --accent-2-dark: var(--citrus-2-dark);
   --accent-3-dark: var(--citrus-3-dark);
@@ -1771,6 +1880,11 @@
   --accent-pressed-dark: var(--citrus-pressed-dark);
   --accent-link-dark: var(--citrus-link-dark);
   --accent-link-hover-dark: var(--citrus-link-hover-dark);
+  --accent-overlay-dark: var(--shade-fill);
+  --accent-overlay-hover-dark: var(--shade-hover-fill);
+  --accent-overlay-soft-dark: var(--shade-soft-fill);
+  --accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --accent-overlay-highlight-dark: var(--shade-fill);
 }
 :root[data-accent="mono"],
 [data-accent="mono"] {
@@ -1791,6 +1905,11 @@
   --accent-pressed-light: var(--mono-pressed-light);
   --accent-link-light: var(--mono-link-light);
   --accent-link-hover-light: var(--mono-link-hover-light);
+  --accent-overlay-light: var(--tint-fill);
+  --accent-overlay-hover-light: var(--tint-hover-fill);
+  --accent-overlay-soft-light: var(--tint-soft-fill);
+  --accent-overlay-quiet-light: var(--tint-quiet-fill);
+  --accent-overlay-highlight-light: var(--tint-fill);
   --accent-1-dark: var(--mono-1-dark);
   --accent-2-dark: var(--mono-2-dark);
   --accent-3-dark: var(--mono-3-dark);
@@ -1808,6 +1927,11 @@
   --accent-pressed-dark: var(--mono-pressed-dark);
   --accent-link-dark: var(--mono-link-dark);
   --accent-link-hover-dark: var(--mono-link-hover-dark);
+  --accent-overlay-dark: var(--shade-fill);
+  --accent-overlay-hover-dark: var(--shade-hover-fill);
+  --accent-overlay-soft-dark: var(--shade-soft-fill);
+  --accent-overlay-quiet-dark: var(--shade-quiet-fill);
+  --accent-overlay-highlight-dark: var(--shade-fill);
 }
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
@@ -1827,26 +1951,40 @@
 
 :root[data-color-level="high"],
 [data-color-level="high"] .light {
-  --affordance-mention-own: var(--accent-10);
-  --affordance-mention-own-hover: var(--accent-pressed);
+  --affordance-mention-own: var(--accent-overlay);
+  --affordance-mention-own-hover: var(--accent-overlay-hover);
+  --affordance-message-own-hover: var(--accent-overlay-quiet);
+  --affordance-message-own-highlight: var(--accent-overlay-highlight);
+  --affordance-reaction-own: var(--accent-overlay-soft);
   --text-mention-own: var(--text-message-own);
   --surface-message-own: var(--accent-9);
   --text-message-own: var(--accent-ink);
   --surface-text-selection-own: var(--accent-ink);
   --text-on-selection-own: var(--surface-message-own);
   --text-message-link-own: var(--accent-ink);
+  --icon-subtle-own: var(--text-message-link-own);
+  --text-metadata-own: var(--text-message-link-own);
+  --icon-success-own: var(--text-message-link-own);
+  --icon-categorical-purple-own: var(--text-message-link-own);
 }
 
 :root[data-color-level="high"][data-color-mode="dark"],
 [data-color-level="high"] .dark {
-  --affordance-mention-own: var(--accent-10);
-  --affordance-mention-own-hover: var(--accent-pressed);
+  --affordance-mention-own: var(--accent-overlay);
+  --affordance-mention-own-hover: var(--accent-overlay-hover);
+  --affordance-message-own-hover: var(--accent-overlay-quiet);
+  --affordance-message-own-highlight: var(--accent-overlay-highlight);
+  --affordance-reaction-own: var(--accent-overlay-soft);
   --text-mention-own: var(--text-message-own);
   --surface-message-own: var(--accent-9);
   --text-message-own: var(--accent-ink);
   --surface-text-selection-own: var(--accent-ink);
   --text-on-selection-own: var(--surface-message-own);
   --text-message-link-own: var(--accent-ink);
+  --icon-subtle-own: var(--text-message-link-own);
+  --text-metadata-own: var(--text-message-link-own);
+  --icon-success-own: var(--text-message-link-own);
+  --icon-categorical-purple-own: var(--text-message-link-own);
 }
 
 /* Raised dark composers need a distinct nested fill and progressively lighter

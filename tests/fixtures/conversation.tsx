@@ -1,6 +1,7 @@
 import { ToastProvider } from "../../src/shared/design-system/ui/Toast";
 // Automated boundary proof only. No live broker, persistent messages or real keys.
 import { Context } from "@deepseek-ai/cordis";
+import { emptySync } from "../../src/features/communities/known-communities";
 import {
   StrictMode,
   useState,
@@ -291,6 +292,17 @@ conversation.tools.subscribe(() => {
   }
 });
 ctx.provide("relay", relay);
+ctx.provide("communityReader", {
+  subscribe: () => () => {},
+  snapshot: () => ({
+    status: "unavailable",
+    relayAvailable: false,
+    profile: { name: "", picture: "" },
+    memberships: [],
+    selected: null,
+    sync: emptySync(),
+  }),
+});
 // Channels needs Agents for its members/templates; this fixture has no agents.
 const noAgents = { status: "unavailable", agents: [], running: [], teams: [] };
 ctx.provide("agents", {

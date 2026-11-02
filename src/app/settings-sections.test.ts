@@ -32,13 +32,9 @@ const cards = [
   card("other/groups"),
   card("example/membership", { section: "administration" }),
   card("example/hosted", { group: "Communities" }),
-  card("block.hosted-communities/hosted", {
-    group: "Plugins",
-    title: "Builderlab hosting",
-  }),
   card("block.builderlab/login", {
     group: "Plugins",
-    title: "Builderlab agents",
+    title: "Builderlab",
   }),
 ];
 const primary = { id: "primary", name: "Primary" };
@@ -53,11 +49,7 @@ const app = [
   "updates",
   ...(developerMode ? ["developer"] : []),
 ];
-const plugins = [
-  "plugins",
-  "block.builderlab/login",
-  "block.hosted-communities/hosted",
-];
+const plugins = ["plugins", "block.builderlab/login"];
 const outline = (model: ReturnType<typeof settingsSections>) =>
   model.groups.map((group) => [
     group.id,

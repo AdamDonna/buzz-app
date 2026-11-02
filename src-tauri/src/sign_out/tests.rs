@@ -190,6 +190,35 @@ fn backup_choice_erase_refuses_a_linked_parent_without_touching_its_destination(
 }
 
 #[test]
+fn wipe_with_kept_agents_preserves_protection_defaults_and_revision() {
+    for remove_agents in [false, true] {
+        let (_dir, paths) = fixture();
+        let identities = paths.app_data.join(AGENTS).join("identities.json");
+        fs::write(&identities, "[]").unwrap();
+        let agents = buzz_agent_controller::AppAgents::open(identities.clone());
+        let owner = "a".repeat(64);
+        agents.upgrade_protection_storage().unwrap();
+        agents
+            .set_protection_defaults(
+                &owner,
+                0,
+                "security.test",
+                Some(serde_json::json!({"injection":true})),
+            )
+            .unwrap();
+        let saved = agents.protection_defaults(&owner).unwrap();
+        mark(&paths, true, remove_agents);
+        finish_pending(&paths, |_| Ok(()), || Ok(())).unwrap();
+        if remove_agents {
+            assert!(!identities.with_file_name("protection.json").exists());
+        } else {
+            let retained = buzz_agent_controller::AppAgents::open(identities);
+            assert_eq!(retained.protection_defaults(&owner).unwrap(), saved);
+        }
+    }
+}
+
+#[test]
 fn wipe_keeps_agents_unless_they_are_removed_too() {
     for remove_agents in [false, true] {
         let (dir, paths) = fixture();
@@ -1731,6 +1760,30 @@ fn development_launches_copy_the_installed_storage_and_take_only_their_sign_out(
     assert!(cache == dirs::data_local_dir().unwrap() || !dev.seeds.contains(&cache));
     assert_eq!(seeds(CURRENT), Some(Vec::new()));
     assert_eq!(seeds(LEGACY), Some(Vec::new()));
+}
+
+#[test]
+fn development_builds_use_the_installed_agents_unless_legacy_storage_is_due() {
+    use legacy_identifier::{agents, CURRENT, DEV, LEGACY};
+    let dir = tempfile::tempdir().unwrap();
+    let app_data = |identifier: &str| dir.path().join(identifier);
+    // With no installed storage, as after an erase that removed agents, never
+    // the stale copy in `.dev`.
+    assert_eq!(agents(DEV, &app_data(DEV)), app_data(CURRENT).join(AGENTS));
+    fs::create_dir(app_data(LEGACY)).unwrap();
+    // Before the installed app moves its storage, it is never created.
+    assert_eq!(agents(DEV, &app_data(DEV)), app_data(DEV).join(AGENTS));
+    assert!(!app_data(CURRENT).exists());
+    fs::rename(app_data(LEGACY), app_data(CURRENT)).unwrap();
+    assert_eq!(agents(DEV, &app_data(DEV)), app_data(CURRENT).join(AGENTS));
+    assert_eq!(
+        agents(CURRENT, &app_data(CURRENT)),
+        app_data(CURRENT).join(AGENTS)
+    );
+    assert_eq!(
+        agents("test", &app_data("test")),
+        app_data("test").join(AGENTS)
+    );
 }
 
 #[test]

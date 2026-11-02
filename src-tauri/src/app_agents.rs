@@ -4,7 +4,8 @@
 //! to the agent's community.
 use buzz_agent_controller::{
     inline_picture, AppAgent, AppAgents, Carry, Credentials, OldStores, PlatformCredentials,
-    PortSource, Portables, Published, Removal, Secret, CREDENTIALS_BUSY,
+    PortSource, Portables, ProtectionBinding, ProtectionDefaults, Published, Removal, Secret,
+    CREDENTIALS_BUSY,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,6 +14,11 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+use crate::federated_identity::{
+    agent::{Admission, AgentTokens, Stamp},
+    assertion,
+};
 
 /// A NIP-98 `Authorization` header for one signed HTTP auth event.
 fn authorization(event: Value) -> Result<String, String> {
@@ -46,6 +52,10 @@ pub(crate) struct AppAgentHost {
     profiles: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     removals: Arc<Mutex<Removals>>,
     hosting: Arc<Hosting>,
+    /// Each agent's NIP-FI grant and assertions, for an organization's communities.
+    tokens: AgentTokens,
+    /// Serializes owner prompts, without holding cross-process identity/custody locks.
+    protection_upgrade: Arc<Mutex<()>>,
 }
 impl AppAgentHost {
     /// `packaged` is false for a dev build, which steps aside for a packaged app.
@@ -53,20 +63,34 @@ impl AppAgentHost {
         path: Result<PathBuf, String>,
         old: Result<OldStores, String>,
         packaged: bool,
+        tokens: AgentTokens,
     ) -> Self {
         let hosts = path
             .as_ref()
             .map_err(Clone::clone)
             .and_then(|path| Ok(path.parent().ok_or("Invalid agent storage")?.join("hosts")));
+        let agents = path.and_then(|path| {
+            let agents = AppAgents::open(path);
+            if agents.protection_upgrade_needed()? {
+                confirm_protection_storage(&agents, &Mutex::new(()), protection_upgrade_dialog)?;
+            }
+            // So an older build can read the list again.
+            if let Err(error) = agents.upgrade() {
+                eprintln!("Saved agent identities were not upgraded: {error}");
+            }
+            Ok(agents)
+        });
+        let listed = agents.clone();
+        tokens.watch(move || {
+            Ok(listed
+                .clone()?
+                .list()?
+                .into_iter()
+                .map(|agent| (agent.owner, agent.pubkey))
+                .collect())
+        });
         Self {
-            agents: path.map(|path| {
-                let agents = AppAgents::open(path);
-                // So an older build can read the list again.
-                if let Err(error) = agents.upgrade() {
-                    eprintln!("Saved agent identities were not upgraded: {error}");
-                }
-                agents
-            }),
+            agents,
             old,
             credentials: Arc::new(PlatformCredentials::default()),
             keys: Arc::default(),
@@ -77,6 +101,8 @@ impl AppAgentHost {
                 packaged,
                 held: Mutex::default(),
             }),
+            tokens,
+            protection_upgrade: Arc::default(),
         }
     }
     /// The saved identities, for readers outside Agents such as the inventory.
@@ -135,6 +161,65 @@ impl AppAgentHost {
         })
         .await
     }
+    /// The agent, its key and its organization evidence, for one request.
+    async fn signer(
+        &self,
+        pubkey: String,
+        relay: String,
+    ) -> Result<(AppAgent, Arc<Secret>, Admission), String> {
+        let incarnation = self.tokens.stamp(&pubkey, &relay)?;
+        let (agent, key) = self.key(self.agent(pubkey, relay).await?).await?;
+        let evidence = self.tokens.authorize(&agent, &key, incarnation).await?;
+        Ok((agent, key, evidence))
+    }
+    /// Saves an imported identity with its key, opening the agent's next
+    /// incarnation if it was deleted here before. Work that keeps the returned
+    /// agent and key passes the returned incarnation to `evidence`, so a later
+    /// deletion refuses it even after another import of the same key.
+    async fn install(
+        &self,
+        prepared: buzz_agent_controller::NewAppAgent,
+        auth: Vec<String>,
+    ) -> Result<(AppAgent, Arc<Secret>, Stamp), String> {
+        let host = self.clone();
+        blocking(move || {
+            let mut keys = host.keys();
+            let (agent, key) =
+                host.agents
+                    .clone()?
+                    .commit(prepared, &auth, host.credentials.as_ref())?;
+            let key = Arc::new(key);
+            keys.insert(agent.pubkey.clone(), key.clone());
+            let incarnation = host.tokens.reopen_row(&agent.pubkey, &agent.relay)?;
+            Ok((agent, key, incarnation))
+        })
+        .await
+    }
+    /// Uploads an imported agent's inline picture and saves its URL, as the
+    /// installation `incarnation` returned by `install`.
+    async fn imported_picture(
+        &self,
+        agent: &AppAgent,
+        key: &Secret,
+        incarnation: Stamp,
+        mime: &str,
+        bytes: Vec<u8>,
+    ) -> Result<String, String> {
+        let agents = self.agents.clone()?;
+        let evidence = self.tokens.authorize(agent, key, incarnation).await?;
+        let receipt = evidence
+            .run(true, upload(agent, key, evidence.header(), bytes, mime))
+            .await?;
+        let url = receipt["url"].as_str().ok_or("Upload returned no URL")?;
+        let (pubkey, relay, picture) = (
+            agent.pubkey.clone(),
+            agent.relay.clone(),
+            Some(url.to_owned()),
+        );
+        blocking(move || evidence.commit(true, || agents.set_picture(&pubkey, &relay, picture)))
+            .await?;
+        Ok(url.to_owned())
+    }
     /// Deletes its key in the community at `relay` once any profile publication
     /// in flight has settled, so the community's cleanup sees every profile it
     /// will ever have. The row stays, marked deleted, until the WebView has
@@ -144,6 +229,14 @@ impl AppAgentHost {
         let page = self.removals().page;
         let turn = self.profile_turn(&pubkey);
         let _turn = turn.lock().await;
+        // Its grant goes with its last community. Checked before the removal,
+        // so a request in flight is refused rather than outliving the key.
+        if self.holds_removal(page, &pubkey, &relay) {
+            self.tokens.forget_row(&pubkey, &relay)?;
+            if let Some(owner) = self.last_community(&pubkey, &relay).await? {
+                self.tokens.forget(&owner, &pubkey).await?;
+            }
+        }
         let host = self.clone();
         blocking(move || {
             // Held across the deletion, so no publication re-reads the key meanwhile.
@@ -172,6 +265,34 @@ impl AppAgentHost {
         })
         .await
     }
+    /// Whether this page holds the agent's removal from the community at `relay`.
+    fn holds_removal(&self, page: u64, pubkey: &str, relay: &str) -> bool {
+        let removals = self.removals();
+        removals.page == page
+            && removals
+                .held
+                .get(pubkey)
+                .is_some_and(|removal| removal.is(pubkey, relay))
+    }
+    /// The agent's owner, if the community at `relay` is the last one where it
+    /// has its key.
+    async fn last_community(&self, pubkey: &str, relay: &str) -> Result<Option<String>, String> {
+        let (host, pubkey, relay) = (self.clone(), pubkey.to_owned(), relay.to_owned());
+        blocking(move || {
+            let rows = host.agents.clone()?.list()?;
+            let live =
+                |agent: &&AppAgent| agent.pubkey == pubkey && !agent.deleted && !agent.joining;
+            if rows.iter().filter(live).any(|agent| agent.relay != relay) {
+                return Ok(None);
+            }
+            Ok(rows
+                .iter()
+                .filter(live)
+                .find(|agent| agent.relay == relay)
+                .map(|agent| agent.owner.clone()))
+        })
+        .await
+    }
     /// The agent in the community at `relay`, if it still has its key there.
     /// One deleted elsewhere loses its cached key.
     async fn agent(&self, pubkey: String, relay: String) -> Result<AppAgent, String> {
@@ -187,11 +308,42 @@ impl AppAgentHost {
     }
 }
 
+/// Explicit native owner consent; no plugin argument can approve this upgrade.
+fn confirm_protection_storage(
+    agents: &AppAgents,
+    prompt: &Mutex<()>,
+    confirm: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    let _prompt = prompt
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if agents.protection_storage_current()? {
+        return Ok(());
+    }
+    if !confirm() {
+        return Err("Agent storage upgrade cancelled. Saved agents and defaults were left unchanged. Restart Buzz to retry a cancelled startup upgrade.".into());
+    }
+    agents.upgrade_protection_storage()
+}
+
+fn protection_upgrade_dialog() -> bool {
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Upgrade local agents for protection?")
+        .set_description("This is a one-way upgrade for ALL agents on this device. Older Buzz builds will no longer be able to list, run or remove any of these agents, even after protection is turned off.\n\nDevelopment Buzz shares these agents with the installed app. Close other Buzz builds before continuing and keep a compatible build installed. Agent identities and keys will be preserved.\n\nCancel leaves the saved files unchanged.")
+        .set_buttons(rfd::MessageButtons::OkCancelCustom("Upgrade agents".into(), "Cancel".into()))
+        .show();
+    // Windows without common-controls-v6 falls back to the standard OK label.
+    result == rfd::MessageDialogResult::Ok
+        || result == rfd::MessageDialogResult::Custom("Upgrade agents".into())
+}
+
 /// Which running copy of the app runs each agent. Every copy on this machine
 /// (the packaged app and any dev builds) shares the agent list and hears the
 /// same events. The packaged app always runs what it can and holds
-/// `<pubkey>.packaged` while it does; there is only ever one, since release
-/// builds are single-instance. Dev builds step aside while that is held, and
+/// `<pubkey>.packaged` while it does; there is only ever one, since only a
+/// release build with the release identifier counts and it is single-instance.
+/// Dev builds step aside while that is held, and
 /// otherwise run each agent from whichever holds `<pubkey>.lock`. The OS lets go
 /// of both when a copy exits, however it exits.
 struct Hosting {
@@ -209,8 +361,18 @@ impl Hosting {
     /// Whether this copy runs the agent. The packaged app always does, so a
     /// stuck dev build can never silence it. A dev build takes the agent if no
     /// other copy runs it, and lets go while the packaged app does.
-    #[allow(clippy::incompatible_msrv)] // `File` locking; see `sign_out::Instance`.
+    #[cfg(test)]
     fn claim(&self, pubkey: &str) -> Result<bool, String> {
+        self.claim_validated(pubkey, || Ok(()))
+    }
+    /// Newly acquired custody is provisional until admission is validated.
+    /// Validation errors leave an existing shared lock intact.
+    #[allow(clippy::incompatible_msrv)] // `File` locking; see `sign_out::Instance`.
+    fn claim_validated(
+        &self,
+        pubkey: &str,
+        validate: impl FnOnce() -> Result<(), String>,
+    ) -> Result<bool, String> {
         if pubkey.len() != 64
             || !pubkey
                 .bytes()
@@ -222,27 +384,48 @@ impl Hosting {
         std::fs::create_dir_all(dir).map_err(|_| "Could not open agent hosting")?;
         let packaged = dir.join(format!("{pubkey}.packaged"));
         let mut held = self.held();
-        if self.packaged {
-            if !held.contains_key(pubkey) {
-                let file = open_lock(&packaged)?;
-                // A dev build checking for it holds it briefly; this tries again next time.
-                if lock(file.try_lock())? {
-                    held.insert(pubkey.into(), file);
-                }
-            }
-            return Ok(true);
-        }
-        if !lock(open_lock(&packaged)?.try_lock_shared())? {
+        if !self.packaged && !lock(open_lock(&packaged)?.try_lock_shared())? {
             held.remove(pubkey);
             return Ok(false);
         }
-        if !held.contains_key(pubkey) {
-            let file = open_lock(&dir.join(format!("{pubkey}.lock")))?;
-            if lock(file.try_lock())? {
-                held.insert(pubkey.into(), file);
-            }
+        if held.contains_key(pubkey) {
+            validate()?;
+            return Ok(true);
         }
-        Ok(held.contains_key(pubkey))
+        let path = if self.packaged {
+            packaged
+        } else {
+            dir.join(format!("{pubkey}.lock"))
+        };
+        let file = open_lock(&path)?;
+        if !lock(file.try_lock())? {
+            return Ok(false);
+        }
+        validate()?;
+        held.insert(pubkey.into(), file);
+        Ok(true)
+    }
+    /// Policy writes require this copy's custody and no overlapping dev/packaged host.
+    #[allow(clippy::incompatible_msrv)]
+    fn protecting<T>(
+        &self,
+        pubkey: &str,
+        change: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let held = self.held();
+        if !held.contains_key(pubkey) {
+            return Err("Change protection in the Buzz app that runs this agent".into());
+        }
+        let dir = self.dir.as_ref().map_err(Clone::clone)?;
+        let other = open_lock(&dir.join(format!(
+            "{pubkey}.{}",
+            if self.packaged { "lock" } else { "packaged" }
+        )))?;
+        if !lock(other.try_lock())? {
+            return Err("Quit the other copy of Buzz before changing protection".into());
+        }
+        // Both hosting locks stay held across the native CAS write.
+        change()
     }
 }
 /// Whether a try at a lock took it; closing the file lets go.
@@ -300,6 +483,9 @@ pub(crate) struct AppAgentSummary {
     home: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     joining: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protection: Option<ProtectionBinding>,
+    protection_revision: u64,
 }
 impl From<AppAgent> for AppAgentSummary {
     fn from(agent: AppAgent) -> Self {
@@ -314,6 +500,8 @@ impl From<AppAgent> for AppAgentSummary {
             deleting: agent.deleting,
             home: agent.home,
             joining: agent.joining,
+            protection: agent.protection,
+            protection_revision: agent.protection_revision,
         }
     }
 }
@@ -365,6 +553,52 @@ pub(crate) async fn app_agent_create(
     .await
 }
 
+/// Reads the owner's defaults without changing storage.
+#[tauri::command]
+pub(crate) async fn app_agent_protection_defaults(
+    host: tauri::State<'_, AppAgentHost>,
+    owner: String,
+) -> Result<ProtectionDefaults, String> {
+    let agents = host.agents()?;
+    blocking(move || agents.protection_defaults(&owner)).await
+}
+#[tauri::command]
+/// Changes only plugin defaults, after any required owner storage confirmation.
+pub(crate) async fn app_agent_set_protection_defaults(
+    host: tauri::State<'_, AppAgentHost>,
+    owner: String,
+    revision: u64,
+    provider: String,
+    policy: Option<Value>,
+) -> Result<(), String> {
+    let agents = host.agents()?;
+    let prompt = host.protection_upgrade.clone();
+    blocking(move || {
+        confirm_protection_storage(&agents, &prompt, protection_upgrade_dialog)?;
+        agents.set_protection_defaults(&owner, revision, &provider, policy)
+    })
+    .await
+}
+#[tauri::command]
+pub(crate) async fn app_agent_set_protection(
+    state: tauri::State<'_, AppAgentHost>,
+    pubkey: String,
+    revision: u64,
+    provider: String,
+    policy: Option<Value>,
+) -> Result<(), String> {
+    let agents = state.agents.clone()?;
+    let hosting = state.hosting.clone();
+    let prompt = state.protection_upgrade.clone();
+    blocking(move || {
+        confirm_protection_storage(&agents, &prompt, protection_upgrade_dialog)?;
+        hosting.protecting(&pubkey, || {
+            agents.set_protection(&pubkey, revision, &provider, policy)
+        })
+    })
+    .await
+}
+
 /// Identities earlier agent systems saved on this machine, as Agents could take
 /// them over; the caller leaves out its own.
 #[tauri::command]
@@ -388,7 +622,8 @@ pub(crate) async fn app_agent_port(
     owner: String,
     agent_type: String,
 ) -> Result<Ported, String> {
-    let agents = state.agents.clone()?;
+    // Unavailable storage refuses before the old store gives up its key.
+    state.agents.clone()?;
     let old = state.old.clone()?;
     let credentials = state.credentials.clone();
     let (found, key) = blocking(move || {
@@ -418,15 +653,7 @@ pub(crate) async fn app_agent_port(
         .inner()
         .authorize_agent(owner, prepared.pubkey().to_owned())
         .await?;
-    let host = state.inner().clone();
-    let (mut agent, key) = blocking(move || {
-        let mut keys = host.keys();
-        let (agent, key) = agents.commit(prepared, &auth, host.credentials.as_ref())?;
-        let key = Arc::new(key);
-        keys.insert(agent.pubkey.clone(), key.clone());
-        Ok((agent, key))
-    })
-    .await?;
+    let (mut agent, key, incarnation) = state.install(prepared, auth).await?;
     let mut notes = vec![];
     // Old Buzz kept some pictures inline; the community serves the upload. The
     // agent comes over without it if that fails, which the import reports.
@@ -441,19 +668,10 @@ pub(crate) async fn app_agent_port(
         ));
     }
     if let Some((mime, bytes)) = inline.and_then(inline_picture) {
-        let agents = state.agents.clone()?;
-        let uploaded = async {
-            let receipt = upload(&agent, &key, bytes, mime).await?;
-            let url = receipt["url"].as_str().ok_or("Upload returned no URL")?;
-            let (pubkey, relay, picture) = (
-                agent.pubkey.clone(),
-                agent.relay.clone(),
-                Some(url.to_owned()),
-            );
-            blocking(move || agents.set_picture(&pubkey, &relay, picture)).await?;
-            Ok::<_, String>(url.to_owned())
-        };
-        match uploaded.await {
+        match state
+            .imported_picture(&agent, &key, incarnation, mime, bytes)
+            .await
+        {
             Ok(url) => agent.picture = Some(url),
             Err(error) => {
                 eprintln!("Imported agent picture was not saved: {error}");
@@ -516,15 +734,15 @@ pub(crate) async fn app_agent_join(
         let _keys = host.keys();
         host.credentials.retry();
         let agents = host.agents.clone()?;
-        Ok(agents
-            .join(
-                &pubkey,
-                &from,
-                &destination,
-                picture,
-                host.credentials.as_ref(),
-            )?
-            .into())
+        let agent = agents.join(
+            &pubkey,
+            &from,
+            &destination,
+            picture,
+            host.credentials.as_ref(),
+        )?;
+        host.tokens.reopen_row(&agent.pubkey, &agent.relay)?;
+        Ok(agent.into())
     })
     .await
 }
@@ -611,9 +829,24 @@ pub(crate) async fn app_agent_forget(
 pub(crate) async fn app_agent_claim(
     state: tauri::State<'_, AppAgentHost>,
     pubkey: String,
+    revision: Option<u64>,
 ) -> Result<bool, String> {
     let hosting = state.hosting.clone();
-    blocking(move || hosting.claim(&pubkey)).await
+    let agents = state.agents.clone()?;
+    blocking(move || {
+        hosting.claim_validated(&pubkey, || {
+            let current = agents
+                .list()?
+                .into_iter()
+                .find(|agent| agent.pubkey == pubkey && !agent.deleted)
+                .ok_or("No such agent on this device")?;
+            if current.protection_revision != revision.unwrap_or(0) {
+                return Err("Agent protection changed; refresh before running this agent".into());
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// Lets another copy of the app run the agent, as when this one cannot.
@@ -639,9 +872,11 @@ pub(crate) async fn app_agent_publish(
     relay: String,
     event: AppAgentEvent,
 ) -> Result<Value, String> {
-    let (agent, key) = state.key(state.agent(pubkey, relay).await?).await?;
+    let (agent, key, evidence) = state.signer(pubkey, relay).await?;
     let signed = agent.sign(&key, event.kind, event.content, event.tags)?;
-    post(&agent, &key, signed).await
+    evidence
+        .run(true, post(&agent, &key, evidence.header(), signed))
+        .await
 }
 
 /// Publishes changed public metadata. Safe to call any time; one publication
@@ -654,28 +889,37 @@ pub(crate) async fn app_agent_publish_profile(
 ) -> Result<(), String> {
     let turn = state.profile_turn(&pubkey);
     let _turn = turn.lock().await;
+    let incarnation = state.tokens.stamp(&pubkey, &relay)?;
     let agent = state.agent(pubkey, relay).await?;
     if agent.profile_is_current() {
         return Ok(());
     }
     let (agent, key) = state.key(agent).await?;
-    let signed = post(&agent, &key, agent.profile_event(&key)?).await?;
+    let evidence = state.tokens.authorize(&agent, &key, incarnation).await?;
+    let signed = evidence
+        .run(
+            true,
+            post(&agent, &key, evidence.header(), agent.profile_event(&key)?),
+        )
+        .await?;
     let created_at = signed
         .get("created_at")
         .and_then(Value::as_u64)
         .ok_or("Invalid agent event")?;
     let agents = state.agents.clone()?;
     blocking(move || {
-        agents.published(
-            &agent.pubkey,
-            &agent.relay,
-            Published {
-                name: agent.name,
-                picture: agent.picture,
-                about: agent.about,
-                created_at,
-            },
-        )
+        evidence.commit(true, || {
+            agents.published(
+                &agent.pubkey,
+                &agent.relay,
+                Published {
+                    name: agent.name,
+                    picture: agent.picture,
+                    about: agent.about,
+                    created_at,
+                },
+            )
+        })
     })
     .await
 }
@@ -692,13 +936,20 @@ pub(crate) async fn app_agent_query(
     if filters.is_empty() || filters.len() > 8 {
         return Err("Agents read with one to eight filters".into());
     }
-    let (agent, key) = state.key(state.agent(pubkey, relay).await?).await?;
-    read(&agent, &key, &filters).await
+    let (agent, key, evidence) = state.signer(pubkey, relay).await?;
+    evidence
+        .run(false, read(&agent, &key, evidence.header(), &filters))
+        .await
 }
 
-async fn read(agent: &AppAgent, key: &Secret, filters: &[Value]) -> Result<Value, String> {
+async fn read(
+    agent: &AppAgent,
+    key: &Secret,
+    evidence: Option<&str>,
+    filters: &[Value],
+) -> Result<Value, String> {
     let bytes = serde_json::to_vec(filters).map_err(|_| "Could not encode agent read")?;
-    let (status, body) = signed_read(agent, key, agent.query_url(), bytes).await?;
+    let (status, body) = signed_read(agent, key, evidence, agent.query_url(), bytes).await?;
     if !status.is_success() {
         return Err(format!(
             "The community refused the agent read: {}",
@@ -713,11 +964,11 @@ async fn read(agent: &AppAgent, key: &Secret, filters: &[Value]) -> Result<Value
 async fn signed_read(
     agent: &AppAgent,
     key: &Secret,
+    evidence: Option<&str>,
     url: String,
     bytes: Vec<u8>,
 ) -> Result<(reqwest::StatusCode, Vec<u8>), String> {
-    let response = client()?
-        .post(&url)
+    let response = attach(client()?.post(&url), evidence)
         .timeout(Duration::from_secs(20))
         .header("Content-Type", "application/json")
         .header(
@@ -745,19 +996,26 @@ pub(crate) async fn app_agent_search_profiles(
     query: String,
     limit: u32,
 ) -> Result<Option<Value>, String> {
-    let (agent, key) = state.key(state.agent(pubkey, relay).await?).await?;
-    search_profiles(&agent, &key, &query, limit).await
+    let (agent, key, evidence) = state.signer(pubkey, relay).await?;
+    evidence
+        .run(
+            false,
+            search_profiles(&agent, &key, evidence.header(), &query, limit),
+        )
+        .await
 }
 
 async fn search_profiles(
     agent: &AppAgent,
     key: &Secret,
+    evidence: Option<&str>,
     query: &str,
     limit: u32,
 ) -> Result<Option<Value>, String> {
     let bytes = serde_json::to_vec(&serde_json::json!({ "query": query, "limit": limit }))
         .map_err(|_| "Could not encode profile search")?;
-    let (status, body) = signed_read(agent, key, agent.profile_search_url(), bytes).await?;
+    let (status, body) =
+        signed_read(agent, key, evidence, agent.profile_search_url(), bytes).await?;
     if matches!(
         status,
         reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED
@@ -812,14 +1070,17 @@ pub(crate) async fn app_agent_upload(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|_| "Invalid upload data")?;
-    let (agent, key) = state.key(state.agent(pubkey, relay).await?).await?;
-    upload(&agent, &key, bytes, &mime).await
+    let (agent, key, evidence) = state.signer(pubkey, relay).await?;
+    evidence
+        .run(true, upload(&agent, &key, evidence.header(), bytes, &mime))
+        .await
 }
 
 /// Uploads one blob to the agent's community as the agent.
 async fn upload(
     agent: &AppAgent,
     key: &Secret,
+    evidence: Option<&str>,
     bytes: Vec<u8>,
     mime: &str,
 ) -> Result<Value, String> {
@@ -828,8 +1089,7 @@ async fn upload(
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let auth = serde_json::to_vec(&agent.upload_auth(key, &sha256)?)
         .map_err(|_| "Could not authorize upload")?;
-    let response = client()?
-        .put(agent.upload_url())
+    let response = attach(client()?.put(agent.upload_url()), evidence)
         .timeout(Duration::from_secs(120))
         .header("Content-Type", mime)
         .header("X-SHA-256", &sha256)
@@ -914,12 +1174,12 @@ pub(crate) async fn app_agent_media(
 ) -> Result<AgentMedia, String> {
     use base64::Engine;
     let dir = std::env::temp_dir().join("buzz-agent-media");
-    let (agent, key) = state.key(state.agent(pubkey, relay).await?).await?;
+    let (agent, key, evidence) = state.signer(pubkey, relay).await?;
     let url = agent.media_url(&url)?;
     let auth =
         serde_json::to_vec(&agent.media_auth(&key)?).map_err(|_| "Could not authorize media")?;
-    let response = client()?
-        .get(&url)
+    evidence.dispatch()?;
+    let response = attach(client()?.get(&url), evidence.header())
         .timeout(Duration::from_secs(600))
         .header(
             "Authorization",
@@ -932,15 +1192,26 @@ pub(crate) async fn app_agent_media(
         .send()
         .await
         .map_err(|_| "Agent media request failed")?;
-    save_media(&agent, &url, response, &dir).await
+    let result = save_media_admitted(&agent, &url, response, &dir, Some(&evidence)).await;
+    evidence.commit(false, || result)
 }
 
 /// Streams a media response to `dir`, named by its hash, checking the hash.
+#[cfg(test)]
 async fn save_media(
+    agent: &AppAgent,
+    url: &str,
+    response: reqwest::Response,
+    dir: &Path,
+) -> Result<AgentMedia, String> {
+    save_media_admitted(agent, url, response, dir, None).await
+}
+async fn save_media_admitted(
     agent: &AppAgent,
     url: &str,
     mut response: reqwest::Response,
     dir: &Path,
+    admission: Option<&Admission>,
 ) -> Result<AgentMedia, String> {
     use base64::Engine;
     use sha2::{Digest, Sha256};
@@ -995,8 +1266,16 @@ async fn save_media(
         }
     }
     let path = dir.join(name);
-    file.persist(&path)
-        .map_err(|_| "Media could not be saved")?;
+    let persist = || {
+        file.persist(&path)
+            .map(drop)
+            .map_err(|_| "Media could not be saved".to_owned())
+    };
+    if let Some(admission) = admission {
+        admission.commit(false, persist)?;
+    } else {
+        persist()?;
+    }
     Ok(AgentMedia {
         path: path.to_string_lossy().into_owned(),
         data: (shown && size <= MEDIA_LIMIT)
@@ -1006,20 +1285,31 @@ async fn save_media(
     })
 }
 
-/// Writes one memory entry, encrypted to the agent's owner. `after` is the
-/// `created_at` of the entry it replaces, or 0.
+/// Writes one memory entry, encrypted to the agent's owner; a null body
+/// deletes it. `after` is the `created_at` of the entry it replaces, or 0.
 #[tauri::command]
 pub(crate) async fn app_agent_remember(
     state: tauri::State<'_, AppAgentHost>,
     pubkey: String,
     relay: String,
     slug: String,
-    body: String,
+    body: Option<String>,
     after: u64,
 ) -> Result<Value, String> {
-    let (agent, key) = state.key(state.agent(pubkey, relay).await?).await?;
-    let signed = agent.memory(&key, &slug, &body, after)?;
-    post(&agent, &key, signed).await
+    let (agent, key, evidence) = state.signer(pubkey, relay).await?;
+    let signed = agent.memory(&key, &slug, body.as_deref(), after)?;
+    evidence
+        .run(true, post(&agent, &key, evidence.header(), signed))
+        .await
+}
+
+/// Adds the agent's NIP-FI assertion, beside its NIP-98 `Authorization`, for
+/// a community of the owner's organization.
+fn attach(request: reqwest::RequestBuilder, evidence: Option<&str>) -> reqwest::RequestBuilder {
+    match evidence {
+        Some(evidence) => request.header(assertion::HEADER, evidence),
+        None => request,
+    }
 }
 
 /// One client for every agent request, so frequent small posts such as
@@ -1063,15 +1353,19 @@ fn reason(status: reqwest::StatusCode, body: &[u8]) -> String {
         .unwrap_or_else(|| format!("status {}", status.as_u16()))
 }
 
-async fn post(agent: &AppAgent, key: &Secret, signed: Value) -> Result<Value, String> {
+async fn post(
+    agent: &AppAgent,
+    key: &Secret,
+    evidence: Option<&str>,
+    signed: Value,
+) -> Result<Value, String> {
     let event_id = signed
         .get("id")
         .and_then(Value::as_str)
         .ok_or("Invalid agent event")?
         .to_owned();
     let bytes = serde_json::to_vec(&signed).map_err(|_| "Could not encode agent event")?;
-    let response = client()?
-        .post(agent.events_url())
+    let response = attach(client()?.post(agent.events_url()), evidence)
         .timeout(Duration::from_secs(20))
         .header("Content-Type", "application/json")
         .header(
@@ -1103,6 +1397,80 @@ async fn post(agent: &AppAgent, key: &Secret, signed: Value) -> Result<Value, St
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn declining_storage_upgrade_leaves_files_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identities.json");
+        std::fs::write(&path, "[]").unwrap();
+        let agents = AppAgents::open(path.clone());
+        assert!(confirm_protection_storage(&agents, &Mutex::new(()), || false).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "[]");
+        assert!(!dir.path().join("protection.json").exists());
+        assert!(!agents.protection_storage_current().unwrap());
+    }
+
+    #[test]
+    fn storage_confirmation_holds_no_identity_lock_and_keeps_concurrent_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identities.json");
+        let key = Secret::generate().unwrap();
+        let agent = agent_at("wss://home.example".into(), &key);
+        std::fs::write(&path, serde_json::to_vec(&vec![agent.clone()]).unwrap()).unwrap();
+        let agents = AppAgents::open(path.clone());
+        confirm_protection_storage(&agents, &Mutex::new(()), || {
+            let other = AppAgents::open(path);
+            other.rename(&agent.pubkey, "Concurrent rename").unwrap();
+            other.upgrade_protection_storage().unwrap();
+            other
+                .set_protection(
+                    &agent.pubkey,
+                    0,
+                    "security.test",
+                    Some(serde_json::json!({})),
+                )
+                .unwrap();
+            true
+        })
+        .unwrap();
+        let kept = agents.get(&agent.pubkey, &agent.relay).unwrap();
+        assert_eq!(kept.name, "Concurrent rename");
+        assert_eq!(kept.protection_revision, 1);
+    }
+
+    #[test]
+    fn concurrent_local_protection_saves_share_one_upgrade_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents = AppAgents::open(dir.path().join("identities.json"));
+        let prompt = Arc::new(Mutex::new(()));
+        let shown = Arc::new(AtomicU32::new(0));
+        let (entered, started) = std::sync::mpsc::channel();
+        let (allow, allowed) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let first_agents = agents.clone();
+            let first_prompt = prompt.clone();
+            let first_shown = shown.clone();
+            let first = scope.spawn(move || {
+                confirm_protection_storage(&first_agents, &first_prompt, || {
+                    first_shown.fetch_add(1, Ordering::SeqCst);
+                    entered.send(()).unwrap();
+                    allowed.recv().unwrap();
+                    true
+                })
+            });
+            started.recv().unwrap();
+            let second = scope.spawn(|| {
+                confirm_protection_storage(&agents, &prompt, || {
+                    shown.fetch_add(1, Ordering::SeqCst);
+                    true
+                })
+            });
+            allow.send(()).unwrap();
+            first.join().unwrap().unwrap();
+            second.join().unwrap().unwrap();
+        });
+        assert_eq!(shown.load(Ordering::SeqCst), 1);
+    }
 
     /// One saved key, behind a store that is busy for the first few reads.
     struct Busy(Mutex<Option<String>>, AtomicU32);
@@ -1149,6 +1517,8 @@ mod tests {
             profiles: Arc::default(),
             removals: Arc::default(),
             hosting: Arc::new(hosting(Err("unused".into()), true)),
+            tokens: AgentTokens::unconfigured(),
+            protection_upgrade: Arc::default(),
         };
         let agent = AppAgent {
             pubkey: key.pubkey().into(),
@@ -1164,6 +1534,8 @@ mod tests {
             deleting: false,
             home: None,
             joining: false,
+            protection: None,
+            protection_revision: 0,
         };
         let (_, read) = host.key(agent).await.unwrap();
         assert_eq!(read.pubkey(), key.pubkey());
@@ -1197,7 +1569,12 @@ mod tests {
             ..agent_at("wss://relay.example".into(), &key)
         };
         std::fs::write(&path, serde_json::to_vec(&[&agent]).unwrap()).unwrap();
-        let mut host = AppAgentHost::new(Ok(path), Err("unused".into()), true);
+        let mut host = AppAgentHost::new(
+            Ok(path),
+            Err("unused".into()),
+            true,
+            AgentTokens::unconfigured(),
+        );
         host.credentials = Arc::new(Busy(
             Mutex::new(Some(key.hex().to_string())),
             AtomicU32::new(0),
@@ -1239,6 +1616,280 @@ mod tests {
         assert!(!host.keys().contains_key(&agent.pubkey));
         agents.forget(&agent.pubkey, &agent.relay).unwrap();
         assert!(agents.list().unwrap().is_empty());
+    }
+
+    /// Saved keys in memory; `gate` holds the next read once it is called.
+    #[derive(Default)]
+    struct Gated(
+        Mutex<HashMap<String, String>>,
+        Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    );
+    impl Credentials for Gated {
+        fn read_legacy(
+            &self,
+            _: buzz_agent_controller::LegacySource,
+            _: &str,
+        ) -> Result<Secret, String> {
+            unreachable!()
+        }
+        fn read(&self, id: &str, pubkey: &str) -> Result<Option<Secret>, String> {
+            let gate = self.1.lock().unwrap().take();
+            if let Some((held, release)) = gate {
+                held.send(()).unwrap();
+                release.recv().unwrap();
+            }
+            let saved = self.0.lock().unwrap().get(id).cloned();
+            saved.map(|hex| Secret::parse(&hex, pubkey)).transpose()
+        }
+        fn add(&self, id: &str, key: &Secret) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(id.into(), key.hex().to_string());
+            Ok(())
+        }
+        fn delete(&self, id: &str, _: &str) -> Result<(), String> {
+            self.0.lock().unwrap().remove(id);
+            Ok(())
+        }
+    }
+
+    /// The owner's NIP-OA tag for `agent`, from a fixed owner key.
+    fn attestation(agent: &str) -> Vec<String> {
+        use secp256k1::{Keypair, Secp256k1, SecretKey};
+        use sha2::{Digest, Sha256};
+        let secp = Secp256k1::new();
+        let mut bytes = [0; 32];
+        bytes[31] = 2;
+        let pair = Keypair::from_secret_key(&secp, &SecretKey::from_byte_array(bytes).unwrap());
+        let digest = Sha256::digest(format!("nostr:agent-auth:{agent}:"));
+        let sig = secp.sign_schnorr_no_aux_rand(&digest, &pair);
+        vec![
+            "auth".into(),
+            pair.x_only_public_key().0.to_string(),
+            String::new(),
+            sig.to_string(),
+        ]
+    }
+
+    /// Starts the agent's Delete and holds its removal, as the page does.
+    fn hold_removal(host: &AppAgentHost, agent: &AppAgent) {
+        let agents = host.agents().unwrap();
+        agents.begin_delete(&agent.pubkey).unwrap();
+        let removal = agents.hold_removal(&agent.pubkey, &agent.relay).unwrap();
+        host.removals().held.insert(agent.pubkey.clone(), removal);
+    }
+
+    #[tokio::test]
+    async fn deletion_refuses_a_request_holding_the_key_and_a_re_import_works_again() {
+        use crate::federated_identity::agent::tests::{enrolled, fixture, issued, issuer, settled};
+        let key = Secret::generate().unwrap();
+        let owner = attestation(key.pubkey())[1].clone();
+        let probe = agent_at("wss://relay.example".into(), &key);
+        let probe = AppAgent {
+            owner: owner.clone(),
+            ..probe
+        };
+        let (base, served) = issuer(vec![
+            (200, enrolled(&owner)),
+            (200, issued(&probe, serde_json::json!({}))),
+        ])
+        .await;
+        let f = fixture(base);
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = Arc::new(Gated::default());
+        let host = AppAgentHost {
+            agents: Ok(AppAgents::open(dir.path().join("identities.json"))),
+            old: Err("unused".into()),
+            credentials: credentials.clone(),
+            keys: Arc::default(),
+            profiles: Arc::default(),
+            removals: Arc::default(),
+            hosting: Arc::new(hosting(Err("unused".into()), true)),
+            tokens: f.tokens.clone(),
+            protection_upgrade: Arc::default(),
+        };
+        let import = |key: &Secret| {
+            let key = Secret::parse(&key.hex(), key.pubkey()).unwrap();
+            let auth = attestation(key.pubkey());
+            let prepared = AppAgents::adopt(
+                "https://relay.example/",
+                &owner,
+                "p/t",
+                key,
+                "Ada",
+                None,
+                None,
+            )
+            .unwrap();
+            let host = host.clone();
+            async move { host.install(prepared, auth).await.unwrap() }
+        };
+        let (agent, _, old_incarnation) = import(&key).await;
+        host.keys().clear();
+
+        // A request reads the agent, then is held reading its key.
+        let (held_tx, held) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        *credentials.1.lock().unwrap() = Some((held_tx, release_rx));
+        let stale = tokio::spawn({
+            let host = host.clone();
+            let (pubkey, relay) = (agent.pubkey.clone(), agent.relay.clone());
+            async move { host.signer(pubkey, relay).await.map(drop) }
+        });
+        tokio::task::spawn_blocking(move || held.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        hold_removal(&host, &agent);
+        let deleting = tokio::spawn({
+            let host = host.clone();
+            let (pubkey, relay) = (agent.pubkey.clone(), agent.relay.clone());
+            async move { host.delete(pubkey, relay).await }
+        });
+        crate::federated_identity::agent::tests::bounded(async {
+            while !host.tokens.closed(&agent.pubkey) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        release.send(()).unwrap();
+        assert_eq!(
+            stale.await.unwrap().err().as_deref(),
+            Some("This agent was deleted")
+        );
+        deleting.await.unwrap().unwrap();
+        assert!(f.grants.0.lock().unwrap().is_empty(), "nothing persisted");
+
+        // The same key imported again enrolls and works; the old request's
+        // incarnation stays refused.
+        let (agent, key, _) = import(&key).await;
+        let (_, _, evidence) = host
+            .signer(agent.pubkey.clone(), agent.relay.clone())
+            .await
+            .unwrap();
+        assert!(evidence.header().is_some());
+        assert_eq!(
+            host.tokens
+                .evidence(&agent, &key, old_incarnation.key)
+                .await
+                .err()
+                .as_deref(),
+            Some("This agent was deleted")
+        );
+        let seen = settled(served).await;
+        assert_eq!(
+            seen.len(),
+            2,
+            "only the re-imported agent's grant and assertion"
+        );
+    }
+
+    #[tokio::test]
+    async fn leaving_one_community_keeps_the_grant_until_the_last_goes() {
+        let f = crate::federated_identity::agent::tests::fixture("http://unused".into());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identities.json");
+        let key = Secret::generate().unwrap();
+        let home = agent_at("wss://home.example".into(), &key);
+        let other = agent_at("wss://other.example".into(), &key);
+        std::fs::write(&path, serde_json::to_vec(&[&home, &other]).unwrap()).unwrap();
+        let host = AppAgentHost {
+            agents: Ok(AppAgents::open(path)),
+            old: Err("unused".into()),
+            credentials: Arc::new(Gated::default()),
+            keys: Arc::default(),
+            profiles: Arc::default(),
+            removals: Arc::default(),
+            hosting: Arc::new(hosting(Err("unused".into()), true)),
+            tokens: f.tokens.clone(),
+            protection_upgrade: Arc::default(),
+        };
+        let agents = host.agents().unwrap();
+
+        agents.begin_leave(&other.pubkey, &other.relay).unwrap();
+        let removal = agents.hold_removal(&other.pubkey, &other.relay).unwrap();
+        host.removals().held.insert(other.pubkey.clone(), removal);
+        host.delete(other.pubkey.clone(), other.relay.clone())
+            .await
+            .unwrap();
+        assert!(!host.tokens.closed(&home.pubkey), "still in its home");
+        host.removals().held.remove(&other.pubkey);
+
+        hold_removal(&host, &home);
+        host.delete(home.pubkey.clone(), home.relay.clone())
+            .await
+            .unwrap();
+        assert!(host.tokens.closed(&home.pubkey));
+    }
+
+    #[tokio::test]
+    async fn an_import_held_past_its_deletion_does_not_upload_with_a_re_import() {
+        use crate::federated_identity::agent::tests::{enrolled, fixture, issued, issuer, settled};
+        let key = Secret::generate().unwrap();
+        let owner = attestation(key.pubkey())[1].clone();
+        let probe = AppAgent {
+            owner: owner.clone(),
+            ..agent_at("wss://relay.example".into(), &key)
+        };
+        let (base, served) = issuer(vec![
+            (200, enrolled(&owner)),
+            (200, issued(&probe, serde_json::json!({}))),
+        ])
+        .await;
+        let f = fixture(base);
+        let dir = tempfile::tempdir().unwrap();
+        let host = AppAgentHost {
+            agents: Ok(AppAgents::open(dir.path().join("identities.json"))),
+            old: Err("unused".into()),
+            credentials: Arc::new(Gated::default()),
+            keys: Arc::default(),
+            profiles: Arc::default(),
+            removals: Arc::default(),
+            hosting: Arc::new(hosting(Err("unused".into()), true)),
+            tokens: f.tokens.clone(),
+            protection_upgrade: Arc::default(),
+        };
+        let import = || {
+            let key = Secret::parse(&key.hex(), key.pubkey()).unwrap();
+            let auth = attestation(key.pubkey());
+            let prepared = AppAgents::adopt(
+                "https://relay.example/",
+                &owner,
+                "p/t",
+                key,
+                "Ada",
+                None,
+                None,
+            )
+            .unwrap();
+            let host = host.clone();
+            async move { host.install(prepared, auth).await.unwrap() }
+        };
+
+        // Import I installs, then its picture work is held while the agent is
+        // deleted and the same key is imported again as import II.
+        let (old_agent, old_key, old_incarnation) = import().await;
+        hold_removal(&host, &old_agent);
+        host.delete(old_agent.pubkey.clone(), old_agent.relay.clone())
+            .await
+            .unwrap();
+        let (agent, _, _) = import().await;
+        let (_, _, evidence) = host
+            .signer(agent.pubkey.clone(), agent.relay.clone())
+            .await
+            .unwrap();
+        assert!(evidence.header().is_some(), "import II works");
+
+        let stale = host
+            .imported_picture(&old_agent, &old_key, old_incarnation, "image/png", vec![1])
+            .await;
+        assert_eq!(stale.err().as_deref(), Some("This agent was deleted"));
+        assert_eq!(
+            settled(served).await.len(),
+            2,
+            "only import II's grant and assertion"
+        );
     }
 
     /// Answers one HTTP request with `status` and `body`, and returns the
@@ -1298,6 +1949,8 @@ mod tests {
             deleting: false,
             home: None,
             joining: false,
+            protection: None,
+            protection_revision: 0,
         }
     }
 
@@ -1408,15 +2061,21 @@ mod tests {
     async fn profile_search_posts_the_query_signed_and_returns_the_ranked_events() {
         let key = Secret::generate().unwrap();
         let (origin, served) = answer_once("200 OK", r#"[{"kind":0}]"#).await;
-        let found = search_profiles(&agent_at(origin, &key), &key, "wes", 40)
-            .await
-            .unwrap();
+        let found = search_profiles(
+            &agent_at(origin, &key),
+            &key,
+            Some("Bearer agent.jwt.sig"),
+            "wes",
+            40,
+        )
+        .await
+        .unwrap();
         assert_eq!(found, Some(serde_json::json!([{ "kind": 0 }])));
-        let request = served.await.unwrap();
-        assert!(request.starts_with("POST /profiles/search HTTP/1.1"));
-        assert!(request
-            .to_ascii_lowercase()
-            .contains("authorization: nostr "));
+        let request = served.await.unwrap().to_ascii_lowercase();
+        assert!(request.starts_with("post /profiles/search http/1.1"));
+        // The organization's assertion rides beside the agent's own NIP-98 proof.
+        assert!(request.contains("authorization: nostr "));
+        assert!(request.contains("nostr-federated-identity: bearer agent.jwt.sig"));
         let body: Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(body, serde_json::json!({ "query": "wes", "limit": 40 }));
     }
@@ -1426,7 +2085,7 @@ mod tests {
         let key = Secret::generate().unwrap();
         for status in ["404 Not Found", "405 Method Not Allowed"] {
             let (origin, served) = answer_once(status, "").await;
-            let found = search_profiles(&agent_at(origin, &key), &key, "wes", 40).await;
+            let found = search_profiles(&agent_at(origin, &key), &key, None, "wes", 40).await;
             assert_eq!(found, Ok(None), "{status}");
             served.await.unwrap();
         }
@@ -1435,7 +2094,7 @@ mod tests {
             r#"{"error":"profile search error"}"#,
         )
         .await;
-        let failed = search_profiles(&agent_at(origin, &key), &key, "wes", 40).await;
+        let failed = search_profiles(&agent_at(origin, &key), &key, None, "wes", 40).await;
         assert_eq!(
             failed,
             Err("The community refused the profile search: profile search error".into())
@@ -1449,6 +2108,43 @@ mod tests {
             packaged,
             held: Mutex::default(),
         }
+    }
+
+    #[test]
+    fn failed_admission_releases_only_newly_acquired_custody() {
+        for packaged in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let agent = "a".repeat(64);
+            let one = hosting(Ok(dir.path().join("hosts")), packaged);
+            let other = hosting(Ok(dir.path().join("hosts")), packaged);
+            assert!(one
+                .claim_validated(&agent, || Err("changed revision".into()))
+                .is_err());
+            assert!(other.claim(&agent).unwrap());
+            other.held().remove(&agent);
+            assert!(one.claim(&agent).unwrap());
+            assert!(one
+                .claim_validated(&agent, || Err("read failed".into()))
+                .is_err());
+            assert!(!other.claim(&agent).unwrap());
+        }
+    }
+
+    #[test]
+    fn protection_changes_require_current_and_exclusive_hosting() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = "a".repeat(64);
+        let dev = hosting(Ok(dir.path().join("hosts")), false);
+        let packaged = hosting(Ok(dir.path().join("hosts")), true);
+        assert!(dev.protecting(&agent, || Ok(())).is_err());
+        assert!(dev.claim(&agent).unwrap());
+        assert!(dev.protecting(&agent, || Ok(())).is_ok());
+        assert!(packaged.claim(&agent).unwrap());
+        // A packaged takeover alone does not mean the dev process has stopped.
+        assert!(packaged.protecting(&agent, || Ok(())).is_err());
+        assert!(dev.protecting(&agent, || Ok(())).is_err());
+        assert!(!dev.claim(&agent).unwrap());
+        assert!(packaged.protecting(&agent, || Ok(())).is_ok());
     }
 
     #[test]
@@ -1489,5 +2185,288 @@ mod tests {
         packaged.held().remove(&agent);
         assert!(dev.claim(&agent).unwrap());
         assert!(!another.claim(&agent).unwrap());
+    }
+
+    #[test]
+    fn dev_builds_let_go_while_the_installed_app_runs_an_agent() {
+        use crate::sign_out::legacy_identifier::{agents, CURRENT, DEV};
+        let data = tempfile::tempdir().unwrap();
+        // Where each copy's agent list puts its locks, with separate app data.
+        let hosts =
+            |identifier: &str| Ok(agents(identifier, &data.path().join(identifier)).join("hosts"));
+        let agent = "a".repeat(64);
+        let dev = hosting(hosts(DEV), false);
+        assert!(dev.claim(&agent).unwrap());
+        let packaged = hosting(hosts(CURRENT), true);
+        assert!(packaged.claim(&agent).unwrap());
+        assert!(!dev.claim(&agent).unwrap());
+        let another = hosting(hosts(DEV), false);
+        assert!(!another.claim(&agent).unwrap());
+        // As when the installed app quits.
+        drop(packaged);
+        assert!(dev.claim(&agent).unwrap());
+        assert!(!another.claim(&agent).unwrap());
+    }
+    #[tokio::test]
+    async fn late_media_body_is_not_committed_after_agent_deletion() {
+        use crate::federated_identity::agent::tests::response_fixture;
+        use sha2::{Digest, Sha256};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for change in ["delete", "sign-out", "expiry"] {
+            let f = response_fixture().await;
+            let admission = f
+                .tokens
+                .authorize(&f.agent, &f.key, Stamp::default())
+                .await
+                .unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let body = b"held media";
+            let url = format!("{origin}/media/{:x}", Sha256::digest(body));
+            let (release, released) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len())
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                released.await.unwrap();
+                socket.write_all(body).await.unwrap();
+            });
+            admission.dispatch().unwrap();
+            let response = reqwest::get(&url).await.unwrap();
+            // Headers prove dispatch; the fixture holds all body bytes meanwhile.
+            match change {
+                "delete" => f
+                    .tokens
+                    .forget(&f.agent.owner, &f.agent.pubkey)
+                    .await
+                    .unwrap(),
+                "sign-out" => {
+                    f.tokens.sign_out().await.unwrap();
+                }
+                _ => {
+                    tokio::time::pause();
+                    tokio::time::advance(Duration::from_secs(600)).await;
+                }
+            }
+            release.send(()).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let agent = AppAgent {
+                relay: origin,
+                ..f.agent
+            };
+            let result =
+                save_media_admitted(&agent, &url, response, dir.path(), Some(&admission)).await;
+            server.await.unwrap();
+            if change == "expiry" {
+                tokio::time::resume();
+                assert!(
+                    result.is_ok(),
+                    "elapsed assertion TTL cannot retire an admitted download"
+                );
+                assert!(admission.dispatch().is_err());
+            } else {
+                assert!(result.is_err());
+                assert_eq!(
+                    std::fs::read_dir(dir.path()).unwrap().count(),
+                    0,
+                    "no completed or staging file survives"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduled_picture_commit_cannot_overwrite_a_reimported_row() {
+        let key = Secret::generate().unwrap();
+        let owner = attestation(key.pubkey())[1].clone();
+        let dir = tempfile::tempdir().unwrap();
+        let host = AppAgentHost {
+            agents: Ok(AppAgents::open(dir.path().join("identities.json"))),
+            old: Err("unused".into()),
+            credentials: Arc::new(Gated::default()),
+            keys: Arc::default(),
+            profiles: Arc::default(),
+            removals: Arc::default(),
+            hosting: Arc::new(hosting(Err("unused".into()), true)),
+            tokens: AgentTokens::unconfigured(),
+            protection_upgrade: Arc::default(),
+        };
+        let import = || {
+            let prepared = AppAgents::adopt(
+                "https://relay.example/",
+                &owner,
+                "p/t",
+                Secret::parse(&key.hex(), key.pubkey()).unwrap(),
+                "Ada",
+                None,
+                None,
+            )
+            .unwrap();
+            let host = host.clone();
+            let auth = attestation(key.pubkey());
+            async move { host.install(prepared, auth).await.unwrap() }
+        };
+        let (old, key, incarnation) = import().await;
+        let other = host
+            .agents()
+            .unwrap()
+            .join(
+                &old.pubkey,
+                &old.relay,
+                "wss://other.example",
+                None,
+                host.credentials.as_ref(),
+            )
+            .unwrap();
+        let other_admission = host
+            .tokens
+            .authorize(&other, &key, incarnation)
+            .await
+            .unwrap();
+        let admission = host
+            .tokens
+            .authorize(&old, &key, incarnation)
+            .await
+            .unwrap();
+        let (held, reached) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let agents = host.agents().unwrap();
+        let updating = blocking(move || {
+            held.send(()).unwrap();
+            released.recv().unwrap();
+            admission.commit(true, || {
+                agents.set_picture(
+                    &old.pubkey,
+                    &old.relay,
+                    Some("https://relay.example/media/old".into()),
+                )
+            })
+        });
+        let replace = async {
+            tokio::task::spawn_blocking(move || reached.recv().unwrap())
+                .await
+                .unwrap();
+            let old = host
+                .agents()
+                .unwrap()
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|agent| agent.relay == "wss://relay.example")
+                .unwrap();
+            let agents = host.agents().unwrap();
+            agents.begin_leave(&old.pubkey, &old.relay).unwrap();
+            let removal = agents.hold_removal(&old.pubkey, &old.relay).unwrap();
+            host.removals().held.insert(old.pubkey.clone(), removal);
+            host.delete(old.pubkey.clone(), old.relay.clone())
+                .await
+                .unwrap();
+            host.removals().held.remove(&old.pubkey);
+            let new = host
+                .agents()
+                .unwrap()
+                .join(
+                    &old.pubkey,
+                    "wss://other.example",
+                    "wss://relay.example",
+                    None,
+                    host.credentials.as_ref(),
+                )
+                .unwrap();
+            host.tokens.reopen_row(&new.pubkey, &new.relay).unwrap();
+            host.agents()
+                .unwrap()
+                .set_picture(
+                    &new.pubkey,
+                    &new.relay,
+                    Some("https://relay.example/media/new".into()),
+                )
+                .unwrap();
+            release.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(updating, replace);
+        other_admission.dispatch().unwrap();
+        other_admission.commit(false, || Ok(())).unwrap();
+        assert!(result.is_err());
+        assert_eq!(
+            host.agents()
+                .unwrap()
+                .list()
+                .unwrap()
+                .iter()
+                .find(|agent| !agent.deleted && agent.relay == "wss://relay.example")
+                .unwrap()
+                .picture
+                .as_deref(),
+            Some("https://relay.example/media/new")
+        );
+    }
+    #[tokio::test]
+    async fn query_body_held_past_sign_out_is_not_admitted() {
+        use crate::federated_identity::agent::tests::response_fixture;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let f = response_fixture().await;
+        let admission = f
+            .tokens
+            .authorize(&f.agent, &f.key, Stamp::default())
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (held, reached) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            let text = String::from_utf8(head).unwrap();
+            let length: usize = text
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(str::to_owned)
+                })
+                .unwrap()
+                .parse()
+                .unwrap();
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[")
+                .await
+                .unwrap();
+            held.send(()).unwrap();
+            released.await.unwrap();
+            socket.write_all(b"]").await.unwrap();
+            text
+        });
+        // Use the loopback server as the community transport; all credentials
+        // and assertions are synthetic. Exercise the production signed read.
+        let agent = AppAgent {
+            relay: origin,
+            ..f.agent.clone()
+        };
+        let filters = vec![serde_json::json!({"kinds":[1]})];
+        let query = admission.run(false, read(&agent, &f.key, admission.header(), &filters));
+        let retire = async {
+            reached.await.unwrap();
+            f.tokens.sign_out().await.unwrap();
+            release.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(query, retire);
+        assert!(result.is_err(), "a retired query returned its parsed body");
+        assert!(server.await.unwrap().contains("nostr-federated-identity:"));
     }
 }

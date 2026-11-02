@@ -58,6 +58,10 @@ test("dragging a group header moves the whole group, keeps its state, and persis
   // A cancelled drag shows its landing edge, then leaves everything unchanged.
   await pull(page, "laptop", "work");
   await expect(laptop).toHaveAttribute("data-section-dragging");
+  await expect(page.locator('[class*="channelDragOverlay"]')).toHaveCSS(
+    "translate",
+    "none",
+  );
   await expect(work).toHaveAttribute("data-drop-edge", "before");
   await expect(work).not.toHaveAttribute("data-drop-target");
   await page.keyboard.press("Escape");
@@ -342,6 +346,10 @@ test("group landing edge follows list order when text size changes during a drag
   await page.evaluate(() => {
     document.documentElement.style.fontSize = "16px";
   });
+  // The pointer is still below the resized groups. Wait for collision geometry
+  // to catch up, or the old marker could satisfy the next assertion before the
+  // move is processed and let the drop race against remeasurement.
+  await expect(missing).not.toHaveAttribute("data-drop-edge");
   const target = await header(page, "missing").boundingBox();
   // The stale initial pixel comparison would now put the line on the wrong side.
   expect(initial.y).toBeGreaterThan(target.y);

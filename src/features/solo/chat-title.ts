@@ -9,8 +9,8 @@ export function startingChatTitle(value: MentionDraft | string): string {
   const draft = stageChatCards(mentionDraft(value), []);
   // Match main’s caption-first title; cards remain the fallback for card-only sends.
   const text =
-    composerMarkdown({ ...draft, chatCards: [] }).trim() ||
-    composerMarkdown(draft);
+    composerMarkdown({ ...draft, chatCards: [], gifs: [] }).trim() ||
+    composerMarkdown({ ...draft, gifs: [] });
   let start = 0;
   let draftStart = 0;
   for (const recipient of [...draft.recipients].sort(

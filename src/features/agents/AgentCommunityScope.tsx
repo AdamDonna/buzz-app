@@ -15,10 +15,9 @@ export type AgentScopeReader = Pick<Agents, "subscribe" | "memberships">;
 
 const noSubscribe = () => () => {};
 const descriptions = {
+  Agents: "These are your agents imported into this community on this device.",
   Memory:
     "Memories are specific to this community and aren’t shared with other communities.",
-  Attention:
-    "Attention is specific to this community and isn’t shared with other communities.",
   Avatar:
     "This avatar is specific to this community and isn’t shared with other communities.",
 };

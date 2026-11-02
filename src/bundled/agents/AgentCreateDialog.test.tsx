@@ -27,6 +27,10 @@ import {
   uploadAvatar,
 } from "../../features/profiles/avatar-upload";
 import { AgentCreateDialog } from "./AgentCreateDialog";
+import {
+  BuilderlabLogoIcon,
+  CodexLogoIcon,
+} from "../../shared/design-system/icons";
 
 vi.mock("../../features/profiles/avatar-upload", async (actual) => ({
   ...(await actual<typeof import("../../features/profiles/avatar-upload")>()),
@@ -210,6 +214,42 @@ it("creates with the name, a pack picture and the config from the type's view", 
   });
   expect(avatar.url).toMatch(/^https:\/\//);
   expect(onCreated).toHaveBeenCalledExactlyOnceWith(made);
+});
+
+it("cancels an in-flight Gloopy swap before switching to Emoji", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("(hover: hover)"),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const animations: {
+    cancel: ReturnType<typeof vi.fn>;
+    finished: Promise<void>;
+  }[] = [];
+  Element.prototype.animate = vi.fn(() => {
+    const animation = {
+      cancel: vi.fn(),
+      finished: new Promise<void>(() => {}),
+    };
+    animations.push(animation);
+    return animation as unknown as Animation;
+  });
+  const { dialog, user } = setup([echo]);
+  const dock = within(dialog).getByRole("group", { name: "Agent avatars" });
+  const slot = within(dock).getAllByRole("button")[0];
+  if (!slot) throw new Error("The dock has an avatar");
+  fireEvent.click(slot, { detail: 1 });
+  expect(animations).toHaveLength(2);
+  const swapAnimations = [...animations];
+  expect(slot.style.visibility).toBe("hidden");
+  await user.click(within(dialog).getByRole("tab", { name: "Emoji" }));
+  expect(
+    within(dialog).getByRole("button", { name: "Choose emoji" }),
+  ).toBeVisible();
+  for (const animation of swapAnimations)
+    expect(animation.cancel).toHaveBeenCalledOnce();
+  expect(slot.style.visibility).toBe("");
+  expect(document.querySelector('body > img[aria-hidden="true"]')).toBeNull();
 });
 
 it("switches avatar types directly and restores the emoji draft with the keyboard", async () => {
@@ -590,6 +630,42 @@ it("jumps instead of gliding, and skips the shake, under reduced motion", async 
     "Add a name to create your agent",
   );
   expect(Element.prototype.animate).not.toHaveBeenCalled();
+});
+
+it("shows registered logos in the harness value and choices with independent SVG masks", async () => {
+  const { dialog, user } = setup([
+    { ...echo, icon: BuilderlabLogoIcon },
+    { ...notes, icon: CodexLogoIcon },
+  ]);
+  const select = within(dialog).getByRole("combobox", { name: "Harness" });
+  const selectedMask = select.querySelector("mask");
+  expect(selectedMask).not.toBeNull();
+  await user.click(select);
+  const option = await screen.findByRole("option", { name: "Echo" });
+  const optionMask = option.querySelector("mask");
+  expect(optionMask).not.toBeNull();
+  expect(optionMask?.id).not.toBe(selectedMask?.id);
+  for (const svg of [
+    select.querySelector("svg"),
+    option.querySelector("svg"),
+  ]) {
+    const mask = svg?.querySelector("mask");
+    expect(svg?.querySelector("path[mask]")).toHaveAttribute(
+      "mask",
+      `url(#${mask?.id})`,
+    );
+    const filter = svg?.querySelector("filter");
+    expect(mask?.querySelector("path")).toHaveAttribute(
+      "filter",
+      `url(#${filter?.id})`,
+    );
+  }
+  const other = screen.getByRole("option", { name: "Notes" });
+  expect(other.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  await user.click(other);
+  expect(select).toHaveTextContent("Notes");
+  expect(select.querySelector("svg")).not.toBeNull();
+  expect(select.querySelector("mask")).toBeNull();
 });
 
 it("switches harness, starting over on the new type's defaults", async () => {

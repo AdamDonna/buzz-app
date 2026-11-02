@@ -7,6 +7,7 @@ import type { ReadFilter, RelayEvent } from "./events";
 import type { ReadTransport } from "./transport";
 import { byteSize } from "./budget";
 import { ReadError } from "./errors";
+import type { AgentLibrary } from "../agents/library";
 
 export type Priority = "foreground" | "background";
 export type ReadOptions = {
@@ -32,8 +33,9 @@ export type RelayReader = {
     options?: ReadOptions,
   ): Promise<readonly RelayEvent[]>;
 };
+type ReadValue = readonly RelayEvent[] | AgentLibrary;
 type Consumer = {
-  resolve(events: readonly RelayEvent[]): void;
+  resolve(value: ReadValue): void;
   reject(error: unknown): void;
 };
 type Job = {
@@ -48,6 +50,7 @@ type Job = {
   timer: ReturnType<typeof setTimeout>;
   running: boolean;
   snapshot: boolean;
+  library: boolean;
   /** Set for a name-only profile search; `filters` then hold the equivalent
    * NIP-50 filter, so invalidation treats both searches alike. */
   profiles?: { query: string; limit: number; page: number };
@@ -123,7 +126,7 @@ export function createRelayReader(
     }
     finish(job, undefined, error);
   }
-  function finish(job: Job, events?: readonly RelayEvent[], error?: unknown) {
+  function finish(job: Job, events?: ReadValue, error?: unknown) {
     if (jobs.get(job.key) !== job) return;
     job.queued(error ? "error" : "ok");
     job.fetched?.(error ? "error" : "ok");
@@ -153,6 +156,16 @@ export function createRelayReader(
       job.fetched = profiling.start("read.fetch", job.id);
       // Catch synchronous adapter failures as well as rejected promises.
       try {
+        if (job.library) {
+          if (!transport.readAgentLibrary)
+            throw new Error("Local agent library unavailable");
+          // Local display data is not a signed relay-event response.
+          void transport
+            .readAgentLibrary(job.controller.signal)
+            .then((library) => finish(job, library))
+            .catch((error) => failed(job, error));
+          continue;
+        }
         if (job.snapshot && !transport.readStateSnapshot)
           throw new Error("Read-state snapshots unavailable");
         if (job.profiles && !transport.searchProfiles)
@@ -202,9 +215,23 @@ export function createRelayReader(
   }
   function read(
     filters: readonly ReadFilter[],
+    options?: ReadOptions,
+    snapshot?: boolean,
+    profiles?: Job["profiles"],
+  ): Promise<readonly RelayEvent[]>;
+  function read(
+    filters: readonly ReadFilter[],
+    options: ReadOptions,
+    snapshot: false,
+    profiles: undefined,
+    library: true,
+  ): Promise<AgentLibrary>;
+  function read(
+    filters: readonly ReadFilter[],
     { signal, priority = "foreground", fresh = false }: ReadOptions = {},
     snapshot = false,
     profiles?: Job["profiles"],
+    library = false,
   ) {
     if (closed || signal?.aborted) return Promise.reject(cancelled());
     if (!transport)
@@ -214,7 +241,7 @@ export function createRelayReader(
     let key: string;
     try {
       if (
-        !filters.length ||
+        (!filters.length && !library) ||
         (filters.length > 4 &&
           !isWorkflowDefinitionBatch(filters) &&
           !isSidebarPreferencesBatch(filters))
@@ -262,6 +289,7 @@ export function createRelayReader(
       return Promise.reject(error);
     }
     const requestFilters = JSON.parse(key);
+    if (library) key = "agent-library";
     if (snapshot) {
       if (!transport.readStateSnapshot)
         return Promise.reject(
@@ -288,6 +316,7 @@ export function createRelayReader(
         consumers: new Set(),
         running: false,
         snapshot,
+        library,
         ...(profiles ? { profiles } : {}),
         timer: setTimeout(
           () =>
@@ -303,7 +332,7 @@ export function createRelayReader(
     } else if (!job.running && priority === "foreground")
       job.priority = priority;
     const owned = job;
-    return new Promise<readonly RelayEvent[]>((resolve, reject) => {
+    return new Promise<ReadValue>((resolve, reject) => {
       const release = () => signal?.removeEventListener("abort", abort);
       const consumer: Consumer = {
         resolve(events) {
@@ -360,6 +389,9 @@ export function createRelayReader(
   });
   return {
     reader,
+    /** The session's local inventory shares navigation admission and read lifetime. */
+    readAgentLibrary: (signal: AbortSignal) =>
+      read([], { signal }, false, undefined, true),
     /** Promote existing queued work without creating a consumer or a new deadline. */
     promote(matches: (filters: readonly ReadFilter[]) => boolean) {
       for (const job of jobs.values())
@@ -373,7 +405,8 @@ export function createRelayReader(
       const previous = closed;
       closed = true;
       for (const job of [...jobs.values()])
-        if (matches(job.filters)) finish(job, undefined, cancelled());
+        if (!job.library && matches(job.filters))
+          finish(job, undefined, cancelled());
       closed = previous;
       pump();
     },

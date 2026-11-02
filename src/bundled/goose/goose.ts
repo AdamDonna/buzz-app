@@ -86,10 +86,10 @@ export const GOOSE: AcpHooks = {
   newSessionMeta: (buzz, { title, provider }) => ({
     // The session's whole tool set: goose's developer tools and the Buzz
     // tools, so extensions in the owner's goose config and plugins never load
-    // into a Buzz agent. goose stores this list with the session. Since
-    // aaif-goose/goose#12908 it leaves out the Buzz entry and holds the
-    // `mcpServers` copy in memory, so the token stays out of sessions.db;
-    // older goose uses this one.
+    // into a Buzz agent. The pinned Goose persists this list, including the
+    // Buzz MCP token; aaif-goose/goose#12908 is not in v1.57.0. Keep the entry
+    // until upstream supports client MCP servers alongside this allowlist.
+    // The non-persistence acceptance test remains a known failure.
     enabledExtensions: buzz ? [DEVELOPER, { type: "mcp", server: buzz }] : [],
     ...(title ? { sessionTitle: title } : {}),
     // On the provider's default model, whatever goose's config holds.

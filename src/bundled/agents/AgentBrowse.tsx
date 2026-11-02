@@ -8,14 +8,17 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { flushSync } from "react-dom";
 import {
   checkText,
   type SharedDefinition,
+  shareable,
 } from "../../features/agents/agent-share";
+import { useAgents } from "../../features/agents/react";
+import { flushSync } from "react-dom";
 import { AGENT_CATALOG_KIND } from "../../features/agents/catalog-envelope";
 import { ModelIcon } from "../../features/agents/ModelPicker";
 import type {
+  Agent,
   Agents,
   RegisteredAgentType,
 } from "../../features/agents/service";
@@ -26,6 +29,7 @@ import {
 import { ReadError } from "../../features/relay/errors";
 import type { EventData } from "../../features/relay/events";
 import { useRelayConnection } from "../../features/relay/react";
+import { useReauthorizedRetry } from "../../features/relay/RecoveryNotice";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
@@ -43,6 +47,7 @@ import { SurfaceButton } from "../../shared/design-system/ui/SurfaceButton";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
+import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { ProfileBackdrop } from "../../features/profiles/ProfileBackdrop";
 import { agentAvatars } from "../../features/agents/avatar-packs";
 import hero from "../../features/profiles/ProfileHero.module.css";
@@ -56,7 +61,9 @@ type Importing = Readonly<{
   agents: Agents;
   /** The types an import can be, which run on this computer. */
   types: readonly RegisteredAgentType[];
-  onImported(): void;
+  onImported(agent: Agent): void;
+  /** Opens an agent of yours that an import would only copy. */
+  onOpen?: ((agent: Agent) => void) | undefined;
 }>;
 
 export type SharedAgentSelection = {
@@ -102,11 +109,16 @@ function SharedAgentList({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // A catalog opened while signed out loads once sign-in lands.
+  const reauthorized = useReauthorizedRetry(session.recovery, () =>
+    setAttempt((value) => value + 1),
+  );
   // biome-ignore lint/correctness/useExhaustiveDependencies: An explicit retry reruns this finite read.
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError(false);
+    const failed = reauthorized.begin();
     const readPage = async () => {
       let limit = pageSize;
       for (;;) {
@@ -136,8 +148,10 @@ function SharedAgentList({
       }
     };
     void readPage()
-      .catch(() => {
-        if (!controller.signal.aborted) setError(true);
+      .catch((problem) => {
+        if (controller.signal.aborted) return;
+        setError(true);
+        failed(problem);
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -145,6 +159,18 @@ function SharedAgentList({
     return () => controller.abort();
   }, [session, cursor, attempt]);
   const agents = sharedAgents(events);
+  const grid = useRef<HTMLDivElement>(null);
+  // A selection made elsewhere, such as View on a published agent, scrolls to
+  // its card once the card is here; one chosen in the grid is in view already.
+  const shown = useRef<string>(undefined);
+  const present = agents.some((agent) => agent.id === selectedId);
+  useEffect(() => {
+    if (!present || shown.current === selectedId) return;
+    shown.current = selectedId;
+    grid.current
+      ?.querySelector<HTMLElement>("[data-selected]")
+      ?.scrollIntoView({ block: "center" });
+  }, [present, selectedId]);
   return (
     <div className="flex flex-col gap-section-gap">
       {loading && <p role="status">Loading shared agents…</p>}
@@ -159,7 +185,7 @@ function SharedAgentList({
       {!loading && !error && !agents.length && (
         <p>No shared agents found in this community yet.</p>
       )}
-      <div className={cardStyles.grid}>
+      <div ref={grid} className={cardStyles.grid}>
         {agents.map((agent) => (
           <SurfaceButton
             key={agent.id}
@@ -167,25 +193,12 @@ function SharedAgentList({
             aria-label={agent.name}
             aria-current={selectedId === agent.id || undefined}
             data-selected={selectedId === agent.id || undefined}
-            onClick={(event) =>
-              onSelect({ agent, session, community }, event.currentTarget)
-            }
+            onClick={(event) => {
+              shown.current = agent.id;
+              onSelect({ agent, session, community }, event.currentTarget);
+            }}
           >
-            <AgentCardBackdrop agent={agent} community={community} />
-            <span className={cardStyles.portrait} aria-hidden="true">
-              <AgentPortrait agent={agent} community={community} />
-            </span>
-            <span className={cardStyles.identity}>
-              <span className={`${cardStyles.name} text-label`}>
-                {agent.name}
-              </span>
-              <span className={cardStyles.detail}>
-                <ModelIcon model={agent.model} />
-                <span className={cardStyles.detailText}>
-                  {agent.model || "Shared agent"}
-                </span>
-              </span>
-            </span>
+            <SharedAgentCardContent agent={agent} community={community} />
           </SurfaceButton>
         ))}
       </div>
@@ -374,11 +387,63 @@ function ImportShared({
 }
 
 /** Imports a shared definition as a new agent, from the marketplace or a file. */
+/** A shared agent's card face, in the Marketplace and in conversations. */
+export function SharedAgentCardContent({
+  agent,
+  community,
+  detail,
+}: {
+  agent: Pick<SharedDefinition, "name" | "picture" | "model">;
+  community: string | undefined;
+  /** Said in place of the model, such as why the card isn't ready. */
+  detail?: string | undefined;
+}) {
+  return (
+    <>
+      <AgentCardBackdrop agent={agent} community={community} />
+      <span className={cardStyles.portrait} aria-hidden="true">
+        <AgentPortrait agent={agent} community={community} />
+      </span>
+      <span className={cardStyles.identity}>
+        <span className={`${cardStyles.name} text-label`}>{agent.name}</span>
+        <span className={cardStyles.detail}>
+          {!detail && <ModelIcon model={agent.model} />}
+          <span className={cardStyles.detailText}>
+            {detail ?? (agent.model || "Shared agent")}
+          </span>
+        </span>
+      </span>
+    </>
+  );
+}
+
+/** Whether importing `shared` would only copy `agent` again. */
+function copies(
+  shared: SharedDefinition,
+  agent: Agent,
+  type: RegisteredAgentType | undefined,
+) {
+  try {
+    const own = shareable(agent, type);
+    // Pictures are left out: a built-in avatar's address can differ.
+    return (
+      own.name === shared.name &&
+      own.instructions === shared.instructions &&
+      own.runtime === shared.runtime &&
+      own.model === shared.model &&
+      (own.provider ?? "") === (shared.provider ?? "")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function SharedImportDialog({
   shared,
   agents,
   types,
   onImported,
+  onOpen,
   onClose,
   finalFocus,
 }: Importing & {
@@ -386,6 +451,8 @@ export function SharedImportDialog({
   onClose(): void;
   finalFocus: React.RefObject<HTMLButtonElement | null>;
 }) {
+  const { snapshot, types: known } = useAgents(agents);
+  const body = useRef<HTMLDivElement>(null);
   const [initial] = useState(() => {
     for (const type of types) {
       const config = type.importShared?.(shared);
@@ -395,19 +462,41 @@ export function SharedImportDialog({
   });
   const [type, setType] = useState(initial?.key ?? "");
   const [config, setConfig] = useState<unknown>(initial?.config);
-  const [changing, setChanging] = useState(!initial);
-  const form = useRef<HTMLDivElement>(null);
+  const [instructions, setInstructions] = useState(shared.instructions);
   const [pending, setPending] = useState(false);
+  // Anything changed from what was shared; Undo brings it back.
+  const edited =
+    type !== (initial?.key ?? "") ||
+    JSON.stringify(config) !== JSON.stringify(initial?.config) ||
+    instructions !== shared.instructions;
+  const undo = () => {
+    // Undo goes with the edit; focus starts over at the first field.
+    flushSync(() => {
+      setType(initial?.key ?? "");
+      setConfig(initial?.config);
+      setInstructions(shared.instructions);
+      setError("");
+    });
+    body.current?.querySelector<HTMLElement>("[role='combobox']")?.focus();
+  };
+  // An agent you already have, the same in everything this would copy.
+  const existing = edited
+    ? undefined
+    : snapshot.agents.find((agent) =>
+        copies(
+          shared,
+          agent,
+          known.find((type) => type.key === agent.type),
+        ),
+      );
   const [error, setError] = useState("");
   // What block/buzz refuses, such as hidden characters in what is shown here.
-  const [refused] = useState(() => {
-    try {
-      checkText(shared.name, shared.instructions);
-      return "";
-    } catch (reason) {
-      return reason instanceof Error ? reason.message : String(reason);
-    }
-  });
+  let refused = "";
+  try {
+    checkText(shared.name, instructions);
+  } catch (reason) {
+    refused = reason instanceof Error ? reason.message : String(reason);
+  }
   const chosen = types.find((item) => item.key === type);
   const Model = chosen?.CreateModel;
   const choose = (key: string) => {
@@ -420,15 +509,15 @@ export function SharedImportDialog({
     setPending(true);
     setError("");
     try {
-      await agents.port({
+      const { agent } = await agents.port({
         source: "shared",
         type: chosen.key,
         name: shared.name,
         ...(shared.picture ? { picture: shared.picture } : {}),
-        instructions: shared.instructions,
+        instructions,
         ...(config !== undefined ? { config } : {}),
       });
-      onImported();
+      onImported(agent);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setPending(false);
@@ -437,107 +526,106 @@ export function SharedImportDialog({
   return (
     <Dialog
       open
-      title={`Import ${shared.name}`}
+      title={shared.name}
+      description={
+        existing
+          ? "You already have this agent."
+          : edited
+            ? "Edited. Changes only affect your copy."
+            : "Import it as is, or edit anything below first. Changes only affect your copy."
+      }
+      headerGap="compact"
+      footerGap="compact"
       finalFocus={finalFocus}
       preventClose={pending}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
+      leadingActions={
+        edited && (
+          <Button variant="ghost" disabled={pending} onClick={undo}>
+            Undo changes
+          </Button>
+        )
+      }
       actions={
         <>
-          <Button disabled={pending} onClick={onClose}>
-            Cancel
-          </Button>
+          {!(existing && onOpen) && (
+            <Button disabled={pending} onClick={onClose}>
+              Cancel
+            </Button>
+          )}
           <Button
-            variant="primary"
+            {...(existing && onOpen ? {} : { variant: "primary" as const })}
             disabled={!chosen || pending || !!refused}
             loading={pending}
             onClick={() => void run()}
           >
-            Import
+            {existing ? "Import a copy" : "Import"}
           </Button>
+          {existing && onOpen && (
+            <Button
+              variant="primary"
+              disabled={pending}
+              onClick={() => onOpen(existing)}
+            >
+              Open {existing.name}
+            </Button>
+          )}
         </>
       }
     >
-      <div ref={form} className="grid gap-4">
-        {types.length === 0 && (
+      {/* Laid out as the agent's Identity tab will show it once imported. */}
+      <div ref={body} className="grid gap-4">
+        {types.length === 0 ? (
           <p className="m-0 text-body-sm text-secondary">
             Enable an agent type plugin to import agents.
           </p>
-        )}
-        {initial && !changing ? (
-          <>
-            <SettingsGroup>
-              <PreferenceRow title="Import as" trailing={chosen?.title} />
-              {shared.provider && (
-                <PreferenceRow title="Provider" trailing={shared.provider} />
-              )}
+        ) : (
+          <SettingsGroup>
+            <PreferenceRow
+              title="Harness"
+              trailing={
+                <Select
+                  label="Harness"
+                  variant="compact"
+                  align="end"
+                  placeholder="Choose"
+                  value={type}
+                  disabled={pending}
+                  groups={[
+                    {
+                      label: "",
+                      options: types.map((item) => ({
+                        value: item.key,
+                        label: item.title,
+                      })),
+                    },
+                  ]}
+                  onValueChange={choose}
+                />
+              }
+            />
+            {Model && (
               <PreferenceRow
                 title="Model"
-                trailing={shared.model || "Default"}
-              />
-            </SettingsGroup>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                // The button goes with the summary; keep focus on what replaces it.
-                flushSync(() => setChanging(true));
-                form.current
-                  ?.querySelector<HTMLElement>("[role='combobox']")
-                  ?.focus();
-              }}
-            >
-              Change settings
-            </Button>
-          </>
-        ) : (
-          types.length > 0 && (
-            <>
-              <Select
-                variant="field"
-                label="Import as"
-                placeholder="Choose an agent type"
-                value={type}
-                disabled={pending}
-                groups={[
-                  {
-                    label: "Agent types",
-                    options: types.map((item) => ({
-                      value: item.key,
-                      label: item.title,
-                    })),
-                  },
-                ]}
-                onValueChange={choose}
-              />
-              {Model && (
-                <SettingsGroup>
-                  <PreferenceRow
-                    title="Model"
-                    trailing={
-                      <Model
-                        key={type}
-                        config={config}
-                        disabled={pending}
-                        onChange={setConfig}
-                      />
-                    }
+                trailing={
+                  <Model
+                    key={type}
+                    config={config}
+                    disabled={pending}
+                    onChange={setConfig}
                   />
-                </SettingsGroup>
-              )}
-            </>
-          )
+                }
+              />
+            )}
+          </SettingsGroup>
         )}
-        {/* What the new agent will do is never hidden behind a summary. */}
-        <section aria-label="Agent instructions">
-          <InlineHeader
-            title="Agent instructions"
-            subtitle="Review the instructions this agent will follow after import."
-          />
-          <div className={styles.instructions}>
-            {shared.instructions || "No system prompt included."}
-          </div>
-        </section>
+        <AgentInstructions
+          value={instructions}
+          disabled={pending}
+          onChange={setInstructions}
+        />
         {(refused || error) && (
           <p role="alert" className="m-0 text-body-sm text-danger">
             {refused || error}

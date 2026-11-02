@@ -609,21 +609,29 @@ readingTest(
     // buffer covers only the side below, so no row above the viewport is mounted.
     await virtuaIdle(page);
     await expectBottom();
-    const rows = await history.evaluate((element) => {
-      const top = element.getBoundingClientRect().top;
-      const mounted = [...element.querySelectorAll("[data-message-id]")];
-      const above = mounted.findLast(
-        (row) => row.getBoundingClientRect().bottom <= top,
-      );
-      const newest = mounted.at(-1);
-      if (!above || !newest || above === newest) return null;
-      above.style.paddingBottom = "100px";
-      return {
-        above: above.dataset.messageId,
-        newest: newest.dataset.messageId,
-      };
-    });
-    expect(rows).not.toBeNull();
+    // Pointer events and stable geometry can precede React's buffered-row
+    // commit. Wait for the offscreen row this scenario needs before resizing it.
+    let rows;
+    await expect
+      .poll(
+        async () =>
+          (rows = await history.evaluate((element) => {
+            const top = element.getBoundingClientRect().top;
+            const mounted = [...element.querySelectorAll("[data-message-id]")];
+            const above = mounted.findLast(
+              (row) => row.getBoundingClientRect().bottom <= top,
+            );
+            const newest = mounted.at(-1);
+            if (!above || !newest || above === newest) return null;
+            above.style.paddingBottom = "100px";
+            return {
+              above: above.dataset.messageId,
+              newest: newest.dataset.messageId,
+            };
+          })),
+        { message: "an offscreen row is mounted above the bottom viewport" },
+      )
+      .not.toBeNull();
     await virtuaIdle(page);
     await expectBottom();
     await history.evaluate((element, ids) => {
@@ -1262,7 +1270,7 @@ const sidebarActions = companionTest.extend({
   historyCounts: { alpha: 20, beta: 1 },
 });
 sidebarActions(
-  "sidebar activity retains channel tabs while compose routes retire them and preserve companion intent",
+  "sidebar activity and compose routes restore content history and preserve companion intent",
   async ({ page, app }) => {
     await open(page, app);
     const companion = page.getByRole("complementary", {
@@ -1300,7 +1308,10 @@ sidebarActions(
           page.getByRole("region", { name: "New message", exact: true }),
         ).toBeVisible();
       }
-      await expect(panel(page)).toHaveCount(0);
+      // Visiting another tab retains the inactive GitHub tab; compose routes
+      // withdraw the workspace. Neither presents the GitHub content here.
+      if (action === "activity") await expect(panel(page)).toBeHidden();
+      else await expect(panel(page)).toHaveCount(0);
       await expect(
         companionLauncher(page, "Companion fixture"),
       ).toHaveAttribute("aria-expanded", "true");
@@ -1308,13 +1319,14 @@ sidebarActions(
       await expect(
         page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
       ).toBeVisible();
-      await expect(panel(page)).toHaveCount(action === "activity" ? 1 : 0);
-      if (action === "activity")
-        await page
-          .locator(
-            '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
-          )
-          .click();
+      // Back restores the pre-navigation content address even when New message
+      // temporarily withdrew its workspace. Only X retires that return path.
+      await expect(panel(page)).toBeVisible();
+      await page
+        .locator(
+          '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+        )
+        .click();
       await expect(companion).toBeVisible();
     }
   },

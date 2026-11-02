@@ -1,11 +1,8 @@
 // Decorative colors come from the avatar artwork, with a theme fallback for unreadable images.
 import { useEffect, useState } from "react";
-import { agentAvatars } from "../../agents/avatar-packs";
+import { bundledPoster } from "../../agents/avatar-packs";
 
-// Pack art ships with the app; read that copy, since the CDN sends no CORS header.
-const bundled = (src: string) =>
-  agentAvatars.find((avatar) => avatar.url === src.split("#", 1)[0])?.preview ??
-  src;
+const bundled = (src: string) => bundledPoster(src) ?? src;
 
 function samplePalette(src: string): Promise<string[]> {
   const result = new Promise<string[]>((resolve) => {

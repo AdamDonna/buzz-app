@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import { allowsOutsideMentions } from "../../features/messages/mention-admission";
+import { matchPerson } from "../../features/search/person-match";
 
 type Person = Awaited<
   ReturnType<ComposerSession["directMessages"]["people"]>
 >["people"][number];
-type Page = { people: readonly Person[]; more: boolean };
+export type MentionDirectoryPage = { people: readonly Person[]; more: boolean };
+type Page = MentionDirectoryPage;
 const empty: readonly Person[] = [];
 /** Typing pause before an uncached query reaches the network. */
 export const MENTION_DIRECTORY_DELAY_MS = 200;
 const CACHE_LIMIT = 100;
+// An exact key is an author lookup, which name-prefix evidence cannot refute.
+const exactKey = (query: string) => /^[0-9a-f]{64}$/.test(query.trim());
 
 // Successful non-empty first pages, per session (community/viewer) and query.
 // Session lifetime bounds staleness; errors are not cached, so Retry reads
@@ -31,6 +35,38 @@ function remember(session: ComposerSession, query: string, page: Page) {
   if (queries.size > CACHE_LIMIT)
     queries.delete(queries.keys().next().value ?? "");
 }
+/**
+ * The longest cached complete page for a proper prefix of `query`. The relay
+ * matches names by prefix, so a page for `mira` that reported no more pages
+ * already holds every match for `mira e`, `mira exam` and `mira example`;
+ * `derive` filters it to the longer query. A truncated page may have left a
+ * match out, and an exact key is an author lookup that no name prefix
+ * answers, so neither derives. Nor does the listing read for an empty query:
+ * it is a plain profile read, not a name search, and once complete (a
+ * community with fewer than 15 profiles) it is a prefix of every query, so it
+ * would answer each name search for the session and hide a member who joins
+ * or renames after it.
+ */
+function prefixPage(session: ComposerSession, query: string) {
+  const queries = pages.get(session);
+  if (!queries || exactKey(query)) return undefined;
+  let best: [string, Page] | undefined;
+  for (const [key, page] of queries)
+    if (
+      key.trim().length > 0 &&
+      !page.more &&
+      key.length < query.length &&
+      query.startsWith(key) &&
+      (!best || key.length > best[0].length)
+    )
+      best = [key, page];
+  return best?.[1];
+}
+/** The page for `query` read out of a complete page for its prefix. */
+const derive = (page: Page, query: string): Page => ({
+  people: page.people.filter((person) => matchPerson(person.name, query)),
+  more: false,
+});
 // The last settled page per chooser lifetime. Inline completion remounts its
 // provider on every keystroke, so a component-local copy would be lost.
 const settled = new WeakMap<ComposerSession, Map<string, Page>>();
@@ -53,6 +89,38 @@ const exhausted = new WeakMap<ComposerSession, string>();
 const refutedPage: Page = { people: empty, more: false };
 
 /**
+ * The first page for `query`: the shared cache, a complete cached page for a
+ * prefix of it, or one relay read that fills the cache. The chooser and the
+ * pending-mention resolver both read through here, so a page either has found
+ * is the other's cache hit. `fresh` skips the prefix page: a retry asked for
+ * a read, and a derived page is not cached, so the chooser could not show it.
+ */
+export async function fetchMentionDirectoryPage(
+  session: ComposerSession,
+  query: string,
+  signal: AbortSignal,
+  { fresh = false } = {},
+): Promise<Page> {
+  const hit = cached(session, query);
+  if (hit) return hit;
+  const source = fresh ? undefined : prefixPage(session, query);
+  if (source) return derive(source, query);
+  exhausted.delete(session);
+  const { people, hasMore } = await session.directMessages.people(
+    query,
+    1,
+    signal,
+  );
+  const page = { people, more: hasMore };
+  if (signal.aborted) return page;
+  if (people.length) remember(session, query, page);
+  // The relay ignores non-word text, so it only refutes word prefixes.
+  else if (!hasMore && !exactKey(query) && /[\p{L}\p{N}]/u.test(query))
+    exhausted.set(session, query);
+  return page;
+}
+
+/**
  * Directory pages belong to this menu and community, not the global profile
  * cache. While a new query waits or loads, the last settled page stays visible
  * so callers can keep its still-matching people instead of blanking the list.
@@ -71,7 +139,12 @@ export function useMentionDirectory(
     allowsOutsideMentions(channel) &&
     !channel?.archived &&
     !channel?.readOnly;
-  const [attempt, setAttempt] = useState(0);
+  // A retry belongs to the query it was asked for. The picker keeps one hook
+  // mounted across openings, so a count that never reset would hold every
+  // later query of the session to a fresh read, off the prefix-page and
+  // refuted shortcuts, after one transient failure.
+  const [retried, setRetried] = useState<{ query: string; attempt: number }>();
+  const attempt = retried?.query === query ? retried.attempt : 0;
   const [state, setState] = useState<{
     session: ComposerSession;
     query: string;
@@ -89,19 +162,25 @@ export function useMentionDirectory(
     state.lifetime === lifetime
       ? state
       : undefined;
-  // An exact key is an author lookup, which name-prefix evidence cannot refute.
-  const exactKey = /^[0-9a-f]{64}$/.test(query.trim());
   const prefix = exhausted.get(session);
   const refuted =
     attempt === 0 &&
-    !exactKey &&
+    !exactKey(query) &&
     prefix !== undefined &&
     query.length > prefix.length &&
     query.startsWith(prefix);
+  const exact = active ? cached(session, query) : undefined;
+  // Like the refuted shortcut, a prefix page serves only until a retry asks
+  // for a fresh read. Its identity keys the derived page, so the result is
+  // stable across renders until another read lands in the cache.
+  const source =
+    active && !exact && attempt === 0 ? prefixPage(session, query) : undefined;
+  const derived = useMemo(
+    () => (source ? derive(source, query) : undefined),
+    [source, query],
+  );
   const hit = active
-    ? (cached(session, query) ??
-      own?.page ??
-      (refuted ? refutedPage : undefined))
+    ? (exact ?? own?.page ?? derived ?? (refuted ? refutedPage : undefined))
     : undefined;
   const searching = active && !hit;
   useEffect(() => {
@@ -109,20 +188,13 @@ export function useMentionDirectory(
     const controller = new AbortController();
     const current = { session, query, attempt, lifetime };
     const timer = setTimeout(() => {
-      exhausted.delete(session);
-      void session.directMessages.people(query, 1, controller.signal).then(
-        ({ people, hasMore }) => {
+      void fetchMentionDirectoryPage(session, query, controller.signal, {
+        fresh: attempt > 0,
+      }).then(
+        (page) => {
           if (controller.signal.aborted) return;
-          const page = { people, more: hasMore };
-          if (people.length) {
-            remember(session, query, page);
-            setState(current);
-            return;
-          }
-          // The relay ignores non-word text, so it only refutes word prefixes.
-          if (!hasMore && !exactKey && /[\p{L}\p{N}]/u.test(query))
-            exhausted.set(session, query);
-          setState({ ...current, page });
+          // A non-empty page is now cached; `own.page` keeps an empty one.
+          setState(page.people.length ? current : { ...current, page });
         },
         () => {
           if (!controller.signal.aborted)
@@ -137,18 +209,22 @@ export function useMentionDirectory(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [session, query, searching, exactKey, attempt, lifetime]);
+  }, [session, query, searching, attempt, lifetime]);
   if (hit) settle(session, lifetime, hit);
   const error = active && !hit ? own?.error : undefined;
   const shown = hit ?? settled.get(session)?.get(lifetime);
   const retry = useCallback(() => {
     pages.get(session)?.delete(query);
-    setAttempt((value) => value + 1);
+    setRetried((prior) => ({
+      query,
+      attempt: (prior?.query === query ? prior.attempt : 0) + 1,
+    }));
   }, [session, query]);
   return useMemo(
     () => ({
       /** The current query's page, or the last settled page while it loads. */
-      people: (active && shown?.people) || empty,
+      // An empty page shares one array, so it changes no cached candidates.
+      people: active && shown?.people.length ? shown.people : empty,
       loading: active && !hit && !error,
       error,
       more: !!hit?.more,

@@ -178,6 +178,22 @@ it("hands the spare's tools to the agent that takes it", async () => {
   });
 });
 
+it("hands over no spare that has run a turn without its prompt", async () => {
+  const { pool, spare, claudes } = withSpare();
+  spare.warm({ cwd: "/work", model: "opus" });
+  await flush();
+  const [used] = claudes();
+  // Another Claude session messaged the spare, so its prompt is fixed.
+  used?.emit({ type: "system", subtype: "init", session_id: "spare-1" });
+  await pool.deliver("c/root", "hi", 1);
+  await flush();
+  expect(used?.killed).toBe(true);
+  expect(used?.prompts).toEqual([]);
+  expect(claudes().find((process) => process.prompts.length)?.prompts).toEqual([
+    "hi",
+  ]);
+});
+
 it("hands over no spare that lists other tools than there are now", async () => {
   let key = "";
   const { pool, spare, claudes } = withSpare({}, () => key);

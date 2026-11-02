@@ -86,6 +86,22 @@ test("shared tokens reach app controls without history or chip overrides", async
           item.dataset.highlighted = "";
           item.textContent = "Shared popup row";
           surface.append(item);
+          if (name === "buzz-menu-popup") {
+            const disabled = document.createElement("div");
+            disabled.className = "buzz-menu-item";
+            disabled.dataset.disabled = "";
+            disabled.dataset.highlighted = "";
+            disabled.dataset.popupOpen = "";
+            const choice = document.createElement("span");
+            choice.className = "buzz-choice-row";
+            choice.dataset.buzzUi = "";
+            const label = document.createElement("span");
+            label.className = "buzz-choice-row-label";
+            label.textContent = "Unavailable choice";
+            choice.append(label);
+            disabled.append(choice);
+            surface.append(disabled);
+          }
         }
         positioner.append(surface);
         probes.append(positioner);
@@ -116,6 +132,7 @@ test("shared tokens reach app controls without history or chip overrides", async
         --affordance-floating-control: rgb(13, 35, 57);
         --scrollbar-thumb-quiet: rgb(34, 56, 78);
         --text-standard: rgb(10, 20, 30);
+        --text-unavailable: rgb(60, 70, 80);
         --text-label-sm: 19px;
         --space-1: 3px;
         --space-2: 7px;
@@ -208,6 +225,12 @@ test("shared tokens reach app controls without history or chip overrides", async
             .evaluate((element) => getComputedStyle(element).backgroundColor),
         );
       }
+      await expect(
+        page.locator("#probe-buzz-menu-popup .buzz-choice-row-label"),
+      ).toHaveCSS("color", "rgb(60, 70, 80)");
+      await expect(
+        page.locator("#probe-buzz-menu-popup [data-disabled]"),
+      ).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     } finally {
       await override.evaluate((node) => node.remove());
     }

@@ -6,7 +6,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { npubEncode } from "nostr-tools/nip19";
 import { ToastProvider } from "../shared/design-system/ui/Toast";
 import type { Identity } from "../features/identity/service";
+import type { FederatedIdentity } from "../features/federated-identity/service";
 import { IdentitySettings } from "./IdentitySettings";
+import { federatedFixture } from "../features/federated-identity/testing";
 const viewer = "ab".repeat(32);
 afterEach(() => {
   cleanup();
@@ -106,4 +108,121 @@ it("clears a revealed key when leaving identity settings and starts masked on re
     "••••••••••••••••",
   );
   expect(exportKey).toHaveBeenCalledTimes(1);
+});
+
+// Methods that need their receiver, like the real service's class methods.
+function bound(service: FederatedIdentity): FederatedIdentity {
+  const self: FederatedIdentity = {
+    apiAvailable: service.apiAvailable,
+    request: service.request,
+    snapshot: service.snapshot,
+    subscribe: service.subscribe,
+    signIn() {
+      expect(this).toBe(self);
+      return service.signIn();
+    },
+    cancelSignIn() {
+      expect(this).toBe(self);
+      return service.cancelSignIn();
+    },
+    signOut() {
+      expect(this).toBe(self);
+      return service.signOut();
+    },
+  };
+  return self;
+}
+
+it("shows the organization account and signs out of it once", async () => {
+  const h = federatedFixture();
+  h.publish({ status: "signed-in", email: "a@example.com" });
+  render(
+    <IdentitySettings viewer={viewer} federatedIdentity={bound(h.service)} />,
+    {
+      wrapper: ToastProvider,
+    },
+  );
+  expect(screen.getByText("Signed in as a@example.com")).toBeVisible();
+  expect(screen.getByText(/builderlab\.example login/)).toBeVisible();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Sign out of organization" }),
+  );
+  expect(h.service.signOut).toHaveBeenCalledTimes(1);
+  expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+});
+
+it("shows when the organization sign-in ends", () => {
+  const h = federatedFixture();
+  const expiresAt = "2026-11-08T19:00:00Z";
+  h.publish({ status: "signed-in", email: "a@example.com", expiresAt });
+  render(<IdentitySettings viewer={viewer} federatedIdentity={h.service} />, {
+    wrapper: ToastProvider,
+  });
+  const expires = new Date(expiresAt).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const subtitle = screen.getByText(/^Expires at /);
+  expect(subtitle).toHaveTextContent(`Expires at ${expires}Lets you`);
+  expect(subtitle.querySelector("br")).not.toBeNull();
+});
+
+it("signs in to the organization once when signed out", async () => {
+  const h = federatedFixture();
+  render(
+    <IdentitySettings viewer={viewer} federatedIdentity={bound(h.service)} />,
+    {
+      wrapper: ToastProvider,
+    },
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  expect(h.service.signIn).toHaveBeenCalledTimes(1);
+});
+
+it("hides organization sign-in without an authority", () => {
+  const h = federatedFixture();
+  h.publish({ status: "unconfigured", authority: null });
+  render(<IdentitySettings viewer={viewer} federatedIdentity={h.service} />, {
+    wrapper: ToastProvider,
+  });
+  expect(screen.queryByText("Organization sign-in")).not.toBeInTheDocument();
+});
+
+it("keeps a failed organization sign-out visible when storage refuses", async () => {
+  const h = federatedFixture();
+  h.publish({ status: "signed-in", email: "a@example.com" });
+  vi.mocked(h.service.signOut).mockImplementationOnce(async () => {
+    h.publish({ status: "unavailable", failure: "storage-busy" });
+  });
+  render(
+    <IdentitySettings viewer={viewer} federatedIdentity={bound(h.service)} />,
+    {
+      wrapper: ToastProvider,
+    },
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Sign out of organization" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Secure storage is busy",
+  );
+});
+
+it("places organization sign-in below signing out of Buzz", () => {
+  const h = federatedFixture();
+  const identity = { exportKey: vi.fn() } as unknown as Identity;
+  render(
+    <IdentitySettings
+      viewer={viewer}
+      identity={identity}
+      federatedIdentity={bound(h.service)}
+    />,
+    { wrapper: ToastProvider },
+  );
+  const signOut = screen.getByRole("button", { name: "Sign out of Buzz" });
+  const organization = screen.getByText("Organization sign-in");
+  expect(
+    signOut.compareDocumentPosition(organization) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 });

@@ -361,10 +361,64 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "bg-surface-message-hover",
+        variable: "--surface-message-hover",
+        pointsAt:
+          "surface-message mixed 5% toward black in light mode / white in dark mode",
+        use: "Received bubble fill while its actions show; text and media are unchanged.",
+        status: "core",
+      },
+      {
+        token: "bg-surface-message-own-hover",
+        variable: "--surface-message-own-hover",
+        pointsAt:
+          "surface-message-own mixed 5% toward black in light mode / white in dark mode",
+        use: "Own bubble fill while its actions show; text and media are unchanged.",
+        status: "core",
+      },
+      {
+        token: "--affordance-message-own-hover",
+        variable: "--affordance-message-own-hover",
+        pointsAt:
+          "black 4% on light bubbles / white 8% on dark ones; at Buzzin’, black 4% on the accent fill (white 8% on Mono in light mode)",
+        use: "Overlay across your own bubble while its actions show. It follows the bubble's lightness, as its chips do.",
+        status: "core",
+      },
+      {
+        token: "--affordance-message-highlight",
+        variable: "--affordance-message-highlight",
+        pointsAt: "black 10% light / white 16% dark",
+        use: "Temporary arrival cue across a received bubble; replaces hover while it shows.",
+        status: "core",
+      },
+      {
+        token: "--affordance-message-own-highlight",
+        variable: "--affordance-message-own-highlight",
+        pointsAt:
+          "affordance-message-highlight; at Buzzin’, the accent's regular overlay step on its fill (black 10%, white 16% on Mono in light mode)",
+        use: "Temporary arrival cue across your own bubble. It follows the bubble's lightness, as its chips do.",
+        status: "core",
+      },
+      {
+        token: "--affordance-reaction",
+        variable: "--affordance-reaction",
+        pointsAt: "black 6% light / white 10% dark",
+        use: "Reaction strip on received bubbles and the panel; the add-reaction hover lays it again on top.",
+        status: "core",
+      },
+      {
+        token: "--affordance-reaction-own",
+        variable: "--affordance-reaction-own",
+        pointsAt:
+          "affordance-reaction; at Buzzin’, black 6% on the accent fill (white 10% on Mono in light mode)",
+        use: "Reaction strip inside your own bubble. It follows the bubble's lightness, as its chips do.",
+        status: "core",
+      },
+      {
         token: "bg-surface-message-highlight",
         variable: "--surface-message-highlight",
         pointsAt: "accent step 3",
-        use: "Temporary return-to-message cue; follows the accent color.",
+        use: "Temporary arrival cue on a message without a filled bubble; follows the accent color.",
         status: "core",
       },
       {
@@ -556,6 +610,34 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "icon-subtle",
+        variable: "--icon-subtle",
+        pointsAt: "text-subtle",
+        use: "Neutral / inactive state icons, including inside message bubbles. Not text.",
+        status: "core",
+      },
+      {
+        token: "icon-subtle-own",
+        variable: "--icon-subtle-own",
+        pointsAt: "icon-subtle; the own bubble's link ink at Buzzin’",
+        use: "Neutral state icons inside your own bubble, where the solid fill clears no grey.",
+        status: "core",
+      },
+      {
+        token: "icon-success",
+        variable: "--icon-success",
+        pointsAt: "green-11 light / green-11 dark",
+        use: "Success / positive state icons, including inside message bubbles. Not text.",
+        status: "core",
+      },
+      {
+        token: "icon-success-own",
+        variable: "--icon-success-own",
+        pointsAt: "icon-success; the own bubble's link ink at Buzzin’",
+        use: "Success state icons inside your own bubble, where the solid fill clears no green.",
+        status: "core",
+      },
+      {
         token: "text-link",
         variable: "--text-link",
         pointsAt: "text-standard (neutral outside message bubbles)",
@@ -587,15 +669,14 @@ export const ROLE_GROUPS: RoleGroup[] = [
       {
         token: "text-mention-own",
         variable: "--text-mention-own",
-        pointsAt:
-          "text-mention; the own bubble's ink at Buzzin’ (tone-on-tone chip)",
+        pointsAt: "text-mention; the own bubble's ink at Buzzin’",
         use: "Mention labels inside your own bubble, paired with bg-affordance-mention-own.",
         status: "core",
       },
       {
         token: "text-mention-self",
         variable: "--text-mention-self",
-        pointsAt: "text-on-accent light / accent 11 dark",
+        pointsAt: "text-on-accent",
         use: "A mention of you, paired with bg-affordance-mention-self. It asks for your attention, so it joins the strong group.",
         status: "core",
       },
@@ -604,6 +685,21 @@ export const ROLE_GROUPS: RoleGroup[] = [
         variable: "--text-categorical-purple",
         pointsAt: "purple-12 light / purple-12 dark",
         use: "Accent-independent categorical text, paired with surface-categorical-purple.",
+        status: "core",
+      },
+      {
+        token: "icon-categorical-purple",
+        variable: "--icon-categorical-purple",
+        pointsAt: "purple-11 light / purple-11 dark",
+        use: "Accent-independent categorical state icons, the icon tier of text-categorical-purple. Not text.",
+        status: "core",
+      },
+      {
+        token: "icon-categorical-purple-own",
+        variable: "--icon-categorical-purple-own",
+        pointsAt:
+          "icon-categorical-purple; the own bubble's link ink at Buzzin’",
+        use: "Categorical state icons inside your own bubble, where the solid fill clears no purple.",
         status: "core",
       },
       {
@@ -830,7 +926,7 @@ export const ROLE_GROUPS: RoleGroup[] = [
         token: "affordance-sidebar-hover",
         variable: "--affordance-sidebar-hover",
         pointsAt: "accent 2 light / accent 3 dark",
-        use: "Sidebar row hover, quieter than selection.",
+        use: "Sidebar row hover and Solo card drop destinations, quieter than selection.",
         status: "core",
       },
       {
@@ -1153,42 +1249,44 @@ export const ROLE_GROUPS: RoleGroup[] = [
       {
         token: "bg-affordance-mention",
         variable: "--affordance-mention",
-        pointsAt: "neutral-4 light / neutral-6 dark",
-        use: "Ordinary mention chip fill, paired with text-mention. Frequent, so it stays neutral at every level.",
+        pointsAt: "black 10% light / white 16% dark",
+        use: "Ordinary mention chip fill, paired with text-mention. Frequent, so it stays a neutral overlay that shows the bubble through.",
         status: "core",
       },
       {
         token: "bg-affordance-mention-hover",
         variable: "--affordance-mention-hover",
-        pointsAt: "neutral-5 light / neutral-5 dark",
+        pointsAt: "black 14% light / white 20% dark",
         use: "Mention chip under the pointer.",
         status: "core",
       },
       {
         token: "bg-affordance-mention-own",
         variable: "--affordance-mention-own",
-        pointsAt: "affordance-mention; accent 10 at Buzzin’",
+        pointsAt:
+          "affordance-mention; at Buzzin’, black 10% on the accent fill (16% on Magenta, Iris and Cobalt; white 16% on Mono in light mode)",
         use: "Mention chip fill inside your own bubble, paired with text-mention-own.",
         status: "core",
       },
       {
         token: "bg-affordance-mention-own-hover",
         variable: "--affordance-mention-own-hover",
-        pointsAt: "affordance-mention-hover; accent pressed at Buzzin’",
+        pointsAt:
+          "affordance-mention-hover; at Buzzin’, black 14% on the accent fill (22% on Magenta, Iris and Cobalt; white 20% on Mono in light mode)",
         use: "Own-bubble mention chip under the pointer.",
         status: "core",
       },
       {
         token: "bg-affordance-mention-self",
         variable: "--affordance-mention-self",
-        pointsAt: "affordance-accent-prominent light / neutral-6 dark",
+        pointsAt: "affordance-accent-prominent",
         use: "Chip fill for a mention of you, paired with text-mention-self.",
         status: "core",
       },
       {
         token: "bg-affordance-mention-self-hover",
         variable: "--affordance-mention-self-hover",
-        pointsAt: "affordance-accent-prominent-hover light / neutral-5 dark",
+        pointsAt: "affordance-accent-prominent-hover",
         use: "A mention of you under the pointer.",
         status: "core",
       },
@@ -1209,7 +1307,7 @@ export const ROLE_GROUPS: RoleGroup[] = [
       {
         token: "bg-affordance-accent-prominent-hover",
         variable: "--affordance-accent-prominent-hover",
-        pointsAt: "accent step 10",
+        pointsAt: "accent step 10, each accent's hover",
         use: "An identity accent fill under a pointer.",
         status: "core",
       },

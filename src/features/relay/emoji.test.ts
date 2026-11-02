@@ -111,7 +111,7 @@ it("unions latest complete member sets; empty replacements and ties survive stal
 it("actual session cold send is draft-safe; A/B sends, replies and signed retries pin original URLs", async () => {
   const a = session("a"),
     b = session("b");
-  expect(() => a.session.messages.send("c", ":party:")).toThrow(/loading/);
+  expect(() => a.session.messages.send("c", ":party:")).toThrow(/isn't ready/);
   expect(a.session.outbox?.snapshot()).toHaveLength(0);
   expect(b.wire.pending).toHaveLength(0);
   const aRead = a.wire.next();
@@ -291,8 +291,12 @@ it("custom emoji reactions are colon-wrapped, bounded, tagged, and retry origina
     h.session.messages.react(root.id, `:${"x".repeat(65)}:`),
   ).toThrow(/long/);
 });
-it("plain sends are immediate and do not acquire a palette; load failure requires explicit retry", async () => {
+it("plain sends do not acquire a palette; a custom send retries a cold failure while passive demand does not", async () => {
   const h = session();
+  const reads = () =>
+    h.query.mock.calls.filter(([filters]) =>
+      filters.some((filter) => filter.kinds?.includes(30030)),
+    ).length;
   expect(h.session.messages.send("c", "hello")).toMatch(/^[0-9a-f]{64}$/);
   expect(h.wire.pending.some((p) => p.filters[0]?.kinds?.includes(30030))).toBe(
     false,
@@ -304,16 +308,118 @@ it("plain sends are immediate and do not acquire a palette; load failure require
   h.wire.next().fail(new Error("offline"));
   await ready;
   expect(h.session.emoji.snapshot().status).toBe("error");
+  // Passive warm-up does not re-read a cold failure.
+  void h.session.emoji.ensure();
+  await flush();
+  expect(h.session.emoji.snapshot().status).toBe("error");
+  expect(reads()).toBe(1);
+  // A refused send starts one retry cycle; repeated sends and demand share it.
   expect(() =>
     h.session.messages.reply("c", "a".repeat(64), ":party:"),
-  ).toThrow(/unavailable/);
-  await h.session.emoji.ensure();
-  expect(h.wire.pending).toHaveLength(0);
-  const retry = h.session.emoji.refresh();
+  ).toThrow(/isn't ready/);
+  expect(h.session.emoji.snapshot().status).toBe("loading");
+  const retry = h.session.emoji.ensure();
+  expect(() => h.session.messages.send("c", ":party:")).toThrow(/isn't ready/);
+  expect(h.session.emoji.ensure()).toBe(retry);
   await vi.waitFor(() => expect(h.wire.pending).toHaveLength(1));
+  expect(reads()).toBe(2);
   h.wire.next().respond([set()]);
   await retry;
   expect(h.session.emoji.snapshot().status).toBe("ready");
+  const id = h.session.messages.send("c", ":party:");
+  expect(
+    h.session.outbox?.snapshot().find((item) => item.event.id === id)?.event
+      .tags,
+  ).toContainEqual(["emoji", "party", url]);
+  expect(reads()).toBe(2);
+});
+it("explicit retries jump background traffic that starves the passive catalog load", async () => {
+  vi.useFakeTimers();
+  try {
+    const catalog = (target: ReturnType<typeof session>) =>
+      target.wire.pending.find((p) => p.filters[0]?.kinds?.includes(30030));
+    // Background profile reads hold the background lane, as on channel open.
+    const busy = (target: ReturnType<typeof session>, key: Key) =>
+      void target.session.profiles
+        .ensure([key.pubkey], "background")
+        .catch(() => {});
+    const h = session();
+    busy(h, member);
+    void h.session.emoji.ensure();
+    // The passive load spends its whole deadline queued, never reaching the relay.
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(catalog(h)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.session.emoji.snapshot()).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Relay read timed out"),
+    });
+    h.wire.pending.splice(0);
+    busy(h, relay);
+    await vi.advanceTimersByTimeAsync(0);
+    // The refused send's retry dispatches despite the busy lane.
+    expect(() => h.session.messages.send("c", ":party:")).toThrow(
+      /isn't ready/,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    catalog(h)?.respond([set()]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.session.emoji.snapshot().status).toBe("ready");
+    const id = h.session.messages.send("c", ":party:");
+    expect(
+      h.session.outbox?.snapshot().find((item) => item.event.id === id)?.event
+        .tags,
+    ).toContainEqual(["emoji", "party", url]);
+    // A retry while the passive load is still queued supersedes it.
+    const queued = session("b");
+    busy(queued, member);
+    void queued.session.emoji.ensure();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(catalog(queued)).toBeUndefined();
+    const retry = queued.session.emoji.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    catalog(queued)?.respond([set()]);
+    await retry;
+    expect(queued.session.emoji.snapshot().status).toBe("ready");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("a failed refresh keeps a loaded catalog ready and sendable, with its error until a retry", async () => {
+  const h = session();
+  const ready = h.session.emoji.ensure();
+  h.wire.next().respond([set()]);
+  await ready;
+  const loaded = h.session.emoji.snapshot();
+  const failing = h.session.emoji.refresh();
+  expect(h.session.emoji.snapshot()).toBe(loaded);
+  h.wire.next().fail(new Error("offline"));
+  await failing;
+  expect(h.session.emoji.snapshot()).toMatchObject({
+    status: "ready",
+    error: expect.stringContaining("offline"),
+  });
+  expect(h.session.emoji.snapshot().entries).toBe(loaded.entries);
+  const id = h.session.messages.reply("c", "a".repeat(64), ":party:");
+  expect(
+    h.session.outbox?.snapshot().find((item) => item.event.id === id)?.event
+      .tags,
+  ).toContainEqual(["emoji", "party", url]);
+  // Demand does not re-read a ready catalog; an explicit retry clears the error.
+  await h.session.emoji.ensure();
+  expect(h.wire.pending).toHaveLength(0);
+  const retry = h.session.emoji.refresh();
+  expect(h.session.emoji.snapshot()).toMatchObject({
+    status: "ready",
+    error: undefined,
+  });
+  await vi.waitFor(() => expect(h.wire.pending).toHaveLength(1));
+  h.wire.next().respond([set()]);
+  await retry;
+  expect(h.session.emoji.snapshot()).toMatchObject({
+    status: "ready",
+    error: undefined,
+  });
 });
 it("initial roster cancellation restarts demanded emoji once; clear/dispose fence obsolete results", async () => {
   const h = session();
@@ -351,12 +457,13 @@ it("initial roster cancellation restarts demanded emoji once; clear/dispose fenc
   await flush();
   expect(h.session.emoji.snapshot().entries).toEqual([]);
 });
-it("reconnect repairs a previously requested catalog, without preloading an unused community", async () => {
+it("reconnect repairs a previously requested catalog in place, without preloading an unused community", async () => {
   const h = session(),
     idle = session();
   const ready = h.session.emoji.ensure();
   h.wire.next().respond([set()]);
   await ready;
+  const loaded = h.session.emoji.snapshot();
   for (const target of [h, idle]) {
     target.live.state({ status: "connected", routes: [] });
     target.live.established();
@@ -370,9 +477,60 @@ it("reconnect repairs a previously requested catalog, without preloading an unus
   expect(
     idle.wire.pending.some((p) => p.filters[0]?.kinds?.includes(30030)),
   ).toBe(false);
+  // The repair read publishes nothing while pending, and sends keep their tags.
+  expect(h.session.emoji.snapshot()).toBe(loaded);
+  const id = h.session.messages.send("c", ":party:");
+  expect(
+    h.session.outbox?.snapshot().find((item) => item.event.id === id)?.event
+      .tags,
+  ).toContainEqual(["emoji", "party", url]);
   requests[0]?.respond([set(member, 2, [])]);
   await flush();
   expect(h.session.emoji.snapshot().entries).toEqual([]);
+});
+it("active catalog demand bypasses queued warm-up and recovers a cold failure without reloading ready data", async () => {
+  vi.useFakeTimers();
+  try {
+    const h = session();
+    void h.session.profiles
+      .ensure([member.pubkey], "background")
+      .catch(() => {});
+    void h.session.emoji.ensure();
+    await vi.advanceTimersByTimeAsync(0);
+    const catalog = () =>
+      h.wire.pending.find(
+        (p) => !p.signal?.aborted && p.filters[0]?.kinds?.includes(30030),
+      );
+    expect(catalog()).toBeUndefined();
+    const active = h.session.emoji.ensure("foreground");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(catalog()).toBeDefined();
+    catalog()?.fail(new Error("catalog unavailable"));
+    await active;
+    expect(h.session.emoji.snapshot().status).toBe("error");
+    await h.session.emoji.ensure();
+    expect(h.session.emoji.snapshot().status).toBe("error");
+    const failed = h.session.emoji.snapshot();
+    const failedReads = h.query.mock.calls.length;
+    // Completion providers remount on each edit. A settled foreground failure
+    // retains its recovery action instead of starting another automatic read.
+    await h.session.emoji.ensure("foreground");
+    await h.session.emoji.ensure("foreground");
+    expect(h.query.mock.calls).toHaveLength(failedReads);
+    expect(h.session.emoji.snapshot()).toBe(failed);
+    const retry = h.session.emoji.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    catalog()?.respond([set()]);
+    await retry;
+    expect(h.session.emoji.snapshot().entries).toEqual([
+      { shortcode: "party", url },
+    ]);
+    const reads = h.query.mock.calls.length;
+    await h.session.emoji.ensure("foreground");
+    expect(h.query.mock.calls).toHaveLength(reads);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 it("exposes read-cap and retained-byte limits rather than evicting replacement evidence", async () => {
   const reader = {
@@ -381,10 +539,13 @@ it("exposes read-cap and retained-byte limits rather than evicting replacement e
   const directory = createEmojiDirectory(reader);
   owners.push(directory);
   await directory.queries.ensure();
+  // A capped read is incomplete, but still resolves the shortcodes it holds.
   expect(directory.queries.snapshot()).toMatchObject({
-    status: "error",
+    status: "ready",
+    entries: [{ shortcode: "party", url }],
     error: expect.stringContaining("incomplete"),
   });
+  expect(directory.tags(":party:")).toEqual([["emoji", "party", url]]);
   directory.accept([
     set(member, 2, [["emoji", "party", "x".repeat(2 * 1024 * 1024)]]),
   ]);
@@ -393,6 +554,11 @@ it("exposes read-cap and retained-byte limits rather than evicting replacement e
     entries: [],
     error: expect.stringContaining("budget"),
   });
+  // Overflow would repeat on every read, so demand and sends leave it to Retry.
+  await directory.queries.ensure();
+  await directory.queries.ensure("foreground");
+  expect(() => directory.tags(":party:")).toThrow(/Retry message preparation/);
+  expect(reader.read).toHaveBeenCalledTimes(1);
   directory.accept([set(member, 1)]);
   expect(directory.queries.snapshot().entries).toEqual([]);
   reader.read.mockResolvedValueOnce([set(member, 3, [])]);

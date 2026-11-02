@@ -133,3 +133,69 @@ test("a user scroll before a delayed entry renders keeps that position for its d
   expect(await sidebar.evaluate((element) => element.scrollTop)).toBe(200);
   expect(errors).toEqual([]);
 });
+
+test("late contributed rows retry the sidebar reveal without moving the owner", async ({
+  page,
+}) => {
+  const { errors } = watchPageErrors(page);
+  await page.goto(url);
+  const sidebar = page.getByRole("navigation", {
+    name: "Sidebar",
+    exact: true,
+  });
+  await page.evaluate(() =>
+    window.sidebar.update({
+      mounted: true,
+      at: "conversation:late",
+      rows: window.sidebar.rows(50),
+    }),
+  );
+  const contributedRow = sidebar.getByRole("button", { name: "Late item" });
+  await expect(contributedRow).toHaveCount(0);
+
+  // This external-store publication rerenders SectionContents, not Sidebar.
+  await page.evaluate(() =>
+    window.sidebar.publishContributionRows([
+      { id: "late", label: "Late item" },
+    ]),
+  );
+  await expect(contributedRow).toBeInViewport({ ratio: 0.9 });
+  await expect(contributedRow).toHaveAttribute("aria-current", "page");
+  expect(errors).toEqual([]);
+});
+
+test("a user scroll before contributed rows arrive cancels their reveal", async ({
+  page,
+}) => {
+  const { errors } = watchPageErrors(page);
+  await page.goto(url);
+  const sidebar = page.getByRole("navigation", {
+    name: "Sidebar",
+    exact: true,
+  });
+  await page.evaluate(() =>
+    window.sidebar.update({
+      mounted: true,
+      at: "conversation:late",
+      rows: window.sidebar.rows(50),
+    }),
+  );
+  await sidebar.hover();
+  await page.mouse.wheel(0, 200);
+  await expect
+    .poll(() => sidebar.evaluate((element) => element.scrollTop))
+    .toBe(200);
+  await settle(page);
+
+  await page.evaluate(() =>
+    window.sidebar.publishContributionRows([
+      { id: "late", label: "Late item" },
+    ]),
+  );
+  const contributedRow = sidebar.getByRole("button", { name: "Late item" });
+  await expect(contributedRow).toHaveAttribute("aria-current", "page");
+  await settle(page);
+  expect(await sidebar.evaluate((element) => element.scrollTop)).toBe(200);
+  await expect(contributedRow).not.toBeInViewport();
+  expect(errors).toEqual([]);
+});

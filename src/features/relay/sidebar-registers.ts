@@ -285,27 +285,20 @@ export function editSidebarRecord(
   return { ...current, ...projected, meta };
 }
 
-/** Appending uses canonical orders, not the densely numbered legacy projection. */
+/** Insertion uses canonical orders, not the densely numbered legacy projection. */
 export function nextSidebarSectionOrder(
   current: Record<string, unknown>,
+  position: "first" | "last" = "last",
 ): number {
-  if (current.meta === undefined)
-    return (
-      Math.max(
-        -1,
-        ...(current.sections as { order: number }[]).map(({ order }) =>
+  const orders =
+    current.meta === undefined
+      ? (current.sections as { order: number }[]).map(({ order }) =>
           Math.round(order),
-        ),
-      ) + 1
-    );
-  const tree = metadata("channel-sections", current.meta);
-  return (
-    Object.values(tree.s as Tree).reduce<number>(
-      (max, node) =>
-        val(node as Tree, "live") === true
-          ? Math.max(max, Number(val(node as Tree, "order") ?? 0))
-          : max,
-      -1,
-    ) + 1
-  );
+        )
+      : Object.values(metadata("channel-sections", current.meta).s as Tree)
+          .filter((node) => val(node as Tree, "live") === true)
+          .map((node) => Number(val(node as Tree, "order") ?? 0));
+  return position === "first"
+    ? Math.min(0, ...orders) - 1
+    : Math.max(-1, ...orders) + 1;
 }

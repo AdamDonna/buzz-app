@@ -355,6 +355,7 @@ function Fixture() {
         <OutboxStatus
           outbox={owner.session.outbox}
           profiling={owner.session.profiling}
+          memberAdditions={owner.session.memberAdditions}
         />
       )}
     </main>

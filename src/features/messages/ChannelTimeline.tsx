@@ -324,8 +324,8 @@ function Timeline({
   const handle = useRef<VirtualizerHandle>(null);
   const [size, setSize] = useState({ width: 0, height: 0, edgeHeight: 0 });
   const width = size.width;
-  const latest = useRef({ signature, width });
-  latest.current = { signature, width };
+  const latest = useRef({ signature, width, edgeHeight: size.edgeHeight });
+  latest.current = { signature, width, edgeHeight: size.edgeHeight };
   const initialCache = useRef<VirtualizerHandle["cache"] | undefined>(
     undefined,
   );
@@ -491,6 +491,20 @@ function Timeline({
     settled.current = false;
     handle.current.scrollToIndex(targetIndex, { align: "center" });
   }, [targetIndex]);
+  const targetPlaced = useCallback(() => {
+    const list = handle.current;
+    const element = scroller.current;
+    if (!list || !element) return;
+    // Replace the mounting request with the reveal's exact position. Retain
+    // that same item-relative offset through Virtua's late measurements.
+    list.scrollToIndex(targetIndex, {
+      align: "start",
+      offset:
+        element.scrollTop -
+        latest.current.edgeHeight -
+        list.getItemOffset(targetIndex),
+    });
+  }, [targetIndex]);
   const targetSignal = inlineSignal ?? navigation?.signal;
   const activityReveal = useRef<AbortSignal | string | undefined>(undefined);
   useLayoutEffect(() => {
@@ -531,6 +545,7 @@ function Timeline({
     signal: targetSignal,
     ready: !!size.width && !!size.height && targetIndex >= 0,
     prepare: prepareTarget,
+    placed: targetPlaced,
     complete: completeTarget,
     hold: holdTarget,
   });
@@ -605,20 +620,30 @@ function Timeline({
     // New rows can leave the initial offset unchanged. Hold through their
     // measurements, but leave ordinary prepend follow-up renders to Virtua.
     correctScrollTop(element, moved);
-    const top = () =>
-      element
-        .querySelector(`[data-message-id="${CSS.escape(id)}"]`)
-        ?.getBoundingClientRect().top;
     // The row's offset from the viewport, as last placed by the reader.
     // A live append must not choose a newly inserted row while the older
     // page is still measuring; keep the reader's original row and offset.
-    let y = reader.current.y;
-    const anchor = { id, y, intent: intent.current };
+    const anchor = { id, y: reader.current.y, intent: intent.current };
     heldReader.current = anchor;
+    const top = () =>
+      element
+        .querySelector(`[data-message-id="${CSS.escape(anchor.id)}"]`)
+        ?.getBoundingClientRect().top;
+    const logicalTop = () => {
+      const index = rows.findIndex((row) => row.id === anchor.id);
+      const virtualizer = handle.current;
+      return index < 0 || !virtualizer
+        ? undefined
+        : virtualizer.getItemOffset(index) - element.scrollTop;
+    };
+    let logical = logicalTop();
+    // A drag can carry the reader away from that row, and Virtua unmounts
+    // rows the reader leaves. Hold the row they read instead, or correcting
+    // for the old one would move the rows in view.
     const read = () => {
-      const row = top();
-      if (row !== undefined)
-        anchor.y = y = row - element.getBoundingClientRect().top;
+      const position = positionAt(element, anchor.id).anchor;
+      if (position) Object.assign(anchor, position);
+      logical = logicalTop();
     };
     let height = list.style.height;
     const since = intent.current;
@@ -633,15 +658,29 @@ function Timeline({
         if (ended) frame = requestAnimationFrame(() => release());
       });
     });
-    const hold = new MutationObserver(() => {
-      const row = top();
-      if (list.style.height === height) return;
+    const hold = new MutationObserver((mutations) => {
+      // Ignore list-only pointer-events changes during input. A row's offsets
+      // can change even when the sum of its siblings' heights does not.
+      if (
+        list.style.height === height &&
+        !mutations.some((mutation) => mutation.target.parentNode === list)
+      )
+        return;
       height = list.style.height;
-      if (row !== undefined && settled.current && !follow.current)
-        correctScrollTop(
-          element,
-          row - element.getBoundingClientRect().top - y,
-        );
+      const row = top();
+      const next = logicalTop();
+      if (settled.current && !follow.current) {
+        let delta =
+          row === undefined
+            ? 0
+            : row - element.getBoundingClientRect().top - anchor.y;
+        // The range can evict the reader before the correction's scroll event.
+        // Follow the same item's delta without mixing its inner DOM offset in.
+        if (row === undefined && next !== undefined && logical !== undefined)
+          delta = next - logical;
+        correctScrollTop(element, delta);
+      }
+      logical = logicalTop();
     });
     const release = (keepAnchor = false) => {
       if (!keepAnchor && heldReader.current === anchor)
@@ -661,7 +700,12 @@ function Timeline({
     const end = () => {
       if (intent.current !== since && !pointerHeld.current) done();
     };
-    hold.observe(list, { attributes: true, attributeFilter: ["style"] });
+    // Row measurements can redistribute offsets without changing total height.
+    hold.observe(list, {
+      attributes: true,
+      attributeFilter: ["style"],
+      subtree: true,
+    });
     element.addEventListener("scroll", read);
     element.addEventListener("scrollend", end);
     // A drag can end outside the scroller.
@@ -1133,6 +1177,22 @@ function Timeline({
           bufferSize={1600}
           // Reflow must not evict the focused control or a row's open report.
           keepMounted={keptIndices}
+          onResize={() => {
+            const element = scroller.current;
+            // Rows can measure after native scrollend without moving the
+            // scroll offset. Do not carry their estimated Y into the next hold.
+            if (
+              element &&
+              settled.current &&
+              element.clientWidth === size.width &&
+              element.clientHeight === size.height &&
+              !follow.current &&
+              !restoredAnchor.current &&
+              heldReader.current?.intent !== intent.current
+            )
+              // A size change refreshes geometry, never bottom-follow intent.
+              savedPosition.current = { ...positionAt(element), bottom: false };
+          }}
           as="ol"
           item="li"
           startMargin={size.edgeHeight}
@@ -1257,7 +1317,11 @@ function Timeline({
             <EmptyState
               icon={<ChatCircleIcon />}
               title="No messages yet."
-              description="Start the conversation below."
+              description={
+                queries.channels.get?.(channelId)?.readOnly
+                  ? undefined
+                  : "Start the conversation below."
+              }
             />
           </div>
         )}

@@ -15,7 +15,7 @@ import type { SharedAgent } from "./shared-agents";
 export type SharedDefinition = Omit<SharedAgent, "id" | "owner">;
 
 const MAX_JSON_BYTES = 5 * 1024 * 1024;
-const MAX_PNG_BYTES = 10 * 1024 * 1024;
+export const MAX_PNG_BYTES = 10 * 1024 * 1024;
 const PNG = [137, 80, 78, 71, 13, 10, 26, 10];
 const KEYWORD = new TextEncoder().encode("buzz_agent_snapshot\0");
 const decoder = new TextDecoder("utf-8", { fatal: true });

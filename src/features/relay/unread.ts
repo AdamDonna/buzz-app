@@ -18,6 +18,7 @@ import type {
 } from "./read-state";
 import type { ReadJournal } from "./read-state-storage";
 import { markMessage } from "./read-state-retention";
+import { LIVE_RESUME_LAG } from "./live";
 import type { Priority, RelayReader } from "./reader";
 import { foldMessages, deletionApplies, messageAuthor } from "./fold";
 import { eventMs } from "./message-order";
@@ -145,6 +146,13 @@ export interface UnreadCapability {
   clearUnreadLocal(target: ReadTarget): Promise<ReadMutationResult>;
   readonly syncedManualUnread: false;
 }
+/** How far before the newest event a batch already returned a repair reads
+ * again (seconds): the relay accepts a created_at up to 900s from its clock, so
+ * an event stored after that read can be older than the newest one it returned. */
+const REPAIR_OVERLAP = LIVE_RESUME_LAG;
+/** Rows one repair read asks for per batch. A read that returns this many may
+ * have been cut off, and says nothing about what lay beyond the cut. */
+const REPAIR_LIMIT = 500;
 /** Rendered message order: effective ms, then event id. */
 const order = (a: RelayEvent, b: RelayEvent) =>
   eventMs(a) - eventMs(b) || a.id.localeCompare(b.id);
@@ -230,6 +238,17 @@ export function createUnread({
   let refresh: Promise<void> | undefined;
   const lifetime = new AbortController();
   const events = new Map<string, RelayEvent>();
+  // Per repair batch (its channel IDs): the newest created_at a complete read of
+  // it returned. `events` only grows until a reset below, so a later repair needs
+  // just what is newer; every path that empties or shrinks `events` clears this,
+  // and the next repair of every batch reads unbounded again. A repair whose
+  // read spans a reset (`resets` moved) must not answer for the cleared evidence.
+  const repaired = new Map<string, number>();
+  let resets = 0;
+  function forget() {
+    repaired.clear();
+    resets++;
+  }
   const known = new Set<string>();
   const listeners = new Map<string, Set<() => void>>();
   const snapshots = new Map<string, UnreadSnapshot>();
@@ -1196,6 +1215,7 @@ export function createUnread({
   function purge() {
     // A revoke/regrant must not revive a transaction accepted under the old access epoch.
     epoch++;
+    forget();
     for (const channelId of channelReadGenerations.keys())
       if (!allowed(channelId)) channelReadGenerations.delete(channelId);
     for (const [key, lookup] of lookups)
@@ -1597,15 +1617,19 @@ export function createUnread({
     repairAgain = false;
     inboxLoading = true;
     const generation = epoch;
+    const reset = resets;
+    const current = () => !closed && generation === epoch && reset === resets;
     refresh = (async () => {
       await reads.ensure();
-      if (closed || generation !== epoch) return;
+      if (!current()) return;
       const ids = channels
         .list()
         .channels.filter(
           (channel) => !channel.cached && channel.members?.includes(viewer),
         )
-        .map((channel) => channel.id);
+        .map((channel) => channel.id)
+        // Batches key their marks, so they must not move when a channel is renamed.
+        .sort();
       if (!ids.length) {
         freshness = "observed";
         error = undefined;
@@ -1617,6 +1641,10 @@ export function createUnread({
         // Each bounded batch owns its queue-inclusive deadline after marker sync;
         // optional profiles must not block the initial user-visible observation.
         for (let offset = 0; offset < ids.length; offset += 128) {
+          const batch = ids.slice(offset, offset + 128);
+          const key = batch.join(",");
+          const mark = repaired.get(key);
+          const asked = Math.floor(Date.now() / 1000);
           const signal = AbortSignal.any([
             lifetime.signal,
             AbortSignal.timeout(10000),
@@ -1625,22 +1653,43 @@ export function createUnread({
             [
               {
                 kinds: [9, 40002, 40008],
-                "#h": ids.slice(offset, offset + 128),
+                "#h": batch,
                 include_aux: true,
-                limit: 500,
+                limit: REPAIR_LIMIT,
+                ...(mark === undefined
+                  ? {}
+                  : { since: Math.max(0, mark - REPAIR_OVERLAP) }),
               },
             ],
             { signal, priority },
           );
-          if (closed || generation !== epoch) return;
-          if (!accept(result) || closed || generation !== epoch) return;
+          // An overflow or refresh while this read was out discarded what the
+          // mark stands for: an overflow waits for refresh, a refresh reads again.
+          if (!current()) return;
+          // Accepting notifies subscribers, and one may refresh from there.
+          if (!accept(result) || !current()) return;
+          // The mark is anchored on what the relay returned, not the clock: a
+          // skewed clock or a future-dated event cannot move the window past
+          // unseen history. Only a read that returned fewer than its limit saw
+          // everything in its window, so only it installs or advances the mark;
+          // the earlier mark was itself such a read, so coverage chains. A read
+          // that filled its limit may have cut off older rows (a deletion would
+          // later free a slot for one), so it drops the mark and the next repair
+          // reads unbounded. An empty read sets nothing either.
+          const newest = Math.max(
+            0,
+            ...result.map((event) => event.created_at),
+          );
+          if (result.length >= REPAIR_LIMIT) repaired.delete(key);
+          else if (newest)
+            repaired.set(key, Math.max(mark ?? 0, Math.min(newest, asked)));
         }
         freshness = "observed";
         error = undefined;
         publish();
         void findHomes(generation);
       } catch (cause) {
-        if (closed || generation !== epoch) return;
+        if (!current()) return;
         freshness = "stale";
         error =
           cause instanceof Error ? cause.message : "Unread observation failed";
@@ -1782,6 +1831,7 @@ export function createUnread({
       const size = new TextEncoder().encode(JSON.stringify(event)).byteLength;
       if (events.size >= 4096 || bytes + size > 8 * 1024 * 1024) {
         events.clear();
+        forget();
         known.clear();
         bytes = 0;
         error = "Unread observation capacity reached; refresh available";
@@ -1955,7 +2005,12 @@ export function createUnread({
     },
     ensure: () => refresh ?? (requested ? Promise.resolve() : repair()),
     refresh: async () => {
+      // An explicit refresh re-observes everything. The reset fences a running
+      // repair, which the refresh waits out rather than joins.
+      forget();
+      const running = refresh;
       await reads.refresh("foreground");
+      await running?.catch(() => undefined);
       await repair();
     },
     revision: reads.revision,
@@ -2501,6 +2556,7 @@ export function createUnread({
       repairAgain = false;
       indexed = false;
       events.clear();
+      forget();
       known.clear();
       forcedMessages.clear();
       entered.clear();

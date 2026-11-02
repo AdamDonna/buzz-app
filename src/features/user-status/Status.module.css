@@ -18,6 +18,11 @@
   align-items: center;
   gap: var(--space-1);
 }
+/* An unresolved code keeps its width; the status text beside it wraps. */
+.tooltipContent > .text {
+  flex: none;
+  max-width: 100%;
+}
 .emoji {
   width: var(--user-status-emoji-size, 1.25rem);
   height: var(--user-status-emoji-size, 1.25rem);
@@ -25,16 +30,14 @@
   object-fit: contain;
   vertical-align: middle;
 }
+.emoji[data-pending] {
+  display: inline-block;
+}
 .emojiFallback {
   white-space: nowrap;
   font-size: var(--user-status-emoji-size, 1.25rem);
   line-height: 1;
   transform: translateY(var(--user-status-emoji-offset, 0px));
-}
-.emojiFallback[data-custom] {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .fields {
   display: grid;

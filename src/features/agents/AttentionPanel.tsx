@@ -1,15 +1,5 @@
-// The device-local runtime control. Agent Attention owns Interests and watches.
-import { useState } from "react";
-import {
-  AgentCommunityScope,
-  useAgentScopeCommunity,
-  type AgentScopeReader,
-} from "./AgentCommunityScope";
-import type { CommunityReader } from "../communities/service";
+// A glance at what wakes an agent. The Attention plugin owns Interests, watches and the device switch.
 import { AtIcon, EyeIcon, TimerIcon } from "../../shared/design-system/icons";
-import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
-import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
-import { Switch } from "../../shared/design-system/ui/Switch";
 import {
   attentionOf,
   describeWatch,
@@ -17,10 +7,7 @@ import {
   type ChannelChoice,
   type Watch,
 } from "./attention";
-import type { Agent, AgentChange } from "./service";
-
-/** The device-local runtime switch. */
-type Save = (change: AgentChange) => Promise<void>;
+import type { Agent } from "./service";
 
 const watchIcon = (watch: Watch) =>
   watch.type === "timer" ? (
@@ -57,85 +44,5 @@ export function AttentionSummary({
         <li className="text-secondary">{plural(paused, "paused watch")}</li>
       )}
     </ul>
-  );
-}
-
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
-function useAction() {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  const run = async (action: () => Promise<void>) => {
-    setPending(true);
-    setError("");
-    try {
-      await action();
-    } catch (reason) {
-      setError(message(reason));
-    } finally {
-      setPending(false);
-    }
-  };
-  return { pending, error, run };
-}
-const Problem = ({ error }: { error: string }) =>
-  error ? (
-    <p role="alert" className="m-0 text-body-sm text-danger">
-      {error}
-    </p>
-  ) : null;
-
-export function AttentionPanel({
-  agent,
-  save,
-  communities,
-  agents,
-}: {
-  agent: Agent;
-  save: Save;
-  communities?: CommunityReader | undefined;
-  agents: AgentScopeReader;
-}) {
-  const community = useAgentScopeCommunity(agent, agents, communities);
-  const switched = useAction();
-  return (
-    <div className="grid gap-4">
-      <SettingsGroup>
-        <PreferenceRow
-          icon={<AtIcon size={16} />}
-          title="Mentions"
-          subtitle="Responds when someone @mentions it. Always on."
-        />
-        <PreferenceRow
-          icon={<EyeIcon size={16} />}
-          title={
-            <span className="inline-flex flex-wrap items-center gap-2">
-              Attention on this device
-              <AgentCommunityScope community={community} scope="Attention" />
-            </span>
-          }
-          subtitle={
-            <>
-              Let this device run the agent’s watches. Turning this off also
-              pauses its Attention tools here. Mentions still work.
-              <Problem error={switched.error} />
-            </>
-          }
-          trailing={
-            <Switch
-              aria-label="Attention on this device"
-              checked={agent.attentionEnabled}
-              disabled={switched.pending}
-              onCheckedChange={(attentionEnabled) =>
-                void switched.run(() => save({ attentionEnabled }))
-              }
-            />
-          }
-        />
-      </SettingsGroup>
-      <p className="m-0 text-body-sm text-secondary">
-        Manage Interests and watches in Agent Attention.
-      </p>
-    </div>
   );
 }

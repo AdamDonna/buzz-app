@@ -3,7 +3,6 @@
 // Memory is relay-backed for both local and hosted agents. Agents classified
 // as `elsewhere` expose no sections in these views.
 import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
-import { AttentionPanel } from "./AttentionPanel";
 import { MemoryPanel, type AgentMemories } from "./MemoryPanel";
 import type { CommunityReader } from "../communities/service";
 import type {
@@ -12,13 +11,15 @@ import type {
   AgentSettingsHost,
   Agents,
   RegisteredAgentType,
+  TranscriptRequest,
 } from "./service";
-import { AgentSaveButton, useAgentSaveState } from "./AgentSaveButton";
+import { AgentSaveButton } from "./AgentSaveButton";
 import { AgentConfigHistory } from "./AgentConfigHistory";
 
 export type AgentSection = Readonly<{
-  /** `agent:<type tab id>`, `agent:settings`, `agent:activity`
-   * or `agent:memory`; never collides with a host tab. */
+  /** `agent:<type tab id>`, `agent:settings`, `agent:activity`,
+   * `agent:added:<plugin>/<tab id>` or `agent:memory`; never collides with a
+   * host tab. */
   value: `agent:${string}`;
   label: string;
   render(): ReactNode;
@@ -29,6 +30,8 @@ export function agentSections({
   agent,
   type,
   conversation,
+  initialTranscript,
+  close,
   settingsHost,
   memories,
   communities,
@@ -39,6 +42,10 @@ export function agentSections({
   agent: Agent;
   type: RegisteredAgentType | undefined;
   conversation?: AgentConversation | undefined;
+  /** Asks to show the conversation's transcript first; see AgentViewProps. */
+  initialTranscript?: TranscriptRequest | undefined;
+  /** Closes the panel the sections are shown in. */
+  close?: (() => void) | undefined;
   settingsHost?: AgentSettingsHost;
   settingsSection?: "identity" | "runtime";
   settingsContent?: ReactNode;
@@ -47,15 +54,6 @@ export function agentSections({
   communities?: CommunityReader | undefined;
 }): readonly AgentSection[] {
   if (agent.place === "elsewhere") return [];
-  const attention =
-    settingsContent === undefined && agent.place === "here" ? (
-      <AttentionSection
-        agents={agents}
-        agent={agent}
-        communities={communities}
-      />
-    ) : null;
-  const content = attention || settingsContent;
   const typeTabs = type?.tabs ?? [];
   const settingsTab = typeTabs.find((tab) => tab.role === "settings");
   const orderedTabs =
@@ -73,10 +71,14 @@ export function agentSections({
             {...(role === "settings" && settingsSection
               ? { settingsSection }
               : {})}
-            {...(role === "settings" && content
-              ? { settingsContent: content }
+            {...(role === "settings" && settingsContent
+              ? { settingsContent }
               : {})}
             {...(conversation && { conversation })}
+            {...(role === "activity" &&
+              conversation &&
+              initialTranscript && { initialTranscript })}
+            {...(role === "activity" && close && { close })}
             save={(config) =>
               settingsHost?.pendingSave
                 ? settingsHost.pendingSave(config)
@@ -88,17 +90,19 @@ export function agentSections({
       </EditorBase>
     ),
   }));
-  if (!settingsTab && (settingsHost || attention))
+  if (!settingsTab && (settingsHost?.typeControl || settingsHost?.pendingSave))
     tabs.unshift({
       value: "agent:settings",
       label: "Settings",
-      render: () => (
-        <>
-          {settingsHost && <HostSettings host={settingsHost} />}
-          {attention}
-        </>
-      ),
+      render: () => <HostSettings host={settingsHost} />,
     });
+  if (agent.place === "here")
+    for (const { key, title, component: Component } of agents.addedTabs())
+      tabs.push({
+        value: `agent:added:${key}`,
+        label: title,
+        render: () => <Component agent={agent} />,
+      });
   if (agent.place === "here" && agents.configHistory(agent.pubkey))
     tabs.push({
       value: "agent:history",
@@ -159,35 +163,6 @@ function HostSettings({ host }: { host: AgentSettingsHost }) {
         disabled={!host.pendingSave}
       />
     </form>
-  );
-}
-
-/** The device-local Attention control, with pending writes tracked by Settings. */
-export function AttentionSection({
-  agents,
-  agent,
-  communities,
-}: {
-  agents: Pick<Agents, "save" | "subscribe" | "memberships">;
-  agent: Agent;
-  communities?: CommunityReader | undefined;
-}) {
-  const [pending, setPending] = useState(0);
-  useAgentSaveState(false, pending > 0);
-  return (
-    <AttentionPanel
-      agents={agents}
-      agent={agent}
-      communities={communities}
-      save={async (change) => {
-        setPending((count) => count + 1);
-        try {
-          await agents.save(agent.key, change);
-        } finally {
-          setPending((count) => count - 1);
-        }
-      }}
-    />
   );
 }
 

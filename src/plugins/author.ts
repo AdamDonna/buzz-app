@@ -1,4 +1,5 @@
 // FOUNDATION: Type-only author entry. Runtime capabilities come from injected ctx.
+export type { AgentHook, AgentHookContext } from "../features/agents/hooks";
 export type { PluginManifest, PluginModule } from "./api";
 export type { SettingsCard, SettingsCards } from "../features/settings/service";
 export type { Context } from "@deepseek-ai/cordis";
@@ -10,6 +11,12 @@ export type {
 export type { NamingIdentity } from "../features/identity-names/policy";
 export type { Browser, BrowserViewProps } from "../features/browser/api";
 export type { Page, PageSidebarProps, Pages } from "../features/pages/service";
+export type {
+  SidebarSectionAction,
+  SidebarSectionContribution,
+  SidebarSectionRow,
+  SidebarSections,
+} from "../features/channel-navigation/sidebar-sections-service";
 export type {
   Panel,
   Panels,
@@ -105,7 +112,44 @@ export type { VoiceRecording } from "../features/relay/voice-media";
 
 export type {
   Agents,
+  AgentAddedTab,
   AgentType,
   AgentSession,
   AgentSessions,
 } from "../features/agents/service";
+
+export type { ArtifactStorage } from "../features/artifact-storage/service";
+export type {
+  ArtifactCollection,
+  ArtifactCollectionDefinition,
+  ArtifactEntry,
+  ArtifactIndex,
+  ArtifactPage,
+  ArtifactPageQuery,
+  ArtifactRevision,
+  ArtifactAvailability,
+  SavedArtifact,
+  ArtifactImport,
+} from "../features/artifact-storage/types";
+
+export type {
+  SoloNavigation,
+  SoloRegionBinding,
+  SoloRegionSnapshot,
+  SoloRegionAction,
+  SoloRegionSource,
+  SoloChatInput,
+  SoloRegionHandle,
+  SoloRegionProps,
+  SoloConversationProps,
+  SoloConversation,
+  SoloConversationLinkProps,
+  SoloCardProps,
+  SoloDisclosureProps,
+} from "../features/channel-navigation/solo-navigation-contract";
+
+export type {
+  FederatedIdentity,
+  SessionSnapshot,
+  AuthenticatedRequest,
+} from "../features/federated-identity/service";

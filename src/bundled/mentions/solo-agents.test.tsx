@@ -39,7 +39,18 @@ import type { Outbox } from "../../features/relay/outbox";
 import { MessageMarkdown } from "../../features/messages/MessageMarkdown";
 import { profileTarget } from "../../features/profiles/target";
 import { npubEncode } from "nostr-tools/nip19";
-import { MENTION_DIRECTORY_DELAY_MS } from "./useMentionDirectory";
+import {
+  fetchMentionDirectoryPage,
+  MENTION_DIRECTORY_DELAY_MS,
+} from "./useMentionDirectory";
+import {
+  resolveSpaceMention,
+  type SpaceMentionResolution,
+} from "./resolve-space-mention";
+import { MENTION_RESOLVE_TIMEOUT_MS } from "../../features/conversation/completion";
+import { createProfileDirectory } from "../../features/relay/profile-directory";
+import type { RelayEvent } from "../../features/relay/events";
+import { keypair, profile } from "../../features/relay/testing";
 // jsdom lacks scrollIntoView; the search highlight keeps its row in view.
 beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -230,6 +241,263 @@ it("offers outside agents in the Solo chat mention picker while ordinary channel
     pubkey: test.key,
     name: "Outside agent",
   });
+  view.unmount();
+  test.library.dispose();
+});
+function renderAudiencePicker(
+  test: ReturnType<typeof setup>,
+  recipients: readonly { pubkey: string; name: string }[],
+) {
+  const only = vi.fn(),
+    toggle = vi.fn(),
+    focusDraft = vi.fn(),
+    select = vi.fn(() => true);
+  const view = render(
+    <MentionPicker
+      scope="scope"
+      session={test.session}
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      audience={{ recipients, named: false, only, toggle }}
+      select={select}
+      focusDraft={focusDraft}
+    />,
+  );
+  return { view, only, toggle, focusDraft, select };
+}
+const outsideRow = (test: ReturnType<typeof setup>) =>
+  screen.findByRole("button", { name: `Outside agent ${test.key}` });
+
+it("an agents-only audience pill replaces the mention button and never inserts a mention", async () => {
+  const test = setup(),
+    agent = { pubkey: test.key, name: "Outside agent" };
+  const { view, select } = renderAudiencePicker(test, [agent]);
+  const pill = screen.getByRole("button", {
+    name: "Sending to Outside agent. Change agents",
+  });
+  expect(screen.queryByRole("button", { name: "Mention a member" })).toBeNull();
+  await userEvent.setup().click(pill);
+  await outsideRow(test);
+  expect(select).not.toHaveBeenCalled();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("clicking an agent row in the pill menu toggles that agent and keeps the menu open", async () => {
+  const test = setup(),
+    user = userEvent.setup(),
+    agent = { pubkey: test.key, name: "Outside agent" };
+  const { view, only, toggle } = renderAudiencePicker(test, []);
+  await user.click(screen.getByRole("button", { name: "Choose agent" }));
+  await user.click(await outsideRow(test));
+  expect(toggle).toHaveBeenCalledExactlyOnceWith(agent);
+  expect(only).not.toHaveBeenCalled();
+  expect(screen.getByRole("searchbox")).toBeInTheDocument();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("with one agent addressed, its row shows a check and is pressed, not filled", async () => {
+  const test = setup(),
+    user = userEvent.setup(),
+    agent = { pubkey: test.key, name: "Outside agent" };
+  const { view } = renderAudiencePicker(test, [agent]);
+  await user.click(
+    screen.getByRole("button", {
+      name: "Sending to Outside agent. Change agents",
+    }),
+  );
+  const row = await outsideRow(test);
+  expect(row).not.toHaveAttribute("data-selected");
+  expect(row).toHaveAttribute("aria-pressed", "true");
+  expect(row.querySelector("svg")).not.toBeNull();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("with several agents addressed, the pill is a menu button and each addressed row shows a check", async () => {
+  const test = setup(),
+    user = userEvent.setup(),
+    agent = { pubkey: test.key, name: "Outside agent" };
+  const { view } = renderAudiencePicker(test, [
+    agent,
+    { pubkey: "c".repeat(64), name: "Another" },
+  ]);
+  await user.click(
+    screen.getByRole("button", {
+      name: "Sending to Outside agent, Another. Change agents",
+    }),
+  );
+  const row = await outsideRow(test);
+  expect(row).not.toHaveAttribute("data-selected");
+  expect(row).toHaveAttribute("aria-pressed", "true");
+  expect(row.querySelector("svg")).not.toBeNull();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("picking an addressed row while several agents are addressed toggles it", async () => {
+  const test = setup(),
+    user = userEvent.setup(),
+    agent = { pubkey: test.key, name: "Outside agent" };
+  const { view, toggle } = renderAudiencePicker(test, [
+    agent,
+    { pubkey: "c".repeat(64), name: "Another" },
+  ]);
+  await user.click(
+    screen.getByRole("button", {
+      name: "Sending to Outside agent, Another. Change agents",
+    }),
+  );
+  await user.click(await outsideRow(test));
+  expect(toggle).toHaveBeenCalledExactlyOnceWith(agent);
+  expect(screen.getByRole("searchbox")).toBeInTheDocument();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("closing the pill menu resumes typing in the draft, unless the click went elsewhere", async () => {
+  const test = setup(),
+    user = userEvent.setup();
+  const { view, focusDraft } = renderAudiencePicker(test, []);
+  const pill = screen.getByRole("button", { name: "Choose agent" });
+  await user.click(pill);
+  await outsideRow(test);
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("searchbox")).toBeNull());
+  await waitFor(() => expect(focusDraft).toHaveBeenCalledOnce());
+  await user.click(pill);
+  await outsideRow(test);
+  await user.click(document.body);
+  await waitFor(() => expect(screen.queryByRole("searchbox")).toBeNull());
+  expect(focusDraft).toHaveBeenCalledOnce();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("the pill changing shape while its menu is open leaves focus in the menu", async () => {
+  const test = setup(),
+    user = userEvent.setup(),
+    focusDraft = vi.fn();
+  const picker = (recipients: readonly { pubkey: string; name: string }[]) => (
+    <MentionPicker
+      scope="scope"
+      session={test.session}
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      audience={{ recipients, named: false, only: vi.fn(), toggle: vi.fn() }}
+      select={() => true}
+      focusDraft={focusDraft}
+    />
+  );
+  const agent = { pubkey: test.key, name: "Outside agent" };
+  const view = render(picker([agent]));
+  await user.click(
+    screen.getByRole("button", {
+      name: "Sending to Outside agent. Change agents",
+    }),
+  );
+  await outsideRow(test);
+  view.rerender(picker([agent, { pubkey: "c".repeat(64), name: "Another" }]));
+  await outsideRow(test);
+  expect(focusDraft).not.toHaveBeenCalled();
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(focusDraft).toHaveBeenCalledOnce());
+  view.unmount();
+  test.library.dispose();
+});
+
+it("the pill menu highlights a row only while the pointer is on it", async () => {
+  const test = setup(),
+    user = userEvent.setup();
+  const { view } = renderAudiencePicker(test, []);
+  await user.click(screen.getByRole("button", { name: "Choose agent" }));
+  const row = await outsideRow(test);
+  expect(row).not.toHaveAttribute("data-highlighted");
+  const move = (clientX: number) =>
+    fireEvent.pointerMove(row, { pointerType: "mouse", clientX, clientY: 4 });
+  move(4);
+  move(6);
+  expect(row).toHaveAttribute("data-highlighted");
+  // Rows are the list's id plus their key; leave the list itself.
+  const list = document.getElementById(row.id.replace(/-person:.*$/, ""));
+  if (!list) throw new Error("Missing choice list");
+  fireEvent.pointerLeave(list, { pointerType: "mouse" });
+  expect(row).not.toHaveAttribute("data-highlighted");
+  view.unmount();
+  test.library.dispose();
+});
+
+it("in the pill menu, Enter on a row toggles that agent and keeps the menu open", async () => {
+  const test = setup(),
+    user = userEvent.setup(),
+    agent = { pubkey: test.key, name: "Outside agent" };
+  const { view, toggle } = renderAudiencePicker(test, []);
+  await user.click(screen.getByRole("button", { name: "Choose agent" }));
+  const row = await outsideRow(test);
+  row.focus();
+  await user.keyboard("{Enter}");
+  expect(toggle).toHaveBeenCalledExactlyOnceWith(agent);
+  expect(screen.getByRole("searchbox")).toBeInTheDocument();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("an audience pill says so when the message's own mentions decide", async () => {
+  const test = setup(false),
+    user = userEvent.setup();
+  const agent = { pubkey: test.key, name: "Outside agent" };
+  const view = render(
+    <MentionPicker
+      scope="scope"
+      session={test.session}
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      audience={{
+        recipients: [agent],
+        named: true,
+        only: vi.fn(),
+        toggle: vi.fn(),
+      }}
+      select={() => true}
+    />,
+  );
+  await user.click(
+    screen.getByRole("button", {
+      name: "Sending to Outside agent. Change agents",
+    }),
+  );
+  expect(
+    await screen.findByText(
+      "Your message tags Outside agent, so picks here add or remove tags.",
+    ),
+  ).toBeInTheDocument();
+  view.unmount();
+  test.library.dispose();
+});
+
+it("a disabled composer disables the audience pill", () => {
+  const test = setup(false);
+  const view = render(
+    <MentionPicker
+      scope="scope"
+      session={test.session}
+      channelId="parent"
+      disabled
+      inviteAgents
+      audience={{
+        recipients: [],
+        named: false,
+        only: vi.fn(),
+        toggle: vi.fn(),
+      }}
+      select={() => true}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Choose agent" })).toBeDisabled();
   view.unmount();
   test.library.dispose();
 });
@@ -521,9 +789,17 @@ it("keeps focus on the highlighted row after Tab, for arrows and pointer", async
   fireEvent.pointerMove(first, { clientX: 2, clientY: 2 });
   expect(first).toHaveAttribute("data-selected");
   expect(first).toHaveFocus();
+  // Leaving returns the highlight and focus to the keyboard's row together.
+  const list = document.getElementById(
+    first.id.slice(0, first.id.lastIndexOf("-")),
+  );
+  if (!list) throw new Error("Missing mention list");
+  fireEvent.pointerLeave(list, { pointerType: "mouse" });
+  expect(last).toHaveAttribute("data-selected");
+  expect(last).toHaveFocus();
   await user.keyboard("{Enter}");
   expect(select).toHaveBeenCalledExactlyOnceWith({
-    pubkey: test.member,
+    pubkey: test.key,
     name: "Outside agent",
   });
   test.library.dispose();
@@ -1464,11 +1740,12 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
   expect(last()?.status).toBe("Searching community…");
   await act(() => vi.advanceTimersByTimeAsync(200));
   expect(people).toHaveBeenCalledTimes(1);
+  // A truncated page: a longer query cannot be read out of it, so it searches.
   await act(async () =>
-    pages.get("La")?.({ people: [lara, larry], hasMore: false }),
+    pages.get("La")?.({ people: [lara, larry], hasMore: true }),
   );
   expect(labels()).toEqual(["Larkin", "Lara", "Larry Outside"]);
-  expect(last()?.status).toBeUndefined();
+  expect(last()?.status).toBe("Narrow your search to see more members.");
   // A new query keeps still-matching people from the last page while it loads.
   view.rerender(
     <MentionCompletion
@@ -1491,7 +1768,7 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
     <MentionCompletion {...props} query={{ start: 0, end: 3, query: "La" }} />,
   );
   expect(labels()).toEqual(["Larkin", "Lara", "Larry Outside"]);
-  expect(last()?.status).toBeUndefined();
+  expect(last()?.status).toBe("Narrow your search to see more members.");
   await act(() => vi.advanceTimersByTimeAsync(200));
   expect(people).toHaveBeenCalledTimes(2);
 });
@@ -1882,8 +2159,11 @@ it("closes prose after an unknown name without status or recovery, and skips sea
   await waitFor(() =>
     expect(last()?.items.map((item) => item.label)).toEqual(["Outside"]),
   );
+  // The complete page for `Out` already answers every query extending it:
+  // `Outside ` is its one name plus a trailing space, prose, with no read.
   view.rerender(complete("Outside "));
-  await waitFor(() => expect(people).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(last()).toEqual({ items: [] }));
+  expect(people).toHaveBeenCalledTimes(2);
 });
 
 function directoryCompletion(people: RelaySessionPeople) {
@@ -1909,11 +2189,183 @@ function directoryCompletion(people: RelaySessionPeople) {
       publish={publish}
     />
   );
-  return { last, complete };
+  return { last, complete, session };
 }
 type RelaySessionPeople = (
   query: string,
 ) => Promise<{ people: { pubkey: string; name: string }[]; hasMore: boolean }>;
+
+it("answers a longer query from the complete page already read for its prefix, with no read and no typing pause", async () => {
+  vi.useFakeTimers();
+  const people = vi.fn<RelaySessionPeople>(async () => ({
+    people: [
+      { pubkey: "e".repeat(64), name: "Mary Jane" },
+      { pubkey: "f".repeat(64), name: "Mark" },
+    ],
+    hasMore: false,
+  }));
+  const { last, complete } = directoryCompletion(people);
+  const view = render(complete("Mar"));
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(1);
+  expect(last()?.items.map((item) => item.label)).toEqual([
+    "Mark",
+    "Mary Jane",
+  ]);
+  // Every match for `Mary J` is on the complete page for `Mar`: the page is
+  // settled on the keystroke, so the multi-word query is admitted at once.
+  view.rerender(complete("Mary J"));
+  expect(last()?.items.map((item) => item.label)).toEqual(["Mary Jane"]);
+  expect(last()?.status).toBeUndefined();
+  expect(last()?.spacePending).toBeUndefined();
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(1);
+  // Space decides over the derived page, as over the page itself.
+  view.rerender(complete("Mary Jane"));
+  expect(last()?.spaceId).toBe("e".repeat(64));
+  expect(last()?.spacePending).toBeUndefined();
+  expect(people).toHaveBeenCalledTimes(1);
+});
+
+it("still searches a longer query when the page read for its prefix was truncated", async () => {
+  vi.useFakeTimers();
+  const people = vi.fn<RelaySessionPeople>(async (query) => ({
+    people: [{ pubkey: "e".repeat(64), name: "Mary Jane" }],
+    hasMore: query === "Mar",
+  }));
+  const { last, complete } = directoryCompletion(people);
+  const view = render(complete("Mar"));
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(last()?.status).toBe("Narrow your search to see more members.");
+  // A truncated page may have left a match out: it answers only its own query.
+  view.rerender(complete("Mary J"));
+  expect(last()?.status).toBe("Searching community…");
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(2);
+  expect(people).toHaveBeenLastCalledWith("Mary J", 1, expect.any(AbortSignal));
+  expect(last()?.status).toBeUndefined();
+  expect(last()?.items.map((item) => item.label)).toEqual(["Mary Jane"]);
+});
+
+it("does not answer a name search from the listing read for an empty query", async () => {
+  vi.useFakeTimers();
+  const people = vi.fn<RelaySessionPeople>(async () => ({
+    people: [{ pubkey: "e".repeat(64), name: "Mira Everly" }],
+    hasMore: false,
+  }));
+  const { last, complete } = directoryCompletion(people);
+  // A pause on `@` lists the community; fewer than 15 profiles completes it.
+  const view = render(complete(""));
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledExactlyOnceWith(
+    "",
+    1,
+    expect.any(AbortSignal),
+  );
+  // The listing is a prefix of every query but is not a name search: a
+  // member who joins or renames after it must still be found by name.
+  view.rerender(complete("mi"));
+  expect(last()?.status).toBe("Searching community…");
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(2);
+  expect(people).toHaveBeenLastCalledWith("mi", 1, expect.any(AbortSignal));
+  expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]);
+  // The finished name search still answers the queries extending it.
+  view.rerender(complete("mir"));
+  expect(last()?.status).toBeUndefined();
+  expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]);
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(2);
+});
+
+it("a retry searches afresh when a complete page for a prefix of the query was cached meanwhile", async () => {
+  const people = vi
+    .fn<RelaySessionPeople>()
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({
+      people: [{ pubkey: "e".repeat(64), name: "Mira Everly" }],
+      hasMore: false,
+    });
+  const { last, complete, session } = directoryCompletion(people);
+  render(complete("mira e"));
+  await waitFor(() =>
+    expect(last()?.status).toBe(
+      "Could not search community people. Retry to refresh.",
+    ),
+  );
+  // Another consumer of the session (a thread composer, or the pending-
+  // mention resolver) reads the complete page for `mira` meanwhile.
+  await fetchMentionDirectoryPage(session, "mira", AbortSignal.timeout(1000));
+  expect(people).toHaveBeenCalledTimes(2);
+  // Retry asked for a read: it must not derive from that page, which the
+  // chooser could not show, but read `mira e` again and render its page.
+  act(() => last()?.retry?.());
+  await waitFor(() => expect(people).toHaveBeenCalledTimes(3));
+  expect(people).toHaveBeenLastCalledWith("mira e", 1, expect.any(AbortSignal));
+  await waitFor(() =>
+    expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]),
+  );
+  expect(last()?.status).toBeUndefined();
+  expect(last()?.retry).toBeUndefined();
+});
+
+it("scopes a retry to its query: later queries derive from a cached prefix page and a refuted prefix again, while that query still reads afresh", async () => {
+  vi.useFakeTimers();
+  const offline = new Error("offline");
+  const people = vi
+    .fn<RelaySessionPeople>()
+    .mockRejectedValueOnce(offline)
+    .mockRejectedValueOnce(offline)
+    .mockImplementation(async (query) => ({
+      people: query.startsWith("mira")
+        ? [{ pubkey: "e".repeat(64), name: "Mira Everly" }]
+        : query.startsWith("lu")
+          ? [{ pubkey: "f".repeat(64), name: "Lucy Lu" }]
+          : [],
+      hasMore: false,
+    }));
+  const { last, complete, session } = directoryCompletion(people);
+  const failed = "Could not search community people. Retry to refresh.";
+  // The picker keeps one hook mounted across openings: one instance sees
+  // every query of the session.
+  const view = render(complete("mira e"));
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(last()?.status).toBe(failed);
+  // Still offline: the retry fails too and Retry stays offered.
+  act(() => last()?.retry?.());
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(2);
+  expect(last()?.status).toBe(failed);
+  // Other consumers of the session settle complete `lu` and `mira` pages and
+  // then an empty `zed` search meanwhile (a read clears the refuted prefix,
+  // so the empty search comes last).
+  const signal = new AbortController().signal;
+  await fetchMentionDirectoryPage(session, "lu", signal);
+  await fetchMentionDirectoryPage(session, "mira", signal);
+  await fetchMentionDirectoryPage(session, "zed", signal);
+  expect(people).toHaveBeenCalledTimes(5);
+  // The retry was `mira e`'s. `lucy` is answered from the `lu` page on the
+  // keystroke, and `zedd` is refuted by the empty `zed` search; neither reads.
+  view.rerender(complete("lucy"));
+  expect(last()?.status).toBeUndefined();
+  expect(last()?.items.map((item) => item.label)).toEqual(["Lucy Lu"]);
+  view.rerender(complete("zedd"));
+  expect(last()?.status).not.toBe("Searching community…");
+  expect(last()?.items).toEqual([]);
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(5);
+  // Back on `mira e`, the asked-for read is still owed: its failure and
+  // Retry stand, and a second Retry reads `mira e` afresh rather than
+  // deriving it from the complete `mira` page.
+  view.rerender(complete("mira e"));
+  expect(last()?.status).toBe(failed);
+  act(() => last()?.retry?.());
+  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  expect(people).toHaveBeenCalledTimes(6);
+  expect(people).toHaveBeenLastCalledWith("mira e", 1, expect.any(AbortSignal));
+  expect(last()?.status).toBeUndefined();
+  expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]);
+});
 
 it("an empty partial-key search does not refute an exact-key lookup, and keys still match no choice", async () => {
   const key = "9".repeat(64);
@@ -2201,8 +2653,9 @@ it("keeps still-matching directory people across the inline host's per-keystroke
   await waitFor(() =>
     expect(people).toHaveBeenCalledWith("La", 1, expect.anything()),
   );
+  // A truncated page, so the longer query below searches rather than reads it.
   await act(async () =>
-    resolvers.get("La")?.({ people: [lara, larry], hasMore: false }),
+    resolvers.get("La")?.({ people: [lara, larry], hasMore: true }),
   );
   await waitFor(() =>
     expect(options()).toEqual([
@@ -2672,6 +3125,7 @@ type DirectoryPage = {
 function spaceFixture(
   memberName: string,
   others: Record<string, string | null> = {},
+  options: { query?: string; dm?: boolean } = {},
 ) {
   const h = setup();
   h.profiles.set(h.member, { name: memberName });
@@ -2682,11 +3136,12 @@ function spaceFixture(
     channels: [
       {
         id: "parent",
-        channelType: "stream" as const,
+        channelType: options.dm ? ("dm" as const) : ("stream" as const),
         members: [h.member, ...Object.keys(others)],
       },
     ],
   };
+  const query = options.query ?? "jose";
   let finish: (value: DirectoryPage) => void = () => {};
   let fail: (error: Error) => void = () => {};
   const people = vi.fn(
@@ -2704,25 +3159,26 @@ function spaceFixture(
   const publish = vi.fn();
   const result = () =>
     publish.mock.lastCall?.[0] as CompletionResult | undefined;
+  const session = {
+    ...h.session,
+    names,
+    channels: { ...h.session.channels, list: () => list },
+    directMessages: { ...h.session.directMessages, people },
+  } as unknown as RelaySession;
+  const end = query.length + 1;
   const view = render(
     <MentionCompletion
-      session={
-        {
-          ...h.session,
-          names,
-          channels: { ...h.session.channels, list: () => list },
-          directMessages: { ...h.session.directMessages, people },
-        } as unknown as RelaySession
-      }
+      session={session}
       scope="space-test"
       channelId="parent"
-      observation={{ revision: 1, text: "@jose", start: 5, end: 5 }}
-      query={{ start: 0, end: 5, query: "jose" }}
+      observation={{ revision: 1, text: `@${query}`, start: end, end }}
+      query={{ start: 0, end, query }}
       publish={publish}
     />,
   );
   return {
     ...h,
+    session,
     people,
     result,
     finish: (page: DirectoryPage) => act(async () => finish(page)),
@@ -2917,3 +3373,540 @@ it.each([
     }
   },
 );
+const outsideNamesake = { pubkey: "e".repeat(64), name: "José" };
+it.each([
+  { case: "no match", page: { people: [], hasMore: false } },
+  {
+    case: "a namesake",
+    page: {
+      people: [{ pubkey: outsideJose, name: "Jose" }, outsideNamesake],
+      hasMore: false,
+    },
+  },
+  {
+    case: "a longer name",
+    page: {
+      people: [{ pubkey: outsideJose, name: "Jose Luis" }],
+      hasMore: false,
+    },
+  },
+  {
+    case: "more pages",
+    page: { people: [{ pubkey: outsideJose, name: "Jose" }], hasMore: true },
+  },
+  { case: "a failed search", page: "error" as const },
+])(
+  "Space may hold an outside name as pending only until the directory settles with $case",
+  async ({ page }) => {
+    const h = spaceFixture("Member");
+    try {
+      await waitFor(() =>
+        expect(h.people).toHaveBeenCalledWith("jose", 1, expect.anything()),
+      );
+      // Undecided, not declined: the search is still running.
+      expect(h.result()?.spaceId).toBeUndefined();
+      expect(h.result()?.spacePending?.name).toBe("jose");
+      await (page === "error" ? h.fail() : h.finish(page));
+      await waitFor(() => expect(h.result()?.spacePending).toBeUndefined());
+      expect(h.result()?.spaceId).toBeUndefined();
+    } finally {
+      h.dispose();
+    }
+  },
+);
+it("Space holds nothing once it can decide", async () => {
+  const h = spaceFixture("José");
+  try {
+    await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
+    expect(h.result()?.spacePending).toBeUndefined();
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose" }],
+      hasMore: false,
+    });
+    await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
+    expect(h.result()?.spacePending).toBeUndefined();
+  } finally {
+    h.dispose();
+  }
+});
+it("Space is declined, not pending, beside a loaded name that continues the query", async () => {
+  const h = spaceFixture("Mira Example", {}, { query: "mira" });
+  try {
+    await waitFor(() =>
+      expect(h.people).toHaveBeenCalledWith("mira", 1, expect.anything()),
+    );
+    await waitFor(() =>
+      expect(h.result()?.items.some((item) => item.id === h.member)).toBe(true),
+    );
+    // The read is in flight, but `Mira Example` continues `mira` whatever it
+    // finds: Space is prose now and `@mira Example ` can still select it.
+    expect(h.result()?.spaceId).toBeUndefined();
+    expect(h.result()?.spacePending).toBeUndefined();
+    await h.finish({ people: [], hasMore: false });
+    expect(h.result()?.spaceId).toBeUndefined();
+    expect(h.result()?.spacePending).toBeUndefined();
+  } finally {
+    h.dispose();
+  }
+});
+it.each(["jose ", "jose,", "", "jose luis"])(
+  "Space never holds %j as a pending mention",
+  async (query) => {
+    const h = spaceFixture("Member", {}, { query });
+    try {
+      await waitFor(() =>
+        expect(h.people).toHaveBeenCalledWith(query, 1, expect.anything()),
+      );
+      expect(h.result()).toBeDefined();
+      expect(h.result()?.spacePending).toBeUndefined();
+    } finally {
+      h.dispose();
+    }
+  },
+);
+it("a saved team with the name never leaves Space pending", async () => {
+  // No roster: nothing local decides, and the directory search is running.
+  const h = teamFixture(undefined, { missingRoster: true });
+  try {
+    await waitFor(() => expect(h.result()).toBeDefined());
+    expect(h.result()?.spaceId).toBeUndefined();
+    expect(h.result()?.spacePending).toBeUndefined();
+  } finally {
+    h.view.unmount();
+    h.library.dispose();
+  }
+});
+it("Space holds an agent's name while an invite scope's inventory loads, and the resolver selects it once loaded", async () => {
+  const test = setup(false);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const read = vi.fn(async () => {
+    await gate;
+    return {
+      definitions: [],
+      identities: [{ pubkey: test.key, name: "Aaron" }],
+    };
+  });
+  const library = createAgentLibrary(read);
+  const session = {
+    ...test.session,
+    agentChoices: createAgentChoices({
+      scope: "test",
+      library: library.queries,
+      signal: new AbortController().signal,
+    }),
+  };
+  const publish = vi.fn();
+  const result = () => publish.mock.lastCall?.[0] as CompletionResult;
+  const view = render(
+    <MentionCompletion
+      {...emptyCompletion}
+      session={session}
+      inviteAgents
+      observation={{ revision: 1, text: "@Aaron", start: 6, end: 6 }}
+      query={{ start: 0, end: 6, query: "Aaron" }}
+      publish={publish}
+    />,
+  );
+  try {
+    await waitFor(() => expect(read).toHaveBeenCalledOnce());
+    expect(result().spaceId).toBeUndefined();
+    expect(result().spacePending?.name).toBe("Aaron");
+    const pending = result().spacePending?.resolve(
+      new AbortController().signal,
+    );
+    await act(async () => release());
+    await expect(pending).resolves.toEqual({ pubkey: test.key, name: "Aaron" });
+    // The resolver joined the read in flight rather than starting another.
+    expect(read).toHaveBeenCalledOnce();
+    await waitFor(() => expect(result().spaceId).toBe(test.key));
+    expect(result().spacePending).toBeUndefined();
+  } finally {
+    await act(async () => release());
+    view.unmount();
+    library.dispose();
+    test.library.dispose();
+  }
+});
+const resolver = (
+  h: { session: RelaySession },
+  signal = new AbortController().signal,
+) =>
+  resolveSpaceMention(
+    h.session,
+    { channelId: "parent", selected: [] },
+    "jose",
+    signal,
+  );
+it.each([
+  {
+    case: "a unique outside name",
+    page: { people: [{ pubkey: outsideJose, name: "Jose" }], hasMore: false },
+    recipient: { pubkey: outsideJose, name: "Jose" },
+  },
+  {
+    case: "a namesake",
+    page: {
+      people: [{ pubkey: outsideJose, name: "Jose" }, outsideNamesake],
+      hasMore: false,
+    },
+    recipient: null,
+  },
+  {
+    // Only a longer name kept it from selecting: the host may extend the chip.
+    case: "a longer name",
+    page: {
+      people: [{ pubkey: outsideJose, name: "Jose Luis" }],
+      hasMore: false,
+    },
+    recipient: { continued: ["Jose Luis"] },
+  },
+  {
+    case: "a longer name on a truncated page",
+    page: {
+      people: [{ pubkey: outsideJose, name: "Jose Luis" }],
+      hasMore: true,
+    },
+    recipient: null,
+  },
+  {
+    case: "more pages",
+    page: { people: [{ pubkey: outsideJose, name: "Jose" }], hasMore: true },
+    recipient: null,
+  },
+  { case: "a failed search", page: "error" as const, recipient: null },
+])(
+  "the resolver settles an outside name once the directory reports $case",
+  async ({ page, recipient }) => {
+    const h = spaceFixture("Member");
+    try {
+      await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+      const pending = resolver(h);
+      // The chooser's read is in flight and uncached; the resolver reads at
+      // once, with no typing pause.
+      await waitFor(() => expect(h.people).toHaveBeenCalledTimes(2));
+      await (page === "error" ? h.fail() : h.finish(page));
+      expect(outcomeOf(await pending)).toEqual(recipient);
+    } finally {
+      h.dispose();
+    }
+  },
+);
+/** A resolution for assertions: the recipient, null, or the continuing names. */
+const outcomeOf = (outcome: SpaceMentionResolution | undefined) =>
+  outcome && "continued" in outcome
+    ? { continued: outcome.continued.map((c) => c.name) }
+    : outcome;
+const continuedOf = (outcome: SpaceMentionResolution) => {
+  if (!outcome || !("continued" in outcome))
+    throw new Error(`Not continued: ${JSON.stringify(outcome)}`);
+  return outcome.continued;
+};
+it("the resolver's continuing names each resolve under the same rule over the page already read", async () => {
+  const h = spaceFixture("Member");
+  try {
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+    const pending = resolver(h);
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(2));
+    const garcia = { pubkey: "e".repeat(64), name: "Jose Luis Garcia" };
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose Luis" }, garcia],
+      hasMore: false,
+    });
+    const continued = continuedOf(await pending);
+    expect(continued.map((c) => c.name)).toEqual([
+      "Jose Luis",
+      "Jose Luis Garcia",
+    ]);
+    const signal = new AbortController().signal;
+    // `Jose Luis` is itself continued; the longest name selects.
+    expect(outcomeOf(await continued[0]?.resolve(signal))).toEqual({
+      continued: ["Jose Luis Garcia"],
+    });
+    await expect(continued[1]?.resolve(signal)).resolves.toEqual(garcia);
+    await expect(
+      continued[1]?.resolve(AbortSignal.abort()),
+    ).resolves.toBeNull();
+    // Every name that equals or continues a longer name is on the page for
+    // its prefix, so no further read is needed.
+    expect(h.people).toHaveBeenCalledTimes(2);
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver's continuing name in a DM resolves to prose when it is an outsider", async () => {
+  const h = spaceFixture("Member", {}, { dm: true });
+  try {
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+    const pending = resolver(h);
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(2));
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose Luis" }],
+      hasMore: false,
+    });
+    const continued = continuedOf(await pending);
+    expect(continued.map((c) => c.name)).toEqual(["Jose Luis"]);
+    await expect(
+      continued[0]?.resolve(new AbortController().signal),
+    ).resolves.toBeNull();
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver continues a roster name into the roster's longer name without the directory", async () => {
+  const h = spaceFixture("Jose");
+  try {
+    const luis = { pubkey: outsideJose, name: "Jose Luis" };
+    const scope = {
+      channelId: "parent",
+      roster: { recipients: [{ pubkey: h.member, name: "Josefa" }, luis] },
+      selected: [],
+    };
+    const signal = new AbortController().signal;
+    const continued = continuedOf(
+      await resolveSpaceMention(h.session, scope, "jose", signal),
+    );
+    expect(continued.map((c) => c.name)).toEqual(["Jose Luis"]);
+    await expect(continued[0]?.resolve(signal)).resolves.toEqual(luis);
+    expect(h.people).not.toHaveBeenCalled();
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver reads a page the chooser already settled from the shared cache", async () => {
+  const h = spaceFixture("Member");
+  try {
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose" }],
+      hasMore: false,
+    });
+    await expect(resolver(h)).resolves.toEqual({
+      pubkey: outsideJose,
+      name: "Jose",
+    });
+    expect(h.people).toHaveBeenCalledTimes(1);
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver reads a longer name's page out of the complete page for its prefix without another read", async () => {
+  const h = spaceFixture("Member");
+  try {
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose Luis" }],
+      hasMore: false,
+    });
+    // The chooser's complete page for `jose` holds every match for `jose luis`.
+    await expect(
+      resolveSpaceMention(
+        h.session,
+        { channelId: "parent", selected: [] },
+        "jose luis",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ pubkey: outsideJose, name: "Jose Luis" });
+    expect(h.people).toHaveBeenCalledTimes(1);
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver returns a DM outsider to prose rather than promise a notification", async () => {
+  const h = spaceFixture("Member", {}, { dm: true });
+  try {
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+    const pending = resolver(h);
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(2));
+    await h.finish({
+      people: [{ pubkey: outsideJose, name: "Jose" }],
+      hasMore: false,
+    });
+    await expect(pending).resolves.toBeNull();
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver settles to prose when its chip is gone before the directory answers", async () => {
+  const h = spaceFixture("Member");
+  try {
+    const controller = new AbortController();
+    const pending = resolver(h, controller.signal);
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(2));
+    controller.abort();
+    await expect(pending).resolves.toBeNull();
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver settles to prose for a chip already gone, even where Space could decide at once", async () => {
+  const h = spaceFixture("Jose");
+  try {
+    // A roster scope with an exact local match awaits nothing before it picks.
+    const scope = {
+      channelId: "parent",
+      roster: { recipients: [{ pubkey: h.member, name: "Jose" }] },
+      selected: [],
+    };
+    await expect(
+      resolveSpaceMention(h.session, scope, "jose", AbortSignal.abort()),
+    ).resolves.toBeNull();
+    await expect(
+      resolveSpaceMention(
+        h.session,
+        scope,
+        "jose",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ pubkey: h.member, name: "Jose" });
+  } finally {
+    h.dispose();
+  }
+});
+it("the resolver gives up at the wait bound", async () => {
+  vi.useFakeTimers();
+  const h = spaceFixture("Member");
+  try {
+    const pending = resolver(h);
+    await vi.advanceTimersByTimeAsync(MENTION_RESOLVE_TIMEOUT_MS);
+    await expect(pending).resolves.toBeNull();
+  } finally {
+    h.dispose();
+  }
+});
+/**
+ * A real profile directory, so a member read that settles or fails is evidence
+ * the chooser sees. The directory search never settles: only step 1 of the
+ * Space rule can select here.
+ */
+function unnamedMemberFixture() {
+  const h = setup();
+  const named = keypair();
+  const reads: {
+    authors: readonly string[];
+    resolve: (events: RelayEvent[]) => void;
+    reject: (error: Error) => void;
+  }[] = [];
+  const directory = createProfileDirectory({
+    read: (filters) =>
+      new Promise<RelayEvent[]>((resolve, reject) => {
+        reads.push({ authors: filters[0]?.authors ?? [], resolve, reject });
+      }),
+  });
+  directory.accept([profile(named, { name: "José" })]);
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "parent",
+        channelType: "stream" as const,
+        members: [named.pubkey, otherMember],
+      },
+    ],
+  };
+  const names = bindNames(
+    { profiles: directory.queries, agentLibrary: h.library.queries },
+    { snapshot: () => [createAgentDirectory()], subscribe: () => () => {} },
+  );
+  const publish = vi.fn();
+  const result = () =>
+    publish.mock.lastCall?.[0] as CompletionResult | undefined;
+  const view = render(
+    <MentionCompletion
+      session={
+        {
+          ...h.session,
+          profiles: directory.queries,
+          names,
+          channels: { ...h.session.channels, list: () => list },
+          directMessages: {
+            ...h.session.directMessages,
+            people: () => new Promise<DirectoryPage>(() => {}),
+          },
+        } as unknown as RelaySession
+      }
+      scope="space-test"
+      channelId="parent"
+      observation={{ revision: 1, text: "@jose", start: 5, end: 5 }}
+      query={{ start: 0, end: 5, query: "jose" }}
+      publish={publish}
+    />,
+  );
+  return {
+    member: named.pubkey,
+    reads,
+    directory,
+    result,
+    canSpace: (id: string) =>
+      result()
+        ?.items.find((item) => item.id === id)
+        ?.canSelect?.(" "),
+    dispose() {
+      view.unmount();
+      names.dispose();
+      directory.dispose();
+      h.library.dispose();
+    },
+  };
+}
+it("Space selects a member's name once a read finds no profile for another member", async () => {
+  const h = unnamedMemberFixture();
+  try {
+    await waitFor(() =>
+      expect(h.reads.map((read) => read.authors)).toEqual([[otherMember]]),
+    );
+    await waitFor(() =>
+      expect(h.result()?.items.some((item) => item.id === h.member)).toBe(true),
+    );
+    // While its read is in flight the other member may still be a namesake.
+    expect(h.result()?.spaceId).toBeUndefined();
+    expect(h.canSpace(h.member)).toBe(false);
+    await act(async () => h.reads[0]?.resolve([]));
+    // Known unnamed: no name to be a namesake, and no directory wait.
+    await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
+    expect(h.canSpace(h.member)).toBe(true);
+  } finally {
+    h.dispose();
+  }
+});
+it("Space holds a member's name while another member's read is in flight, and the resolver selects it once the read settles", async () => {
+  const h = unnamedMemberFixture();
+  try {
+    await waitFor(() =>
+      expect(h.reads.map((read) => read.authors)).toEqual([[otherMember]]),
+    );
+    expect(h.result()?.spaceId).toBeUndefined();
+    expect(h.result()?.spacePending?.name).toBe("jose");
+    const pending = h
+      .result()
+      ?.spacePending?.resolve(new AbortController().signal);
+    await act(async () => h.reads[0]?.resolve([]));
+    // Known unnamed: the member's exact name selects without the directory.
+    await expect(pending).resolves.toEqual({ pubkey: h.member, name: "José" });
+    // The resolver joined the read in flight rather than issuing another.
+    expect(h.reads).toHaveLength(1);
+  } finally {
+    h.dispose();
+  }
+});
+it("Space keeps waiting after a member's profile read fails until a retry settles it", async () => {
+  const h = unnamedMemberFixture();
+  try {
+    await waitFor(() => expect(h.reads).toHaveLength(1));
+    await act(async () => h.reads[0]?.reject(new Error("offline")));
+    // A failed read is not evidence that the member has no name.
+    expect(h.directory.queries.unnamed?.()).toEqual(new Set());
+    expect(h.result()?.spaceId).toBeUndefined();
+    expect(h.canSpace(h.member)).toBe(false);
+    act(() => h.result()?.retry?.());
+    await waitFor(() => expect(h.reads).toHaveLength(2));
+    expect(h.reads[1]?.authors).toEqual([otherMember]);
+    await act(async () => h.reads[1]?.resolve([]));
+    await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
+    expect(h.canSpace(h.member)).toBe(true);
+  } finally {
+    h.dispose();
+  }
+});

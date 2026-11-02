@@ -1,3 +1,4 @@
+import { retryRead } from "../relay/read-retry";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChannelSummary } from "../relay/contracts";
 import type { ComposerSession } from "../messages/composer-session";
@@ -38,21 +39,25 @@ export function usePublicChannelSearch(
     let kept = none;
     // Typeahead waits for a brief typing pause; cancellation also owns the delay.
     const timer = setTimeout(() => {
-      search(query, {
-        signal: controller.signal,
-        priority: "foreground",
-        exact,
-        // An exact lookup names one channel, so it waits for every page.
-        progress: exact
-          ? undefined
-          : ({ channels }) => {
-              const ids = channels.map(({ id }) => id).join();
-              if (controller.signal.aborted || ids === shown) return;
-              shown = ids;
-              kept = channels;
-              setResult({ owner, channels, partial: false, pending: true });
-            },
-      }).then(
+      retryRead(
+        (signal) =>
+          search(query, {
+            signal,
+            priority: "foreground",
+            exact,
+            // An exact lookup names one channel, so it waits for every page.
+            progress: exact
+              ? undefined
+              : ({ channels }) => {
+                  const ids = channels.map(({ id }) => id).join();
+                  if (controller.signal.aborted || ids === shown) return;
+                  shown = ids;
+                  kept = channels;
+                  setResult({ owner, channels, partial: false, pending: true });
+                },
+          }),
+        controller.signal,
+      ).then(
         ({ channels, partial }) => {
           if (!controller.signal.aborted)
             setResult({ owner, channels, partial });

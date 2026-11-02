@@ -1,7 +1,6 @@
 import { relayAddress } from "../../../features/communities/destination";
-import type { Host, HostResponse } from "../../../features/host/service";
-import { oauthTarget, type Credential } from "../oauth/browser";
-import type { OAuthSession } from "../oauth/session";
+import type { HostResponse } from "../../../features/host/service";
+import type { BuilderlabSession, Credential } from "../session";
 
 /** The service's refusals. None is retried as sent: each waits for a fresh
  * sign-in. A client error the service did not name is `rejected` with its
@@ -42,7 +41,8 @@ const isRefusal = (code: unknown): code is Named =>
   typeof code === "string" && REFUSALS.has(code);
 /** A status outside the route's contract: another client error is a refusal
  * of the request as sent, while a timeout, a rate limit or a server error is
- * a failure to retry. (A 401 ends the session before reaching here.) */
+ * a failure to retry. (A legacy 401 ends the session before reaching here;
+ * an FI build answers it as this request's refusal.) */
 function unexpected(status: number): Refusal {
   if (status >= 400 && status < 500 && status !== 408 && status !== 429)
     return { kind: "rejected", status };
@@ -57,7 +57,7 @@ function unexpected(status: number): Refusal {
 /** A listed row's destination. `null` is a row whose address this device could
  * never save (dropped on its own), `undefined` a row of a shape this client
  * does not understand, which makes the whole response invalid. */
-function address(row: unknown): string | null | undefined {
+export function listedAddress(row: unknown): string | null | undefined {
   if (!row || typeof row !== "object") return undefined;
   const { community_url } = row as Record<string, unknown>;
   if (typeof community_url !== "string") return undefined;
@@ -74,10 +74,7 @@ function address(row: unknown): string | null | undefined {
  * service refuses adds past about 1,000 destinations (a best-effort quota that
  * concurrent adds can overshoot), so the list stays far inside the host
  * transport's response cap and no cap is imposed here. */
-export function createKnownCommunitiesClient(
-  host: Host,
-  session: OAuthSession,
-) {
+export function createKnownCommunitiesClient(session: BuilderlabSession) {
   function check(credential: Credential, signal: AbortSignal) {
     signal.throwIfAborted();
     if (
@@ -95,13 +92,12 @@ export function createKnownCommunitiesClient(
     const credential = session.credential();
     let response: HostResponse;
     try {
-      response = await host.request({
-        url: `${oauthTarget()}/v1/buzz/known-communities/${path}`,
+      response = await session.request(credential, {
+        path: `/v1/buzz/known-communities/${path}`,
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "X-BB-Session-Credential": credential.value,
         },
         body: JSON.stringify(body),
       });
@@ -112,7 +108,7 @@ export function createKnownCommunitiesClient(
     check(credential, signal);
     if (response.status === 401) {
       // The session is over; the fence reports it as the cancellation it is.
-      session.signOut();
+      session.expired(credential);
       check(credential, signal);
     }
     let value: unknown;
@@ -161,7 +157,7 @@ export function createKnownCommunitiesClient(
       // Protobuf JSON can omit an empty repeated field.
       const rows = value.communities ?? [];
       if (!Array.isArray(rows)) return { kind: "invalid_response" };
-      const addresses = rows.map(address);
+      const addresses = rows.map(listedAddress);
       if (addresses.includes(undefined)) return { kind: "invalid_response" };
       const communities = addresses.filter((a): a is string => a !== null);
       return {

@@ -73,6 +73,7 @@ export function stageChatCards(
   }
   return {
     ...projectComposerDocument(tr.doc).draft,
+    ...(draft.gifs ? { gifs: draft.gifs } : {}),
     chatCards: [
       ...new Set([
         ...(draft.chatCards ?? []),

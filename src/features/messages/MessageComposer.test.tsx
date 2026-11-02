@@ -30,16 +30,23 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
+import { createRecovery } from "../relay/recovery";
 import type { Contribution } from "../../plugins/contributions";
 import type {
   ComposerCompletion,
   ComposerCompletionProps,
   ComposerTool,
   ComposerToolProps,
+  CompletionPending,
+  CompletionResolution,
   CompletionResult,
   InlineRenderer,
 } from "../conversation/contracts";
+import { MENTION_RESOLVE_TIMEOUT_MS } from "../conversation/completion";
+import { mentionQuery } from "../../bundled/mentions/mention-query";
+import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
+import type { MentionRecipient } from "./mention-draft";
 import type { AgentLibrarySnapshot } from "../agents/library";
 import { createAgentChoices } from "../agents/choices";
 import type { LocalAgents } from "../agents/local";
@@ -76,6 +83,7 @@ import type { ComposerInputElement } from "./composer-dom";
 import { profileTarget } from "../profiles/target";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { setRememberAgentsPreference } from "./mention-preferences";
+import { setDefaultAgent } from "../solo/default-agent";
 import { ResourcePicker } from "../../bundled/repos/ResourcePicker";
 import { entityHref } from "../repos/routes";
 import type { Entity, RepositoryHome } from "../repos/destinations";
@@ -86,6 +94,11 @@ composerDOMFixture();
 const owners: ReturnType<typeof createRelaySession>[] = [];
 
 const first = { pubkey: "a".repeat(64), name: "Honey" };
+const noArchives = Object.freeze({ status: "ready" as const, archived: [] });
+const firstArchived = Object.freeze({
+  status: "ready" as const,
+  archived: [first.pubkey],
+});
 const second = { pubkey: "b".repeat(64), name: "Honey" };
 /** The mounted channel listed as a Solo chat. */
 const soloList = {
@@ -180,6 +193,14 @@ function mount(
         <button type="button" onClick={() => props.insertMention(second)}>
           Second Honey
         </button>
+        {props.audience && (
+          // Stands in for the picker's pill: same name, same audience contract.
+          <output
+            aria-label={`Sending to ${props.audience.recipients
+              .map((person) => person.name)
+              .join(", ")}. Change agents`}
+          />
+        )}
       </>
     );
   }
@@ -201,6 +222,7 @@ function mount(
   const outboxListeners = new Set<() => void>();
   let pending: readonly OutgoingEvent[] = [];
   let rows: readonly ChannelMessage[] = [];
+  let history: "idle" | "loading" | "ready" = "ready";
   const rowListeners = new Set<() => void>();
   const setPending = (next: readonly OutgoingEvent[]) => {
     pending = next;
@@ -298,7 +320,7 @@ function mount(
       ),
     },
     channels: {
-      window: () => ({ status: "ready", rows }),
+      window: () => ({ rows, status: history }),
       subscribeWindow(_id: string, listener: () => void) {
         rowListeners.add(listener);
         return () => rowListeners.delete(listener);
@@ -396,6 +418,12 @@ function mount(
     setRows(next: readonly ChannelMessage[]) {
       act(() => {
         rows = next;
+        for (const listener of rowListeners) listener();
+      });
+    },
+    setHistory(next: typeof history) {
+      act(() => {
+        history = next;
         for (const listener of rowListeners) listener();
       });
     },
@@ -598,7 +626,166 @@ it("shows a local draft in the cached composer without completion, typing or tra
   }
 });
 
-it("an explicit focus request resumes after the draft's retained mention", () => {
+it.each([true, false])(
+  "reports focused form removal only while it owns focus (focused=%s)",
+  (focused) => {
+    const initial = vi.fn();
+    const latest = vi.fn();
+    const h = mount({ autoFocus: false, onFocusedRemoval: initial });
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    try {
+      if (focused) h.input().focus();
+      else outside.focus();
+      h.retarget({ channelName: "Renamed", onFocusedRemoval: latest });
+      expect(initial).not.toHaveBeenCalled();
+      expect(latest).not.toHaveBeenCalled();
+      h.unmount();
+      expect(initial).not.toHaveBeenCalled();
+      expect(latest).toHaveBeenCalledTimes(focused ? 1 : 0);
+      if (!focused) expect(outside).toHaveFocus();
+    } finally {
+      h.unmount();
+      outside.remove();
+    }
+  },
+);
+
+function archiveToastFixture() {
+  const base = mount({}, undefined, first.pubkey);
+  base.unmount();
+  const summary = (archived = false): ChannelSummary => ({
+    id: "channel",
+    name: "General",
+    channelType: "stream",
+    members: [first.pubkey, second.pubkey],
+    ...(archived ? { archived: true } : {}),
+  });
+  let channel = summary();
+  let list = { status: "ready" as const, channels: [channel] };
+  const session = {
+    ...base.session,
+    channels: {
+      ...base.session.channels,
+      get: () => channel,
+      list: () => list,
+    },
+  };
+  const row = editableMessage();
+  let editScope: ReturnType<typeof useMessageEditScope>;
+  function Probe() {
+    editScope = useMessageEditScope();
+    return null;
+  }
+  const tree = (shown = true) => (
+    <ToastProvider>
+      <MessageEditScope>
+        <Probe />
+        <button type="button">Outside composer</button>
+        {shown && (
+          <MessageComposer
+            session={session}
+            scope="archive-toast"
+            channelId="channel"
+            channelName="General"
+            editMessages={[row]}
+          />
+        )}
+      </MessageEditScope>
+    </ToastProvider>
+  );
+  userEvent.setup();
+  const view = render(tree(), { reactStrictMode: true });
+  const input = () => screen.getByRole("textbox") as ComposerInputElement;
+  return {
+    input,
+    edit() {
+      act(() => editScope?.current?.(row));
+    },
+    fill(text: string) {
+      act(() => {
+        input().focus();
+        input().value = text;
+      });
+      fireEvent.input(input());
+    },
+    remove(archived = true) {
+      channel = summary(archived);
+      list = { ...list, channels: [channel] };
+      view.rerender(tree(false));
+    },
+    restore() {
+      channel = summary();
+      list = { ...list, channels: [channel] };
+      view.rerender(tree());
+    },
+  };
+}
+
+it.each(["draft", "edit"])(
+  "offers the focused archived %s text for copying and restores the saved draft",
+  async (mode) => {
+    const h = archiveToastFixture();
+    const write = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockResolvedValue(undefined);
+    onTestFinished(() => write.mockRestore());
+    h.fill("Saved draft");
+    if (mode === "edit") {
+      h.edit();
+      expect(h.input()).toHaveAccessibleName("Edit message");
+      h.fill("Unsent **edit**");
+    }
+    const text = h.input().value;
+    h.remove();
+    fireEvent.click(await screen.findByRole("button", { name: "Copy text" }));
+    await waitFor(() => expect(write).toHaveBeenCalledWith(text));
+    expect(
+      await screen.findByText("Text copied", { exact: true }),
+    ).toBeVisible();
+    h.restore();
+    expect(h.input()).toHaveValue("Saved draft");
+  },
+);
+
+it.each([
+  { text: "", focused: true, archived: true },
+  { text: "  \n ", focused: true, archived: true },
+  { text: "Saved draft", focused: false, archived: true },
+  { text: "Saved draft", focused: true, archived: false },
+])(
+  "does not offer text for unrelated or empty removal: %j",
+  async ({ text, focused, archived }) => {
+    const h = archiveToastFixture();
+    h.fill(text);
+    if (!focused)
+      screen.getByRole("button", { name: "Outside composer" }).focus();
+    h.remove(archived);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+  },
+);
+
+it("keeps the captured text retryable when clipboard copying fails", async () => {
+  const h = archiveToastFixture();
+  const write = vi
+    .spyOn(navigator.clipboard, "writeText")
+    .mockRejectedValueOnce(new Error("Clipboard unavailable"))
+    .mockResolvedValue(undefined);
+  onTestFinished(() => write.mockRestore());
+  h.fill("Keep this text");
+  h.remove();
+  fireEvent.click(await screen.findByRole("button", { name: "Copy text" }));
+  expect(
+    await screen.findByText("Couldn’t copy text", { exact: true }),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+  expect(write).toHaveBeenLastCalledWith("Keep this text");
+  expect(await screen.findByText("Text copied", { exact: true })).toBeVisible();
+});
+
+it("a first focus request starts after the retained mention and later requests preserve selection", () => {
   writeView("scope", "draft:channel", {
     text: "@Honey existing prose",
     recipients: [{ ...first, start: 0, end: 6 }],
@@ -612,7 +799,10 @@ it("an explicit focus request resumes after the draft's retained mention", () =>
   h.retarget({ channelName: "Renamed" });
   expect(h.input().selectionStart).toBe(7);
   h.retarget({ focusRequest: 2 });
-  expect(h.input().selectionStart).toBe(21);
+  expect(h.input().selectionStart).toBe(7);
+  act(() => h.input().setSelectionRange(0, 6));
+  h.retarget({ focusRequest: 3 });
+  expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([0, 6]);
 });
 
 it("autofocuses each selected conversation once without stealing focus on updates", () => {
@@ -639,6 +829,83 @@ it("defers initial focus until a loading conversation enables its composer", () 
   expect(h.input()).not.toHaveFocus();
   h.retarget({ disabled: false });
   expect(h.input()).toHaveFocus();
+});
+
+it("does not mistake a later focused control for a saved draft's opening row", () => {
+  const row = document.createElement("button");
+  const later = document.createElement("button");
+  document.body.append(row, later);
+  try {
+    row.focus();
+    later.focus();
+    const h = mount({ autoFocus: { current: row } });
+    expect(later).toHaveFocus();
+    expect(h.input()).not.toHaveFocus();
+  } finally {
+    row.remove();
+    later.remove();
+  }
+});
+
+it("cancels a deferred draft handoff when another control takes focus and disappears", () => {
+  const row = document.createElement("button");
+  const later = document.createElement("button");
+  document.body.append(row, later);
+  try {
+    row.focus();
+    const h = mount({ autoFocus: { current: row }, disabled: true });
+    later.focus();
+    later.remove();
+    h.retarget({ disabled: false });
+    expect(document.activeElement).toBe(document.body);
+    expect(h.input()).not.toHaveFocus();
+  } finally {
+    row.remove();
+    later.remove();
+  }
+});
+
+it("honors a draft cancellation recorded before its composer mounts", () => {
+  const origin: { current: HTMLElement | null } = { current: null };
+  const h = mount({ autoFocus: origin });
+  expect(h.input()).not.toHaveFocus();
+});
+
+it("honors owner cancellation while the composer waits without a focus event", () => {
+  const row = document.createElement("button");
+  document.body.append(row);
+  const origin: { current: HTMLElement | null } = { current: row };
+  try {
+    row.focus();
+    const h = mount({ autoFocus: origin, disabled: true });
+    origin.current = null;
+    row.remove();
+    h.retarget({ disabled: false });
+    expect(h.input()).not.toHaveFocus();
+  } finally {
+    row.remove();
+  }
+});
+
+it("hands the live draft target to its editor through StrictMode replay", () => {
+  const row = document.createElement("button");
+  document.body.append(row);
+  const origin: { current: HTMLElement | null } = { current: row };
+  const moved = (event: FocusEvent) => {
+    if (event.target !== origin.current) origin.current = null;
+  };
+  document.addEventListener("focusin", moved, true);
+  try {
+    row.focus();
+    writeView("scope", "draft:channel", "Saved draft");
+    const h = mount({ autoFocus: origin });
+    expect(h.input()).toHaveFocus();
+    expect(origin.current).toBe(h.input());
+    expect(h.input().selectionEnd).toBe("Saved draft".length);
+  } finally {
+    document.removeEventListener("focusin", moved, true);
+    row.remove();
+  }
 });
 
 it("does not redo initial focus when a focused composer is disabled and enabled again", () => {
@@ -919,6 +1186,202 @@ it.each(["click", "Enter", "Tab", " "])(
     expect(h.messages.send).not.toHaveBeenCalled();
   },
 );
+
+it("selects the exact match on Space from a publication React has not rendered yet", () => {
+  const h = mount();
+  const input = h.input();
+  input.focus();
+  h.fill("!search");
+  const publish = h.completionRequests.at(-1);
+  if (!publish) throw new Error("No observed completion request");
+  const chosen = { id: "chosen", label: "Chosen", edit: { text: "chosen" } };
+  act(() => {
+    publish({ items: [chosen] });
+  });
+  expect(screen.getByRole("option", { name: "Chosen" })).toBeVisible();
+  act(() => {
+    // The provider decides Space on the keystroke that completed the name,
+    // and a fast Space arrives before React commits that publication.
+    publish({ items: [chosen], spaceId: chosen.id });
+    expect(fireEvent.keyDown(input, { key: " " })).toBe(false);
+  });
+  expect(input).toHaveValue("chosen ");
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+/** The real `@` syntax with a provider that answers each query from its mount
+ * effect, as the bundled providers do: one row named by the query, the exact
+ * name decided on Space, and a settled empty result once a Space is typed.
+ * `mounted` runs in that effect before the publication, after the host has
+ * committed what it shows for the query on its own. */
+function mountTypeahead(mounted?: (query: string) => void) {
+  function Completion({ query, publish }: ComposerCompletionProps) {
+    useEffect(() => {
+      mounted?.(query.query);
+      const withdraw = publish(
+        query.query.includes(" ")
+          ? { items: [] }
+          : {
+              items: [
+                {
+                  id: first.pubkey,
+                  label: `Honey ${query.query}`,
+                  edit: { mention: first },
+                },
+              ],
+              ...(query.query === "honey" ? { spaceId: first.pubkey } : {}),
+            },
+      );
+      return () => {
+        if (withdraw) withdraw();
+      };
+    }, [query.query, publish]);
+    return null;
+  }
+  const completions: readonly Contribution<ComposerCompletion>[] = [
+    {
+      id: "mentions",
+      key: "buzz.mentions/mentions",
+      pluginId: "buzz.mentions",
+      revision: "1",
+      title: "Mention",
+      match: ({ text, start }) => mentionQuery(text, start),
+      component: Completion,
+    },
+  ];
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount({
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: { snapshot: () => completions, subscribe: () => () => {} },
+    },
+  });
+  return {
+    ...h,
+    /** The popup's row labels, or null while the popup is not in the document. */
+    rows() {
+      const popup = document.querySelector(
+        'section[aria-label="Mention suggestions"]',
+      );
+      return popup
+        ? [...popup.querySelectorAll('[role="option"]')].map(
+            (row) => row.textContent,
+          )
+        : null;
+    },
+  };
+}
+
+it("keeps the popup up through each keystroke that continues an open @ query", async () => {
+  const h = mountTypeahead();
+  const input = h.input();
+  input.focus();
+  h.fill("@h");
+  expect(h.rows()).toEqual(["Honey h"]);
+  const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean | undefined };
+  const previous = env.IS_REACT_ACT_ENVIRONMENT;
+  // Each delivery of DOM changes is a point at which the browser may paint.
+  // The per-query owner remounts on every keystroke, so its popup section is
+  // a new node each time; a delivery whose records removed a section without
+  // adding its replacement left the popup absent at a paint opportunity.
+  const popup = 'section[aria-label$=" suggestions"]';
+  const holds = (nodes: NodeList) =>
+    [...nodes].some(
+      (node) =>
+        node instanceof Element &&
+        (node.matches(popup) || !!node.querySelector(popup)),
+    );
+  const deliveries: { removed: boolean; added: boolean }[] = [];
+  const observer = new MutationObserver((records) =>
+    deliveries.push({
+      removed: records.some((record) => holds(record.removedNodes)),
+      added: records.some((record) => holds(record.addedNodes)),
+    }),
+  );
+  observer.observe(document.body, { childList: true, subtree: true });
+  try {
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    for (const text of ["@ho", "@hon", "@hone", "@honey"]) {
+      // The draft changes during a discrete event, as under a keystroke, so
+      // React commits the new observation in a microtask rather than under
+      // act; the provider's rows for it must be in the document by the end
+      // of that task, with no delivery in between showing no popup.
+      input.addEventListener(
+        "select",
+        () => {
+          input.value = text;
+          input.setSelectionRange(text.length, text.length);
+        },
+        { once: true },
+      );
+      input.dispatchEvent(new Event("select"));
+      await Promise.resolve();
+      expect(h.rows()).toEqual([`Honey ${text.slice(1)}`]);
+      // The observer's own microtask was queued during React's.
+      await Promise.resolve();
+    }
+  } finally {
+    env.IS_REACT_ACT_ENVIRONMENT = previous;
+    observer.disconnect();
+    await act(async () => {});
+  }
+  expect(deliveries.filter(({ removed, added }) => removed && !added)).toEqual(
+    [],
+  );
+  expect(deliveries.filter(({ removed }) => removed)).toHaveLength(4);
+  expect(h.rows()).toEqual(["Honey honey"]);
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("reopens a query at the same offset after Escape with no carried rows", () => {
+  // What the host showed for each query before its provider published, once
+  // per query: StrictMode runs the provider's mount effect twice.
+  const shown: [string, string[] | null][] = [];
+  const h = mountTypeahead((query) => {
+    if (shown.at(-1)?.[0] !== query) shown.push([query, h.rows()]);
+  });
+  const input = h.input();
+  input.focus();
+  h.fill("@hon");
+  h.fill("@hone");
+  expect(h.rows()).toEqual(["Honey hone"]);
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(h.rows()).toBeNull();
+  h.fill("@honey");
+  expect(h.rows()).toEqual(["Honey honey"]);
+  expect(shown).toEqual([
+    ["hon", null],
+    // A continuing keystroke carries the previous query's rows.
+    ["hone", ["Honey hon"]],
+    // A query reopened after the popup closed starts empty, as a first one.
+    ["honey", null],
+  ]);
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("still closes the popup when the query closes, on Escape, and on a Space that selects", () => {
+  const h = mountTypeahead();
+  const input = h.input();
+  input.focus();
+  h.fill("@hon");
+  expect(h.rows()).toEqual(["Honey hon"]);
+  // A settled empty result for the continued query: `@hon ` is prose.
+  h.fill("@hon ");
+  expect(h.rows()).toBeNull();
+  h.fill("@hone");
+  expect(h.rows()).toEqual(["Honey hone"]);
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(h.rows()).toBeNull();
+  h.fill("@honey");
+  expect(h.rows()).toEqual(["Honey honey"]);
+  expect(fireEvent.keyDown(input, { key: " " })).toBe(false);
+  expect(input).toHaveValue("@Honey ");
+  expect(h.rows()).toBeNull();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
 
 it.each(["click", "Enter", "Tab"])(
   "rejects withdrawn or ineligible refreshed completions via %s without sending",
@@ -1236,26 +1699,32 @@ async function mountUploadComposer(
     ]),
   );
   const scope = `https://relay.example.test:${viewer.pubkey}`;
-  const view = render(
+  const composer = (presented = true, shown = true) => (
     <AgentsContext.Provider value={options.agents}>
-      <MessageComposer
-        session={owner.session}
-        scope={scope}
-        channelId="channel"
-        channelName="General"
-        defaultMention={options.defaultMention}
-        requireMention={options.requireMention}
-        {...(options.extensions ? { extensions: options.extensions } : {})}
-        {...(options.threadRootId
-          ? { threadRootId: options.threadRootId }
-          : {})}
-        {...(options.replyParentId
-          ? { replyParentId: options.replyParentId }
-          : {})}
-      />
-    </AgentsContext.Provider>,
-    { reactStrictMode: true, wrapper: ToastProvider },
+      <ConversationPresentation value={presented}>
+        <MessageComposer
+          shown={shown}
+          session={owner.session}
+          scope={scope}
+          channelId="channel"
+          channelName="General"
+          defaultMention={options.defaultMention}
+          requireMention={options.requireMention}
+          {...(options.extensions ? { extensions: options.extensions } : {})}
+          {...(options.threadRootId
+            ? { threadRootId: options.threadRootId }
+            : {})}
+          {...(options.replyParentId
+            ? { replyParentId: options.replyParentId }
+            : {})}
+        />
+      </ConversationPresentation>
+    </AgentsContext.Provider>
   );
+  const view = render(composer(), {
+    reactStrictMode: true,
+    wrapper: ToastProvider,
+  });
   const input = () => within(view.container).getByRole("textbox");
   const form = () => within(view.container).getByRole("form");
   const send = () =>
@@ -1272,8 +1741,136 @@ async function mountUploadComposer(
     sign,
     publish,
     otherMembership,
+    present: (presented: boolean, shown = true) =>
+      view.rerender(composer(presented, shown)),
   };
 }
+
+function pickAttachments(container: HTMLElement, files: readonly File[]) {
+  const picker =
+    container.querySelector<HTMLInputElement>('input[type="file"]');
+  if (!picker) throw new Error("Missing attachment picker");
+  fireEvent.change(picker, { target: { files } });
+}
+
+it("focuses the composer only after the whole picker batch succeeds", async () => {
+  const h = await mountUploadComposer();
+  const trigger = screen.getByRole("button", { name: "Attach files" });
+  trigger.focus();
+  pickAttachments(h.container, [
+    attachmentFile("one.txt"),
+    attachmentFile("two.txt"),
+  ]);
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  expect(trigger).toHaveFocus();
+  await act(() =>
+    h.uploadCalls[0]?.result.resolve(uploadDescriptor("one.txt")),
+  );
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
+  expect(trigger).toHaveFocus();
+  await act(() =>
+    h.uploadCalls[1]?.result.resolve(uploadDescriptor("two.txt")),
+  );
+  expect(h.input()).toHaveFocus();
+});
+
+it.each(["before", "after"])(
+  "keeps the picker handoff when focus returns to Attach %s change",
+  async (order) => {
+    const h = await mountUploadComposer();
+    const trigger = screen.getByRole("button", { name: "Attach files" });
+    trigger.focus();
+    if (order === "before") fireEvent.focusIn(trigger);
+    pickAttachments(h.container, [attachmentFile()]);
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+    if (order === "after") fireEvent.focusIn(trigger);
+    await act(() => h.uploadCalls[0]?.result.resolve(uploadDescriptor()));
+    expect(h.input()).toHaveFocus();
+  },
+);
+
+it("leaves focus alone on picker cancellation or rejected files", async () => {
+  const h = await mountUploadComposer();
+  const trigger = screen.getByRole("button", { name: "Attach files" });
+  trigger.focus();
+  pickAttachments(h.container, []);
+  pickAttachments(h.container, [attachmentFile("empty.txt", "")]);
+  expect(
+    await screen.findByText("Could not attach file", { exact: true }),
+  ).toBeVisible();
+  expect(h.uploadCalls).toHaveLength(0);
+  expect(trigger).toHaveFocus();
+});
+
+it("does not focus after a picker upload fails or is later retried", async () => {
+  const h = await mountUploadComposer();
+  const trigger = screen.getByRole("button", { name: "Attach files" });
+  trigger.focus();
+  pickAttachments(h.container, [attachmentFile()]);
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  await act(() => h.uploadCalls[0]?.result.reject(new Error("offline")));
+  expect(trigger).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Retry notes.txt" }));
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
+  await act(() => h.uploadCalls[1]?.result.resolve(uploadDescriptor()));
+  expect(trigger).toHaveFocus();
+});
+
+it.each(["inactive", "hidden"])(
+  "cancels picker focus when the conversation becomes %s, including a warm return",
+  async (state) => {
+    const h = await mountUploadComposer();
+    const trigger = screen.getByRole("button", { name: "Attach files" });
+    trigger.focus();
+    pickAttachments(h.container, [attachmentFile()]);
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+    h.present(state !== "inactive", state !== "hidden");
+    h.present(true);
+    screen.getByRole("button", { name: "Attach files" }).focus();
+    await act(() => h.uploadCalls[0]?.result.resolve(uploadDescriptor()));
+    expect(screen.getByRole("button", { name: "Attach files" })).toHaveFocus();
+  },
+);
+
+it("preserves deliberate focus changes even when focus returns to the picker trigger", async () => {
+  const h = await mountUploadComposer();
+  const trigger = screen.getByRole("button", { name: "Attach files" });
+  trigger.focus();
+  pickAttachments(h.container, [attachmentFile()]);
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  h.input().focus();
+  trigger.focus();
+  await act(() => h.uploadCalls[0]?.result.resolve(uploadDescriptor()));
+  expect(trigger).toHaveFocus();
+});
+
+it("does not focus a replacement composer after a late picker completion", async () => {
+  const h = await mountUploadComposer();
+  screen.getByRole("button", { name: "Attach files" }).focus();
+  pickAttachments(h.container, [attachmentFile()]);
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  h.unmount();
+  const next = await mountUploadComposer();
+  const trigger = within(next.container).getByRole("button", {
+    name: "Attach files",
+  });
+  trigger.focus();
+  await act(() => h.uploadCalls[0]?.result.resolve(uploadDescriptor()));
+  expect(trigger).toHaveFocus();
+});
+
+it.each([attachByPaste, attachByDrop])(
+  "keeps existing focus behavior for %s uploads",
+  async (attach) => {
+    const h = await mountUploadComposer();
+    const trigger = screen.getByRole("button", { name: "Attach files" });
+    trigger.focus();
+    attach(h.form());
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+    await act(() => h.uploadCalls[0]?.result.resolve(uploadDescriptor()));
+    expect(trigger).toHaveFocus();
+  },
+);
 
 it("pauses while disabled and resumes attachment Send without Retry when re-enabled", async () => {
   const h = await mountUploadComposer();
@@ -1639,11 +2236,17 @@ it("offers emoji catalog refresh after an attachment publication fails preparati
   );
   await waitFor(() => expect(h.input()).toHaveValue("caption :party:"));
   expect(within(h.form()).getByRole("alert")).toHaveTextContent(
-    "Community emoji unavailable",
+    "Community emoji isn't ready",
   );
+  // The refused send retried the catalog; recovery is offered once that fails.
   expect(
-    screen.getByRole("button", { name: "Retry message preparation" }),
+    await screen.findByRole("button", { name: "Retry message preparation" }),
   ).toBeVisible();
+  // The retained refusal stays accurate once that retry has failed.
+  expect(h.owner.session.emoji.snapshot().status).toBe("error");
+  expect(within(h.form()).getByRole("alert")).toHaveTextContent(
+    "Community emoji isn't ready. Your draft is kept; try sending again shortly.",
+  );
   available = true;
   fireEvent.click(
     screen.getByRole("button", { name: "Retry message preparation" }),
@@ -1654,6 +2257,35 @@ it("offers emoji catalog refresh after an attachment publication fails preparati
   expect(h.input()).toHaveValue("caption :party:");
   expect(within(h.form()).getByText("emoji.txt")).toBeVisible();
   expect(h.publish).not.toHaveBeenCalled();
+});
+
+it("sends once the catalog retry started by a refused emoji send loads", async () => {
+  let available = false;
+  const h = await mountUploadComposer({
+    emojiRead: async () => {
+      if (!available) throw Error("catalog offline");
+      return [];
+    },
+  });
+  await waitFor(() =>
+    expect(h.owner.session.emoji.snapshot().status).toBe("error"),
+  );
+  available = true;
+  await userEvent.type(h.input(), ":party:");
+  fireEvent.click(h.send());
+  expect(within(h.form()).getByRole("alert")).toHaveTextContent(
+    "Community emoji isn't ready. Your draft is kept; try sending again shortly.",
+  );
+  await waitFor(() =>
+    expect(h.owner.session.emoji.snapshot().status).toBe("ready"),
+  );
+  expect(
+    screen.queryByRole("button", { name: "Retry message preparation" }),
+  ).toBeNull();
+  expect(h.input()).toHaveValue(":party:");
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.publish).toHaveBeenCalledTimes(1));
+  expect(within(h.form()).queryByRole("alert")).toBeNull();
 });
 
 it("does not overwrite a later local edit when a background upload fails", async () => {
@@ -1926,6 +2558,9 @@ it("retains preparation retry when recovery is deferred by an edit then unmounte
     h.uploadCalls[0]?.result.resolve(uploadDescriptor("edit-remount.txt")),
   );
   expect(h.input()).toHaveAccessibleName("Edit message");
+  await waitFor(() =>
+    expect(h.owner.session.emoji.snapshot().status).toBe("error"),
+  );
   expect(
     within(h.form()).queryByRole("button", {
       name: "Retry message preparation",
@@ -1948,10 +2583,11 @@ it("retains preparation retry when recovery is deferred by an edit then unmounte
     expect(composer.getByText("edit-remount.txt")).toBeVisible(),
   );
   expect(composer.getByRole("alert")).toHaveTextContent(
-    "Community emoji unavailable",
+    "Community emoji isn't ready",
   );
+  // The refused send retried the catalog; recovery is offered once that fails.
   expect(
-    composer.getByRole("button", { name: "Retry message preparation" }),
+    await composer.findByRole("button", { name: "Retry message preparation" }),
   ).toBeVisible();
 });
 
@@ -1991,12 +2627,14 @@ it("offers message preparation retry after a failed attachment send remounts", a
     expect(composer.getByText("emoji-remount.txt")).toBeVisible(),
   );
   expect(composer.getByRole("alert")).toHaveTextContent(
-    "Community emoji unavailable",
+    "Community emoji isn't ready",
   );
+  // The refused send retried the catalog; recovery is offered once that fails.
+  const retry = await composer.findByRole("button", {
+    name: "Retry message preparation",
+  });
   available = true;
-  fireEvent.click(
-    composer.getByRole("button", { name: "Retry message preparation" }),
-  );
+  fireEvent.click(retry);
   await waitFor(() =>
     expect(h.owner.session.emoji.snapshot().status).toBe("ready"),
   );
@@ -2648,6 +3286,24 @@ const oldBuzzAgents = () => {
   return { agents, port };
 };
 
+it("Enter on import entry keeps the draft without importing or sending", async () => {
+  const { agents, port } = oldBuzzAgents();
+  const h = mount({}, undefined, undefined, agents);
+  fireEvent.click(screen.getByRole("button", { name: "First Honey" }));
+  h.submit();
+  await screen.findByRole("dialog", { name: "Import Honey?" });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+  );
+  await userEvent.setup().keyboard("{Enter}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  expect(h.input()).toHaveValue("@Honey ");
+  expect(port).not.toHaveBeenCalled();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
 it("imports a mentioned agent an earlier Buzz runs before sending to it", async () => {
   const { agents, port } = oldBuzzAgents();
   const h = mount({}, undefined, undefined, agents);
@@ -2747,8 +3403,10 @@ it("keeps focus on the import action while it runs, fails and finishes", async (
   h.submit();
   await screen.findByRole("dialog", { name: "Import Honey?" });
   const action = screen.getByRole("button", { name: "Import and send" });
-  await waitFor(() => expect(action).toHaveFocus());
-  fireEvent.click(action);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+  );
+  await userEvent.setup().click(action);
   expect(action).toHaveAttribute("aria-busy", "true");
   expect(action).toHaveFocus();
   await act(async () => failed.reject(new Error("No disk space.")));
@@ -4712,6 +5370,8 @@ it.each([
   ["hello :-1", "hello 👎"],
   [":+1", "👍"],
   ["say :SMILE", "say 😄"],
+  // The second shortcode may follow a converted emoji with no space between them.
+  ["😄:wave", "😄👋"],
 ])(
   "replaces an exact shortcode with its emoji on the closing colon: %s",
   async (typed, expected) => {
@@ -4936,7 +5596,10 @@ for (const threadRootId of [undefined, "f".repeat(64)])
     Object.assign(h.session, {
       channels: { list: () => list, subscribeList: () => () => {} },
       viewer: "d".repeat(64),
-      archives: { state: () => "not-archived" },
+      archives: {
+        state: () => "not-archived",
+        snapshot: () => noArchives,
+      },
       channelWrites: {
         refreshMembership: vi.fn(async () => {
           if (operations[0]?.delivery === "accepted")
@@ -5056,7 +5719,10 @@ it.each([false, true])(
     Object.assign(h.session, {
       channels: { list: () => list, subscribeList: () => () => {} },
       viewer: "d".repeat(64),
-      archives: { state: () => "not-archived" },
+      archives: {
+        state: () => "not-archived",
+        snapshot: () => noArchives,
+      },
       channelWrites: { refreshMembership: async () => list.channels[0] },
       outbox: {
         supports: () => true,
@@ -5177,7 +5843,7 @@ it.each(
     [false, true].map((removeMention) => ({ root, removeMention })),
   ),
 )(
-  "requires an explicit recipient even with one Solo agent:  root=$root, removed=$removeMention",
+  "seeds a Solo chat's only agent into the pill and sends to it untagged:  root=$root, removed=$removeMention",
   async ({ root, removeMention }) => {
     const view = mount();
     const channel = {
@@ -5194,7 +5860,11 @@ it.each(
     const session = {
       ...view.session,
       viewer: "viewer",
-      channels: { list: () => list, subscribeList: () => () => {} },
+      channels: {
+        ...view.session.channels,
+        list: () => list,
+        subscribeList: () => () => {},
+      },
       agentLibrary: {
         snapshot: () => library,
         subscribe: () => () => {},
@@ -5211,30 +5881,40 @@ it.each(
       ...(root ? { threadRootId: root } : {}),
     });
     view.fill("Keep going ");
+    // The chat's only agent seeds the pill, so no tag is needed. A thread
+    // reply is never seeded: it starts empty until an agent is picked or named.
+    const sendingTo = () =>
+      screen.getByRole("status", {
+        name: `Sending to ${root ? "" : "Honey"}. Change agents`,
+      });
+    expect(sendingTo()).toBeInTheDocument();
     if (removeMention) {
+      // A mention is inline text, not an explicit-mentions chip row.
       await view.user.click(
         screen.getByRole("button", { name: "First Honey" }),
       );
-      const remove = screen.getByRole("button", {
-        name: `Remove mention Honey ${first.pubkey}`,
-      });
-      await view.user.hover(remove);
-      expect(await screen.findByRole("tooltip")).toHaveTextContent(
-        "Remove explicit mention of Honey (aaaaaaaa)",
-      );
-      await view.user.click(remove);
-      expect(view.input()).toHaveValue("@Honey Keep going ");
-      expect(view.input().querySelector(".inline-chip")).toBeNull();
+      expect(view.input().querySelector(".inline-chip")).not.toBeNull();
       expect(
         screen.queryByRole("region", { name: "Explicit mentions" }),
       ).not.toBeInTheDocument();
+      // Deleting it brings the fallback back (nobody, in a thread).
+      view.fill("Keep going ");
+      expect(view.input().querySelector(".inline-chip")).toBeNull();
+      expect(sendingTo()).toBeInTheDocument();
     }
     view.submit();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Tag a person or agent to send",
-    );
-    expect(view.messages.reply).not.toHaveBeenCalled();
-    expect(view.messages.send).not.toHaveBeenCalled();
+    const sent = root ? view.messages.reply : view.messages.send;
+    if (root) {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Choose an agent to send",
+      );
+      expect(view.messages.reply).not.toHaveBeenCalled();
+      expect(view.messages.send).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(sent).toHaveBeenCalled());
+      expect(sent.mock.calls.at(-1)?.[2]).toEqual([first.pubkey]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    }
     expect(session.channelWrites.addAgents).not.toHaveBeenCalled();
   },
 );
@@ -5347,6 +6027,8 @@ it("keeps retry submission available while a new Solo draft is locked", () => {
       recipients: [],
     },
     expect.objectContaining({ prepareForSend: expect.any(Function) }),
+    // Outside Solo-with-agents no recipients are held apart from the text.
+    undefined,
   );
   expect(h.messages.send).not.toHaveBeenCalled();
 });
@@ -5914,7 +6596,7 @@ it("opt-out changes future prefills, not the current draft, and re-enable revive
   expect(h.input()).toHaveValue("");
 });
 
-it("tags a Berd draft with the default agent once and needs a tag to send", async () => {
+function mountBerdDraft(defaultMention?: { pubkey: string; name: string }) {
   const submit = vi.fn();
   const h = mount({
     submission: {
@@ -5926,7 +6608,7 @@ it("tags a Berd draft with the default agent once and needs a tag to send", asyn
     ownSoloConversation: true,
     soloConversation: true,
     requireMention: true,
-    defaultMention: { pubkey: second.pubkey, name: "Selected" },
+    ...(defaultMention ? { defaultMention } : {}),
   });
   h.setLibrary([
     { pubkey: first.pubkey, name: "Explicit" },
@@ -5945,18 +6627,54 @@ it("tags a Berd draft with the default agent once and needs a tag to send", asyn
       list: () => soloList,
     },
   });
-  // The default agent arrives in the empty draft as an ordinary tag.
-  await waitFor(() => expect(h.input()).toHaveValue("@Selected "));
-  const send = screen.getByRole("button", { name: "Send message" });
-  // Removing the tag is respected: no re-tag, and Enter explains even an empty draft.
+  return { h, submit };
+}
+
+it("seeds a Berd draft's pill with the default agent once, never its text", async () => {
+  const { h, submit } = mountBerdDraft({
+    pubkey: second.pubkey,
+    name: "Selected",
+  });
+  // The default agent arrives in the pill; the draft text stays empty.
+  expect(
+    await screen.findByRole("status", {
+      name: "Sending to Selected. Change agents",
+    }),
+  ).toBeInTheDocument();
+  expect(h.input()).toHaveValue("");
+  expect(h.commands().recipients).toEqual([]);
+  // Typing and clearing leaves it alone: it was seeded once and stays held.
+  h.fill("hello");
   h.fill("");
+  expect(h.input()).toHaveValue("");
+  expect(
+    screen.getByRole("status", { name: "Sending to Selected. Change agents" }),
+  ).toBeInTheDocument();
+  h.fill("hello");
+  h.submit();
+  expect(submit).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ text: "hello", recipients: [] }),
+    expect.objectContaining({ prepareForSend: expect.any(Function) }),
+    [{ pubkey: second.pubkey, name: "Selected" }],
+  );
+});
+
+it("a Berd draft with nobody addressed needs a tag to send", async () => {
+  const { h, submit } = mountBerdDraft();
+  const send = screen.getByRole("button", { name: "Send message" });
+  // Nothing seeds the pill, and Enter explains even an empty draft.
+  expect(h.input()).toHaveValue("");
   fireEvent.keyDown(h.input(), { key: "Enter" });
-  expect(screen.getByRole("alert")).toHaveTextContent("Tag an agent to send");
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Choose an agent to send",
+  );
   h.fill("no agent here");
   expect(h.input()).toHaveValue("no agent here");
   // Enter and native form submission obey the same rule, not just the button.
   fireEvent.keyDown(h.input(), { key: "Enter" });
-  expect(screen.getByRole("alert")).toHaveTextContent("Tag an agent to send");
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Choose an agent to send",
+  );
   h.submit();
   expect(submit).not.toHaveBeenCalled();
   expect(h.input()).toHaveValue("no agent here");
@@ -5964,13 +6682,87 @@ it("tags a Berd draft with the default agent once and needs a tag to send", asyn
   expect(send).toHaveAttribute("aria-disabled", "true");
   await userEvent.hover(send);
   expect(await screen.findByRole("tooltip")).toHaveTextContent(
-    "Tag an agent to send",
+    "Choose an agent to send",
   );
   await userEvent.unhover(send);
+  // An inline mention addresses the agent and enables sending.
   act(() => {
     h.commands().insertMention(first);
   });
   expect(send).not.toHaveAttribute("aria-disabled");
+  // Picking an agent in the pill does too, once the mention is gone.
+  h.fill("no agent here");
+  expect(send).toHaveAttribute("aria-disabled", "true");
+  act(() => h.commands().audience?.only([second]));
+  expect(send).not.toHaveAttribute("aria-disabled");
+});
+
+const pillSendingTo = (names: string) =>
+  screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
+
+function mountNewSoloChat(name: string, pubkey: string) {
+  const h = mount({
+    submission: {
+      draftKey: "new-chat",
+      locked: false,
+      disabled: false,
+      submit: vi.fn(),
+    },
+    ownSoloConversation: true,
+    soloConversation: true,
+    requireMention: true,
+    defaultMention: { pubkey, name },
+  });
+  h.setLibrary([
+    { pubkey: first.pubkey, name: "Cached" },
+    { pubkey: second.pubkey, name: "Saved" },
+  ]);
+  Object.assign(h.session, {
+    channels: { ...h.session.channels, list: () => soloList },
+  });
+  return h;
+}
+
+it("puts the default agent in a new chat's pill, never the text or a saved draft", async () => {
+  const h = mountNewSoloChat("Cached", first.pubkey);
+  await waitFor(() => expect(pillSendingTo("Cached")).toBeInTheDocument());
+  expect(h.input()).toHaveValue("");
+  expect(readView("scope", "new-chat", null)).toBeNull();
+  // A new default doesn't swap the pill on screen.
+  h.retarget({ defaultMention: { pubkey: second.pubkey, name: "Saved" } });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(pillSendingTo("Cached")).toBeInTheDocument();
+  // Shown again untouched, it holds the current default.
+  h.retarget({ shown: false });
+  h.retarget({ shown: true });
+  await waitFor(() => expect(pillSendingTo("Saved")).toBeInTheDocument());
+  expect(readView("scope", "new-chat", null)).toBeNull();
+});
+
+it("keeps an agent the viewer picked in a new chat's pill across showing again, but a new mount starts from the main agent", async () => {
+  const h = mountNewSoloChat("Cached", first.pubkey);
+  await waitFor(() => expect(pillSendingTo("Cached")).toBeInTheDocument());
+  act(() =>
+    h.commands().audience?.only([{ pubkey: second.pubkey, name: "Saved" }]),
+  );
+  h.retarget({ defaultMention: { pubkey: first.pubkey, name: "Cached" } });
+  h.retarget({ shown: false });
+  h.retarget({ shown: true });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(pillSendingTo("Saved")).toBeInTheDocument();
+  expect(h.input()).toHaveValue("");
+  h.unmount();
+  mountNewSoloChat("Cached", first.pubkey);
+  await waitFor(() => expect(pillSendingTo("Cached")).toBeInTheDocument());
+});
+
+it("an untouched new chat's pill holds the current default after a remount", async () => {
+  const before = mountNewSoloChat("Cached", first.pubkey);
+  await waitFor(() => expect(pillSendingTo("Cached")).toBeInTheDocument());
+  // The viewer leaves before the account's main agent arrives.
+  before.unmount();
+  mountNewSoloChat("Saved", second.pubkey);
+  await waitFor(() => expect(pillSendingTo("Saved")).toBeInTheDocument());
 });
 
 it.each([
@@ -7126,9 +7918,7 @@ for (const channelType of ["stream", "forum"] as const)
       // block/buzz parity: without permission, Invite is absent, not disabled.
       expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
       await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: "Send anyway" }),
-        ).toHaveFocus(),
+        expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
       );
       expect(screen.getByRole("dialog")).toHaveTextContent(
         "Honey is not in this channel. You cannot add people to this channel. You can still send without inviting them.",
@@ -7198,7 +7988,7 @@ it.each(["Do nothing", "Invite"])(
   },
 );
 
-it("Enter invites a nonmember before sending", async () => {
+it("Enter on a deliberately focused Invite adds a nonmember before sending", async () => {
   const h = mount();
   const add = vi.fn(async () => {});
   const list = {
@@ -7215,7 +8005,10 @@ it("Enter invites a nonmember before sending", async () => {
   act(() => h.commands().insertMention(first));
   fireEvent.submit(screen.getByRole("form"));
   const invite = screen.getByRole("button", { name: "Invite" });
-  await waitFor(() => expect(invite).toHaveFocus());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+  );
+  invite.focus();
   await userEvent.setup().keyboard("{Enter}");
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
   expect(add).toHaveBeenCalledWith("channel", first.pubkey);
@@ -7269,6 +8062,7 @@ it.each([
         archives: {
           state: (key: string) =>
             key === first.pubkey ? "archived" : "not-archived",
+          snapshot: () => firstArchived,
         },
       }),
     });
@@ -7306,7 +8100,7 @@ it.each([
   },
 );
 
-it.each(["close", "escape"])(
+it.each(["close", "escape", "enter"])(
   "%s preserves the captured draft and returns focus without adding or sending",
   async (action) => {
     const h = mount();
@@ -7333,11 +8127,14 @@ it.each(["close", "escape"])(
     );
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Invite" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
     );
     if (action === "close")
       fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    else await userEvent.setup().keyboard("{Escape}");
+    else
+      await userEvent
+        .setup()
+        .keyboard(action === "enter" ? "{Enter}" : "{Escape}");
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
@@ -7449,12 +8246,11 @@ it("disabled completion keeps the highlighted key and consumes Enter without sen
 it("rejects a known archived recipient at send entry without clearing the draft", () => {
   const h = mount();
   let archived = false;
-  const snapshot = { status: "ready" as const, archived: [] as string[] };
   h.retarget({
     session: {
       ...h.session,
       archives: {
-        snapshot: () => snapshot,
+        snapshot: () => (archived ? firstArchived : noArchives),
         subscribe: () => () => {},
         state: () => (archived ? "archived" : "not-archived"),
         ensure: async () => {},
@@ -7548,7 +8344,9 @@ describe("repository resource picker", () => {
       },
     );
     const homes = vi.fn(home);
+    const recovery = createRecovery([]);
     Object.assign(h.session as object, {
+      recovery,
       repositories: {
         home: homes,
         load,
@@ -7577,6 +8375,7 @@ describe("repository resource picker", () => {
       h,
       homes,
       load,
+      recovery,
       validations,
       release: async () => {
         await act(async () => {
@@ -7993,6 +8792,39 @@ describe("repository resource picker", () => {
     await waitFor(() =>
       expect(failed.homes.mock.calls.length).toBeGreaterThan(reads),
     );
+  });
+
+  it("reads repositories and their lists refused while signed out again once sign-in lands", async () => {
+    const refused = () =>
+      Promise.reject(new Error("Federated sign-in is required"));
+    let signedIn = false;
+    const p = picker(() =>
+      signedIn
+        ? Promise.resolve({ status: "home", repositories: [repository] })
+        : refused(),
+    );
+    const { recovery } = p;
+    await screen.findByRole("button", { name: "Add issue or pull request" });
+    await act(async () => {});
+    const homes = p.homes.mock.calls.length;
+    signedIn = true;
+    act(() => recovery.retryAll());
+    await waitFor(() =>
+      expect(p.homes.mock.calls.length).toBeGreaterThan(homes),
+    );
+    const reread = p.homes.mock.calls.length;
+    p.load.mockImplementationOnce(refused);
+    signedIn = false;
+    await p.open();
+    expect(
+      await screen.findByText("Could not load issues and pull requests."),
+    ).toBeVisible();
+    const lists = p.load.mock.calls.length;
+    act(() => recovery.retryAll());
+    expect(await screen.findByRole("button", { name: row })).toBeVisible();
+    expect(p.load.mock.calls.length).toBeGreaterThan(lists);
+    // A list refusal rereads the list, not the repositories.
+    expect(p.homes.mock.calls.length).toBe(reread);
   });
 
   it.each(["formatting", "channel"])(
@@ -8655,6 +9487,8 @@ it("does not apply ordinary draft reconciliation to submission-owned recovery", 
       recipients: [],
     },
     expect.objectContaining({ prepareForSend: expect.any(Function) }),
+    // Outside Solo-with-agents no recipients are held apart from the text.
+    undefined,
   );
   expect(
     screen.queryByRole("button", { name: "Load saved draft" }),
@@ -9130,25 +9964,33 @@ it("edits the last message from an untouched automatic tag and restores that tag
   expect(h.input()).not.toHaveAccessibleName("Edit message");
 });
 
-it("tags the agents the viewer's latest Solo message tagged whenever an empty composer is shown", () => {
+it("seeds the pill with the agent last tagged in a Solo chat, never the text", () => {
   const viewer = "e".repeat(64);
-  const h = mount({}, undefined, viewer);
-  h.setLibrary([first, second]);
-  h.setProfiles(
-    new Map([
-      [first.pubkey, { name: "Ada", isAgent: true }],
-      [second.pubkey, { name: "Bea", isAgent: true }],
-    ]),
-  );
-  h.retarget({
-    ownSoloConversation: true,
-    requireMention: true,
-    session: {
-      ...h.session,
-      channels: { ...h.session.channels, list: () => soloList },
-    } as unknown as RelaySession,
-  });
+  const mountSolo = () => {
+    const h = mount({}, undefined, viewer);
+    h.setHistory("loading");
+    h.setLibrary([first, second]);
+    h.setProfiles(
+      new Map([
+        [first.pubkey, { name: "Ada", isAgent: true }],
+        [second.pubkey, { name: "Bea", isAgent: true }],
+      ]),
+    );
+    h.retarget({
+      ownSoloConversation: true,
+      requireMention: true,
+      session: {
+        ...h.session,
+        channels: { ...h.session.channels, list: () => soloList },
+      } as unknown as RelaySession,
+    });
+    return h;
+  };
+  const sendingTo = (names: string) =>
+    screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
+  const h = mountSolo();
   expect(h.input()).toHaveValue("");
+  expect(sendingTo("")).toBeInTheDocument();
   h.setRows([
     editableMessage({
       id: "1".repeat(64),
@@ -9173,41 +10015,55 @@ it("tags the agents the viewer's latest Solo message tagged whenever an empty co
       threadRootId: "1".repeat(64),
     }),
   ]);
-  expect(h.input()).toHaveValue("@Bea ");
-  expect(h.commands().recipients).toEqual([
+  // The history decides before any stand-in: the pill waits while it loads.
+  expect(sendingTo("")).toBeInTheDocument();
+  h.setHistory("ready");
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  // The agent is held by the pill, not tagged in the text.
+  expect(h.input()).toHaveValue("");
+  expect(h.commands().recipients).toEqual([]);
+  expect(h.commands().audience?.recipients).toEqual([
     { pubkey: second.pubkey, name: "Bea" },
   ]);
-  // A removed tag stays removed while the chat is shown.
-  act(() => h.input().removeRecipient(second.pubkey));
+  // The pill is never emptied: picking another agent replaces the last-tagged
+  // one, and that choice stays while the chat is shown, however the draft changes.
+  act(() =>
+    h.commands().audience?.only([{ pubkey: first.pubkey, name: "Ada" }]),
+  );
+  h.fill("for Ada");
   h.fill("");
-  expect(h.input()).toHaveValue("");
-  // Coming back to the chat tags the agent again, whether the conversation or
-  // its retained tab is shown again.
+  expect(sendingTo("Ada")).toBeInTheDocument();
   h.present(false);
   h.present(true);
-  expect(h.input()).toHaveValue("@Bea ");
-  act(() => h.input().removeRecipient(second.pubkey));
-  h.fill("");
+  expect(sendingTo("Ada")).toBeInTheDocument();
   h.retarget({ shown: false });
-  expect(h.input()).toHaveValue("");
   h.retarget({ shown: true });
-  expect(h.input()).toHaveValue("@Bea ");
-  // Text without a tag is left as written.
-  act(() => h.input().removeRecipient(second.pubkey));
+  expect(sendingTo("Ada")).toBeInTheDocument();
+  expect(h.input()).toHaveValue("");
+  // Text is left as written.
   h.fill("for people");
   h.present(false);
   h.present(true);
   expect(h.input()).toHaveValue("for people");
-  // Off with remembered agents.
-  h.fill("");
+  expect(sendingTo("Ada")).toBeInTheDocument();
+  // The pick outlives a remount, over the history and whatever the
+  // remember-agents preference says.
+  h.unmount();
   setRememberAgentsPreference(false);
-  h.present(false);
-  h.present(true);
-  expect(h.input()).toHaveValue("");
+  const fresh = mountSolo();
+  fresh.setRows([
+    editableMessage({
+      id: "2".repeat(64),
+      authorId: viewer,
+      mentions: [second.pubkey],
+    }),
+  ]);
+  fresh.setHistory("ready");
+  expect(sendingTo("Ada")).toBeInTheDocument();
   setRememberAgentsPreference(true);
 });
 
-it("waits for the inventory to classify the agent the viewer's latest Solo message tagged", () => {
+it("waits for complete agent choices before seeding the pill with the agent last tagged in a Solo chat", () => {
   const viewer = "e".repeat(64);
   // The local agent is usable before the library holding the latest agent loads.
   const control = localAgentsFixture([
@@ -9240,9 +10096,16 @@ it("waits for the inventory to classify the agent the viewer's latest Solo messa
     }),
   ]);
   expect(h.input()).toHaveValue("");
+  // Until the choices are complete the members aren't known as agents, so
+  // there is no pill and nothing is seeded.
+  expect(screen.queryByRole("status", { name: /Change agents/ })).toBeNull();
   h.setLibrary([{ pubkey: second.pubkey, name: "Bea" }]);
-  expect(h.input()).toHaveValue("@Bea ");
-  expect(h.commands().recipients).toEqual([
+  expect(h.input()).toHaveValue("");
+  expect(
+    screen.getByRole("status", { name: "Sending to Bea. Change agents" }),
+  ).toBeInTheDocument();
+  expect(h.commands().recipients).toEqual([]);
+  expect(h.commands().audience?.recipients).toEqual([
     { pubkey: second.pubkey, name: "Bea" },
   ]);
 });
@@ -9294,71 +10157,922 @@ it("keeps remembered agents while typing during upload without taking focus when
   }
 });
 
-it.each(["thread", "solo"])(
-  "%s follow-ups retain every selected agent, honor removal and share the opt-out",
-  async (surface) => {
-    const h = mount({}, undefined, first.pubkey);
-    h.setLibrary([first, second]);
-    h.setProfiles(
+it("thread follow-ups retain every selected agent, honor removal and share the opt-out", async () => {
+  const h = mount({}, undefined, first.pubkey);
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: first.name, isAgent: true }],
+      [second.pubkey, { name: second.name, isAgent: true }],
+    ]),
+  );
+  h.retarget({
+    threadRootId: "root",
+    session: {
+      ...h.session,
+      channels: {
+        ...h.session.channels,
+        list: () => soloList,
+      },
+      channelWrites: {
+        refreshMembership: async () => ({
+          id: "channel",
+          members: [first.pubkey, second.pubkey],
+        }),
+        addAgents: vi.fn(),
+      },
+    } as unknown as RelaySession,
+  });
+  act(() => {
+    h.commands().insertMention(first);
+    h.commands().insertMention(second);
+    h.commands().insertText("hello");
+  });
+  h.submit();
+  const send = h.messages.reply;
+  await waitFor(() => expect(send).toHaveBeenCalledOnce());
+  await waitFor(() => expect(h.input()).toHaveValue("@Honey @Honey "));
+  // Keep only the second agent for the next send.
+  act(() => {
+    h.input().removeRecipient(first.pubkey);
+    h.commands().insertText("next");
+  });
+  h.submit();
+  await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(h.input()).toHaveValue("@Honey "));
+  expect(send.mock.calls.at(-1)?.[3]).toEqual([second.pubkey]);
+  setRememberAgentsPreference(false);
+  h.submit();
+  await waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  setRememberAgentsPreference(true);
+  expect(h.input()).toHaveValue("");
+});
+
+it("solo follow-ups keep every selected agent in the pill, never the text", async () => {
+  const h = mount({}, undefined, first.pubkey);
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: first.name, isAgent: true }],
+      [second.pubkey, { name: second.name, isAgent: true }],
+    ]),
+  );
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: {
+        ...h.session.channels,
+        list: () => soloList,
+      },
+      channelWrites: {
+        refreshMembership: async () => ({
+          id: "channel",
+          members: [first.pubkey, second.pubkey],
+        }),
+        addAgents: vi.fn(),
+      },
+    } as unknown as RelaySession,
+  });
+  const sendingTo = (names: string) =>
+    screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
+  act(() => {
+    h.commands().insertMention(first);
+    h.commands().insertMention(second);
+    h.commands().insertText("hello");
+  });
+  expect(sendingTo("Honey, Honey")).toBeInTheDocument();
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([
+    first.pubkey,
+    second.pubkey,
+  ]);
+  // Both agents stay selected in the pill for the next message; the text is empty.
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(sendingTo("Honey, Honey")).toBeInTheDocument();
+  h.setRows([editableMessage()]);
+  fireEvent.keyDown(h.input(), { key: "ArrowUp" });
+  expect(h.input()).toHaveAccessibleName("Edit message");
+  fireEvent.keyDown(h.input(), { key: "Escape" });
+  expect(h.input()).toHaveValue("");
+  expect(sendingTo("Honey, Honey")).toBeInTheDocument();
+  // A pick keeps only that agent for the next send.
+  act(() => {
+    h.commands().audience?.only([second]);
+    h.commands().insertText("next");
+  });
+  expect(sendingTo("Honey")).toBeInTheDocument();
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(2));
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([second.pubkey]);
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(sendingTo("Honey")).toBeInTheDocument();
+  // The pill is never emptied: an empty pick is ignored.
+  act(() => h.commands().audience?.only([]));
+  expect(sendingTo("Honey")).toBeInTheDocument();
+  h.fill("again");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(3));
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([second.pubkey]);
+});
+
+function mountSoloAgents(
+  options: {
+    main?: string;
+    members?: readonly string[];
+    archived?: () => boolean;
+    agents?: Agents;
+    refreshed?: readonly string[];
+  } = {},
+) {
+  if (options.main) setDefaultAgent("scope", options.main);
+  const members = options.members ?? [first.pubkey, second.pubkey];
+  const list = {
+    ...soloList,
+    channels: [{ ...soloList.channels[0], members }],
+  };
+  const h = mount({}, undefined, "viewer", options.agents);
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+    ]),
+  );
+  h.retarget({
+    soloConversation: true,
+    session: {
+      ...h.session,
+      viewer: "viewer",
+      channels: { ...h.session.channels, list: () => list },
+      ...(options.archived && {
+        archives: {
+          snapshot: () => (options.archived?.() ? firstArchived : noArchives),
+          subscribe: () => () => {},
+          ensure: async () => {},
+          refresh: async () => {},
+          writable: false,
+          supported: true,
+          consent: vi.fn(),
+          request: vi.fn(),
+        },
+      }),
+      channelWrites: {
+        refreshMembership: async () => ({
+          id: "channel",
+          members: options.refreshed ?? members,
+        }),
+        addAgents: vi.fn(),
+      },
+    } as unknown as RelaySession,
+  });
+  const ada = { pubkey: first.pubkey, name: "Ada" };
+  const bea = { pubkey: second.pubkey, name: "Bea" };
+  act(() => h.commands().audience?.only([ada]));
+  const sendingTo = (names: string) =>
+    screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
+  return { h, ada, bea, sendingTo };
+}
+
+it("typing a mention then deleting it falls back to the main agent, not the remembered pair", async () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents({ main: first.pubkey });
+  act(() => h.commands().audience?.only([ada, bea]));
+  expect(sendingTo("Ada, Bea")).toBeInTheDocument();
+  act(() => {
+    h.commands().insertMention(bea);
+    h.commands().insertText("hello");
+  });
+  // The mentioned agent is the recipient; the remembered pair steps aside.
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  expect(h.commands().recipients).toEqual([bea]);
+  expect(h.commands().audience?.named).toBe(true);
+  // Deleting the mention gives the main agent, not the pair.
+  h.fill("hello");
+  expect(h.commands().recipients).toEqual([]);
+  expect(sendingTo("Ada")).toBeInTheDocument();
+  // A send with no mention goes to the main agent; the text carries no tag.
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([ada.pubkey]);
+});
+
+it("a pill-only agent that is compacting holds the send", () => {
+  const agents = sessionAgents("channel");
+  const { h } = mountSoloAgents({ agents });
+  act(() => agents.setSessionState("compacting"));
+  h.fill("hello");
+  expect(screen.getByText("Compacting session…")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  h.submit();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("a person who joined since the pill was shown stops its untagged send", async () => {
+  const person = "f".repeat(64);
+  const { h } = mountSoloAgents({
+    refreshed: [first.pubkey, second.pubkey, person],
+  });
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+      [person, { name: "Pat" }],
+    ]),
+  );
+  h.fill("hello");
+  h.submit();
+  expect(
+    await screen.findByText("Someone joined this chat. Tag an agent to send."),
+  ).toBeVisible();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("a member who joined with no loaded profile also stops the untagged send", async () => {
+  const { h } = mountSoloAgents({
+    refreshed: [first.pubkey, second.pubkey, "f".repeat(64)],
+  });
+  h.fill("hello");
+  h.submit();
+  expect(
+    await screen.findByText("Someone joined this chat. Tag an agent to send."),
+  ).toBeVisible();
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("removing an avatar resumes typing in the draft", async () => {
+  const { h, ada, bea } = mountSoloAgents();
+  act(() => h.commands().audience?.only([ada, bea]));
+  h.fill("hello");
+  const remove = screen.getByRole("button", {
+    name: `Remove agent Ada ${ada.pubkey}`,
+  });
+  remove.focus();
+  await h.user.keyboard("{Enter}");
+  expect(h.input()).toHaveFocus();
+  expect(h.commands().audience?.recipients).toEqual([bea]);
+});
+
+it("a menu toggle removes a typed tag while another tagged agent is archived", () => {
+  let archived = false;
+  const { h, ada, bea } = mountSoloAgents({ archived: () => archived });
+  act(() => {
+    h.commands().insertMention(ada);
+    h.commands().insertMention(bea);
+    h.commands().insertText("hello");
+  });
+  archived = true;
+  act(() => h.commands().audience?.toggle(bea));
+  expect(h.commands().recipients.map(({ pubkey }) => pubkey)).toEqual([
+    ada.pubkey,
+  ]);
+  expect(h.input()).toHaveValue("@Ada hello");
+});
+
+it("a mention typed before the chat's agents were known still falls back to the main agent", () => {
+  setDefaultAgent("scope", first.pubkey);
+  const viewer = "e".repeat(64);
+  const third = "f".repeat(64);
+  const h = mount({}, undefined, viewer);
+  h.setLibrary([first, second]);
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "channel",
+        channelType: "solo" as const,
+        members: [first.pubkey, second.pubkey, third],
+      },
+    ],
+  };
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => list },
+    } as unknown as RelaySession,
+  });
+  // The viewer last sent to Bea.
+  h.setRows([editableMessage({ authorId: viewer, mentions: [second.pubkey] })]);
+  // A member's profile hasn't loaded: the text decides.
+  expect(screen.queryByRole("status", { name: /Change agents/ })).toBeNull();
+  act(() => {
+    h.commands().insertMention({ pubkey: first.pubkey, name: "Ada" });
+    h.commands().insertText("hello");
+  });
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+      [third, { name: "Cal", isAgent: true }],
+    ]),
+  );
+  // Deleting the typed tag falls back to the main agent, not the history.
+  act(() => h.input().removeRecipient(first.pubkey));
+  h.fill("hello");
+  expect(
+    screen.getByRole("status", { name: "Sending to Ada. Change agents" }),
+  ).toBeInTheDocument();
+});
+
+it("an archived agent in the pill blocks the send and asks for another agent", () => {
+  let archived = false;
+  const { h } = mountSoloAgents({ archived: () => archived });
+  h.fill("hello");
+  archived = true;
+  h.submit();
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("hello");
+  expect(
+    screen.getByText(
+      "An agent you're sending to is archived. Choose another agent to send.",
+    ),
+  ).toBeVisible();
+});
+
+it("choosing another agent replaces an archived one the menu cannot uncheck", async () => {
+  let archived = false;
+  const { h, bea, sendingTo } = mountSoloAgents({ archived: () => archived });
+  archived = true;
+  act(() => h.commands().audience?.toggle(bea));
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  h.fill("hello");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([second.pubkey]);
+});
+
+it("a deleted typed mention falls back to the chat's own agent when the main agent isn't in it", async () => {
+  const { h, ada, sendingTo } = mountSoloAgents({
+    main: second.pubkey,
+    members: [first.pubkey],
+  });
+  act(() => {
+    h.commands().insertMention(ada);
+    h.commands().insertText("hello");
+  });
+  h.fill("hello");
+  expect(h.commands().recipients).toEqual([]);
+  await waitFor(() => expect(sendingTo("Ada")).toBeInTheDocument());
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([first.pubkey]);
+});
+
+it("after sending to two agents, a different typed mention deleted again gives the main agent, and a menu pick restores menu-driven state", async () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents({ main: first.pubkey });
+  act(() => h.commands().audience?.only([ada, bea]));
+  h.fill("both");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([
+    ada.pubkey,
+    bea.pubkey,
+  ]);
+  // The pill keeps both recipients for the next draft.
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(sendingTo("Ada, Bea")).toBeInTheDocument();
+  act(() => {
+    h.commands().insertMention(bea);
+    h.commands().insertText("hello");
+  });
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  h.fill("hello");
+  await waitFor(() => expect(sendingTo("Ada")).toBeInTheDocument());
+  // A menu pick sets the pill directly and clears the replaced state.
+  act(() => h.commands().audience?.only([bea]));
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  expect(h.commands().audience?.named).toBe(false);
+});
+
+it("a Solo pill pick replaces the fallback, a team pick sets several, and it is never emptied", () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents();
+  act(() => h.commands().audience?.only([bea]));
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  act(() => h.commands().audience?.only([bea, ada]));
+  expect(sendingTo("Bea, Ada")).toBeInTheDocument();
+  // An empty pick is ignored.
+  act(() => h.commands().audience?.only([]));
+  expect(sendingTo("Bea, Ada")).toBeInTheDocument();
+  // Picking one agent drops the rest.
+  act(() => h.commands().audience?.only([ada]));
+  expect(sendingTo("Ada")).toBeInTheDocument();
+  // None of it touches the text, and typing resumes at the caret.
+  expect(h.input()).toHaveValue("");
+  expect(h.commands().recipients).toEqual([]);
+  expect(h.input()).toHaveFocus();
+});
+
+it("a Solo menu toggle adds and removes agents but never the last one", () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents();
+  act(() => h.commands().audience?.toggle(bea));
+  expect(sendingTo("Ada, Bea")).toBeInTheDocument();
+  act(() => h.commands().audience?.toggle(ada));
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  // The last agent stays: a message always goes to someone.
+  act(() => h.commands().audience?.toggle(bea));
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  expect(h.input()).toHaveValue("");
+  expect(h.commands().recipients).toEqual([]);
+});
+
+it("while a typed tag decides, a Solo menu toggle edits the tags, not a hidden list", () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents({ main: first.pubkey });
+  act(() => {
+    h.commands().insertMention(ada);
+    h.commands().insertText("hello");
+  });
+  act(() => h.commands().audience?.toggle(bea));
+  expect(h.commands().recipients.map(({ pubkey }) => pubkey)).toEqual([
+    ada.pubkey,
+    bea.pubkey,
+  ]);
+  expect(sendingTo("Ada, Bea")).toBeInTheDocument();
+  expect(h.input()).toHaveValue("@Ada @Bea hello");
+  act(() => h.commands().audience?.toggle(ada));
+  expect(h.commands().recipients.map(({ pubkey }) => pubkey)).toEqual([
+    bea.pubkey,
+  ]);
+  expect(h.input()).toHaveValue("@Bea hello");
+  // Deleting the last tag falls back to the main agent, untouched by picks.
+  h.fill("hello");
+  expect(sendingTo("Ada")).toBeInTheDocument();
+});
+
+it("while a typed tag decides, a Solo team pick replaces the tags", () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents({ main: first.pubkey });
+  act(() => {
+    h.commands().insertMention(ada);
+    h.commands().insertText("hello");
+  });
+  act(() => h.commands().audience?.only([bea]));
+  expect(h.commands().recipients.map(({ pubkey }) => pubkey)).toEqual([
+    bea.pubkey,
+  ]);
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  expect(h.input()).toHaveValue("@Bea hello");
+  // Deleting the tag falls back to the main agent, not a hidden pick.
+  h.fill("hello");
+  expect(sendingTo("Ada")).toBeInTheDocument();
+});
+
+it("with several Solo agents, each shows as an avatar that removes it, down to one", async () => {
+  const { h, ada, bea, sendingTo } = mountSoloAgents();
+  expect(
+    screen.queryByRole("button", { name: `Remove agent Ada ${ada.pubkey}` }),
+  ).toBeNull();
+  act(() => h.commands().audience?.toggle(bea));
+  await h.user.click(
+    screen.getByRole("button", { name: `Remove agent Ada ${ada.pubkey}` }),
+  );
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  // One agent left: no removable avatars.
+  expect(
+    screen.queryByRole("button", { name: `Remove agent Bea ${bea.pubkey}` }),
+  ).toBeNull();
+});
+
+it("a Solo pill pick returns focus to the draft without moving its caret", () => {
+  const { h, bea } = mountSoloAgents();
+  h.fill("hello there");
+  act(() => {
+    h.input().setSelectionRange(5, 5);
+    h.input().blur();
+  });
+  act(() => h.commands().audience?.only([bea]));
+  expect(h.input()).toHaveFocus();
+  expect(h.input().selectionStart).toBe(5);
+  expect(h.input()).toHaveValue("hello there");
+});
+
+it("after a Solo send the pill keeps whoever received it, and a mention-addressed send replaces the fallback", async () => {
+  const { h, bea, sendingTo } = mountSoloAgents();
+  act(() => {
+    h.commands().insertMention(bea);
+    h.commands().insertText("hello");
+  });
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([second.pubkey]);
+  // The next draft is empty and the fallback is now Bea, not Ada.
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(h.commands().recipients).toEqual([]);
+  expect(sendingTo("Bea")).toBeInTheDocument();
+  h.fill("again");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(2));
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([second.pubkey]);
+});
+
+function mountSoloHistory(options: { remember?: boolean } = {}) {
+  const viewer = "e".repeat(64);
+  if (options.remember === false) setRememberAgentsPreference(false);
+  const h = mount({}, undefined, viewer);
+  h.setHistory("loading");
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+    ]),
+  );
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => soloList },
+      channelWrites: {
+        refreshMembership: async () => ({
+          id: "channel",
+          members: [first.pubkey, second.pubkey],
+        }),
+        addAgents: vi.fn(),
+      },
+    } as unknown as RelaySession,
+  });
+  h.setRows([
+    editableMessage({
+      id: "1".repeat(64),
+      authorId: viewer,
+      mentions: [first.pubkey],
+    }),
+    editableMessage({
+      id: "2".repeat(64),
+      authorId: viewer,
+      mentions: [first.pubkey, second.pubkey],
+    }),
+    // A reply in a thread never chooses the audience.
+    editableMessage({
+      id: "3".repeat(64),
+      authorId: viewer,
+      mentions: [second.pubkey],
+      threadRootId: "1".repeat(64),
+    }),
+  ]);
+  h.setHistory("ready");
+  return h;
+}
+
+it("a multi-agent pill survives a remount: it is seeded from every agent of the latest message", () => {
+  const h = mountSoloHistory();
+  const sendingTo = (names: string) =>
+    screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
+  expect(sendingTo("Ada, Bea")).toBeInTheDocument();
+  h.unmount();
+  mountSoloHistory();
+  expect(sendingTo("Ada, Bea")).toBeInTheDocument();
+});
+
+it("seeding the pill from the latest message ignores the remember-agents preference", () => {
+  try {
+    mountSoloHistory({ remember: false });
+    expect(
+      screen.getByRole("status", {
+        name: "Sending to Ada, Bea. Change agents",
+      }),
+    ).toBeInTheDocument();
+  } finally {
+    setRememberAgentsPreference(true);
+  }
+});
+
+it("an inline mention in the middle of the text replaces the pill's fallback", async () => {
+  const h = mountSoloHistory();
+  act(() => {
+    h.commands().insertText("Please ask ");
+    h.commands().insertMention({ pubkey: second.pubkey, name: "Bea" });
+    h.commands().insertText("about it");
+  });
+  expect(
+    screen.getByRole("status", { name: "Sending to Bea. Change agents" }),
+  ).toBeInTheDocument();
+  expect(h.commands().recipients).toEqual([
+    { pubkey: second.pubkey, name: "Bea" },
+  ]);
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls.at(-1)?.[2]).toEqual([second.pubkey]);
+});
+
+function mountSoloChat(
+  members: readonly string[],
+  options: { history?: "idle" | "loading" | "ready"; viewer?: string } = {},
+) {
+  const viewer = options.viewer ?? "e".repeat(64);
+  const h = mount({}, undefined, viewer);
+  h.setHistory(options.history ?? "ready");
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+    ]),
+  );
+  const list = {
+    status: "ready" as const,
+    channels: [{ id: "channel", channelType: "solo" as const, members }],
+  };
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => list },
+    } as unknown as RelaySession,
+  });
+  return { h, viewer };
+}
+const pillNamed = (names: string) =>
+  screen.getByRole("status", { name: `Sending to ${names}. Change agents` });
+
+it("with none of your messages loaded and no main or local agent among them, the pill takes all the chat's usable agents", () => {
+  mountSoloChat([first.pubkey, second.pubkey]);
+  expect(pillNamed("Ada, Bea")).toBeInTheDocument();
+});
+
+it("with none of your messages loaded, the main agent is chosen over the chat's other agents when it is a member", () => {
+  setDefaultAgent("scope", second.pubkey);
+  mountSoloChat([first.pubkey, second.pubkey]);
+  expect(pillNamed("Bea")).toBeInTheDocument();
+});
+
+it("with none of your messages loaded, the first member agent that runs on this computer is chosen", () => {
+  const control = localAgentsFixture([
+    { ...localAgent, pubkey: second.pubkey, name: "Bea" },
+  ]);
+  const h = mount(
+    { scope: `https://relay.example.test:${"d".repeat(64)}` },
+    control,
+    "e".repeat(64),
+  );
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+    ]),
+  );
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "channel",
+        channelType: "solo" as const,
+        members: [first.pubkey, second.pubkey],
+      },
+    ],
+  };
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => list },
+    } as unknown as RelaySession,
+  });
+  expect(pillNamed("Bea")).toBeInTheDocument();
+});
+
+it("with no usable agent in the chat, the pill falls back to your main agent", () => {
+  localStorage.clear();
+  setDefaultAgent("scope", second.pubkey);
+  mountSoloChat(["f".repeat(64)]);
+  // The chat's only other member is unknown, so routing is off until it loads.
+  expect(screen.queryByRole("status", { name: /Change agents/ })).toBeNull();
+  cleanup();
+  const { h } = mountSoloChat(["e".repeat(64)]);
+  expect(pillNamed("Bea")).toBeInTheDocument();
+  expect(h.input()).toHaveValue("");
+});
+
+it("a Solo chat with a person tags the agent the viewer last tagged in the text, honoring the preference", () => {
+  const person = "f".repeat(64);
+  const viewer = "e".repeat(64);
+  const open = () => {
+    const opened = mountSoloChat([first.pubkey, person], { viewer });
+    opened.h.setProfiles(
       new Map([
-        [first.pubkey, { name: first.name, isAgent: true }],
-        [second.pubkey, { name: second.name, isAgent: true }],
+        [first.pubkey, { name: "Ada", isAgent: true }],
+        [second.pubkey, { name: "Bea", isAgent: true }],
+        [person, { name: "Pat" }],
       ]),
     );
-    const personal = surface === "solo";
-    h.retarget({
-      ...(personal
-        ? { ownSoloConversation: true, requireMention: true }
-        : { threadRootId: "root" }),
-      session: {
-        ...h.session,
-        channels: {
-          ...h.session.channels,
-          list: () => soloList,
-        },
-        channelWrites: {
-          refreshMembership: async () => ({
-            id: "channel",
-            members: [first.pubkey, second.pubkey],
-          }),
-          addAgents: vi.fn(),
-        },
-      } as unknown as RelaySession,
-    });
-    act(() => {
-      h.commands().insertMention(first);
-      h.commands().insertMention(second);
-      h.commands().insertText("hello");
-    });
-    h.submit();
-    const send = personal ? h.messages.send : h.messages.reply;
-    await waitFor(() => expect(send).toHaveBeenCalledOnce());
-    await waitFor(() => expect(h.input()).toHaveValue("@Honey @Honey "));
-    if (personal) {
-      // The sent message lands with the agents it notified.
-      h.setRows([editableMessage({ mentions: [first.pubkey, second.pubkey] })]);
-      fireEvent.keyDown(h.input(), { key: "ArrowUp" });
-      expect(h.input()).toHaveAccessibleName("Edit message");
-      fireEvent.keyDown(h.input(), { key: "Escape" });
-      expect(h.input()).toHaveValue("@Honey @Honey ");
-    }
-    // Keep only the second agent for the next send.
-    act(() => {
-      h.input().removeRecipient(first.pubkey);
-      h.commands().insertText("next");
-    });
-    h.submit();
-    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(h.input()).toHaveValue("@Honey "));
-    expect(send.mock.calls.at(-1)?.[personal ? 2 : 3]).toEqual([second.pubkey]);
-    setRememberAgentsPreference(false);
-    h.submit();
-    await waitFor(() => expect(send).toHaveBeenCalledTimes(3));
-    await waitFor(() => expect(h.input()).toHaveValue(""));
-    setRememberAgentsPreference(true);
-    expect(h.input()).toHaveValue("");
-  },
-);
+    opened.h.setRows([
+      editableMessage({ authorId: viewer, mentions: [first.pubkey] }),
+    ]);
+    return opened.h;
+  };
+  const h = open();
+  expect(screen.queryByRole("status", { name: /Change agents/ })).toBeNull();
+  expect(h.input()).toHaveValue("@Ada ");
+  h.unmount();
+  setRememberAgentsPreference(false);
+  const off = open();
+  expect(off.input()).toHaveValue("");
+  setRememberAgentsPreference(true);
+});
+
+it("a Solo chat with a person that opens on ready history tags the agent at mount", () => {
+  const person = "f".repeat(64);
+  const viewer = "e".repeat(64);
+  const h = mount({}, undefined, viewer);
+  h.setHistory("ready");
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [person, { name: "Pat" }],
+    ]),
+  );
+  h.setRows([editableMessage({ authorId: viewer, mentions: [first.pubkey] })]);
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "channel",
+        channelType: "solo" as const,
+        members: [first.pubkey, person],
+      },
+    ],
+  };
+  // Switching to an own Solo chat mounts its composer afresh.
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => list },
+    } as unknown as RelaySession,
+  });
+  expect(h.input()).toHaveValue("@Ada ");
+});
+
+it("a hidden tab keeps the pill of a draft with prose when the history changes", () => {
+  const viewer = "e".repeat(64);
+  const { h } = mountSoloChat([first.pubkey, second.pubkey], {
+    viewer,
+    history: "loading",
+  });
+  h.setRows([editableMessage({ authorId: viewer, mentions: [first.pubkey] })]);
+  h.setHistory("ready");
+  const pill = (name: string) =>
+    screen.getByRole("status", { name: `Sending to ${name}. Change agents` });
+  expect(pill("Ada")).toBeInTheDocument();
+  h.fill("for Ada");
+  // Another device sends to Bea while this tab is hidden.
+  h.retarget({ shown: false });
+  h.setRows([
+    editableMessage({ authorId: viewer, mentions: [first.pubkey] }),
+    editableMessage({
+      id: "2".repeat(64),
+      authorId: viewer,
+      mentions: [second.pubkey],
+    }),
+  ]);
+  h.retarget({ shown: true });
+  expect(h.input()).toHaveValue("for Ada");
+  expect(pill("Ada")).toBeInTheDocument();
+});
+
+it("a saved chat's pick is restored whole while agent discovery is incomplete", () => {
+  const viewer = "e".repeat(64);
+  const ada = { pubkey: first.pubkey, name: "Ada" };
+  const bea = { pubkey: second.pubkey, name: "Bea" };
+  const pill = (name: string) =>
+    screen.getByRole("status", { name: `Sending to ${name}. Change agents` });
+  const before = mountSoloChat([first.pubkey, second.pubkey], { viewer });
+  act(() => before.h.commands().audience?.only([ada, bea]));
+  expect(pill("Ada, Bea")).toBeInTheDocument();
+  before.h.unmount();
+  // Bea's profile says agent, but her library hasn't loaded yet.
+  const h = mount({}, undefined, viewer);
+  h.setHistory("ready");
+  h.setLibrary([first], "loading");
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+    ]),
+  );
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "channel",
+        channelType: "solo" as const,
+        members: [first.pubkey, second.pubkey],
+      },
+    ],
+  };
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => list },
+    } as unknown as RelaySession,
+  });
+  expect(pill("Ada, Bea")).toBeInTheDocument();
+  h.setLibrary([first, second]);
+  expect(pill("Ada, Bea")).toBeInTheDocument();
+});
+
+it("a pill that takes over from mount-time text seeding keeps the history's agent", () => {
+  setDefaultAgent("scope", second.pubkey);
+  const viewer = "e".repeat(64);
+  const third = "f".repeat(64);
+  const h = mount({}, undefined, viewer);
+  h.setHistory("ready");
+  h.setLibrary([first, second]);
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+    ]),
+  );
+  h.setRows([editableMessage({ authorId: viewer, mentions: [first.pubkey] })]);
+  const list = {
+    status: "ready" as const,
+    channels: [
+      {
+        id: "channel",
+        channelType: "solo" as const,
+        members: [first.pubkey, second.pubkey, third],
+      },
+    ],
+  };
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, list: () => list },
+    } as unknown as RelaySession,
+  });
+  // A member's profile is loading: the text is seeded.
+  expect(h.input()).toHaveValue("@Ada ");
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [second.pubkey, { name: "Bea", isAgent: true }],
+      [third, { name: "Cal", isAgent: true }],
+    ]),
+  );
+  // Alone with agents, the history's agent moves to the pill.
+  expect(h.input()).toHaveValue("");
+  expect(
+    screen.getByRole("status", { name: "Sending to Ada. Change agents" }),
+  ).toBeInTheDocument();
+});
+
+it("the pill waits for the chat's history before any stand-in seeds it", () => {
+  const { h, viewer } = mountSoloChat([first.pubkey, second.pubkey], {
+    history: "loading",
+  });
+  expect(pillNamed("")).toBeInTheDocument();
+  h.setRows([
+    editableMessage({
+      id: "2".repeat(64),
+      authorId: viewer,
+      mentions: [second.pubkey],
+    }),
+  ]);
+  expect(pillNamed("")).toBeInTheDocument();
+  h.setHistory("ready");
+  // The latest message wins over the chat's members.
+  expect(pillNamed("Bea")).toBeInTheDocument();
+});
+
+it("a member whose profile has not loaded turns pill routing off", async () => {
+  const unknown = "f".repeat(64);
+  const { h } = mountSoloChat([first.pubkey, unknown]);
+  expect(screen.queryByRole("status", { name: /Change agents/ })).toBeNull();
+  expect(h.commands().audience).toBeUndefined();
+  // The old mention rules apply: tag someone to send.
+  h.fill("hello");
+  h.submit();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Tag a person or agent to send",
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  act(() => h.commands().insertMention(first));
+  expect(h.commands().recipients).toEqual([first]);
+  // Once the member is known as an agent, the pill takes over.
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Ada", isAgent: true }],
+      [unknown, { name: "Cy", isAgent: true }],
+    ]),
+  );
+  expect(h.commands().audience).toBeDefined();
+});
 
 it("queues a tagged agent follow-up while agent choices no longer list it", async () => {
   localStorage.setItem("buzz-follow-up-behavior.v1", "queue");
@@ -9902,4 +11616,1234 @@ it("guards automatic recipient changes using the current draft prose", () => {
   expect(h.input().value).toContain("Written draft");
   h.fill(" \n ");
   act(() => expect(replace?.([second])).toBe(true));
+});
+
+/** A mention provider the test publishes for, over the real `@` syntax. */
+function mountPendingMention(options: Partial<MessageComposerProps> = {}) {
+  const publishes: ComposerCompletionProps["publish"][] = [];
+  function Completion({ publish }: ComposerCompletionProps) {
+    useLayoutEffect(() => {
+      publishes.push(publish);
+    }, [publish]);
+    return null;
+  }
+  const completions: readonly Contribution<ComposerCompletion>[] = [
+    {
+      id: "mentions",
+      key: "buzz.mentions/mentions",
+      pluginId: "buzz.mentions",
+      revision: "1",
+      title: "Mention",
+      match: ({ text, start }) => mentionQuery(text, start),
+      component: Completion,
+    },
+  ];
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount({
+    ...options,
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: { snapshot: () => completions, subscribe: () => () => {} },
+    },
+  });
+  const resolve = vi.fn<CompletionPending["resolve"]>();
+  const publish = () => {
+    const publish = publishes.at(-1);
+    if (!publish) throw new Error("No mention query observed");
+    return publish;
+  };
+  return {
+    ...h,
+    resolve,
+    /** How many `@` queries the provider has been mounted for. */
+    queries: () => publishes.length,
+    publish,
+    /** Type `@name`, publish an undecided result for it, then type Space.
+     * Returns the keydown's default-prevented state inverted: false when held. */
+    hold(name: string, outcome: Promise<CompletionResolution>) {
+      resolve.mockImplementation(() => outcome);
+      h.fill(`@${name}`);
+      act(() => {
+        publish()({ items: [], spacePending: { name, resolve } });
+      });
+      return fireEvent.keyDown(h.input(), { key: " " });
+    },
+    chip: (name: string) =>
+      within(h.input()).queryByRole("img", {
+        name: `Resolving mention ${name}`,
+      }),
+  };
+}
+
+it("holds an undecided name on Space, then settles it into the recipient without reopening the chooser", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    expect(h.hold("honey", outcome.promise)).toBe(false);
+    expect(h.input()).toHaveValue("@honey ");
+    expect(h.chip("honey")).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+    expect(h.resolve).toHaveBeenCalledOnce();
+    // The chip's `@` is not an open query: no provider mounts for "honey ".
+    const queries = h.queries();
+    await act(async () => outcome.resolve(first));
+    expect(h.input()).toHaveValue("@Honey ");
+    expect(h.chip("honey")).toBeNull();
+    expect(
+      within(
+        screen.getByRole("region", { name: "Explicit mentions" }),
+      ).getAllByRole("button"),
+    ).toHaveLength(1);
+    expect(h.queries()).toBe(queries);
+    h.submit();
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "@Honey ",
+      [first.pubkey],
+      [],
+    );
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+it("leaves Space literal beside a loaded longer member name and selects that name on the next Space", async () => {
+  // The real chooser over the real `@` syntax, with the directory read held:
+  // `Mira Example` continues `mira` whatever the read finds, so the first
+  // Space is prose, not a pending chip, and the query stays open for the word
+  // that completes the name.
+  const completions: readonly Contribution<ComposerCompletion>[] = [
+    {
+      id: "mentions",
+      key: "buzz.mentions/mentions",
+      pluginId: "buzz.mentions",
+      revision: "1",
+      title: "Mention",
+      match: ({ text, start }) => mentionQuery(text, start),
+      component: MentionCompletion,
+    },
+  ];
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount({
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: { snapshot: () => completions, subscribe: () => () => {} },
+    },
+  });
+  const people = vi.fn(() => new Promise<never>(() => {}));
+  h.retarget({
+    session: {
+      ...h.session,
+      channels: { ...h.session.channels, ensureList: () => {} },
+      directMessages: { people },
+    } as unknown as RelaySession,
+  });
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Mira Example" }],
+      [second.pubkey, { name: "Other Member" }],
+    ]),
+  );
+  const chip = () =>
+    within(h.input()).queryByRole("img", { name: /^Resolving mention / });
+  await h.user.type(h.input(), "@mira");
+  // The chooser has published for `mira` once its row shows.
+  await screen.findByRole("option", { name: /Mira Example/ });
+  await h.user.keyboard(" ");
+  expect(h.input()).toHaveValue("@mira ");
+  expect(chip()).toBeNull();
+  await h.user.keyboard("Example hi");
+  expect(h.input()).toHaveValue("@Mira Example hi");
+  expect(chip()).toBeNull();
+  expect(
+    within(
+      screen.getByRole("region", { name: "Explicit mentions" }),
+    ).getAllByRole("button"),
+  ).toHaveLength(1);
+  h.submit();
+  expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+    "channel",
+    "@Mira Example hi",
+    [first.pubkey],
+    [],
+  );
+});
+
+/** The real chooser over the real `@` syntax with `Mira Example` only in the
+ * directory and every member named, so the first Space is undecided. Each
+ * `people` read is held until the test releases it. */
+function mountDirectoryMention(
+  options: { agents?: Agents; channel?: object; session?: object } = {},
+) {
+  const completions: readonly Contribution<ComposerCompletion>[] = [
+    {
+      id: "mentions",
+      key: "buzz.mentions/mentions",
+      pluginId: "buzz.mentions",
+      revision: "1",
+      title: "Mention",
+      match: ({ text, start }) => mentionQuery(text, start),
+      component: MentionCompletion,
+    },
+  ];
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount(
+    {
+      extensions: {
+        tools: none,
+        inline: none,
+        completions: {
+          snapshot: () => completions,
+          subscribe: () => () => {},
+        },
+      },
+    },
+    undefined,
+    undefined,
+    options.agents,
+  );
+  const list = {
+    status: "ready",
+    channels: h.session.channels
+      .list()
+      .channels.map((channel) => ({ ...channel, ...options.channel })),
+  };
+  type Page = { people: readonly MentionRecipient[]; hasMore: boolean };
+  const reads: ((page: Page) => void)[] = [];
+  const people = vi.fn(
+    (query: string) =>
+      new Promise<Page>((resolve) => {
+        reads.push(resolve);
+        void query;
+      }),
+  );
+  h.retarget({
+    session: {
+      ...h.session,
+      channels: {
+        ...h.session.channels,
+        list: () => list,
+        ensureList: () => {},
+      },
+      directMessages: { people },
+      memberAdditions: { add: vi.fn() },
+      ...options.session,
+    } as unknown as RelaySession,
+  });
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Other Member" }],
+      [second.pubkey, { name: "Another Member" }],
+    ]),
+  );
+  return {
+    ...h,
+    people,
+    /** Answer every read made so far with `page`. */
+    release: (page: Page) =>
+      act(async () => {
+        for (const read of reads.splice(0)) read(page);
+      }),
+    chip: (name: string) =>
+      within(h.input()).queryByRole("img", {
+        name: `Resolving mention ${name}`,
+      }),
+    recipients: () =>
+      within(
+        screen.getByRole("region", { name: "Explicit mentions" }),
+      ).getAllByRole("button"),
+    /** Type `@mira`, wait for the chooser to publish, then type Space. */
+    async holdMira() {
+      await h.user.type(h.input(), "@mira");
+      await screen.findByText("Searching community…");
+      await h.user.keyboard(" ");
+      expect(h.input()).toHaveValue("@mira ");
+      expect(this.chip("mira")).toHaveAttribute("aria-busy", "true");
+    },
+  };
+}
+const mira = { pubkey: "c".repeat(64), name: "Mira Example" };
+
+/** The owner's agent in another community, as `Agents.joinable()` offers it. */
+function elsewhereAgent(agent: MentionRecipient) {
+  const snapshot = { agents: [] };
+  const types: never[] = [];
+  const joinable = [
+    { key: agent.pubkey, ...agent, relay: "wss://oss.example.com" },
+  ];
+  return {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+    find: () => undefined,
+    types: () => types,
+    joinable: () => joinable,
+    join: vi.fn(),
+  } as unknown as Agents;
+}
+
+it("returns a pending mention to prose when a member shares its name with the owner's agent from another community", async () => {
+  // The chooser counts the other community's agent as a local namesake, so
+  // Space holds a chip; the resolver must decide over the same set.
+  const h = mountDirectoryMention({
+    agents: elsewhereAgent({ pubkey: "e".repeat(64), name: "Mira" }),
+    channel: { channelType: "stream" },
+  });
+  h.setProfiles(
+    new Map([
+      [first.pubkey, { name: "Mira" }],
+      [second.pubkey, { name: "Another Member" }],
+    ]),
+  );
+  await h.user.type(h.input(), "@mira");
+  await screen.findByRole("option", { name: /In oss\.example\.com/ });
+  await h.user.keyboard(" ");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [], hasMore: false });
+  await waitFor(() => expect(h.chip("mira")).toBeNull());
+  expect(h.input()).toHaveValue("@mira ");
+  expect(
+    screen.queryByRole("region", { name: "Explicit mentions" }),
+  ).toBeNull();
+  h.submit();
+  await act(async () => {});
+  expect(h.messages.send).toHaveBeenCalledOnce();
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([]);
+});
+
+it("settles a pending mention into the owner's agent from another community that is archived here, as Tab would", async () => {
+  const rocket = { pubkey: "e".repeat(64), name: "Rocket" };
+  const archives = { status: "ready" as const, archived: [rocket.pubkey] };
+  const h = mountDirectoryMention({
+    agents: elsewhereAgent(rocket),
+    channel: { channelType: "stream" },
+    session: {
+      archives: {
+        snapshot: () => archives,
+        subscribe: () => () => {},
+        state: (key: string) =>
+          key === rocket.pubkey ? "archived" : "not-archived",
+        ensure: async () => {},
+      },
+    },
+  });
+  // A member's name still unknown keeps the chooser from deciding Space.
+  h.setProfiles(new Map([[first.pubkey, { name: "Other Member" }]]));
+  await h.user.type(h.input(), "@rocket");
+  await screen.findByRole("option", { name: /Rocket/ });
+  await h.user.keyboard(" ");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [], hasMore: false });
+  await waitFor(() => expect(h.input()).toHaveValue("@Rocket "));
+  expect(h.chip("rocket")).toBeNull();
+  expect(h.recipients()).toHaveLength(1);
+  h.submit();
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    /Bring Rocket into/,
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("extends a pending chip over the typed words that complete the one longer directory name continuing it", async () => {
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("Example hi");
+  expect(h.input()).toHaveValue("@mira Example hi");
+  // The resolver reads the page at once; the chooser unmounted with the chip.
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [mira], hasMore: false });
+  await waitFor(() => expect(h.input()).toHaveValue("@Mira Example hi"));
+  expect(h.chip("mira")).toBeNull();
+  expect(h.chip("mira Example")).toBeNull();
+  expect(h.recipients()).toHaveLength(1);
+  // The extended chip's `@` opened no query.
+  expect(screen.queryByRole("listbox")).toBeNull();
+  h.submit();
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "Mira Example is not in this channel.",
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /^(Do nothing|Send anyway)$/ }),
+  );
+  await act(async () => {});
+  expect(h.messages.send).toHaveBeenCalledOnce();
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Mira Example hi",
+    [],
+  ]);
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([mira.pubkey]);
+});
+
+it("keeps the separator typed after the words a pending chip extends over, so later text does not join the name", async () => {
+  // The page lands while the draft ends at `Example `: the remainder that
+  // spells the name is `Example`, not `Example ` (`normalizeName` trims, so
+  // both spell it), and the Space stays outside the chip.
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("Example ");
+  expect(h.input()).toHaveValue("@mira Example ");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [mira], hasMore: false });
+  await waitFor(() => expect(h.input()).toHaveValue("@Mira Example "));
+  expect(h.chip("mira")).toBeNull();
+  expect(h.recipients()).toHaveLength(1);
+  await h.user.keyboard("hi");
+  expect(h.input()).toHaveValue("@Mira Example hi");
+  expect(h.recipients()).toHaveLength(1);
+  h.submit();
+  fireEvent.click(
+    screen.getByRole("button", { name: /^(Do nothing|Send anyway)$/ }),
+  );
+  await act(async () => {});
+  expect(h.messages.send).toHaveBeenCalledOnce();
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Mira Example hi",
+    [],
+  ]);
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([mira.pubkey]);
+});
+
+it("selects a longer directory name on the Space that completes it when its page arrived before the first Space", async () => {
+  // The slow typist: a known longer name declines the first Space outright
+  // (`continuedMention`), the query stays open, and the second Space selects.
+  const h = mountDirectoryMention();
+  await h.user.type(h.input(), "@mira");
+  await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+  await h.release({ people: [mira], hasMore: false });
+  await screen.findByRole("option", { name: /Mira Example/ });
+  await h.user.keyboard(" ");
+  expect(h.input()).toHaveValue("@mira ");
+  expect(h.chip("mira")).toBeNull();
+  // The complete page for `mira` already answers every query extending it,
+  // so the name shows on each keystroke with no further read.
+  await h.user.keyboard("Example hi");
+  expect(h.input()).toHaveValue("@Mira Example hi");
+  expect(h.recipients()).toHaveLength(1);
+  expect(h.people).toHaveBeenCalledOnce();
+});
+
+it("extends a pending chip to the one longer name the typed words complete when several continue it", async () => {
+  const h = mountDirectoryMention();
+  const examples = { pubkey: "d".repeat(64), name: "Mira Examples" };
+  await h.holdMira();
+  await h.user.keyboard("Examples hi");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [mira, examples], hasMore: false });
+  await waitFor(() => expect(h.input()).toHaveValue("@Mira Examples hi"));
+  expect(h.recipients()).toHaveLength(1);
+  h.submit();
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "Mira Examples is not in this channel.",
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /^(Do nothing|Send anyway)$/ }),
+  );
+  await act(async () => {});
+  expect(h.messages.send).toHaveBeenCalledOnce();
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([examples.pubkey]);
+});
+
+it("returns the whole span to prose when the name a chip extended into is itself continued by a name the words do not complete", async () => {
+  // `Mira Example Jr` continues `Mira Example` as that continued `mira`: the
+  // chip extends once, the second resolution answers `continued` again over
+  // the same page, and ` hi` completes nothing, so what was typed comes back.
+  const h = mountDirectoryMention();
+  const junior = { pubkey: "d".repeat(64), name: "Mira Example Jr" };
+  await h.holdMira();
+  await h.user.keyboard("Example hi");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [mira, junior], hasMore: false });
+  await waitFor(() => expect(h.chip("mira")).toBeNull());
+  expect(h.chip("mira Example")).toBeNull();
+  expect(h.input()).toHaveValue("@mira Example hi");
+  expect(h.input().querySelector("[data-source]")).toBeNull();
+  expect(
+    screen.queryByRole("region", { name: "Explicit mentions" }),
+  ).toBeNull();
+  h.submit();
+  expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+    "channel",
+    "@mira Example hi",
+    [],
+    [],
+  );
+});
+
+it.each([
+  { case: "stop mid-name", typed: "Exam", text: "@mira Exam" },
+  {
+    case: "complete no longer name",
+    typed: "Other hi",
+    text: "@mira Other hi",
+  },
+])(
+  "returns a pending chip to prose when the words typed after it $case",
+  async ({ typed, text }) => {
+    const h = mountDirectoryMention();
+    await h.holdMira();
+    await h.user.keyboard(typed);
+    await waitFor(() => expect(h.people).toHaveBeenCalled());
+    await h.release({ people: [mira], hasMore: false });
+    await waitFor(() => expect(h.chip("mira")).toBeNull());
+    expect(h.input()).toHaveValue(text);
+    expect(h.input().querySelector("[data-source]")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+  },
+);
+
+it("selects a longer directory name on the Space that completes it after its page returned a pending chip to prose mid-word", async () => {
+  // The page lands while the longer name is still being typed: the chip
+  // returns to text, the chooser reopens over `mira Exam`, and the complete
+  // page for `mira` already answers that query, so the name shows at once
+  // and the Space after `ple` selects it without another read.
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("Exam");
+  await waitFor(() => expect(h.people).toHaveBeenCalledOnce());
+  await h.release({ people: [mira], hasMore: false });
+  await waitFor(() => expect(h.input()).toHaveValue("@mira Exam"));
+  expect(
+    within(h.input()).queryByRole("img", { name: /^Resolving mention / }),
+  ).toBeNull();
+  await screen.findByRole("option", { name: /Mira Example/ });
+  expect(screen.queryByText("Searching community…")).toBeNull();
+  await h.user.keyboard("ple ");
+  expect(h.input()).toHaveValue("@Mira Example ");
+  expect(h.recipients()).toHaveLength(1);
+  expect(h.people).toHaveBeenCalledOnce();
+  await h.user.keyboard("hi");
+  h.submit();
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "Mira Example is not in this channel.",
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /^(Do nothing|Send anyway)$/ }),
+  );
+  await act(async () => {});
+  expect(h.messages.send).toHaveBeenCalledOnce();
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Mira Example hi",
+    [],
+  ]);
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([mira.pubkey]);
+});
+
+it("selects a longer directory name on the Space that completes it after its page returned a pending chip to prose before the next word", async () => {
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await waitFor(() => expect(h.people).toHaveBeenCalledOnce());
+  await h.release({ people: [mira], hasMore: false });
+  await waitFor(() => expect(h.chip("mira")).toBeNull());
+  expect(h.input()).toHaveValue("@mira ");
+  // `mira ` is admitted again: the page for `mira` names what continues it.
+  await screen.findByRole("option", { name: /Mira Example/ });
+  expect(screen.queryByText("Searching community…")).toBeNull();
+  await h.user.keyboard("Example ");
+  expect(h.input()).toHaveValue("@Mira Example ");
+  expect(h.recipients()).toHaveLength(1);
+  expect(h.people).toHaveBeenCalledOnce();
+});
+
+it("returns a pending chip to prose when the typed words changed under a composition before it could extend", async () => {
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("Example hi");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  act(() => fireEvent.compositionStart(h.input()));
+  await h.release({ people: [mira], hasMore: false });
+  // The extension is held until the composition ends.
+  expect(h.chip("mira")).toHaveAttribute("aria-busy", "true");
+  const after = h.input().querySelector("[data-source]")?.nextSibling;
+  if (!(after instanceof Text)) throw new Error("No text after the chip");
+  await act(async () => {
+    // The IME commits a different word and ends the composition in one task.
+    after.nodeValue = " Exemplar hi";
+    fireEvent.compositionEnd(h.input());
+  });
+  await waitFor(() => expect(h.chip("mira")).toBeNull());
+  expect(h.input()).toHaveValue("@mira Exemplar hi");
+  expect(h.input().querySelector("[data-source]")).toBeNull();
+  expect(
+    screen.queryByRole("region", { name: "Explicit mentions" }),
+  ).toBeNull();
+});
+
+it("a send while a chip is pending waits through its extension, then asks about the outside recipient", async () => {
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("Example hi");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  h.submit();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled(),
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  await h.release({ people: [mira], hasMore: false });
+  await waitFor(() =>
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Mira Example is not in this channel.",
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /^(Do nothing|Send anyway)$/ }),
+  );
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+    "channel",
+    "@Mira Example hi",
+    [],
+  ]);
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([mira.pubkey]);
+});
+
+it("a send while a chip is pending says its name could not be confirmed when the search finds namesakes", async () => {
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("hi");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  h.submit();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled(),
+  );
+  await h.release({
+    people: [
+      { pubkey: "c".repeat(64), name: "Mira" },
+      { pubkey: "d".repeat(64), name: "Mira" },
+    ],
+    hasMore: false,
+  });
+  // Two people answer to the name, so neither is tagged, and the notice does
+  // not claim the name matched no one.
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "@mira could not be confirmed as one person or agent. Send again to send it as text.",
+    ),
+  );
+  expect(h.chip("mira")).toBeNull();
+  expect(h.input()).toHaveValue("@mira hi");
+  expect(h.messages.send).not.toHaveBeenCalled();
+});
+
+it("returns a chip to prose at the resolver's bound when the longer name it extended into never settles, and keeps the draft for a second send", async () => {
+  // A scripted provider whose chained resolve does I/O that never answers:
+  // the host holds it to the bound the first resolution gets.
+  const h = mountPendingMention();
+  const outcome = deferred<CompletionResolution>();
+  const chained = vi.fn<CompletionPending["resolve"]>(
+    () => new Promise<never>(() => {}),
+  );
+  expect(h.hold("mira", outcome.promise)).toBe(false);
+  await h.user.keyboard("Example hi");
+  expect(h.input()).toHaveValue("@mira Example hi");
+  h.submit();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled(),
+  );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await act(async () =>
+      outcome.resolve({
+        continued: [{ name: "Mira Example", resolve: chained }],
+      }),
+    );
+    expect(h.chip("mira Example")).toHaveAttribute("aria-busy", "true");
+    expect(chained).toHaveBeenCalledOnce();
+    expect(h.messages.send).not.toHaveBeenCalled();
+    await act(async () =>
+      vi.advanceTimersByTime(MENTION_RESOLVE_TIMEOUT_MS - 1),
+    );
+    expect(h.chip("mira Example")).toHaveAttribute("aria-busy", "true");
+    expect(h.messages.send).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(1));
+    // The chip returned to prose; the waiting send keeps the draft and says
+    // which name it is, under the name the chip had when it settled.
+    expect(h.chip("mira Example")).toBeNull();
+    expect(h.messages.send).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "@mira Example could not be confirmed as one person or agent. Send again to send it as text.",
+    );
+    expect(h.input()).toHaveValue("@mira Example hi");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  } finally {
+    vi.useRealTimers();
+  }
+  h.submit();
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "@mira Example hi",
+      [],
+      [],
+    ),
+  );
+  expect(h.input()).toHaveValue("");
+});
+
+it("returns a chip to prose at the bound when a provider's first resolution never settles, and keeps the draft for a second send", async () => {
+  // The contract does not ask a provider to time its resolution; the host
+  // holds the first link to the same bound as each longer name.
+  const h = mountPendingMention();
+  // The bound starts with the resolution, so the clock is faked before Space.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    expect(h.hold("mira", new Promise<never>(() => {}))).toBe(false);
+    expect(h.resolve).toHaveBeenCalledOnce();
+    const signal = h.resolve.mock.calls[0]?.[0];
+    // Whether the chip was still pending when the provider was told to stop:
+    // the bound aborts it, not the chip leaving the draft afterwards.
+    let pendingAtAbort: boolean | undefined;
+    signal?.addEventListener("abort", () => {
+      pendingAtAbort = h.chip("mira") !== null;
+    });
+    expect(h.chip("mira")).toHaveAttribute("aria-busy", "true");
+    await act(async () => h.submit());
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    await act(async () =>
+      vi.advanceTimersByTime(MENTION_RESOLVE_TIMEOUT_MS - 1),
+    );
+    expect(h.chip("mira")).toHaveAttribute("aria-busy", "true");
+    expect(signal?.aborted).toBe(false);
+    expect(h.messages.send).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(1));
+    // The bound told the provider's in-flight work to stop, the chip returned
+    // to prose, and the waiting send kept the draft with a notice.
+    expect(pendingAtAbort).toBe(true);
+    expect(h.chip("mira")).toBeNull();
+    expect(h.messages.send).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "@mira could not be confirmed as one person or agent. Send again to send it as text.",
+    );
+    expect(h.input()).toHaveValue("@mira ");
+  } finally {
+    vi.useRealTimers();
+  }
+  h.submit();
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "@mira ",
+      [],
+      [],
+    ),
+  );
+  expect(h.input()).toHaveValue("");
+});
+
+it("removing a pending chip before the bound aborts the provider's signal and leaves no bound timer behind", async () => {
+  // A provider that ignores abort must not keep the host's 8 s timer alive
+  // after the chip left: the bound is cleared with the chip's signal.
+  const h = mountPendingMention();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const timers = vi.getTimerCount();
+    expect(h.hold("honey", new Promise<never>(() => {}))).toBe(false);
+    const signal = h.resolve.mock.calls[0]?.[0];
+    expect(signal?.aborted).toBe(false);
+    // Typing leaves the editor a short timer of its own; past it, the bound
+    // is the one timer the chip added.
+    act(() => vi.advanceTimersByTime(100));
+    expect(vi.getTimerCount()).toBe(timers + 1);
+    act(() => h.input().undo(false));
+    expect(h.input()).toHaveValue("@honey");
+    expect(h.chip("honey")).toBeNull();
+    expect(signal?.aborted).toBe(true);
+    // The undo leaves the editor's short timer again; past it, nothing: the
+    // bound went with the chip's signal rather than running on to 8 s.
+    act(() => vi.advanceTimersByTime(100));
+    expect(vi.getTimerCount()).toBe(timers);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("undo after an extended chip settled first removes the words typed after it, then leaves the typed `@mira`", async () => {
+  const h = mountDirectoryMention();
+  await h.holdMira();
+  await h.user.keyboard("Example hi");
+  await waitFor(() => expect(h.people).toHaveBeenCalled());
+  await h.release({ people: [mira], hasMore: false });
+  await waitFor(() => expect(h.input()).toHaveValue("@Mira Example hi"));
+  act(() => h.input().undo(false));
+  expect(h.input()).toHaveValue("@Mira Example");
+  expect(h.recipients()).toHaveLength(1);
+  act(() => h.input().undo(false));
+  expect(h.input()).toHaveValue("@mira");
+  expect(h.chip("mira")).toBeNull();
+  expect(
+    screen.queryByRole("region", { name: "Explicit mentions" }),
+  ).toBeNull();
+});
+
+it("returns a pending mention to prose when its recipient is not admitted at settle", async () => {
+  const h = mountPendingMention();
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    h.hold("eve", outcome.promise);
+    // The destination became a Solo chat meanwhile: outsiders are not admitted.
+    Object.assign(h.session, {
+      channels: { list: () => soloList, subscribeList: () => () => {} },
+    });
+    await act(async () =>
+      outcome.resolve({ pubkey: "e".repeat(64), name: "Eve" }),
+    );
+    expect(h.input()).toHaveValue("@eve ");
+    expect(h.chip("eve")).toBeNull();
+    expect(h.input().querySelector("[data-source]")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+it("returns a pending mention to prose when its resolution is not a well-formed recipient", async () => {
+  // The resolution is a provider's answer: the same shape check a picked
+  // mention gets, so a name-less object never becomes an `@undefined` chip.
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", outcome.promise);
+    await act(async () =>
+      outcome.resolve({
+        pubkey: first.pubkey,
+        name: undefined,
+      } as unknown as MentionRecipient),
+    );
+    expect(h.input()).toHaveValue("@honey ");
+    expect(h.chip("honey")).toBeNull();
+    expect(h.input().querySelector("[data-source]")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+/** `@honey ` held, Send pressed while it is pending. */
+async function sendWhilePending(
+  options: Partial<MessageComposerProps> = {},
+  prepare?: (h: ReturnType<typeof mountPendingMention>) => void,
+) {
+  const h = mountPendingMention(options);
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const outcome = deferred<MentionRecipient | null>();
+  h.hold("honey", outcome.promise);
+  prepare?.(h);
+  h.submit();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled(),
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  return { ...h, outcome };
+}
+
+it("sending while a mention is pending waits for it, then sends the recipient", async () => {
+  const h = await sendWhilePending();
+  await act(async () => h.outcome.resolve(first));
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "@Honey ",
+      [first.pubkey],
+      [],
+    ),
+  );
+});
+
+it("sending while a mention is pending keeps the draft when it returns to prose, and the next send sends the text", async () => {
+  const h = await sendWhilePending();
+  await act(async () => h.outcome.resolve(null));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "@honey could not be confirmed as one person or agent. Send again to send it as text.",
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("@honey ");
+  expect(h.chip("honey")).toBeNull();
+  expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  h.submit();
+  await waitFor(() =>
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "@honey ",
+      [],
+      [],
+    ),
+  );
+  expect(h.input()).toHaveValue("");
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// The resolver found a recipient, but the host would not tag it: the alert
+// says why, not that the name matched no one.
+it.each([
+  {
+    refusal: "32 recipients are already tagged",
+    resolution: first,
+    prepare: (h: ReturnType<typeof mountPendingMention>) =>
+      act(() => {
+        h.input().insertText(
+          "",
+          Array.from({ length: 32 }, () => second),
+        );
+      }),
+    alert:
+      "@honey could not be tagged: a message can tag at most 32 recipients. Send again to send it as text.",
+  },
+  {
+    refusal: "the recipient is not admitted here",
+    resolution: { pubkey: "e".repeat(64), name: "Eve" },
+    // The destination became a Solo chat meanwhile: outsiders are not admitted.
+    prepare: (h: ReturnType<typeof mountPendingMention>) =>
+      Object.assign(h.session, {
+        channels: { list: () => soloList, subscribeList: () => () => {} },
+      }),
+    alert: "@honey could not be tagged here. Send again to send it as text.",
+  },
+  {
+    refusal: "its current name would overrun the length limit",
+    resolution: { pubkey: first.pubkey, name: "H".repeat(16000) },
+    prepare: undefined,
+    alert:
+      "@honey could not be tagged: the message would be too long. Send again to send it as text.",
+  },
+])(
+  "sending while a mention is pending says why when it resolves but $refusal",
+  async ({ resolution, prepare, alert }) => {
+    const h = await sendWhilePending({}, prepare);
+    await act(async () => h.outcome.resolve(resolution));
+    expect(screen.getByRole("alert")).toHaveTextContent(alert);
+    expect(h.messages.send).not.toHaveBeenCalled();
+    expect(h.input().value).toMatch(/^@honey /);
+    expect(h.chip("honey")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  },
+);
+
+it("sending while two mentions are pending says why each was not tagged", async () => {
+  const h = mountPendingMention();
+  const unmatched = deferred<MentionRecipient | null>();
+  const long = deferred<MentionRecipient | null>();
+  h.hold("honey", unmatched.promise);
+  act(() => {
+    h.input().insertText("@eve");
+  });
+  h.resolve.mockImplementation(() => long.promise);
+  act(() => {
+    h.publish()({
+      items: [],
+      spacePending: { name: "eve", resolve: h.resolve },
+    });
+  });
+  fireEvent.keyDown(h.input(), { key: " " });
+  expect(h.chip("eve")).not.toBeNull();
+  h.submit();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled(),
+  );
+  await act(async () => {
+    unmatched.resolve(null);
+    long.resolve({ pubkey: first.pubkey, name: "H".repeat(16000) });
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "@honey could not be confirmed as one person or agent. @eve could not be tagged: the message would be too long. Send again to send them as text.",
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("@honey @eve ");
+});
+
+it("sending while a mention is pending asks for a recipient when it returns to prose and one is required", async () => {
+  const h = await sendWhilePending({ requireMention: true });
+  await act(async () => h.outcome.resolve(null));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "@honey could not be confirmed as one person or agent. Tag a person or agent to send.",
+  );
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue("@honey ");
+  // Untagged: Send stays focusable so its tooltip can say why.
+  expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+it("asks about a settled outside agent before sending, like a chosen one", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey", isAgent: true }]]));
+  const list = {
+    status: "ready",
+    channels: [
+      { id: "channel", channelType: "stream", members: ["d".repeat(64)] },
+    ],
+  };
+  Object.assign(h.session, {
+    viewer: "d".repeat(64),
+    channels: { list: () => list, subscribeList: () => () => {} },
+    memberAdditions: { add: vi.fn() },
+  });
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", outcome.promise);
+    await act(async () => outcome.resolve(first));
+    expect(h.input()).toHaveValue("@Honey ");
+    h.submit();
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Honey is not in this channel. Invite them to the channel, or send without inviting them.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Do nothing" }));
+    await act(async () => {});
+    expect(h.messages.send).toHaveBeenCalledOnce();
+    expect(h.messages.send.mock.calls[0]?.slice(0, 3)).toEqual([
+      "channel",
+      "@Honey ",
+      [],
+    ]);
+    expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual([first.pubkey]);
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+it("keeps the resolver of a chip removed as its resolution landed, so redo settles it", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const landed = deferred<MentionRecipient | null>();
+  const restarted = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", landed.promise);
+    // The resolution lands in the same tick as the undo removing its chip,
+    // before the commit whose effect would have aborted it: nothing to settle.
+    await act(async () => {
+      landed.resolve(first);
+      h.input().undo(false);
+    });
+    expect(h.input()).toHaveValue("@honey");
+    expect(h.resolve).toHaveBeenCalledOnce();
+    h.resolve.mockImplementation(() => restarted.promise);
+    act(() => h.input().undo(true));
+    expect(h.input()).toHaveValue("@honey ");
+    expect(h.chip("honey")).toBeInTheDocument();
+    expect(h.resolve).toHaveBeenCalledTimes(2);
+    await act(async () => restarted.resolve(first));
+    expect(h.input()).toHaveValue("@Honey ");
+    expect(h.chip("honey")).toBeNull();
+  } finally {
+    landed.resolve(null);
+    restarted.resolve(null);
+  }
+});
+
+it("holds Space as pending when the publication withdrew the displayed exact match as undecided", async () => {
+  const h = mountPendingMention();
+  const outcome = deferred<MentionRecipient | null>();
+  h.resolve.mockImplementation(() => outcome.promise);
+  try {
+    h.fill("@honey");
+    const publish = h.publish();
+    act(() => {
+      publish({
+        items: [{ id: first.pubkey, label: "Honey", edit: { mention: first } }],
+        spaceId: first.pubkey,
+      });
+    });
+    expect(screen.getByRole("option", { name: "Honey" })).toBeVisible();
+    act(() => {
+      // The display is not overruled by another recipient; the decision is
+      // deferred to the resolver under the full rule.
+      publish({
+        items: [],
+        spacePending: { name: "honey", resolve: h.resolve },
+      });
+      expect(fireEvent.keyDown(h.input(), { key: " " })).toBe(false);
+    });
+    expect(h.input()).toHaveValue("@honey ");
+    expect(h.chip("honey")).toHaveAttribute("aria-busy", "true");
+    expect(h.resolve).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+    await act(async () => outcome.resolve(first));
+    expect(h.input()).toHaveValue("@Honey ");
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+it("waits for a settle held through a composition before sending, then sends and remembers the recipient", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", outcome.promise);
+    act(() => fireEvent.compositionStart(h.input()));
+    await act(async () => outcome.resolve(first));
+    expect(h.chip("honey")).toHaveAttribute("aria-busy", "true");
+    // Send clicked under the composition: Mac WebKit leaves focus in the
+    // editor, so the IME has not committed and the chip is still pending.
+    h.submit();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Send message" }),
+      ).toBeDisabled(),
+    );
+    expect(h.messages.send).not.toHaveBeenCalled();
+    await act(async () => fireEvent.compositionEnd(h.input()));
+    await waitFor(() =>
+      expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+        "channel",
+        "@Honey ",
+        [first.pubkey],
+        [],
+      ),
+    );
+    expect([...(mentionHistory(h.session, "channel")?.keys() ?? [])]).toContain(
+      first.pubkey,
+    );
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+it("settles a resolution landing after the composition ended under a send, and sends the recipient", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", outcome.promise);
+    act(() => fireEvent.compositionStart(h.input()));
+    h.submit();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Send message" }),
+      ).toBeDisabled(),
+    );
+    // The IME commits while the send has the editor read-only: ProseMirror
+    // skips its own compositionend there and keeps its `composing` flag, so
+    // only the React flag says the composition is over. The resolution lands
+    // after that, and nothing else will come to replay a held settle.
+    await act(async () => fireEvent.compositionEnd(h.input()));
+    expect(h.chip("honey")).toHaveAttribute("aria-busy", "true");
+    expect(h.messages.send).not.toHaveBeenCalled();
+    await act(async () => outcome.resolve(first));
+    await waitFor(() =>
+      expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+        "channel",
+        "@Honey ",
+        [first.pubkey],
+        [],
+      ),
+    );
+    expect(h.chip("honey")).toBeNull();
+  } finally {
+    outcome.resolve(null);
+  }
+});
+
+it("keeps the resolver of a chip gone when its held settle replays, and settles nothing", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const held = deferred<MentionRecipient | null>();
+  const restarted = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", held.promise);
+    act(() => fireEvent.compositionStart(h.input()));
+    await act(async () => held.resolve(first));
+    expect(h.chip("honey")).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      h.input().querySelector("[data-source]")?.remove();
+    });
+    expect(h.chip("honey")).toBeNull();
+    h.resolve.mockImplementation(() => restarted.promise);
+    await act(async () => fireEvent.compositionEnd(h.input()));
+    expect(h.input().querySelector("[data-source]")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+    expect(h.resolve).toHaveBeenCalledOnce();
+    // Undo restores the chip under the same id, and its kept resolver starts again.
+    act(() => h.input().undo(false));
+    expect(h.chip("honey")).toBeInTheDocument();
+    expect(h.resolve).toHaveBeenCalledTimes(2);
+    await act(async () => restarted.resolve(first));
+    expect(h.input()).toHaveValue("@Honey ");
+    expect(h.chip("honey")).toBeNull();
+  } finally {
+    held.resolve(null);
+    restarted.resolve(null);
+  }
+});
+
+it("returns a pending chip to its typed query when a name character follows it, so its resolution tags no one", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const outcome = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", outcome.promise);
+    const signal = h.resolve.mock.calls[0]?.[0];
+    const queries = h.queries();
+    await h.user.keyboard("{Backspace}suckle");
+    expect(h.input()).toHaveValue("@honeysuckle");
+    expect(h.chip("honey")).toBeNull();
+    expect(h.input().querySelector("[data-source]")).toBeNull();
+    expect(signal?.aborted).toBe(true);
+    // The chooser reopens over the whole word.
+    expect(h.queries()).toBeGreaterThan(queries);
+    await act(async () => outcome.resolve(first));
+    expect(h.input()).toHaveValue("@honeysuckle");
+    expect(
+      screen.queryByRole("region", { name: "Explicit mentions" }),
+    ).toBeNull();
+    h.submit();
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "@honeysuckle",
+      [],
+      [],
+    );
+  } finally {
+    outcome.resolve(null);
+  }
+});
+it("removing a pending chip abandons its resolution, and redo starts it again", async () => {
+  const h = mountPendingMention();
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey" }]]));
+  const abandoned = deferred<MentionRecipient | null>();
+  const restarted = deferred<MentionRecipient | null>();
+  try {
+    h.hold("honey", abandoned.promise);
+    const signal = h.resolve.mock.calls[0]?.[0];
+    act(() => h.input().undo(false));
+    expect(h.input()).toHaveValue("@honey");
+    expect(signal?.aborted).toBe(true);
+    h.resolve.mockImplementation(() => restarted.promise);
+    act(() => h.input().undo(true));
+    expect(h.input()).toHaveValue("@honey ");
+    expect(h.chip("honey")).toBeInTheDocument();
+    expect(h.resolve).toHaveBeenCalledTimes(2);
+    expect(h.resolve.mock.calls[1]?.[0]?.aborted).toBe(false);
+    // The abandoned resolution settling late changes nothing.
+    await act(async () => abandoned.resolve(second));
+    expect(h.input()).toHaveValue("@honey ");
+    expect(h.chip("honey")).toBeInTheDocument();
+    await act(async () => restarted.resolve(first));
+    expect(h.input()).toHaveValue("@Honey ");
+    expect(h.chip("honey")).toBeNull();
+  } finally {
+    abandoned.resolve(null);
+    restarted.resolve(null);
+  }
 });

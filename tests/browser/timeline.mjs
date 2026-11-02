@@ -226,12 +226,4 @@ export async function hoverRow(page, locator, scroller = history(page)) {
   const box = await locator.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 }
-// Activate a timeline control by keyboard when the test is about the action,
-// not pointer hit testing. Opening a thread narrows the timeline, and its
-// re-pin can scroll after any idle check. A click released inside Virtua's
-// pointer hold reaches the scroller instead of the control.
-export async function activate(control) {
-  await control.focus();
-  await expect(control).toBeFocused();
-  await control.press("Enter");
-}
+export { activate } from "./navigation.mjs";

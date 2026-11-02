@@ -692,11 +692,7 @@ test("the published-activity tab shows turns its agent published", async ({
     .getByRole("button", { name: /^Activity: .+ working$/ })
     .hover();
   const popup = page.getByRole("dialog", { name: "Working now", exact: true });
-  await popup
-    .getByRole("button", {
-      name: /^Open (?:thread|conversation) for Local tester/,
-    })
-    .hover();
+  // The channel is already shown, so the agent's row opens its activity.
   await popup
     .getByRole("button", { name: /^View .*Local tester.* activity$/ })
     .click();

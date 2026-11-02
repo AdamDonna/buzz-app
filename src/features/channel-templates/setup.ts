@@ -304,6 +304,17 @@ export function createChannelSetup({
             create(p.id, p.input, active),
           );
           await delivered(id);
+          // Place before the row first lists, so it renders in its destination
+          // and the creation reveal targets that entry.
+          const setup = p.input.setup;
+          const placement = setup?.starred
+            ? star(p.id)
+            : setup?.groupId
+              ? place(p.id, setup.groupId)
+              : undefined;
+          // Observed after admission. If admission fails its result is dropped,
+          // but the delivered channel still lists in its destination.
+          placement?.catch(() => {});
           await refresh(p.id, viewer, p.input);
           p.created = true;
           pending = undefined;
@@ -312,11 +323,9 @@ export function createChannelSetup({
           // A subsequent storage/setup failure belongs to its completion notice.
           opened(p.id);
           await persist();
-          const setup = p.input.setup;
           let placementError: unknown;
           try {
-            if (setup?.starred) await star(p.id);
-            else if (setup?.groupId) await place(p.id, setup.groupId);
+            await placement;
           } catch (error) {
             placementError = error;
           }

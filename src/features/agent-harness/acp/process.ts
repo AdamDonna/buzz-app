@@ -3,6 +3,7 @@
 // HTTP MCP server for its agent's Buzz tools, which the app serves and
 // answers: the harness is given its address and token in `session/new`, never
 // a Buzz key. What a harness adds to plain ACP comes from its `AcpHooks`.
+import { isFinalMessage, MESSAGE_TOOLS } from "../../../buzz-mcp/session-tools";
 import type { HostMcpServer, HostProcess } from "../../host/service";
 import { AcpSession, type ConfigOptions } from "./session";
 import { allow, errorMessage } from "./steps";
@@ -17,7 +18,7 @@ import type {
 
 /** The Buzz tools that answer where people see it. A read, or a send that
  * failed, still leaves the harness's text to post. */
-const ANSWERS = new Set(["send", "edit", "react"]);
+const ANSWERS = new Set<string>([...MESSAGE_TOOLS, "edit", "react"]);
 const STOPPED =
   "Buzz stopped this session's tools: another program used their token";
 
@@ -459,7 +460,7 @@ export class AcpProcess {
     return this.write(reply).catch(() => undefined);
   }
   /** One MCP message for a session's Buzz tools, answered with its JSON-RPC
-   * response; a notification gets none. A final `send` that succeeded ends
+   * response; a notification gets none. A final message that succeeded ends
    * its turn. The host answers a throw with an internal error. */
   private async mcp(
     tools: ToolServer,
@@ -482,7 +483,7 @@ export class AcpProcess {
       !response.error &&
       !(response.result as { isError?: unknown } | undefined)?.isError;
     if (worked && ANSWERS.has(String(call.name))) session?.answered();
-    if (worked && call.name === "send" && call.arguments?.final === true)
+    if (worked && isFinalMessage(call.name, call.arguments))
       session?.finished();
     return response;
   }

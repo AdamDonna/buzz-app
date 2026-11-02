@@ -205,6 +205,28 @@ it("replaces the last opened tab unless asked to keep it", () => {
   expect(page.openers.size).toBe(1);
 });
 
+it("gives each conversation tab its sidebar icon", () => {
+  const page = fixture();
+  expect(page.open({ channelId: "beta" })).toBe(true);
+  expect(page.open({ channelId: "dm" }, { keep: true })).toBe(true);
+  const list = screen
+    .getAllByRole("tablist")
+    .find((item) => item.getAttribute("aria-label") !== "Switchboard tabs");
+  expect(
+    within(list as HTMLElement)
+      .getAllByRole("tab")
+      .map(
+        (tab) =>
+          `${
+            tab
+              .querySelector("svg")
+              ?.getAttribute("class")
+              ?.match(/tabler-icon-[\w-]+/)?.[0]
+          } ${tab.textContent}`,
+      ),
+  ).toEqual(["tabler-icon-hash beta", "tabler-icon-message-circle Alice"]);
+});
+
 it("opens a thread moved to the main pane where it is", () => {
   const page = fixture();
   expect(page.open({ channelId: "alpha", threadId: "root" })).toBe(true);

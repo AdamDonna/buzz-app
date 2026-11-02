@@ -1,3 +1,4 @@
+import { pauseClock } from "./clock.mjs";
 import { test, expect } from "./source-fixture.mjs";
 
 // Real grid/flex sizing decides whether the slug truncates; jsdom cannot measure it.
@@ -177,7 +178,7 @@ test("settings footer opens and closes gradually without moving editing focus", 
     }
     await expect(field).toBeFocused();
   };
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await pauseClock(page, 1000);
   await sample();
   await field.pressSequentially("x");
   await page.clock.runFor(400);
@@ -205,7 +206,7 @@ test("settings footer opens and closes gradually without moving editing focus", 
   ).toBeGreaterThan(0);
   await page.clock.resume();
   await save.click({ trial: true });
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await pauseClock(page, 1000);
   await sample();
   await field.fill("");
   await page.clock.runFor(400);
@@ -629,10 +630,9 @@ test("owner profile keeps its pane and caret stable during inline name editing",
     .poll(async () => (await profile.boundingBox()).width)
     .toBe(originalWidth);
 
-  await page.getByRole("tab", { name: "Settings", exact: true }).click();
-  await expect(
-    profile.getByRole("switch", { name: "Attention on this device" }),
-  ).toBeVisible();
+  const settings = page.getByRole("tab", { name: "Settings", exact: true });
+  await settings.click();
+  await expect(settings).toHaveAttribute("aria-selected", "true");
   const before = await profile.boundingBox();
   await page.screenshot({ path: info.outputPath("agent-profile.png") });
   await profile.getByRole("button", { name: "Agent profile actions" }).click();

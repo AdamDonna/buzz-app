@@ -537,3 +537,40 @@ it("a create that never arrives backs off, then ends the start once the relay sh
     h.session.channels.list().channels.some((channel) => channel.id === id),
   ).toBe(false);
 });
+
+it("lists a labeled region start only with the same labels as its single create", async () => {
+  const id = "66666666-6666-4666-8666-666666666666";
+  const h = setup(id);
+  await h.established();
+  const region = "buzz.region:example:work";
+  const start = h.session.channelWrites.start(
+    id,
+    "Start",
+    [],
+    undefined,
+    true,
+    undefined,
+    { labels: [region] },
+  );
+  const pending = h.session.channels
+    .list()
+    .channels.find((channel) => channel.id === id);
+  expect(pending).toMatchObject({
+    pending: true,
+    channelType: "solo",
+    labels: [SOLO_LABEL, "buzz.session.named", region],
+  });
+  try {
+    await vi.waitFor(() => expect(h.publish).toHaveBeenCalled());
+    expect(
+      h.publish.mock.calls[0]?.[0].tags.filter(([tag]) => tag === "t"),
+    ).toEqual([
+      ["t", SOLO_LABEL],
+      ["t", "buzz.session.named"],
+      ["t", region],
+    ]);
+  } finally {
+    h.release();
+  }
+  await start.ready;
+});

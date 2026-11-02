@@ -17,10 +17,7 @@ import {
 } from "../../shared/design-system/ui/Menu";
 import type { ChannelSummary, Profile } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
-import {
-  ChatCircleIcon,
-  ClockIcon,
-} from "../../shared/design-system/icons/index";
+import { ClockIcon } from "../../shared/design-system/icons/index";
 import { channelIcon } from "../../features/channels/channel-icon";
 import { ChannelActivityPopover } from "./ChannelActivityPopover";
 import { channelDurationLabel } from "./ChannelDurationField";
@@ -159,8 +156,7 @@ function ChannelSidebarItemCore({
   useLayoutEffect(() => {
     if (menuContent !== undefined) lastMenuContent.current = menuContent;
   }, [menuContent]);
-  const Icon =
-    channel.channelType === "dm" ? ChatCircleIcon : channelIcon(channel);
+  const Icon = channelIcon(channel);
   const row = (
     <ChannelSidebarRow
       channel={channel}

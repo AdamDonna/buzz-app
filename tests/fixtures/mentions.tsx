@@ -5,6 +5,7 @@ import { StrictMode, useState, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { finalizeEvent } from "nostr-tools";
 import { Context } from "@deepseek-ai/cordis";
+import { emptySync } from "../../src/features/communities/known-communities";
 import { createPluginManager } from "../../src/plugins/manager";
 import { PagesService } from "../../src/features/pages/service";
 import { PanelsService } from "../../src/features/panels/service";
@@ -369,6 +370,17 @@ if (channels) {
   provideNavigation(context);
   // Channels requires Agents for its page/settings, neither mounted here.
   context.provide("agents", {});
+  context.provide("communityReader", {
+    subscribe: () => () => {},
+    snapshot: () => ({
+      status: "unavailable",
+      relayAvailable: false,
+      profile: { name: "", picture: "" },
+      memberships: [],
+      selected: null,
+      sync: emptySync(),
+    }),
+  });
   // Only the composer is mounted; the Channels page never consumes this service.
   context.provide("relay", {
     snapshot: () => ({ session: namedSession }),

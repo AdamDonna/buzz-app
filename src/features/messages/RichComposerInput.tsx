@@ -4,7 +4,7 @@ import { useContext, type ReactNode } from "react";
 import { DraftMentionRoster } from "./draft-mention-roster";
 import { archivedMention } from "./mention-admission";
 import { useLayoutEffect, useMemo, useRef } from "react";
-import { useIdentityNames } from "../identity-names/react";
+import { useNamesRevision } from "../identity-names/react";
 import { useListedChannel } from "../relay/listed-channel";
 import { InlineChip } from "../../shared/design-system/ui/InlineChip";
 import type { ConversationExtensions } from "../conversation/contracts";
@@ -47,44 +47,65 @@ export function RichComposerInput({
     channelId,
     (channel) => channel?.members,
   );
-  useMentionArchives(session);
-  const roster = useContext(DraftMentionRoster);
-  const profiles = new Map(directory.profiles);
-  for (const recipient of draft.recipients)
-    profiles.set(recipient.pubkey, {
-      ...profiles.get(recipient.pubkey),
-      name: recipient.name,
-    });
-  const resolveName = useIdentityNames(session.names);
-  // Chips name selections among the people who read this destination. Draft
-  // recipients stay in even when archived, so their chips keep a name.
-  const candidates = [
-    ...new Set([
-      ...(roster?.map((p) => p.pubkey) ?? members ?? []).filter(
-        (pubkey) => !archivedMention(session, pubkey),
+  const archives = useMentionArchives(session);
+  const roster = useContext(DraftMentionRoster)?.recipients;
+  // Recipients, not keystrokes, change chip names: typing prose must not
+  // copy every profile or scan every member of a large channel.
+  const recipientKey = JSON.stringify(
+    draft.recipients.map(({ pubkey, name }) => [pubkey, name]),
+  );
+  // Chip labels and facts come from names.lookup.
+  const names = useNamesRevision(session.names, recipientKey !== "[]");
+  const { profiles, qualifiers, labels } = useMemo(() => {
+    void archives;
+    void names;
+    const recipients = JSON.parse(recipientKey) as [string, string][];
+    const profiles = new Map(directory.profiles);
+    for (const [pubkey, name] of recipients)
+      profiles.set(pubkey, { ...profiles.get(pubkey), name });
+    if (!recipients.length)
+      return {
+        profiles,
+        qualifiers: new Map<string, string | undefined>(),
+        labels: new Map<string, string>(),
+      };
+    // Chips name selections among the people who read this destination. Draft
+    // recipients stay in even when archived, so their chips keep a name.
+    const candidates = [
+      ...new Set([
+        ...(roster?.map((p) => p.pubkey) ?? members ?? []).filter(
+          (pubkey) => !archivedMention(session, pubkey),
+        ),
+        ...recipients.map(([pubkey]) => pubkey),
+      ]),
+    ];
+    const displayFacts = recipients
+      .filter(([pubkey]) => !session.names?.lookup(pubkey, candidates))
+      .map(([pubkey, name]) => ({ pubkey, name }));
+    return {
+      profiles,
+      qualifiers: new Map(
+        recipients.map(([pubkey]) => [
+          pubkey,
+          session.names?.lookup(pubkey, candidates, displayFacts)?.qualifier,
+        ]),
       ),
-      ...draft.recipients.map((p) => p.pubkey),
-    ]),
-  ];
-  const displayFacts = draft.recipients
-    .filter((recipient) => !session.names?.lookup(recipient.pubkey, candidates))
-    .map((recipient) => ({
-      pubkey: recipient.pubkey,
-      name: recipient.name,
-    }));
-  const qualifiers = new Map(
-    draft.recipients.map((recipient) => [
-      recipient.pubkey,
-      session.names?.lookup(recipient.pubkey, candidates, displayFacts)
-        ?.qualifier,
-    ]),
-  );
-  const labels = new Map(
-    draft.recipients.map((recipient) => [
-      recipient.pubkey,
-      resolveName(recipient.pubkey, recipient.name, candidates, displayFacts),
-    ]),
-  );
+      labels: new Map(
+        recipients.map(([pubkey, name]) => [
+          pubkey,
+          session.names?.lookup(pubkey, candidates, displayFacts)?.name ?? name,
+        ]),
+      ),
+    };
+  }, [
+    session,
+    directory.profiles,
+    recipientKey,
+    roster,
+    members,
+    archives,
+    names,
+  ]);
   const previous = useRef(labels);
   const revealed = useRef(
     new Set([...qualifiers].filter(([, suffix]) => suffix).map(([key]) => key)),

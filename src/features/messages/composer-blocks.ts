@@ -131,7 +131,7 @@ function isolate(tr: Transaction) {
 
 /** Use native ProseMirror block commands, composing their steps into the same
  * transaction as token expansion/selection isolation. No second history owner. */
-function apply(tr: Transaction, command: Command) {
+export function apply(tr: Transaction, command: Command) {
   const state = EditorState.create({
     doc: tr.doc,
     selection: tr.selection,

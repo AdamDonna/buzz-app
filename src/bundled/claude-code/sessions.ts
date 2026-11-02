@@ -647,7 +647,10 @@ export class Spare {
       return undefined;
     }
     const process = await next.process;
-    if (process?.running) return process;
+    // A spare that ran a turn, such as one another Claude session's message
+    // starts, fixed its system prompt then; Claude ignores the prompt
+    // `initialize` brings it later, so the agent would run without it.
+    if (process?.running && !process.started) return process;
     void process?.kill();
     return undefined;
   }

@@ -27,7 +27,7 @@ it("hands confirmed deletion to the page and discards draft navigation risk", as
     <WorkflowChannel
       capability={fixture.capability}
       channelId={fixtureChannel}
-      channelName="Fixture channel"
+      channel={{ name: "Fixture channel" }}
       viewer={fixtureViewer}
       initialSelection={fixtureDefinition}
       onClose={() => {}}
@@ -69,7 +69,7 @@ it("keeps the open workflow visible without a refresh banner", async () => {
     <WorkflowChannel
       capability={fixture.capability}
       channelId={fixtureChannel}
-      channelName="Fixture channel"
+      channel={{ name: "Fixture channel" }}
       viewer={fixtureViewer}
       initialSelection={fixtureDefinition}
       onClose={() => {}}
@@ -116,7 +116,7 @@ it("releases a mounted run latch after unknown delivery without replaying it", a
     <WorkflowChannel
       capability={fixture.capability}
       channelId={fixtureChannel}
-      channelName="Fixture channel"
+      channel={{ name: "Fixture channel" }}
       viewer={fixtureViewer}
       initialSelection={fixtureDefinition}
       onClose={() => {}}
@@ -165,7 +165,7 @@ it("runs despite a lost earlier run receipt, rereads open history on success and
     <WorkflowChannel
       capability={fixture.capability}
       channelId={fixtureChannel}
-      channelName="Fixture channel"
+      channel={{ name: "Fixture channel" }}
       viewer={fixtureViewer}
       initialSelection={fixtureDefinition}
       onClose={() => {}}
@@ -212,7 +212,7 @@ it.each(["rejected", "unknown"] as const)(
       <WorkflowChannel
         capability={fixture.capability}
         channelId={fixtureChannel}
-        channelName="Fixture channel"
+        channel={{ name: "Fixture channel" }}
         viewer={fixtureViewer}
         initialSelection={fixtureDefinition}
         onClose={() => {}}
@@ -260,7 +260,7 @@ it("runs once a newer head supersedes a save whose receipt was lost", async () =
     <WorkflowChannel
       capability={fixture.capability}
       channelId={fixtureChannel}
-      channelName="Fixture channel"
+      channel={{ name: "Fixture channel" }}
       viewer={fixtureViewer}
       initialSelection={head}
       onClose={() => {}}
@@ -280,7 +280,7 @@ it("drops a run status when another configuration replaces the draft", async () 
     <WorkflowChannel
       capability={fixture.capability}
       channelId={fixtureChannel}
-      channelName="Fixture channel"
+      channel={{ name: "Fixture channel" }}
       viewer={fixtureViewer}
       initialSelection={fixtureDefinition}
       onClose={() => {}}

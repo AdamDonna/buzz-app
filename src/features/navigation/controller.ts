@@ -1,5 +1,9 @@
 import { parseOpenTarget, targetKey, type OpenTarget } from "./targets";
-import type { NavigationEntry, NavigationHistory } from "./history";
+import type {
+  DismissedVisits,
+  NavigationEntry,
+  NavigationHistory,
+} from "./history";
 
 /**
  * Shared abort reason. A reason-less abort() makes Blink mint a DOMException per
@@ -23,14 +27,24 @@ export type OpenFailure =
 export type OpenResult = Readonly<
   | { status: "opened" }
   | { status: "cancelled" | "superseded" }
-  | { status: "failed"; reason: OpenFailure }
+  | {
+      status: "failed";
+      reason: OpenFailure;
+      /** The page shows this failure in place, next to what failed; the host
+       * keeps the page on screen instead of replacing it. */
+      presented?: true;
+      /** Reopen this visit once, while it is still the one shown: called
+       * with that reopen, returns its cancel (see reauthorizedOnce). */
+      reauthorize?: (reopen: () => void) => () => void;
+    }
 >;
 /** Focus is per opening, never part of a saved address or history entry. */
 export type NavigationFocus = "content" | "preserve";
 export type NavigationOpenOptions = {
   replace?: boolean;
-  /** Close a modal visit: return to the visit behind it when that visit is
-   * this target, otherwise replace this visit. Never adds a visit to Back.
+  /** @deprecated For explicit Close use Navigation.dismiss, which retires visits.
+   * Legacy return/replace behavior: this option does not retire restoration visits.
+   * Return to the visit behind this one when it matches, otherwise replace it.
    * When the host traverses asynchronously, the return lands after open()
    * resolves, so the resolved result describes the visit being left. */
   dismiss?: boolean;
@@ -47,9 +61,12 @@ export type NavigationSnapshot = Readonly<{
   attempt: OpenAttempt;
   status: "opening" | OpenResult["status"];
   reason?: OpenFailure;
+  /** The failed page presents its own failure in place. */
+  presented?: true;
   /** An incoming URL failed before it could create a history destination. */
   ingress?: boolean;
   retryable?: boolean;
+  retainedVisits?: readonly string[] | undefined;
   canGoBack: boolean;
   canGoForward: boolean;
 }>;
@@ -62,6 +79,8 @@ export type Navigation = Readonly<{
   ): Promise<OpenResult>;
   back(): void;
   forward(): void;
+  /** Explicit dismissal retires content visits; passive traversal retains them. */
+  dismiss(visits: DismissedVisits, fallback: OpenTarget): void;
   retry(): Promise<OpenResult>;
 }>;
 
@@ -78,11 +97,17 @@ export function createNavigationController(
     promise: Promise<OpenResult>;
     resolve: (result: OpenResult) => void;
     pending: boolean;
-    timer?: ReturnType<typeof setTimeout>;
+    timer?: ReturnType<typeof setTimeout> | undefined;
+    /** Cancels a failed visit's reopen after sign-in. */
+    reauthorizing?: () => void;
   };
   let disposed = false;
   let active: Operation;
   let snapshot: NavigationSnapshot;
+  // The deadline measures a presenter. None may exist yet (the identity and
+  // key-setup gate, IdentitySetup, hides the app for minutes), so it runs only
+  // while one is attached.
+  let presenters = 0;
   let ingressRetry: (() => Promise<OpenResult>) | undefined;
   const listeners = new Set<() => void>();
   // Commit state and capture each caller's result before invoking external code.
@@ -123,22 +148,54 @@ export function createNavigationController(
     clearTimeout(operation.timer);
     operation.resolve(result);
   }
+  function arm(operation: Operation) {
+    if (!presenters || !operation.pending || operation.timer) return;
+    operation.timer = setTimeout(
+      () =>
+        transaction(() => {
+          finish(operation, { status: "failed", reason: "timeout" });
+        }),
+      timeoutMs,
+    );
+  }
   function finish(operation: Operation, result: OpenResult) {
     if (operation !== active || !operation.pending) return;
     settle(operation, result);
     snapshot = Object.freeze({
       ...snapshot,
       status: result.status,
-      ...(result.status === "failed" ? { reason: result.reason } : {}),
+      ...(result.status === "failed"
+        ? {
+            reason: result.reason,
+            ...(result.presented ? { presented: true as const } : {}),
+          }
+        : {}),
     });
-    if (result.status !== "opened")
+    // A failure presented in place keeps its page's authority until the visit
+    // is left or replaced, as an opened visit does.
+    if (
+      result.status !== "opened" &&
+      !(result.status === "failed" && result.presented)
+    )
       effects.push(() => operation.controller.abort(NAVIGATION_ABORTED));
+    const reauthorize = result.status === "failed" && result.reauthorize;
+    if (reauthorize)
+      effects.push(() => {
+        if (active !== operation || disposed) return;
+        operation.reauthorizing = reauthorize(() =>
+          transaction(() => {
+            if (active === operation && !disposed)
+              start(operation.attempt.focus);
+          }),
+        );
+      });
     emit();
   }
   function start(focus: NavigationFocus = "content"): Promise<OpenResult> {
     if (disposed) return Promise.resolve({ status: "cancelled" });
     ingressRetry = undefined;
     const old = active;
+    old?.reauthorizing?.();
     if (old) {
       settle(old, { status: "superseded" });
       effects.push(() => old.controller.abort(NAVIGATION_ABORTED));
@@ -167,6 +224,7 @@ export function createNavigationController(
       entry: state.current,
       attempt,
       status: "opening",
+      retainedVisits: state.retainedVisits,
       canGoBack: state.canGoBack,
       canGoForward: state.canGoForward,
     });
@@ -174,16 +232,26 @@ export function createNavigationController(
       finish(operation, { status: "failed", reason: "invalid-target" });
       return promise;
     }
-    operation.timer = setTimeout(
-      () =>
-        transaction(() => {
-          finish(operation, { status: "failed", reason: "timeout" });
-        }),
-      timeoutMs,
-    );
+    arm(operation);
     emit();
     return promise;
   }
+  let departureGuard:
+    | ((next: OpenTarget, decide: (proceed: boolean) => void) => boolean)
+    | undefined;
+  let departure: { from: string; to: string; proceed: boolean } | undefined;
+  function resumeDeparture(pending: NonNullable<typeof departure>) {
+    if (history.returnTo(pending.to)) return;
+    const previous = history.snapshot().previous;
+    if (previous) {
+      pending.to = previous.id;
+      if (history.returnTo(previous.id)) return;
+    }
+    departure = undefined;
+  }
+  let admittingOpen = false;
+  let opening = false;
+  let openingDecision: { settle: (result: OpenResult) => void } | undefined;
   let resolving: Operation | undefined;
   // Both host drivers publish pushes synchronously; consume this opening only.
   let openingFocus: NavigationFocus | undefined;
@@ -201,6 +269,7 @@ export function createNavigationController(
         });
         snapshot = Object.freeze({
           ...snapshot,
+          retainedVisits: state.retainedVisits,
           entry: state.current,
           attempt: active.attempt,
           canGoBack: state.canGoBack,
@@ -208,6 +277,52 @@ export function createNavigationController(
         });
         emit();
       } else {
+        const state = history.snapshot();
+        if (departure?.from === state.current.id) {
+          if (departure.proceed) resumeDeparture(departure);
+          return;
+        }
+        const admitted =
+          departure?.proceed && departure.to === state.current.id;
+        if (admitted) departure = undefined;
+        if (
+          !admitted &&
+          !opening &&
+          state.current.id !== active.attempt.entry.id &&
+          departureGuard
+        ) {
+          const pending = {
+            from: active.attempt.entry.id,
+            to: state.current.id,
+            proceed: false,
+          };
+          departure = pending;
+          const blocked = departureGuard(state.current.target, (proceed) => {
+            if (departure !== pending) return;
+            if (!proceed) {
+              departure = undefined;
+              return;
+            }
+            pending.proceed = true;
+            if (history.snapshot().current.id === pending.from)
+              resumeDeparture(pending);
+          });
+          if (blocked) {
+            history.returnTo(pending.from);
+            return;
+          }
+          departure = undefined;
+        }
+        if (state.current === active.attempt.entry) {
+          snapshot = Object.freeze({
+            ...snapshot,
+            retainedVisits: state.retainedVisits,
+            canGoBack: state.canGoBack,
+            canGoForward: state.canGoForward,
+          });
+          emit();
+          return;
+        }
         const focus = openingFocus ?? returningFocus;
         openingFocus = returningFocus = undefined;
         start(focus);
@@ -237,12 +352,42 @@ export function createNavigationController(
             reason: "invalid-target",
           });
         }
+        if (
+          !admittingOpen &&
+          departureGuard &&
+          targetKey(target) !== targetKey(snapshot.entry.target)
+        ) {
+          openingDecision?.settle({ status: "superseded" });
+          let settle: (result: OpenResult) => void = () => {};
+          const result = new Promise<OpenResult>((resolve) => {
+            settle = resolve;
+          });
+          const pending = { settle };
+          openingDecision = pending;
+          const blocked = departureGuard(target, (proceed) => {
+            if (openingDecision !== pending) return;
+            openingDecision = undefined;
+            if (!proceed) {
+              settle({ status: "cancelled" });
+              return;
+            }
+            admittingOpen = true;
+            try {
+              void navigation.open(target, options).then(settle);
+            } finally {
+              admittingOpen = false;
+            }
+          });
+          if (blocked) return result;
+          openingDecision = undefined;
+        }
         try {
           if (
             !history.snapshot().invalidAddress &&
             targetKey(target) === targetKey(history.snapshot().current.target)
           )
             return start(options?.focus);
+          opening = true;
           openingFocus = options?.focus;
           returningFocus = undefined;
           const previous = history.snapshot().previous;
@@ -256,7 +401,28 @@ export function createNavigationController(
             return active.promise;
           }
           if (options?.replace || options?.dismiss) history.replace(target);
-          else history.push(target);
+          else {
+            const { current, previous } = history.snapshot();
+            if (
+              !history.snapshot().invalidAddress &&
+              current.target.kind === "conversation" &&
+              current.target.panel === "members"
+            ) {
+              const { panel: _panel, ...channel } = current.target;
+              if (previous && targetKey(previous.target) === targetKey(channel))
+                history.replace(target);
+              else {
+                // A cold Members link still needs its channel beneath a handoff.
+                resolving = active;
+                try {
+                  history.resolve(channel);
+                } finally {
+                  resolving = undefined;
+                }
+                history.push(target);
+              }
+            } else history.push(target);
+          }
           return active.promise;
         } catch {
           // Drivers commit atomically and notify only their exclusive controller.
@@ -265,6 +431,7 @@ export function createNavigationController(
             reason: "host-error",
           });
         } finally {
+          opening = false;
           openingFocus = undefined;
         }
       });
@@ -277,6 +444,11 @@ export function createNavigationController(
     forward() {
       transaction(() => {
         if (!disposed) history.forward();
+      });
+    },
+    dismiss(visits, fallback) {
+      transaction(() => {
+        if (!disposed) history.dismiss(visits, fallback);
       });
     },
     retry() {
@@ -295,6 +467,36 @@ export function createNavigationController(
   });
   return {
     navigation,
+    /** Shell-owned draft guard; native traversal bounces before presentation unmounts. */
+    guardDeparture(guard: NonNullable<typeof departureGuard>) {
+      departureGuard = guard;
+      return () => {
+        if (departureGuard === guard) {
+          departureGuard = undefined;
+          openingDecision?.settle({ status: "cancelled" });
+          openingDecision = undefined;
+          departure = undefined;
+        }
+      };
+    },
+    /**
+     * Host-only: a presenter now exists. The pending visit's deadline starts (or
+     * restarts) here and stops when the last presenter detaches, so an attempt
+     * nobody could present never times out, while one a presenter stalls on does.
+     */
+    attach() {
+      presenters++;
+      arm(active);
+      let attached = true;
+      return () => {
+        if (!attached) return;
+        attached = false;
+        presenters--;
+        if (presenters) return;
+        clearTimeout(active.timer);
+        active.timer = undefined;
+      };
+    },
     /** Normalize a pending presentation, not a new intent; never reset its deadline. */
     resolve(attempt: OpenAttempt, input: OpenTarget) {
       return transaction(() => {
@@ -336,7 +538,7 @@ export function createNavigationController(
         return true;
       });
     },
-    /** Host-only return from a modal destination to its retained workspace visit. */
+    /** Host-only traversal to a retained visit; does not retire dismissed content. */
     returnTo(entryId: string) {
       return transaction(() => !disposed && history.returnTo(entryId));
     },
@@ -366,7 +568,11 @@ export function createNavigationController(
       transaction(() => {
         if (disposed) return;
         disposed = true;
+        openingDecision?.settle({ status: "cancelled" });
+        openingDecision = undefined;
+        departure = undefined;
         ingressRetry = undefined;
+        active.reauthorizing?.();
         unsubscribe();
         finish(active, { status: "cancelled" });
         const operation = active;

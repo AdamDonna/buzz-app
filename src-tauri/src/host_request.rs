@@ -11,7 +11,7 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 8192;
 const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
-const DEADLINE: Duration = Duration::from_secs(30);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(30);
 /// An uploaded file, such as an app artifact.
 const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
 /// A deploy can wait for its rollout before it answers.
@@ -68,9 +68,9 @@ struct UploadFile {
     content_type: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct HostResponse {
-    status: u16,
+    pub(crate) status: u16,
     headers: BTreeMap<String, String>,
     body: String,
 }
@@ -293,7 +293,7 @@ fn validate_request(
     Ok((url, method, headers))
 }
 
-async fn send_request(
+pub(crate) async fn send_request(
     url: reqwest::Url,
     method: reqwest::Method,
     headers: HeaderMap,
@@ -453,6 +453,15 @@ mod tests {
         let manager =
             buzzodz_plugins::Manager::open(Some(temp.path().into()), "test", false).unwrap();
         let grants = manager.host_grants("block.builderlab", "bundled").unwrap();
+        if option_env!("BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG").is_some_and(|c| !c.is_empty()) {
+            // FI builds reach Builderlab only through the native forwarder.
+            assert!(grants
+                .federated_identity
+                .is_some_and(|grant| !grant.operations.is_empty()));
+            assert!(!grants.files && grants.network_origins.is_empty());
+            return;
+        }
+        assert!(grants.federated_identity.is_none());
         assert_eq!(
             grants.files,
             buzzodz_plugins::apps_control_plane(buzzodz_plugins::BUILDERLAB_ORIGIN).is_some()
@@ -497,29 +506,6 @@ mod tests {
             .unwrap();
         let (url, _, _) = validate_request(&request(other.as_str())).unwrap();
         assert!(!allows_origin(&grants, &url));
-    }
-
-    #[test]
-    fn bundled_hosted_communities_reach_only_the_builderlab_origin() {
-        let temp = tempfile::tempdir().unwrap();
-        let manager =
-            buzzodz_plugins::Manager::open(Some(temp.path().into()), "test", false).unwrap();
-        let grants = manager
-            .host_grants("block.hosted-communities", "bundled")
-            .unwrap();
-        assert_eq!(grants.network_origins, ["https://app.builderlab.xyz"]);
-        assert!(grants.commands.is_empty());
-        for (url, allowed) in [
-            ("https://app.builderlab.xyz/api/goose/v1/auth/me", true),
-            ("https://builderlab.xyz/api/goose/v1/auth/me", false),
-            (
-                "https://app.builderlab.xyz:8443/api/goose/v1/auth/me",
-                false,
-            ),
-        ] {
-            let (url, _, _) = validate_request(&request(url)).unwrap();
-            assert_eq!(allows_origin(&grants, &url), allowed, "{url}");
-        }
     }
 
     #[test]

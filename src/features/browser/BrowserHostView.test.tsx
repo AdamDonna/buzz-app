@@ -421,6 +421,7 @@ it("retries a failed evicted guest at its last page only on explicit Reload", as
       "https://first.example/signed-in",
       expect.any(Object),
       undefined,
+      undefined,
     ),
   );
   expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -453,6 +454,7 @@ it("retries a failed evicted guest at its last page only on explicit Reload", as
   expect(platform.attach).toHaveBeenLastCalledWith(
     "https://first.example/signed-in",
     expect.any(Object),
+    undefined,
     undefined,
   );
   expect(screen.queryByRole("alert")).toBeNull();
@@ -835,4 +837,139 @@ it("ignores status from a replaced session", async () => {
   });
   await waitFor(() => expect(screen.getByTitle("New page")).toBeVisible());
   expect(screen.queryByText("Old page")).not.toBeInTheDocument();
+});
+
+it.each([false, true])(
+  "restarts a lost Builderlab guest at the app URL instead of replaying its login ticket (resume policy: %s)",
+  async (withPolicy) => {
+    const platform = fakePlatform();
+    let count = 0;
+    vi.mocked(platform.attach).mockImplementation(
+      async () => `guest-${++count}`,
+    );
+    const login =
+      "https://login.apps.builderlab.xyz/api/goose/v1/auth/hosted-site/handoff?code=one-use";
+    vi.mocked(platform.status).mockResolvedValue({
+      url: login,
+      title: "",
+      loading: true,
+      error: null,
+    });
+    const sessions = new BrowserSessions(platform);
+    const lifetime = new AbortController();
+    const builderlab = {
+      credential: "private",
+      storage: "viewer-test",
+      signal: lifetime.signal,
+    };
+    const app = "https://counter.apps.builderlab.xyz/report/42";
+    render(
+      <BrowserHostView
+        url={app}
+        builderlab={builderlab}
+        canResumeUrl={withPolicy ? () => false : undefined}
+        platform={platform}
+        sessions={sessions}
+      />,
+    );
+    // Establish that polling applied the intermediate navigation before losing this guest.
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Address" })).toHaveValue(
+        login,
+      ),
+    );
+    await act(() => sessions.detach("guest-1"));
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(2));
+    expect(platform.attach).toHaveBeenLastCalledWith(
+      app,
+      expect.any(Object),
+      "viewer-test",
+      builderlab,
+    );
+    lifetime.abort();
+  },
+);
+
+it("restores the last approved app after eviction instead of a later consent ticket", async () => {
+  const platform = fakePlatform();
+  let count = 0;
+  vi.mocked(platform.attach).mockImplementation(async () => `guest-${++count}`);
+  const destination = "https://second.apps.example/report/42?q=week#chart";
+  vi.mocked(platform.status).mockResolvedValue({
+    url: destination,
+    title: "Second app",
+    loading: false,
+    error: null,
+  });
+  const sessions = new BrowserSessions(platform);
+  const lifetime = new AbortController();
+  const builderlab = {
+    credential: "private",
+    storage: "viewer-test",
+    signal: lifetime.signal,
+  };
+  const canResumeUrl = vi.fn((target: string) => target === destination);
+  const view = render(
+    <div data-testid="pane">
+      <BrowserHostView
+        url="https://first.apps.example/"
+        builderlab={builderlab}
+        canResumeUrl={canResumeUrl}
+        platform={platform}
+        sessions={sessions}
+      />
+    </div>,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "Address" })).toHaveValue(
+      destination,
+    ),
+  );
+  const consent = "https://login.example/consent?ticket=one-use";
+  vi.mocked(platform.status).mockResolvedValue({
+    url: consent,
+    title: "Consent",
+    loading: true,
+    error: null,
+  });
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "Address" })).toHaveValue(
+      consent,
+    ),
+  );
+  // Hide it, then fill the real four-guest pool so its oldest guest is evicted.
+  view.getByTestId("pane").setAttribute("data-covered", "");
+  await waitFor(() =>
+    expect(platform.setBounds).toHaveBeenCalledWith(
+      "guest-1",
+      expect.any(Object),
+      false,
+    ),
+  );
+  await act(async () => {
+    for (let index = 0; index < 4; index++)
+      await sessions.attach(
+        `https://ordinary${index}.example/`,
+        {
+          x: 0,
+          y: 0,
+          width: 400,
+          height: 300,
+        },
+        () => true,
+      );
+  });
+  expect(platform.detach).toHaveBeenCalledWith("guest-1");
+  view.getByTestId("pane").removeAttribute("data-covered");
+  await waitFor(() => expect(platform.attach).toHaveBeenCalledTimes(6));
+  expect(platform.attach).toHaveBeenLastCalledWith(
+    destination,
+    expect.any(Object),
+    "viewer-test",
+    builderlab,
+  );
+  expect(canResumeUrl).toHaveBeenCalledWith(destination);
+  expect(canResumeUrl).toHaveBeenCalledWith(consent);
+  lifetime.abort();
 });

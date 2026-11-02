@@ -1,7 +1,8 @@
-// The production page and shared controls, with only the host data boundary replaced.
+// The production tab and shared controls, with only the host data boundary replaced.
 import { createRoot } from "react-dom/client";
 import type { Context } from "../../src/plugins/author";
-import { createPage } from "../../src/bundled/agents/attention/Page";
+import { presentPull } from "../../src/bundled/github/attention";
+import { createTab } from "../../src/bundled/watching/Tab";
 import "../../src/shared/styles/globals.css";
 
 const channel = "11111111-1111-4111-8111-111111111111";
@@ -43,7 +44,11 @@ let snapshot = {
               "# Release planning\nReport blockers and keep the release moving.",
           },
         },
-        "watch/discussion": { slug: "watch/discussion", modifiedAt: 1, value },
+        "watch/discussion": {
+          slug: "watch/discussion",
+          modifiedAt: 1,
+          value,
+        },
         "interest/review": {
           slug: "interest/review",
           modifiedAt: 1,
@@ -84,6 +89,7 @@ const connection = {
 let saveGate: Promise<void> | undefined;
 const controls = {
   saveStarted: false,
+  opened: undefined as unknown,
   releaseSave: () => {},
   holdSave() {
     controls.saveStarted = false;
@@ -98,8 +104,21 @@ declare global {
   }
 }
 window.attentionFixture = controls;
-const Page = createPage({
+const navigation = {
+  open: async (target: unknown) => {
+    controls.opened = target;
+  },
+};
+const presentGitHub = presentPull(navigation);
+const Tab = createTab({
   agents: {
+    presentWatch: (
+      watch: Parameters<typeof presentGitHub>[0],
+      title: string,
+    ) =>
+      watch.provider === "attention/github-pr"
+        ? presentGitHub(watch, title)
+        : undefined,
     snapshot: () => snapshot,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
@@ -144,8 +163,8 @@ const Page = createPage({
     },
   },
   relay: { snapshot: () => connection, subscribe: () => () => {} },
-  navigation: { open: async () => {} },
+  navigation,
 } as unknown as Context);
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");
-createRoot(root).render(<Page />);
+createRoot(root).render(<Tab agent={{ key: "membership-a" }} />);

@@ -19,12 +19,15 @@ export const CATCH_UP_BYTES = 8 * 1024 * 1024;
  * delivered or skipped. While a window (`through`, `upper`] is being
  * delivered, `after` is the last event delivered of it, in delivery order:
  * oldest first, ties by id. A restart goes on after it, up to `upper`.
- * `heard` are later ones already heard live, which catch-up skips too. */
+ * `heard` are later ones already heard live, which catch-up skips too.
+ * `hidden` marks one moved while no plugin showed Attention: once one does,
+ * even after a restart, it starts from then. */
 export type Checkpoint = Readonly<{
   through: number;
   upper?: number;
   after?: Readonly<{ created_at: number; id: string }>;
   heard?: readonly Readonly<{ created_at: number; id: string }>[];
+  hidden?: true;
 }>;
 /** Live events each stream keeps as heard past its checkpoint. A tick moves
  * the checkpoint past them every few seconds while the app listens; past
@@ -79,7 +82,7 @@ function ownerOf(key: string): AgentKey | undefined {
 
 /** A valid checkpoint, with its fields in one order; undefined otherwise. */
 function checkpointOf(value: unknown): Checkpoint | undefined {
-  const { through, upper, after, heard } = (value ?? {}) as Checkpoint;
+  const { through, upper, after, heard, hidden } = (value ?? {}) as Checkpoint;
   if (
     !time(through) ||
     (upper !== undefined && !(time(upper) && upper > through))
@@ -108,6 +111,7 @@ function checkpointOf(value: unknown): Checkpoint | undefined {
     ...(upper !== undefined ? { upper } : {}),
     ...(after ? { after: { created_at: after.created_at, id: after.id } } : {}),
     ...(live.length ? { heard: live } : {}),
+    ...(hidden === true ? { hidden } : {}),
   };
 }
 

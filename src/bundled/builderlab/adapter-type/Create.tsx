@@ -8,7 +8,8 @@ import {
   type RemoteAgentModel,
   validInstructions,
 } from "../agents/client";
-import type { OAuthSession } from "../oauth/session";
+import type { BuilderlabSession } from "../session";
+import { effortLabel } from "./models";
 
 export type CreationConfig = {
   instructions: string;
@@ -34,14 +35,14 @@ export function creationConfig(value: unknown): CreationConfig {
     typeof config.subject !== "string"
   )
     throw new Error(
-      "Choose a model and reasoning effort and check the instructions.",
+      "Choose a model and thinking level and check the instructions.",
     );
   return config as CreationConfig;
 }
 
 export function createCreationFields(
   client: AgentClient,
-  session: OAuthSession,
+  session: BuilderlabSession,
 ) {
   return function Create({ config, onChange, disabled }: AgentCreateProps) {
     const draft = config as CreationConfig;
@@ -81,9 +82,11 @@ export function createCreationFields(
         {login.status !== "signed-in" ? (
           <div className="grid justify-items-start gap-3">
             <p role="status" className="m-0 text-body-sm text-secondary">
-              {login.status === "pending"
-                ? "Finish sign-in in your browser, then choose a model."
-                : "Sign in to choose a model and reasoning effort."}
+              {login.checking
+                ? "Checking your Builderlab sign-in…"
+                : login.status === "pending"
+                  ? "Finish sign-in in your browser, then choose a model."
+                  : "Sign in to choose a model and thinking level."}
             </p>
             {login.error && (
               <p role="alert" className="m-0 text-body-sm text-danger">
@@ -92,14 +95,17 @@ export function createCreationFields(
             )}
             <Button
               disabled={disabled && login.status !== "pending"}
+              loading={login.checking === true}
               onClick={() => {
                 if (login.status === "pending") session.cancel();
                 else void session.signIn();
               }}
             >
-              {login.status === "pending"
-                ? "Cancel sign-in"
-                : "Sign in with Builderlab"}
+              {login.checking
+                ? "Checking sign-in"
+                : login.status === "pending"
+                  ? "Cancel sign-in"
+                  : "Sign in with Builderlab"}
             </Button>
           </div>
         ) : models?.length ? (
@@ -131,18 +137,18 @@ export function createCreationFields(
               }
             />
             <Select
-              label="Reasoning effort"
+              label="Thinking"
               variant="field"
               name="builderlab-effort"
               required
               value={supported ? draft.reasoningEffort : ""}
-              placeholder="Choose reasoning effort"
+              placeholder="Choose thinking"
               disabled={disabled || !model || !!wrongAccount}
               groups={[
                 {
-                  label: "Supported reasoning efforts",
+                  label: "",
                   options: (model?.supportedReasoningEfforts ?? []).map(
-                    (value) => ({ value, label: value }),
+                    (value) => ({ value, label: effortLabel(value) }),
                   ),
                 },
               ]}
@@ -153,7 +159,7 @@ export function createCreationFields(
             {wrongAccount && (
               <p role="status" className="m-0 text-body-sm text-secondary">
                 These choices belong to another Builderlab account. Choose a
-                model and reasoning effort again.
+                model and thinking level again.
               </p>
             )}
           </>

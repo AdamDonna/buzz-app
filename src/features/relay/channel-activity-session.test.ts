@@ -1,5 +1,8 @@
 import { assert, expect, it, vi } from "vitest";
+import type { EventTemplate } from "nostr-tools";
 import { createRelaySession } from "./session";
+import { PublishRejected } from "./outbox";
+import { ReadError } from "./errors";
 import {
   flush,
   keypair,
@@ -29,36 +32,44 @@ function setup() {
         pending.push({ ids, signal, resolve, reject }),
       ),
   );
+  const publish = vi.fn(async (_event: RelayEvent) => {});
   const sort: Record<string, "recent"> = {};
   const filters: Record<string, "active" | "unreads"> = {};
-  const owner = createRelaySession({
-    ...wire.transport,
-    channelActivity: activity,
-    decodeSidebarPreferences: async () => ({
-      sections: [],
-      assignments: {},
-      starred: [],
-      muted: [],
-      sort: {},
-    }),
-    writeSidebarSort: async (group, mode) => {
-      if (mode === "recent") sort[group] = mode;
-      else delete sort[group];
-      return { ...sort };
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      writer: {
+        sign: async (template: EventTemplate) => signed(viewer, template),
+        publish,
+      },
+      channelActivity: activity,
+      decodeSidebarPreferences: async () => ({
+        sections: [],
+        assignments: {},
+        starred: [],
+        muted: [],
+        sort: {},
+      }),
+      writeSidebarSort: async (group, mode) => {
+        if (mode === "recent") sort[group] = mode;
+        else delete sort[group];
+        return { ...sort };
+      },
+      writeSidebarFilter: async (group, mode) => {
+        if (mode === "all") delete filters[group];
+        else filters[group] = mode;
+        return { filters: { ...filters }, activeWindowSeconds: {} };
+      },
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, dispose() {}, retry() {} };
+      },
     },
-    writeSidebarFilter: async (group, mode) => {
-      if (mode === "all") delete filters[group];
-      else filters[group] = mode;
-      return { filters: { ...filters }, activeWindowSeconds: {} };
-    },
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, dispose() {}, retry() {} };
-    },
-  });
+    { outboxStorage: { load: () => [], save() {} } },
+  );
   const channels = owner.session.channels;
   const preferences = owner.session.sidebarPreferences;
-  async function initial() {
+  async function initial(extra: readonly string[] = []) {
     channels.ensureList();
     wire
       .next()
@@ -67,6 +78,10 @@ function setup() {
         roster(relay, "beta", [viewer.pubkey]),
         metadata(relay, "alpha", "Alpha"),
         metadata(relay, "beta", "Beta"),
+        ...extra.flatMap((id) => [
+          roster(relay, id, [viewer.pubkey]),
+          metadata(relay, id, id),
+        ]),
       ]);
     await flush();
     const reading = preferences.ensure();
@@ -81,6 +96,7 @@ function setup() {
     preferences,
     pending,
     activity,
+    publish,
     wire,
     viewer,
     relay,
@@ -157,6 +173,107 @@ it("reads no roster activity for A–Z, deduplicates Recent demand, and projects
     h.owner.dispose();
   }
 });
+// Own sends updated the row preview at once but moved it in Recent and Active
+// only when the live socket echoed them.
+it.each(["connected", "retrying"] as const)(
+  "projects an own send the relay accepted while live is %s, before any echo",
+  async (status) => {
+    const h = setup();
+    try {
+      await h.initial();
+      await h.preferences.setSort("channels", "recent", []);
+      take(h.pending).resolve([message(h.peer, "alpha", "history", 50)]);
+      await flush();
+      h.live().state({ status, routes: [] });
+      const beta = () =>
+        h.channels.list().channels.find(({ id }) => id === "beta");
+      expect(beta()?.lastActivityAt).toBeUndefined();
+      h.owner.session.outbox?.send({
+        kind: 9,
+        content: "mine",
+        tags: [["h", "beta"]],
+      });
+      await vi.waitFor(() => expect(h.publish).toHaveBeenCalledOnce());
+      await flush();
+      const sent = h.publish.mock.calls[0]?.[0];
+      assert.exists(sent);
+      expect(beta()?.lastActivityAt).toBe(sent.created_at);
+      if (status !== "connected") return;
+      const summary = beta();
+      h.live().receive([sent]);
+      expect(beta()).toBe(summary);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+it.each([
+  ["refused", new PublishRejected("blocked"), "failed"],
+  ["left unanswered", new Error("timed out"), "unknown"],
+] as const)(
+  "does not project an own send the relay %s",
+  async (_outcome, error, delivery) => {
+    const h = setup();
+    try {
+      await h.initial();
+      h.publish.mockRejectedValueOnce(error);
+      h.owner.session.outbox?.send({
+        kind: 9,
+        content: "mine",
+        tags: [["h", "beta"]],
+      });
+      await vi.waitFor(() =>
+        expect(h.owner.session.outbox?.snapshot()[0]?.delivery).toBe(delivery),
+      );
+      await flush();
+      expect(
+        h.channels.list().channels.find(({ id }) => id === "beta")
+          ?.lastActivityAt,
+      ).toBeUndefined();
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+// A send left `unknown` updated its preview once a read proved it landed, but
+// its row stayed put without a live echo.
+it("projects an unanswered own send once its read-back returns it", async () => {
+  const h = setup();
+  try {
+    await h.initial();
+    h.live().state({ status: "retrying", routes: [] });
+    h.publish.mockRejectedValueOnce(new Error("timed out"));
+    h.owner.session.outbox?.send({
+      kind: 9,
+      content: "mine",
+      tags: [["h", "beta"]],
+    });
+    await vi.waitFor(() =>
+      expect(h.owner.session.outbox?.snapshot()[0]?.delivery).toBe("unknown"),
+    );
+    const sent = h.publish.mock.calls[0]?.[0];
+    assert.exists(sent);
+    const beta = () =>
+      h.channels.list().channels.find(({ id }) => id === "beta");
+    expect(beta()?.lastActivityAt).toBeUndefined();
+    const readBack = await vi.waitFor(() => {
+      const entry = h.wire.pending.find(({ filters }) =>
+        filters.some((filter) => filter.ids?.includes(sent.id)),
+      );
+      assert.exists(entry);
+      return entry;
+    });
+    readBack.respond([sent]);
+    // The verified read completes delivery before confirm() sees its result.
+    await vi.waitFor(() =>
+      expect(h.owner.session.outbox?.snapshot()).toEqual([]),
+    );
+    await flush();
+    expect(beta()?.lastActivityAt).toBe(sent.created_at);
+  } finally {
+    h.owner.dispose();
+  }
+});
 it("keeps other channels' summaries when one channel's live activity advances", async () => {
   const h = setup();
   try {
@@ -215,6 +332,69 @@ it("retries failed Recent activity after an explicit roster refresh", async () =
     expect(
       h.channels.list().channels.find((c) => c.id === "beta")?.lastActivityAt,
     ).toBe(100);
+  } finally {
+    h.owner.dispose();
+  }
+});
+it("retries a transient activity failure quietly and reports a lasting one at once", async () => {
+  const h = setup();
+  try {
+    await h.initial();
+    vi.useFakeTimers();
+    void h.preferences.setSort("channels", "recent", []);
+    await vi.advanceTimersByTimeAsync(0);
+    take(h.pending).reject(
+      new ReadError("unavailable", "Relay read failed (502)"),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // No error while the quiet retry waits (at most the first 1 s delay).
+    expect(h.channels.list().activityStatus).toBe("loading");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.activity).toHaveBeenCalledTimes(2);
+    take(h.pending).resolve([message(h.peer, "beta", "recovered", 100)]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.channels.list().activityStatus).toBe("ready");
+    expect(
+      h.channels.list().channels.find((c) => c.id === "beta")?.lastActivityAt,
+    ).toBe(100);
+
+    // A denial cannot clear on retry: the sidebar reports it without a retry.
+    void h.preferences.setSort("channels", "alpha", []);
+    await vi.advanceTimersByTimeAsync(0);
+    void h.preferences.setSort("channels", "recent", []);
+    await vi.advanceTimersByTimeAsync(0);
+    take(h.pending).reject(new ReadError("denied", "Relay read failed (403)"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.channels.list().activityStatus).toBe("error");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.activity).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.useRealTimers();
+    h.owner.dispose();
+  }
+});
+it("projects activity read before a later batch failed and leaves only unread channels unknown", async () => {
+  const h = setup();
+  try {
+    const rooms = Array.from({ length: 127 }, (_, i) => `room-${1000 + i}`);
+    await h.initial(rooms);
+    await h.preferences.setSort("channels", "recent", []);
+    const find = (id: string) =>
+      h.channels.list().channels.find((c) => c.id === id);
+    const first = take(h.pending);
+    expect(first.ids).toEqual(["alpha", "beta", ...rooms.slice(0, 126)]);
+    first.resolve([message(h.peer, "beta", "landed", 90)]);
+    await flush();
+    expect(h.channels.list().activityStatus).toBe("loading");
+    expect(find("beta")?.activityKnown).toBeUndefined();
+    const second = take(h.pending);
+    expect(second.ids).toEqual(rooms.slice(126));
+    second.reject(new Error("offline"));
+    await flush();
+    expect(h.channels.list().activityStatus).toBe("error");
+    expect(find("beta")?.lastActivityAt).toBe(90);
+    expect(find("alpha")).toMatchObject({ activityKnown: true });
+    expect(find(rooms[126] ?? "")?.activityKnown).toBeUndefined();
   } finally {
     h.owner.dispose();
   }

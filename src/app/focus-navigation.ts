@@ -19,7 +19,7 @@ function available(element: HTMLElement) {
     .find((hit) => hit.closest(COVERING))
     ?.closest(COVERING);
   // Skip notifications, but include dock content without its own workspace.
-  return !front || front === element.closest(COVERING);
+  return front === element.closest(COVERING);
 }
 
 function workspaces() {

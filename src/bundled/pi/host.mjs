@@ -28,6 +28,8 @@ import {
   defineExtension,
   defineTool,
   Harness,
+  hook,
+  ToolTask,
   SessionFailed,
   section,
   UsageDoc,
@@ -40,6 +42,10 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import lockfile from "proper-lockfile";
 
 const context = BACKGROUND_CONTEXT;
+/** Stores a document whole after this many changes, so reading it replays
+ * a bounded number of them, as Pi's own Code Mode documents do. */
+const checkpointWhen = (_value, _ops, { deltasSinceBase }) =>
+  deltasSinceBase >= 64;
 /** Each Buzz conversation key's Pi conversation, the tools' default
  * destination for it, and the newest message it has been shown. */
 const Places = defineDoc({
@@ -47,6 +53,7 @@ const Places = defineDoc({
   version: 1,
   scope: "session",
   initial: () => ({}),
+  checkpointWhen,
 });
 /** An Attention wake's reply destination belongs to its request, independently
  * of the conversation's tool defaults. Recorded before submission for recovery. */
@@ -55,7 +62,15 @@ const Replies = defineDoc({
   version: 1,
   scope: "session",
   initial: () => ({}),
+  checkpointWhen,
 });
+/** Why a request in a conversation Pi parked a task of is unanswered. */
+const PARKED = {
+  status: "unanswered",
+  reason: "restart_limit",
+  detail:
+    "Pi stopped this turn because it crashed partway through it several times in a row.",
+};
 /** Messages that arrive while Pi works join its run at the next boundary. */
 const SETTINGS = { steeringMode: "all" };
 /** Pi's own default thinking level, for a model that thinks. */
@@ -464,6 +479,8 @@ export function serve({
       // Loads the Buzz tools that are deferred when the model asks for them.
       registry.install(createToolSearchExtension());
       for (const extension of packages.extensions) registry.install(extension);
+      /** Conversations with a task Pi parked, which the next wait stops. */
+      const parked = new Set();
       const harness = await Harness.open(
         await openNodeSqliteStorage(path),
         {
@@ -471,7 +488,13 @@ export function serve({
           registry,
           settings: SETTINGS,
           env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? homedir() }),
-          onReport: (error) => console.error("Pi reported", error),
+          onReport: (error, info) => {
+            console.error(`Pi reported ${info.type}`, error);
+            // Cut off by crashes too often, a task waits for a retry that
+            // Buzz has no way to ask for, and its run would never end.
+            if (info.type === "task_parked")
+              parked.add(info.task.conversationId);
+          },
         },
         context,
       );
@@ -493,6 +516,7 @@ export function serve({
         queues: new Map(),
         /** Why each request withdrawn with a failed run is unanswered. */
         failed: new Map(),
+        parked,
         closing: false,
       };
       const places = (await harness.snapshot(Places, context)) ?? {};
@@ -571,6 +595,30 @@ export function serve({
           { tag: false },
         ),
       ],
+      hooks: [
+        hook(ToolTask, {
+          beforeTool: (input, api, context) =>
+            awaitWithContext(
+              call("hook", {
+                agent: opened.agent,
+                conversation: api.conversationId,
+                event: "beforeTool",
+                input,
+              }),
+              context,
+            ).then((value) => value ?? undefined),
+          afterTool: (input, result, api, context) =>
+            awaitWithContext(
+              call("hook", {
+                agent: opened.agent,
+                conversation: api.conversationId,
+                event: "afterTool",
+                input: { call: input, result },
+              }),
+              context,
+            ).then((value) => value ?? undefined),
+        }),
+      ],
       tools: tools.map((tool) =>
         defineTool({
           name: `${PREFIX}${tool.name}`,
@@ -597,7 +645,7 @@ export function serve({
                   : { type: "text", text: JSON.stringify(part) },
               ),
               ...(result.isError ? { isError: true } : {}),
-              // A final `send` answered the run; Pi ends it without another
+              // A final message answered the run; Pi ends it without another
               // model call, and starts a new one for what arrived meanwhile.
               ...(result.final ? { control: { terminate: true } } : {}),
             };
@@ -652,6 +700,7 @@ export function serve({
   async function settle(opened, id) {
     let record;
     try {
+      await unpark(opened);
       const submission = await opened.harness.submission(id, context);
       if (!submission) throw new Error("Pi has no record of this request");
       record = await submission.wait(context);
@@ -688,6 +737,27 @@ export function serve({
       answer: record.answer,
       text: textOf(entry?.model?.at(-1)),
     };
+  }
+
+  /** Stops the conversations Pi parked a task of: each of their requests
+   * fails, saying why. Not waited for, as their tasks run only once a wait
+   * asks Pi for progress. */
+  async function unpark(opened) {
+    if (!opened.parked.size) return;
+    const conversations = [...opened.parked];
+    opened.parked.clear();
+    const { submissions } = await opened.harness.inspect(context);
+    for (const { id, conversationId } of submissions)
+      if (conversations.includes(conversationId)) opened.failed.set(id, PARKED);
+    for (const id of conversations)
+      void opened.harness
+        .conversation(id, context)
+        .then((conversation) =>
+          conversation?.abort(context, { background: true }),
+        )
+        .catch((error) =>
+          console.error("Pi could not stop a parked run", error),
+        );
   }
 
   /** A failed run leaves what was queued for it waiting for a later request:
@@ -1117,7 +1187,7 @@ export function serve({
       const pending = calls.get(message.id);
       calls.delete(message.id);
       if (message.error) pending?.reject(new Error(message.error));
-      else pending?.resolve(message.result ?? {});
+      else pending?.resolve(message.result);
     }
   });
   // The plugin closes stdin to stop the host; each agent's storage closes

@@ -3,25 +3,29 @@ import type { ReactNode } from "react";
 import { Button, type ButtonProps } from "./Button";
 import { MenuPopup, MenuRoot, MenuTrigger } from "./Menu";
 
-export type SplitButtonProps = Pick<ButtonProps, "onClick" | "aria-label"> & {
+export type SplitButtonProps = Pick<
+  ButtonProps,
+  "onClick" | "onBlur" | "aria-label" | "aria-disabled"
+> & {
   /** The main action's label, which names the menu's current choice. */
   children: ReactNode;
   /** Names the menu button, such as "Choose agent type". */
   menuLabel: string;
-  /** The menu's items: choices that change what the main action does. */
+  /** The menu's items: option choices or related actions. */
   menu: ReactNode;
   variant?: "subtle" | "outline" | "prominent";
-  size?: "sm" | "md";
+  size?: "xs" | "sm" | "md";
+  menuDisabled?: boolean | undefined;
   loading?: boolean | undefined;
   disabled?: boolean | undefined;
 };
 
-/** An action joined to a menu of choices for it. The action runs with the
- * chosen option; choosing in the menu changes the option, not runs it. */
+/** An action joined to a separately named menu of options or related actions. */
 export function SplitButton({
   children,
   menuLabel,
   menu,
+  menuDisabled,
   variant = "subtle",
   size = "md",
   loading = false,
@@ -41,6 +45,7 @@ export function SplitButton({
       </Button>
       <MenuRoot>
         <MenuTrigger
+          disabled={disabled || loading || menuDisabled}
           render={
             <Button
               variant={variant}
@@ -48,7 +53,7 @@ export function SplitButton({
               shape="icon"
               aria-label={menuLabel}
               // A choice made while the action runs would not be the one it used.
-              disabled={disabled || loading}
+              disabled={disabled || loading || menuDisabled}
             >
               <CaretDownIcon aria-hidden="true" />
             </Button>

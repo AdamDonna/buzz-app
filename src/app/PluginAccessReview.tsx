@@ -1,4 +1,7 @@
-import type { Ref } from "react";
+import { type Ref, useContext, useSyncExternalStore } from "react";
+import { AgentsContext } from "../features/agents/react";
+import type { RegisteredAgentType } from "../features/agents/service";
+
 import type { PluginManifest } from "../plugins/api";
 import { Accordion } from "../shared/design-system/ui/Accordion";
 import { Button } from "../shared/design-system/ui/Button";
@@ -10,6 +13,11 @@ import {
   MonitorIcon,
 } from "../shared/design-system/icons/index";
 import styles from "./PluginImport.module.css";
+
+const noSubscribe = () => () => {};
+const noTypes = () => EMPTY_TYPES;
+const EMPTY_TYPES: readonly RegisteredAgentType[] = [];
+
 function ProgramDetails({
   program,
   args,
@@ -42,8 +50,20 @@ function ProgramDetails({
   );
 }
 
-function hostDeclarations(manifest: PluginManifest) {
+function hostDeclarations(
+  manifest: PluginManifest,
+  types: readonly RegisteredAgentType[],
+) {
   return [
+    ...(manifest.host?.agentHooks ?? []).map((harness) => ({
+      key: `agentHooks:${harness}`,
+      signature: `Agent hooks: ${harness}`,
+      title: "Agent hooks:",
+      label: `Observe and influence ${types.find((type) => type.key === harness)?.title ?? harness}`,
+      hint: "Can read hook events and change or block agent actions.",
+      icon: PlugIcon,
+      details: <code className={styles.sourcePath}>{harness}</code>,
+    })),
     ...(manifest.host?.commands ?? []).map((command) => ({
       key: `command:${command.id}`,
       signature: `Command ${command.id}: ${JSON.stringify([command.program, ...command.args])} · input: ${command.maxInputBytes === undefined ? "none" : `up to ${command.maxInputBytes} bytes`} · output: up to ${command.maxOutputBytes ?? 4096} bytes`,
@@ -76,6 +96,17 @@ function hostDeclarations(manifest: PluginManifest) {
       icon: GlobeIcon,
       details: <code className={styles.sourcePath}>{origin}</code>,
     })),
+    ...(manifest.host?.federatedIdentity?.operations ?? []).map(
+      (operation) => ({
+        key: `federated:${operation.method} ${operation.path}`,
+        signature: `Federated authority ${manifest.host?.federatedIdentity?.authority}: ${operation.method} ${operation.path}`,
+        title: `Federated authority ${manifest.host?.federatedIdentity?.authority}:`,
+        label: `${operation.method} ${operation.path}`,
+        hint: "Buzz can call this route with your community session for the plugin.",
+        icon: GlobeIcon,
+        details: <code className={styles.sourcePath}>{operation.path}</code>,
+      }),
+    ),
     ...(manifest.host?.processes ?? []).map((process) => ({
       key: `process:${process.id}`,
       signature: `Process ${process.id}: ${JSON.stringify([process.program, ...(process.args ?? [])])}${process.bundled ? " (bundled with Buzz)" : ""} and any further arguments · stdin, full user access`,
@@ -147,10 +178,16 @@ export function PluginAccessReview({
   unchangedTrigger?: Ref<HTMLButtonElement>;
   onShowUnchanged?: () => void;
 }) {
+  const agents = useContext(AgentsContext);
+  const types = useSyncExternalStore(
+    agents?.subscribe ?? noSubscribe,
+    agents?.types ?? noTypes,
+    noTypes,
+  );
   const updating = !!previousManifest;
-  const declaredDetails = hostDeclarations(manifest);
+  const declaredDetails = hostDeclarations(manifest, types);
   const previousDetails = previousManifest
-    ? hostDeclarations(previousManifest)
+    ? hostDeclarations(previousManifest, types)
     : [];
   const previousGrants = previousDetails.map((grant) => grant.signature);
   const removedDetails = previousDetails.filter(

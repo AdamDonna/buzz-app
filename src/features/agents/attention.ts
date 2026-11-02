@@ -33,8 +33,6 @@ export type EventWatch = Readonly<{
   authors?: readonly string[];
   /** The event's author must not be one of these. */
   exclude_authors?: readonly string[];
-  /** Match any case-insensitive literal substring of the event content. */
-  keywords?: readonly string[];
   tags?: Readonly<Record<string, readonly string[]>>;
   /** true: replies only; false: top-level only (NIP-10 `reply` marker). */
   is_reply?: boolean;
@@ -151,7 +149,6 @@ function eventWatch(value: Record<string, unknown>) {
       "name",
       "authors",
       "exclude_authors",
-      "keywords",
       "tags",
       "is_reply",
       "classifier",
@@ -165,16 +162,6 @@ function eventWatch(value: Record<string, unknown>) {
   integer(value.since, "since", 1);
   destination(value);
   const { channels, kinds, tags, classifier } = value;
-  if (value.keywords !== undefined) {
-    if (
-      !Array.isArray(value.keywords) ||
-      !value.keywords.length ||
-      value.keywords.length > 32
-    )
-      fail("keywords must contain 1 to 32 literal strings");
-    for (const keyword of value.keywords as unknown[])
-      filled(keyword, "keywords", 256);
-  }
   if (channels !== "all")
     if (
       !Array.isArray(channels) ||
@@ -353,22 +340,16 @@ export function validateObject(
 export const CHAT_KINDS: readonly number[] = [9, 40003, 40007, 46010];
 
 /** Directly addressed events take the runtime's built-in mention path, never a
- * watch: an encrypted DM (kind 4) to the agent, a chat event that p-tags it, or
- * a non-chat event with an `e` tag naming something it wrote. A chat reply that
- * does not mention it, even in its own thread, is not addressed: only a watch
- * can wake it for one.
+ * watch: an encrypted DM (kind 4) to the agent, or a chat event that p-tags it.
+ * A chat reply that does not mention it, even in its own thread, is not
+ * addressed, and neither is a reaction to or deletion of its message: only a
+ * watch can wake it for one.
  * Its own events are the caller's to skip. */
-export function addressedTo(
-  event: EventData,
-  agent: string,
-  wroteEvent: (id: string) => boolean = () => false,
-) {
+export function addressedTo(event: EventData, agent: string) {
   if (event.pubkey === agent) return false;
-  if (event.kind === 4) return tagsAgent(event, agent);
-  if (CHAT_KINDS.includes(event.kind)) return tagsAgent(event, agent);
-  return event.tags.some(
-    (tag) => tag[0] === "e" && !!tag[1] && wroteEvent(tag[1]),
-  );
+  if (event.kind === 4 || CHAT_KINDS.includes(event.kind))
+    return tagsAgent(event, agent);
+  return false;
 }
 export const tagsAgent = (event: EventData, agent: string) =>
   event.tags.some((tag) => tag[0] === "p" && tag[1] === agent);
@@ -384,13 +365,6 @@ export function watchMatches(watch: EventWatch, event: EventData): boolean {
   if (watch.kinds.length && !watch.kinds.includes(event.kind)) return false;
   if (watch.authors && !watch.authors.includes(event.pubkey)) return false;
   if (watch.exclude_authors?.includes(event.pubkey)) return false;
-  if (watch.keywords) {
-    const content = event.content.toLowerCase();
-    if (
-      !watch.keywords.some((keyword) => content.includes(keyword.toLowerCase()))
-    )
-      return false;
-  }
   for (const [key, values] of Object.entries(watch.tags ?? {}))
     if (
       !event.tags.some(
@@ -492,10 +466,7 @@ export function describeWatch(
         ? `#${only.name}`
         : plural(watch.channels.length, "channel");
   const filtered =
-    watch.authors ||
-    watch.exclude_authors ||
-    watch.keywords ||
-    watch.is_reply !== undefined;
+    watch.authors || watch.exclude_authors || watch.is_reply !== undefined;
   return `${what} in ${where}${filtered ? ", filtered" : ""}`;
 }
 

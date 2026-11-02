@@ -29,6 +29,7 @@ html[data-keyboard-navigation] .link:focus-visible {
    bubbles) set the --mention-* trio, which wins over both.
    Channel hosts reset ordinary buttons, so the color is restated here. */
 [data-mention-kind].link {
+  border-radius: var(--radius-pill);
   text-decoration: none;
   --link-text: var(--mention-text, var(--text-mention));
   --link-hover: var(--mention-hover, var(--affordance-mention-hover));

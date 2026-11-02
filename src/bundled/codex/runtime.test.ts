@@ -12,7 +12,10 @@ import type { RelayData } from "../../features/relay/service";
 import type { EventData } from "../../features/relay/events";
 import { eventDto } from "../../features/relay/events";
 import { keypair, signed } from "../../features/relay/testing";
-import type { HostProcessOptions } from "../../features/host/service";
+import type {
+  McpHandler,
+  HostProcessOptions,
+} from "../../features/host/service";
 import { BUZZ_PROMPT, TOP_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
 import { CodexRuntime, codexStep, programs } from "./runtime";
 import { config } from "./config";
@@ -52,8 +55,10 @@ function fixture(
     model?: string;
     model_reasoning_effort?: string;
     model_reasoning_summary?: string;
+    features?: { hooks?: boolean; codex_hooks?: boolean };
   } = {},
   repositories?: (scope: string | undefined) => string,
+  hooks?: ConstructorParameters<typeof CodexRuntime>[7],
 ) {
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
@@ -125,6 +130,20 @@ function fixture(
             },
           ],
           nextCursor: null,
+        };
+      if (request.method === "hooks/list")
+        result = {
+          data: [
+            {
+              hooks: [
+                {
+                  key: "dispatcher",
+                  currentHash: "fixed",
+                  source: "sessionFlags",
+                },
+              ],
+            },
+          ],
         };
       if (request.method === "config/read")
         result = {
@@ -319,6 +338,7 @@ function fixture(
     config,
     () => added,
     repositories,
+    hooks,
   );
   runtimes.push(runtime);
   const events: EventData[] = [];
@@ -728,7 +748,7 @@ it("keeps an agent's two communities' threads apart, each under its membership's
   await f.complete(0, "HERE");
   await vi.waitFor(() => expect(f.runtime.sessions(elsewhere)).toHaveLength(1));
   const saved = (key: string) =>
-    f.storage.get(`buzz.codex.sessions.v13:${scope}:${key}`);
+    f.storage.get(`buzz.codex.sessions.v17:${scope}:${key}`);
   expect(saved(pubkey)).toBeTruthy();
   expect(saved(elsewhere)).toBeTruthy();
   expect(f.runtime.conversations(pubkey)).toHaveLength(1);
@@ -2481,7 +2501,7 @@ it.each(["/queue", "/stop", "/steer", "/reset"])(
     await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
   },
 );
-it.each(["v2", "v3", "v5", "v6", "v7"])(
+it.each(["v2", "v3", "v5", "v6", "v7", "v15", "v16"])(
   "starts fresh instead of restoring a %s binding, whose tools are out of date",
   async (version) => {
     const f = fixture();
@@ -2503,7 +2523,10 @@ it.each(["v2", "v3", "v5", "v6", "v7"])(
       ?.params as { dynamicTools: { tools: { name: string }[] }[] };
     expect(thread.dynamicTools[0]?.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
+        "channel_list",
+        "channel_get",
         "media_get",
+        "mem_rm",
         "notes_get",
         "notes_set",
         "notes_rm",
@@ -3177,44 +3200,51 @@ it("keeps the notes of a turn Codex refused to start for the next", async () => 
   expect(pending.channel).toEqual(["(I interrupted your reply)"]);
 });
 
-it("finishes final sends normally and preserves the agent's background terminals", async () => {
-  const f = fixture([{ processId: "dev-server" }]);
-  await f.runtime.run(f.delivery("start server"));
-  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
-  const reply = await f.tool("send", {
-    audience: "everyone",
-    text: "http://localhost:3000",
-    final: true,
-  });
-  expect(reply?.result).toMatchObject({ success: true });
-  expect(f.publish).toHaveBeenCalledTimes(1);
-  expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Working");
-  expect(f.sent.some((wire) => wire.method === "turn/interrupt")).toBe(false);
-  // The request is answered, so it stops counting as working before Codex's
-  // closing model call ends the turn.
-  await expect(f.workingUntil.mock.calls[0]?.[0]).resolves.toEqual({
-    ok: true,
-  });
-  const threadId = (f.starts()[0]?.params as { threadId: string } | undefined)
-    ?.threadId;
-  f.emit({
-    method: "turn/completed",
-    params: { threadId, turn: { id: "turn-1", status: "completed" } },
-  });
-  await vi.waitFor(() =>
-    expect(f.sent.some((wire) => wire.method === "thread/unsubscribe")).toBe(
-      true,
-    ),
-  );
-  expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle");
-  expect(
-    f.sent.some((wire) =>
-      wire.method?.startsWith("thread/backgroundTerminals/"),
-    ),
-  ).toBe(false);
-  expect(f.process.end).not.toHaveBeenCalled();
-  expect(f.publish).toHaveBeenCalledTimes(1);
-});
+it.each([
+  ["send", {}],
+  ["reply_in_subthread", { parent: root }],
+])(
+  "finishes a final %s normally and preserves the agent's background terminals",
+  async (name, extra) => {
+    const f = fixture([{ processId: "dev-server" }]);
+    await f.runtime.run(f.delivery("start server"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    const reply = await f.tool(name, {
+      ...extra,
+      audience: "everyone",
+      text: "http://localhost:3000",
+      final: true,
+    });
+    expect(reply?.result).toMatchObject({ success: true });
+    expect(f.publish).toHaveBeenCalledTimes(1);
+    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Working");
+    expect(f.sent.some((wire) => wire.method === "turn/interrupt")).toBe(false);
+    // The request is answered, so it stops counting as working before Codex's
+    // closing model call ends the turn.
+    await expect(f.workingUntil.mock.calls[0]?.[0]).resolves.toEqual({
+      ok: true,
+    });
+    const threadId = (f.starts()[0]?.params as { threadId: string } | undefined)
+      ?.threadId;
+    f.emit({
+      method: "turn/completed",
+      params: { threadId, turn: { id: "turn-1", status: "completed" } },
+    });
+    await vi.waitFor(() =>
+      expect(f.sent.some((wire) => wire.method === "thread/unsubscribe")).toBe(
+        true,
+      ),
+    );
+    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle");
+    expect(
+      f.sent.some((wire) =>
+        wire.method?.startsWith("thread/backgroundTerminals/"),
+      ),
+    ).toBe(false);
+    expect(f.process.end).not.toHaveBeenCalled();
+    expect(f.publish).toHaveBeenCalledTimes(1);
+  },
+);
 
 it.each([false, true])(
   "stops an in-flight file reader at turn end, including late spawn: %s",
@@ -3262,7 +3292,7 @@ it("lists saved conversations newest first from storage, and moves a started one
   const channel = JSON.stringify(["channel", "channel"]);
   const elsewhere = JSON.stringify(["unlisted", root]);
   f.storage.set(
-    `buzz.codex.sessions.v13:${scope}:${pubkey}`,
+    `buzz.codex.sessions.v17:${scope}:${pubkey}`,
     JSON.stringify({
       [channel]: { threadId: "before-timestamps", workspace: "/w" },
       [thread]: { threadId: "older", workspace: "/w", at: 1 },
@@ -3282,6 +3312,7 @@ it("lists saved conversations newest first from storage, and moves a started one
       key: thread,
       channelId: "channel",
       name: "test",
+      channelType: "stream",
       root,
       threadId: "older",
       at: 1,
@@ -3290,6 +3321,7 @@ it("lists saved conversations newest first from storage, and moves a started one
       key: channel,
       channelId: "channel",
       name: "test",
+      channelType: "stream",
       threadId: "before-timestamps",
     },
   ]);
@@ -3299,7 +3331,7 @@ it("lists saved conversations newest first from storage, and moves a started one
   expect(latest?.at).toBeGreaterThan(2);
   const stored = Object.keys(
     JSON.parse(
-      f.storage.get(`buzz.codex.sessions.v13:${scope}:${pubkey}`) ?? "{}",
+      f.storage.get(`buzz.codex.sessions.v17:${scope}:${pubkey}`) ?? "{}",
     ),
   );
   expect(stored.at(-1)).toBe(latest?.key);
@@ -3366,7 +3398,7 @@ it("always offers the attention tools, on search, keeps the thread when attentio
   );
   const next = f.starts()[1]?.params as { input: { text: string }[] };
   expect(next.input[0]?.text).toMatch(
-    /<attention>\nYour owner has attention off/,
+    /<attention>\nAttention is off on this device/,
   );
   expect(next.input[0]?.text).not.toContain("Handle the work");
   const off = await f.tool("interest_show", { id: "ops" }, 1);
@@ -3420,7 +3452,7 @@ it("offers the tools plugins add, runs them as the agent here, and starts a new 
     1,
   );
   const saved = JSON.parse(
-    f.storage.get(`buzz.codex.sessions.v13:${scope}:${pubkey}`) ?? "{}",
+    f.storage.get(`buzz.codex.sessions.v17:${scope}:${pubkey}`) ?? "{}",
   );
   expect(Object.values(saved)).toEqual([
     expect.objectContaining({ tools: expect.any(String) }),
@@ -3639,7 +3671,7 @@ it("ends a queued mention with the attention note current when it starts", async
   const text = (
     f.starts()[1]?.params as { input: { text: string }[] } | undefined
   )?.input[0]?.text;
-  expect(text).toMatch(/<attention>\nYour owner has attention off/);
+  expect(text).toMatch(/<attention>\nAttention is off on this device/);
   await f.complete(1, "SECOND");
 });
 
@@ -4341,7 +4373,7 @@ it("delivers a rootless subscription to its channel without publishing its ancho
   expect(JSON.stringify(f.publish.mock.calls)).not.toContain(WAKE_ID);
 });
 
-it.each(["v7", "v12"])(
+it.each(["v7", "v12", "v13"])(
   "does not reuse %s persisted bindings with older built-in tool schemas",
   (version) => {
     const f = fixture();
@@ -4447,4 +4479,128 @@ it("refuses a handoff from a channel-scoped Codex session to another of its chan
     "That is this conversation.",
   );
   expect(handoff).not.toHaveBeenCalled();
+});
+
+it("keeps callbacks live beside terminals and lets a title finish after its admission closes", async () => {
+  let handler!: McpHandler;
+  let enabled = true;
+  const close = vi.fn(async () => {});
+  const f = fixture([{}], undefined, false, {}, undefined, {
+    serve: async (run) => {
+      handler = run;
+      return {
+        url: "http://127.0.0.1:1/mcp",
+        headers: [],
+        close,
+        closed: new Promise(() => {}),
+      };
+    },
+    run: async () => (enabled ? { decision: "block", reason: "policy" } : {}),
+  });
+  asSoloChat(f);
+  const named = vi.fn();
+  await f.runtime.run({ ...f.delivery("@Codex title this"), named });
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+  const title = f.sent.filter((wire) => wire.method === "thread/start")[1];
+  expect(title?.params).toMatchObject({
+    config: {
+      mcp_servers: { buzz_native_hooks: { enabled: false } },
+      "hooks.state": { dispatcher: { enabled: false } },
+    },
+  });
+  const call = () =>
+    handler({
+      id: 1,
+      method: "tools/call",
+      params: { name: "PreToolUse", arguments: { session_id: "thread-1" } },
+    });
+  expect(await call()).toMatchObject({
+    result: { content: [{ text: '{"decision":"block","reason":"policy"}' }] },
+  });
+  enabled = false;
+  expect(await call()).toMatchObject({ result: { content: [{ text: "{}" }] } });
+  await f.complete(0, "FIRST");
+  await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(
+    f.sent.some(
+      (wire) => wire.method === "thread/backgroundTerminals/terminate",
+    ),
+  ).toBe(false);
+  f.emit({
+    method: "item/completed",
+    params: {
+      threadId: "thread-2",
+      item: { type: "agentMessage", text: '{"title":"Still running"}' },
+    },
+  });
+  f.emit({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-2",
+      turn: { id: "turn-2", status: "completed" },
+    },
+  });
+  await vi.waitFor(() => expect(named).toHaveBeenCalledWith("Still running"));
+});
+
+it.each([
+  { features: { hooks: false }, disabled: true },
+  { features: { codex_hooks: false }, disabled: true },
+  { features: { hooks: false, codex_hooks: true }, disabled: true },
+  { features: { hooks: true, codex_hooks: false }, disabled: false },
+  { features: { codex_hooks: true }, disabled: false },
+])(
+  "honors native hook flags $features before opening the bridge",
+  async ({ features, disabled }) => {
+    const serve = vi.fn(async () => ({
+      url: "http://127.0.0.1:1/mcp",
+      headers: [],
+      close: async () => {},
+      closed: new Promise<void>(() => {}),
+    }));
+    const f = fixture([], undefined, false, { features }, undefined, {
+      serve,
+      run: async () => ({}),
+    });
+    await f.runtime.run(f.delivery("@Codex hi"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(serve).toHaveBeenCalledTimes(disabled ? 0 : 1);
+    const started = f.sent.find((wire) => wire.method === "thread/start");
+    if (!started) throw new Error("No thread start");
+    const config = (started.params as { config: Record<string, unknown> })
+      .config;
+    expect(config).not.toHaveProperty("features.hooks");
+    expect(
+      Object.hasOwn(config.mcp_servers as object, "buzz_native_hooks"),
+    ).toBe(!disabled);
+    expect(f.sent.some((wire) => wire.method === "hooks/list")).toBe(!disabled);
+    await f.complete(0);
+    await f.runtime.run(f.delivery("@Codex again"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    const resumed = f.sent.find((wire) => wire.method === "thread/resume")
+      ?.params as { config: Record<string, unknown> };
+    expect(resumed.config).not.toHaveProperty("features.hooks");
+    expect(serve).toHaveBeenCalledTimes(disabled ? 0 : 2);
+    await f.complete(1);
+  },
+);
+
+it("keeps interrupting an idle existing conversation a no-op", async () => {
+  const f = fixture();
+  const delivery = f.delivery("first");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  await f.complete();
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  await expect(
+    f.runtime.session(agent, { channelId: "channel", root }, "interrupt"),
+  ).resolves.toBeUndefined();
 });

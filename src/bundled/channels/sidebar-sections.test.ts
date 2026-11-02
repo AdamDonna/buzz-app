@@ -1,10 +1,24 @@
 import { expect, it } from "vitest";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import {
+  orderContributedSidebarSections,
   isChannelDropSectionKey,
   isChannelSectionKey,
   sidebarSections,
 } from "./sidebar-sections";
+
+it("keeps contributed order stable and lets saved preferences lead", () => {
+  const sections = [
+    { key: "plugin/a" },
+    { key: "plugin/b" },
+    { key: "plugin/c" },
+  ];
+  expect(
+    orderContributedSidebarSections(sections, ["plugin/c", "plugin/a"]).map(
+      ({ key }) => key,
+    ),
+  ).toEqual(["plugin/c", "plugin/a", "plugin/b"]);
+});
 
 const row = (
   id: string,

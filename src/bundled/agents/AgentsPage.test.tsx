@@ -34,7 +34,7 @@ import type {
 import type { OldTeam, PortableAgent } from "../../features/agents/native";
 import { localStore } from "../../features/agents/state";
 import { setDefaultAgent } from "../../features/solo/default-agent";
-import { writeView } from "../../shared/view-state";
+import { readView, writeView } from "../../shared/view-state";
 import type { RelayData } from "../../features/relay/service";
 import type { CommunityReader } from "../../features/communities/service";
 import type { Navigation } from "../../features/navigation/controller";
@@ -165,6 +165,7 @@ function setup(
       navigator?: Navigation;
       communities?: CommunityReader;
     },
+    teams = [] as AgentsSnapshot["teams"],
   } = {},
 ) {
   let snapshot: AgentsSnapshot = {
@@ -173,7 +174,7 @@ function setup(
     agents: saved,
     running: saved,
     interrupted: [],
-    teams: [],
+    teams,
   };
   const listeners = new Set<() => void>();
   const echoProvider = provider("ready", ({ onClose }) => (
@@ -356,6 +357,12 @@ function setup(
       for (const listener of listeners) listener();
       return team;
     }),
+    // The selected community, where each hosted agent was picked, syncs teams
+    // and is every synced team's home.
+    teamHere: vi.fn(
+      ({ id }: Pick<TeamChange, "id" | "draft">, _community?: string) =>
+        !id || !!snapshot.teams.find((team) => team.id === id)?.revision,
+    ),
     core: vi.fn(async () => undefined),
     removeTeam: vi.fn(async (id: string) => {
       snapshot = {
@@ -365,6 +372,7 @@ function setup(
       for (const listener of listeners) listener();
     }),
     attentionProviders: () => [],
+    presentWatch: () => undefined,
     addAttentionSource: vi.fn(),
     storage: localStore(),
     resumeInterrupted: vi.fn(),
@@ -383,7 +391,12 @@ function setup(
     updateRequests: () => [],
     dismissUpdate: vi.fn(),
     approveUpdate: vi.fn(),
+    registerHook: vi.fn(),
+    dispatchHook: vi.fn(async () => undefined),
     configHistory: () => undefined,
+    addedTabs: () => [],
+    registerTab: () => {},
+    controlAttention: () => {},
   } satisfies Agents;
   const disconnected = { status: "disconnected", generation: 0 };
   const relay = {
@@ -395,7 +408,11 @@ function setup(
     snapshot = { ...snapshot, agents: next };
     for (const listener of listeners) listener();
   };
-  return { agents, echoProvider, types, show, relay, ...view };
+  const change = (patch: Partial<AgentsSnapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    for (const listener of listeners) listener();
+  };
+  return { agents, echoProvider, types, show, change, relay, ...view };
 }
 
 it("opens settings for a selected agent beside the grid and follows the arrow keys", async () => {
@@ -418,7 +435,7 @@ it("opens settings for a selected agent beside the grid and follows the arrow ke
   expect(
     within(profilePane).getByRole("tablist", { name: "Panel tabs" }),
   ).toBeVisible();
-  expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -432,9 +449,7 @@ it("opens settings for a selected agent beside the grid and follows the arrow ke
   expect(screen.getByRole("gridcell", { name: /Bo/ })).toHaveFocus();
 
   await user.keyboard("{Escape}");
-  expect(
-    screen.queryByRole("tab", { name: "Identity" }),
-  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Reply" })).not.toBeInTheDocument();
   expect(grid).toBeInTheDocument();
 });
 
@@ -451,7 +466,6 @@ it("opens the side panel with the type's tabs and the app's Settings and Memory 
     "Your teams",
     "Marketplace",
     "AAda",
-    "Identity",
     "Reply",
     "Memory",
     "Settings",
@@ -463,10 +477,6 @@ it("opens the side panel with the type's tabs and the app's Settings and Memory 
   ).not.toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "Reply" }));
   expect(screen.getByText("Reply tab")).toBeInTheDocument();
-  await user.click(screen.getByRole("tab", { name: "Settings" }));
-  expect(
-    screen.getByRole("switch", { name: "Attention on this device" }),
-  ).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Close Ada tab" }));
   expect(screen.getByRole("gridcell", { name: /Ada/ })).toHaveAttribute(
@@ -635,7 +645,7 @@ it("checks providers in Agent setup and opens their host-owned dialogs", async (
   }
 });
 
-it("restores legacy provider links and writes close visits", async () => {
+it("restores provider links and retires only that provider's visits after close guards permit it", async () => {
   const user = userEvent.setup();
   const base = {
     version: 1,
@@ -653,9 +663,11 @@ it("restores legacy provider links and writes close visits", async () => {
     target: base,
   };
   const open = vi.fn(async () => ({ status: "opened" as const }));
+  const dismiss = vi.fn();
   const navigator = {
     snapshot: () => ({ entry: current }),
     open,
+    dismiss,
   } as unknown as Navigation;
   const request = (): PageNavigation => {
     const navigation = {
@@ -691,10 +703,59 @@ it("restores legacy provider links and writes close visits", async () => {
 
   current = { id: "provider", target: routed };
   restored.rerender(pageView(view.agents, view.relay));
+  act(() => view.echoProvider.set({ readiness: "ready", blocking: true }));
+  await user.keyboard("{Escape}");
+  expect(dismiss).not.toHaveBeenCalled();
+  expect(await screen.findByRole("button", { name: "Close" })).toBeDisabled();
+  act(() => view.echoProvider.set({ readiness: "ready" }));
   await user.click(await screen.findByRole("button", { name: "Close" }));
-  await vi.waitFor(() =>
-    expect(open).toHaveBeenLastCalledWith(base, { replace: true }),
-  );
+  expect(dismiss).toHaveBeenCalledOnce();
+  const [matches, fallback] = dismiss.mock.calls[0] as unknown as [
+    (target: OpenTarget) => boolean,
+    OpenTarget,
+  ];
+  expect(fallback).toEqual(base);
+  expect(matches(routed)).toBe(true);
+  expect(matches(base)).toBe(false);
+  expect(
+    matches({
+      ...routed,
+      route: { version: 1, params: { provider: "test/other" } },
+    }),
+  ).toBe(false);
+  const { scope: _scope, ...unscoped } = routed;
+  expect(matches(unscoped)).toBe(false);
+  expect(open).not.toHaveBeenCalled();
+});
+
+it("opens the agent a link names, on Your agents", async () => {
+  const target = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.agents",
+    pageId: "agents",
+    scope: null,
+    route: { version: 1, params: { agent: "2".repeat(64) } },
+  } as const;
+  const navigator = {
+    snapshot: () => ({ entry: { id: "agent", target } }),
+    open: vi.fn(async () => ({ status: "opened" as const })),
+  } as unknown as Navigation;
+  const navigation: PageNavigation = {
+    entryId: "agent",
+    target,
+    signal: new AbortController().signal,
+    focus: "content",
+    forSession: () => navigation,
+    resolve: () => true,
+    complete: () => true,
+  };
+  setup([agent("Ada", 1), agent("Bea", 2)], {
+    page: { navigator, navigation },
+  });
+  const profile = await screen.findByRole("region", { name: "Agent profile" });
+  expect(within(profile).getAllByText("Bea").length).toBeGreaterThan(0);
+  expect(within(profile).queryByText("Ada")).toBeNull();
 });
 
 it("shows an agent's picture in the grid and side panel", async () => {
@@ -1430,12 +1491,12 @@ it("imports an exported agent file as a new agent of the type that runs it", asy
     ),
   );
   const confirmation = await screen.findByRole("dialog", {
-    name: "Import Scout",
+    name: "Scout",
   });
   // What the new agent will follow is shown before it is accepted.
   expect(
-    within(confirmation).getByRole("region", { name: "Agent instructions" }),
-  ).toHaveTextContent("Scout ahead.");
+    within(confirmation).getByRole("textbox", { name: "Instructions" }),
+  ).toHaveValue("Scout ahead.");
   await user.click(
     within(confirmation).getByRole("button", { name: "Import" }),
   );
@@ -2407,6 +2468,255 @@ it("makes a team of chosen agents and lists it with its members", async () => {
   expect(screen.queryByRole("list", { name: "Teams" })).not.toBeInTheDocument();
 });
 
+it("offers hosted agents as members, warning that they may not get the instructions", async () => {
+  const user = userEvent.setup();
+  setup([
+    agent("Ada", 1),
+    { ...agent("Sky", 2), place: "hosted" },
+    { ...agent("Kai", 5), place: "hosted" },
+    { ...agent("Bo", 3), place: "hosted", unfinished: true },
+    { ...agent("Cy", 4), place: "elsewhere" },
+  ]);
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  await user.click(screen.getByRole("button", { name: "New team" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Create a new team" }),
+  );
+  const members = ["Ada", "Sky", "Bo", "Cy"].map((name) =>
+    screen.queryByRole("checkbox", { name }),
+  );
+  expect(members.map(Boolean)).toEqual([true, true, false, false]);
+  const instructions = screen.getByRole("textbox", { name: "Instructions" });
+  const local = "Every member follows these after its own instructions.";
+  await user.click(screen.getByRole("checkbox", { name: "Ada" }));
+  expect(instructions).toHaveAccessibleDescription(local);
+  await user.click(screen.getByRole("checkbox", { name: "Sky" }));
+  expect(instructions).toHaveAccessibleDescription(
+    "Agents on your devices follow these after their own instructions. Agents run by their provider (Sky) will not get these team instructions.",
+  );
+  await user.click(screen.getByRole("checkbox", { name: "Kai" }));
+  expect(instructions).toHaveAccessibleDescription(
+    /\(Sky and Kai\) will not get these team instructions\.$/,
+  );
+  await user.click(screen.getByRole("checkbox", { name: "Sky" }));
+  await user.click(screen.getByRole("checkbox", { name: "Kai" }));
+  expect(instructions).toHaveAccessibleDescription(local);
+});
+
+it("offers hosted agents only to a team Save puts in this community", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const synced = (id: string, name: string) => ({
+    id,
+    name,
+    instructions: "",
+    members: [ada.pubkey],
+    revision: "1",
+  });
+  const { agents } = setup([ada, { ...agent("Sky", 2), place: "hosted" }], {
+    teams: [
+      { id: "crew", name: "Crew", instructions: "", members: [ada.pubkey] },
+      synced("synced", "Synced"),
+      synced("away", "Away"),
+    ],
+  });
+  // Away's home is another community, and a new team made here is local.
+  agents.teamHere.mockImplementation(({ id }) => id === "synced");
+  const sky = () => screen.queryByRole("checkbox", { name: "Sky" });
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  for (const name of ["Crew", "Away", "Synced"]) {
+    await user.click(screen.getByRole("button", { name }));
+    expect(screen.getByRole("checkbox", { name: "Ada" })).toBeChecked();
+    expect(!!sky()).toBe(name === "Synced");
+    await user.keyboard("{Escape}");
+  }
+  await user.click(screen.getByRole("button", { name: "New team" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Create a new team" }),
+  );
+  expect(agents.teamHere).toHaveBeenCalledWith({ draft: expect.any(String) });
+  expect(screen.getByRole("checkbox", { name: "Ada" })).toBeInTheDocument();
+  expect(sky()).not.toBeInTheDocument();
+});
+
+it("leaves a hosted agent picked in another community off a new team, keeping the rest", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const sky: Agent = { ...agent("Sky", 2), place: "hosted" };
+  const { agents, show } = setup([ada, sky], {
+    teams: [
+      {
+        id: "sky",
+        name: "Sky crew",
+        instructions: "",
+        members: [sky.pubkey],
+        revision: "1",
+      },
+    ],
+  });
+  // Ada runs on this device, in the first community only.
+  agents.memberships.mockImplementation((pubkey) =>
+    pubkey === ada.pubkey
+      ? [{ key: ada.key, origin: "https://relay.example", connected: true }]
+      : [],
+  );
+  // A new team syncs in the selected community.
+  let selected = ada.relay;
+  agents.teamHere.mockImplementation(
+    ({ id }, community = selected) => !!id || community === selected,
+  );
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  await user.click(screen.getByRole("button", { name: "New team" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Create a new team" }),
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "Crew");
+  await user.click(screen.getByRole("checkbox", { name: "Ada" }));
+  await user.click(screen.getByRole("checkbox", { name: "Sky" }));
+  // Another community that syncs teams, with its own hosted agent.
+  const other = "wss://other.example";
+  act(() => {
+    selected = other;
+    show([
+      { ...agent("Bo", 3), relay: other },
+      { ...agent("Kai", 5), place: "hosted", relay: other },
+    ]);
+  });
+  expect(screen.getByRole("form", { name: "New team" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("checkbox", { name: "Sky" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Kai" })).not.toBeChecked();
+  expect(
+    screen.getByText("+1 in your other communities, who stay on the team."),
+  ).toBeInTheDocument();
+  const instructions = screen.getByRole("textbox", { name: "Instructions" });
+  expect(instructions).toHaveAccessibleDescription(
+    "Every member follows these after its own instructions.",
+  );
+  await user.click(screen.getByRole("button", { name: "Create team" }));
+  expect(agents.saveTeam).toHaveBeenLastCalledWith({
+    draft: expect.any(String),
+    name: "Crew",
+    instructions: "",
+    members: [ada.pubkey],
+  });
+  // A hosted member the team already has stays, though not listed here.
+  await user.click(screen.getByRole("button", { name: "Sky crew" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  expect(agents.saveTeam).toHaveBeenLastCalledWith(
+    expect.objectContaining({ id: "sky", members: [sky.pubkey] }),
+  );
+});
+
+it("keeps a hosted agent picked for a new team while its community lists agents again", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const sky: Agent = { ...agent("Sky", 2), place: "hosted" };
+  const { agents, show } = setup([ada, sky]);
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  await user.click(screen.getByRole("button", { name: "New team" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Create a new team" }),
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "Crew");
+  await user.click(screen.getByRole("checkbox", { name: "Ada" }));
+  await user.click(screen.getByRole("checkbox", { name: "Sky" }));
+  // The community reconnects and still syncs teams, but its hosted agents
+  // are unlisted until their records are read again, so Save refuses Sky,
+  // which still shows checked.
+  act(() => show([ada]));
+  expect(screen.getByRole("checkbox", { name: "Sky" })).toBeChecked();
+  const refusal = "Can't tell yet whether Sky is in relay.example";
+  agents.saveTeam.mockRejectedValueOnce(new Error(refusal));
+  await user.click(screen.getByRole("button", { name: "Create team" }));
+  const form = screen.getByRole("form", { name: "New team" });
+  expect(await within(form).findByRole("alert")).toHaveTextContent(refusal);
+  const draft = agents.saveTeam.mock.calls.at(-1)?.[0].draft;
+  expect(agents.saveTeam).toHaveBeenLastCalledWith({
+    draft: expect.any(String),
+    name: "Crew",
+    instructions: "",
+    members: [ada.pubkey, sky.pubkey],
+  });
+  // Once they are, Sky is listed again, and Create keeps the draft.
+  act(() => show([ada, sky]));
+  expect(screen.getAllByRole("checkbox", { name: "Sky" })).toHaveLength(1);
+  expect(screen.getByRole("checkbox", { name: "Sky" })).toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Create team" }));
+  expect(agents.saveTeam).toHaveBeenLastCalledWith({
+    draft,
+    name: "Crew",
+    instructions: "",
+    members: [ada.pubkey, sky.pubkey],
+  });
+});
+
+it("lets a hosted agent picked for a new team be unchecked once it is no longer listed", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const sky: Agent = { ...agent("Sky", 2), place: "hosted" };
+  const { agents, show } = setup([ada, sky]);
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  await user.click(screen.getByRole("button", { name: "New team" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Create a new team" }),
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "Crew");
+  await user.click(screen.getByRole("checkbox", { name: "Ada" }));
+  await user.click(screen.getByRole("checkbox", { name: "Sky" }));
+  // Sky is deleted from another device, and the community's agent list is
+  // read without it, so Save refuses it. It still shows, named in the warning.
+  act(() => show([ada]));
+  expect(
+    screen.getByRole("textbox", { name: "Instructions" }),
+  ).toHaveAccessibleDescription(
+    /\(Sky\) will not get these team instructions\.$/,
+  );
+  const refusal = "Add Sky to relay.example first";
+  agents.saveTeam.mockRejectedValueOnce(new Error(refusal));
+  await user.click(screen.getByRole("button", { name: "Create team" }));
+  const form = screen.getByRole("form", { name: "New team" });
+  expect(await within(form).findByRole("alert")).toHaveTextContent(refusal);
+  const draft = agents.saveTeam.mock.calls.at(-1)?.[0].draft;
+  // Unchecking it keeps the draft, and Create leaves it off.
+  await user.click(screen.getByRole("checkbox", { name: "Sky" }));
+  expect(screen.getByRole("checkbox", { name: "Sky" })).not.toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Create team" }));
+  expect(agents.saveTeam).toHaveBeenLastCalledWith({
+    draft,
+    name: "Crew",
+    instructions: "",
+    members: [ada.pubkey],
+  });
+});
+
+it("offers an open new team hosted agents once its community is known to sync teams", async () => {
+  const user = userEvent.setup();
+  const { agents, change } = setup([
+    agent("Ada", 1),
+    { ...agent("Sky", 2), place: "hosted" },
+  ]);
+  // A new team syncs here once the community's config channels are up.
+  agents.teamHere.mockImplementation(
+    ({ id }) => !id && !!agents.snapshot().syncsTeams,
+  );
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  await user.click(screen.getByRole("button", { name: "New team" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Create a new team" }),
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "Crew");
+  await user.click(screen.getByRole("checkbox", { name: "Ada" }));
+  expect(
+    screen.queryByRole("checkbox", { name: "Sky" }),
+  ).not.toBeInTheDocument();
+  act(() => change({ syncsTeams: true }));
+  expect(screen.getByRole("checkbox", { name: "Sky" })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Ada" })).toBeChecked();
+  expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Crew");
+});
+
 it("closes the team editor when leaving Your teams", async () => {
   const user = userEvent.setup();
   const { agents } = setup([agent("Ada", 1)]);
@@ -2451,6 +2761,93 @@ it("offers New team again when the team being edited disappears", async () => {
   expect(screen.getByRole("button", { name: "New team" })).toBeInTheDocument();
 });
 
+it("explains an unavailable harness without claiming the key is on another device", async () => {
+  const user = userEvent.setup();
+  setup([
+    {
+      ...agent("Starf", 3),
+      type: "block.builderlab/builderlab",
+      place: "elsewhere",
+    },
+  ]);
+  const grid = screen.getByRole("grid", { name: "Agents" });
+  expect(within(grid).getByText("Harness unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("On another device")).not.toBeInTheDocument();
+
+  await user.click(within(grid).getByText("Starf"));
+  expect(screen.getByText(/Check Settings → Plugins/)).toBeInTheDocument();
+  expect(screen.queryByText(/another of your devices/)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Delete agent" }),
+  ).not.toBeInTheDocument();
+});
+
+it("shows a synced team only where its members are, after switching communities", async () => {
+  const user = userEvent.setup();
+  const sky: Agent = { ...agent("Sky", 2), place: "hosted" };
+  const { agents, show } = setup([agent("Ada", 1), sky], {
+    teams: [
+      {
+        id: "sky",
+        name: "Sky crew",
+        instructions: "",
+        members: [sky.pubkey],
+        revision: "1",
+      },
+      {
+        id: "empty",
+        name: "Empty",
+        instructions: "",
+        members: [],
+        revision: "1",
+      },
+      {
+        id: "stale",
+        name: "Stale",
+        instructions: "",
+        members: ["9".repeat(64)],
+      },
+    ],
+  });
+  const listed = () =>
+    within(screen.getByRole("list", { name: "Teams" }))
+      .getAllByRole("button")
+      .map((card) => card.getAttribute("aria-label"));
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  expect(listed()).toEqual(["Sky crew", "Empty", "Stale"]);
+  await user.click(screen.getByRole("button", { name: "Sky crew" }));
+  expect(
+    screen.getByRole("form", { name: "Edit Sky crew" }),
+  ).toBeInTheDocument();
+  // Bo's community is no synced team's home.
+  agents.teamHere.mockReturnValue(false);
+  act(() => show([agent("Bo", 3)]));
+  expect(
+    screen.queryByRole("form", { name: "Edit Sky crew" }),
+  ).not.toBeInTheDocument();
+  expect(listed()).toEqual(["Empty", "Stale"]);
+});
+
+it("keeps a synced team in its home while none of its members is listed", async () => {
+  const user = userEvent.setup();
+  const { agents } = setup([agent("Ada", 1)], {
+    teams: [
+      {
+        id: "gone",
+        name: "Gone",
+        instructions: "",
+        members: ["9".repeat(64)],
+        revision: "1",
+      },
+    ],
+  });
+  await user.click(screen.getByRole("tab", { name: "Your teams" }));
+  expect(agents.teamHere).toHaveBeenCalledWith({ id: "gone" });
+  await user.click(screen.getByRole("button", { name: "Gone" }));
+  await user.click(screen.getByRole("button", { name: "Delete team" }));
+  expect(agents.removeTeam).toHaveBeenCalledWith("gone");
+});
+
 it("shows an agent on another device read-only, and offers only Finish setup and Delete for an unfinished hosted one", async () => {
   const user = userEvent.setup();
   const far: Agent = {
@@ -2491,7 +2888,7 @@ it("shows an agent on another device read-only, and offers only Finish setup and
   expect(screen.getByRole("grid")).toBeInTheDocument();
 });
 
-it("moves focus from Finish setup to Identity once the setup finishes", async () => {
+it("moves focus from Finish setup to the first tab once the setup finishes", async () => {
   const user = userEvent.setup();
   const finished: Agent = {
     ...agent("Sky", 4),
@@ -2506,7 +2903,7 @@ it("moves focus from Finish setup to Identity once the setup finishes", async ()
   await user.click(screen.getByText("Sky"));
   screen.getByRole("button", { name: "Finish setup" }).focus();
   await user.keyboard("{Enter}");
-  expect(await screen.findByRole("tab", { name: "Identity" })).toHaveFocus();
+  expect(await screen.findByRole("tab", { name: "Reply" })).toHaveFocus();
 });
 
 it("keeps a failed Delete's agent and its warning on screen", async () => {
@@ -2647,7 +3044,7 @@ it("opens deletion from the card menu without selecting it and requires confirma
   await user.click(
     await screen.findByRole("menuitem", { name: "Open settings" }),
   );
-  expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -2881,17 +3278,15 @@ it("opens avatar and name editing from the profile menu", async () => {
     await screen.findByRole("menuitem", { name: "Change avatar" }),
   );
   const dialog = await screen.findByRole("dialog", { name: "Change avatar" });
-  expect(dialog).toHaveAttribute("data-height", "stable-tall");
-  expect(
-    within(dialog).getByRole("button", { name: "Use custom" }),
-  ).toBeVisible();
+  expect(dialog).toHaveAttribute("data-height", "content");
+  expect(within(dialog).getByRole("tab", { name: "Emoji" })).toBeVisible();
   expect(
     within(dialog).queryByRole("button", { name: "Back" }),
   ).not.toBeInTheDocument();
   expect(
     within(dialog).getByRole("button", { name: "Save changes" }),
   ).toBeDisabled();
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await user.click(within(dialog).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(menu).toHaveFocus());
   await user.click(menu);
   await user.click(
@@ -2904,16 +3299,7 @@ it("opens avatar and name editing from the profile menu", async () => {
   expect(agents.save).not.toHaveBeenCalled();
 });
 
-it("leaves an open avatar picker by Back, Escape or Cancel without saving", async () => {
-  for (const name of ["ResizeObserver", "IntersectionObserver"])
-    vi.stubGlobal(
-      name,
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
+it("keeps avatar changes as a draft until Save and closes without saving", async () => {
   const user = userEvent.setup();
   const { agents } = setup([agent("Ada", 1)]);
   await user.click(screen.getByRole("gridcell", { name: /Ada/ }));
@@ -2924,24 +3310,17 @@ it("leaves an open avatar picker by Back, Escape or Cancel without saving", asyn
     await screen.findByRole("menuitem", { name: "Change avatar" }),
   );
   const dialog = await screen.findByRole("dialog", { name: "Change avatar" });
-  await user.click(within(dialog).getByRole("button", { name: "Use custom" }));
   await user.click(within(dialog).getByRole("tab", { name: "Emoji" }));
-  // Let Mart finish mounting so it cannot outlive the test.
-  await waitFor(() =>
-    expect(
-      dialog
-        .querySelector("em-emoji-picker")
-        ?.shadowRoot?.querySelector("input"),
-    ).toBeTruthy(),
-  );
-  await user.click(within(dialog).getByRole("button", { name: "Back" }));
-  await user.click(within(dialog).getByRole("button", { name: "Use custom" }));
-  await user.keyboard("{Escape}");
   expect(
-    await within(dialog).findByRole("button", { name: "Use custom" }),
+    within(dialog).getByRole("button", { name: "Choose emoji" }),
   ).toBeVisible();
-  await user.click(within(dialog).getByRole("button", { name: "Use custom" }));
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(
+    within(dialog).getByRole("group", { name: "Avatar background" }),
+  ).toBeVisible();
+  expect(agents.save).not.toHaveBeenCalled();
+  await user.keyboard("{Escape}");
+  expect(dialog).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Close" }));
   await waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );
@@ -2970,7 +3349,7 @@ it("shares the editable owner profile with chat profile targets", async () => {
       />,
     );
     expect(screen.getByRole("heading", { name: "Ada" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Identity" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Reply" })).toBeVisible();
     expect(screen.queryByRole("tab", { name: "Info" })).not.toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(
@@ -2986,47 +3365,32 @@ it("shares the editable owner profile with chat profile targets", async () => {
   }
 });
 
-it("saves an avatar directly from its choices and cancels a changed draft", async () => {
+it("saves an avatar directly from the creation picker", async () => {
   const user = userEvent.setup();
   const { agents } = setup([agent("Ada", 1)]);
+  vi.mocked(agents.save).mockRejectedValueOnce(
+    new Error("Could not save avatar"),
+  );
   await user.click(screen.getByRole("gridcell", { name: /Ada/ }));
-  const open = async () => {
-    await user.click(
-      screen.getByRole("button", { name: "Agent profile actions" }),
-    );
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Change avatar" }),
-    );
-    return screen.findByRole("dialog", { name: "Change avatar" });
-  };
-  let dialog = await open();
-  await user.click(within(dialog).getByRole("button", { name: "Gloopies" }));
+  await user.click(
+    screen.getByRole("button", { name: "Agent profile actions" }),
+  );
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Change avatar" }),
+  );
+  const dialog = await screen.findByRole("dialog", { name: "Change avatar" });
   await user.click(within(dialog).getByRole("button", { name: "Gloopies 1" }));
-  expect(
-    within(dialog).getByRole("button", { name: "Gloopies 1" }),
-  ).toHaveAttribute("aria-pressed", "true");
   expect(
     within(dialog).queryByRole("textbox", { name: "Agent name" }),
   ).not.toBeInTheDocument();
-  expect(
-    within(dialog).queryByRole("button", { name: "Back" }),
-  ).not.toBeInTheDocument();
   expect(agents.save).not.toHaveBeenCalled();
-  await user.keyboard("{Escape}");
-  expect(
-    within(dialog).getByRole("button", { name: /^Gloopies$/ }),
-  ).toBeVisible();
-  await user.keyboard("{Escape}");
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save changes" }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Could not save avatar",
+  );
   expect(dialog).toBeVisible();
-  await user.click(within(dialog).getByRole("button", { name: /^Gloopies$/ }));
-  expect(
-    within(dialog).getByRole("button", { name: "Gloopies 1" }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  expect(agents.save).not.toHaveBeenCalled();
-  dialog = await open();
-  await user.click(within(dialog).getByRole("button", { name: "Gloopies" }));
-  await user.click(within(dialog).getByRole("button", { name: "Gloopies 1" }));
   await user.click(
     within(dialog).getByRole("button", { name: "Save changes" }),
   );
@@ -3086,7 +3450,7 @@ it("opens the owned agent provider Activity tab for the originating conversation
         close={close}
       />,
     );
-    expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -3106,10 +3470,8 @@ it("opens the owned agent provider Activity tab for the originating conversation
     expect(
       screen.getByText(`Transcript: ${ada.pubkey} / channel-a`),
     ).toBeVisible();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("tab", { name: "Identity" }));
-    expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Reply" }));
+    expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -3145,10 +3507,9 @@ it("removes an existing avatar through the image editor and explicit Save", asyn
     await screen.findByRole("menuitem", { name: "Change avatar" }),
   );
   const dialog = await screen.findByRole("dialog", { name: "Change avatar" });
-  await user.click(within(dialog).getByRole("button", { name: "Use custom" }));
-  const url = within(dialog).getByRole("textbox", { name: /url/i });
-  await user.clear(url);
-  await user.click(within(dialog).getByRole("button", { name: "Done" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "Remove avatar" }),
+  );
   expect(agents.save).not.toHaveBeenCalled();
   await user.click(
     within(dialog).getByRole("button", { name: "Save changes" }),
@@ -3180,13 +3541,14 @@ it("retains the selected profile draft while viewing teams", async () => {
   expect(agents.save).not.toHaveBeenCalled();
 });
 
-it("announces the main agent and presents its menu status without a fake toggle", async () => {
+it("announces the Bestie on its card without repeating it in actions", async () => {
   const ada = agent("Ada", 1);
   const view = setup([ada]);
   const choices = {
     status: "ready",
     complete: true,
     pending: false,
+    identities: [{ pubkey: ada.pubkey, name: ada.name, managed: true }],
     selectable: [{ pubkey: ada.pubkey, name: ada.name, managed: true }],
     archives: { status: "unavailable", archived: [] },
   };
@@ -3206,19 +3568,20 @@ it("announces the main agent and presents its menu status without a fake toggle"
     subscribe: () => () => {},
   } as unknown as RelayData;
   view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
-  const card = screen.getByRole("gridcell", { name: "Ada, Main agent" });
-  expect(within(card).getByRole("img", { name: "Main agent" })).toBeVisible();
+  const card = screen.getByRole("gridcell", { name: "Ada, Bestie" });
+  expect(within(card).getByText("Bestie")).toBeVisible();
+  expect(within(card).queryByRole("img", { name: "Bestie" })).toBeNull();
   fireEvent.keyDown(card, { key: "F10", shiftKey: true });
   const menu = await screen.findByRole("menu", { name: "Actions for Ada" });
-  expect(within(menu).getByText("Main agent")).toBeVisible();
-  // Right-click carries the same actions as the card's "..." menu.
+  expect(within(menu).queryByText("Bestie")).toBeNull();
+  // Right-click carries the same ordinary actions as the card's "..." menu.
   expect(
     within(menu).getByRole("menuitem", { name: "Copy public key" }),
   ).toBeVisible();
   expect(within(menu).queryByRole("menuitemcheckbox")).toBeNull();
 });
 
-it("offers Make main agent from the card's actions button", async () => {
+it("offers Make my bestie from the card's actions button", async () => {
   const user = userEvent.setup();
   const ada = agent("Ada", 1);
   const bea = agent("Bea", 2);
@@ -3227,6 +3590,10 @@ it("offers Make main agent from the card's actions button", async () => {
     status: "ready",
     complete: true,
     pending: false,
+    identities: [
+      { pubkey: ada.pubkey, name: ada.name, managed: true },
+      { pubkey: bea.pubkey, name: bea.name, managed: true },
+    ],
     selectable: [
       { pubkey: ada.pubkey, name: ada.name, managed: true },
       { pubkey: bea.pubkey, name: bea.name, managed: true },
@@ -3249,30 +3616,148 @@ it("offers Make main agent from the card's actions button", async () => {
     subscribe: () => () => {},
   } as unknown as RelayData;
   view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
-  expect(
-    screen.getByRole("gridcell", { name: "Ada, Main agent" }),
-  ).toBeVisible();
+  expect(screen.getByRole("gridcell", { name: "Ada, Bestie" })).toBeVisible();
   const card = screen.getByRole("gridcell", { name: "Bea" });
   await user.click(
     within(card).getByRole("button", { name: "Actions for Bea" }),
   );
   await user.click(
-    await screen.findByRole("menuitem", { name: "Make main agent" }),
+    await screen.findByRole("menuitem", { name: "Make my bestie" }),
+  );
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Bea your bestie?",
+  });
+  expect(confirmation).toHaveAccessibleDescription(
+    "Your existing chats with Ada will still be available in your DMs.",
   );
   expect(
-    await screen.findByRole("gridcell", { name: "Bea, Main agent" }),
+    within(confirmation).getByRole("button", { name: "Keep Ada" }),
+  ).toBeVisible();
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Switch to Bea" }),
+  );
+  expect(
+    await screen.findByRole("gridcell", { name: "Bea, Bestie" }),
   ).toBeVisible();
   expect(screen.getByRole("gridcell", { name: "Ada" })).toBeVisible();
-  // Right-click opens the same actions, including the main agent choice.
+  // Right-click opens the same actions, including the Bestie choice.
   fireEvent.contextMenu(screen.getByRole("gridcell", { name: "Ada" }));
   const menu = await screen.findByRole("menu", { name: "Actions for Ada" });
   await user.click(
-    within(menu).getByRole("menuitem", { name: "Make main agent" }),
+    within(menu).getByRole("menuitem", { name: "Make my bestie" }),
+  );
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Switch to Ada",
+    }),
   );
   expect(
-    await screen.findByRole("gridcell", { name: "Ada, Main agent" }),
+    await screen.findByRole("gridcell", { name: "Ada, Bestie" }),
   ).toBeVisible();
   expect(screen.getByRole("gridcell", { name: "Bea" })).toBeVisible();
+});
+
+it("keeps a failed Bestie replacement visible and retries the account save", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const bea = agent("Bea", 2);
+  const view = setup([ada, bea]);
+  const choices = {
+    status: "ready",
+    complete: true,
+    pending: false,
+    identities: [
+      { pubkey: ada.pubkey, name: ada.name, managed: true },
+      { pubkey: bea.pubkey, name: bea.name, managed: true },
+    ],
+    selectable: [
+      { pubkey: ada.pubkey, name: ada.name, managed: true },
+      { pubkey: bea.pubkey, name: bea.name, managed: true },
+    ],
+    archives: { status: "unavailable", archived: [] },
+  };
+  const writes: Array<(failure?: Error) => void> = [];
+  const mainAgent = {
+    read: async () => ada.pubkey,
+    write: () =>
+      new Promise<void>((resolve, reject) =>
+        writes.push((failure) => (failure ? reject(failure) : resolve())),
+      ),
+  };
+  const connection = {
+    status: "ready",
+    scope: "bestie-retry",
+    session: {
+      mainAgent,
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe: () => () => {},
+        retain: () => () => {},
+      },
+    },
+  };
+  const relay = {
+    snapshot: () => connection,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
+  const adaCard = await screen.findByRole("gridcell", {
+    name: "Ada, Bestie",
+  });
+  expect(adaCard).toBeVisible();
+
+  const beaCard = screen.getByRole("gridcell", { name: "Bea" });
+  await user.click(
+    within(beaCard).getByRole("button", { name: "Actions for Bea" }),
+  );
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Make my bestie" }),
+  );
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Bea your bestie?",
+  });
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Switch to Bea" }),
+  );
+  await act(async () => writes[0]?.(new Error("offline")));
+  expect(within(confirmation).getByRole("alert")).toHaveTextContent(
+    "Your bestie couldn't be saved to your account. Try again.",
+  );
+  expect(confirmation).toBeVisible();
+  expect(readView(connection.scope, "solo:default-agent", null)).toBe(
+    bea.pubkey,
+  );
+
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Keep Ada" }),
+  );
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(readView(connection.scope, "solo:default-agent", null)).toBe(
+    ada.pubkey,
+  );
+  expect(screen.getByRole("gridcell", { name: "Ada, Bestie" })).toBeVisible();
+
+  await user.click(
+    within(screen.getByRole("gridcell", { name: "Bea" })).getByRole("button", {
+      name: "Actions for Bea",
+    }),
+  );
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Make my bestie" }),
+  );
+  const retry = await screen.findByRole("alertdialog", {
+    name: "Make Bea your bestie?",
+  });
+  expect(within(retry).queryByRole("alert")).not.toBeInTheDocument();
+  await user.click(
+    within(retry).getByRole("button", { name: "Switch to Bea" }),
+  );
+  await act(async () => writes[1]?.());
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(
+    await screen.findByRole("gridcell", { name: "Bea, Bestie" }),
+  ).toBeVisible();
 });
 
 it("opens deletion from the card's right-click menu", async () => {
@@ -3349,7 +3834,7 @@ it("opens a Marketplace tile in the profile pane and returns focus on close and 
     await user.click(tile);
     await user.click(screen.getByRole("button", { name: "Import" }));
     const dialog = screen.getByRole("dialog", {
-      name: "Import Marketplace helper",
+      name: "Marketplace helper",
     });
     await user.click(within(dialog).getByRole("button", { name: "Import" }));
     await vi.waitFor(() =>
@@ -3364,13 +3849,14 @@ it("opens a Marketplace tile in the profile pane and returns focus on close and 
   }
 });
 
-it("offers Make main agent on a stand-in for a missing chosen agent", async () => {
+it("offers Make my bestie on a stand-in for a missing chosen agent", async () => {
   const ada = agent("Ada", 1);
   const view = setup([ada]);
   const choices = {
     status: "ready",
     complete: true,
     pending: false,
+    identities: [{ pubkey: ada.pubkey, name: ada.name, managed: true }],
     selectable: [{ pubkey: ada.pubkey, name: ada.name, managed: true }],
     archives: { status: "unavailable", archived: [] },
   };
@@ -3394,16 +3880,95 @@ it("offers Make main agent on a stand-in for a missing chosen agent", async () =
     setDefaultAgent("stand-in", "d".repeat(64));
   });
   view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
-  const card = screen.getByRole("gridcell", { name: "Ada, Main agent" });
+  const card = screen.getByRole("gridcell", { name: "Ada" });
   fireEvent.contextMenu(card);
   const menu = await screen.findByRole("menu", { name: "Actions for Ada" });
   fireEvent.click(
-    within(menu).getByRole("menuitem", { name: "Make main agent" }),
+    within(menu).getByRole("menuitem", { name: "Make my bestie" }),
   );
-  fireEvent.contextMenu(card);
+  await screen.findByRole("gridcell", { name: "Ada, Bestie" });
+  fireEvent.contextMenu(screen.getByRole("gridcell", { name: "Ada, Bestie" }));
   expect(
     within(
       await screen.findByRole("menu", { name: "Actions for Ada" }),
-    ).queryByRole("menuitem", { name: "Make main agent" }),
+    ).queryByRole("menuitem", { name: "Make my bestie" }),
   ).toBeNull();
+});
+
+it("offers to save an automatic bestie to the account, and again after a failed save", async () => {
+  const ada = agent("Ada", 1);
+  const bea = agent("Bea", 2);
+  const view = setup([ada, bea]);
+  const choices = {
+    status: "ready",
+    complete: true,
+    pending: false,
+    identities: [
+      { pubkey: ada.pubkey, name: ada.name, managed: true },
+      { pubkey: bea.pubkey, name: bea.name, managed: true },
+    ],
+    selectable: [
+      { pubkey: ada.pubkey, name: ada.name, managed: true },
+      { pubkey: bea.pubkey, name: bea.name, managed: true },
+    ],
+    archives: { status: "unavailable", archived: [] },
+  };
+  const writes: Array<(failure?: Error) => void> = [];
+  const mainAgent = {
+    read: async () => undefined,
+    write: () =>
+      new Promise<void>((resolve, reject) =>
+        writes.push((failure) => (failure ? reject(failure) : resolve())),
+      ),
+  };
+  const connection = {
+    status: "ready",
+    scope: "account-save",
+    session: {
+      mainAgent,
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe: () => () => {},
+        retain: () => () => {},
+      },
+    },
+  };
+  const relay = {
+    snapshot: () => connection,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  view.rerender(<AgentsPage agents={view.agents} relay={relay} />);
+  const make = async (name: string) => {
+    fireEvent.contextMenu(
+      await screen.findByRole("gridcell", { name: new RegExp(`^${name}`) }),
+    );
+    const menu = await screen.findByRole("menu", {
+      name: `Actions for ${name}`,
+    });
+    return within(menu).queryByRole("menuitem", { name: "Make my bestie" });
+  };
+  // Picked automatically, so it is not labelled Bestie until saved.
+  await screen.findByRole("gridcell", { name: "Ada" });
+  fireEvent.click((await make("Ada")) as HTMLElement);
+  await act(async () => writes[0]?.(new Error("offline")));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Your bestie couldn't be saved to your account. Try again.",
+  );
+  fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: "Escape",
+  });
+  // A failed save can be tried again; a newer choice hides an older failure.
+  fireEvent.click((await make("Ada")) as HTMLElement);
+  fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: "Escape",
+  });
+  fireEvent.click((await make("Bea")) as HTMLElement);
+  await act(async () => writes[2]?.());
+  await act(async () => writes[1]?.(new Error("offline")));
+  expect(screen.queryByRole("alert")).toBeNull();
+  await screen.findByRole("gridcell", { name: "Bea, Bestie" });
+  fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: "Escape",
+  });
+  expect(await make("Bea")).toBeNull();
 });

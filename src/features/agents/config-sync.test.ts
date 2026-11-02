@@ -414,6 +414,52 @@ describe("config sync over one NIP-AR sync", () => {
     expect(store.instructions(instructions)).toEqual({ ok: true, text: "B" });
   });
 
+  it("a set's lookup from before a restart never denies what the newer set installed", async () => {
+    const a = await revision("A");
+    const b = await revision("B", a.id);
+    const old = held<RelayEvent[]>();
+    let holding = false;
+    const relayFeed = controlled(() => {
+      if (!holding) return [];
+      holding = false;
+      return old.promise;
+    });
+    const store = new AgentConfigStore(memoryStorage());
+    const spies = hooks();
+    const sync = createConfigSync(
+      store,
+      relayFeed.feed,
+      owner.pubkey,
+      "c",
+      spies,
+    );
+    const bound = sync.bind([binding]);
+    await vi.waitFor(() => expect(relayFeed.view()).toBeDefined());
+    relayFeed.set("live", [a]);
+    await bound;
+    // A restarted set that lacks the head looks it up, and is held.
+    relayFeed.set("loading");
+    holding = true;
+    relayFeed.set("live", []);
+    await vi.waitFor(() => expect(holding).toBe(false));
+    try {
+      relayFeed.set("loading");
+      relayFeed.set("live", [b]);
+      await vi.waitFor(() =>
+        expect(store.instructions(instructions)).toEqual({
+          ok: true,
+          text: "B",
+        }),
+      );
+    } finally {
+      old.fail(new Error("Relay read failed (403)"));
+    }
+    await flush();
+    await flush();
+    expect(store.instructions(instructions)).toEqual({ ok: true, text: "B" });
+    expect(spies.problem).not.toHaveBeenCalled();
+  });
+
   it("looks up by d what the set lacks, keeping deleted apart from unavailable", async () => {
     const a = await revision("A");
     const d = await artifactD("buzz.agent.instructions", channel);
@@ -969,6 +1015,44 @@ describe("config sync without a sync", () => {
     await flush();
     await flush();
     expect(f.store.instructions(instructions)).toEqual({ ok: true, text: "B" });
+    expect(f.spies.problem).not.toHaveBeenCalled();
+  });
+
+  it("a reread queued behind one from before a reconnect still runs when that one fails", async () => {
+    const old = held<RelayEvent[]>();
+    let b: RelayEvent | undefined;
+    let e: RelayEvent | undefined;
+    let holding = false;
+    const f = await following((filter, a) => {
+      if (filter.artifact === "current") return b ? [b] : [a];
+      if (!holding) return [e ?? b ?? a];
+      holding = false;
+      return old.promise;
+    });
+    holding = true;
+    f.relayFeed.emit(await revision("D", (await revision("X", f.a.id)).id));
+    await vi.waitFor(() => expect(holding).toBe(false));
+    try {
+      b = await revision("B", f.a.id);
+      f.relayFeed.reconnect();
+      await vi.waitFor(() =>
+        expect(f.store.instructions(instructions)).toEqual({
+          ok: true,
+          text: "B",
+        }),
+      );
+      // Past another missed revision: queued behind the old reread.
+      e = await revision("E", (await revision("Y", b.id)).id);
+      f.relayFeed.emit(e);
+    } finally {
+      old.fail(new Error("Relay read failed (403)"));
+    }
+    await vi.waitFor(() =>
+      expect(f.store.instructions(instructions)).toEqual({
+        ok: true,
+        text: "E",
+      }),
+    );
     expect(f.spies.problem).not.toHaveBeenCalled();
   });
 

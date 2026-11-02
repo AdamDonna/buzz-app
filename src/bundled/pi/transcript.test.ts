@@ -128,6 +128,33 @@ it("shows a turn's prompt, thinking, tools, sends and answer, steers included", 
   ]);
 });
 
+it("shows a reply in a subthread as a message, posted or not", () => {
+  const nested = (id: string) => ({
+    type: "toolCall",
+    id,
+    name: "buzz_reply_in_subthread",
+    arguments: { parent: "root", text: id },
+  });
+  const [turn] = piTurns(
+    [
+      user(1, event("review it")),
+      assistant(2, [nested("n1"), nested("n2")]),
+      result(3, "n1", "sent"),
+      result(4, "n2", "Not allowed", true),
+    ],
+    PLACE,
+    false,
+  );
+  expect(turn?.items.slice(1)).toEqual([
+    expect.objectContaining({ type: "message", text: "n1", posted: true }),
+    expect.not.objectContaining({ posted: true }),
+    expect.objectContaining({
+      type: "status",
+      text: "The message above was not posted: Not allowed",
+    }),
+  ]);
+});
+
 it("ends each turn at the next prompt, and keeps a working one open", () => {
   const turns = piTurns(
     [

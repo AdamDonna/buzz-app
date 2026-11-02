@@ -1,12 +1,13 @@
+import { transientStatus } from "../../../features/relay/errors";
+import { retryRead } from "../../../features/relay/read-retry";
 import { invoke } from "@tauri-apps/api/core";
 import { nativeIdentityEnabled } from "../../../features/identity/service";
 import type {
-  Host,
   HostResponse,
   NipOaAuthorization,
 } from "../../../features/host/service";
-import { oauthTarget, type Credential } from "../oauth/browser";
-import type { OAuthSession } from "../oauth/session";
+import { oauthTarget } from "../oauth/browser";
+import type { BuilderlabSession, Credential } from "../session";
 import {
   clearRegistration,
   registrationIntent,
@@ -98,6 +99,8 @@ const nativeOwner: OwnerIdentity = {
     invoke("identity_sign_builderlab_binding", { challenge }),
 };
 
+class BuilderlabUnavailable extends Error {}
+
 const LINK_ERRORS: Record<string, string> = {
   identity_already_bound:
     "This Builderlab account is linked to a different Buzz identity.",
@@ -106,8 +109,7 @@ const LINK_ERRORS: Record<string, string> = {
 };
 
 export function createAgentClient(
-  host: Host,
-  session: OAuthSession,
+  session: BuilderlabSession,
   // Without native identity (the dev viewer), owner proofs come from the
   // dev broker, which has no binding signer, so linking is skipped.
   owner: OwnerIdentity | null = nativeIdentityEnabled() ? nativeOwner : null,
@@ -128,9 +130,9 @@ export function createAgentClient(
     )
       throw new DOMException("Builderlab session changed.", "AbortError");
   }
-  function signOutIfExpired(response: HostResponse) {
+  function signOutIfExpired(credential: Credential, response: HostResponse) {
     if (response.status !== 401) return;
-    session.signOut();
+    session.expired(credential);
     throw Object.assign(
       new Error("Your Builderlab session expired. Sign in again."),
       { status: 401 },
@@ -145,22 +147,21 @@ export function createAgentClient(
     const credential = remoteCredential();
     let response: HostResponse;
     try {
-      response = await host.request({
-        url: `${oauthTarget()}/v3/beekeeper/${path}`,
+      response = await session.request(credential, {
+        path: `/v3/beekeeper/${path}`,
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "X-BB-Session-Credential": credential.value,
         },
         body: JSON.stringify(body),
       });
     } catch {
       check(credential, signal);
-      throw new Error("Could not reach Builderlab. Try again.");
+      throw new BuilderlabUnavailable("Could not reach Builderlab. Try again.");
     }
     check(credential, signal);
-    signOutIfExpired(response);
+    signOutIfExpired(credential, response);
     if (response.status === 403)
       throw Object.assign(
         new Error("This Builderlab account cannot manage remote agents."),
@@ -180,6 +181,26 @@ export function createAgentClient(
       throw new Error("Builderlab returned an invalid response.");
     }
   }
+  function readRequest(
+    path: "get-model-catalog" | "list-agents",
+    body: unknown,
+    signal: AbortSignal,
+  ) {
+    const credential = remoteCredential();
+    return retryRead(
+      (signal) => {
+        check(credential, signal);
+        return request(path, body, signal);
+      },
+      signal,
+      (error) =>
+        error instanceof BuilderlabUnavailable ||
+        (error instanceof Error &&
+          "status" in error &&
+          typeof error.status === "number" &&
+          transientStatus(error.status)),
+    );
+  }
   /** Builderlab's identity routes answer failures with `{ error: { code } }`. */
   async function identityRequest(
     path: string,
@@ -191,13 +212,12 @@ export function createAgentClient(
     const target = oauthTarget();
     let response: HostResponse;
     try {
-      response = await host.request({
-        url: `${target}/v1/buzz/nostr-identities/${path}`,
+      response = await session.request(credential, {
+        path: `/v1/buzz/nostr-identities/${path}`,
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "X-BB-Session-Credential": credential.value,
           // Binding requires the challenge origin to match this header.
           Origin: new URL(target).origin,
         },
@@ -208,7 +228,7 @@ export function createAgentClient(
       throw new Error("Could not reach Builderlab. Try again.");
     }
     check(credential, signal);
-    signOutIfExpired(response);
+    signOutIfExpired(credential, response);
     let result: Record<string, unknown> | undefined;
     try {
       const parsed = JSON.parse(response.body);
@@ -335,7 +355,7 @@ export function createAgentClient(
     async modelCatalog(
       signal: AbortSignal,
     ): Promise<readonly RemoteAgentModel[]> {
-      const result = await request("get-model-catalog", {}, signal);
+      const result = await readRequest("get-model-catalog", {}, signal);
       const models = result.models ?? [];
       if (
         !Array.isArray(models) ||
@@ -595,7 +615,7 @@ export function createAgentClient(
       };
     },
     async list(signal: AbortSignal): Promise<readonly RemoteAgent[]> {
-      const result = await request(
+      const result = await readRequest(
         "list-agents",
         { include_instructions: true },
         signal,

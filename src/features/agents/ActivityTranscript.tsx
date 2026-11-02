@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
@@ -86,21 +86,59 @@ const thread = (turn: TranscriptTurn) =>
       ? `Thread ${turn.threadRootId.slice(0, 8)}`
       : "Thread unknown";
 
-/** Turn-by-turn transcript of the loaded activity. */
+/** The nearest ancestor that scrolls, which the host supplies. */
+function scroller(element: HTMLElement | null) {
+  for (let node = element?.parentElement; node; node = node.parentElement)
+    if (/auto|scroll/.test(getComputedStyle(node).overflowY)) return node;
+  return undefined;
+}
+/** How near the end still counts as reading the latest. */
+const END_SLACK = 32;
+
+/** Opens at the latest step and keeps it in view as the transcript grows,
+ * unless the reader has scrolled up to read earlier turns. */
+function useFollowLatest(content: unknown, enabled: boolean) {
+  const timeline = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  useLayoutEffect(() => {
+    const view = enabled ? scroller(timeline.current) : undefined;
+    if (!view) return;
+    const read = () => {
+      following.current =
+        view.scrollHeight - view.scrollTop - view.clientHeight <= END_SLACK;
+    };
+    view.addEventListener("scroll", read, { passive: true });
+    return () => view.removeEventListener("scroll", read);
+  }, [enabled]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: content is the change to follow.
+  useLayoutEffect(() => {
+    const view = enabled && following.current && scroller(timeline.current);
+    if (view) view.scrollTop = view.scrollHeight;
+  }, [content, enabled]);
+  return timeline;
+}
+
+/** Turn-by-turn transcript of the loaded activity, oldest first, opened at
+ * the latest. */
 export function ActivityTranscript({
   transcript,
   agentName,
   state,
   before,
+  follow = true,
 }: {
   transcript: Transcript;
   agentName: string;
   state: (turnId: string) => TurnState | undefined;
   /** Paging controls shown above the oldest loaded turn. */
   before?: ReactNode;
+  /** Scroll the host to the latest step; off where the transcript shares
+   * its scroll with other content. */
+  follow?: boolean;
 }) {
+  const timeline = useFollowLatest(transcript, follow);
   return (
-    <div className={styles.timeline}>
+    <div ref={timeline} className={styles.timeline}>
       {before}
       {!transcript.turns.length && (
         <p className="text-body-sm text-secondary">

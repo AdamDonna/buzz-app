@@ -66,8 +66,26 @@ export function createChannelActivity(
       status = "loading";
       publish();
       const refreshed = new Map<string, number>();
+      const merge = (channelIds: readonly string[]) => {
+        const next = new Map(values);
+        for (const id of channelIds) {
+          const displayed = values.get(id) ?? undefined;
+          const started = atStart.get(id) ?? undefined;
+          const result = refreshed.get(id);
+          const changedDuringRead = displayed !== started;
+          if (
+            displayed !== undefined &&
+            (result !== undefined ? displayed > result : changedDuringRead)
+          )
+            continue;
+          // Retain authoritative absence through later refreshes and failures.
+          next.set(id, result ?? null);
+        }
+        return next;
+      };
+      let offset = 0;
       try {
-        for (let offset = 0; offset < ids.length; offset += CHANNEL_BATCH) {
+        for (; offset < ids.length; offset += CHANNEL_BATCH) {
           const batch = ids.slice(offset, offset + CHANNEL_BATCH);
           const events = await read(
             batch,
@@ -87,6 +105,8 @@ export function createChannelActivity(
         }
       } catch (error) {
         if (closed || controller.signal.aborted || epoch !== generation) return;
+        // Batches that landed before the failure still apply.
+        values = merge(ids.slice(0, offset));
         status = "error";
         publish();
         throw error;
@@ -95,20 +115,7 @@ export function createChannelActivity(
       }
       if (closed || epoch !== generation) return;
       const wanted = new Set(ids);
-      const next = new Map(values);
-      for (const id of ids) {
-        const displayed = values.get(id) ?? undefined;
-        const started = atStart.get(id) ?? undefined;
-        const result = refreshed.get(id);
-        const changedDuringRead = displayed !== started;
-        if (
-          displayed !== undefined &&
-          (result !== undefined ? displayed > result : changedDuringRead)
-        )
-          continue;
-        // Retain authoritative absence through later refreshes and failures.
-        next.set(id, result ?? null);
-      }
+      const next = merge(ids);
       for (const id of next.keys()) if (!wanted.has(id)) next.delete(id);
       status = "ready";
       values = next;

@@ -1,6 +1,323 @@
 import { test, expect } from "./source-fixture.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
 
+test("transient profiles replace without retiring Back/Forward return paths", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/profiles.html");
+  await page.waitForFunction(() => !!window.profilesFixture);
+  const read = () =>
+    page.evaluate(() => window.profilesFixture.navigation.snapshot());
+  const channel = (await read()).entry.id;
+  const view = async (name) => {
+    await page
+      .getByRole("button", { name: `View ${name} profile`, exact: true })
+      .click();
+    await expect(
+      page
+        .getByRole("complementary", { name: "Profile", exact: true })
+        .getByRole("heading", { name, exact: true }),
+    ).toBeVisible();
+    return (await read()).entry.id;
+  };
+  const viewer = await view("Viewer");
+  const mic = await view("Mic");
+  const tabs = page.getByRole("tablist", { name: "Panel tabs" });
+  await expect(tabs.getByRole("tab")).toHaveCount(1);
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(viewer);
+  await expect(
+    tabs.getByRole("tab", { name: "Viewer", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.getByRole("tab")).toHaveCount(1);
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(mic);
+  await expect(tabs.getByRole("tab")).toHaveCount(1);
+  await tabs
+    .getByRole("tab", { name: "Mic", exact: true })
+    .click({ button: "right" });
+  await page
+    .getByRole("menuitem", { name: "Close all tabs", exact: true })
+    .click();
+  await expect
+    .poll(async () => (await read()).entry.target.detail)
+    .toBeUndefined();
+  const closed = (await read()).entry.id;
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(viewer);
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(channel);
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(viewer);
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(closed);
+  expect((await read()).canGoForward).toBe(false);
+});
+
+// Real relay-session replacement and native history traversal exercise the
+// page's close wiring; retirement identity partitions are covered by owner tests.
+test("Close after same-scope replacement retires earlier profile visits through Back/Forward", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/profiles.html");
+  await page.waitForFunction(() => !!window.profilesFixture);
+  const read = () =>
+    page.evaluate(() => window.profilesFixture.navigation.snapshot());
+  const channel = (await read()).entry.id;
+  const view = async (name) => {
+    await page
+      .getByRole("button", { name: `View ${name} profile`, exact: true })
+      .click();
+    await expect(
+      page
+        .getByRole("complementary", { name: "Profile", exact: true })
+        .getByRole("heading", { name, exact: true }),
+    ).toBeVisible();
+    return (await read()).entry.id;
+  };
+  await view("Viewer");
+  const other = await view("Mic");
+  const current = await view("Viewer");
+  await page.evaluate(() => window.profilesFixture.replace());
+  const tabs = page.getByRole("tablist", { name: "Panel tabs" });
+  const viewer = tabs.getByRole("tab", { name: "Viewer", exact: true });
+  await expect(viewer).toHaveAttribute("aria-selected", "true");
+  await expect.poll(async () => (await read()).entry.id).toBe(current);
+  // Rebuild the neighbouring Q tab through passive traversal. #1767 restores
+  // only the current address on replacement; #1793 also keeps the tab strip.
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(other);
+  await expect(
+    tabs.getByRole("tab", { name: "Mic", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(current);
+  await expect(viewer).toHaveAttribute("aria-selected", "true");
+  await viewer
+    .locator("..")
+    .getByRole("button", { name: /^Close / })
+    .click();
+  await expect
+    .poll(async () => (await read()).entry.target.detail)
+    .toBeUndefined();
+  const closed = (await read()).entry.id;
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(other);
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(channel);
+  await expect(viewer).toHaveCount(0);
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(other);
+  await expect(viewer).toHaveCount(0);
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(closed);
+  expect((await read()).canGoForward).toBe(false);
+  // A deliberate reopening gets a fresh visit and remains possible.
+  expect(await view("Viewer")).not.toBe(current);
+});
+
+// Native traversal and the real page close callback must use inherited identity
+// while the successor's exact-message lookup is explicitly held.
+test("Close before successor reply resolution retires the inherited verified thread", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/profiles.html");
+  await page.waitForFunction(() => !!window.profilesFixture);
+  const read = () =>
+    page.evaluate(() => window.profilesFixture.navigation.snapshot());
+  const initial = (await read()).entry.target;
+  await page.evaluate(
+    (target) => window.profilesFixture.navigation.open(target),
+    {
+      ...initial,
+      channelId: "two",
+    },
+  );
+  const before = (await read()).entry;
+  await page.evaluate(
+    (target) => window.profilesFixture.navigation.open(target),
+    initial,
+  );
+  const channel = (await read()).entry;
+  await page
+    .getByRole("button", { name: "View thread: 1 reply", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "View Pinky profile", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = window.profilesFixture;
+    const target = fixture.navigation.snapshot().entry.target;
+    return fixture.navigation.open({
+      ...target,
+      messageId: fixture.messages.reply,
+      threadRootId: undefined,
+    });
+  });
+  const tabs = page.locator(
+    '[data-panel-workspace] [role="tab"][data-tab-value^="thread:"]',
+  );
+  const root = await page.evaluate(() => window.profilesFixture.messages.root);
+  await expect(tabs).toHaveCount(1); // The reply reader verified and merged into R.
+  await expect(tabs).toHaveAttribute("data-tab-value", `thread:one:${root}`);
+  await page.evaluate(() => {
+    window.profilesFixture.holdReply();
+    window.profilesFixture.replace();
+  });
+  try {
+    await expect
+      .poll(() => page.evaluate(() => window.profilesFixture.replyPending()))
+      .toBe(true);
+    await expect(tabs).toHaveCount(1);
+    await tabs
+      .locator("..")
+      .getByRole("button", { name: /^Close / })
+      .click();
+    await expect.poll(async () => (await read()).entry).toEqual(channel);
+    await expect(tabs).toHaveCount(0);
+    expect((await read()).canGoBack).toBe(true);
+    expect((await read()).canGoForward).toBe(false);
+    await page.goBack();
+    await expect.poll(async () => (await read()).entry).toEqual(before);
+    await page.goForward();
+    await expect.poll(async () => (await read()).entry).toEqual(channel);
+  } finally {
+    await page.evaluate(() => window.profilesFixture.releaseReply());
+  }
+  await expect(tabs).toHaveCount(0);
+});
+
+// Browser history must restore the selected profile and skip an explicitly
+// dismissed inactive tab; hook tests cannot establish native event traversal.
+test("profile visits survive passive traversal and X retires active and inactive visits", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/profiles.html");
+  await page.waitForFunction(() => !!window.profilesFixture);
+  const read = () =>
+    page.evaluate(() => window.profilesFixture.navigation.snapshot());
+  const avatar = page.getByRole("button", {
+    name: "View Viewer profile",
+    exact: true,
+  });
+  await expect(avatar).toBeVisible();
+  const channel = (await read()).entry.id;
+  await avatar.click();
+  const viewer = (await read()).entry.id;
+  const panel = page.getByRole("complementary", {
+    name: "Profile",
+    exact: true,
+  });
+  await expect(
+    panel.getByRole("heading", { name: "Viewer", exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(channel);
+  await expect(panel).toBeHidden();
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(viewer);
+  await expect(
+    panel.getByRole("heading", { name: "Viewer", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "View Mic profile", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("heading", { name: "Mic", exact: true }),
+  ).toBeVisible();
+  const mic = (await read()).entry.id;
+  const tabs = page.getByRole("tablist", { name: "Panel tabs" });
+  await expect(
+    tabs.getByRole("tab", { name: "Viewer", exact: true }),
+  ).toHaveCount(0);
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(viewer);
+  await page.goForward();
+  await expect.poll(async () => (await read()).entry.id).toBe(mic);
+  await tabs
+    .getByRole("tab", { name: "Mic", exact: true })
+    .locator("..")
+    .getByRole("button", { name: /^Close / })
+    .click();
+  await expect
+    .poll(async () => (await read()).entry.target.detail)
+    .toBeUndefined();
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(viewer);
+  await tabs
+    .getByRole("tab", { name: "Viewer", exact: true })
+    .locator("..")
+    .getByRole("button", { name: /^Close / })
+    .click();
+  await expect.poll(async () => (await read()).entry.id).toBe(channel);
+  await avatar.click();
+  await expect(
+    panel.getByRole("heading", { name: "Viewer", exact: true }),
+  ).toBeVisible();
+  // Members composes above a content visit without replacing that content.
+  const reopened = (await read()).entry.id;
+  await page
+    .getByRole("button", { name: "Manage members", exact: true })
+    .click();
+  const members = page.getByRole("dialog", {
+    name: "Manage members",
+    exact: true,
+  });
+  await expect(members).toBeVisible();
+  await page.goBack();
+  await expect.poll(async () => (await read()).entry.id).toBe(reopened);
+  await expect(members).toBeHidden();
+  await expect(panel).toBeVisible();
+  await page.goForward();
+  await expect(members).toBeVisible();
+  await members.getByRole("button", { name: "Close", exact: true }).click();
+  await expect.poll(async () => (await read()).entry.id).toBe(reopened);
+  await expect(members).toBeHidden();
+  await expect(panel).toBeVisible();
+});
+
+test("closing a profile beside a main thread preserves the thread destination", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("buzz-thread-placement.v1", "main"),
+  );
+  await page.goto("/tests/fixtures/profiles.html");
+  await page
+    .getByRole("button", { name: "View thread: 1 reply", exact: true })
+    .click();
+  const main = page.locator("[data-main-workspace]");
+  const thread = main.locator('[role="tab"][data-tab-value^="thread:"]');
+  await expect(thread).toHaveAttribute("aria-selected", "true");
+  await page
+    .getByRole("button", { name: "View Pinky profile", exact: true })
+    .click();
+  const panel = page.getByRole("complementary", {
+    name: "Profile",
+    exact: true,
+  });
+  await expect(
+    panel.getByRole("heading", { name: "Pinky", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("tablist", { name: "Panel tabs" })
+    .getByRole("button", { name: "Close Pinky tab", exact: true })
+    .click();
+  await expect(panel).toHaveCount(0);
+  await expect(thread).toHaveAttribute("aria-selected", "true");
+  await expect(
+    main.getByRole("button", { name: "View Pinky profile", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          !!window.profilesFixture.navigation.snapshot().entry.target.messageId,
+      ),
+    )
+    .toBe(true);
+});
+
 test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecycle and recovery", async ({
   page,
 }, testInfo) => {
@@ -113,8 +430,13 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     await expect(key).toHaveText(npubs.viewer);
     if (pointerVisit !== "stationary") await page.mouse.move(0, 0);
     if (pointerVisit === "back") {
-      const rect = await avatar.boundingBox();
-      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      // Profile pushes the avatar aside. Hover waits for it to settle, so the
+      // pointer rests on the pushed avatar, not where Escape puts it back.
+      await avatar.hover();
+      // Complete this hover while Profile is still open. Otherwise its timer
+      // can fire after Escape and legitimately count as a fresh hover visit.
+      await page.clock.runFor(300);
+      await expect(preview).toBeHidden();
     }
     await page.getByRole("region", { name: "Profile details" }).press("Escape");
     await expect(panel).toHaveCount(0);
@@ -300,8 +622,27 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
       });
     }
   }
-  await page.evaluate(() => window.profilesFixture.replace());
-  await expect(panel).toHaveCount(0);
+  const visit = await page.evaluate(() => {
+    const visit = window.profilesFixture.navigation.snapshot().entry;
+    window.profilesFixture.replace();
+    return visit;
+  });
+  // Same-account/community replacement reconstructs the read-only address;
+  // it does not keep the old live session or its callbacks.
+  await expect(
+    panel.getByRole("heading", { name: "Recovered", exact: true }),
+  ).toBeVisible();
+  const current = () =>
+    page.evaluate(() => window.profilesFixture.navigation.snapshot().entry);
+  await expect.poll(current).toEqual(visit);
+  await page.goBack();
+  // Earlier visits in this journey can themselves be Profiles.
+  await expect.poll(async () => (await current()).id).not.toBe(visit.id);
+  await page.goForward();
+  await expect.poll(current).toEqual(visit);
+  await expect(
+    panel.getByRole("heading", { name: "Recovered", exact: true }),
+  ).toBeVisible();
   const reads = await page.evaluate(() => ({
     reads: window.profilesFixture.report.profileReads,
     key: window.profilesFixture.keys.pinky,
@@ -489,26 +830,12 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       const member = group.getByRole("listitem").first();
       await expect(member).toHaveCSS("padding-inline-end", "0px");
       const header = dialog.locator(".buzz-dialog-header");
-      const refresh = header.getByRole("button", {
-        name: "Refresh member data",
-      });
-      const close = header.getByRole("button", {
-        name: "Close",
-      });
-      await expect(refresh).toHaveAttribute("data-variant", "ghost");
-      await expect(refresh).toHaveAttribute("data-icon-size", "compact");
-      const refreshBounds = await refresh.boundingBox();
-      const closeBounds = await close.boundingBox();
-      expect(refreshBounds.x + refreshBounds.width).toBeLessThanOrEqual(
-        closeBounds.x,
-      );
-      expect(refreshBounds.y).toBe(closeBounds.y);
-      expect(refreshBounds.width).toBe(closeBounds.width);
-      expect(refreshBounds.height).toBe(closeBounds.height);
-      for (const button of [refresh, close]) {
-        await expect(button.locator("svg")).toHaveCSS("width", "16px");
-        await expect(button.locator("svg")).toHaveCSS("height", "16px");
-      }
+      await expect(
+        dialog.getByRole("button", { name: "Refresh member data" }),
+      ).toHaveCount(0);
+      const close = header.getByRole("button", { name: "Close" });
+      await expect(close.locator("svg")).toHaveCSS("width", "16px");
+      await expect(close.locator("svg")).toHaveCSS("height", "16px");
       expect(await body.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(
         false,
       );
@@ -527,10 +854,11 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       expect(await list.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(
         false,
       );
-      // This read-only fixture has a notice before the first group. Once that
-      // content scrolls out, the heading pins without an extra padding slide.
+      // Short result viewports let headings scroll away so they cannot cover
+      // actions. This read-only fixture has a notice before the first group.
       await expect(list).toHaveCSS("padding-top", "0px");
       const firstHeading = list.getByRole("heading").first();
+      await expect(firstHeading).toHaveCSS("position", "static");
       const headingBounds = await firstHeading.boundingBox();
       const leadingContent = Math.round(headingBounds.y - listBounds.y);
       for (const scrollTop of [0, 1, 8, 16]) {
@@ -540,10 +868,9 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
         await expect
           .poll(() => list.evaluate((el) => el.scrollTop))
           .toBe(leadingContent + scrollTop);
-        // Sticky headings snap to whole pixels inside a fractional frame.
         await expect
           .poll(async () => Math.round((await firstHeading.boundingBox()).y))
-          .toBe(Math.round(listBounds.y));
+          .toBe(Math.round(headingBounds.y) - leadingContent - scrollTop);
       }
       await list.evaluate((el) => {
         el.scrollTop = el.scrollHeight;
@@ -580,12 +907,55 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       await list.evaluate((el) => {
         el.scrollTop = 0;
       });
+      // With room for a heading and its rows, the heading still pins as soon
+      // as the preceding notice scrolls out, without an extra padding slide.
+      await page.setViewportSize({ width, height: 530 });
+      // Give the collection 9rem: above the 8rem sticky-heading threshold,
+      // while retaining scroll range past its notice. Derive viewport height
+      // from native layout so wrapped recovery content cannot change the state.
+      const contentHeight = () =>
+        list.evaluate((el) => {
+          const style = getComputedStyle(el);
+          return (
+            el.clientHeight -
+            parseFloat(style.paddingTop) -
+            parseFloat(style.paddingBottom)
+          );
+        });
+      const measuredHeight = await contentHeight();
+      await page.setViewportSize({ width, height: 530 + 144 - measuredHeight });
+      await expect.poll(contentHeight).toBe(144);
+      await expect(firstHeading).toHaveCSS("position", "sticky");
+      const roomyListBounds = await list.boundingBox();
+      const roomyHeadingBounds = await firstHeading.boundingBox();
+      const roomyLeadingContent = Math.round(
+        roomyHeadingBounds.y - roomyListBounds.y,
+      );
+      // Prove the fixture can scroll past its notice and exercise pinning.
+      expect(
+        await list.evaluate((el) => el.scrollHeight - el.clientHeight),
+      ).toBeGreaterThanOrEqual(roomyLeadingContent + 16);
+      for (const scrollTop of [0, 1, 8, 16]) {
+        await list.evaluate((el, top) => {
+          el.scrollTop = top;
+        }, roomyLeadingContent + scrollTop);
+        await expect
+          .poll(() => list.evaluate((el) => el.scrollTop))
+          .toBe(roomyLeadingContent + scrollTop);
+        // Sticky headings snap to whole pixels inside a fractional frame.
+        await expect
+          .poll(async () => Math.round((await firstHeading.boundingBox()).y))
+          .toBe(Math.round(roomyListBounds.y));
+      }
+      await list.evaluate((el) => {
+        el.scrollTop = 0;
+      });
       // The viewport fills spare height, not the Members group. Search results
       // and recovery content must follow the short roster without a flex spacer.
       await page.setViewportSize({ width, height: 900 });
       await expect
         .poll(() => list.evaluate((el) => el.clientHeight))
-        .toBeGreaterThan(300);
+        .toBeGreaterThan(roomyListBounds.height);
       await expect(group).toHaveCSS("flex-grow", "0");
       expect((await group.boundingBox()).height).toBeLessThan(
         (await list.boundingBox()).height,
@@ -795,14 +1165,18 @@ test("member Send message navigates a human DM without sending or returning focu
   expect(
     await page.evaluate(() => window.profilesFixture.report.publications),
   ).toBe(0);
-  // Returning to the Members visit must not repeat the DM open or send.
+  // The handoff retires Members; Back returns to the channel without replaying
+  // the DM open or send.
   await page.evaluate(() => window.profilesFixture.navigation.back());
-  await expect(dialog.getByRole("searchbox")).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: "Manage members", exact: true }),
+  ).toBeVisible();
+  await expect(dialog).toHaveCount(0);
   expect(
     await page.evaluate(
       () => window.profilesFixture.navigation.snapshot().entry.target.panel,
     ),
-  ).toBe("members");
+  ).toBeUndefined();
   await page.evaluate(() => window.profilesFixture.navigation.forward());
   await expect(dialog).toHaveCount(0);
   await expect(

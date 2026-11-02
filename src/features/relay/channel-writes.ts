@@ -646,6 +646,8 @@ export function createChannelWrites(
       ttlSeconds?: number,
       named = false,
       members: readonly string[] = [],
+      active?: () => boolean,
+      labels: readonly string[] = [],
     ) {
       writer();
       identifier(id);
@@ -660,21 +662,27 @@ export function createChannelWrites(
           ttlSeconds > 2_147_483_647)
       )
         throw new Error("Choose a valid chat duration.");
-      return writer().send({
-        kind: 9007,
-        content: "",
-        tags: [
-          ["h", id],
-          ["name", title],
-          ["visibility", "private"],
-          ["channel_type", "stream"],
-          ...(ttlSeconds !== undefined ? [["ttl", String(ttlSeconds)]] : []),
-          ...channelLabelTags(
-            named ? [SOLO_LABEL, SOLO_NAMED_LABEL] : [SOLO_LABEL],
-          ),
-          ...[...new Set(members)].map((key) => ["p", key]),
-        ],
-      });
+      return writer().send(
+        {
+          kind: 9007,
+          content: "",
+          tags: [
+            ["h", id],
+            ["name", title],
+            ["visibility", "private"],
+            ["channel_type", "stream"],
+            ...(ttlSeconds !== undefined ? [["ttl", String(ttlSeconds)]] : []),
+            ...channelLabelTags([
+              SOLO_LABEL,
+              ...(named ? [SOLO_NAMED_LABEL] : []),
+              ...labels,
+            ]),
+            ...[...new Set(members)].map((key) => ["p", key]),
+          ],
+        },
+        undefined,
+        active,
+      );
     },
     /** Starts a Solo chat whose create names its `members`. It lists at once
      * as pending; `ready` settles once the relay OKs the create, which adds the
@@ -690,13 +698,26 @@ export function createChannelWrites(
       /** The chat's Canvas, and the work that saves it once the chat
        * exists; nothing waits for it, and a failure leaves a working chat. */
       setup?: { canvas: string; apply(): Promise<unknown> },
+      options?: { labels?: readonly string[]; active?: () => boolean },
     ) {
-      const create = api.create(id, title, ttlSeconds, named, members);
+      const create = api.create(
+        id,
+        title,
+        ttlSeconds,
+        named,
+        members,
+        options?.active,
+        options?.labels,
+      );
       channels.start?.({
         id,
         name: title,
         members,
-        labels: named ? [SOLO_LABEL, SOLO_NAMED_LABEL] : [SOLO_LABEL],
+        labels: [
+          SOLO_LABEL,
+          ...(named ? [SOLO_NAMED_LABEL] : []),
+          ...(options?.labels ?? []),
+        ],
         ttlSeconds,
       });
       // The relay adds the members in the create, so the chat takes events

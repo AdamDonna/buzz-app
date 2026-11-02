@@ -355,7 +355,13 @@ test("collapsing a workspace waits for its rename save before hiding the editor"
   await page.getByRole("menuitem", { name: "Move to", exact: true }).hover();
   await page.getByRole("menuitem", { name: "New workspace" }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("textbox", { name: "Workspace name" }).fill("Work");
+  // Wait until the exiting menus are gone and the dialog's initial focus has
+  // settled on the field. The modal hides the menus from role queries.
+  await expect(page.locator('[role="menu"]')).toHaveCount(0);
+  const field = dialog.getByRole("textbox", { name: "Workspace name" });
+  await expect(field).toBeFocused();
+  await field.fill("Work");
+  await expect(field).toHaveValue("Work");
   await dialog.getByRole("button", { name: "Create and move" }).click();
   await expect(dialog).not.toBeVisible();
   const work = sidebar(page).getByRole("button", { name: "Work", exact: true });
@@ -451,5 +457,123 @@ test("collapsing a workspace waits for its rename save before hiding the editor"
     }
   } finally {
     release();
+  }
+});
+
+// Composable source rows must retain native drawer hit targets and focus rules.
+// Real browser focus refusal for display:none cannot be established in jsdom.
+const regionRow = (page, id) =>
+  sidebar(page).locator(`[data-solo-destination-id="${id}"]`);
+async function regionFixture(page, app, ids = [alpha, beta]) {
+  await page.goto(`${app.origin}/?solo-region-fixture`);
+  await newChat(page);
+  await expect(row(page, alpha)).toBeVisible();
+  await page.evaluate(async (ids) => {
+    for (const id of ids) await window.fixtureSoloRegion.classify(id);
+  }, ids);
+  await expect(regionRow(page, alpha)).toBeVisible();
+}
+
+test("composable rows retain narrow rename and immediate keyboard/touch activation", async ({
+  page,
+  app,
+}) => {
+  await regionFixture(page, app, [alpha]);
+  await page.setViewportSize({ width: 600, height: 950 });
+  const show = page.getByRole("button", {
+    name: "Show navigation",
+    exact: true,
+  });
+  await show.click();
+  await expect(regionRow(page, alpha)).toBeVisible();
+  for (const mode of ["light", "dark"]) {
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+      document.documentElement.style.fontSize = "150%";
+    }, mode);
+    await regionRow(page, alpha).dblclick();
+    await expect(input(page)).toHaveValue("Alpha");
+    await expect(input(page)).toBeFocused();
+    await input(page).press("Escape");
+    await expect(regionRow(page, alpha)).toBeFocused();
+  }
+  // The ordinary row and source row share the same pending mouse selection.
+  // Anchor both calls to one clock, as in the ordinary-row journey above.
+  const clockStart = Date.now();
+  await page.clock.install({ time: clockStart });
+  await page.clock.pauseAt(clockStart + 60_000);
+  await regionRow(page, alpha).click();
+  await row(page, beta).click();
+  await page.clock.runFor(500);
+  await expect(composer(page)).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Beta", exact: true }),
+  ).toBeVisible();
+  await expect(sidebar(page)).not.toBeVisible();
+  await page.clock.resume();
+  await show.click();
+  await regionRow(page, alpha).press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "Alpha", exact: true }),
+  ).toBeVisible();
+  await expect(sidebar(page)).not.toBeVisible();
+  await show.click();
+  await regionRow(page, alpha).tap();
+  await expect(sidebar(page)).not.toBeVisible();
+});
+
+test("composable row removal respects blur and continues past a CSS-hidden neighbor", async ({
+  page,
+  app,
+}) => {
+  await regionFixture(page, app);
+  const owned = regionRow(page, alpha);
+  await owned.focus();
+  await owned.evaluate((node) => node.blur());
+  await page.evaluate(
+    (id) => window.fixtureSoloRegion.present([id], []),
+    alpha,
+  );
+  await expect(owned).toHaveCount(0);
+  expect(
+    await page.evaluate(() => document.activeElement === document.body),
+  ).toBe(true);
+  await page.evaluate(() => window.fixtureSoloRegion.present([], []));
+  await owned.focus();
+  await page.evaluate(
+    (ids) => window.fixtureSoloRegion.present([ids[0]], [ids[1]]),
+    [alpha, beta],
+  );
+  await expect(owned).toHaveCount(0);
+  await expect(regionRow(page, beta)).toBeHidden();
+  await expect(
+    sidebar(page).locator("summary").filter({ hasText: "Solo" }),
+  ).toBeFocused();
+});
+
+// A real browser must move focus off the detached summary to the remaining
+// source heading; the ordinary Solo fallback is not mounted in this layout.
+test("removing a focused region keeps keyboard focus in the remaining region", async ({
+  page,
+  app,
+}) => {
+  await regionFixture(page, app);
+  for (const mode of ["light", "dark"]) {
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+      document.documentElement.style.fontSize = "150%";
+    }, mode);
+    await page.evaluate(() => window.fixtureSoloRegion.addTransientRegion());
+    const temporary = sidebar(page).locator('summary[aria-label="Temporary"]');
+    await temporary.focus();
+    await expect(temporary).toBeFocused();
+    await page.evaluate(() => window.fixtureSoloRegion.removeTransientRegion());
+    await expect(temporary).toHaveCount(0);
+    const remaining = sidebar(page).locator('summary[aria-label="Solo"]');
+    await expect(remaining).toBeFocused();
+    await remaining.press("Enter");
+    await expect(regionRow(page, alpha)).toBeHidden();
+    await remaining.press("Enter");
+    await expect(regionRow(page, alpha)).toBeVisible();
   }
 });

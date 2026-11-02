@@ -48,6 +48,12 @@ import {
 import styles from "./Channels.module.css";
 import tabStyles from "./ChannelTabs.module.css";
 
+/** The content-tab families whose visits follow explicit dismissal. */
+export const historyPanel = (entry: PanelOpening) =>
+  !entry.channelContext &&
+  (entry.panel.key === "buzz.profiles/profile" ||
+    entry.panel.key === "buzz.github/object");
+
 /** Shared secondary workspace. Pages retain their main reader and route semantics. */
 export function useConversationTabs({
   state: tabState,
@@ -79,6 +85,9 @@ export function useConversationTabs({
   onCloseThread,
   onRetryNavigation,
   conversationToolbar,
+  onVisitPanel,
+  onClosePanel,
+  onCloseTabs,
 }: {
   state: ReturnType<typeof useChannelTabState>;
   relay: RelayData;
@@ -126,10 +135,20 @@ export function useConversationTabs({
     last: boolean,
   ): void;
   onRetryNavigation?(): void;
+  onVisitPanel?(entry: PanelOpening): void;
+  onClosePanel?(entry: PanelOpening, remaining: PanelOpening[]): void;
+  /** One history transaction after the batch's local selection is committed. */
+  onCloseTabs?(
+    tabs: readonly Tab[],
+    entries: readonly PanelOpening[],
+    keep?: string,
+  ): void;
 }) {
   const currentId = current?.id;
   const viewer = queries.viewer;
   const { entries, setEntries } = tabState;
+  const panelHistory = useRef({ onVisitPanel, onClosePanel });
+  panelHistory.current = { onVisitPanel, onClosePanel };
   const available = useSyncExternalStore(
     panels.subscribe,
     panels.snapshot,
@@ -253,6 +272,8 @@ export function useConversationTabs({
           ? [...retained, selected]
           : retained;
       entryList.current = updated;
+      if (selected && historyPanel(selected))
+        panelHistory.current.onVisitPanel?.(selected);
       setEntries(updated);
       selectOpening(selected);
     },
@@ -264,7 +285,8 @@ export function useConversationTabs({
       (!eligible || eligible(entry)) &&
       (!entry.channelContext ||
         (current &&
-          !current.readOnly &&
+          !current.cached &&
+          (!current.readOnly || current.viewerRole === "guest") &&
           (!current.archived ||
             entry.panel.channelMenu?.eligible(current, queries)) &&
           current.id === entry.channelId)),
@@ -306,6 +328,8 @@ export function useConversationTabs({
         (item) => item.panel === next && item.target === target,
       );
       const replacement = existing ?? { ...entry, panel: next, target };
+      if (historyPanel(replacement))
+        panelHistory.current.onVisitPanel?.(replacement);
       entryList.current = entryList.current
         .map((item) => (item === entry ? replacement : item))
         .filter((item, index, all) => all.indexOf(item) === index);
@@ -333,6 +357,7 @@ export function useConversationTabs({
     setEntries(remaining);
     if (!main) {
       afterClose(tabId(entry), panelTrigger.current);
+      panelHistory.current.onClosePanel?.(entry, remaining);
       return;
     }
     // The conversation remains; the neighbouring main tab takes over.
@@ -341,10 +366,14 @@ export function useConversationTabs({
     const rest = order.filter((id) => id !== tabId(entry));
     if (tabState.mainSelected === tabId(entry))
       tabState.selectMain(rest[Math.min(index, rest.length - 1)]);
+    panelHistory.current.onClosePanel?.(entry, remaining);
   };
   const drawerContext = useMemo(
     () =>
-      current && !current.readOnly && viewer
+      current &&
+      !current.cached &&
+      (!current.readOnly || current.viewerRole === "guest") &&
+      viewer
         ? {
             scope,
             viewer,
@@ -462,15 +491,20 @@ export function useConversationTabs({
     setSidePanel(sidePanel);
     return () => setSidePanel(false);
   }, [setSidePanel, sidePanel]);
-  const selectPanelTab = (id: string) => {
+  const selectPanelTab = (id: string, visit = true) => {
     opening.current = panelTabs.find((entry) => tabId(entry) === id);
+    if (visit && opening.current && historyPanel(opening.current))
+      panelHistory.current.onVisitPanel?.(opening.current);
     tabState.select(id);
   };
   const afterClose = (id: string, trigger?: HTMLElement | null) => {
     if (id !== selectedTab) return;
     const index = rootTabIds.indexOf(id);
     const remaining = rootTabIds.filter((tab) => tab !== id);
-    selectPanelTab(remaining[Math.min(index, remaining.length - 1)] ?? "");
+    selectPanelTab(
+      remaining[Math.min(index, remaining.length - 1)] ?? "",
+      false,
+    );
     if (!remaining.length) {
       const target = trigger?.isConnected ? trigger : fallbackFocus?.current;
       if (target) target.focus({ preventScroll: true });
@@ -645,7 +679,7 @@ export function useConversationTabs({
   const nodes = useTabNodes(
     tabState.tabs.filter((tab) => tab.kind === "thread").map((tab) => tab.id),
   );
-  // Hidden thread tabs mount when first shown, then stay mounted for the visit.
+  // Threads and opted-in panels mount when shown, then stay for the visit.
   const visitTabs = useRef<{ shown: Set<string>; entered: Map<string, Tab> }>(
     undefined,
   );
@@ -656,7 +690,10 @@ export function useConversationTabs({
     };
   const visitTab = visitTabs.current;
   // A closed tab's lifetime ends; reopening it starts its requests afresh.
-  const openIds = new Set(tabState.tabs.map((tab) => tab.id));
+  const openIds = new Set([
+    ...tabState.tabs.map((tab) => tab.id),
+    ...panelTabs.map(tabId),
+  ]);
   for (const id of visitTab.entered.keys())
     if (!openIds.has(id)) visitTab.entered.delete(id);
   for (const id of visitTab.shown)
@@ -691,7 +728,7 @@ export function useConversationTabs({
         channelId,
         messageId,
         rootId,
-        undefined,
+        "reveal",
         threadPane ?? (mainThread(channelId) ? undefined : "side"),
       );
       if (
@@ -818,8 +855,15 @@ export function useConversationTabs({
 
   function panelItem(entry: Opening) {
     const main = inMain(entry);
+    const id = tabId(entry);
+    if (
+      main
+        ? tabState.mainSelected === id
+        : tabState.paneOpen && selectedTab === id
+    )
+      visitTab.shown.add(id);
     return {
-      id: tabId(entry),
+      id,
       instance: entry,
       label: entry.panel.title,
       ...(entry.channelContext && {
@@ -833,15 +877,16 @@ export function useConversationTabs({
             placeEntry(tabId(entry), main ? "side" : "main");
         },
       }),
-      content: (
-        <PanelCard
-          panel={entry.panel}
-          target={entry.target}
-          context={panelContext(entry)}
-          channelContext={entry.channelContext}
-          close={() => closeTab(entry)}
-        />
-      ),
+      content:
+        !entry.panel.deferUntilShown || visitTab.shown.has(id) ? (
+          <PanelCard
+            panel={entry.panel}
+            target={entry.target}
+            context={panelContext(entry)}
+            channelContext={entry.channelContext}
+            close={() => closeTab(entry)}
+          />
+        ) : null,
     };
   }
 
@@ -850,6 +895,9 @@ export function useConversationTabs({
   // change: nothing to close and the kept tab already selected.
   const closeTabsExcept = (keep?: string) => {
     const closing = tabState.tabs.filter((tab) => tab.id !== keep);
+    const closingEntries = tabState.entries.filter(
+      (entry) => panelTabId(entry) !== keep,
+    );
     const kept = tabState.tabs.find((tab) => tab.id === keep);
     const keptEntry = tabState.entries.find(
       (entry) => panelTabId(entry) === keep,
@@ -884,7 +932,9 @@ export function useConversationTabs({
     );
     opening.current = entryList.current[0];
     tabState.closeTabs(keep);
-    if (addressed?.kind === "thread") onCloseThread?.(addressed, false, true);
+    if (onCloseTabs) onCloseTabs(closing, closingEntries, keep);
+    else if (addressed?.kind === "thread")
+      onCloseThread?.(addressed, false, true);
     return true;
   };
 

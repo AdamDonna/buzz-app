@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { validChannelCommand } from "./channel-commands.mjs";
 const id = "11111111-1111-4111-8111-111111111111";
-it("allows only ordinary invitations, without extra roles", () => {
+it("allows ordinary invitations with an optional explicit participant role", () => {
   const invite = {
     kind: 9000,
     created_at: 1,
@@ -12,6 +12,20 @@ it("allows only ordinary invitations, without extra roles", () => {
     ],
   };
   expect(validChannelCommand(invite)).toBe(true);
+  expect(
+    validChannelCommand({
+      ...invite,
+      tags: [...invite.tags, ["role", "member"]],
+    }),
+  ).toBe(true);
+  for (const role of ["owner", "admin", "guest", "bot", ""]) {
+    expect(
+      validChannelCommand({
+        ...invite,
+        tags: [...invite.tags, ["role", role]],
+      }),
+    ).toBe(false);
+  }
   expect(
     validChannelCommand({
       ...invite,
@@ -94,11 +108,16 @@ it("accepts one trailing outbox identifier for invitations and rejects ambiguous
     p = ["p", "a".repeat(64)],
     client = ["client-id", id];
   expect(validChannelCommand(invite([h, p, client]))).toBe(true);
+  expect(validChannelCommand(invite([h, p, ["role", "member"], client]))).toBe(
+    true,
+  );
   for (const tags of [
     [h, p, client, client],
     [client, h, p],
     [h, p, ["client-id", "invalid"]],
     [h, p, [...client, "extra"]],
+    [h, p, ["role", "member", "extra"]],
+    [h, p, ["role", "member"], ["role", "member"]],
   ])
     expect(validChannelCommand(invite(tags))).toBe(false);
 });

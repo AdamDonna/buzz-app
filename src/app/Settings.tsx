@@ -52,12 +52,16 @@ import { canRetryPlugin, type PluginManager } from "../plugins/manager";
 import type { Catalog, PluginInfo } from "../plugins/types";
 import type { Communities, Membership } from "../features/communities/service";
 import { PluginImport } from "./PluginImport";
+import { ManagedPluginUpdate, ManagedPlugins } from "./ManagedPlugins";
+import { managedBy, pendingManaged } from "../plugins/managed";
+import { RecommendationCount } from "./RecommendationCount";
 import { PluginReadme } from "./PluginReadme";
 import { bundledReadmes } from "../bundled/readmes";
 import { bundledIcons } from "../bundled/icons";
 import type { Identity } from "../features/identity/service";
 import { ProfileSettings } from "./ProfileSettings";
 import { IdentitySettings } from "./IdentitySettings";
+import type { FederatedIdentity } from "../features/federated-identity/service";
 import { CommunityLocalSettings } from "./CommunityLocalSettings";
 
 import type { Appearance } from "../shared/theme/service";
@@ -197,16 +201,24 @@ function PluginIcon({
 function PluginProvenance({
   source,
   publisher,
+  managedBy,
   className,
 }: {
   source: "bundled" | "external";
   publisher?: string | null | undefined;
+  managedBy?: string | undefined;
   className?: string | undefined;
 }) {
-  if (source !== "bundled" && !publisher) return null;
+  const label = [
+    source === "bundled" ? "Buzz" : publisher,
+    managedBy && `Managed by ${managedBy}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (!label) return null;
   return (
     <span className={`${styles.pluginProvenance} ${className ?? ""}`}>
-      <span>{source === "bundled" ? "Buzz" : publisher}</span>
+      <span>{label}</span>
     </span>
   );
 }
@@ -271,6 +283,7 @@ function pluginToggleDisabled(
 
 function PluginDetails({
   plugin,
+  managed,
   failure,
   retryable,
   busy,
@@ -288,6 +301,7 @@ function PluginDetails({
   initialUpdateAvailable,
 }: {
   plugin: PluginInfo;
+  managed?: ReturnType<typeof managedBy>;
   failure: string | null;
   retryable: boolean;
   busy: boolean;
@@ -378,6 +392,11 @@ function PluginDetails({
             <CheckCircleIcon size={14} aria-hidden="true" />
             Installed
           </span>
+          {managed && (
+            <span className={styles.pluginInstallBadge}>
+              Managed by {managed.source}
+            </span>
+          )}
           <span
             ref={setInstalledStatus}
             className={styles.pluginInstallBadge}
@@ -472,7 +491,18 @@ function PluginDetails({
           </span>
         )}
       </div>
-      {plugin.source === "external" && plugins.imports && (
+      {plugin.source === "external" && plugins.imports && managed && (
+        <ManagedPluginUpdate
+          plugins={plugins}
+          catalog={catalog}
+          busy={busy}
+          source={managed.source}
+          entry={managed.entry}
+          returnFocus={() => close.current}
+          {...(authorizeGit ? { authorizeGit } : {})}
+        />
+      )}
+      {plugin.source === "external" && plugins.imports && !managed && (
         <PluginImport
           key={`${plugin.revision}:${JSON.stringify(plugin.updateSource)}`}
           initialUpdateAvailable={initialUpdateAvailable}
@@ -584,6 +614,7 @@ export function Settings({
   adminAccess,
   communities,
   identity,
+  federatedIdentity,
   appearance,
   shortcuts,
   shortcutBindings,
@@ -591,6 +622,7 @@ export function Settings({
   updates,
   navigation,
   onSection,
+  onProvider,
   navigationPane = false,
   onDeparturePending,
   onUnsavedChange,
@@ -602,6 +634,7 @@ export function Settings({
   adminAccess?: AdminAccessReader;
   communities: Communities;
   identity?: Identity | undefined;
+  federatedIdentity?: FederatedIdentity | undefined;
   appearance: Appearance;
   shortcuts: ShortcutsService;
   shortcutBindings: ShortcutBindings;
@@ -611,6 +644,7 @@ export function Settings({
     | import("../features/navigation/service").PageNavigation
     | undefined;
   onSection?: (section: string) => void;
+  onProvider?: ((provider?: string) => void) | undefined;
   navigationPane?: boolean;
   onDeparturePending?: (pending: boolean) => void;
   onUnsavedChange?: (unsaved: boolean) => void;
@@ -695,6 +729,8 @@ export function Settings({
   const ready = configuration.status === "ready" ? configuration : undefined;
   const catalog = ready?.catalog;
   const externalPluginsPaused = ready?.externalPluginsPaused;
+  const managed = ready?.managed;
+  const pendingCount = pendingManaged(managed).length;
   const [activationAttempt, setActivationAttempt] = useState<{
     id: string;
     revision: string;
@@ -913,6 +949,7 @@ export function Settings({
                 (running?.revision === plugin.revision ? running.error : null);
               const updateAvailable =
                 !!plugins.imports &&
+                !managedBy(managed, id) &&
                 updateChecks[id]?.revision === plugin.revision &&
                 !!updateChecks[id]?.available;
               const name = (
@@ -963,7 +1000,8 @@ export function Settings({
                           plugin.manifest.description
                             ? `plugin-description-${id}`
                             : null,
-                          plugin.source === "external" && plugin.publisher
+                          plugin.source === "external" &&
+                          (plugin.publisher || managedBy(managed, id))
                             ? `plugin-publisher-${id}`
                             : null,
                           isEssentialPlugin(plugin)
@@ -1019,6 +1057,7 @@ export function Settings({
                           <PluginProvenance
                             source={plugin.source}
                             publisher={plugin.publisher}
+                            managedBy={managedBy(managed, id)?.source}
                             className={styles.pluginRowAuthor}
                           />
                         </span>
@@ -1172,7 +1211,12 @@ export function Settings({
           />
         </div>
         <div hidden={selected !== "agents"}>
-          <AgentSettings agents={agents} active={selected === "agents"} />
+          <AgentSettings
+            agents={agents}
+            active={selected === "agents"}
+            navigation={navigation}
+            onProvider={onProvider}
+          />
         </div>
         {decisions && (
           <div hidden={selected !== "decisions"}>
@@ -1246,6 +1290,7 @@ export function Settings({
             key={client.viewer}
             viewer={client.viewer}
             identity={identity}
+            federatedIdentity={federatedIdentity}
           />
         )}
         {developerMode && (
@@ -1273,6 +1318,15 @@ export function Settings({
             <AnimatePresence initial={false} mode="popLayout">
               {coreGroup && renderPluginGroup(coreGroup)}
             </AnimatePresence>
+            {catalog && (
+              <ManagedPlugins
+                plugins={plugins}
+                managed={managed}
+                catalog={catalog}
+                busy={busy}
+                authorizeGit={authorizePluginGit}
+              />
+            )}
             {catalog && (
               <motion.div {...layoutMotion} className={styles.pluginToolbar}>
                 <motion.div {...layoutMotion}>
@@ -1422,8 +1476,10 @@ export function Settings({
         <PluginDetails
           key={selectedPlugin.manifest.id}
           plugin={selectedPlugin}
+          managed={managedBy(managed, selectedPlugin.manifest.id)}
           catalog={catalog}
           initialUpdateAvailable={
+            !managedBy(managed, selectedPlugin.manifest.id) &&
             updateChecks[selectedPlugin.manifest.id]?.revision ===
               selectedPlugin.revision &&
             updateChecks[selectedPlugin.manifest.id]?.available === true
@@ -1511,6 +1567,13 @@ export function Settings({
                         label={label}
                         icon={Icon && <Icon aria-hidden="true" size={18} />}
                         selected={selected === id}
+                        {...(id === "plugins" && pendingCount > 0
+                          ? {
+                              trailing: (
+                                <RecommendationCount count={pendingCount} />
+                              ),
+                            }
+                          : {})}
                         type="button"
                         key={id}
                         aria-current={selected === id ? "page" : undefined}

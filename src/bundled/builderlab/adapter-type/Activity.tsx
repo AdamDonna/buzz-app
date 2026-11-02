@@ -86,6 +86,7 @@ function ActivityFeed({
       transcript={transcript}
       agentName={agent.name}
       state={(turnId) => state.get(turnId)}
+      follow={false}
       before={
         <>
           <Note>

@@ -433,7 +433,6 @@ it("says which conversations a request works in, and lists the agent's places", 
       conversation: CONVERSATION,
       channelId: channel,
       root: root.id,
-      name: "general",
       at: 110_000,
     },
   ]);
@@ -459,32 +458,38 @@ it("posts nothing Pi wrote without `send`, for any request its run answered", as
   expect(published).toEqual([]);
 });
 
-it("runs Pi's Buzz tools in the conversation's thread, and posts nothing more after a send", async () => {
-  const answered = deferred();
-  const { host, deliver, settled, published } = setup({
-    wait: async () => {
-      await answered.promise;
-      return { status: "done", answer: 5, text: "Posted it." };
-    },
-  });
-  const turn = deliver({ type: "mention", event: reply("2", "@Pi look") });
-  await turn.run;
-  const sent = await host.processes[0]?.tool({
-    agent: self,
-    conversation: CONVERSATION,
-    context: { channel, root: root.id },
-    name: "send",
-    arguments: { text: "On it", audience: "everyone", final: true },
-  });
-  // A final send ends Pi's run.
-  expect(sent?.result).toMatchObject({ final: true });
-  expect(sent?.result).not.toMatchObject({ isError: true });
-  answered.resolve();
-  await expect(settled(turn)).resolves.toEqual({ ok: true });
-  expect(published).toHaveLength(1);
-  expect(published[0]).toMatchObject({ kind: 9, content: "On it" });
-  expect(published[0]?.tags).toContainEqual(["e", root.id, "", "reply"]);
-});
+it.each([
+  ["send", {}],
+  ["reply_in_subthread", { parent: root.id }],
+])(
+  "runs Pi's Buzz tools in the conversation's thread, and posts nothing more after a final %s",
+  async (name, extra) => {
+    const answered = deferred();
+    const { host, deliver, settled, published } = setup({
+      wait: async () => {
+        await answered.promise;
+        return { status: "done", answer: 5, text: "Posted it." };
+      },
+    });
+    const turn = deliver({ type: "mention", event: reply("2", "@Pi look") });
+    await turn.run;
+    const sent = await host.processes[0]?.tool({
+      agent: self,
+      conversation: CONVERSATION,
+      context: { channel, root: root.id },
+      name,
+      arguments: { ...extra, text: "On it", audience: "everyone", final: true },
+    });
+    // A final message ends Pi's run.
+    expect(sent?.result).toMatchObject({ final: true });
+    expect(sent?.result).not.toMatchObject({ isError: true });
+    answered.resolve();
+    await expect(settled(turn)).resolves.toEqual({ ok: true });
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({ kind: 9, content: "On it" });
+    expect(published[0]?.tags).toContainEqual(["e", root.id, "", "reply"]);
+  },
+);
 
 it("hands off from Pi to another of its conversations", async () => {
   const { host, deliver, agent } = setup();
@@ -2206,4 +2211,132 @@ it("keeps foreign-channel roots out of conversation context", async () => {
   expect(String(f.host.requests("deliver")[0]?.params.text)).not.toContain(
     "Private root",
   );
+});
+
+/** The owner's connection to the agent's community, as the relay has it: a
+ * session whose channel list the community changes, replaced when the relay
+ * reconnects. */
+function relayFixture() {
+  const session = () => {
+    const listeners = new Set<() => void>();
+    const unsubscribe = vi.fn();
+    let channels = [{ id: channel, name: "general", channelType: "stream" }];
+    return {
+      channels: {
+        list: () => ({ channels }),
+        subscribeList: (listener: () => void) => {
+          listeners.add(listener);
+          return () => {
+            unsubscribe();
+            listeners.delete(listener);
+          };
+        },
+      },
+      unsubscribe,
+      /** Whether a channel-list listener is attached now. */
+      listening: () => listeners.size > 0,
+      /** The community made the channel private. */
+      lock() {
+        channels = [{ ...channels[0], private: true } as (typeof channels)[0]];
+        for (const listener of listeners) listener();
+      },
+    };
+  };
+  const listeners = new Set<() => void>();
+  let snapshot: { status: string; session: ReturnType<typeof session> } = {
+    status: "connecting",
+    session: session(),
+  };
+  const relay = {
+    snapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as unknown as RelayData;
+  const runtime = new PiRuntime(
+    { spawn: fakeHost().spawn },
+    (key) => ownerReads(relay, pubkeyOf(key)),
+    vi.fn(async () => null),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_key, listener) => relay.subscribe(listener),
+  );
+  return {
+    runtime,
+    session: () => snapshot.session,
+    /** Whether anything follows the relay's snapshot. */
+    followed: () => listeners.size > 0,
+    /** The relay is ready with a new session. */
+    connect() {
+      snapshot = { status: "ready", session: session() };
+      for (const listener of listeners) listener();
+    },
+    /** The relay's state changed without replacing its session. */
+    tick() {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+it("tells of channel changes once the agent's community connects after Activity subscribed", () => {
+  const relay = relayFixture();
+  const changed = vi.fn();
+  relay.runtime.subscribeChannels(self, changed);
+  expect(relay.session().listening()).toBe(false);
+  expect(relay.runtime.channelLabel(self, channel)).toBeUndefined();
+
+  relay.connect();
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(relay.session().listening()).toBe(true);
+  expect(relay.runtime.channelLabel(self, channel)).toEqual({
+    name: "general",
+    channelType: "stream",
+  });
+  relay.session().lock();
+  expect(changed).toHaveBeenCalledTimes(2);
+  expect(relay.runtime.channelLabel(self, channel)).toMatchObject({
+    private: true,
+  });
+});
+
+it("follows the community's connection when the relay replaces its session", () => {
+  const relay = relayFixture();
+  relay.connect();
+  const first = relay.session();
+  const changed = vi.fn();
+  relay.runtime.subscribeChannels(self, changed);
+  relay.tick();
+  expect(changed).not.toHaveBeenCalled();
+
+  relay.connect();
+  expect(first.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(changed).toHaveBeenCalledTimes(1);
+  first.lock();
+  expect(changed).toHaveBeenCalledTimes(1);
+  relay.session().lock();
+  expect(changed).toHaveBeenCalledTimes(2);
+  expect(relay.runtime.channelLabel(self, channel)).toMatchObject({
+    private: true,
+  });
+});
+
+it("lets go of whichever channel-list listener it holds when Activity unsubscribes", () => {
+  const relay = relayFixture();
+  relay.connect();
+  const changed = vi.fn();
+  const stop = relay.runtime.subscribeChannels(self, changed);
+  relay.connect();
+  const current = relay.session();
+  expect(current.listening()).toBe(true);
+
+  stop();
+  expect(current.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(current.listening()).toBe(false);
+  expect(relay.followed()).toBe(false);
+  current.lock();
+  relay.connect();
+  expect(changed).toHaveBeenCalledTimes(1);
 });

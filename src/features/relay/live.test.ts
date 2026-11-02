@@ -4,6 +4,8 @@ import { assert, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createLiveAdmission,
   liveChannels,
+  liveReconnectDelay,
+  liveResumeSince,
   SETUP_TIMEOUT_MS,
   liveSlowRetryDelay,
   subscribeRelayTraffic,
@@ -29,9 +31,10 @@ const isProbe = (frame: unknown[]) =>
   typeof frame[1] === "string" && frame[1].startsWith("probe-");
 class Socket {
   readyState = 1;
+  onopen?: () => void;
   onmessage?: (event: { data: string }) => Promise<void>;
-  onclose?: () => void;
-  onerror?: () => void;
+  onclose?: (event?: { code?: number | undefined }) => void;
+  onerror?: (event: Event) => void;
   sent: unknown[][] = [];
   /** A responsive relay answers liveness probes; a silent one answers nothing. */
   silent = false;
@@ -41,9 +44,9 @@ class Socket {
     if (frame[0] === "REQ" && isProbe(frame) && !this.silent)
       queueMicrotask(() => void this.receive(["EOSE", frame[1]]));
   }
-  close() {
+  close(code?: number) {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
   async receive(value: unknown) {
     await this.onmessage?.({ data: JSON.stringify(value) });
@@ -66,7 +69,25 @@ class Socket {
   }
 }
 afterEach(() => vi.useRealTimers());
-function setup(channels = ["a", "b"], admission = createLiveAdmission()) {
+it("keeps the browser authentication deadline measured from construction", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    await vi.advanceTimersByTimeAsync(9000);
+    h.first.onopen?.();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("retrying");
+  } finally {
+    h.owner.dispose();
+  }
+});
+function setup(
+  channels = ["a", "b"],
+  admission = createLiveAdmission(),
+  random?: () => number,
+) {
   const key = keypair(),
     sockets: Socket[] = [];
   const callbacks = {
@@ -87,6 +108,9 @@ function setup(channels = ["a", "b"], admission = createLiveAdmission()) {
       return socket as unknown as WebSocket;
     },
     admission,
+    undefined,
+    undefined,
+    random,
   );
   owner.update(channels);
   const first = sockets[0];
@@ -1280,6 +1304,660 @@ it.each([0, 0.5])(
     }
   },
 );
+
+it.each([
+  [
+    "resumes sixteen minutes before the connection last heard",
+    1000,
+    5000,
+    4040,
+  ],
+  ["never reaches back past the original window", 1000, 1500, 1000],
+  ["keeps the original window at its edge", 1000, 1960, 1000],
+  ["moves past the original window one second later", 1000, 1961, 1001],
+] as const)("liveResumeSince: %s", (_name, original, liveUntil, expected) => {
+  expect(liveResumeSince(original, { liveUntil })).toBe(expected);
+});
+
+it.each([
+  ["a restarting relay is spread from zero", 1012, 500, 0, 0],
+  ["going away is spread the same way", 1001, 500, 0.5, 5000],
+  ["the spread stays under its bound", 1012, 500, 0.999, 9990],
+  [
+    "repeated bounces widen the spread with the backoff",
+    1012,
+    16000,
+    0.5,
+    8000,
+  ],
+  ["other closes back off at half the backoff", 1006, 500, 0, 250],
+  ["other closes back off at three quarters", undefined, 500, 0.5, 375],
+  ["other closes back off at most the backoff", 1000, 8000, 1, 8000],
+] as const)(
+  "liveReconnectDelay: %s",
+  (_name, code, backoff, sample, expected) => {
+    expect(liveReconnectDelay(code, backoff, () => sample)).toBeCloseTo(
+      expected,
+      6,
+    );
+  },
+);
+
+// A session older than the resume lag, so a cursor is not held back by the
+// session's first window. Timers keep their offsets.
+const age = () => vi.setSystemTime(Date.now() + 2_000_000);
+// A refusal the relay retries on the same socket after the pause it names.
+const REFUSED = "rate-limited: quota exceeded; retry in 0s";
+const isProfiles = (r: WireRequest) =>
+  filtersOf(r)[0]?.kinds?.includes(0) === true;
+const sinceOf = (socket: Socket, match: (r: WireRequest) => boolean) =>
+  filtersOf(socket.requests().find(match) as WireRequest).map((f) => f.since);
+
+it("resumes a rebuilt route sixteen minutes before its connection last heard the relay, and only if it reached EOSE", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a", "b"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const [profiles, membership, a, b] = h.first.requests();
+    assert.exists(profiles);
+    assert.exists(membership);
+    assert.exists(a);
+    assert.exists(b);
+    // Established: profiles and "a". Still replaying at the close: membership and "b".
+    await h.first.receive(["EOSE", profiles[1]]);
+    await h.first.receive(["EOSE", a[1]]);
+    const heard = Math.floor(Date.now() / 1000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const first = Math.floor(Date.now() / 1000) - 300;
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    // Reaches back past an event stored just after the close and backdated by
+    // the relay's full 900s drift.
+    expect(sinceOf(next, (r) => scopeOf(r).includes("a"))).toEqual([
+      heard - 960,
+    ]);
+    expect(
+      sinceOf(next, (r) => filtersOf(r)[0]?.kinds.includes(0) === true)[0],
+    ).toBe(heard - 960);
+    // Never established on any connection: the five-minute window.
+    expect(sinceOf(next, (r) => scopeOf(r).includes("b"))).toEqual([first]);
+    expect(
+      sinceOf(next, (r) => filtersOf(r)[0]?.kinds.includes(44100) === true)[0],
+    ).toBe(first);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("never resumes from before the session's first window", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(next, (r) => scopeOf(r).includes("a"))).toEqual([
+      1_700_000_000 - 300,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("takes a batch's resume point from its earliest channel", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const batch = h.first.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(batch);
+    await h.first.receive(["EOSE", batch[1]]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.close();
+    // "c" joins after the last connection: it has no cursor, and its own
+    // window would start later than the cursor of "a".
+    h.owner.update(["a", "c"], ["a", "c"]);
+    await vi.advanceTimersByTimeAsync(500);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(next, (r) => scopeOf(r).includes("c"))).toEqual([
+      heard - 960,
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("resumes from when a silent socket last answered, not from when it was replaced", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.silent = true;
+    // The stall is found by a probe and the socket replaced; wait for that.
+    for (let i = 0; i < 300 && h.sockets.length < 2; i++)
+      await vi.advanceTimersByTimeAsync(1000);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(next, (r) => scopeOf(r).includes("a"))).toEqual([
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+/** A joined batch of "a" and "b", established, then renewed by the recovery tick. */
+async function renewing(h: ReturnType<typeof setup>) {
+  age();
+  h.owner.update(["a", "b"], ["a", "b"]);
+  await h.first.auth();
+  await vi.advanceTimersByTimeAsync(750);
+  for (const [, id] of h.first.requests()) await h.first.receive(["EOSE", id]);
+  const heard = Math.floor(Date.now() / 1000);
+  await vi.advanceTimersByTimeAsync(60_000);
+  const renewal = h.first
+    .requests()
+    .find((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 0);
+  assert.exists(renewal);
+  return { heard, renewal };
+}
+const batchSince = (socket: Socket, id: string) =>
+  sinceOf(socket, (r) => scopeOf(r).includes(id));
+async function rebuilt(h: ReturnType<typeof setup>) {
+  await vi.advanceTimersByTimeAsync(1000);
+  const next = h.sockets[1];
+  assert.exists(next);
+  await next.auth();
+  await vi.advanceTimersByTimeAsync(750);
+  return next;
+}
+
+it("resumes a joined batch closed during its renewal from the source it kept", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    const { heard } = await renewing(h);
+    h.first.close();
+    expect(batchSince(await rebuilt(h), "a")).toEqual([
+      heard - 960,
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("resumes a joined batch whose renewal failed but kept its source", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    const { heard, renewal } = await renewing(h);
+    // After one tick, a frame proves the relay only as far as the AUTH.
+    await h.first.receive(["CLOSED", renewal[1], "error: busy"]);
+    h.first.close();
+    expect(batchSince(await rebuilt(h), "a")).toEqual([
+      heard - 960,
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("resumes a silent joined batch from its last frame, though its renewal never answered", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.silent = true;
+    for (let i = 0; i < 300 && h.sockets.length < 2; i++)
+      await vi.advanceTimersByTimeAsync(1000);
+    // The recovery tick renewed the batch before the stall was found.
+    expect(
+      h.first
+        .requests()
+        .some((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 0),
+    ).toBe(true);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(batchSince(next, "a")).toEqual([heard - 960, heard - 960]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("gives a renewal's kept source no cursor for a channel the renewal dropped", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    // "b" leaves: the survivor renewal for "a" keeps the source of both.
+    h.owner.update(["a"], ["a"]);
+    await vi.advanceTimersByTimeAsync(0);
+    h.first.close();
+    // "b" is back before the rebuild, on its own route, without having
+    // streamed since it left.
+    h.owner.update(["a", "b"], ["a"]);
+    const next = await rebuilt(h);
+    expect(batchSince(next, "a")).toEqual([heard - 960]);
+    const [since] = batchSince(next, "b");
+    expect(since).toBeGreaterThanOrEqual(heard - 300);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("resumes a batch rebuilt before its EOSE from the cursor, not the last five minutes", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b", "c"], ["a", "b", "c"]);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.close();
+    // Ten minutes offline, so five minutes back from the reconnect misses a gap.
+    vi.setSystemTime(Date.now() + 600_000);
+    const next = await rebuilt(h);
+    expect(new Set(batchSince(next, "a"))).toEqual(new Set([heard - 960]));
+    // "c" leaves the joined set before the batch's EOSE, so the batch is rebuilt.
+    h.owner.update(["a", "b", "c"], ["a", "b"]);
+    await vi.advanceTimersByTimeAsync(750);
+    const batches = next.requests().filter((r) => scopeOf(r).includes("a"));
+    expect(batches).toHaveLength(2);
+    const [, survivor] = batches as [WireRequest, WireRequest];
+    expect(new Set(scopeOf(survivor))).toEqual(new Set(["a", "b"]));
+    expect(new Set(filtersOf(survivor).map((f) => f.since))).toEqual(
+      new Set([heard - 960]),
+    );
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("does not move the cursor to the wake time for a frame that waited through a sleep", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    // An hour asleep; a frame queued before it is handled on wake, then the
+    // relay's restart close behind it.
+    vi.setSystemTime(Date.now() + 3_600_000);
+    await h.first.receive(["NOTICE", "queued before the sleep"]);
+    h.first.close(1012);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(next, (r) => scopeOf(r).includes("a"))).toEqual([
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it.each([
+  ["the frame", false],
+  ["the late tick", true],
+])(
+  "a frame handled after a short sleep proves the relay only up to the tick before the latest, whether %s is handled first",
+  async (_, tickFirst) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup(["a"], undefined, () => 0.5);
+    try {
+      age();
+      await h.first.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      for (const [, id] of h.first.requests())
+        await h.first.receive(["EOSE", id]);
+      const ticks: number[] = [];
+      for (const _ of [1, 2]) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        ticks.push(Math.floor(Date.now() / 1000));
+        await h.first.receive(["NOTICE", "live"]);
+      }
+      const [before, last] = ticks;
+      assert.exists(before);
+      assert.exists(last);
+      // Asleep from just after the last tick until 100s after it: a frame
+      // queued before the sleep is handled on wake, then the relay's restart
+      // close behind it. An event stored then may be backdated past last - 900.
+      if (tickFirst) {
+        vi.setSystemTime(Date.now() + 40_000);
+        await vi.advanceTimersByTimeAsync(60_000);
+      } else vi.setSystemTime(Date.now() + 100_000);
+      await h.first.receive(["NOTICE", "queued before the sleep"]);
+      h.first.close(1012);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const next = h.sockets[1];
+      assert.exists(next);
+      await next.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      const [since] = sinceOf(next, (r) => scopeOf(r).includes("a"));
+      expect(since).toBe((tickFirst ? last : before) - 960);
+      expect(since).toBeLessThanOrEqual(last - 900);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it("keeps a route's cursor through a connection that never established it", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    // Authenticated, but the relay closes before any route is established.
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    second.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    const third = h.sockets[2];
+    assert.exists(third);
+    await third.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(third, (r) => scopeOf(r).includes("a"))).toEqual([
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("forgets the cursor of a channel that left the interests before a rebuild", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a", "b"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    h.first.close();
+    h.owner.update(["a"]);
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    // Before its first tick, a connection's frames prove the relay as of the AUTH.
+    const heard = Math.floor(Date.now() / 1000);
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
+    h.owner.update(["a", "b"]);
+    second.close();
+    // The doubled backoff at three quarters: the rebuild happens now.
+    await vi.advanceTimersByTimeAsync(750);
+    const floor = Math.floor(Date.now() / 1000) - 300;
+    const third = h.sockets[2];
+    assert.exists(third);
+    await third.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(third, (r) => scopeOf(r).includes("a"))).toEqual([
+      heard - 960,
+    ]);
+    // "b" was not routed when its old cursor would have been renewed.
+    expect(sinceOf(third, (r) => scopeOf(r).includes("b"))).toEqual([floor]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it.each([
+  ["a 1012 close", (socket: Socket) => socket.close(1012)],
+  ["an abnormal 1006 close", (socket: Socket) => socket.close(1006)],
+  [
+    "a transport error",
+    (socket: Socket) => socket.onerror?.(new Event("error")),
+  ],
+])(
+  "stamps the last relay frame, not the wake-up, when waking finds %s",
+  async (_name, drop) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup(["a"], undefined, () => 0.5);
+    try {
+      age();
+      await h.first.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      for (const [, id] of h.first.requests())
+        await h.first.receive(["EOSE", id]);
+      const heard = Math.floor(Date.now() / 1000);
+      // The machine sleeps for an hour: the clock moves, no timer runs and no
+      // frame arrives. The buffered close or error is handled on waking, and
+      // is the transport's own event, not a frame from the relay.
+      vi.setSystemTime(Date.now() + 3_600_000);
+      drop(h.first);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const next = h.sockets[1];
+      assert.exists(next);
+      await next.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      expect(sinceOf(next, (r) => scopeOf(r).includes("a"))).toEqual([
+        heard - 960,
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it("does not take a late EOSE for a superseded REQ as the replacement's catch-up", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const first = h.first.requests().find(isProfiles);
+    assert.exists(first);
+    // The relay refuses the first REQ; the same socket asks again.
+    await h.first.receive(["CLOSED", first[1], REFUSED]);
+    await vi.advanceTimersByTimeAsync(1000);
+    const retry = h.first.requests().filter(isProfiles).at(-1);
+    assert.exists(retry);
+    expect(retry[1]).not.toBe(first[1]);
+    // The old REQ's EOSE arrives late, before the replacement's history.
+    await h.first.receive(["EOSE", first[1]]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const floor = Math.floor(Date.now() / 1000) - 300;
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    // No connection established the route, so no cursor: the five-minute window.
+    expect(new Set(sinceOf(next, isProfiles))).toEqual(new Set([floor]));
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("keeps an earlier cursor when the replacement REQ on the same socket has not caught up", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const asked = second.requests().find(isProfiles);
+    assert.exists(asked);
+    // Refused, asked again; the old REQ's EOSE comes late and the replacement's
+    // history never arrives before this connection also drops.
+    await second.receive(["CLOSED", asked[1], REFUSED]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await second.receive(["EOSE", asked[1]]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    second.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    const third = h.sockets[2];
+    assert.exists(third);
+    await third.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(new Set(sinceOf(third, isProfiles))).toEqual(new Set([heard - 960]));
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("keeps the earlier cursor when a channel is unsubscribed and subscribed again before its late EOSE", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup(["a"], undefined, () => 0.5);
+  try {
+    age();
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const [, id] of h.first.requests())
+      await h.first.receive(["EOSE", id]);
+    const heard = Math.floor(Date.now() / 1000);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const old = second.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(old);
+    // Unsubscribe, then subscribe the same channel again on the same socket.
+    h.owner.update([]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(second.sent).toContainEqual(["CLOSE", old[1]]);
+    h.owner.update(["a"]);
+    await vi.advanceTimersByTimeAsync(10);
+    const fresh = second.requests().filter((r) => scopeOf(r).includes("a"));
+    expect(fresh.length).toBeGreaterThan(1);
+    const again = fresh.at(-1);
+    assert.exists(again);
+    expect(again[1]).not.toBe(old[1]);
+    // The old REQ's EOSE was still buffered when its CLOSE went out; the new
+    // history has not arrived when this connection drops.
+    await second.receive(["EOSE", old[1]]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    second.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    const third = h.sockets[2];
+    assert.exists(third);
+    await third.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(sinceOf(third, (r) => scopeOf(r).includes("a"))).toEqual([
+      heard - 960,
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it.each([
+  [1012, 9000],
+  [1001, 9000],
+  [1006, 475],
+  [undefined, 475],
+])(
+  "waits for the jitter its close code calls for before reconnecting (code %s)",
+  async (code, delay) => {
+    vi.useFakeTimers();
+    const h = setup(["a"], undefined, () => 0.9);
+    try {
+      await h.first.auth();
+      h.first.close(code);
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(h.sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sockets).toHaveLength(2);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it("reconnects at once when the spread draws zero, then backs off normally after a plain failure", async () => {
+  vi.useFakeTimers();
+  const draws = [0, 0.5];
+  const h = setup(["a"], undefined, () => draws.shift() ?? 0.5);
+  try {
+    await h.first.auth();
+    h.first.close(1012);
+    await vi.advanceTimersByTimeAsync(0);
+    const second = h.sockets[1];
+    assert.exists(second);
+    // The restart spread leaves the backoff to double: a failure now waits 750ms.
+    second.close(1006);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(h.sockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.sockets).toHaveLength(3);
+  } finally {
+    h.owner.dispose();
+  }
+});
 
 it("retries a rejected authentication slowly, doubling the wait, and keeps the error visible", async () => {
   vi.useFakeTimers();
@@ -2820,4 +3498,158 @@ it("carries verified workflow attribution from live admission to notification ca
     owner.dispose();
     h.owner.dispose();
   }
+});
+describe("policy close (1008) recovery", () => {
+  const deny = async (socket: Socket) => {
+    await socket.receive(["NOTICE", "auth-required: authorization denied"]);
+    (
+      socket.onclose as unknown as (event: {
+        code: number;
+        reason: string;
+      }) => void
+    )?.({
+      code: 1008,
+      reason: "authorization denied",
+    });
+  };
+  const status = (h: ReturnType<typeof setup>) =>
+    h.callbacks.state.mock.lastCall?.[0].status;
+  it("stops when the fresh-evidence reconnect is denied after NIP-42", async () => {
+    vi.useFakeTimers();
+    const h = setup([]);
+    try {
+      await h.first.auth();
+      await deny(h.first);
+      expect(status(h)).toBe("retrying");
+      await vi.advanceTimersByTimeAsync(2000);
+      const second = h.sockets[1];
+      assert.exists(second);
+      // The relay checks the deny set after the upgrade and the AUTH frame.
+      await second.receive(["AUTH", "challenge"]);
+      expect(second.sent.some((entry) => entry[0] === "AUTH")).toBe(true);
+      await deny(second);
+      expect(status(h)).toBe("error");
+      await vi.advanceTimersByTimeAsync(600000);
+      expect(h.sockets).toHaveLength(2);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+  it("keeps recovering ordinary expiry once each admission succeeds", async () => {
+    vi.useFakeTimers();
+    const h = setup([]);
+    try {
+      for (let i = 0; i < 3; i++) {
+        const socket = h.sockets[i];
+        assert.exists(socket);
+        await socket.auth();
+        expect(status(h)).toBe("connected");
+        await deny(socket);
+        expect(status(h)).toBe("retrying");
+        await vi.advanceTimersByTimeAsync(2000);
+      }
+      expect(h.sockets).toHaveLength(4);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+  it("stops on a repeated policy close before AUTH", async () => {
+    vi.useFakeTimers();
+    const h = setup([]);
+    try {
+      await deny(h.first);
+      expect(status(h)).toBe("retrying");
+      await vi.advanceTimersByTimeAsync(2000);
+      const second = h.sockets[1];
+      assert.exists(second);
+      await deny(second);
+      expect(status(h)).toBe("error");
+    } finally {
+      h.owner.dispose();
+    }
+  });
+  it("does not reconnect a disposed subscription", async () => {
+    vi.useFakeTimers();
+    const h = setup([]);
+    await h.first.auth();
+    h.owner.dispose();
+    await deny(h.first);
+    await vi.advanceTimersByTimeAsync(600000);
+    expect(h.sockets).toHaveLength(1);
+  });
+});
+it("a replaced socket's late 1008 leaves the current connection's budget", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  const policyClose = (socket: Socket) =>
+    (
+      socket.onclose as unknown as (event: {
+        code: number;
+        reason: string;
+      }) => void
+    )?.({ code: 1008, reason: "expired" });
+  try {
+    // The first socket never authenticates and is replaced after its deadline.
+    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(1000);
+    const current = h.sockets[1];
+    assert.exists(current);
+    await current.auth();
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connected");
+    policyClose(h.first);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connected");
+    // Ordinary expiry on the admitted socket still gets its reconnect.
+    policyClose(current);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("retrying");
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("backs off a relay's sign-in refusal and stops on a local terminal one", async () => {
+  vi.useFakeTimers();
+  const run = (message: string) => {
+    const sockets: Socket[] = [];
+    const state = vi.fn();
+    const owner = subscribeRelayTraffic(
+      "wss://relay.test",
+      async (event) => signed(keypair(), event),
+      keypair().pubkey,
+      { state, receive: vi.fn(), established: vi.fn(), denied: vi.fn() },
+      () => {
+        const socket = new Socket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    );
+    const refuse = () =>
+      (sockets.at(-1)?.onerror as ((event: Event) => void) | undefined)?.(
+        Object.assign(new Event("error"), { terminal: true, message }),
+      );
+    return { owner, sockets, state, refuse };
+  };
+  const signIn = run("Federated sign-in is required");
+  signIn.refuse();
+  expect(signIn.state.mock.lastCall?.[0]).toMatchObject({
+    status: "error",
+    error: "Federated sign-in is required",
+  });
+  // Never a tight loop: nothing before the slow interval, then one attempt.
+  await vi.advanceTimersByTimeAsync(59_000);
+  expect(signIn.sockets).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(signIn.sockets).toHaveLength(2);
+  // The next refusal doubles the wait.
+  signIn.refuse();
+  await vi.advanceTimersByTimeAsync(119_000);
+  expect(signIn.sockets).toHaveLength(2);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(signIn.sockets).toHaveLength(3);
+  signIn.owner.dispose();
+
+  const forbidden = run("relay-forbidden");
+  forbidden.refuse();
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(forbidden.sockets).toHaveLength(1);
+  forbidden.owner.dispose();
 });

@@ -61,6 +61,36 @@ it("puts the earlier choice for this text and usage ahead, within the order", ()
   expect(order(people, "dana", usage)).toEqual(["Dana Two", "Dana One"]);
 });
 
+it.each(["", " \t "])(
+  "orders idle suggestions by relationship and usage for %j",
+  (needle) => {
+    const people = [
+      person("stranger", "Stranger"),
+      person("managed", "Managed", { agent: true, relationship: 2 }),
+      person("visited", "Visited", { agent: true, relationship: 2 }),
+      person("other-dm", "Other DM", { relationship: 0 }),
+      person("dm", "Direct", {
+        relationship: 0,
+        usageKeys: [personKey("dm"), "channel:dm"],
+      }),
+    ];
+    const usage: SearchUsage = {
+      boost: (...keys) =>
+        keys.includes(personKey("visited")) || keys.includes("channel:dm")
+          ? 1
+          : 0,
+      pick: () => undefined,
+    };
+    expect(order(people, needle, usage)).toEqual([
+      "Direct",
+      "Other DM",
+      "Visited",
+      "Managed",
+      "Stranger",
+    ]);
+  },
+);
+
 it("ranks a hidden agent name after shown names, as mentions do", () => {
   const people = [
     person("agent", "Helper Bot", {

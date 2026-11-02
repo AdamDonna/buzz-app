@@ -11,6 +11,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ChannelSummary } from "../relay/contracts";
@@ -251,6 +252,47 @@ function setup() {
 const recipient = () =>
   screen.getByRole("combobox", { name: "Message recipients" });
 const send = () => screen.getByRole("button", { name: "Send message" });
+
+it("finds a hosted agent by its owned name and sends without local custody", async () => {
+  const t = setup();
+  const [owned] = t.control.snapshot().agents;
+  assert(owned);
+  const hosted = { ...owned, name: "Hosted helper" };
+  t.updateControl({ status: "ready", agents: [], hosted: [hosted] });
+  t.mount();
+  await t.user.type(recipient(), "Hosted helper");
+  await t.user.click(
+    await screen.findByRole("option", { name: "Person 2, Agent" }),
+  );
+  expect(t.directMessages.open).not.toHaveBeenCalled();
+  expect(t.messages.send).not.toHaveBeenCalled();
+  await t.user.type(screen.getByRole("textbox"), "Hello hosted helper");
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  expect(t.directMessages.open).toHaveBeenCalledWith(
+    [hosted.pubkey],
+    expect.any(AbortSignal),
+  );
+  expect(t.messages.send).toHaveBeenCalledOnce();
+});
+
+it("revalidates a hosted recipient when its owned evidence disappears", async () => {
+  const t = setup();
+  const hosted = t.control.snapshot().agents;
+  t.updateControl({ status: "ready", agents: [], hosted });
+  t.mount();
+  await t.user.click(
+    await screen.findByRole("option", { name: "Person 2, Agent" }),
+  );
+  await t.user.type(screen.getByRole("textbox"), "Private draft");
+  t.updateControl({ status: "ready", agents: [], hosted: [] });
+  await t.user.click(send());
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "no longer available",
+  );
+  expect(t.directMessages.open).not.toHaveBeenCalled();
+  expect(t.messages.send).not.toHaveBeenCalled();
+});
 
 it("offers only local agents in this community, including cached searches after their list changes", async () => {
   const t = setup();
@@ -610,6 +652,30 @@ it("Space does not pick while the rest of the list failed to load", async () => 
   ).not.toBeInTheDocument();
 });
 
+it("a pointer passing over the people returns Enter to the keyboard's choice when it leaves", async () => {
+  const t = setup();
+  t.directMessages.people.mockResolvedValue({ people, hasMore: false });
+  t.mount();
+  await screen.findByRole("option", { name: "Person 1" });
+  await t.user.keyboard("{ArrowDown}");
+  const chosen = screen.getByRole("option", { name: "Person 1" });
+  const hovered = screen.getByRole("option", { name: "Person 3" });
+  await waitFor(() => expect(chosen).toHaveAttribute("aria-selected", "true"));
+  for (const clientX of [10, 12])
+    fireEvent.pointerMove(hovered, {
+      pointerType: "mouse",
+      clientX,
+      clientY: 10,
+    });
+  expect(hovered).toHaveAttribute("aria-selected", "true");
+  fireEvent.pointerLeave(screen.getByRole("listbox", { name: "People" }), {
+    pointerType: "mouse",
+  });
+  expect(chosen).toHaveAttribute("aria-selected", "true");
+  await t.user.keyboard("{Enter}");
+  expect(screen.getByRole("button", { name: "Remove Person 1" })).toBeVisible();
+});
+
 it("reveals the highlighted person on every arrow key and when the list reopens", async () => {
   const t = setup();
   const scrolled = vi.mocked(Element.prototype.scrollIntoView);
@@ -861,6 +927,111 @@ it("keeps a failed draft editable and resolves changed recipients again", async 
     [[people[0]?.pubkey, people[1]?.pubkey], expect.any(AbortSignal)],
   ]);
   expect(t.outbox.dismiss).toHaveBeenCalledOnce();
+});
+
+it("holds Send while the To field has text that is not a recipient", async () => {
+  const t = setup();
+  t.mount();
+  await t.user.click(await screen.findByRole("option", { name: "Person 1" }));
+  await t.user.type(screen.getByRole("textbox"), "Hello");
+  expect(send()).toBeEnabled();
+  const error = "“zz” is not a valid recipient";
+  await t.user.type(recipient(), "zz");
+  expect(send()).toBeDisabled();
+  // No error while the name is typed.
+  expect(screen.queryByText(error)).not.toBeInTheDocument();
+  await t.user.click(screen.getByRole("textbox"));
+  await t.user.keyboard("{Enter}");
+  expect(t.directMessages.open).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox")).toHaveTextContent("Hello");
+  // Once To is left, the error names its text in a status under the field.
+  const hint = within(
+    screen.getByRole("group", { name: "Recipients" }),
+  ).getByRole("status");
+  expect(hint).toHaveTextContent(error);
+  expect(hint).toHaveClass("text-body-sm", "text-danger");
+  // Back in To it hides with the list open, and shows when Escape closes it.
+  await t.user.click(recipient());
+  expect(screen.queryByText(error)).not.toBeInTheDocument();
+  await t.user.keyboard("{Escape}");
+  expect(screen.getByRole("status")).toHaveTextContent(error);
+  // Focus stays in To, which the error describes while it shows.
+  expect(recipient()).toHaveAccessibleDescription(error);
+  // Typing in To, where Escape left focus, removes it, so the status never
+  // changes text while shown.
+  await t.user.keyboard("z");
+  expect(screen.queryByText(/is not a valid recipient/)).toBeNull();
+  expect(recipient()).not.toHaveAccessibleDescription();
+  await t.user.clear(recipient());
+  await t.user.click(screen.getByRole("textbox"));
+  expect(screen.queryByText(error)).not.toBeInTheDocument();
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  expect(t.directMessages.open).toHaveBeenCalledWith(
+    [people[0]?.pubkey],
+    expect.any(AbortSignal),
+  );
+});
+
+it("shows the To error only beside a recipient, and clears it once the text becomes one", async () => {
+  const t = setup();
+  t.mount();
+  await screen.findByRole("option", { name: "Person 1" });
+  // With no recipient Send is held anyway, so the closed list shows no error.
+  await t.user.type(recipient(), "Person 3");
+  await t.user.keyboard("{Escape}");
+  expect(screen.queryByText(/is not a valid recipient/)).toBeNull();
+  await t.user.clear(recipient());
+  await t.user.click(await screen.findByRole("option", { name: "Person 1" }));
+  await t.user.type(recipient(), "Person 3");
+  await t.user.click(screen.getByRole("textbox"));
+  expect(
+    screen.getByText("“Person 3” is not a valid recipient"),
+  ).toBeInTheDocument();
+  await t.user.click(recipient());
+  await t.user.click(screen.getByRole("option", { name: "Person 3" }));
+  await t.user.type(screen.getByRole("textbox"), "Hello");
+  expect(screen.queryByText(/is not a valid recipient/)).toBeNull();
+  expect(send()).toBeEnabled();
+});
+
+it("does not hold Send for spaces left in the To field", async () => {
+  const t = setup();
+  t.mount();
+  await t.user.click(await screen.findByRole("option", { name: "Person 1" }));
+  await t.user.type(recipient(), "  ");
+  expect(recipient()).toHaveValue("  ");
+  await t.user.click(screen.getByRole("textbox"));
+  await t.user.keyboard("Hello");
+  // Spaces are no name, so they neither hold Send nor raise the To error.
+  expect(send()).toBeEnabled();
+  expect(
+    within(screen.getByRole("group", { name: "Recipients" })).queryByRole(
+      "status",
+    ),
+  ).toBeNull();
+});
+
+it("cuts the text named by the To error to 24 characters", async () => {
+  const t = setup();
+  t.mount();
+  await t.user.click(await screen.findByRole("option", { name: "Person 1" }));
+  await t.user.click(recipient());
+  await t.user.paste("  Avery Chen and Jordan 👩‍👩‍👧 Lee");
+  await t.user.click(screen.getByRole("textbox"));
+  // Trimmed, then cut after the 23rd character, which here is an emoji
+  // sequence of several code points.
+  expect(
+    screen.getByText(
+      "“Avery Chen and Jordan 👩‍👩‍👧…” is not a valid recipient",
+    ),
+  ).toBeInTheDocument();
+  await t.user.clear(recipient());
+  await t.user.paste("Avery Chen and Jordan Le");
+  await t.user.click(screen.getByRole("textbox"));
+  expect(
+    screen.getByText("“Avery Chen and Jordan Le” is not a valid recipient"),
+  ).toBeInTheDocument();
 });
 
 it("locks during opening and delivery, waits for confirmation, and retries the same uncertain send", async () => {

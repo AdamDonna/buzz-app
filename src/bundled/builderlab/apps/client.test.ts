@@ -31,13 +31,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-it.each(["create", "share"] as const)(
+it.each(["create", "community"] as const)(
   "stops %s after the owner changes during its first request",
   async (operation) => {
     let owner = "A";
     const session = createOAuthSession(async () => ({
       value: owner,
-      account: { subject: owner, email: "", canUseRemoteAgents: true },
+      account: {
+        subject: owner,
+        email: "",
+        canUseRemoteAgents: true,
+        canUseBuilderlabDecisions: false,
+      },
     }));
     await session.signIn();
     const held = deferred<HostResponse>();
@@ -50,7 +55,7 @@ it.each(["create", "share"] as const)(
     const pending =
       operation === "create"
         ? client.create("Demo")
-        : client.share("demo", "team");
+        : client.community("demo", "buzz-alpha", "grant");
     const rejected = expect(pending).rejects.toThrow(/sign-in changed/);
     session.signOut();
     owner = "B";
@@ -58,11 +63,7 @@ it.each(["create", "share"] as const)(
     held.resolve(
       operation === "create"
         ? contract()
-        : json(200, {
-            visibility: "restricted",
-            lifecycle_id: "life",
-            workspace_grant_revision: 1,
-          }),
+        : json(200, { lifecycle_id: "life", community_grant_revision: 1 }),
     );
     await rejected;
     expect(request).toHaveBeenCalledTimes(1);
@@ -72,7 +73,12 @@ it.each(["create", "share"] as const)(
 it("preserves the reserved app ID when sign-out interrupts initialization", async () => {
   const session = createOAuthSession(async () => ({
     value: "A",
-    account: { subject: "A", email: "", canUseRemoteAgents: true },
+    account: {
+      subject: "A",
+      email: "",
+      canUseRemoteAgents: true,
+      canUseBuilderlabDecisions: false,
+    },
   }));
   await session.signIn();
   const held = deferred<HostResponse>();
@@ -109,7 +115,12 @@ it("preserves the reserved app ID when sign-out interrupts initialization", asyn
 async function setup(responses: HostResponse[], signedIn = true) {
   const session = createOAuthSession(async () => ({
     value: "secret-session",
-    account: { subject: "auth0|owner", email: "", canUseRemoteAgents: true },
+    account: {
+      subject: "auth0|owner",
+      email: "",
+      canUseRemoteAgents: true,
+      canUseBuilderlabDecisions: false,
+    },
   }));
   if (signedIn) await session.signIn();
   const requests: (HostRequest | HostUpload)[] = [];
@@ -298,7 +309,7 @@ it("uploads the artifact to the app's deploy endpoint", async () => {
 it("points the agent at Settings when signed out or refused", async () => {
   const signedOut = await setup([], false);
   await expect(signedOut.client.list()).rejects.toThrow(
-    /not signed in.*Settings → Plugins → Builderlab agents/,
+    /not signed in.*Settings → Plugins → Builderlab, then/,
   );
   expect(signedOut.requests).toEqual([]);
   const refused = await setup([json(401, {})]);
@@ -323,28 +334,103 @@ it("reports the server's error without the session", async () => {
   );
 });
 
-it("shares only a restricted app, at its current grant revision", async () => {
+it("switches visibility without sending viewers", async () => {
   const { client, requests } = await setup([
-    json(200, {
-      visibility: "restricted",
-      lifecycle_id: "life-1",
-      workspace_grant_revision: 3,
-    }),
-    json(200, { ok: true }),
+    json(200, { ok: true, app_id: "demo", visibility: "restricted" }),
+    json(200, { ok: true, app_id: "demo", visibility: "restricted" }),
   ]);
-  await client.share("demo", "team/one");
-  expect(requests[1]).toMatchObject({
-    url: `${BASE}/v1/agent/apps/demo/sharing/workspaces/team%2Fone`,
-    method: "POST",
-    body: JSON.stringify({ lifecycle_id: "life-1", expected_revision: 3 }),
+  await client.visibility("demo", "only_you");
+  expect(requests[0]).toMatchObject({
+    url: `${BASE}/v1/agent/apps/demo/visibility`,
+    method: "PUT",
+    body: JSON.stringify({ visibility: "restricted" }),
   });
-  const open = await setup([json(200, { visibility: "organization" })]);
-  await expect(open.client.share("demo", "team")).rejects.toThrow(
-    /restricted visibility/,
+  await expect(client.visibility("demo", "workspace")).rejects.toThrow(
+    "Apps Platform reported demo as restricted, not demo as organization. Ask your owner to check who can open it in Share & manage before retrying",
+  );
+  const other = await setup([
+    json(200, { ok: true, app_id: "other", visibility: "organization" }),
+  ]);
+  await expect(other.client.visibility("demo", "workspace")).rejects.toThrow(
+    /reported other as organization, not demo as organization/,
   );
 });
 
-it("deploys to the sign-in's own tenant and opens only its app hosts", () => {
+it.each([
+  ["grant", "POST"],
+  ["revoke", "DELETE"],
+] as const)(
+  "%ss a community at the grant revision it just read",
+  async (action, method) => {
+    const { client, requests } = await setup([
+      json(200, { lifecycle_id: "life-1", community_grant_revision: 7 }),
+      json(200, { ok: true, community_grant_revision: 8 }),
+    ]);
+    await client.community("demo", "buzz/alpha", action);
+    const path = `${BASE}/v1/agent/apps/demo/sharing/communities/buzz%2Falpha`;
+    expect(requests).toMatchObject([
+      { url: path, method: "GET" },
+      {
+        url: path,
+        method,
+        body: JSON.stringify({ lifecycle_id: "life-1", expected_revision: 7 }),
+      },
+    ]);
+  },
+);
+
+it("tells the agent to deploy before sharing an app with no sharing lifecycle", async () => {
+  for (const response of [
+    json(409, {
+      error: {
+        code: "community_grant_conflict",
+        message: "app sharing state changed; read access and retry",
+      },
+    }),
+  ]) {
+    const { client, requests } = await setup([response]);
+    await expect(
+      client.community("demo", "buzz-alpha", "grant"),
+    ).rejects.toThrow(
+      "This app isn't set up for sharing yet. Deploy it with apps_deploy, then try again.",
+    );
+    expect(requests).toHaveLength(1);
+  }
+});
+
+it("changes nothing when the sharing read has no valid revision", async () => {
+  for (const body of [
+    { community_grant_revision: 0 },
+    { lifecycle_id: "life-1" },
+    { lifecycle_id: "life-1", community_grant_revision: -1 },
+    { lifecycle_id: "life-1", community_grant_revision: 1.5 },
+  ]) {
+    const { client, requests } = await setup([json(200, body)]);
+    await expect(
+      client.community("demo", "buzz-alpha", "grant"),
+    ).rejects.toThrow(/no valid sharing revision.*nothing was changed/);
+    expect(requests).toHaveLength(1);
+  }
+});
+
+it("passes a conflicting community change through unchanged", async () => {
+  const { client } = await setup([
+    json(200, { lifecycle_id: "life-1", community_grant_revision: 7 }),
+    json(409, {
+      error: {
+        code: "community_grant_conflict",
+        message: "app sharing state changed; read access and retry",
+      },
+    }),
+  ]);
+  await expect(
+    client.community("demo", "buzz-alpha", "revoke"),
+  ).rejects.toThrow(
+    "Revoking the community failed (HTTP 409): community_grant_conflict: app sharing state changed; read access and retry",
+  );
+});
+
+it("deploys to the sign-in's own tenant", () => {
   expect(controlPlane("https://app.builderlabstaging.xyz")).toBe(BASE);
   expect(controlPlane("https://block.builderlab.xyz/")).toBe(
     "https://compose-ctrl.block.builderlab.xyz",
@@ -354,12 +440,26 @@ it("deploys to the sign-in's own tenant and opens only its app hosts", () => {
   );
   expect(controlPlane("https://builderlab.example")).toBeUndefined();
   expect(controlPlane("")).toBeUndefined();
+});
+
+it("recognizes deployed app hosts across tenants", () => {
   for (const url of [
     "https://tiny-counter--bpsites.apps.builderlab.xyz/",
     "https://demo--bpsites.apps.block.builderlab.xyz/",
     "https://demo--bpsites.apps.builderlabstaging.xyz/path?x=1",
+    "https://demo--workspace.apps.acme.builderlab.xyz/",
+    "https://demo--workspace.apps.acme.builderlabstaging.xyz/",
+    "https://demo.apps.acme-2.builderlab.xyz/",
+    "https://demo.apps.7.builderlabstaging.xyz/",
+    "https://nested.demo.apps.builderlab.xyz/",
+    "https://nested.demo.apps.acme.builderlabstaging.xyz/",
+    "https://DEMO.APPS.ACME.BUILDERLABSTAGING.XYZ:8443/path?x=1#section",
+    `https://${"a".repeat(63)}.apps.${"b".repeat(63)}.builderlab.xyz/`,
   ])
     expect(isAppUrl(url), url).toBe(true);
+});
+
+it("rejects URLs outside the deployed app hostname shapes", () => {
   for (const url of [
     "http://demo--bpsites.apps.builderlab.xyz/",
     "https://apps.builderlab.xyz/",
@@ -371,6 +471,37 @@ it("deploys to the sign-in's own tenant and opens only its app hosts", () => {
     "https://demo.apps.block.builderlab.xyz.example.org/",
     "https://evilapps.block.builderlab.xyz/",
     "https://user:pass@demo.apps.block.builderlab.xyz/",
+    "http://demo.apps.acme.builderlabstaging.xyz/",
+    "https://user@demo.apps.acme.builderlab.xyz/",
+    "https://:pass@demo.apps.acme.builderlabstaging.xyz/",
+    "https://demo.apps.acme.builderlab.xyz@evil.example/",
+    "https://apps.builderlabstaging.xyz/",
+    "https://apps.acme.builderlab.xyz/",
+    "https://apps.acme.builderlabstaging.xyz/",
+    "https://demo.apps.acme.builderlabstaging.xyz.example.org/",
+    "https://demo.evilapps.acme.builderlab.xyz/",
+    "https://demo.apps.acme.builderlabstaging-evil.xyz/",
+    "https://demo.apps.acme.builderlab.xyz.evil/",
+    "https://demo.apps.acme.other.builderlab.xyz/",
+    "https://apps.demo.acme.builderlabstaging.xyz/",
+    "https://demo.acme.builderlab.xyz/",
+    "https://demo.apps.builderlab.example/",
+    "https://demo.apps.acme.blockstaging.build/",
+    "https://demo.apps.blockstaging.build/",
+    "https://demo.apps..builderlab.xyz/",
+    "https://demo.apps.-acme.builderlab.xyz/",
+    "https://demo.apps.acme-.builderlabstaging.xyz/",
+    "https://demo.apps.ac_me.builderlab.xyz/",
+    "https://.demo.apps.builderlab.xyz/",
+    "https://demo..apps.acme.builderlabstaging.xyz/",
+    "https://-demo.apps.builderlab.xyz/",
+    "https://demo-.apps.acme.builderlabstaging.xyz/",
+    "https://de_mo.apps.builderlab.xyz/",
+    "https://demo.apps.builderlab.xyz./",
+    `https://${"a".repeat(64)}.apps.builderlab.xyz/`,
+    `https://demo.apps.${"a".repeat(64)}.builderlabstaging.xyz/`,
+    "https://",
+    "",
     "not a url",
   ])
     expect(isAppUrl(url), url).toBe(false);

@@ -1,3 +1,4 @@
+import { useMediaReadRecovery } from "./use-media-read-recovery";
 import { useVideoGestures } from "./use-video-gestures";
 import { useMediaControls } from "./use-media-controls";
 import { useMediaCorners } from "./use-media-corners";
@@ -446,6 +447,10 @@ export function VideoPlayer({
   // Callers render their unavailable state instead of a player when
   // `useMediaElementSource(source).unavailable`.
   const { src: elementSource } = useMediaElementSource(source);
+  const { recover: recoverMedia } = useMediaReadRecovery(
+    elementSource,
+    onError,
+  );
   return (
     <div
       ref={stage}
@@ -482,7 +487,9 @@ export function VideoPlayer({
           onTime(element.currentTime);
         }}
         onTimeUpdate={(event) => onTime(event.currentTarget.currentTime)}
-        onError={onError}
+        onError={(event) => {
+          if (!recoverMedia(event.currentTarget)) onError();
+        }}
       />
       {feedback && (
         <div

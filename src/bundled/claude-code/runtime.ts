@@ -34,6 +34,7 @@ import type {
 import { pubkeyOf, type AgentKey } from "../../features/agents/membership";
 import type { Host } from "../../features/host/service";
 import type { EventData } from "../../features/relay/events";
+import type { ChannelLabel } from "../../features/channels/channel-icon";
 import { threadReference } from "../../features/relay/thread-reference";
 import {
   wakeAnchor,
@@ -103,14 +104,14 @@ export const config = (value: unknown): Config => ({
   ...(value && typeof value === "object" ? (value as Partial<Config>) : {}),
 });
 
-/** A saved session, for the owner's transcript list. */
-export type SavedConversation = Conversation & {
-  key: string;
-  sessionId: string;
-  /** The channel's name, when this community lists it. */
-  name?: string;
-  at: number;
-};
+/** A saved session, for the owner's transcript list, with the channel's name
+ * and kind when this community lists it. */
+export type SavedConversation = Conversation &
+  Partial<ChannelLabel> & {
+    key: string;
+    sessionId: string;
+    at: number;
+  };
 
 const NAMES_TIMEOUT_MS = 2_000;
 const CHAT = [9, 40002];
@@ -193,6 +194,12 @@ export class ClaudeRuntime {
     /** Desktop-local repository instructions; standalone hosts keep their own layout. */
     private readonly repositories: (scope: string | undefined) => string = () =>
       "",
+    private readonly hook: (
+      agent: string,
+      session: string,
+      event: string,
+      input: unknown,
+    ) => Promise<Record<string, unknown>> = async () => ({}),
   ) {}
 
   /** The host's own spawn, not a copy: history read with it is kept for it,
@@ -232,7 +239,9 @@ export class ClaudeRuntime {
       }
     }
     this.spare.warm(
-      ...agents.map((agent) => where(this.resolveConfig(agent.config))),
+      ...agents.map((agent) => ({
+        ...where(this.resolveConfig(agent.config)),
+      })),
     );
     this.notify();
   }
@@ -308,14 +317,13 @@ export class ClaudeRuntime {
       .list()
       .map(([key, saved]) => {
         const [channelId = key, root] = key.split("/");
-        const name = reads?.channelName(channelId);
         return {
           key,
           agent,
           sessionId: saved.id,
           channelId,
           ...(root ? { root } : {}),
-          ...(name ? { name } : {}),
+          ...reads?.channelLabel(channelId),
           at: saved.at,
         };
       });
@@ -346,15 +354,18 @@ export class ClaudeRuntime {
     );
     const last = transcript?.turns.at(-1);
     if (!last?.sessionId) return undefined;
-    const name = this.reads(agent)?.channelName(place.channelId);
     return {
       key: place.root ? `${place.channelId}/${place.root}` : place.channelId,
       agent,
       sessionId: last.sessionId,
       ...place,
-      ...(name ? { name } : {}),
       at: last.endedAt ?? last.startedAt,
     };
+  }
+  /** The community's current name and kind for a channel, if it lists it;
+   * `useOpenedSession` gives them to a session `find` returned. */
+  channelLabel(agent: AgentKey, channelId: string) {
+    return this.reads(agent)?.channelLabel(channelId);
   }
   subscribe(listener: () => void) {
     this.listeners.add(listener);
@@ -931,6 +942,8 @@ export class ClaudeRuntime {
         return {
           ...where(entry.config),
           ...(directories ? { directories } : {}),
+          hook: (session, event, input) =>
+            this.hook(agent, session, event, input),
           tools: tools(workspace),
           systemPrompt: systemPrompt({
             scope,

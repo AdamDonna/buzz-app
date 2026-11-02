@@ -201,12 +201,12 @@ async function openChoices() {
 it("keeps New agent's card to instructions; the model field shows goose's default", async () => {
   created();
   expect(screen.queryByRole("combobox", { name: "Provider" })).toBeNull();
-  await waitFor(() => expect(modelButton()).toHaveTextContent("claude"));
+  await waitFor(() => expect(modelButton()).toHaveTextContent("Claude"));
 });
 
 it("shows the model family icon and keeps provider options text-only", async () => {
   created();
-  await waitFor(() => expect(modelButton()).toHaveTextContent("claude"));
+  await waitFor(() => expect(modelButton()).toHaveTextContent("Claude"));
   expect(
     modelButton().querySelector(".tabler-icon-brand-databricks"),
   ).toBeNull();
@@ -332,8 +332,8 @@ it("keeps a card's model chip to the model, while its menu shows the level", asy
 it("gives a card's inherited model its name's room, naming Default only in its label", async () => {
   created({ modelAppearance: "glass-ghost" });
   await waitFor(() => expect(modelButton()).toBeEnabled());
-  expect(modelButton()).toHaveTextContent(/^claude$/);
-  expect(modelButton()).toHaveAccessibleName("Goose model: claude · Default");
+  expect(modelButton()).toHaveTextContent(/^Claude$/);
+  expect(modelButton()).toHaveAccessibleName("Goose model: Claude · Default");
 });
 
 it("saves a key on Enter in Settings, and only an absolute or ~/ workspace", async () => {
@@ -761,6 +761,91 @@ it("lists the agent's goose sessions and shows one's transcript", async () => {
   expect(screen.getAllByText(/@Gander what's up\?/).length).toBeGreaterThan(0);
 });
 
+it("opens a session transcript its history lookup finds after the profile shows", async () => {
+  // No running session knows the thread, so goose's history finds it only
+  // after the profile is shown.
+  const agent = "c".repeat(64);
+  const context = [
+    "<context>",
+    "Scope: thread",
+    "Session scope: thread",
+    "Channel: general (#chan)",
+    `Thread root: ${"1".repeat(64)}`,
+    `Agent: ${agent}`,
+    "</context>",
+    "",
+    '<buzz-event type="@mention">',
+    "Content: @Gander what's up?",
+    "</buzz-event>",
+  ].join("\n");
+  const fake = fakeSpawn({
+    home: "/home/test",
+    history: [
+      {
+        sessionId: "s1",
+        title: "Gander · #general · 11111111",
+        cwd: "/home/test/.buzz",
+        updatedAt: "2027-01-15T08:00:00Z",
+        conversation: [
+          {
+            role: "user",
+            created: 1_800_000_000,
+            content: [{ type: "text", text: context }],
+            metadata: { userVisible: true },
+          },
+          {
+            role: "assistant",
+            created: 1_800_000_001,
+            content: [
+              {
+                type: "toolRequest",
+                id: "t1",
+                toolCall: {
+                  status: "success",
+                  value: {
+                    name: "buzz__send",
+                    arguments: { text: "Hi from goose", final: true },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  // The runtime keeps one snapshot until its sessions change.
+  const none: never[] = [];
+  const runtime = {
+    subscribe: () => () => {},
+    sessions: () => none,
+  } as unknown as GooseRuntime;
+  const { ActivityTab } = createTabs({
+    setup: new GooseSetup(fake),
+    runtime,
+    history: new GooseHistory(fake),
+  });
+  const done = vi.fn();
+  render(
+    <ActivityTab
+      agent={
+        {
+          key: agent,
+          pubkey: agent,
+          name: "Gander",
+          type: "buzz.goose/goose",
+          owner: "a".repeat(64),
+          config: DEFAULT_CONFIG,
+        } as Agent<Config>
+      }
+      conversation={{ channelId: "chan", rootId: "1".repeat(64) }}
+      initialTranscript={{ opening: 1, done }}
+    />,
+  );
+  expect(await screen.findByText("Hi from goose")).toBeInTheDocument();
+  expect(done).toHaveBeenCalledTimes(1);
+});
+
 it("says it is reading goose's sessions until the list arrives", async () => {
   const fake = fakeSpawn({ home: "/home/test" });
   const history = new GooseHistory(fake);
@@ -875,15 +960,15 @@ it("shows and changes the device default from the compact control without stripp
     name: /^Goose default model:/,
   });
   await waitFor(() => expect(trigger).toBeEnabled());
-  expect(trigger).toHaveTextContent("gpt-6");
+  expect(trigger).toHaveTextContent("GPT-6");
   expect(trigger).not.toHaveTextContent("databricks-");
   await user.click(trigger);
   (await screen.findByRole("menuitem", { name: "Kimi" })).focus();
   await user.keyboard("{ArrowRight}");
   await user.click(
-    await screen.findByRole("menuitemradio", { name: "kimi-k2" }),
+    await screen.findByRole("menuitemradio", { name: "Kimi K2" }),
   );
-  await waitFor(() => expect(trigger).toHaveTextContent("kimi-k2"));
+  await waitFor(() => expect(trigger).toHaveTextContent("Kimi K2"));
   expect((await setup.providers()).defaults.model).toBe("databricks-kimi-k2");
   await user.click(trigger);
   await user.click(
@@ -967,7 +1052,7 @@ it("keeps the creation menu open when its provider finishes loading", async () =
     await screen.findByRole("menuitem", { name: "Edit configuration" }),
   ).toBeVisible();
   release();
-  await waitFor(() => expect(modelButton()).toHaveTextContent("claude"));
+  await waitFor(() => expect(modelButton()).toHaveTextContent("Claude"));
   expect(
     screen.getByRole("menuitem", { name: "Edit configuration" }),
   ).toBeVisible();
@@ -1009,12 +1094,12 @@ it("preserves Goose model inheritance when only thinking changes", async () => {
     />,
   );
   await waitFor(() =>
-    expect(modelButton()).toHaveTextContent("claude · Default"),
+    expect(modelButton()).toHaveTextContent("Claude · Default"),
   );
   await waitFor(() => expect(modelButton()).toBeEnabled());
   fireEvent.click(modelButton());
   fireEvent.click(await screen.findByRole("menuitem", { name: "Claude" }));
-  fireEvent.click(await screen.findByRole("menuitemradio", { name: "claude" }));
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Claude" }));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
   expect(onChange).toHaveBeenCalledWith(
     expect.objectContaining({ model: "", effort: "high" }),
@@ -1174,11 +1259,11 @@ it.each([false, true])(
     await user.keyboard("{ArrowRight}");
     try {
       await user.click(
-        await screen.findByRole("menuitemradio", { name: "kimi-k2" }),
+        await screen.findByRole("menuitemradio", { name: "Kimi K2" }),
       );
       await waitFor(() => expect(pendingSave).toHaveBeenCalledOnce());
       await waitFor(() => expect(trigger).toHaveFocus());
-      expect(trigger).toHaveAccessibleName("Goose default model: claude");
+      expect(trigger).toHaveAccessibleName("Goose default model: Claude");
       expect(trigger).not.toHaveAttribute("disabled");
       expect(trigger).toHaveAttribute("aria-disabled", "true");
       await user.keyboard("{Enter}");
@@ -1190,7 +1275,7 @@ it.each([false, true])(
     } finally {
       await act(async () => releaseSave());
     }
-    await waitFor(() => expect(trigger).toHaveTextContent("kimi-k2"));
+    await waitFor(() => expect(trigger).toHaveTextContent("Kimi K2"));
     expect(trigger).toBeInTheDocument();
     await waitFor(() =>
       expect(

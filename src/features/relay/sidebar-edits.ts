@@ -86,12 +86,16 @@ export function validSidebarAssignment(
 ): boolean {
   const { channelId, sectionId, createSection } = intent;
   return (
-    validSidebarChannelId(channelId) &&
+    (channelId === undefined
+      ? !!createSection
+      : validSidebarChannelId(channelId)) &&
     (sectionId === undefined || validSidebarChannelId(sectionId)) &&
     (!createSection ||
       (sectionId === undefined &&
         /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(createSection.id) &&
-        validSidebarChannelId(createSection.name)))
+        validSidebarChannelId(createSection.name) &&
+        (createSection.position === undefined ||
+          createSection.position === "first")))
   );
 }
 
@@ -169,12 +173,13 @@ export function editSidebarAssignment(
       sections.push({
         id: createSection.id,
         name,
-        order: nextSidebarSectionOrder(current),
+        order: nextSidebarSectionOrder(current, createSection.position),
       });
   }
   if (section !== undefined && !sections.some((entry) => entry.id === section))
     throw new Error("Sidebar group no longer exists");
-  const writes: [string[], unknown][] = [[["a", channelId], section ?? null]];
+  const writes: [string[], unknown][] =
+    channelId === undefined ? [] : [[["a", channelId], section ?? null]];
   if (createSection && !existing.some(({ id }) => id === section)) {
     const added = sections.find(({ id }) => id === section);
     if (!added) throw new Error("Sidebar group no longer exists");

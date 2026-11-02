@@ -59,7 +59,11 @@ export function SidebarSection({
   session,
   open,
   onToggle,
+  headerActions,
+  headerNotice,
+  hideMoreActions = false,
   createChannel,
+  createSection,
   newMessage,
   sort,
   filter,
@@ -79,18 +83,24 @@ export function SidebarSection({
   sectionKey: string;
   title: string;
   hideTitle?: boolean;
-  icon?: string | undefined;
+  icon?: ReactNode;
   session?: RelaySession | undefined;
   open: boolean;
   onToggle: (open: boolean) => void;
+  headerActions?: ReactNode;
+  headerNotice?: ReactNode;
   onRemove?: (() => unknown) | undefined;
   onRename?: ((name: string) => unknown) | undefined;
+  hideMoreActions?: boolean;
   channelCount?: number | undefined;
   removalFocus?: (() => HTMLElement | null | undefined) | undefined;
   createChannel?:
     | { available: boolean; open: (trigger: HTMLButtonElement) => void }
     | undefined;
   newMessage?: (() => void) | undefined;
+  createSection?:
+    | { available: boolean; open: (trigger: HTMLButtonElement) => void }
+    | undefined;
   sort?:
     | {
         value: "alpha" | "recent";
@@ -203,9 +213,11 @@ export function SidebarSection({
             <span className={styles.sectionLabel}>
               {sectionKey === "starred" ? (
                 <SidebarStarIcon />
-              ) : icon && session ? (
+              ) : typeof icon === "string" && session ? (
                 <SidebarGroupIcon icon={icon} session={session} />
-              ) : null}
+              ) : (
+                icon
+              )}
               <FadingLabel className={styles.sectionTitle}>{title}</FadingLabel>
             </span>
             <span className={`${styles.sidebarIcon} ${styles.sectionChevron}`}>
@@ -220,6 +232,7 @@ export function SidebarSection({
               render={(props) => (
                 <IconButton
                   {...props}
+                  hidden={hideMoreActions}
                   size="compact"
                   aria-label={`More actions for ${title}`}
                   icon={<DotsThreeIcon strokeWidth={2.5} size={15} />}
@@ -369,6 +382,24 @@ export function SidebarSection({
                   </MenuSubmenuPopup>
                 </MenuSubmenu>
               )}
+              {createSection && (
+                <>
+                  {(filter || sort) && <MenuSeparator />}
+                  <MenuItem
+                    disabled={!createSection.available}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      if (actionsTrigger.current)
+                        createSection.open(actionsTrigger.current);
+                    }}
+                  >
+                    <MenuIcon>
+                      <PlusIcon size={14} />
+                    </MenuIcon>
+                    Create section
+                  </MenuItem>
+                </>
+              )}
               {move && (
                 <>
                   <MenuItem
@@ -430,6 +461,7 @@ export function SidebarSection({
               )}
             </MenuPopup>
           </MenuRoot>
+          {headerActions}
           {newMessage && (
             <IconButton
               hint="familiar"
@@ -519,6 +551,7 @@ export function SidebarSection({
           )}
         </div>
       </div>
+      {headerNotice}
       <div
         id={id}
         className={styles.sectionContent}

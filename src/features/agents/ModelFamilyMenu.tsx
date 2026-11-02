@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ModelIcon, type ModelChoice } from "./ModelPicker";
+import { modelLogo, type ModelChoice } from "./ModelPicker";
 import { CaretDownIcon, CheckIcon } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
@@ -18,6 +18,7 @@ import {
 
 /** Catalogs expose IDs, not a common family field. Unknown IDs remain available. */
 export function modelFamily(model: ModelChoice): string {
+  if (model.family) return model.family;
   const name = `${model.id} ${model.label}`.toLowerCase();
   for (const [family, pattern] of [
     ["OpenAI", /codex|gpt|openai|(?:^|[\s/._-])o[134](?:[\s/._-]|$)/],
@@ -29,6 +30,7 @@ export function modelFamily(model: ModelChoice): string {
     ["Llama", /llama/],
     ["Mistral", /mistral|mixtral|codestral/],
     ["Grok", /grok/],
+    ["GLM", /(?:^|[\s/._-])glm(?:[\s/._-]|\d|$)|zhipu|z[.-]ai/],
   ] as const)
     if (pattern.test(name)) return family;
   return "Other";
@@ -51,6 +53,7 @@ export function ModelFamilyMenu({
   disabled,
   loading = false,
   description,
+  align = "start",
   onChange,
   onCustom,
 }: {
@@ -70,6 +73,7 @@ export function ModelFamilyMenu({
   disabled: boolean;
   loading?: boolean;
   description?: string | undefined;
+  align?: "start" | "center" | "end";
   onChange(id: string): void;
   onCustom?: (() => void) | undefined;
 }) {
@@ -78,6 +82,9 @@ export function ModelFamilyMenu({
     const family = modelFamily(model);
     families.set(family, [...(families.get(family) ?? []), model]);
   }
+  const hasFamilyLogos = [...families.keys()].some((family) =>
+    modelLogo(family),
+  );
   const selectedLabel = `${selected.label}${inherited ? " · Default" : ""}`;
   const menu = (
     <MenuRoot>
@@ -100,9 +107,7 @@ export function ModelFamilyMenu({
                 {leading}
               </span>
             )}
-            <span className="buzz-select-leading" aria-hidden="true">
-              <ModelIcon model={selected.id || selected.label} />
-            </span>
+            {modelLogo(modelFamily(selected), "buzz-select-leading")}
             {/* Card labels keep Default accessible without crowding the model. */}
             <span className={styles.value}>
               <span className={`buzz-select-value ${styles.model}`}>
@@ -123,13 +128,16 @@ export function ModelFamilyMenu({
           </Button>
         )}
       />
-      <MenuPopup aria-label={label}>
+      <MenuPopup aria-label={label} align={align}>
         {defaultChoice && (
           <MenuRadioGroup
             value={inherited ? "" : selected.id}
             onValueChange={(id) => onChange(id)}
           >
             <MenuRadioItem value="" closeOnClick>
+              {hasFamilyLogos && (
+                <span className="buzz-select-leading" aria-hidden="true" />
+              )}
               {defaultChoice.label} · Default
             </MenuRadioItem>
           </MenuRadioGroup>
@@ -141,7 +149,11 @@ export function ModelFamilyMenu({
           .map(([family, choices]) => (
             <MenuSubmenu key={family}>
               <MenuSubmenuTrigger>
-                <ModelIcon model={family} />
+                {hasFamilyLogos && (
+                  <span className="buzz-select-leading" aria-hidden="true">
+                    {modelLogo(family)}
+                  </span>
+                )}
                 {family}
               </MenuSubmenuTrigger>
               <MenuSubmenuPopup aria-label={`${family} models`}>
@@ -165,7 +177,9 @@ export function ModelFamilyMenu({
                         value={model.id}
                         closeOnClick
                       >
-                        {model.label}
+                        {model.unlisted && model.description
+                          ? `${model.label} · ${model.description}`
+                          : model.label}
                       </MenuRadioItem>
                     ),
                   )}

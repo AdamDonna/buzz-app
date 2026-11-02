@@ -9,6 +9,7 @@ export type ComposerSession = Pick<
   "viewer" | "media" | "scope"
 > & {
   names?: import("../identity-names/service").IdentityNameView | undefined;
+  recovery?: RelaySession["recovery"];
   repositories: Pick<
     RelaySession["repositories"],
     "home" | "load" | "peekHome"

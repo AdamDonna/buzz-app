@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 import { ActivityTranscript } from "./ActivityTranscript";
@@ -357,4 +357,54 @@ it("keeps different threads distinguishable when showing all conversations", () 
   );
   expect(screen.getByText("· Thread aaaaaaaa")).toBeVisible();
   expect(screen.getByText("· Thread bbbbbbbb")).toBeVisible();
+});
+
+it("opens at the latest turn and follows new ones until the reader scrolls up", () => {
+  const turn = (id: string, at: number): TranscriptTurn => ({
+    turnId: id,
+    channelId: "channel",
+    threadRootId: null,
+    triggeringEventIds: [],
+    newSession: false,
+    config: [],
+    startedAt: at,
+    endedAt: at + 1000,
+    partial: false,
+    items: [],
+  });
+  let height = 1000;
+  const scrolling = () => {
+    const view = document.createElement("div");
+    view.style.overflowY = "auto";
+    Object.defineProperty(view, "scrollHeight", { get: () => height });
+    Object.defineProperty(view, "clientHeight", { get: () => 200 });
+    return document.body.appendChild(view);
+  };
+  const view = scrolling();
+  const show = (turns: TranscriptTurn[], follow?: boolean) => (
+    <ActivityTranscript
+      transcript={{ turns }}
+      agentName="Sol"
+      state={() => "ended"}
+      {...(follow === undefined ? {} : { follow })}
+    />
+  );
+  const { rerender, unmount } = render(show([turn("a", 1)]), {
+    container: view,
+  });
+  expect(view.scrollTop).toBe(1000);
+  height = 1400;
+  rerender(show([turn("a", 1), turn("b", 2)]));
+  expect(view.scrollTop).toBe(1400);
+  view.scrollTop = 100;
+  fireEvent.scroll(view);
+  height = 1800;
+  rerender(show([turn("a", 1), turn("b", 2), turn("c", 3)]));
+  expect(view.scrollTop).toBe(100);
+  unmount();
+  const shared = scrolling();
+  render(show([turn("a", 1)], false), { container: shared });
+  expect(shared.scrollTop).toBe(0);
+  view.remove();
+  shared.remove();
 });

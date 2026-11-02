@@ -91,8 +91,8 @@ export function LiveStatus({
           ? "Channel list needs refreshing."
           : "Live updates are unavailable."));
   const settled = liveRecoveryStatus(snapshot) === "settled";
-  // Startup, bounded automatic quota recovery and the first automatic retry do
-  // not need user attention.
+  // Startup, bounded automatic quota recovery and recovery before its notice
+  // delay do not need user attention.
   const quiet = !issue || (retrying && !settled);
   // What automatic recovery cannot change: capacity, a partial roster, a
   // denial or a sign-in failure. Capacity and a partial roster stay passive.

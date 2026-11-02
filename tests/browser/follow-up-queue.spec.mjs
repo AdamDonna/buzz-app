@@ -1,5 +1,5 @@
 import { test, expect } from "./fixture.mjs";
-import { openPage, selectSettingsSection } from "./navigation.mjs";
+import { openPage, selectSettingsSection, sendOnlyTo } from "./navigation.mjs";
 
 const chat = "33333333-3333-4333-8333-333333333333";
 const agent =
@@ -183,13 +183,12 @@ async function startWorkingAgent(page, app) {
     name: "Message your agents",
     exact: true,
   });
-  await page
-    .getByRole("button", { name: "Mention a member", exact: true })
-    .click();
-  await page
-    .getByRole("dialog", { name: "Mention a member or agent" })
-    .getByRole("button", { name: `Local tester ${agent}`, exact: true })
-    .click();
+  // Agents-only Solo chats address agents from the composer's pill.
+  await sendOnlyTo(
+    page,
+    page.getByRole("button", { name: /Change agents$|^Choose agent$/ }),
+    { name: "Local tester", pubkey: agent },
+  );
   await editor.press("End");
   await editor.pressSequentially("First request");
   await editor.press("Enter");
@@ -227,10 +226,18 @@ test("queue focus survives preview release and pointer removal", async ({
   await editor.press("End");
   await editor.pressSequentially("Keep this row");
   await editor.press("Enter");
+  // Admission is asynchronous: settle the first submission before typing into
+  // the draft it clears, then establish both rows before testing removal.
+  await expect(queue).toContainText("Keep this row");
+  await expect(editor).not.toContainText("Keep this row");
+  await expect(editor).toHaveAttribute("contenteditable", "true");
   await editor.press("End");
   await editor.pressSequentially("Remove last row");
   await editor.press("Enter");
+  await expect(queue).toContainText("Remove last row");
+  await expect(queue.getByRole("listitem")).toHaveCount(2);
   const remove = queue.getByRole("button", { name: "Remove queued message" });
+  await expect(remove).toHaveCount(2);
   await queue.getByRole("listitem").last().hover();
   // WebKit does not focus clicked buttons; focus explicitly to cover the same
   // pointer-modality handoff on both engines.

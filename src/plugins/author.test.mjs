@@ -32,7 +32,8 @@ test("generated author package in a path with spaces exposes shared message fact
     await writeFile(
       join(dir, "consumer.ts"),
       `
-import type { Context, DecisionResult, Host, PluginManifest, NamingPolicy, UnreadCapability, PageSidebarProps } from "@buzz/author";
+import { createElement } from "react";
+import type { Context, DecisionResult, Host, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -92,6 +93,25 @@ export function apply(ctx: Context) {
     // @ts-expect-error A page sidebar must be a React component.
     sidebar: 1,
   });
+  const section: SidebarSectionContribution = {
+    version: 1,
+    id: "work",
+    title: "Work",
+    icon: "W",
+    rows: {
+      snapshot: () => [{ id: "today", label: "Today" }],
+      subscribe: () => () => {},
+    },
+    select: () => ({ version: 1, kind: "home" }),
+    actions: [{ id: "new", label: "New", icon: createElement("span"), onSelect: () => {} }],
+  };
+  const sidebar: SidebarSections | undefined = ctx.reflect.get("sidebarSections");
+  sidebar?.register(section);
+  // @ts-expect-error Sidebar contribution versions are explicit.
+  sidebar?.register({ ...section, version: 2 });
+  // @ts-expect-error Row counts are numeric, not display text.
+  const badCount: SidebarSectionContribution = { ...section, rows: { snapshot: () => [{ id: "bad", label: "Bad", count: "two" }], subscribe: () => () => {} } };
+  void badCount;
   ctx.pages.register({
     id: "other",
     title: "Other",

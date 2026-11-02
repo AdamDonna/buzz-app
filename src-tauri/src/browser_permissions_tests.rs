@@ -2,13 +2,22 @@ use tauri::{
     ipc::{CallbackFn, InvokeBody},
     test::{get_ipc_response, mock_builder, MockRuntime, INVOKE_KEY},
     webview::InvokeRequest,
-    WebviewBuilder, WebviewUrl, WindowBuilder,
+    WebviewUrl, WebviewWindowBuilder,
 };
 
 fn invoke(
     webview: &tauri::Webview<MockRuntime>,
     command: &str,
     origin: &str,
+) -> Result<tauri::ipc::InvokeResponseBody, serde_json::Value> {
+    invoke_with_body(webview, command, origin, InvokeBody::default())
+}
+
+fn invoke_with_body(
+    webview: &tauri::Webview<MockRuntime>,
+    command: &str,
+    origin: &str,
+    body: impl Into<InvokeBody>,
 ) -> Result<tauri::ipc::InvokeResponseBody, serde_json::Value> {
     struct BorrowedWebview<'a>(&'a tauri::Webview<MockRuntime>);
     impl AsRef<tauri::Webview<MockRuntime>> for BorrowedWebview<'_> {
@@ -23,7 +32,7 @@ fn invoke(
             callback: CallbackFn(0),
             error: CallbackFn(1),
             url: origin.parse().unwrap(),
-            body: InvokeBody::default(),
+            body: body.into(),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.into(),
         },
@@ -49,29 +58,31 @@ fn native_command_permissions_isolate_webviews() {
             .build(),
     );
     let app = builder.build(super::app_context()).unwrap();
-    let main_window = WindowBuilder::new(&app, "main").build().unwrap();
-    let main = main_window
-        .add_child(
-            WebviewBuilder::new("main", WebviewUrl::default()),
-            tauri::LogicalPosition::new(0, 0),
-            tauri::LogicalSize::new(800, 600),
-        )
+    let main = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
+        .build()
         .unwrap();
-    // Production uses a raw Wry guest with no IPC. A simulated Tauri sibling
-    // catches accidental window-wide grants in the main window's capability.
-    let guest = main_window
-        .add_child(
-            WebviewBuilder::new("browser-content", WebviewUrl::default()),
-            tauri::LogicalPosition::new(500, 80),
-            tauri::LogicalSize::new(300, 500),
-        )
+    // Production uses a raw Wry guest with no IPC. A Tauri webview under its
+    // label catches grants that would reach it if it ever gained IPC.
+    let guest = WebviewWindowBuilder::new(&app, "browser-content", WebviewUrl::default())
+        .build()
         .unwrap();
 
-    let huddle = tauri::WebviewWindowBuilder::new(&app, "huddle", WebviewUrl::default())
+    let huddle = WebviewWindowBuilder::new(&app, "huddle", WebviewUrl::default())
         .build()
         .unwrap();
 
     let application_commands = [
+        "federated_identity_snapshot",
+        "federated_identity_sign_in",
+        "federated_identity_cancel_sign_in",
+        "federated_identity_sign_out",
+        "federated_identity_register",
+        "federated_identity_unregister",
+        "federated_identity_request",
+        "relay_socket_connect",
+        "relay_socket_start",
+        "relay_socket_send",
+        "relay_socket_close",
         "identity_restore",
         "identity_import",
         "identity_legacy_available",
@@ -81,6 +92,8 @@ fn native_command_permissions_isolate_webviews() {
         "nsec_backup_available",
         "nsec_backup_session",
         "nsec_backup_retry",
+        "nsec_backup_state",
+        "nsec_backup_watch",
         "nsec_restore_begin",
         "nsec_restore_wait",
         "nsec_restore_install",
@@ -121,6 +134,7 @@ fn native_command_permissions_isolate_webviews() {
         "media_download",
         "file_download",
         "media_copy_image",
+        "clipboard_write_text",
         "media_stream_base",
         "get_os_idle_seconds",
         "plugin_import_folder",
@@ -149,6 +163,9 @@ fn native_command_permissions_isolate_webviews() {
         "oauth_callback_wait",
         "oauth_callback_cancel",
         "app_agent_list",
+        "app_agent_set_protection",
+        "app_agent_protection_defaults",
+        "app_agent_set_protection_defaults",
         "app_agent_create",
         "app_agent_portable",
         "app_agent_port",
@@ -207,34 +224,117 @@ fn native_command_permissions_isolate_webviews() {
     } else {
         "tauri://localhost"
     };
+    // Exercise the real event plugin with the same payload shape as the frontend
+    // API. Valid requests succeed for main and fail only at the capability
+    // boundary for sibling webviews or remote origins.
+    let event = "pr869-capability-test";
+    let listen_body = serde_json::json!({
+        "event": event,
+        "target": { "kind": "Any" },
+        "handler": 42
+    });
+    let event_id = invoke_with_body(
+        main.as_ref(),
+        "plugin:event|listen",
+        local_origin,
+        listen_body.clone(),
+    )
+    .expect("main should be able to register an event listener")
+    .deserialize::<u32>()
+    .expect("event plugin should return the listener id");
+    let unlisten_body = serde_json::json!({
+        "event": event,
+        "eventId": event_id
+    });
+    assert!(
+        invoke_with_body(
+            main.as_ref(),
+            "plugin:event|emit",
+            local_origin,
+            serde_json::json!({ "event": event, "payload": { "source": "test" } })
+        )
+        .is_err(),
+        "main must not receive event emission permission"
+    );
+    assert!(
+        invoke_with_body(
+            main.as_ref(),
+            "plugin:event|emit_to",
+            local_origin,
+            serde_json::json!({
+                "target": { "kind": "Webview", "label": "main" },
+                "event": event,
+                "payload": { "source": "test" }
+            })
+        )
+        .is_err(),
+        "main must not receive targeted event emission permission"
+    );
+
+    for (webview, origin, source) in [
+        (&guest, local_origin, "guest webview"),
+        (&main, "https://example.org", "remote content"),
+    ] {
+        assert!(
+            invoke_with_body(
+                webview.as_ref(),
+                "plugin:event|listen",
+                origin,
+                listen_body.clone()
+            )
+            .is_err(),
+            "{source} must not listen to events"
+        );
+        assert!(
+            invoke_with_body(
+                webview.as_ref(),
+                "plugin:event|unlisten",
+                origin,
+                unlisten_body.clone()
+            )
+            .is_err(),
+            "{source} must not unregister event listeners"
+        );
+    }
+    assert!(invoke_with_body(
+        main.as_ref(),
+        "plugin:event|unlisten",
+        local_origin,
+        unlisten_body
+    )
+    .is_ok());
+
     // Window fallback belongs to trusted app UI, never a sibling or remote page.
     for origin in [local_origin, "https://example.org", "http://localhost:1430"] {
-        assert!(invoke(&guest, "plugin:window|close", origin).is_err());
+        assert!(invoke(guest.as_ref(), "plugin:window|close", origin).is_err());
     }
-    assert!(invoke(&main, "plugin:window|close", "https://example.org").is_err());
+    assert!(invoke(main.as_ref(), "plugin:window|close", "https://example.org").is_err());
     // The removed owner attestation cannot acquire a main-webview grant.
-    assert!(invoke(&main, "relay_agent_authorize", local_origin).is_err());
-    assert!(invoke(&main, "relay_agent_history_decode", local_origin).is_err());
+    assert!(invoke(main.as_ref(), "relay_agent_authorize", local_origin).is_err());
+    assert!(invoke(main.as_ref(), "relay_agent_history_decode", local_origin).is_err());
     for command in application_commands {
-        assert!(invoke(&main, command, local_origin).is_ok(), "{command}");
+        assert!(
+            invoke(main.as_ref(), command, local_origin).is_ok(),
+            "{command}"
+        );
         assert_eq!(
             invoke(huddle.as_ref(), command, local_origin).is_ok(),
-            command == "media_download",
-            "huddle must only acquire the bounded download command: {command}"
+            matches!(command, "media_download" | "clipboard_write_text"),
+            "huddle must only acquire bounded download and text copy: {command}"
         );
         assert!(invoke(huddle.as_ref(), command, "https://example.org").is_err());
         for origin in [local_origin, "https://example.org", "http://localhost:1430"] {
             assert!(
-                invoke(&guest, command, origin).is_err(),
+                invoke(guest.as_ref(), command, origin).is_err(),
                 "guest must reject {command} from {origin}"
             );
         }
         assert!(
-            invoke(&main, command, "https://example.org").is_err(),
+            invoke(main.as_ref(), command, "https://example.org").is_err(),
             "remote content must not use main grants: {command}"
         );
     }
-    assert!(invoke(&main, "plugin:window|close", local_origin).is_ok());
+    assert!(invoke(main.as_ref(), "plugin:window|close", local_origin).is_ok());
 
     #[cfg(all(feature = "native-mcp", target_os = "macos"))]
     {
@@ -246,7 +346,7 @@ fn native_command_permissions_isolate_webviews() {
         ];
         for callback in callbacks {
             assert!(invoke(
-                &main,
+                main.as_ref(),
                 &format!("plugin:mcp-bridge|{callback}"),
                 local_origin
             )
@@ -266,12 +366,20 @@ fn native_command_permissions_isolate_webviews() {
         }
         for callback in callbacks {
             let command = format!("plugin:mcp-bridge|{callback}");
-            assert!(invoke(&main, &command, local_origin).is_ok(), "{command}");
-            assert!(invoke(&main, &command, "https://example.org").is_err());
-            assert!(invoke(&guest, &command, local_origin).is_err());
+            assert!(
+                invoke(main.as_ref(), &command, local_origin).is_ok(),
+                "{command}"
+            );
+            assert!(invoke(main.as_ref(), &command, "https://example.org").is_err());
+            assert!(invoke(guest.as_ref(), &command, local_origin).is_err());
             assert!(invoke(huddle.as_ref(), &command, local_origin).is_err());
         }
-        assert!(invoke(&main, "plugin:mcp-bridge|execute_command", local_origin).is_err());
-        assert!(invoke(&main, "identity_restore", local_origin).is_ok());
+        assert!(invoke(
+            main.as_ref(),
+            "plugin:mcp-bridge|execute_command",
+            local_origin
+        )
+        .is_err());
+        assert!(invoke(main.as_ref(), "identity_restore", local_origin).is_ok());
     }
 }

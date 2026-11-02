@@ -59,14 +59,15 @@ test("search opens a new Solo chat with one of the viewer's agents", async ({
     exact: true,
   });
   await expect(composer).toBeFocused();
-  // The new chat starts tagged with the chosen agent.
+  // The new chat starts addressed to the chosen agent, in the composer's pill.
   const [agent] = app.soloAgents;
   await expect(
     page.getByRole("button", {
-      name: `Remove mention ${agent.name} ${agent.pubkey}`,
+      name: `Sending to ${agent.name}. Change agents`,
       exact: true,
     }),
   ).toBeVisible();
+  await expect(composer).toHaveText("");
   // This browser fixture cannot start Solo chats (it says so below the
   // composer). SoloDraft tests cover the first message.
   await page.screenshot({

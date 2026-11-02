@@ -27,13 +27,14 @@ const base: Snapshot = {
 function recoveryIn(state: "idle" | "shown") {
   const snapshot = Object.freeze(
     state === "shown"
-      ? { recovering: true, attempt: 1, shown: true }
-      : { recovering: false, attempt: 0, shown: false },
+      ? { recovering: true, attempt: 1, shown: true, reauthorized: 0 }
+      : { recovering: false, attempt: 0, shown: false, reauthorized: 0 },
   );
   return {
     snapshot: () => snapshot,
     subscribe: () => () => {},
     retryNow: vi.fn(),
+    retryAll: vi.fn(),
     dispose() {},
   };
 }
@@ -308,12 +309,13 @@ it("diagnostics does not duplicate notices; changing the selected channel/sessio
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
 
-it("stays quiet before the first automatic retry, then shows one inline notice whose Retry now retries the session", async () => {
+it("stays quiet before the notice delay, then shows one inline notice whose Retry now retries the session", async () => {
   const failed: Snapshot = { ...base, status: "retrying" };
   const quietState = Object.freeze({
     recovering: true,
     attempt: 0,
     shown: false,
+    reauthorized: 0,
   });
   const live = {
     snapshot: () => failed,
@@ -393,6 +395,7 @@ it("shows a permanent live failure even while other reads recover", () => {
     recovering: true,
     attempt: 0,
     shown: false,
+    reauthorized: 0,
   });
   const quiet = { ...recoveryIn("idle"), snapshot: () => quietState };
   const onRecovered = vi.fn();

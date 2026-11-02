@@ -530,6 +530,18 @@ fn validate_sidebar_payload(coordinate: &str, value: &serde_json::Value) -> Resu
             }
         }
 
+        "main-agent" => {
+            let agent = data.get("agent").ok_or_else(invalid)?;
+            if data.len() != 2
+                || !agent.as_str().is_some_and(|v| {
+                    v.len() == 64
+                        && v.bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+            {
+                return Err(invalid());
+            }
+        }
         _ => return Err(invalid()),
     }
     if let Some(meta) = data.get("meta") {
@@ -680,7 +692,12 @@ fn project_sidebar_meta(coordinate: &str, meta: &serde_json::Value) -> serde_jso
 pub(crate) fn sidebar_coordinate(value: &str) -> bool {
     matches!(
         value,
-        "channel-sections" | "channel-stars" | "channel-mutes" | "channel-sort" | "channel-filter"
+        "channel-sections"
+            | "channel-stars"
+            | "channel-mutes"
+            | "channel-sort"
+            | "channel-filter"
+            | "main-agent"
     )
 }
 
@@ -719,19 +736,33 @@ pub struct IdentityHost(Arc<Mutex<Identity>>);
 impl IdentityHost {
     #[cfg(test)]
     pub(crate) fn fixture() -> Self {
+        Self::fixture_in(State::Ready(Key(Zeroizing::new([1; 32]))))
+    }
+    /// No saved key, or a key that cannot be read (a signing-out host refuses every read).
+    #[cfg(test)]
+    pub(crate) fn fixture_without_key(readable: bool) -> Self {
+        Self::fixture_in(if readable {
+            State::Missing
+        } else {
+            State::Closed
+        })
+    }
+    #[cfg(test)]
+    fn fixture_in(state: State) -> Self {
         Self(Arc::new(Mutex::new(Identity {
-            state: State::Ready(Key(Zeroizing::new([1; 32]))),
+            state,
             store: Box::new(OsStore),
         })))
     }
 
+    /// The saved key's public key, or `None` when secure storage confirms none.
+    pub(crate) async fn saved_viewer(&self) -> Result<Option<String>> {
+        with_identity(self.clone(), Identity::restore).await
+    }
     pub(crate) async fn viewer(&self) -> Result<String> {
-        with_identity(self.clone(), |identity| {
-            identity
-                .restore()?
-                .ok_or_else(|| "Set up your identity first".into())
-        })
-        .await
+        self.saved_viewer()
+            .await?
+            .ok_or_else(|| "Set up your identity first".into())
     }
 
     pub(crate) async fn require_missing(&self) -> Result<()> {

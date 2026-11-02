@@ -21,7 +21,7 @@ import {
 } from "../../shared/design-system/ui/Menu";
 import inlineStyles from "../../shared/InlineReference.module.css";
 import { relativeTimestamp } from "../../shared/relative-timestamp";
-import { loadGitHubChecks, type CheckSummary } from "./checks";
+import type { CheckSummary } from "./checks";
 import type { GitHubDetails } from "./data";
 import type { GitHubCli } from "./gh";
 import { readable } from "./object";
@@ -588,29 +588,17 @@ export function PullChecklist({
   );
 }
 
-/** Without `gh`, only CI can be read for the checklist, from the public API. */
+/** Without `gh`, only CI can be read for the checklist, from the public API,
+ * as the store reads the rest of the pull request. */
 export function PublicChecklist({
   url,
-  repository,
   sha,
+  checks,
 }: {
   url: string;
-  repository: string;
   sha: string | undefined;
+  checks: CheckSummary | undefined;
 }) {
-  const [checks, setChecks] = useState<CheckSummary>();
-  useEffect(() => {
-    if (!sha) return;
-    const controller = new AbortController();
-    void loadGitHubChecks(
-      repository,
-      sha,
-      AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
-    ).then((summary) => {
-      if (!controller.signal.aborted) setChecks(summary);
-    });
-    return () => controller.abort();
-  }, [repository, sha]);
   return (
     <ul className={styles.checklist} aria-label="Pull request checklist">
       {checks ? (

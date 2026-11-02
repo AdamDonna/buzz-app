@@ -26,6 +26,12 @@
       max(19.75rem, var(--secondary-panel-width, calc(100% / 2.1)))
     );
 }
+/* Only the board and its dock read the split width. Reset it below them so a
+   resize frame restyles those readers, not the timeline and panels inside. */
+.board > :not([data-panel-dock]),
+.panelStack > * {
+  --secondary-panel-width: initial;
+}
 .sidebar,
 .conversation {
   height: 100%;
@@ -96,6 +102,25 @@
   height: 1.125rem;
   flex: 0 0 1.125rem;
   place-items: center;
+}
+.contributionNavigationItem {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+}
+.contributionMetadata {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+  white-space: normal;
+}
+@container (max-width: 17rem) {
+  .contributionNavigationItem [class~="navigation-item-trailing"] {
+    max-width: 40%;
+    min-width: 0;
+    flex: 0 1 auto;
+  }
 }
 .channelListFrame {
   position: relative;
@@ -277,6 +302,48 @@
   border-radius: var(--radius-row);
   background: var(--affordance-panel-hover);
 }
+.createSectionSlot + .channelSection {
+  margin-top: 0;
+}
+.createSectionHitArea {
+  position: absolute;
+  inset: calc(-1 * var(--space-4)) 0 0;
+  pointer-events: none;
+}
+.createSectionReveal {
+  overflow: hidden;
+}
+.createSectionDrop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  /* Match the avatar uploader's compact 80px drop area at the default scale. */
+  min-height: calc(5 * var(--space-4));
+  margin-bottom: var(--space-4);
+  padding: var(--space-2);
+  border: 2px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+  color: var(--text-subtle);
+  text-align: center;
+  transition: background-color var(--duration-state) var(--easing-state);
+}
+.createSectionDrop > svg {
+  flex-shrink: 0;
+}
+.createSectionDrop[data-drop-target] {
+  border-color: var(--text-standard);
+  border-style: dashed;
+  background: var(--affordance-subtle-hover);
+  color: var(--text-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  .createSectionDrop {
+    transition: none;
+  }
+}
 [data-channel-dragging],
 .channelSection[data-section-dragging] {
   opacity: 0.3;
@@ -320,6 +387,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The highlighted destination replaces the preview while it accepts the drop. */
+body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
+  visibility: hidden;
+}
 .sectionHeader {
   position: relative;
 }
@@ -360,6 +431,13 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+.contributionFeedback {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-danger);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
 }
 .sectionLabel [data-sidebar-group-icon] {
   width: var(--space-5);
@@ -409,9 +487,13 @@
 }
 html[data-keyboard-navigation] .sectionActions:focus-within,
 .sectionHeader:hover :is(.sectionActions, .sectionChevron),
-.channelSection[data-menu-open] :is(.sectionActions, .sectionChevron),
 html[data-keyboard-navigation]
   .sectionHeader:focus-within
+  :is(.sectionActions, .sectionChevron),
+.channelSection:is(
+    [data-menu-open],
+    :has(> .sectionHeader [aria-expanded="true"][aria-haspopup="menu"])
+  )
   :is(.sectionActions, .sectionChevron) {
   opacity: 1;
   pointer-events: auto;
@@ -504,6 +586,24 @@ html[data-keyboard-navigation]
 }
 .connect button {
   margin: var(--space-4) 0;
+}
+.failed {
+  height: 100%;
+  background: var(--surface-panel);
+  display: grid;
+  place-items: center;
+  padding: var(--space-section-gap);
+}
+.failed > * {
+  max-inline-size: 28rem;
+}
+.connecting {
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  letter-spacing: var(--text-body--letter-spacing);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 .note {
   font-size: var(--text-caption);

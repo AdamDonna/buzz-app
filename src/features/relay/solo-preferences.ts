@@ -132,11 +132,14 @@ export function createSoloPreferences(kit: ChannelKit, lifetime: AbortSignal) {
         if (target && !groups.some((group) => group.id === target))
           throw new Error("The Solo group is unavailable");
         const assignments = { ...value.assignments };
-        if (target) assignments[intent.channelId] = target;
-        else delete assignments[intent.channelId];
+        if (intent.channelId !== undefined) {
+          if (target) assignments[intent.channelId] = target;
+          else delete assignments[intent.channelId];
+        }
         if (
           groups === value.groups &&
-          value.assignments[intent.channelId] === target
+          (intent.channelId === undefined ||
+            value.assignments[intent.channelId] === target)
         )
           return project(value);
         return save({ ...value, groups, assignments }, entry, active);

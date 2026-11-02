@@ -357,3 +357,61 @@ it("promotes a queued background profile read when foreground demand joins it", 
     reader.dispose();
   }
 });
+
+it("records identities a completed read found no profile for, until one arrives", async () => {
+  const other = keypair();
+  const third = keypair();
+  const read = vi.fn(async () => [profile(user, { name: "Mic" })]);
+  const directory = createProfileDirectory({ read });
+  const listener = vi.fn();
+  directory.queries.subscribe(listener);
+  try {
+    await directory.ensure([user.pubkey, other.pubkey]);
+    const absent = directory.queries.unnamed?.();
+    expect(absent).toEqual(new Set([other.pubkey]));
+    // Once for the profile, once for the absence.
+    expect(listener).toHaveBeenCalledTimes(2);
+    // A failed read is not evidence.
+    read.mockRejectedValueOnce(new Error("offline"));
+    await expect(directory.ensure([third.pubkey])).rejects.toThrow("offline");
+    expect(directory.queries.unnamed?.()).toBe(absent);
+    // A profile that arrives later outranks the absence.
+    directory.accept([profile(other, { name: "Nu" })]);
+    expect(directory.queries.snapshot().get(other.pubkey)?.name).toBe("Nu");
+    expect(directory.queries.unnamed?.()).toEqual(new Set());
+    // Clearing forgets the evidence and tells subscribers so.
+    await directory.ensure([third.pubkey]);
+    expect(directory.queries.unnamed?.()).toEqual(new Set([third.pubkey]));
+    listener.mockClear();
+    directory.clear();
+    expect(directory.queries.unnamed?.()).toEqual(new Set());
+    expect(listener).toHaveBeenCalled();
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("records no absence from a read that filled its page", async () => {
+  const other = keypair();
+  // A relay that keeps every kind 0 can fill the page from one author. The
+  // directory does not verify events, so older versions are cheap copies.
+  const head = profile(user, { name: "Mic" }, 1_700_000_500);
+  const versions = Array.from({ length: 500 }, (_, i) => ({
+    ...head,
+    id: i.toString(16).padStart(64, "0"),
+    created_at: head.created_at - i,
+  }));
+  const read = vi.fn(async () => versions);
+  const directory = createProfileDirectory({ read });
+  try {
+    await directory.ensure([user.pubkey, other.pubkey]);
+    expect(directory.queries.snapshot().get(user.pubkey)?.name).toBe("Mic");
+    expect(directory.queries.unnamed?.()).toEqual(new Set());
+    // One short of the limit is complete.
+    read.mockResolvedValueOnce(versions.slice(1));
+    await directory.ensure([other.pubkey]);
+    expect(directory.queries.unnamed?.()).toEqual(new Set([other.pubkey]));
+  } finally {
+    directory.dispose();
+  }
+});

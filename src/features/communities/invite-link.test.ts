@@ -15,6 +15,22 @@ it.each(["", "/"])(
   },
 );
 it.each([
+  "buzz://connect?relay=wss%3A%2F%2Frelay.example%2F&code=ignored",
+  "buzz://connect/?relay=wss%3A%2F%2Frelay.example",
+  "buzz://add-community?relay=wss%3A%2F%2Frelay.example%2F&name=relay",
+  "buzz://add-community/?relay=wss%3A%2F%2Frelay.example",
+])("parses the code-less community link %s", (url) => {
+  expect(parseInviteLink(url)).toEqual({
+    community: "https://relay.example",
+    code: "",
+  });
+});
+it.each([
+  "buzz://connect?relay=ws%3A%2F%2Frelay.example",
+  "buzz://connect?relay=wss%3A%2F%2Frelay.example&relay=wss%3A%2F%2Fother.example",
+  "buzz://connect/extra?relay=wss%3A%2F%2Frelay.example",
+  "buzz://connect?code=x",
+  "buzz://add-community?relay=ws%3A%2F%2Frelay.example",
   "buzz://join?relay=example&code=x",
   "buzz://join?relay=wss%3A%2F%2Fuser%40relay.example&code=x",
   "buzz://join?relay=wss%3A%2F%2Frelay.example%2Fother&code=x",

@@ -6,10 +6,11 @@ import type {
   AgentSettingsHost,
   Agents,
   RegisteredAgentType,
+  TranscriptRequest,
 } from "../../features/agents/service";
 import type { AgentMemories } from "../../features/agents/MemoryPanel";
 import type { CommunityReader } from "../../features/communities/service";
-import { agentSections, AttentionSection } from "../../features/agents/tabs";
+import { agentSections } from "../../features/agents/tabs";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -27,20 +28,10 @@ export function AgentTabs(props: {
   settingsContent: ReactNode;
   conversation?: AgentConversation | undefined;
   initialActivity?: boolean | undefined;
+  initialTranscript?: TranscriptRequest | undefined;
+  close?: (() => void) | undefined;
   onDiscard?: () => void;
 }) {
-  const settingsContent = (
-    <>
-      {props.agent.place === "here" && (
-        <AttentionSection
-          agent={props.agent}
-          agents={props.agents}
-          communities={props.communities}
-        />
-      )}
-      {props.settingsContent}
-    </>
-  );
   const split = props.type?.tabs?.some(
     (section) => section.role === "settings" && section.splitSettings,
   );
@@ -56,11 +47,12 @@ export function AgentTabs(props: {
     ...supplied.filter((section) => section.value.startsWith("agent:type:")),
     ...supplied.filter((section) => section.value === "agent:memory"),
     ...supplied.filter((section) => section.value === "agent:activity"),
+    ...supplied.filter((section) => section.value.startsWith("agent:added:")),
     ...supplied.filter((section) => section.value === "agent:history"),
     {
       value: "agent:management",
       label: "Settings",
-      render: () => settingsContent,
+      render: () => props.settingsContent,
     },
   ];
   const [tab, setTab] = useState<string>(
@@ -93,7 +85,7 @@ export function AgentTabs(props: {
         ...props,
         settingsSection:
           selected?.value === "agent:management" ? "runtime" : "identity",
-        settingsContent,
+        settingsContent: props.settingsContent,
       }).find((section) => section.value === "agent:settings")
     : undefined;
   const settingsValue =

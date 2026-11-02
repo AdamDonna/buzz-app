@@ -93,8 +93,8 @@ behavior on the label, so a rename touches copy only.
   implemented behavior.
 - Solo chats and drafts use the full conversation pane. Right-click,
   Shift+F10 and overflow share one sidebar action list: Mark as unread, then
-  Edit…, Move to and Copy, then Share… and Convert to channel (where eligible),
-  then Archive chat and Delete chat. Opening a row
+  Rename (where editable), Chat settings and Move to, then Share access, Copy link
+  and Convert to channel (where eligible), then Archive chat and Delete chat. Opening a row
   menu does not select the row.
   A chat can also be dragged with a pointer onto another workspace or **Chats**;
   the drop is the same Move to intent, with the same gate, optimistic placement,
@@ -116,16 +116,27 @@ behavior on the label, so a rename touches copy only.
   recipient tags for both owners and guests. Saved chats offer the chat's people
   and your available agents; an untagged message never infers an agent recipient.
   Only available agents can be enrolled through tagging—outside humans must
-  already have been shared into the chat. Empty new-chat drafts start tagged with the device's main
-  agent for this account/community. **Agents → right-click or "..." → Make main
-  agent** changes that choice; its card shows **Main agent**. The choice stays
-  until it is changed or the agent is deleted, and it is still tagged when its
-  runtime is signed out or broken. Without a choice, or after the chosen agent
-  is deleted, the first managed agent, then the first selectable agent, becomes
-  the main agent and is saved, only after agent evidence is complete and the
-  requested archive read has settled. A chosen agent missing for another reason
-  is stood in for without replacing the choice; the stand-in can be made main.
-  An available explicit choice does not wait for fallback evidence.
+  already have been shared into the chat. Empty new-chat drafts start tagged with
+  the default agent for this account/community. **Agents → right-click or "..." →
+  Make my bestie** explicitly saves that agent as the bestie; its card then shows
+  **Bestie**. That choice is saved to the account as a private `main-agent` record,
+  so every install adopts it once per session. Only this explicit choice writes
+  the record; a deleted agent left on it is stood in for until the next choice.
+  The choice stays until it is changed or the agent is deleted, and it is still
+  tagged when its runtime is signed out or broken. Without a choice, or after the
+  chosen agent is deleted, the first managed agent, then the first selectable
+  agent, becomes the default agent and is saved on this device only, after the
+  account record has been read, agent evidence is complete and the requested
+  archive read has settled. A chosen agent missing for another reason is stood in
+  for without replacing the choice. Until an agent is explicitly saved as the
+  bestie, including for an automatic pick, a stand-in or a failed save, **Make my
+  bestie** stays offered. Nothing is picked until the account record has been read
+  and its archive read has settled, so a new chat is never tagged for a stale
+  pick. A new chat tags the current default once each time it is shown; the tag
+  isn't saved until the draft is edited, so showing an untouched new chat again
+  uses the current default. Archive rereads, failed rereads and reconnects keep
+  the last known archives, so a known deletion is never forgotten and a live
+  choice never disappears.
   Follow-ups keep all exact agents notified by the previous send, just like
   Team threads, including the shared Remember mentioned agents preference.
   The account default never replaces recipients in an existing chat.
@@ -215,11 +226,11 @@ there is no create-then-edit. Local settings store name, Canvas and lifetime
 together. Invalid stored durations are visible failures, not implicit Ongoing.
 
 The **Chat settings** gear in the header opens the form directly; Solo chat
-row menus offer the same form as **Edit…**. Both open one
+row menus offer the same form as **Chat settings**. Both open one
 scrollable dialog, with **Chat name** above Workspace/Canvas
 (optional for a new draft),
-**Lifetime** below it, and one **Save changes** action. The separate Rename editor
-and menu action have been removed. There is no separate lifetime menu or tab.
+**Lifetime** below it, and one **Save changes** action. There is no separate
+lifetime menu or tab.
 Changed Canvas confirms first, then changed name/lifetime use one fresh signed
 channel-details operation. The Solo label, privacy, history, membership and
 workspace filing remain unchanged. A no-op closes without writing. If details fail
@@ -252,7 +263,8 @@ The shared fresh-details owner remains edit authority.
 
 ## Optional naming
 
-Double-click an editable Solo chat’s sidebar row to rename it inline. The current
+Double-click an editable Solo chat’s sidebar row, or choose **Rename** from its
+actions menu, to rename it inline. The current
 name is selected; Enter or clicking away saves, and Escape cancels. Empty or
 unchanged names keep the confirmed title. Errors retain the draft below the field;
 uncertain saves offer **Check save status** without republishing. This uses the

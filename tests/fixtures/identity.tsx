@@ -56,8 +56,7 @@ mockIPC((command, payload) => {
       failedCount:
         recoveryMode === "partial" || recoveryMode === "failed" ? 1 : 0,
     };
-    if (recoveryMode === "unavailable")
-      throw "Backup recovery is unavailable. Try again later.";
+    if (recoveryMode === "unavailable") throw "Backup recovery is unavailable.";
     if (recoveryMode === "waiting")
       return new Promise((resolve) => {
         finishRecovery = () => resolve(result);

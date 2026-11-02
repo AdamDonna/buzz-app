@@ -19,9 +19,12 @@ import {
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuGroup,
+  MenuGroupLabel,
 } from "../../../../src/shared/design-system/ui/Menu";
 import { SurfaceButton } from "../../../../src/shared/design-system/ui/SurfaceButton";
 import { Button } from "../../../../src/shared/design-system/ui/Button";
+import { ChoiceRow } from "../../../../src/shared/design-system/ui/ChoiceRow";
 import { IconButton } from "../../../../src/shared/design-system/ui/IconButton";
 import { SplitButton } from "../../../../src/shared/design-system/ui/SplitButton";
 
@@ -154,6 +157,37 @@ export function ButtonSpecimen() {
         <Button>Continue</Button>
       </ExamplePreview>
       <ButtonMatrix kind="text" />
+      <ExamplePreview code='<SplitButton menuLabel="Other add options" menu={<MenuItem>View only</MenuItem>}>Add</SplitButton>'>
+        <SplitButton
+          variant="prominent"
+          menuLabel="Other add options"
+          menu={
+            <MenuGroup>
+              <MenuGroupLabel>Add as</MenuGroupLabel>
+              <MenuItem>
+                <ChoiceRow
+                  label="Participant"
+                  description="Send messages, reply, and react."
+                />
+              </MenuItem>
+              <MenuItem>
+                <ChoiceRow
+                  label="View only"
+                  description="Read messages and threads."
+                />
+              </MenuItem>
+              <MenuItem>
+                <ChoiceRow
+                  label="Admin"
+                  description="Manage this channel and its members."
+                />
+              </MenuItem>
+            </MenuGroup>
+          }
+        >
+          Add
+        </SplitButton>
+      </ExamplePreview>
       <ExamplePreview
         className="bg-affordance-accent"
         code='<Button variant="glass">Message</Button>'
@@ -610,6 +644,21 @@ export function IconButtonSpecimen() {
 </div>`}
         >
           <div className="component-specimen-row">
+            <IconButton
+              variant="inset"
+              shape="round"
+              size="md"
+              aria-label="Inset action"
+              icon={<GearIcon aria-hidden="true" />}
+            />
+            <IconButton
+              variant="inset"
+              disabled
+              shape="round"
+              size="md"
+              aria-label="Disabled inset action"
+              icon={<GearIcon aria-hidden="true" />}
+            />
             <IconButton
               variant="chrome"
               aria-label="Chrome settings"

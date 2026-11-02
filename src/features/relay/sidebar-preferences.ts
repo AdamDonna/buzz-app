@@ -35,8 +35,9 @@ export function isSidebarPreferencesBatch(
           filter["#d"][0] as (typeof SIDEBAR_COORDINATES)[number],
         ) &&
         filter.limit === 1 &&
+        (filter.consistency === undefined || filter.consistency === "strong") &&
         Object.keys(filter).every((key) =>
-          ["kinds", "authors", "#d", "limit"].includes(key),
+          ["kinds", "authors", "#d", "limit", "consistency"].includes(key),
         ),
     )
   );
@@ -93,9 +94,10 @@ export type SidebarPreferences = SidebarGroups &
     activeWindowSeconds?: Readonly<Record<string, number>>;
   }>;
 export type SidebarAssignmentIntent = Readonly<{
-  channelId: string;
+  /** Omit only when creating an empty section. */
+  channelId?: string;
   sectionId?: string;
-  createSection?: Readonly<{ id: string; name: string }>;
+  createSection?: Readonly<{ id: string; name: string; position?: "first" }>;
 }>;
 export type SidebarAssignmentMutator = (
   intent: SidebarAssignmentIntent,
@@ -113,7 +115,7 @@ export type SidebarSectionOrderMutator = (
   sectionIds: readonly string[],
   signal: AbortSignal,
 ) => Promise<SidebarGroups>;
-/** Adds an empty section; only Solo groups support this today. */
+/** Adds an empty section without assigning a conversation. */
 export type SidebarSectionCreationMutator = (
   section: Readonly<{ id: string; name: string }>,
   signal: AbortSignal,
@@ -322,6 +324,7 @@ export async function readSidebarPreferences(
   viewer: string,
   decode: SidebarDecoder,
   signal: AbortSignal,
+  consistency?: "strong",
 ): Promise<SidebarPreferences> {
   let events: readonly RelayEvent[];
   try {
@@ -331,8 +334,13 @@ export async function readSidebarPreferences(
         authors: [viewer],
         "#d": [coordinate],
         limit: 1,
+        ...(consistency ? { consistency } : {}),
       })),
-      { signal, priority: "foreground" },
+      {
+        signal,
+        priority: "foreground",
+        ...(consistency ? { fresh: true } : {}),
+      },
     );
     signal.throwIfAborted();
   } catch (error) {

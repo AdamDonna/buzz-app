@@ -24,6 +24,8 @@ function setup(retain = false) {
   const ctx = new Context();
   contexts.push(ctx);
   const host = provideNavigation(ctx);
+  // The visit deadline runs only while a presenter is attached, as the app's is.
+  host.attach();
   let live = true;
   const listeners = new Set<() => void>();
   const owner: PresentationOwner = {

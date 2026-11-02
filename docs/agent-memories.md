@@ -59,8 +59,12 @@ credential loader is copied into the plugin.
   without one it only creates. A session's `core` is a copy from its start,
   so another session's write in between is refused rather than overwritten.
   The check reads before it writes, so two writes racing that one read can
-  still both land. `mem_get q` searches the whole listing client side, so it
-  is subject to the same limits and partial mark.
+  still both land. `mem_rm` deletes an entry with a NIP-AE tombstone and
+  always needs the version; it refuses `core`, which has no tombstone.
+  Listings report each tombstone's slug and time apart from the entries, so
+  `mem_set` dates a recreated entry after it.
+  `mem_get q` searches the whole listing client side, so it is subject to
+  the same limits and partial mark.
 - Ten-second incoming upload deadline.
 - Four mounted views per session; views make no periodic or startup requests.
 - Oversized input fails closed, not silently truncated before head selection.

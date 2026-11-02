@@ -246,7 +246,10 @@ export function deletionApplies(
 
 /** Folds one window's top-level messages with their aux overlays: author deletes (5/9005),
  * author edits (40003, latest wins), reactions (7) and relay-signed thread summaries (39005).
- * Replies stay out of the top level. Output is ascending by time; ties break on id so windows merge deterministically. */
+ * Replies stay out of the top level; when they are not rows, the non-deleted `pendingReplies`
+ * of a root layer on top of its summary: they add to `replyCount` and their authors lead
+ * `participants`, so an own reply counts and shows before the relay's summary round trip.
+ * Output is ascending by time; ties break on id so windows merge deterministically. */
 export function foldMessages(
   channelId: string,
   relayAuthor: string,
@@ -256,17 +259,35 @@ export function foldMessages(
     collapseHuddles = true,
     signingAuthority,
     agentOwner,
+    pendingReplies,
   }: {
     includeReplies?: boolean;
     collapseHuddles?: boolean;
     signingAuthority?: string | undefined;
     agentOwner?: ((pubkey: string) => string | undefined) | undefined;
+    /** Retained reply sends of this client's that no relay summary has counted yet
+     * (MessageProjection decides that by observation order); absent means every
+     * summary is complete. */
+    pendingReplies?: ReadonlySet<string> | undefined;
   } = {},
 ): ChannelMessage[] {
   const overlays = new Map<string, EventData[]>();
   const summaries = new Map<string, EventData>();
+  const replies = new Map<string, EventData[]>();
   for (const event of events) {
-    if (channelRowKind(event.kind)) continue;
+    if (channelRowKind(event.kind)) {
+      const rootId = threadReference(event)?.rootId;
+      if (
+        rootId &&
+        pendingReplies?.has(event.id) &&
+        event.tags.some((entry) => entry[0] === "h" && entry[1] === channelId)
+      ) {
+        const list = replies.get(rootId) ?? [];
+        list.push(event);
+        replies.set(rootId, list);
+      }
+      continue;
+    }
     if (event.kind === 39005) {
       const target = event.tags.find((entry) => entry[0] === "e")?.[1];
       if (target && event.pubkey === relayAuthor)
@@ -382,6 +403,20 @@ export function foldMessages(
     for (const { url, name } of projected.names)
       if (!attachmentNames.has(url)) attachmentNames.set(url, name);
     const authorId = messageAuthor(event, signingAuthority);
+    const summary = parseSummary(summaries.get(event.id));
+    const pending = includeReplies
+      ? []
+      : (replies.get(event.id)?.filter((reply) => !deleted(reply)) ?? []);
+    // The relay lists participants by signer, so a pending reply whose signer
+    // it lists but not its author (a relay-signed workflow reply) leads as that
+    // signer rather than adding a second identity.
+    const repliers = pending.map((reply) => {
+      const author = messageAuthor(reply, signingAuthority);
+      return !summary.participants.includes(author) &&
+        summary.participants.includes(reply.pubkey)
+        ? reply.pubkey
+        : author;
+    });
     rows.push(
       Object.freeze({
         id: event.id,
@@ -460,7 +495,12 @@ export function foldMessages(
           aux.filter((item) => item.kind === 7),
           deleted,
         ),
-        ...parseSummary(summaries.get(event.id)),
+        replyCount: summary.replyCount + pending.length,
+        // Pending repliers lead, returning ones included, so they stay within
+        // the visible avatar stack.
+        participants: Object.freeze([
+          ...new Set([...repliers, ...summary.participants]),
+        ]),
       }),
     );
   }

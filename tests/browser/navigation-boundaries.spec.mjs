@@ -38,7 +38,7 @@ test("cold destination waits for its enabled provider to activate", async ({
       .poll(() => page.evaluate(() => window.delayFixture.started))
       .toBe(true);
     await expect(page.getByRole("main").getByRole("status")).toHaveText(
-      "Opening destination…",
+      "Loading…",
     );
     await expect
       .poll(() =>
@@ -61,6 +61,89 @@ test("cold destination waits for its enabled provider to activate", async ({
   } finally {
     await page.evaluate(() => window.delayFixture?.release?.());
   }
+});
+
+test("cold Settings provider waits for its plugin activation", async ({
+  page,
+  app,
+}) => {
+  await page.addInitScript(() => {
+    window.delayFixture = { started: false };
+  });
+  const target = {
+    version: 1,
+    kind: "settings",
+    section: "agents",
+    provider: "fixture.delayed/provider",
+  };
+  try {
+    await page.goto(
+      `${app.origin}/#buzz=${encodeURIComponent(JSON.stringify(target))}`,
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.delayFixture.started))
+      .toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.fixtureNavigation?.snapshot().status),
+      )
+      .toBe("opening");
+    await page.evaluate(() => window.delayFixture.release());
+    await expect(
+      page.getByRole("dialog", { name: "Delayed provider", exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.fixtureNavigation.snapshot().status),
+      )
+      .toBe("opened");
+  } finally {
+    await page.evaluate(() => window.delayFixture?.release?.());
+  }
+});
+
+// Native Forward must retain the actual editor node while its destination fails;
+// owner tests cover pending activation and Save/Discard decision ordering.
+test("native Settings traversal retains a dirty Profile behind an unavailable provider", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const profile = { version: 1, kind: "settings", section: "profile" };
+  expect(
+    await page.evaluate(
+      (target) => window.fixtureNavigation.open(target),
+      profile,
+    ),
+  ).toEqual({ status: "opened" });
+  expect(
+    await page.evaluate((target) => window.fixtureNavigation.open(target), {
+      ...profile,
+      section: "agents",
+      provider: "missing/provider",
+    }),
+  ).toEqual({ status: "failed", reason: "unavailable" });
+  await page.goBack();
+  const name = page
+    .getByRole("dialog", { name: "Settings", exact: true })
+    .getByRole("textbox", { name: "Display name", exact: true });
+  await expect(name).toBeEnabled();
+  await name.fill("Keep this Profile draft");
+  await name.evaluate((element) => {
+    window.retainedDraftEditor = element;
+  });
+  await page.goForward();
+  await expect(
+    page.getByText("This page isn’t available", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => window.retainedDraftEditor.isConnected),
+  ).toBe(true);
+  await page.goBack();
+  await expect(name).toHaveValue("Keep this Profile draft");
+  expect(
+    await name.evaluate((element) => element === window.retainedDraftEditor),
+  ).toBe(true);
 });
 
 test("Messages default resolution returns opened to cold and warm callers without an extra visit", async ({

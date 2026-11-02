@@ -1,13 +1,15 @@
+import { useSoloRowActivation } from "./useSoloRowActivation";
+import { useSoloNavigation } from "./solo-navigation-react";
 import {
-  useEffect,
   useRef,
   useState,
   useSyncExternalStore,
   type ComponentProps,
   type RefObject,
+  type ReactNode,
 } from "react";
 import { useChannelNavigation } from "./ChannelNavigationState";
-import { ownSolo } from "../solo/labels";
+import { eligibleSolo } from "../solo/labels";
 import { conversationTarget, soloDraft, soloDraftTarget } from "./routes";
 import { ChannelActivityPopover } from "../../bundled/channels/ChannelActivityPopover";
 import { useWorkingAgents } from "../../bundled/channels/useWorkingAgents";
@@ -23,7 +25,8 @@ import {
 import { useChannelList } from "../relay/react";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
-import { useRecoveryShown } from "../relay/RecoveryNotice";
+import { useRecoveryOwns } from "../relay/RecoveryNotice";
+import { rosterRecovering } from "../relay/live-recovery";
 import type { Navigation } from "../navigation/controller";
 import type { OpenTarget } from "../navigation/targets";
 import { buzzLinkTarget } from "../navigation/buzz-links";
@@ -60,6 +63,7 @@ export function SoloInventory({
   target,
   chatIcons,
   chatMenus,
+  renderContents,
 }: {
   session: RelaySession;
   scope: string;
@@ -68,8 +72,16 @@ export function SoloInventory({
   /** Plugin icons that can stand in for a chat's own. */
   chatIcons?: ContributionReader<ChatIcon> | undefined;
   chatMenus?: ContributionReader<ChatMenu> | undefined;
+  renderContents?: (
+    content: ReactNode,
+    actions: ReactNode,
+    header: ReactNode,
+    trigger: RefObject<HTMLButtonElement | null>,
+    pendingClick: RefObject<ReturnType<typeof setTimeout> | undefined>,
+  ) => ReactNode;
 }) {
   const list = useChannelList(session.channels);
+  const regions = useSoloNavigation(session);
   const pendingClick = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -80,7 +92,9 @@ export function SoloInventory({
   const [menuOpen, setMenuOpen] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const recoveryShown = useRecoveryShown(session.recovery);
+  const rosterRecovers = useRecoveryOwns(session, (live) =>
+    rosterRecovering(live.roster),
+  );
   const selected =
     target.kind === "conversation" ? target.channelId : undefined;
   const draft =
@@ -140,9 +154,7 @@ export function SoloInventory({
     // Opening one from a link without membership adds nothing here.
     .filter(
       (item) =>
-        !item.archived &&
-        item.channelType === "solo" &&
-        (!item.readOnly || ownSolo(item, session.viewer)),
+        eligibleSolo(item, session.viewer) && !regions.excluded.has(item.id),
     )
     .sort(
       (a, b) =>
@@ -165,44 +177,54 @@ export function SoloInventory({
     if (project) resetNewChatProject(scope, project);
     void navigator.open(soloDraftTarget(scope, project ? { project } : {}));
   };
-  return (
-    <nav className={styles.sidebarContents} aria-label="Solo conversations">
-      <div
-        className={creationStyles.header}
-        data-actions-visible={menuOpen || undefined}
+  const creationItems = (
+    <>
+      <MenuItem onClick={() => newChat()}>New chat</MenuItem>
+      <MenuItem
+        disabled={!session.soloPreferences.sectionCreationWritable}
+        onClick={() => {
+          if (current()) setCreatingProject(true);
+        }}
       >
-        <InlineHeader
-          title={<span className="text-standard">Solo</span>}
-          actions={
-            <div className={creationStyles.actions}>
-              <MenuRoot open={menuOpen} onOpenChange={setMenuOpen}>
-                <MenuTrigger
-                  render={
-                    <IconButton
-                      ref={trigger}
-                      size="compact"
-                      aria-label="New chat or workspace"
-                      title="New chat or workspace"
-                      icon={<PlusIcon size={15} strokeWidth={2.5} />}
-                    />
-                  }
-                />
-                <MenuPopup align="end">
-                  <MenuItem onClick={() => newChat()}>New chat</MenuItem>
-                  <MenuItem
-                    disabled={!session.soloPreferences.sectionCreationWritable}
-                    onClick={() => {
-                      if (current()) setCreatingProject(true);
-                    }}
-                  >
-                    New workspace
-                  </MenuItem>
-                </MenuPopup>
-              </MenuRoot>
-            </div>
+        New workspace
+      </MenuItem>
+    </>
+  );
+  const actions = (
+    <div className={creationStyles.actions}>
+      <MenuRoot open={menuOpen} onOpenChange={setMenuOpen}>
+        <MenuTrigger
+          render={
+            <IconButton
+              ref={trigger}
+              size="compact"
+              aria-label="New chat or workspace"
+              title="New chat or workspace"
+              icon={<PlusIcon size={15} strokeWidth={2.5} />}
+            />
           }
         />
-      </div>
+        <MenuPopup align="end">{creationItems}</MenuPopup>
+      </MenuRoot>
+    </div>
+  );
+  const header = (
+    <div
+      className={creationStyles.header}
+      data-actions-visible={menuOpen || undefined}
+    >
+      <InlineHeader
+        title={
+          <span className="text-standard" data-solo-heading="" tabIndex={-1}>
+            Solo
+          </span>
+        }
+        actions={actions}
+      />
+    </div>
+  );
+  const content = (
+    <>
       {empty && (
         <NavigationItem
           variant="row"
@@ -302,8 +324,23 @@ export function SoloInventory({
         )}
       />
       {list.status === "loading" && <p role="status">Loading conversations…</p>}
-      {list.status === "error" && !recoveryShown && (
+      {list.status === "error" && !rosterRecovers && (
         <p role="alert">{list.error}</p>
+      )}
+    </>
+  );
+  return (
+    <nav
+      className={styles.sidebarContents}
+      aria-label={`${regions.regions.find((region) => region.source)?.title ?? "Solo"} conversations`}
+    >
+      {renderContents ? (
+        renderContents(content, creationItems, header, trigger, pendingClick)
+      ) : (
+        <>
+          {header}
+          {content}
+        </>
       )}
     </nav>
   );
@@ -340,9 +377,12 @@ function SoloConversationRow({
   ComponentProps<typeof ChannelActivityPopover>,
   "onOpenThread" | "onOpenWorkingAgent" | "onOpenAgentActivity"
 >) {
-  const click = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const pointer = useRef<string | undefined>(undefined);
-  useEffect(() => () => clearTimeout(click.current), []);
+  const activation = useSoloRowActivation(
+    navigation,
+    pendingClick,
+    onSelect,
+    onRename,
+  );
   const { agents, agentProfiles, waiting } = useWorkingAgents(
     session,
     id,
@@ -368,37 +408,7 @@ function SoloConversationRow({
           data-solo-channel-id={id}
           aria-current={selected ? "page" : undefined}
           aria-describedby={shared ? soloSharedMarkId(id) : undefined}
-          onPointerDown={(event) => {
-            pointer.current = event.pointerType;
-          }}
-          onClick={(event) => {
-            if (event.detail >= 2) return;
-            clearTimeout(pendingClick.current);
-            const touch = pointer.current === "touch";
-            pointer.current = undefined;
-            if (
-              event.detail === 1 &&
-              onRename &&
-              !touch &&
-              window.matchMedia("(max-width: 650px)").matches
-            ) {
-              // Keep the drawer present for a mouse double-click. Touch and
-              // keyboard activation, and wide layouts, navigate immediately.
-              const attempt = navigation.snapshot().attempt;
-              click.current = pendingClick.current = setTimeout(() => {
-                if (navigation.snapshot().attempt.id === attempt.id) onSelect();
-              }, 500);
-            } else onSelect();
-          }}
-          onDoubleClick={
-            onRename
-              ? () => {
-                  clearTimeout(pendingClick.current);
-                  if (!onRename()) onSelect();
-                }
-              : undefined
-          }
-          onContextMenu={() => clearTimeout(pendingClick.current)}
+          {...activation}
           icon={
             Icon ? (
               <Icon session={session} channelId={id} fallback={chatIcon} />

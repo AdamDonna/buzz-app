@@ -41,9 +41,20 @@ Admin tags, and each row has the channel members' actions menu, so the chat owne
 can remove someone. The verified roster shows loading or failure, never treating a
 failed read as an empty audience.
 
-Eligible stream/forum channels appear in a **Channels** group; **Select** chooses
-one. The selected channel shows **#name** with its **N members**, expandable to
-inspect participants. **Share** gives that channel's current members (agents
+Invitations use the same groups and controls as channels: **Your agents** first,
+then **People**, **Other agents** and **Your other agents**, omitting empty groups.
+Solo still excludes agents the viewer cannot add directly. Each group uses shared
+name, relationship and usage ranking, begins with four rows, and expands with its
+own **Show more**. Only the viewer's client agents are suggested without typing,
+and only while the viewer is the sole member. With anyone else in the roster,
+search is required to offer invitations. Search still finds people and channels
+for sharing; this presentation grants no additional authority.
+Solo and channels intentionally share the device-local `channel-members` usage
+picks, so a choice in either surface can improve its order in the other.
+
+While searching, eligible stream/forum channels appear in a **Channels** group;
+**Select** chooses one. The selected channel shows **#name** with its **N members**,
+expandable to inspect participants. **Share** gives that channel's current members (agents
 included, archived members skipped, at most 100 needing access) membership in the
 chat, then posts one link message in the channel through the Outbox and closes.
 The toast **Shared in #channel** offers **View**, which opens the posted link. If a

@@ -31,10 +31,19 @@ const response = (value: unknown, status = 200): HostResponse => ({
 const viewer = "cd".repeat(32);
 const bound = (pubkey_hex = viewer) => response({ identity: { pubkey_hex } });
 async function fixture(subject = "user", canUseRemoteAgents = true) {
-  const session = createOAuthSession(async () => ({
-    value: "secret",
-    account: { subject, email: "a@example.com", canUseRemoteAgents },
-  }));
+  const session = createOAuthSession(
+    async () => ({
+      value: "secret",
+      account: {
+        subject,
+        email: "a@example.com",
+        canUseRemoteAgents,
+        canUseBuilderlabDecisions: false,
+      },
+    }),
+    undefined,
+    { request: (input) => host.request(input) },
+  );
   await session.signIn();
   const host: Host = {
     runCommand: vi.fn(),
@@ -50,7 +59,7 @@ async function fixture(subject = "user", canUseRemoteAgents = true) {
     session,
     host,
     owner,
-    client: createAgentClient(host, session, owner),
+    client: createAgentClient(session, owner),
     retain: vi.fn(),
     signal: new AbortController().signal,
   };
@@ -140,7 +149,15 @@ it.each([401, 403, 500])(
     vi.mocked(h.host.request).mockResolvedValue(
       response({ error: "private-secret" }, status),
     );
-    const error = await h.client.list(h.signal).catch((error: Error) => error);
+    vi.useFakeTimers();
+    let error: unknown;
+    try {
+      const pending = h.client.list(h.signal).catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(7000);
+      error = await pending;
+    } finally {
+      vi.useRealTimers();
+    }
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain("private-secret");
     expect(h.session.snapshot().status).toBe(
@@ -530,11 +547,7 @@ it.each(["network", "server", "malformed", "cancel"])(
       }),
     );
     // A fresh consumer after navigation/restart reuses the persisted intent.
-    await createAgentClient(h.host, h.session).register(
-      "Helper",
-      h.signal,
-      h.retain,
-    );
+    await createAgentClient(h.session).register("Helper", h.signal, h.retain);
     const bodies = vi
       .mocked(h.host.request)
       .mock.calls.map(([input]) => JSON.parse(input.body ?? "{}"));
@@ -715,7 +728,7 @@ it("signs out when the identity check finds the session expired", async () => {
 it("attests without linking when there is no native identity", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(response({ status: 1 }));
-  await createAgentClient(h.host, h.session, null).activate(
+  await createAgentClient(h.session, null).activate(
     row.agent_pubkey,
     proof,
     undefined,
@@ -771,4 +784,70 @@ it("shares one binding attempt between overlapping links", async () => {
       .mocked(h.host.request)
       .mock.calls.map(([input]) => input.url.split("/").at(-1)),
   ).toEqual(["current", "attest-agent"]);
+});
+
+it.each(["network", "429"])(
+  "quietly recovers read-only Builderlab discovery after %s",
+  async (failure) => {
+    const h = await fixture();
+    vi.useFakeTimers();
+    try {
+      const request = vi.mocked(h.host.request);
+      if (failure === "network")
+        request.mockRejectedValueOnce(new Error("offline"));
+      else request.mockResolvedValueOnce(response({}, Number(failure)));
+      const pending = h.client.list(h.signal);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(501);
+      expect(await pending).toHaveLength(1);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("does not replay a Builderlab mutation after a transport failure", async () => {
+  const h = await fixture();
+  vi.useFakeTimers();
+  try {
+    const request = vi
+      .mocked(h.host.request)
+      .mockRejectedValue(new Error("offline"));
+    await expect(h.client.delete({ id: "agent-1" }, h.signal)).rejects.toThrow(
+      "Could not reach Builderlab",
+    );
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(request).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("exhausts Builderlab reads once and cancels the same backoff on account change", async () => {
+  const h = await fixture();
+  vi.useFakeTimers();
+  try {
+    const request = vi
+      .mocked(h.host.request)
+      .mockResolvedValue(response({}, 503));
+    const rejected = expect(h.client.list(h.signal)).rejects.toThrow(
+      "HTTP 503",
+    );
+    await vi.advanceTimersByTimeAsync(7000);
+    await rejected;
+    expect(request).toHaveBeenCalledTimes(4);
+    const pending = h.client.list(h.signal);
+    const cancelled = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    h.session.signOut();
+    await vi.advanceTimersByTimeAsync(1000);
+    await cancelled;
+    expect(request).toHaveBeenCalledTimes(5);
+  } finally {
+    vi.useRealTimers();
+  }
 });

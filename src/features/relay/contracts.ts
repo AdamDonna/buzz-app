@@ -1,3 +1,4 @@
+import type { VerifiedProfile } from "./verified-profile";
 import type { ReadFilter } from "./events";
 import type { CustomEmoji } from "./emoji";
 import type { ReadOptions } from "./reader";
@@ -22,12 +23,17 @@ export type ChannelSummary = Readonly<{
   metadataPending?: boolean | undefined;
   /** Explicit signed visibility; absent means unknown, not public. */
   visibility?: "public" | "private" | undefined;
+  /** Default for future participants; never an existing participant's role. */
+  joinRole?: "member" | "guest" | undefined;
+  /** Viewer role from the relay-signed roster, independent of admission defaults. */
+  viewerRole?: "owner" | "admin" | "member" | "guest" | "bot" | undefined;
   preview?: string | undefined;
-  /** Newest verified user-visible activity for sidebar ordering, in Unix seconds. */
+  /** Newest verified user-visible activity for sidebar ordering, in Unix
+   * seconds. An own send counts once the relay accepts it. */
   lastActivityAt?: number | undefined;
   /** Activity has been observed or read successfully, including an empty result. */
   activityKnown?: true;
-  /** Readable public nonmember channel; not part of the joined roster. */
+  /** Writing unavailable: public preview, cached membership, or a guest. */
   readOnly?: true;
   /** Downloaded membership is display-only pending current relay confirmation. */
   cached?: true;
@@ -62,6 +68,8 @@ export type ChannelSummary = Readonly<{
   participants?: readonly string[];
 }>;
 export type Profile = Readonly<{
+  /** Relay-signed name assertion; display only, never account access. */
+  verified?: VerifiedProfile;
   name: string;
   /** The name is an identity fragment, not a name supplied by kind-0 content. */
   nameIsFallback?: true;
@@ -157,10 +165,16 @@ export type ChannelMessage = Readonly<{
   sentFromThread?:
     | Readonly<{ rootId: string; excerpt?: string | undefined }>
     | undefined;
-  /** Relay-signed whole-thread reply total (including nested replies).
+  /** Relay-signed whole-thread reply total (including nested replies), plus this
+   * client's own non-deleted reply sends that no summary has counted yet (so an
+   * own reply counts before the relay's summary arrives; stored and other users'
+   * replies wait for the relay's summary).
    * Falls back to direct replies when the summary lacks a valid descendant total. */
   replyCount: number;
-  /** Pubkeys the relay reports as thread participants (may be empty even with replies). */
+  /** Authors of this client's own reply sends no summary has counted yet, even
+   * when the relay already lists them (so an own reply's avatar shows, first,
+   * before the relay's summary arrives), followed by the other pubkeys the relay
+   * reports as thread participants (may be empty even with replies). */
   participants: readonly string[];
 }>;
 export type ListStatus = "unavailable" | "idle" | "loading" | "ready" | "error";

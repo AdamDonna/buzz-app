@@ -2,6 +2,7 @@ import { Virtualizer } from "virtua";
 import { Popover } from "@base-ui/react/popover";
 import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useAgentChoices } from "../agents/use-choices";
+import { canMessageAgent } from "../agents/choices";
 import type { RelaySession } from "../relay/session";
 import { MatchedLabel } from "../search/MatchedLabel";
 import { exactName, matchPerson } from "../search/person-match";
@@ -25,6 +26,17 @@ import { avatarMedia } from "../../shared/avatar-source";
 
 const noExclusions: readonly string[] = [];
 const personKey = (pubkey: string) => `person:${pubkey}`;
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** At most 24 characters, cut between characters rather than inside one. */
+function shortened(text: string) {
+  const characters = Array.from(
+    graphemes.segment(text),
+    (part) => part.segment,
+  );
+  return characters.length > 24
+    ? `${characters.slice(0, 23).join("").trimEnd()}…`
+    : text;
+}
 
 export function RecipientPicker({
   session,
@@ -35,6 +47,7 @@ export function RecipientPicker({
   initiallyOpen = true,
   onChange,
   onComplete,
+  onTyped,
 }: {
   session: RelaySession;
   /** View-state partition whose DM visits and earlier choices rank people. */
@@ -46,6 +59,8 @@ export function RecipientPicker({
   initiallyOpen?: boolean;
   onChange(people: Recipient[]): void;
   onComplete(): void;
+  /** Whether the To field holds text that is not a recipient yet. */
+  onTyped(typed: boolean): void;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(initiallyOpen);
@@ -57,12 +72,14 @@ export function RecipientPicker({
   const selection = useRef(selected);
   selection.current = selected;
   const id = useId();
+  const errorId = useId();
   const directory = usePeople(session, query);
   const agents = useAgentChoices(session, false);
   const removal = useChipRemoval();
   const atLimit = selected.length >= 8;
   const needle = query.trim().toLowerCase();
   const typed = pickerText("dm", needle);
+  const invalid = !open && !!needle && selected.length > 0;
   // biome-ignore lint/correctness/useExhaustiveDependencies: a choice or removal makes the stored usage newer.
   const usage = useMemo(() => readSearchUsage(scope), [scope, selected.length]);
   const known = useRef(new Map<string, Recipient>());
@@ -84,18 +101,16 @@ export function RecipientPicker({
     keys,
   } = useMemo(() => {
     const controlled = new Set(
-      agents.identities
-        .filter((agent) => agent.managed)
-        .map((agent) => agent.pubkey),
+      agents.identities.filter(canMessageAgent).map((agent) => agent.pubkey),
     );
     const relationships = peopleRelationships(channels, controlled);
     const inDirectory = new Map(
       people.map((person) => [person.pubkey, person]),
     );
-    // A managed agent's own name, kept for ranking and for Space.
+    // An eligible agent's own name, kept for ranking and for Space.
     const agentName = new Map(
       agents.identities.flatMap((agent) =>
-        agent.managed && agent.name
+        canMessageAgent(agent) && agent.name
           ? [[agent.pubkey, agent.name] as const]
           : [],
       ),
@@ -107,7 +122,7 @@ export function RecipientPicker({
     const byAgentName = query.trim()
       ? agents.identities.flatMap((agent): Recipient[] => {
           if (
-            !agent.managed ||
+            !canMessageAgent(agent) ||
             !agent.name ||
             inDirectory.has(agent.pubkey) ||
             matchPerson(agent.name, query) === undefined
@@ -259,6 +274,7 @@ export function RecipientPicker({
     selection.current = [...selection.current, person];
     onChange(selection.current);
     setQuery("");
+    onTyped(false);
     focus();
   }
   function remove(pubkey: string, point?: { x: number; y: number }) {
@@ -389,6 +405,7 @@ export function RecipientPicker({
             aria-expanded={open && !disabled}
             aria-controls={listed ? highlight.listId : undefined}
             aria-autocomplete="list"
+            aria-describedby={invalid ? errorId : undefined}
             {...highlight.fieldProps}
             placeholder={
               selected.length
@@ -408,6 +425,7 @@ export function RecipientPicker({
             onFocus={() => setOpen(true)}
             onChange={(event) => {
               setQuery(event.target.value);
+              onTyped(!!event.target.value.trim());
               setOpen(true);
             }}
             onKeyDown={(event) => {
@@ -465,6 +483,21 @@ export function RecipientPicker({
             }}
           />
         </div>
+        {/* Text left in To holds Send, so say why once the list closes, not
+            while a name is typed. Below the list's anchor, so the list keeps
+            its place. A polite status, read after whatever focus moved to,
+            and To's description, as Escape leaves focus there: any To edit
+            opens the list and unmounts it, so its text never changes while
+            shown. */}
+        {invalid && (
+          <p
+            id={errorId}
+            role="status"
+            className="mt-1 text-body-sm text-danger"
+          >
+            “{shortened(query.trim())}” is not a valid recipient
+          </p>
+        )}
         <Popover.Portal>
           <Popover.Positioner
             anchor={anchor}
@@ -494,6 +527,7 @@ export function RecipientPicker({
                     if (key) highlight.rowProps(key).onPointerMove(event);
                     highlight.listProps.onPointerMove(event);
                   }}
+                  onPointerLeave={highlight.listProps.onPointerLeave}
                   onFocus={(event) => {
                     const key = optionKey(event.target);
                     if (key) highlight.rowProps(key).onFocus();

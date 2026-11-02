@@ -1,3 +1,4 @@
+import { forgetTabVisits } from "../messages/tab-visit-lifetime";
 import { forgetCoreMemory } from "../agents/core-memory-cache";
 import { forgetChannelSetups } from "../channel-templates/setup";
 import { forgetQuickReactions } from "../messages/quick-reactions";
@@ -46,6 +47,7 @@ export async function purgeCommunityDeviceState(
   };
   // Agents' core memory is only ever held in memory, so this cannot fail.
   forgetCoreMemory(scope);
+  forgetTabVisits(scope);
   await attempt("community display name", () => {
     saveLocalCommunityName(origin, viewer, "");
   });

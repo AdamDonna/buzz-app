@@ -1,5 +1,6 @@
 // A conversation's Codex thread, read back through app-server and shown in the
 // host's turn-transcript model. Codex owns the history; nothing here is saved.
+import { isMessageTool } from "../../buzz-mcp/session-tools";
 import {
   promptSections,
   type ToolItem,
@@ -159,7 +160,7 @@ function item(
       const args = (value.arguments ?? {}) as Json;
       if (
         value.namespace === "buzz" &&
-        value.tool === "send" &&
+        isMessageTool(value.tool) &&
         value.success === true &&
         str(args.text).trim()
       )

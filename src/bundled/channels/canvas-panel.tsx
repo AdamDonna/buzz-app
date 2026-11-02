@@ -11,7 +11,7 @@ import { CanvasEditor } from "./CanvasEditor";
 function eligible(channel: ChannelSummary, session: RelaySession) {
   return (
     !channel.cached &&
-    !channel.readOnly &&
+    (!channel.readOnly || channel.viewerRole === "guest") &&
     !!channel.members?.includes(session.viewer ?? "")
   );
 }
@@ -23,10 +23,14 @@ export function registerCanvas(ctx: Context) {
   function Panel({ channelContext }: PanelProps) {
     usePanelTabTitle("Canvas", tabIcon);
     const state = useSyncExternalStore(ctx.relay.subscribe, ctx.relay.snapshot);
-    const archived = useListedChannel(
+    const readOnly = useListedChannel(
       state.status === "ready" ? state.session.channels : undefined,
       channelContext?.channelId,
-      (channel) => !!channel?.archived,
+      (channel) =>
+        !channel ||
+        !!channel.archived ||
+        !!channel.readOnly ||
+        !!channel.cached,
     );
     if (
       !channelContext ||
@@ -41,7 +45,7 @@ export function registerCanvas(ctx: Context) {
     return (
       <CanvasEditor
         key={`${state.scope}:${state.generation}:${channelContext.channelId}`}
-        readOnly={archived}
+        readOnly={readOnly}
         canvas={state.session.canvas}
         profiles={state.session.profiles}
         scope={state.scope}

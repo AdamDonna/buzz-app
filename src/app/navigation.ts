@@ -16,6 +16,7 @@ import type {
   NavigationOpenOptions,
 } from "../features/navigation/controller";
 import { isBuiltInSettingsSection } from "./settings-sections";
+import { linkedPage, linkedPageTarget } from "../features/pages/plugin-link";
 
 const channelsKey = "buzz.channels/channels";
 /** Presentation-only lease for an already-confirmed Settings departure. */
@@ -43,9 +44,32 @@ export function useAppNavigation(
     services.plugins.snapshot,
   );
 
+  // This is the presenter the visit deadline measures. Behind the identity and
+  // key-setup gate (IdentitySetup) none exists, so the startup visit's deadline
+  // runs from this mount, not from createServices(); otherwise a new user's first
+  // frame was the timeout notice.
+  useLayoutEffect(() => services.navigationHost.attach(), [services]);
+
+  const relay = useSyncExternalStore(
+    services.relay.subscribe,
+    services.relay.snapshot,
+  );
+
   const startup = plugins.configuration.status;
   const target = state.entry.target;
   const settings = target.kind === "settings";
+  const provider = settings ? target.provider : undefined;
+  const providerAvailable = useSyncExternalStore(
+    (listener) =>
+      provider && services.agents
+        ? services.agents.subscribe(listener)
+        : () => {},
+    () =>
+      !!provider &&
+      !!services.agents
+        ?.types()
+        .some((type) => type.key === provider && type.provider),
+  );
   const visibility = useSyncExternalStore(
     services.settingsCards.subscribe,
     () =>
@@ -75,6 +99,8 @@ export function useAppNavigation(
         ? channelsKey
         : undefined;
   const page = pages.find((page) => page.key === pageKey);
+  const pluginLink = target.kind === "plugin" ? target : undefined;
+  const linked = pluginLink && linkedPage(pages, pluginLink);
   const membership = scope
     ? client.memberships.find(
         (item) => communityDestination(item.id).url === scope.communityOrigin,
@@ -102,7 +128,10 @@ export function useAppNavigation(
   const legacyMessagesSettings =
     settings && target.section === "buzz.channels/messages";
   let waiting =
-    legacyHome || legacyPage !== undefined || legacyMessagesSettings;
+    legacyHome ||
+    legacyPage !== undefined ||
+    legacyMessagesSettings ||
+    pluginLink !== undefined;
   if (scope === null) {
     waiting ||= client.status === "loading" || client.selected !== null;
   } else if (scope) {
@@ -133,6 +162,13 @@ export function useAppNavigation(
       }
     }
   }
+  if (pluginLink && !failure && !linked) {
+    if (
+      startup !== "loading" &&
+      plugins.activation[pluginLink.pluginId]?.status !== "starting"
+    )
+      failure = "unavailable";
+  }
   if (
     target.kind === "settings" &&
     !failure &&
@@ -153,6 +189,15 @@ export function useAppNavigation(
         waiting = true;
       else failure = "unavailable";
     }
+  }
+  if (provider && !failure && !waiting) {
+    const owner = provider.split("/")[0] ?? "";
+    if (
+      startup === "loading" ||
+      plugins.activation[owner]?.status === "starting"
+    )
+      waiting = true;
+    else if (!providerAvailable) failure = "unavailable";
   }
   // Legacy Home resolves to Messages; version-1 placeholder routes resolve to
   // their standalone plugins. Preserve scope so normalization never grants access.
@@ -179,6 +224,11 @@ export function useAppNavigation(
         ...target,
         section: "appearance",
       });
+    else if (pluginLink && linked && !failure)
+      services.navigationHost.resolve(
+        state.attempt,
+        linkedPageTarget(pluginLink, linked),
+      );
   }, [
     services,
     state.attempt,
@@ -187,6 +237,9 @@ export function useAppNavigation(
     legacyMessagesSettings,
     target,
     scope,
+    pluginLink,
+    linked,
+    failure,
   ]);
   const owner = useMemo(
     () => ({ attempt: state.attempt, page, waiting, failure }),
@@ -300,6 +353,31 @@ export function useAppNavigation(
       services.communities.select(membership.id);
     }
   }, [services, state.attempt, failure, scope, client, membership]);
+  // A visit that failed while its connection was down, or whose connection has
+  // dropped since, reopens by itself, once, when that connection is live again. A live connection alone does not prove
+  // a failed read recovered. Host-decided, denied and invalid visits keep their
+  // error; a page presenting its failure in place owns that Retry.
+  const offline =
+    relay.status === "connecting" || relay.status === "error" || !!relay.cached;
+  const failedOffline = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (
+      state.status !== "failed" ||
+      state.presented ||
+      state.ingress ||
+      failure ||
+      (state.reason !== "timeout" && state.reason !== "unavailable")
+    )
+      return;
+    if (offline) failedOffline.current = state.attempt.id;
+    else if (
+      relay.status === "ready" &&
+      failedOffline.current === state.attempt.id
+    ) {
+      failedOffline.current = undefined;
+      void navigation.retry();
+    }
+  }, [navigation, state, failure, offline, relay.status]);
   const select = (
     key: string,
     options?: Pick<NavigationOpenOptions, "focus"> & {
@@ -358,6 +436,12 @@ export function useAppNavigation(
     waiting,
     failure,
     selected: pageKey ?? target.kind,
+    /** The connection is down, including a settled refusal. */
+    offline: !failure && offline,
+    /** The connection is still being made or retried, and the visit reopens
+     * once it is live; not a refused or misconfigured connection. */
+    reconnecting:
+      !failure && (relay.status === "connecting" || !!relay.retrying),
     workspace: {
       page: workspacePage || undefined,
       target: workspaceTarget,
@@ -369,16 +453,41 @@ export function useAppNavigation(
           ? retained.owner.attempt.id
           : state.attempt.id,
     },
+    setSettingsProvider(provider?: string) {
+      const current = navigation.snapshot().entry.target;
+      if (current.kind !== "settings") return;
+      const { provider: closing, ...settings } = current;
+      if (provider)
+        void navigation.open({ ...settings, section: "agents", provider });
+      else if (closing) {
+        const parent = targetKey(settings);
+        navigation.dismiss((target) => {
+          if (target.kind !== "settings" || target.provider !== closing)
+            return false;
+          const { provider: _provider, ...settings } = target;
+          return targetKey(settings) === parent;
+        }, settings);
+      }
+    },
     leaveSettings() {
+      const current = navigation.snapshot().entry.target;
+      if (current.kind !== "settings") return;
+      const { section: _section, provider: _provider, ...dialog } = current;
+      const dialogKey = targetKey(dialog);
+      const dismiss = (fallback: OpenTarget) =>
+        navigation.dismiss((target) => {
+          if (target.kind !== "settings") return false;
+          const { section: _section, provider: _provider, ...dialog } = target;
+          return targetKey(dialog) === dialogKey;
+        }, fallback);
       const previous = lastNonSettings.current;
       if (previous) {
-        if (services.navigationHost.returnTo(previous.entryId)) return;
-        void navigation.open(previous.target, { focus: "preserve" });
+        dismiss(previous.target);
         return;
       }
       const selectedClient = services.communities.snapshot();
       if (!selectedClient.viewer) return;
-      void navigation.open({
+      dismiss({
         version: 1,
         kind: "page",
         pluginId: "buzz.channels",

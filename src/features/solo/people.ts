@@ -23,6 +23,21 @@ export function soloHasPeople(
   );
 }
 
+/** Whether every member besides the viewer is a known agent. Stricter than
+ * `!soloHasPeople`: a member whose profile hasn't loaded is not known to be an
+ * agent, so it counts as a person until it is, and a roster that hasn't
+ * loaded (absent, or empty before discovery fills it) is not known at all. */
+export function soloAgentsOnly(
+  members: readonly string[] | undefined,
+  viewer: string | undefined,
+  agents: ReadonlySet<string>,
+): boolean {
+  return (
+    !!members?.length &&
+    members.every((key) => key === viewer || agents.has(key))
+  );
+}
+
 /** Who a saved Solo chat's composer may tag: its people (never the viewer,
  * never an agent it doesn't own) plus the viewer's available agents. */
 export function soloRoster(
@@ -50,6 +65,16 @@ export function useSoloHasPeople(
   channelId: string,
   enabled: boolean,
 ): boolean {
+  return useSoloMembers(session, channelId, enabled).withPeople;
+}
+
+/** Live Solo membership: whether people are in the chat, and whether every
+ * member is a known agent (no unloaded profile left to doubt). */
+export function useSoloMembers(
+  session: ComposerSession,
+  channelId: string,
+  enabled: boolean,
+): { withPeople: boolean; agentsOnly: boolean } {
   const list = useSyncExternalStore(
     enabled ? session.channels.subscribeList : noSubscription,
     enabled ? session.channels.list : noList,
@@ -76,15 +101,12 @@ export function useSoloHasPeople(
       .ensure(memberKeys.split(","), "background")
       .catch(() => {});
   }, [enabled, memberKeys, session]);
-  return (
-    enabled &&
-    soloHasPeople(
-      members,
-      session.viewer,
-      profiles,
-      knownAgentPubkeys(profiles, library),
-    )
-  );
+  const agents = knownAgentPubkeys(profiles, library);
+  return {
+    withPeople:
+      enabled && soloHasPeople(members, session.viewer, profiles, agents),
+    agentsOnly: !enabled || soloAgentsOnly(members, session.viewer, agents),
+  };
 }
 
 const noSubscription = () => () => {};

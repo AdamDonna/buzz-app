@@ -317,6 +317,12 @@
     min-height: 0;
     overflow: hidden;
   }
+  /* Stable lists need a usable control before the whole dialog scrolls. */
+  :is(.buzz-dialog, .buzz-dialog-step)[data-body-layout="flex"]:where(
+    [data-height^="stable"]:not([data-size="expanded"])
+  ) > .buzz-dialog-body {
+    min-height: calc(2 * var(--dialog-padding) + var(--size-control));
+  }
   /* Without footer actions, the popup already supplies the bottom gutter. */
   :is(.buzz-dialog, .buzz-dialog-step)[data-body-layout="flex"]
   > .buzz-dialog-body:last-child {

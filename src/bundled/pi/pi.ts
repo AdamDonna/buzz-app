@@ -36,7 +36,14 @@ export type PiEvent = Readonly<
     | { type: "step"; tool: string; target?: string }
   )
 >;
+export type PiHookCall = Readonly<{
+  agent: string;
+  conversation: number;
+  event: "beforeTool" | "afterTool";
+  input: unknown;
+}>;
 type Handlers = Readonly<{
+  hook?(call: PiHookCall): Promise<unknown>;
   tool(call: ToolCall): Promise<ToolResult>;
   event(event: PiEvent): void;
   prompt?(call: {
@@ -154,7 +161,9 @@ export class Pi {
       else if (message.method === "event")
         this.handlers.event(message.params as PiEvent);
       else if (
-        (message.method === "tool" || message.method === "prompt") &&
+        (message.method === "tool" ||
+          message.method === "prompt" ||
+          message.method === "hook") &&
         message.id !== undefined
       )
         void this.answer(
@@ -234,7 +243,7 @@ export class Pi {
   private async answer(
     connection: Connection,
     id: number | string,
-    method: "tool" | "prompt",
+    method: "tool" | "prompt" | "hook",
     params: unknown,
   ) {
     let message: Message;
@@ -242,11 +251,13 @@ export class Pi {
       message = {
         id,
         result:
-          method === "tool"
-            ? await this.handlers.tool(params as ToolCall)
-            : ((await this.handlers.prompt?.(
-                params as { agent: string; request: string },
-              )) ?? false),
+          method === "hook"
+            ? ((await this.handlers.hook?.(params as PiHookCall)) ?? null)
+            : method === "tool"
+              ? await this.handlers.tool(params as ToolCall)
+              : ((await this.handlers.prompt?.(
+                  params as { agent: string; request: string },
+                )) ?? false),
       };
     } catch (error) {
       message = {

@@ -47,6 +47,9 @@ it("reads authoritative activity in 128-channel batches across message and forum
     assert.exists(channelId);
     request.resolve([forumActivity(peer, channelId, 45003, 100 + index)]);
     await flush();
+    // Nothing applies or publishes until the last batch lands with readiness.
+    expect(activity.known(channelId)).toBe(index === 2);
+    expect(changed).toHaveBeenCalledTimes(index < 2 ? 1 : 2);
   }
   await refresh;
   expect(activity.last(ids[0] ?? "")).toBe(100);
@@ -131,19 +134,61 @@ it("cache clear aborts active batches and disposal ignores late live input", asy
   expect(activity.last("alpha")).toBeUndefined();
 });
 
-it("a later batch failure cannot partially replace the last good projection", async () => {
+it("a later batch failure keeps landed batches and never rolls back live activity", async () => {
   const peer = keypair();
   const wire = deferredReader();
+  const changed = vi.fn();
   const activity = createChannelActivity(wire.read);
   activity.accept([message(peer, "room-0", "seed", 50)]);
-  const ids = Array.from({ length: 129 }, (_, i) => `room-${i}`);
+  activity.accept([message(peer, "room-128", "seed", 60)]);
+  activity.subscribe(changed);
+  const ids = Array.from({ length: 257 }, (_, i) => `room-${i}`);
   const pending = activity.refresh(ids);
   const failed = expect(pending).rejects.toThrow("offline");
-  take(wire.pending).resolve([message(peer, "room-0", "partial", 90)]);
+  take(wire.pending).resolve([message(peer, "room-0", "landed", 90)]);
   await flush();
+  // Live activity during the second batch outlives its older and empty rows.
+  activity.accept([message(peer, "room-128", "live", 70)]);
+  activity.accept([message(peer, "room-129", "live", 80)]);
+  take(wire.pending).resolve([message(peer, "room-128", "older", 65)]);
+  await flush();
+  expect(activity.last("room-0")).toBe(50);
+  expect(activity.known("room-1")).toBe(false);
+  const published = changed.mock.calls.length;
   take(wire.pending).reject(new Error("offline"));
   await failed;
-  expect(activity.last("room-0")).toBe(50);
+  // Landed batches apply in the failure's single publish.
+  expect(changed).toHaveBeenCalledTimes(published + 1);
+  expect(activity.status()).toBe("error");
+  expect(activity.last("room-0")).toBe(90);
+  expect(activity.known("room-1")).toBe(true);
+  expect(activity.last("room-1")).toBeUndefined();
+  expect(activity.last("room-128")).toBe(70);
+  expect(activity.last("room-129")).toBe(80);
+  expect(activity.known("room-256")).toBe(false);
+  activity.dispose();
+});
+
+it("a retired multi-batch read publishes and keeps nothing", async () => {
+  const peer = keypair();
+  const wire = deferredReader();
+  const changed = vi.fn();
+  const activity = createChannelActivity(wire.read);
+  activity.subscribe(changed);
+  const ids = Array.from({ length: 129 }, (_, i) => `room-${i}`);
+  const retired = activity.refresh(ids);
+  take(wire.pending).resolve([message(peer, "room-0", "landed", 90)]);
+  await flush();
+  const second = take(wire.pending);
+  activity.cancel();
+  expect(second.signal.aborted).toBe(true);
+  const published = changed.mock.calls.length;
+  second.reject(new DOMException("Aborted", "AbortError"));
+  await retired;
+  expect(changed).toHaveBeenCalledTimes(published);
+  expect(activity.status()).toBe("idle");
+  expect(activity.known("room-0")).toBe(false);
+  expect(activity.known("room-128")).toBe(false);
   activity.dispose();
 });
 

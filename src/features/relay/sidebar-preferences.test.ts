@@ -670,6 +670,19 @@ it.each([
   },
 );
 
+it("writer reconciliation cannot join an older in-flight preference read", async () => {
+  const read = vi.fn(async () => []);
+  const decode = vi.fn(async () => expected);
+  const signal = new AbortController().signal;
+  await readSidebarPreferences({ read }, "viewer", decode, signal, "strong");
+  expect(read).toHaveBeenCalledWith(
+    expect.arrayContaining([
+      expect.objectContaining({ consistency: "strong" }),
+    ]),
+    { signal, priority: "foreground", fresh: true },
+  );
+});
+
 it("admits only the complete bounded sidebar batch beyond the normal reader limit", async () => {
   const { SIDEBAR_COORDINATES, isSidebarPreferencesBatch } = await import(
     "./sidebar-preferences"
@@ -681,6 +694,27 @@ it("admits only the complete bounded sidebar batch beyond the normal reader limi
     limit: 1,
   }));
   expect(isSidebarPreferencesBatch(filters)).toBe(true);
+  expect(
+    isSidebarPreferencesBatch(
+      filters.map((filter) => ({ ...filter, consistency: "strong" })),
+    ),
+  ).toBe(true);
+  expect(
+    isSidebarPreferencesBatch(
+      filters.map((filter) => ({
+        ...filter,
+        consistency: "weak",
+      })) as unknown as typeof filters,
+    ),
+  ).toBe(false);
+  expect(
+    isSidebarPreferencesBatch(
+      filters.map((filter) => ({
+        ...filter,
+        consistency: true,
+      })) as unknown as typeof filters,
+    ),
+  ).toBe(false);
   expect(isSidebarPreferencesBatch(filters.slice(1))).toBe(false);
   expect(
     isSidebarPreferencesBatch([

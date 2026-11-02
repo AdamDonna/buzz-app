@@ -250,6 +250,7 @@ export function WorkflowCommunity({
               )}
               {eligible.length > 0 && (
                 <WorkflowLanding
+                  session={session}
                   capability={capability}
                   channels={eligible}
                   filter={filter}
@@ -316,7 +317,7 @@ export function WorkflowCommunity({
           }`}
           capability={capability}
           channelId={channel.id}
-          channelName={channel.name}
+          channel={channel}
           initialSelection={selectedDefinition}
           onSaveReadback={setSaveReadback}
           onDelete={deleteWorkflow}

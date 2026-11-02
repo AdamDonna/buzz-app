@@ -39,6 +39,10 @@ export type NipOaAuthorization = readonly [
   conditions: string,
   signature: string,
 ];
+export type ProcessProtection = Readonly<{
+  readOnlyPaths: readonly string[];
+  hiddenPaths: readonly string[];
+}>;
 export type HostProcessOptions = Readonly<{
   /** Follow the arguments the manifest declares. */
   args?: readonly string[];
@@ -48,6 +52,8 @@ export type HostProcessOptions = Readonly<{
   env?: Readonly<Record<string, string | null>>;
   /** Run with one app-held MCP session and an agent-scoped `buzz` on PATH. */
   mcp?: Pick<HostMcpServer, "url" | "headers">;
+  /** Native macOS containment for a protected worker and its descendants. */
+  protection?: ProcessProtection;
   onStdout?(data: string): void;
   onStderr?(data: string): void;
 }>;
@@ -84,6 +90,10 @@ export type HostMcpServer = Readonly<{
 type McpEvent =
   | { type: "message"; request: number; body: string }
   | { type: "closed" };
+/** Share one MCP session among cooperating clients holding the token.
+ * This permits token reuse after initialization. The handler must bind identity
+ * itself and grant every client the same authority. Defaults to false. */
+export type HostMcpOptions = Readonly<{ sharedSession?: boolean }>;
 export interface Host {
   runCommand(id: string, input?: string): Promise<string | null>;
   /** Starts a process the manifest declares in `host.processes`. It lives until
@@ -91,7 +101,10 @@ export interface Host {
   spawn?: (id: string, options?: HostProcessOptions) => Promise<HostProcess>;
   /** Starts a loopback MCP server whose messages `handler` answers, for a
    * plugin whose manifest declares `host.mcp`. Desktop only. */
-  serveMcp?: (handler: McpHandler) => Promise<HostMcpServer>;
+  serveMcp?: (
+    handler: McpHandler,
+    options?: HostMcpOptions,
+  ) => Promise<HostMcpServer>;
   /** Reads a file of at most 50 MB, for a plugin whose manifest declares
    * `host.files`. `path` is absolute, `~/…`, or relative to `cwd`, which is
    * absolute or `~/…`. A missing file rejects with "No such file". Desktop
@@ -236,6 +249,7 @@ export class HostService extends Service implements Host {
       cwd: options.cwd ?? null,
       env: options.env ?? null,
       mcp: options.mcp ?? null,
+      protection: options.protection ?? null,
       onEvent,
     });
     // The host takes at most 1 MiB a write, so a longer one goes in pieces,
@@ -285,7 +299,10 @@ export class HostService extends Service implements Host {
   }
 
   // A method, not a field: `this.ctx` is then the calling plugin's scope.
-  async serveMcp(handler: McpHandler): Promise<HostMcpServer> {
+  async serveMcp(
+    handler: McpHandler,
+    options?: HostMcpOptions,
+  ): Promise<HostMcpServer> {
     const owner = this.ctx.pluginOwner;
     if (!owner || !isTauri())
       throw new Error("MCP servers require an installed desktop plugin");
@@ -321,7 +338,12 @@ export class HostService extends Service implements Host {
     });
     const server = await invoke<{ handle: number; url: string; token: string }>(
       "plugin_host_mcp_serve",
-      { id: owner.id, revision: owner.revision, onEvent },
+      {
+        id: owner.id,
+        revision: owner.revision,
+        onEvent,
+        ...(options?.sharedSession ? { sharedSession: true } : {}),
+      },
     );
     handle = server.handle;
     const close = () =>

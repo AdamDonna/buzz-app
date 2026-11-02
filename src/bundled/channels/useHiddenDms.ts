@@ -25,19 +25,6 @@ type HiddenDm = {
 };
 const key = "hidden-dms";
 
-function pause(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener("abort", done, { once: true });
-  });
-}
-
 function restore(scope: string): HiddenDm[] {
   const saved = readView<unknown>(scope, key, []);
   if (!Array.isArray(saved)) return [];
@@ -209,57 +196,47 @@ export function useHiddenDms(
         const entry = current.current.find((item) => item.id === id);
         if (!entry) continue;
         if (!dmIds.has(id)) continue;
-        for (
-          let attempt = 0;
-          attempt < 3 && !controller.signal.aborted;
-          attempt++
-        ) {
-          try {
-            // Save a deeper initial window so deleting a recent head does not
-            // make older pre-hide history look like a new message.
-            const events = await session.read(
-              [
-                {
-                  kinds: [9, 40002, 40008],
-                  "#h": [id],
-                  limit: entry.knownIds ? 50 : 100,
-                },
-              ],
+        // `session.read` owns the quiet transient retry for this finite read.
+        try {
+          // Save a deeper initial window so deleting a recent head does not
+          // make older pre-hide history look like a new message.
+          const events = await session.read(
+            [
               {
-                signal: controller.signal,
-                priority: "background",
+                kinds: [9, 40002, 40008],
+                "#h": [id],
+                limit: entry.knownIds ? 50 : 100,
               },
+            ],
+            {
+              signal: controller.signal,
+              priority: "background",
+            },
+          );
+          if (!current.current.includes(entry)) continue;
+          const latest = session.unread.snapshot({
+            kind: "channel",
+            channelId: id,
+          }).latestMessage;
+          const ids = events.map((event) => event.id);
+          const changed =
+            entry.knownIds &&
+            ids.some((eventId) => !entry.knownIds?.includes(eventId));
+          if (changed) show([id]);
+          else if (entry.baseline === undefined || !entry.knownIds)
+            update(
+              current.current.map((item) =>
+                item === entry
+                  ? {
+                      ...item,
+                      baseline: latest ?? null,
+                      knownIds: ids,
+                    }
+                  : item,
+              ),
             );
-            if (current.current.includes(entry)) {
-              const latest = session.unread.snapshot({
-                kind: "channel",
-                channelId: id,
-              }).latestMessage;
-              const ids = events.map((event) => event.id);
-              const changed =
-                entry.knownIds &&
-                ids.some((eventId) => !entry.knownIds?.includes(eventId));
-              if (changed) {
-                show([id]);
-                break;
-              }
-              if (entry.baseline === undefined || !entry.knownIds)
-                update(
-                  current.current.map((item) =>
-                    item === entry
-                      ? {
-                          ...item,
-                          baseline: latest ?? null,
-                          knownIds: ids,
-                        }
-                      : item,
-                  ),
-                );
-            }
-            break;
-          } catch {
-            if (attempt < 2) await pause(500 * 2 ** attempt, controller.signal);
-          }
+        } catch {
+          // Keep the hidden entry; the next roster or hide change rechecks it.
         }
       }
     })();

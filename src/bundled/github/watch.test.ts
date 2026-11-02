@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  FEEDBACK_READ,
-  feedbackRequest,
-  parseFeedback,
-  parsePull,
   pullOf,
+  snapshotOf,
   QUIET_MS,
   step,
   WAKE_LIMIT,
@@ -12,6 +9,7 @@ import {
   type PullSnapshot,
   type Watch,
 } from "./watch";
+import type { PullState } from "./pull-states";
 
 const url = "https://github.com/block/buzz-app/pull/7";
 const watch: Watch = { agent: "a".repeat(64), url, channel: "c", wakes: 0 };
@@ -74,15 +72,13 @@ describe("step", () => {
     expect(pushed.wake).toBe(`CI passed on 222222222 for ${url}.`);
   });
 
-  it("batches new feedback until it has been quiet, skipping only the agent's own", () => {
+  it("batches new feedback until it has been quiet", () => {
     const base = step(watch, snap(), 0).watch;
-    // The viewer's 🤖 comment is an agent's; its other comments are the owner's.
-    const agents = comment("2", "baxen", "🤖 Fixed in abc");
     const owners = comment("4", "baxen", "Please also rename it");
-    const first = step(base, snap({ feedback: [comment("1"), agents] }), 1_000);
+    const first = step(base, snap({ feedback: [comment("1")] }), 1_000);
     expect(first.wake).toBeUndefined();
     expect(first.watch.pending?.map((item) => item.id)).toEqual(["1"]);
-    const all = [comment("1"), agents, comment("3"), owners];
+    const all = [comment("1"), comment("3"), owners];
     const more = step(
       first.watch,
       snap({ feedback: all }),
@@ -186,9 +182,14 @@ describe("step", () => {
     );
   });
 
-  it("ends when the pull request merges or closes, and after the wake limit", () => {
-    expect(step(watch, snap({ state: "MERGED" }), 0).ended).toBe("merged");
-    expect(step(watch, snap({ state: "CLOSED" }), 0).ended).toBe("closed");
+  it("ends when the pull request merges or closes, telling the agent, and after the wake limit", () => {
+    const merged = step(watch, snap({ state: "MERGED" }), 0);
+    expect(merged.ended).toBe("merged");
+    expect(merged.wake).toMatch(/was merged, so this watch has ended/);
+    expect(merged.wake).toMatch(/interest_remove/);
+    const closed = step(watch, snap({ state: "CLOSED" }), 0);
+    expect(closed.ended).toBe("closed");
+    expect(closed.wake).toMatch(/was closed/);
     const last = step(
       { ...watch, wakes: WAKE_LIMIT - 1 },
       snap({ settled: true }),
@@ -196,75 +197,6 @@ describe("step", () => {
     );
     expect(last.wake).toBeDefined();
     expect(last.ended).toBe("limit");
-  });
-});
-
-describe("parseFeedback", () => {
-  it("reads each kind, leaving out the empty reviews that only wrap inline comments", () => {
-    const output = JSON.stringify({
-      data: {
-        nodes: [
-          {
-            __typename: "PullRequestReview",
-            id: "R1",
-            author: { login: "wes" },
-            state: "CHANGES_REQUESTED",
-            body: "Fix it",
-            url: "u1",
-          },
-          {
-            __typename: "PullRequestReview",
-            id: "R2",
-            author: { login: "wes" },
-            state: "COMMENTED",
-            body: " ",
-            url: "u2",
-          },
-          { __typename: "IssueComment", id: "I3", author: null, url: "u3" },
-          {
-            __typename: "PullRequestReviewComment",
-            id: "C4",
-            author: { login: "codex" },
-            body: "Here",
-            path: "src/a.ts",
-            url: "u4",
-          },
-          null,
-        ],
-      },
-    });
-    expect(parseFeedback(output)).toEqual([
-      {
-        id: "review/R1",
-        author: "wes",
-        url: "u1",
-        body: "Fix it",
-        state: "CHANGES_REQUESTED",
-      },
-      { id: "comment/I3", author: "ghost", url: "u3", body: "" },
-      {
-        id: "inline/C4",
-        author: "codex",
-        url: "u4",
-        body: "Here",
-        path: "src/a.ts",
-      },
-    ]);
-    expect(parseFeedback("not json")).toBeUndefined();
-    expect(parseFeedback(JSON.stringify({ data: null }))).toBeUndefined();
-  });
-
-  it("asks for the node ids of a read's worth of feedback within the command's input limit", () => {
-    const ids = Array.from(
-      { length: FEEDBACK_READ },
-      (_, i) =>
-        `inline/PRRC_kwDOUVULN88AAAABAiDYp${String(i).padStart(4, "0")}`,
-    );
-    const request = feedbackRequest(ids);
-    expect(JSON.parse(request).variables.ids[0]).toBe(
-      "PRRC_kwDOUVULN88AAAABAiDYp0000",
-    );
-    expect(new TextEncoder().encode(request).length).toBeLessThanOrEqual(4096);
   });
 });
 
@@ -285,88 +217,57 @@ describe("pullOf", () => {
   });
 });
 
-describe("parsePull", () => {
-  const response = ({
-    rollup = "FAILURE",
-    total = 3,
-    e2e = "COMPLETED",
-  } = {}) =>
-    JSON.stringify({
-      data: {
-        viewer: { login: "baxen" },
-        repository: {
-          pullRequest: {
-            state: "OPEN",
-            headRefOid: "abc",
-            commits: {
-              nodes: [
-                {
-                  commit: {
-                    statusCheckRollup: {
-                      state: rollup,
-                      contexts: {
-                        totalCount: total,
-                        nodes: [
-                          {
-                            __typename: "CheckRun",
-                            name: "unit",
-                            status: "COMPLETED",
-                            conclusion: "FAILURE",
-                          },
-                          {
-                            __typename: "CheckRun",
-                            name: "e2e",
-                            status: e2e,
-                            conclusion: e2e === "COMPLETED" ? "SUCCESS" : null,
-                          },
-                          {
-                            __typename: "StatusContext",
-                            context: "deploy",
-                            state: "SUCCESS",
-                          },
-                        ],
-                      },
-                    },
-                  },
-                },
-              ],
-            },
-            reviews: {
-              nodes: [
-                { id: "R1", comments: { nodes: [] } },
-                { id: "R2", comments: { nodes: [{ id: "C4" }, { id: "C5" }] } },
-              ],
-            },
-            comments: { nodes: [{ id: "I3" }, null] },
-          },
-        },
-      },
-    });
-
-  it("reads failed checks and the ids of reviews, comments and inline comments", () => {
-    expect(parsePull(response())).toEqual({
+describe("snapshotOf", () => {
+  const state = (over: Partial<PullState> = {}): PullState => ({
+    state: "open",
+    checks: "failure",
+    conflicts: false,
+    head: "abc",
+    settled: true,
+    failed: ["unit"],
+    feedback: {
+      viewer: "baxen",
+      ids: ["review/R1", "inline/C2", "comment/I3", "comment/I4"],
+      items: [
+        comment("review/R1", "wes", " "),
+        { ...comment("inline/C2"), path: "src/a.ts" },
+        comment("comment/I3"),
+      ],
+    },
+    ...over,
+  });
+  it("learns everything listed on a first read", () => {
+    expect(snapshotOf(state())).toMatchObject({
       state: "OPEN",
       viewer: "baxen",
       head: "abc",
       settled: true,
       failed: ["unit"],
-      ids: ["review/R1", "review/R2", "inline/C4", "inline/C5", "comment/I3"],
-      feedback: [],
+      ids: ["review/R1", "inline/C2", "comment/I3", "comment/I4"],
     });
   });
 
-  it("is not settled while a check runs, more are unread, or the rollup waits", () => {
-    expect(parsePull(response({ e2e: "IN_PROGRESS" }))?.settled).toBe(false);
-    expect(parsePull(response({ total: 101 }))?.settled).toBe(false);
-    expect(parsePull(response({ rollup: "EXPECTED" }))?.settled).toBe(false);
+  it("leaves feedback whose text is not read yet unseen, and gives the rest that is new", () => {
+    const wrapper = { ...comment("review/R1", "wes", " "), state: "COMMENTED" };
+    const found = snapshotOf(
+      state({
+        feedback: {
+          viewer: "baxen",
+          ids: ["review/R1", "inline/C2", "comment/I3", "comment/I4"],
+          items: [wrapper, { ...comment("inline/C2"), path: "src/a.ts" }],
+        },
+      }),
+      ["comment/I3"],
+    );
+    // I4's text is not read yet; the empty review is read but is not news.
+    expect(found?.ids).toEqual(["review/R1", "inline/C2", "comment/I3"]);
+    expect(found?.feedback.map((item) => item.id)).toEqual(["inline/C2"]);
   });
 
-  it("gives undefined for errors and missing pull requests", () => {
-    expect(parsePull("not json")).toBeUndefined();
-    expect(
-      parsePull(
-        JSON.stringify({ data: { repository: { pullRequest: null } } }),
-      ),
-    ).toBeUndefined();
+  it("needs the head and feedback, which only gh reads", () => {
+    expect(snapshotOf({ state: "open" })).toBeUndefined();
+    expect(snapshotOf(state({ feedback: undefined }))).toBeUndefined();
+    expect(snapshotOf(state({ state: "draft" }))?.state).toBe("OPEN");
+    expect(snapshotOf(state({ state: "merged" }))?.state).toBe("MERGED");
   });
 });

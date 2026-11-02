@@ -13,7 +13,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RelaySession } from "../relay/session";
 import type { TypingEntry } from "../relay/typing";
-import { profileActivityViewTarget } from "../profiles/target";
+import {
+  profileActivityViewTarget,
+  claimProfileTranscript,
+  profileTranscriptRequest,
+} from "../profiles/target";
 import { TypingIndicator } from "./TypingIndicator";
 
 afterEach(cleanup);
@@ -102,9 +106,13 @@ it("opens one avatar by hover, with separate thread and activity actions and key
   await user.click(
     within(dialog).getByRole("button", { name: "View Agent activity" }),
   );
-  expect(open).toHaveBeenLastCalledWith(profileActivityViewTarget(agent), {
+  const transcript = profileActivityViewTarget(agent, { transcript: true });
+  expect(open).toHaveBeenLastCalledWith(transcript, {
     rootId: root,
   });
+  // The click asks the profile it opens for the transcript, once.
+  expect(profileTranscriptRequest(transcript ?? "")).toBeDefined();
+  claimProfileTranscript(transcript ?? "");
   trigger.focus();
   await user.keyboard("{Enter}");
   dialog = await screen.findByRole("dialog", { name: "Working now" });
@@ -279,9 +287,8 @@ it("never chooses one thread from simultaneous work and deduplicates public and 
     screen.getByRole("button", { name: "Activity: Agent working" }),
   );
   const dialog = await screen.findByRole("dialog");
-  expect(
-    within(dialog).getAllByRole("button", { name: /^Open conversation/ }),
-  ).toHaveLength(1);
+  // The channel conversation is already shown, so the one row opens activity.
+  expect(within(dialog).getAllByRole("button")).toHaveLength(1);
   await user.click(
     within(dialog).getByRole("button", { name: "View Agent activity" }),
   );
@@ -308,10 +315,16 @@ it("opens activity for the composer's explicit thread", async () => {
   await user.click(
     screen.getByRole("button", { name: "Activity: Agent working" }),
   );
+  expect(
+    screen.queryByRole("button", { name: "Open thread for Agent" }),
+  ).toBeNull();
   await user.click(screen.getByRole("button", { name: "View Agent activity" }));
-  expect(open).toHaveBeenLastCalledWith(profileActivityViewTarget(agent), {
-    rootId: root,
-  });
+  expect(open).toHaveBeenLastCalledWith(
+    profileActivityViewTarget(agent, { transcript: true }),
+    {
+      rootId: root,
+    },
+  );
 });
 
 it("retains one explicit live region from idle through work and back to idle", () => {
@@ -346,7 +359,7 @@ it("keeps another owner's self-declared agent as ordinary typing without activit
 });
 
 it.each([null, undefined])(
-  "opens channel activity and conversation for root %s",
+  "opens channel activity from its row for root %s",
   async (threadRootId) => {
     const f = fixture(),
       user = userEvent.setup(),
@@ -394,16 +407,15 @@ it.each([null, undefined])(
       screen.getByRole("button", { name: "View Agent activity" }),
     );
     expect(open).toHaveBeenLastCalledWith(
-      profileActivityViewTarget(agent),
+      profileActivityViewTarget(agent, {
+        transcript: threadRootId === null,
+      }),
       undefined,
     );
-    await user.click(
-      screen.getByRole("button", { name: "Activity: Agent working" }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Open conversation for Agent" }),
-    );
-    expect(open).toHaveBeenLastCalledWith("buzz://channel/channel", undefined);
+    // Opening the channel already shown would do nothing.
+    expect(
+      screen.queryByRole("button", { name: "Open conversation for Agent" }),
+    ).toBeNull();
   },
 );
 
@@ -543,7 +555,7 @@ it.each(["click", "Enter", "Space"])(
       await user.keyboard(activation === "Enter" ? "{Enter}" : " ");
     }
     expect(open).toHaveBeenCalledExactlyOnceWith(
-      profileActivityViewTarget(agent),
+      profileActivityViewTarget(agent, { transcript: true }),
       { rootId: root },
     );
     expect(

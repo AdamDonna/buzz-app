@@ -65,7 +65,7 @@ semantic tokens, UI authoring rules and the local component reference.
   a shared Popover containing NavigationItem rows with their existing context menus;
   this richer picker retains community actions as well as switching. Arrow keys,
   Home and End move focus. Join and Create community appear at the bottom; creation
-  opens the registered Hosted communities settings flow. Dialogs return focus to
+  opens the registered Builderlab settings flow. Dialogs return focus to
   the surviving community trigger.
   Switching pages preserves the desktop sidebar’s current visibility. The manual
   collapse toggle remains available across destinations.

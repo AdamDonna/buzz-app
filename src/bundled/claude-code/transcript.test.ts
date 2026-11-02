@@ -132,9 +132,9 @@ it("groups a session file into prompted turns with steering, tools and replies",
 
 it("shows what the agent posted as its reply once sent, and names Buzz tools as Codex does", () => {
   clock = 0;
-  const send = (id: string, text: string) =>
+  const send = (id: string, text: string, tool = "send") =>
     line("assistant", [
-      { type: "tool_use", id, name: "mcp__buzz__send", input: { text } },
+      { type: "tool_use", id, name: `mcp__buzz__${tool}`, input: { text } },
     ]);
   const result = (id: string, content: string, is_error = false) =>
     line("user", [{ type: "tool_result", tool_use_id: id, content, is_error }]);
@@ -152,6 +152,8 @@ it("shows what the agent posted as its reply once sent, and names Buzz tools as 
       result("r", "3 messages"),
       send("s1", "Looks good."),
       result("s1", "sent"),
+      send("n1", "Nested.", "reply_in_subthread"),
+      result("n1", "sent"),
       send("s2", "One more thing."),
       result("s2", "channel not found", true),
       // Not finished when the session was read, or never: it ended mid-send.
@@ -168,12 +170,42 @@ it("shows what the agent posted as its reply once sent, and names Buzz tools as 
       text: "Looks good.",
       posted: true,
     }),
+    expect.objectContaining({ type: "message", text: "Nested.", posted: true }),
     expect.not.objectContaining({ posted: true }),
     expect.objectContaining({
       type: "status",
       text: "The message above was not posted: channel not found",
     }),
     expect.not.objectContaining({ posted: true }),
+  ]);
+});
+
+it("leaves a bare send or reply_in_subthread, outside Buzz, as an ordinary tool", () => {
+  clock = 0;
+  const [turn] = claudeTurns(
+    [
+      line("user", prompt("go")),
+      ...["send", "reply_in_subthread"].flatMap((name) => [
+        line("assistant", [
+          { type: "tool_use", id: name, name, input: { text: "Hi." } },
+        ]),
+        line("user", [
+          {
+            type: "tool_result",
+            tool_use_id: name,
+            content: "ok",
+            is_error: false,
+          },
+        ]),
+      ]),
+    ].join("\n"),
+    conversation,
+    false,
+  );
+  expect(turn?.items).toEqual([
+    expect.objectContaining({ type: "prompt" }),
+    expect.objectContaining({ type: "tool" }),
+    expect.objectContaining({ type: "tool" }),
   ]);
 });
 

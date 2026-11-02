@@ -60,6 +60,7 @@ type Snapshot = Readonly<{
 /** One bounded account-preference projection per relay session, not per page. */
 export function createSidebarPreferencesStore({
   read,
+  readAfterWrite = read,
   available,
   write,
   writeStar,
@@ -75,6 +76,10 @@ export function createSidebarPreferencesStore({
   writeFilter,
 }: Readonly<{
   read: (signal?: AbortSignal) => Promise<SidebarPreferences>;
+  /** Authoritative reconciliation after uncertain creation, including Retry. */
+  readAfterWrite?:
+    | ((signal?: AbortSignal) => Promise<SidebarPreferences>)
+    | undefined;
   available: boolean;
   write?: SidebarAssignmentMutator | undefined;
   writeStar?: SidebarStarMutator | undefined;
@@ -104,6 +109,8 @@ export function createSidebarPreferencesStore({
   let confirmed: SidebarPreferences | undefined;
   let readFailure: string | undefined;
   let readTransient = false;
+  // Retain writer routing through failed reads and cache clears until reconciled.
+  let creationUncertain = false;
   const writable = () =>
     !closed &&
     !!confirmed &&
@@ -140,15 +147,20 @@ export function createSidebarPreferencesStore({
       else {
         starred.delete(channelId);
         const created = destination.createSection;
-        if (created && !sections.some(({ id }) => id === created.id))
-          sections = [
-            ...sections,
-            {
-              ...created,
-              name: created.name.trim(),
-              order: Math.max(-1, ...sections.map(({ order }) => order)) + 1,
-            },
-          ];
+        if (created && !sections.some(({ id }) => id === created.id)) {
+          const section = {
+            id: created.id,
+            name: created.name.trim(),
+            order:
+              created.position === "first"
+                ? Math.min(0, ...sections.map(({ order }) => order)) - 1
+                : Math.max(-1, ...sections.map(({ order }) => order)) + 1,
+          };
+          sections =
+            created.position === "first"
+              ? [section, ...sections]
+              : [...sections, section];
+        }
         const target = created?.id ?? destination.sectionId;
         if (target) assignments[channelId] = target;
         else delete assignments[channelId];
@@ -323,39 +335,54 @@ export function createSidebarPreferencesStore({
     }
     if (active) return active.promise;
     const controller = new AbortController();
-    const refreshMutation = mutation;
+    const requestedMutation = mutation;
     const job = { controller, promise: Promise.resolve() };
     active = job;
     job.promise = Promise.resolve().then(async () => {
       if (closed || controller.signal.aborted) return;
+      const current = () =>
+        !closed && !controller.signal.aborted && active === job;
       try {
-        const data = await read(controller.signal);
-        if (
-          closed ||
-          controller.signal.aborted ||
-          active !== job ||
-          mutation !== refreshMutation
-        )
-          return;
-        readFailure = undefined;
-        confirmed = data;
-        project();
-      } catch (error) {
-        if (
-          !closed &&
-          !controller.signal.aborted &&
-          active === job &&
-          mutation === refreshMutation
-        ) {
-          readFailure = error instanceof Error ? error.message : String(error);
-          readTransient = isTransientFailure(error);
-          const { transient: _transient, ...rest } = snapshot;
-          publish({
-            ...rest,
-            status: "error",
-            error: readFailure,
-            ...(readTransient ? { transient: true as const } : {}),
-          });
+        while (current()) {
+          // Other preference families share the queue. Read after they settle,
+          // and repeat if a write admitted during the read invalidates it.
+          if (creationUncertain) await writeQueue;
+          if (!current()) return;
+          const refreshMutation = creationUncertain
+            ? mutation
+            : requestedMutation;
+          try {
+            const data = await (creationUncertain ? readAfterWrite : read)(
+              controller.signal,
+            );
+            if (!current()) return;
+            if (mutation !== refreshMutation) {
+              if (creationUncertain) continue;
+              return;
+            }
+            readFailure = undefined;
+            creationUncertain = false;
+            confirmed = data;
+            project();
+            return;
+          } catch (error) {
+            if (!current()) return;
+            if (mutation !== refreshMutation) {
+              if (creationUncertain) continue;
+              return;
+            }
+            readFailure =
+              error instanceof Error ? error.message : String(error);
+            readTransient = isTransientFailure(error);
+            const { transient: _transient, ...rest } = snapshot;
+            publish({
+              ...rest,
+              status: "error",
+              error: readFailure,
+              ...(readTransient ? { transient: true as const } : {}),
+            });
+            return;
+          }
         }
       } finally {
         if (active === job) active = undefined;
@@ -386,6 +413,7 @@ export function createSidebarPreferencesStore({
   ): Promise<SidebarPreferences> {
     if (
       !writable() ||
+      (creationUncertain && "createSection" in destination) ||
       !snapshot.data ||
       !confirmed ||
       !write ||
@@ -417,6 +445,8 @@ export function createSidebarPreferencesStore({
       .then(async () => {
         try {
           check();
+          if (creationUncertain && "createSection" in destination)
+            throw new Error("Section creation is unavailable");
           const starring = "starred" in destination;
           // Always check the fresh assignment head on removal, even if cached
           // placement has no assignment. Another device may have changed it.
@@ -651,13 +681,41 @@ export function createSidebarPreferencesStore({
         );
       },
       get sectionCreationWritable() {
-        return writable() && !snapshot.cached && !!createSection;
+        return (
+          writable() &&
+          !creationUncertain &&
+          !snapshot.cached &&
+          !!(createSection || write)
+        );
       },
       createSection(section: Readonly<{ id: string; name: string }>) {
-        if (!writable() || snapshot.cached || !createSection)
-          return Promise.reject(new Error("Workspaces are unavailable"));
-        return writeGroups("Workspaces are unavailable", (signal) =>
-          createSection(section, signal),
+        const failure = groupsOnly
+          ? "Workspaces are unavailable"
+          : "Section creation is unavailable";
+        const create =
+          createSection ??
+          (write
+            ? (
+                section: Readonly<{ id: string; name: string }>,
+                signal: AbortSignal,
+              ) => write({ createSection: section }, signal)
+            : undefined);
+        if (!writable() || creationUncertain || snapshot.cached || !create)
+          return Promise.reject(new Error(failure));
+        const writeGeneration = generation;
+        return writeGroups(failure, (signal) => create(section, signal)).catch(
+          async (error) => {
+            if (!closed && generation === writeGeneration) {
+              // The relay may have accepted the creation. Reconcile before
+              // the form can discard its ID, without replaying the write or
+              // joining a read that began before publication.
+              active?.controller.abort();
+              active = undefined;
+              creationUncertain = true;
+              await refresh();
+            }
+            throw error;
+          },
         );
       },
       get sectionOrderWritable() {
@@ -956,7 +1014,7 @@ export function createSidebarPreferencesStore({
       },
       createAndAssign(
         channelId: string,
-        section: { id: string; name: string },
+        section: NonNullable<SidebarAssignmentIntent["createSection"]>,
         signal?: AbortSignal,
       ) {
         return move(channelId, { createSection: section }, signal);

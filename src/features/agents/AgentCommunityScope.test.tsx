@@ -11,7 +11,7 @@ import {
 
 afterEach(cleanup);
 
-it.each(["Memory", "Attention", "Avatar"] as const)(
+it.each(["Memory", "Avatar"] as const)(
   "%s scope follows this agent's remaining memberships, including offline ones",
   async (scope) => {
     const user = userEvent.setup();

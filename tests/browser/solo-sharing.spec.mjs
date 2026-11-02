@@ -128,7 +128,15 @@ test("a Solo chat link card opens the same authorized conversation in the channe
 
 // Real modal/footer reachability, portal hit-testing and focus in both engines.
 async function reachable(locator, { scroll = true } = {}) {
-  if (scroll) await locator.scrollIntoViewIfNeeded();
+  if (scroll) {
+    // Match keyboard highlighting's reveal below sticky group headings.
+    await locator.evaluate((element) =>
+      element.scrollIntoView({ block: "nearest", inline: "nearest" }),
+    );
+    // WebKit can still reveal the focused field after a viewport/text reflow.
+    // Check normal pointer actionability before sampling the final geometry.
+    await locator.click({ trial: true });
+  }
   await expect(locator).toBeInViewport();
   await expect
     .poll(() =>
@@ -397,7 +405,10 @@ test("People search holds loading, lists inline results and restores keyboard fo
   try {
     await search.fill("Morgan");
     await requested;
-    const results = dialog.getByRole("region", { name: "Not in this chat" });
+    const results = dialog.getByRole("region", {
+      name: "Not in this chat",
+      exact: true,
+    });
     await expect(
       results.getByText("Searching…", { exact: true }),
     ).toBeVisible();
@@ -427,6 +438,18 @@ test("People search holds loading, lists inline results and restores keyboard fo
       );
       await reachable(adds.first());
     }
+    // At enlarged text, production keyboard reveals must keep Add reachable
+    // while focus stays in the search field, including the return upward.
+    for (const key of ["ArrowDown", "ArrowUp"]) {
+      await search.press(key);
+      await expect(search).toBeFocused();
+      await reachable(
+        results
+          .locator("[data-highlighted]")
+          .getByRole("button", { name: /^Add Morgan person/ }),
+        { scroll: false },
+      );
+    }
     await page.evaluate(() =>
       document.documentElement.style.setProperty("--buzz-text-scale", "1"),
     );
@@ -442,6 +465,95 @@ test("People search holds loading, lists inline results and restores keyboard fo
     await expect(trigger).toBeFocused();
   } finally {
     release();
+  }
+});
+
+test.describe("owned Solo invitation headings", () => {
+  const soloId = "33333333-3333-4333-8333-333333333333";
+  test.use({
+    channelIds: [soloId],
+    channelNames: { [soloId]: "Planning" },
+    soloChannels: [soloId],
+    ownSoloChannels: [soloId],
+    agentPeers: false,
+    channelWriteKinds: [9, 9000, 9007],
+    historyCounts: { [soloId]: 1 },
+  });
+
+  // Browser-only: persisted text scaling, wrapped headings and native keyboard
+  // scroll reveal must leave the real Add action exposed, without test scrolling.
+  for (const mode of ["light", "dark"]) {
+    test(`wrapped saved-agent headings preserve keyboard reachability in ${mode}`, async ({
+      page,
+      app,
+    }, info) => {
+      await page.setViewportSize({ width: 390, height: 620 });
+      await page.addInitScript((mode) => {
+        localStorage.setItem("buzz-font-scale.v1", "2");
+        localStorage.setItem("buzz-appearance.v1", mode);
+      }, mode);
+      const saved = Array.from({ length: 5 }, (_, index) => {
+        const name = `Saved helper ${index + 1}`;
+        const event = app.serveProfile(generateSecretKey(), {
+          name,
+          is_agent: true,
+        });
+        return { pubkey: event.pubkey, name };
+      });
+      // Model the host's direct-agent capability and saved inventory; the
+      // built frontend, production broker and invitation policy stay real.
+      await page.route("**/api/relay/**/session", async (route) => {
+        const response = await route.fetch();
+        const session = await response.json();
+        await route.fulfill({
+          response,
+          json: { ...session, writeKinds: [...session.writeKinds, 9007] },
+        });
+      });
+      await page.route("**/api/relay/**/agent-library", (route) =>
+        route.fulfill({ json: { definitions: [], identities: saved } }),
+      );
+      await page.goto(app.origin);
+      await openChat(page, app, soloId);
+      await expect(page.locator("html")).toHaveCSS("--buzz-text-scale", "2");
+      await page
+        .getByRole("button", { name: "Share access", exact: true })
+        .click();
+      const dialog = page.getByRole("dialog", { name: "Share access" });
+      const search = dialog.getByRole("searchbox");
+      await search.fill("Saved helper");
+      const group = dialog.getByRole("region", {
+        name: "Your other agents",
+        exact: true,
+      });
+      await expect(
+        group.getByRole("button", { name: /^Add Saved helper/ }),
+      ).toHaveCount(4);
+      const heading = group.getByRole("heading", {
+        name: /^Your other agents/,
+      });
+      await expect(heading).toBeVisible();
+      for (const [key, number] of [
+        ["ArrowDown", 2],
+        ["ArrowDown", 3],
+        ["ArrowUp", 2],
+      ]) {
+        await search.press(key);
+        await expect(search).toBeFocused();
+        await expect(group.locator("[data-highlighted]")).toContainText(
+          `Saved helper ${number}`,
+        );
+      }
+      await dialog.screenshot({
+        path: info.outputPath(`wrapped-invitations-${mode}.png`),
+      });
+      await reachable(
+        group.getByRole("button", { name: /^Add Saved helper 2 / }),
+        { scroll: false },
+      );
+      await page.setViewportSize({ width: 1280, height: 1600 });
+      await expect(heading).toHaveCSS("position", "sticky");
+    });
   }
 });
 

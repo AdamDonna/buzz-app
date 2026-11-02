@@ -1,6 +1,7 @@
 // NIP-AP config history (plan §7): offset pages of one artifact's revisions,
 // every chain segment they form, the cause of each gap, diffs and revert.
 // Display only: history never decides artifact state (§3.2).
+import { retryRead } from "../relay/read-retry";
 import type { EventData, RelayEvent } from "../relay/events";
 import { type SettingsSchema, syncedSettings } from "./agent-config";
 import {
@@ -49,18 +50,23 @@ export async function loadOlder(
   if (history.done || history.next > HISTORY_MAX_OFFSET)
     return { ...history, failed: false };
   try {
-    const page = await read(
-      [
-        {
-          kinds: [ARTIFACT_KIND],
-          "#h": [channel],
-          "#d": [d],
-          artifact: "history",
-          limit: HISTORY_PAGE,
-          offset: history.next,
-        },
-      ],
-      { signal },
+    const active = signal ?? new AbortController().signal;
+    const page = await retryRead(
+      (signal) =>
+        read(
+          [
+            {
+              kinds: [ARTIFACT_KIND],
+              "#h": [channel],
+              "#d": [d],
+              artifact: "history",
+              limit: HISTORY_PAGE,
+              offset: history.next,
+            },
+          ],
+          { signal },
+        ),
+      active,
     );
     const seen = new Set(history.revisions.map((event) => event.id));
     return {

@@ -1517,6 +1517,7 @@ function fixture(
     soloChannel?: boolean;
     memberAgents?: 1 | 2;
     readCapability?: "read-only" | "unsupported";
+    guest?: boolean;
   } = {},
 ) {
   const viewer = keypair(),
@@ -1666,6 +1667,18 @@ function fixture(
         ]
       : []),
   ];
+  if (options.guest) {
+    const roster = events[0];
+    if (!roster) throw new Error("Missing channel roster");
+    events[0] = signed(relayKey, {
+      ...roster,
+      tags: roster.tags.map((tag) =>
+        tag[0] === "p" && tag[1] === viewer.pubkey
+          ? ["p", viewer.pubkey, "", "guest"]
+          : tag,
+      ),
+    });
+  }
   if (options.readCapability) {
     journal = {
       ...newReadJournal(),
@@ -2259,6 +2272,37 @@ it("Mentions orders and classifies matching senders and reads only through match
       .inbox()
       .items.find((item) => item.id.endsWith(root.id)),
   ).toMatchObject({ messageId: progress.id, unreadCount: 1 });
+});
+
+it("lets a joined Guest read an Inbox item and change its personal unread state", async () => {
+  const h = fixture({ guest: true });
+  render(h.view);
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  expect(h.session.channels.get?.("room")).toMatchObject({
+    viewerRole: "guest",
+    readOnly: true,
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open Alice in #Design" }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("img", { name: "Unread" }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(
+    screen.queryByText(
+      "Inbox action expired. Close and reopen the conversation.",
+    ),
+  ).not.toBeInTheDocument();
+  fireEvent.click(await openRowMenu());
+  await waitFor(() =>
+    expect(h.journal()?.localUnread[`msg:${h.mention.id}`]).toBeTypeOf(
+      "number",
+    ),
+  );
+  expect(h.session.channels.get?.("room")?.viewerRole).toBe("guest");
 });
 
 async function openRowMenu(
@@ -3466,7 +3510,9 @@ it.each([true, false])(
     await screen.findByText("Please review this");
     await chooseFilter("Mentions");
     fireEvent.click(
-      screen.getByRole("button", { name: "Open Alice in #Design" }),
+      screen.getByRole("button", {
+        name: soloChannel ? "Open Alice in Design" : "Open Alice in #Design",
+      }),
     );
     const editor = await screen.findByRole("textbox", {
       name: soloChannel ? "Message this conversation" : "Reply to thread",
@@ -3515,9 +3561,7 @@ it("Inbox Solo chat activity shared with a person sends without a tag", async ()
   render(h.view);
   await screen.findByText("Please review this");
   await chooseFilter("Mentions");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open Alice in #Design" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Open Alice in Design" }));
   const editor = await screen.findByRole("textbox", {
     name: "Message this conversation",
   });
@@ -3552,9 +3596,7 @@ it("Inbox keeps an open Solo chat timeline when a late reply regroups its mentio
   render(h.view);
   await screen.findByText("Please review this");
   await chooseFilter("Mentions");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open Alice in #Design" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Open Alice in Design" }));
   const editor = await screen.findByRole("textbox", {
     name: "Message this conversation",
   });

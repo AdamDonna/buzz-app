@@ -20,6 +20,10 @@ import type { RelaySession } from "../relay/session";
 import { useChannelList } from "../relay/react";
 import type { Navigation } from "../navigation/controller";
 import type { OpenTarget } from "../navigation/targets";
+import type {
+  RegisteredSidebarSection,
+  SidebarSections,
+} from "./sidebar-sections-service";
 import type { SidebarFrame } from "./SidebarFrame";
 import { Button } from "../../shared/design-system/ui/Button";
 import {
@@ -37,7 +41,8 @@ import {
 import type { ChannelSummary } from "../relay/contracts";
 import { useChannelRowMenu } from "../../bundled/channels/useChannelRowMenu";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
-import { useRecoveryShown } from "../relay/RecoveryNotice";
+import { useRecoveryOwns } from "../relay/RecoveryNotice";
+import { rosterRecovering } from "../relay/live-recovery";
 import { clientMetrics } from "../developer/client-metrics";
 import {
   BellIcon,
@@ -67,9 +72,16 @@ import { useSidebarView } from "../../bundled/channels/useSidebarView";
 import { useSidebarFilters } from "../../bundled/channels/useSidebarFilters";
 import {
   sidebarSections,
+  contributedSidebarSectionKey,
   isChannelSectionKey,
   isChannelDropSectionKey,
+  orderContributedSidebarSections,
 } from "../../bundled/channels/sidebar-sections";
+import { SidebarContributionSection } from "./SidebarContributionSection";
+import {
+  ContributionBoundary,
+  contributionKey,
+} from "../conversation/ContributionBoundary";
 import {
   CreateChannelDialog,
   type CreateChannelInput,
@@ -94,6 +106,16 @@ type Inventory = {
   dialogs: ReactNode;
 };
 
+const noSubscription = () => () => {};
+const emptyContributions: readonly RegisteredSidebarSection[] = [];
+const noSidebarSections = () => emptyContributions;
+const emptySidebarSections: SidebarSections = {
+  version: 1,
+  snapshot: noSidebarSections,
+  subscribe: noSubscription,
+  register: () => {},
+};
+
 /** Channel data, actions and notices; the primary sidebar owns their framing. */
 export function ChannelInventory({
   relay,
@@ -106,6 +128,7 @@ export function ChannelInventory({
   connectionError,
   scope,
   viewer,
+  sidebarSections: contributedSections,
   render,
 }: {
   relay: RelayData;
@@ -119,10 +142,18 @@ export function ChannelInventory({
   connectionError?: string | undefined;
   scope: string;
   viewer?: string | undefined;
+  sidebarSections?: SidebarSections | undefined;
   render(inventory: Inventory): ReactNode;
 }) {
+  const contributions = useSyncExternalStore(
+    contributedSections?.subscribe ?? noSubscription,
+    contributedSections?.snapshot ?? noSidebarSections,
+    contributedSections?.snapshot ?? noSidebarSections,
+  );
   const list = useChannelList(queries.channels);
-  const recoveryShown = useRecoveryShown(queries.recovery);
+  const rosterRecovers = useRecoveryOwns(queries, (live) =>
+    rosterRecovering(live.roster),
+  );
   const preferences = useSidebarPreferences(queries.sidebarPreferences);
   const startup = useSidebarStartup(queries, list, preferences);
   const [activityErrorDismissed, setActivityErrorDismissed] = useState(false);
@@ -145,9 +176,19 @@ export function ChannelInventory({
     lifecycle.snapshot,
     lifecycle.snapshot,
   );
+  const visibilityRequest = useRef<AbortController | undefined>(undefined);
+  // Roster commits join an in-flight refresh; only unmount or a new lifecycle
+  // cancels it, so live discovery cannot restart its retry budget.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new lifecycle retires the previous refresh signal.
+  useEffect(() => {
+    const request = new AbortController();
+    visibilityRequest.current = request;
+    return () => request.abort();
+  }, [lifecycle]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a completed roster refresh also refreshes per-viewer visibility.
   useEffect(() => {
-    if (list.status === "ready") void lifecycle.refreshVisibility();
+    if (list.status === "ready")
+      void lifecycle.refreshVisibility(visibilityRequest.current?.signal);
   }, [lifecycle, list.asOf, list.status]);
   const lifecycleFocus = useRef<string | undefined>(undefined);
   const lifecycleTrigger = useRef<HTMLElement | undefined>(undefined);
@@ -226,9 +267,12 @@ export function ChannelInventory({
     { channelId: string; target: HTMLElement } | undefined
   >(undefined);
   const pendingCreate = useRef<ChannelSummary | undefined>(undefined);
+  const [creatingSection, setCreatingSection] = useState(false);
+  const createSectionTrigger = useRef<HTMLButtonElement>(null);
   const [creatingFor, setCreatingFor] = useState<{
     channel: ChannelSummary;
     surface?: ChannelMenuSurface;
+    position?: "first";
   }>();
 
   const createOrigin = creatingFor?.surface?.signal;
@@ -453,6 +497,9 @@ export function ChannelInventory({
     ),
     list.activityStatus === "ready",
   );
+  const firstChannelSection = filteredSections.find(({ key }) =>
+    isChannelSectionKey(key),
+  )?.key;
   // Menu dismissal may run before a moved row mounts at its new placement.
   // Only an actual filter exclusion should return focus to a section summary.
   const hiddenRowSections = useRef(new Map<string, string>());
@@ -533,6 +580,39 @@ export function ChannelInventory({
   // Group drags land on the placement drop targets, so they need both writers.
   const orderWritable = placementWritable && preferences.sectionOrderWritable;
   const groupIds = preferences.data?.sections.map(({ id }) => id) ?? [];
+  // Saved order uses the same section keys as collapse and drag.
+  const orderedContributions = orderContributedSidebarSections(
+    contributions.map((entry) => ({
+      key: contributedSidebarSectionKey(entry.key),
+      entry,
+    })),
+    sidebar.contributionOrder,
+  ).map(({ entry }) => entry);
+  const reorderContributions = (sectionKey: string, overKey: string) => {
+    const ids = orderedContributions.map(({ key }) =>
+      contributedSidebarSectionKey(key),
+    );
+    const from = ids.indexOf(sectionKey);
+    const to = ids.indexOf(overKey);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, sectionKey);
+    const activeKeys = new Set(ids);
+    const seenSavedKeys = new Set<string>();
+    const order: string[] = [];
+    let nextActive = 0;
+    for (const savedKey of sidebar.contributionOrder) {
+      if (!activeKeys.has(savedKey)) {
+        order.push(savedKey);
+        continue;
+      }
+      if (seenSavedKeys.has(savedKey)) continue;
+      seenSavedKeys.add(savedKey);
+      order.push(ids[nextActive++] ?? savedKey);
+    }
+    order.push(...ids.slice(nextActive));
+    sidebar.setContributionOrder(order);
+  };
   const moveGroup = (sectionId: string, to: number) => {
     const ids = groupIds.filter((id) => id !== sectionId);
     ids.splice(to, 0, sectionId);
@@ -647,6 +727,7 @@ export function ChannelInventory({
             </MenuRadioGroup>
             <MenuSeparator />
             <MenuItem
+              disabled={!preferences.sectionCreationWritable}
               onClick={() => {
                 if (surface) {
                   surface.close(() => false);
@@ -654,6 +735,7 @@ export function ChannelInventory({
                     if (
                       mounted.current &&
                       !surface.signal?.aborted &&
+                      queries.sidebarPreferences.sectionCreationWritable &&
                       relay.snapshot().session === queries
                     )
                       setCreatingFor({ channel, surface });
@@ -1030,22 +1112,38 @@ export function ChannelInventory({
             </Button>
           </ToastNotice>
         ))}
-        {!cached &&
-          dmVisibility.status === "error" &&
-          !dmVisibility.transient && (
-            <div role="alert">
-              Hidden conversations could not be refreshed.{" "}
-              <Button onClick={() => void lifecycle.refreshVisibility()}>
-                Retry hidden conversations
-              </Button>
-            </div>
-          )}
+        {!cached && dmVisibility.status === "error" && (
+          <div role="alert">
+            Hidden conversations could not be refreshed.{" "}
+            <Button
+              onClick={() =>
+                void lifecycle.refreshVisibility(
+                  visibilityRequest.current?.signal,
+                )
+              }
+            >
+              Retry hidden conversations
+            </Button>
+          </div>
+        )}
       </>
     ),
     content: (
       <>
         <ChannelSidebarDnd
           writable={placementWritable}
+          onCreateSection={(channelId) => {
+            const channel = sidebarChannels.find(({ id }) => id === channelId);
+            // Finish releasing the pointer before giving the modal its focus.
+            requestAnimationFrame(() => {
+              if (
+                mounted.current &&
+                channel &&
+                queries.sidebarPreferences.sectionCreationWritable
+              )
+                setCreatingFor({ channel, position: "first" });
+            });
+          }}
           onMove={(channelId, sectionKey) =>
             sectionKey === "starred"
               ? setChannelStar(channelId, true)
@@ -1057,22 +1155,38 @@ export function ChannelInventory({
                 )
           }
           onReorder={(sectionKey, overKey) =>
-            moveGroup(
-              sectionKey.slice("group:".length),
-              groupIds.indexOf(overKey.slice("group:".length)),
-            )
+            sectionKey.startsWith("plugin:")
+              ? reorderContributions(sectionKey, overKey)
+              : moveGroup(
+                  sectionKey.slice("group:".length),
+                  groupIds.indexOf(overKey.slice("group:".length)),
+                )
           }
           overlay={(id, group) => {
             if (group) {
               const section = sections.find(({ key }) => key === id);
-              return section ? (
+              const contribution = section
+                ? undefined
+                : orderedContributions.find(
+                    ({ key }) => contributedSidebarSectionKey(key) === id,
+                  );
+              const title = section?.title ?? contribution?.title;
+              if (!title) return null;
+              return (
                 <div className={styles.channelDragOverlay}>
-                  {section.icon && (
+                  {section?.icon ? (
                     <SidebarGroupIcon icon={section.icon} session={queries} />
-                  )}
-                  <span>{section.title}</span>
+                  ) : contribution?.icon ? (
+                    <ContributionBoundary
+                      key={contributionKey(contribution)}
+                      fallback={null}
+                    >
+                      {contribution.icon}
+                    </ContributionBoundary>
+                  ) : null}
+                  <span>{title}</span>
                 </div>
-              ) : null;
+              );
             }
             const channel = sidebarChannels.find(
               (channel) => channel.id === id,
@@ -1090,6 +1204,10 @@ export function ChannelInventory({
           {filteredSections.map((section) => (
             <DroppableSidebarSection
               key={section.key}
+              createSectionTarget={
+                section.key === firstChannelSection &&
+                preferences.sectionCreationWritable
+              }
               groupIndex={groupIds.indexOf(section.key.slice("group:".length))}
               disabled={
                 !placementWritable || !isChannelDropSectionKey(section.key)
@@ -1194,6 +1312,19 @@ export function ChannelInventory({
                     }
                   : undefined
               }
+              createSection={
+                section.key === "channels"
+                  ? {
+                      available: preferences.sectionCreationWritable,
+                      open: (trigger) => {
+                        createSectionTrigger.current = trigger;
+                        requestAnimationFrame(() => {
+                          if (mounted.current) setCreatingSection(true);
+                        });
+                      },
+                    }
+                  : undefined
+              }
               newMessage={
                 section.key === "dms"
                   ? () => {
@@ -1284,13 +1415,57 @@ export function ChannelInventory({
               })}
             </DroppableSidebarSection>
           ))}
+          {orderedContributions.map((entry, index) => {
+            const sectionKey = contributedSidebarSectionKey(entry.key);
+            const previousKey = orderedContributions[index - 1]?.key;
+            const nextKey = orderedContributions[index + 1]?.key;
+            const reorderable = contributions.length > 1;
+            return (
+              <SidebarContributionSection
+                key={entry.key}
+                entry={entry}
+                registry={contributedSections ?? emptySidebarSections}
+                navigator={navigator}
+                target={target}
+                open={!sidebar.collapsed.includes(sectionKey)}
+                onToggle={(open) => sidebar.toggle(sectionKey, open)}
+                groupIndex={index}
+                reorderable={reorderable}
+                onRowsCommitted={sidebar.retryReveal}
+                move={
+                  reorderable
+                    ? {
+                        ...(previousKey
+                          ? {
+                              up: () =>
+                                reorderContributions(
+                                  sectionKey,
+                                  contributedSidebarSectionKey(previousKey),
+                                ),
+                            }
+                          : {}),
+                        ...(nextKey
+                          ? {
+                              down: () =>
+                                reorderContributions(
+                                  sectionKey,
+                                  contributedSidebarSectionKey(nextKey),
+                                ),
+                            }
+                          : {}),
+                      }
+                    : undefined
+                }
+              />
+            );
+          })}
         </ChannelSidebarDnd>
         {!startup.ready && (
           <p className={styles.empty} role="status">
             Loading your sidebar…
           </p>
         )}
-        {list.status === "error" && !recoveryShown && (
+        {list.status === "error" && !rosterRecovers && (
           <p role="alert" className={styles.empty}>
             {list.error}
           </p>
@@ -1489,10 +1664,27 @@ export function ChannelInventory({
     ),
     dialogs: (
       <>
+        {creatingSection && (
+          <CreateSidebarSection
+            writable={preferences.sectionCreationWritable}
+            refreshing={preferences.status === "loading"}
+            retry={preferences.reload}
+            finalFocus={createSectionTrigger}
+            close={() => setCreatingSection(false)}
+            create={async (section) => {
+              if (!queries.sidebarPreferences.sectionCreationWritable)
+                return false;
+              await preferences.createSection(section);
+              sidebar.toggle(`group:${section.id}`, true);
+              setCreatingSection(false);
+              return true;
+            }}
+          />
+        )}
         {creatingFor && !creatingFor.surface?.signal?.aborted && (
           <CreateSidebarSection
             channelName={creatingFor.channel.name}
-            writable={preferences.writable}
+            writable={preferences.sectionCreationWritable}
             refreshing={preferences.status === "loading"}
             retry={preferences.reload}
             create={(section) => {
@@ -1500,13 +1692,18 @@ export function ChannelInventory({
               // the live gate before handing its draft to the optimistic store.
               if (
                 creatingFor.surface?.signal?.aborted ||
-                !queries.sidebarPreferences.writable
+                !queries.sidebarPreferences.sectionCreationWritable
               )
                 return false;
               moveChannel(
                 creatingFor.channel.id,
                 () =>
-                  preferences.createAndAssign(creatingFor.channel.id, section),
+                  preferences.createAndAssign(creatingFor.channel.id, {
+                    ...section,
+                    ...(creatingFor.position
+                      ? { position: creatingFor.position }
+                      : {}),
+                  }),
                 creatingFor.surface,
               );
               setCreatingFor(undefined);

@@ -15,6 +15,9 @@ import { DiscoveryState } from "../relay/discovery";
 import { keypair, metadata, roster, signed } from "../relay/testing";
 import { huddleDescription } from "../huddle/lifecycle";
 import { createRelaySession } from "../relay/session";
+import { createChannelLifecycle } from "../relay/channel-lifecycle";
+import { ReadError } from "../relay/errors";
+import { createRecovery, RECOVERY_NOTICE_DELAY_MS } from "../relay/recovery";
 import { createSidebarPreferencesStore } from "../relay/sidebar-preferences-store";
 import type {
   SidebarGroups,
@@ -24,6 +27,11 @@ import type {
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { ChannelList } from "../relay/contracts";
 import type { Navigation } from "../navigation/controller";
+import type {
+  RegisteredSidebarSection,
+  SidebarSectionRow,
+  SidebarSections,
+} from "./sidebar-sections-service";
 import { createRef, type ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { ChannelHeaderMenu } from "../../bundled/channels/ChannelHeaderMenu";
@@ -101,6 +109,7 @@ function fixture(
     { id: "beta", name: "beta", channelType: "stream" },
     { id: "gamma", name: "gamma", channelType: "stream" },
   ],
+  sidebarSections?: SidebarSections,
 ) {
   const owner = createRelaySession(null);
   owners.push(owner);
@@ -144,6 +153,12 @@ function fixture(
           channel.id === id ? { ...channel, ...change } : channel,
         ),
       };
+      for (const listener of listeners) listener();
+    });
+  // A discovery commit, as live roster events produce.
+  const commit = () =>
+    act(() => {
+      list = { ...list, asOf: (list.asOf ?? 0) + 1 };
       for (const listener of listeners) listener();
     });
   const drop = (id: string) =>
@@ -202,6 +217,7 @@ function fixture(
                 communityOrigin: "https://relay.test",
               },
             }}
+            sidebarSections={sidebarSections}
           >
             {pages}
           </PrimarySidebar>
@@ -216,6 +232,7 @@ function fixture(
     list,
     session,
     publish,
+    commit,
     drop,
     connection(next: RelaySnapshot) {
       act(() => {
@@ -225,6 +242,152 @@ function fixture(
     },
   };
 }
+
+function visibilityFixture() {
+  const f = fixture();
+  const read = vi
+    .fn()
+    .mockRejectedValue(new ReadError("unavailable", "offline", 503));
+  const lifecycle = createChannelLifecycle({
+    reader: { read },
+    viewer: f.session.viewer,
+    relayAuthor: "b".repeat(64),
+    canAccess: () => true,
+    acceptDiscovery() {},
+    removed() {},
+  });
+  f.session.channelLifecycle = lifecycle.capability;
+  return { f, read, lifecycle };
+}
+
+it("keeps visibility recovery quiet, then offers the existing retry after exhaustion", async () => {
+  vi.useFakeTimers();
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const { f, read, lifecycle } = visibilityFixture();
+  try {
+    render(f.view("alpha"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(read).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByText("Hidden conversations could not be refreshed."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry hidden conversations" }),
+    ).not.toBeInTheDocument();
+    f.commit();
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    f.commit();
+    await act(() => vi.advanceTimersByTimeAsync(4250));
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(
+      screen.getByText("Hidden conversations could not be refreshed."),
+    ).toBeVisible();
+    read.mockResolvedValue([]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry hidden conversations" }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(read).toHaveBeenCalledTimes(5);
+    expect(
+      screen.queryByRole("button", { name: "Retry hidden conversations" }),
+    ).not.toBeInTheDocument();
+  } finally {
+    cleanup();
+    lifecycle.dispose();
+    random.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+it("keeps a roster failure quiet while recovery retries it, but not a denial while another read recovers", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  // Another background read (sidebar preferences) keeps recovery running.
+  const recovery = createRecovery([
+    { status: () => "failed", subscribe: () => () => {}, retry() {} },
+  ]);
+  const live = f.session.live;
+  // A stable snapshot, as the session's live view keeps between changes.
+  let view = {
+    ...live.snapshot(),
+    roster: { state: "error", transient: true } as {
+      state: string;
+      transient?: true;
+    },
+  };
+  const liveListeners = new Set<() => void>();
+  f.session.live = {
+    ...live,
+    snapshot: () => view,
+    subscribe(listener) {
+      liveListeners.add(listener);
+      return () => liveListeners.delete(listener);
+    },
+  } as typeof live;
+  const failed: ChannelList = {
+    status: "error",
+    error: "Channels could not be loaded.",
+    channels: [],
+  };
+  f.session.recovery = recovery;
+  f.session.channels = { ...f.session.channels, list: () => failed };
+  try {
+    render(f.view("alpha"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(recovery.snapshot()).toMatchObject({
+      recovering: true,
+      shown: false,
+    });
+    expect(
+      screen.queryByText("Channels could not be loaded."),
+    ).not.toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(RECOVERY_NOTICE_DELAY_MS - 1));
+    expect(
+      screen.queryByText("Channels could not be loaded."),
+    ).not.toBeInTheDocument();
+    // A denial is not recovery's to retry: the channel and Solo inventories
+    // each report it at once, though recovery still runs for the other read.
+    view = { ...view, roster: { state: "error" } };
+    act(() => {
+      for (const listener of liveListeners) listener();
+    });
+    expect(recovery.snapshot()).toMatchObject({
+      recovering: true,
+      shown: false,
+    });
+    const alerts = screen.getAllByText("Channels could not be loaded.");
+    expect(alerts).toHaveLength(2);
+    for (const alert of alerts) expect(alert).toHaveAttribute("role", "alert");
+  } finally {
+    cleanup();
+    recovery.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("cancels visibility retries on sidebar unmount and session changes", async () => {
+  vi.useFakeTimers();
+  const { f, read, lifecycle } = visibilityFixture();
+  try {
+    const mounted = render(f.view("alpha"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(read).toHaveBeenCalledOnce();
+    const next = fixture();
+    mounted.rerender(next.view("beta"));
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(read).toHaveBeenCalledOnce();
+    mounted.rerender(f.view("alpha"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(read).toHaveBeenCalledTimes(2);
+    mounted.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    cleanup();
+    lifecycle.dispose();
+    vi.useRealTimers();
+  }
+});
 
 it.each(["Retry", "Dismiss"] as const)(
   "%s restores mute recovery focus after cached-to-live session handoff without remounting",
@@ -410,6 +573,154 @@ it("ignores local and legacy filter state", async () => {
   expect(screen.getByRole("button", { name: "gamma" })).toBeVisible();
 });
 
+it("preserves disabled contribution positions when active sections reorder", async () => {
+  const makeSection = (id: string): RegisteredSidebarSection => {
+    const rows = [{ id: `${id}-row`, label: `${id.toUpperCase()} item` }];
+    return {
+      version: 1,
+      id,
+      title: id.toUpperCase(),
+      icon: "★",
+      rows: { snapshot: () => rows, subscribe: () => () => {} },
+      select: () => ({ version: 1, kind: "home" }),
+      key: `example.plugin/${id}`,
+      pluginId: "example.plugin",
+      revision: "one",
+    };
+  };
+  const [a, b, c] = ["a", "b", "c"].map(makeSection);
+  assert(a && b && c);
+  let active: readonly RegisteredSidebarSection[] = [a, c];
+  const listeners = new Set<() => void>();
+  const registry: SidebarSections = {
+    version: 1,
+    snapshot: () => active,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    register: () => {},
+  };
+  const h = fixture(undefined, "ready", [], registry);
+  const scope = h.snapshot.scope;
+  assert.exists(scope);
+  // A raw key saved before canonical section keys keeps its position, and
+  // another owner's section key keeps its slot.
+  const solo = "solo-region:buzz.region:example:work";
+  writeView(scope, "channel-sidebar", {
+    collapsed: [],
+    contributionOrder: [a.key, solo, `plugin:${b.key}`, c.key],
+    scrollTop: 0,
+  });
+  const visibleOrder = () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[data-sidebar-section^="plugin:example.plugin/"]',
+      ),
+    ].map((section) => section.dataset.sidebarSection);
+  const user = userEvent.setup();
+
+  render(h.view("alpha"));
+  await waitFor(() =>
+    expect(visibleOrder()).toEqual([
+      "plugin:example.plugin/a",
+      "plugin:example.plugin/c",
+    ]),
+  );
+  await user.click(screen.getByRole("button", { name: "More actions for C" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Move up" }));
+
+  expect(readView(scope, "channel-sidebar", {})).toMatchObject({
+    contributionOrder: [
+      `plugin:${c.key}`,
+      solo,
+      `plugin:${b.key}`,
+      `plugin:${a.key}`,
+    ],
+  });
+  act(() => {
+    active = [a, b, c];
+    for (const listener of listeners) listener();
+  });
+  await waitFor(() =>
+    expect(visibleOrder()).toEqual([
+      "plugin:example.plugin/c",
+      "plugin:example.plugin/b",
+      "plugin:example.plugin/a",
+    ]),
+  );
+});
+
+it("retries a contributed section after invalid rows recover", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    let rows: readonly SidebarSectionRow[] = [{ id: "queue", label: "" }];
+    const section = (
+      id: string,
+      title: string,
+      snapshot: () => readonly SidebarSectionRow[],
+    ): RegisteredSidebarSection => ({
+      version: 1,
+      id,
+      title,
+      icon: "★",
+      rows: { snapshot, subscribe: () => () => {} },
+      select: () => ({ version: 1, kind: "home" }),
+      key: `example.plugin/${id}`,
+      pluginId: "example.plugin",
+      revision: "one",
+    });
+    const sibling = [{ id: "review", label: "Review item" }];
+    const sections = [
+      section("work", "Workspace", () => rows),
+      section("review", "Review", () => sibling),
+    ];
+    const registry: SidebarSections = {
+      version: 1,
+      snapshot: () => sections,
+      subscribe: () => () => {},
+      register: () => {},
+    };
+    const h = fixture(undefined, "ready", [], registry);
+    const work = () => {
+      const element = document.querySelector<HTMLElement>(
+        '[data-sidebar-section="plugin:example.plugin/work"]',
+      );
+      if (!element) throw new Error("The Workspace section is not mounted");
+      return element;
+    };
+    const user = userEvent.setup();
+    render(h.view("alpha"));
+
+    expect(
+      await screen.findByText(/Workspace is unavailable/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Review item" }));
+    expect(h.navigator.open).toHaveBeenCalledWith({ version: 1, kind: "home" });
+
+    // Retrying unchanged invalid rows keeps the recovery control in reach.
+    const retry = within(work()).getByRole("button", { name: "Retry" });
+    await user.click(retry);
+    expect(within(work()).getByRole("alert")).toHaveTextContent(
+      "Workspace is unavailable.",
+    );
+    expect(within(work()).getByRole("button", { name: "Retry" })).toHaveFocus();
+
+    // A later valid snapshot is not observed by the failed section until Retry.
+    rows = [{ id: "queue", label: "Queue" }];
+    expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
+    await user.click(within(work()).getByRole("button", { name: "Retry" }));
+    expect(
+      await screen.findByRole("button", { name: "Queue" }),
+    ).toBeInTheDocument();
+    expect(within(work()).queryByRole("alert")).toBeNull();
+    expect(work().querySelector("summary")).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Review item" })).toBeVisible();
+  } finally {
+    consoleError.mockRestore();
+  }
+});
+
 it("does not rebuild unchanged rows on channel switches", async () => {
   const h = fixture();
   const mounted = render(h.view("alpha"));
@@ -494,7 +805,9 @@ it("offers DMs a Move conversation menu and relocates them into a saved group", 
   let assignments: Record<string, string> = {};
   const read = vi.fn(async () => ({ ...saved, assignments }));
   const write = vi.fn(
-    async (intent: { channelId: string; sectionId?: string }) => {
+    async (intent: { channelId?: string; sectionId?: string }) => {
+      if (intent.channelId === undefined)
+        throw new Error("Expected channel move");
       const changedAssignments = intent.sectionId
         ? { ...assignments, [intent.channelId]: intent.sectionId }
         : Object.fromEntries(
@@ -937,10 +1250,67 @@ it("rejects a deferred header Create section after its navigation origin retires
     for (const frame of frames.splice(0)) frame(0);
   });
   expect(
-    screen.queryByRole("dialog", { name: "Create new section" }),
+    screen.queryByRole("dialog", { name: "Move to new section" }),
   ).not.toBeInTheDocument();
   expect(preferences.queries.snapshot().data?.sections).toEqual([]);
   preferences.dispose();
+});
+
+it("gates all creation entry points while uncertain creation reconciles, preserving ordinary moves", async () => {
+  const data = { sections: [], assignments: {}, starred: [], muted: [] };
+  let finish!: (value: SidebarPreferences) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const read = new Promise<SidebarPreferences>((resolve) => {
+    finish = resolve;
+  });
+  const preferences = createSidebarPreferencesStore({
+    read: async () => data,
+    readAfterWrite: () => {
+      entered();
+      return read;
+    },
+    available: true,
+    write: vi.fn().mockRejectedValue(new Error("response lost")),
+    writeStar: vi.fn(async () => []),
+  });
+  await preferences.queries.ensure();
+  const creating = expect(
+    preferences.queries.createSection({ id: "saved", name: "Saved" }),
+  ).rejects.toThrow("response lost");
+  try {
+    await started;
+    const h = fixture(preferences.queries);
+    const user = userEvent.setup();
+    render(h.view("alpha"));
+    const row = await screen.findByRole("button", { name: "beta" });
+    expect(document.querySelector("[data-create-section-trigger]")).toBeNull();
+    fireEvent.keyDown(row, { key: "ContextMenu" });
+    await user.hover(
+      await screen.findByRole("menuitem", { name: "Move channel" }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: "Create new…" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("menuitemradio", { name: "Starred" }),
+    ).not.toHaveAttribute("aria-disabled", "true");
+    await act(async () => {
+      finish(data);
+      await creating;
+    });
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-create-section-trigger]"),
+      ).not.toBeNull(),
+    );
+  } finally {
+    finish(data);
+    await creating;
+    preferences.dispose();
+  }
 });
 
 it("clears only the removed section's collapsed intent after confirmation, never on cancel or failure", async () => {
@@ -1397,6 +1767,11 @@ it("moves a saved group from its menu, rolls back a failed save, and retries it"
     await waitFor(() =>
       expect(groups()).toEqual(["group:work", "group:later"]),
     );
+    expect(
+      document.querySelector(
+        "[data-create-section-slot] + [data-sidebar-section]",
+      ),
+    ).toHaveAttribute("data-sidebar-section", "group:work");
     await user.click(
       screen.getByRole("button", { name: "More actions for Work" }),
     );
@@ -1427,6 +1802,11 @@ it("moves a saved group from its menu, rolls back a failed save, and retries it"
     await waitFor(() =>
       expect(groups()).toEqual(["group:later", "group:work"]),
     );
+    expect(
+      document.querySelector(
+        "[data-create-section-slot] + [data-sidebar-section]",
+      ),
+    ).toHaveAttribute("data-sidebar-section", "group:later");
     expect(order).toHaveBeenLastCalledWith(
       ["later", "work"],
       expect.any(AbortSignal),

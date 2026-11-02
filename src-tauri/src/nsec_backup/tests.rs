@@ -3,11 +3,75 @@ use std::{
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
 };
+use tauri::ipc::InvokeResponseBody;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{Notify, Semaphore},
 };
+
+#[test]
+fn hosted_backup_keeps_its_fixed_service_with_any_builderlab_build_target() {
+    let service = Config {
+        service_url: "https://app.builderlab.xyz/api/goose".into(),
+        namespace: "backup/staging".into(),
+    };
+    for (origin, path) in [
+        ("", ""),
+        (
+            "https://staging.builderlab.example",
+            "/deployment/api/goose/",
+        ),
+        ("https://app.builderlab.xyz", "/staging/api/goose/"),
+    ] {
+        assert!(
+            source_allowed_for(Source::Hosted, Some(&service), origin, path),
+            "Builderlab target {origin}{path} must not change the hosted service"
+        );
+    }
+    let wrong_service = Config {
+        service_url: "https://app.builderlab.xyz/staging/api/goose".into(),
+        namespace: "backup/staging".into(),
+    };
+    assert!(!source_allowed_for(
+        Source::Hosted,
+        Some(&wrong_service),
+        "https://app.builderlab.xyz",
+        "/api/goose/"
+    ));
+}
+
+#[test]
+fn builderlab_backup_requires_the_compiled_builderlab_api_path() {
+    let service = Config {
+        service_url: "https://app.builderlab.xyz/api/goose".into(),
+        namespace: "backup/staging".into(),
+    };
+    assert!(source_allowed_for(
+        Source::Builderlab,
+        Some(&service),
+        "https://app.builderlab.xyz",
+        "/api/goose/"
+    ));
+    assert!(!source_allowed_for(
+        Source::Builderlab,
+        Some(&service),
+        "https://staging.builderlab.example",
+        "/api/goose/"
+    ));
+    assert!(!source_allowed_for(
+        Source::Builderlab,
+        Some(&service),
+        "https://app.builderlab.xyz",
+        "/staging/api/goose/"
+    ));
+    assert!(!source_allowed_for(
+        Source::Builderlab,
+        Some(&service),
+        "https://app.builderlab.xyz",
+        ""
+    ));
+}
 
 fn pubkey(secret: [u8; 32]) -> String {
     PublicKey::from_secret_key(
@@ -24,10 +88,14 @@ fn recovery(keys: &[[u8; 32]], failed: usize) -> serde_json::Value {
     })).collect::<Vec<_>>(), "failed_backup_ids":(0..failed).map(|_|uuid::Uuid::new_v4().to_string()).collect::<Vec<_>>()})
 }
 struct FixtureState {
+    me_status: u16,
+    expires_at: String,
     mapping: Option<String>,
     mapping_status: u16,
     mapping_body: Option<serde_json::Value>,
     owner: String,
+    namespace: String,
+    enrollment_status: u16,
     recipient_id: String,
     recipient_key: Option<String>,
     subject: String,
@@ -39,6 +107,8 @@ struct FixtureState {
     requests: HashMap<String, usize>,
     uploads: Vec<Vec<u8>>,
     rows: HashMap<String, Vec<u8>>,
+    /// Holds this route's response until `release_upload` gets a permit.
+    pause_path: Option<&'static str>,
 }
 struct Service {
     root: String,
@@ -59,10 +129,14 @@ impl Service {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let root = format!("http://{}", listener.local_addr().unwrap());
         let state = Arc::new(Mutex::new(FixtureState {
+            me_status: 200,
+            expires_at: "2999-01-01T00:00:00Z".into(),
             mapping: Some(pubkey([1; 32])),
             mapping_status: 200,
             mapping_body: None,
             owner: "subject:synthetic-account".into(),
+            namespace: "backup/staging".into(),
+            enrollment_status: 200,
             recipient_id: "backup-key-2026-09".into(),
             recipient_key: None,
             subject: "synthetic-account".into(),
@@ -74,6 +148,7 @@ impl Service {
             requests: HashMap::new(),
             uploads: Vec::new(),
             rows: HashMap::new(),
+            pause_path: None,
         }));
         let pause_upload = Arc::new(AtomicBool::new(false));
         let pause_current = Arc::new(AtomicBool::new(false));
@@ -112,6 +187,7 @@ impl Service {
     }
     fn host(&self, root: &std::path::Path) -> NsecBackupHost {
         NsecBackupHost {
+            federated: None,
             state: Default::default(),
             config: Arc::new(Some(Config {
                 service_url: self.root.clone(),
@@ -123,7 +199,7 @@ impl Service {
     fn session(&self) -> Session {
         Session {
             source: Source::Hosted,
-            credential: Zeroizing::new("synthetic-cli-credential".into()),
+            auth: Auth::Credential(Zeroizing::new("synthetic-cli-credential".into())),
         }
     }
     async fn enable(&self, host: &NsecBackupHost) {
@@ -179,23 +255,25 @@ async fn serve(
         bytes.extend_from_slice(&chunk[..count]);
     }
     let body = bytes[header_end..].to_vec();
+    let lower = header.to_ascii_lowercase();
     assert!(
         path.ends_with("/exchange")
-            || header
-                .to_ascii_lowercase()
-                .contains("x-bb-session-credential: synthetic-cli-credential")
+            || lower.contains("x-bb-session-credential: synthetic-cli-credential")
+            || lower.contains("authorization: bearer fixture-session-token")
+                && !lower.contains("x-bb-session-credential"),
+        "{header}"
     );
     let (status, response) = {
         let mut state = shared.lock().unwrap();
         *state.requests.entry(path.clone()).or_default() += 1;
         match path.as_str() {
             "/v1/auth/login/exchange" => (200, serde_json::json!({"session_credential":"synthetic-cli-credential"})),
-            "/v1/auth/me" => (200, serde_json::json!({"subject":state.subject,"expires_at":"2999-01-01T00:00:00Z"})),
+            "/v1/auth/me" => (state.me_status, serde_json::json!({"subject":state.subject,"expires_at":state.expires_at})),
             "/v1/buzz/nostr-identities/current" => (state.mapping_status,state.mapping_body.clone().unwrap_or_else(||serde_json::json!({"correlation_id":"synthetic-correlation","identity":state.mapping.as_ref().map(|key|serde_json::json!({"pubkey_hex":key}))}))),
             "/v1/buzz/nsec-backups/enrollment" => {
                 let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/hpke_nsec_backup_v1.json")).unwrap();
-                (200, serde_json::json!({"version":1,"suite":{"kem_id":16,"kdf_id":1,"aead_id":2},
-                    "recipient_key_id":state.recipient_id,"service_namespace":"backup/staging","owner_id":state.owner,
+                (state.enrollment_status, serde_json::json!({"version":1,"suite":{"kem_id":16,"kdf_id":1,"aead_id":2},
+                    "recipient_key_id":state.recipient_id,"service_namespace":state.namespace,"owner_id":state.owner,
                     "backup_id":uuid::Uuid::new_v4().to_string(),"nostr_pubkey":state.mapping,
                     "recipient_public_key":state.recipient_key.clone().unwrap_or_else(||URL_SAFE_NO_PAD.encode(hex::decode(fixture["recipient_public_key_sec1_hex"].as_str().unwrap()).unwrap()))}))
             },
@@ -214,6 +292,7 @@ async fn serve(
     if (path == "/v1/buzz/nsec-backups" || path == "/v1/buzz/nsec-backups/recovery")
         && pause.load(Ordering::SeqCst)
         || path == "/v1/buzz/nostr-identities/current" && pause_current.load(Ordering::SeqCst)
+        || shared.lock().unwrap().pause_path == Some(path.as_str())
     {
         started.notify_one();
         release.acquire().await.unwrap().forget();
@@ -317,10 +396,11 @@ async fn restart_retry_reuses_persisted_ciphertext_and_completion_prevents_more_
     let host = service.host(directory.path());
     service.enable(&host).await;
     service.state.lock().unwrap().upload_status = 503;
-    assert!(host
-        .backup(&IdentityHost::fixture(), &service.session(), 0)
-        .await
-        .is_err());
+    assert_eq!(
+        host.backup(&IdentityHost::fixture(), &service.session(), 0)
+            .await,
+        Err(Stop::Failed(Failure::Unreachable))
+    );
     let first = service.state.lock().unwrap().uploads[0].clone();
     service.state.lock().unwrap().upload_status = 200;
     let restarted = service.host(directory.path());
@@ -329,20 +409,22 @@ async fn restart_retry_reuses_persisted_ciphertext_and_completion_prevents_more_
         .await
         .unwrap();
     let baseline = service.state.lock().unwrap().requests.clone();
-    restarted
-        .backup(&IdentityHost::fixture(), &service.session(), 0)
-        .await
-        .unwrap();
+    assert_eq!(
+        restarted
+            .backup(&IdentityHost::fixture(), &service.session(), 0)
+            .await,
+        Ok(Outcome::Waiting(Waiting::NoConsent))
+    );
     assert_eq!(service.state.lock().unwrap().requests, baseline);
     service.enable(&restarted).await;
-    restarted
-        .backup(&IdentityHost::fixture(), &service.session(), 0)
-        .await
-        .unwrap();
-    restarted
-        .backup(&IdentityHost::fixture(), &service.session(), 0)
-        .await
-        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            restarted
+                .backup(&IdentityHost::fixture(), &service.session(), 0)
+                .await,
+            Ok(Outcome::Complete)
+        );
+    }
     let state = service.state.lock().unwrap();
     assert_eq!(state.uploads, vec![first.clone(), first]);
     assert_eq!(state.rows.len(), 1);
@@ -390,10 +472,11 @@ async fn mismatched_mapping_and_unwritable_pending_state_never_upload() {
     let host = service.host(directory.path());
     service.enable(&host).await;
     service.state.lock().unwrap().mapping = Some(pubkey([2; 32]));
-    assert!(host
-        .backup(&IdentityHost::fixture(), &service.session(), 0)
-        .await
-        .is_err());
+    assert_eq!(
+        host.backup(&IdentityHost::fixture(), &service.session(), 0)
+            .await,
+        Err(Stop::Failed(Failure::OtherKeyLinked))
+    );
     service.state.lock().unwrap().mapping = Some(pubkey([1; 32]));
     service.pause_current.store(true, Ordering::SeqCst);
     let task_host = host.clone();
@@ -411,7 +494,7 @@ async fn mismatched_mapping_and_unwritable_pending_state_never_upload() {
     let result = backup.await;
     std::fs::remove_file(directory.path()).unwrap();
     std::fs::rename(&retained, directory.path()).unwrap();
-    assert!(result.unwrap().is_err());
+    assert_eq!(result.unwrap(), Err(Stop::Failed(Failure::Storage)));
     assert!(service.state.lock().unwrap().uploads.is_empty());
 }
 
@@ -430,14 +513,17 @@ async fn competing_workers_and_signout_keep_an_admitted_upload_pending() {
             .await
     });
     service.upload_started.notified().await;
-    assert!(service
-        .host(directory.path())
-        .backup(&IdentityHost::fixture(), &service.session(), 0)
-        .await
-        .is_err());
+    // Another copy holding this key's record lock is `busy`, retried on the next wake.
+    assert_eq!(
+        service
+            .host(directory.path())
+            .backup(&IdentityHost::fixture(), &service.session(), 0)
+            .await,
+        Err(Stop::Failed(Failure::Busy))
+    );
     host.close();
     service.release_upload.add_permits(1);
-    assert!(upload.await.unwrap().is_err());
+    assert_eq!(upload.await.unwrap(), Err(Stop::Canceled));
     service.pause_upload.store(false, Ordering::SeqCst);
     service
         .host(directory.path())
@@ -533,12 +619,13 @@ async fn recover_with(service: &Service, host: &NsecBackupHost) -> Result<Restor
 }
 
 #[tokio::test]
-async fn native_recovery_preserves_empty_partial_all_failed_and_unavailable_distinctions() {
+async fn native_recovery_preserves_empty_partial_all_failed_unavailable_and_refused_distinctions() {
     for (keys, failed, status) in [
         (vec![], 0, 200),
         (vec![], 2, 200),
         (vec![[1; 32], [2; 32]], 1, 200),
         (vec![], 0, 404),
+        (vec![], 0, 403),
     ] {
         let service = Service::new().await;
         let directory = tempfile::tempdir().unwrap();
@@ -548,6 +635,8 @@ async fn native_recovery_preserves_empty_partial_all_failed_and_unavailable_dist
         let result = recover_with(&service, &host).await;
         if status == 404 {
             assert_eq!(result.err().as_deref(), Some(UNAVAILABLE));
+        } else if status == 403 {
+            assert_eq!(result.err().as_deref(), Some(REFUSED));
         } else {
             let result = result.unwrap();
             assert_eq!(result.candidates.len(), keys.len());
@@ -561,17 +650,21 @@ async fn native_recovery_preserves_empty_partial_all_failed_and_unavailable_dist
 
 #[tokio::test]
 async fn mapping_failure_never_becomes_a_missing_binding() {
-    let service = Service::new().await;
-    let directory = tempfile::tempdir().unwrap();
-    service.state.lock().unwrap().mapping_status = 404;
-    let result = recover_with(&service, &service.host(directory.path())).await;
-    assert_eq!(result.err().as_deref(), Some(RETRY));
-    assert!(!service
-        .state
-        .lock()
-        .unwrap()
-        .requests
-        .contains_key("/v1/buzz/nsec-backups/recovery"));
+    // A rejected session reads as any other failure here, unlike in a backup
+    // pass; an account without Buzz access is refused, as by recovery itself.
+    for (status, expected) in [(404, RETRY), (401, RETRY), (403, REFUSED)] {
+        let service = Service::new().await;
+        let directory = tempfile::tempdir().unwrap();
+        service.state.lock().unwrap().mapping_status = status;
+        let result = recover_with(&service, &service.host(directory.path())).await;
+        assert_eq!(result.err().as_deref(), Some(expected), "status {status}");
+        assert!(!service
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .contains_key("/v1/buzz/nsec-backups/recovery"));
+    }
 }
 
 #[tokio::test]
@@ -741,7 +834,10 @@ async fn absent_or_invalid_consent_never_contacts_the_backup_service() {
         assert!(service.state.lock().unwrap().requests.is_empty());
     }
     std::fs::write(&path, b"corrupt").unwrap();
-    assert!(host.backup(&identity, &service.session(), 0).await.is_err());
+    assert_eq!(
+        host.backup(&identity, &service.session(), 0).await,
+        Err(Stop::Failed(Failure::Storage))
+    );
     assert!(service.state.lock().unwrap().requests.is_empty());
 }
 
@@ -790,6 +886,7 @@ async fn saving_consent_after_login_wakes_the_existing_uploader_and_disable_fenc
 fn source_generations_and_teardown_fence_retired_work_without_another_sources_logout() {
     // No filesystem or worker is configured; exercise purpose-specific credential ownership.
     let host = NsecBackupHost {
+        federated: None,
         state: Default::default(),
         root: None,
         config: Arc::new(Some(Config {
@@ -1074,6 +1171,7 @@ async fn pending_backup_reseals_when_the_authenticated_recipient_rotates() {
 #[test]
 fn signing_out_the_latest_source_retains_the_other_sources_session() {
     let host = NsecBackupHost {
+        federated: None,
         state: Default::default(),
         root: None,
         config: Arc::new(Some(Config {
@@ -1084,7 +1182,7 @@ fn signing_out_the_latest_source_retains_the_other_sources_session() {
     // Start with an admitted secondary session, independent of optional build origins.
     host.state.lock().unwrap().sessions.push(Session {
         source: Source::Builderlab,
-        credential: Zeroizing::new("synthetic-builderlab-session".into()),
+        auth: Auth::Credential(Zeroizing::new("synthetic-builderlab-session".into())),
     });
     host.session(
         Source::Hosted,
@@ -1121,7 +1219,7 @@ fn signing_out_the_latest_source_retains_the_other_sources_session() {
         .sessions
         .last()
         .is_some_and(|s| s.source == Source::Builderlab
-            && s.credential.as_str() == "synthetic-builderlab-session"));
+            && matches!(&s.auth, Auth::Credential(c) if c.as_str() == "synthetic-builderlab-session")));
 }
 
 #[tokio::test]
@@ -1132,6 +1230,7 @@ async fn login_session_changes_leave_recovery_and_selected_installation_alive() 
         let host = service.host(directory.path());
         // Admit normal source events on the configured origin; HTTP stays on the loopback fixture.
         let login = NsecBackupHost {
+            federated: None,
             state: host.state.clone(),
             root: None,
             config: Arc::new(Some(Config {
@@ -1165,10 +1264,10 @@ async fn login_session_changes_leave_recovery_and_selected_installation_alive() 
             assert_eq!(identity.viewer().await.unwrap(), pubkey([1; 32]));
             let state = host.state.lock().unwrap();
             assert_eq!(state.sessions.len(), 1);
-            assert_eq!(
-                state.sessions[0].credential.as_str(),
-                "synthetic-plugin-session"
-            );
+            assert!(matches!(
+                &state.sessions[0].auth,
+                Auth::Credential(c) if c.as_str() == "synthetic-plugin-session"
+            ));
         } else {
             service.pause_upload.store(true, Ordering::SeqCst);
             let recovering = recover_with(&service, &host);
@@ -1194,5 +1293,757 @@ async fn login_session_changes_leave_recovery_and_selected_installation_alive() 
             assert_eq!(recovering.await.unwrap().candidates.len(), 1);
             host.cancel("synthetic-attempt");
         }
+    }
+}
+
+/// Watch statuses as the renderer does. An undelivered channel records each send
+/// and fails it, like a reloaded page's.
+fn record(host: &NsecBackupHost, delivered: bool) -> Arc<Mutex<Vec<serde_json::Value>>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let output = seen.clone();
+    host.watch(Channel::new(move |body| {
+        if let InvokeResponseBody::Json(json) = body {
+            output
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(&json).unwrap());
+        }
+        if delivered {
+            Ok(())
+        } else {
+            Err(tauri::Error::WebviewNotFound)
+        }
+    }));
+    seen
+}
+/// Each message as `"<pass> <status>"`, with `:<reason>` or `:<kind>` when present.
+fn statuses(seen: &Mutex<Vec<serde_json::Value>>) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|status| {
+            let name = status["status"].as_str().unwrap();
+            let pass = status["pass"].as_u64().unwrap();
+            match status.get("reason").or(status.get("kind")) {
+                Some(detail) => format!("{pass} {name}:{}", detail.as_str().unwrap()),
+                None => format!("{pass} {name}"),
+            }
+        })
+        .collect()
+}
+fn worker(host: &NsecBackupHost) -> tokio::task::AbortHandle {
+    host.state
+        .lock()
+        .unwrap()
+        .worker
+        .as_ref()
+        .unwrap()
+        .inner()
+        .abort_handle()
+}
+async fn retired(worker: &tokio::task::AbortHandle) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !worker.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+/// A pass that stops before uploading fails here with what it reported, not a hang.
+async fn upload_started(service: &Service, seen: &Mutex<Vec<serde_json::Value>>) {
+    let started = service.upload_started.notified();
+    if tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .is_err()
+    {
+        panic!("No upload started; the pass reported {:?}", statuses(seen));
+    }
+}
+fn production() -> Arc<Option<Config>> {
+    Arc::new(Some(Config {
+        service_url: "https://app.builderlab.xyz/api/goose".into(),
+        namespace: "backup/staging".into(),
+    }))
+}
+
+#[tokio::test]
+async fn a_pass_publishes_running_then_its_outcome_under_the_returned_ticket() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    let seen = record(&host, true);
+    service.enable(&host).await;
+    host.state.lock().unwrap().sessions.push(service.session());
+    assert_eq!(host.trigger(IdentityHost::fixture()), Some(1));
+    finish_background(&host).await;
+    assert_eq!(statuses(&seen), ["1 running", "1 complete"]);
+    let messages = seen.lock().unwrap().clone();
+    assert!(messages[0]["seq"].as_u64() < messages[1]["seq"].as_u64());
+    assert_eq!(serde_json::to_value(host.status()).unwrap(), messages[1]);
+    // A later wake finds the record complete and uploads nothing more.
+    assert_eq!(host.trigger(IdentityHost::fixture()), Some(2));
+    finish_background(&host).await;
+    assert_eq!(
+        statuses(&seen),
+        ["1 running", "1 complete", "2 running", "2 complete"]
+    );
+    let messages = seen.lock().unwrap().clone();
+    assert!(messages
+        .windows(2)
+        .all(|pair| pair[0]["seq"].as_u64() < pair[1]["seq"].as_u64()));
+    assert_eq!(service.state.lock().unwrap().uploads.len(), 1);
+}
+
+#[tokio::test]
+async fn each_stopped_pass_publishes_its_waiting_reason_or_failure_kind() {
+    type Knob = fn(&mut FixtureState);
+    let cases: [(Knob, &str); 24] = [
+        (|s| s.mapping = None, "waiting:not_linked"),
+        (
+            |s| s.mapping = Some(pubkey([2; 32])),
+            "failed:other_key_linked",
+        ),
+        (|s| s.mapping_status = 500, "failed:unreachable"),
+        // kgoose's answer to an expired, revoked or unknown session credential.
+        (|s| s.me_status = 401, "failed:signed_out"),
+        (|s| s.mapping_status = 401, "failed:signed_out"),
+        // A session `me` accepts but this device's clock has already expired.
+        (
+            |s| s.expires_at = "2000-01-01T00:00:00Z".into(),
+            "failed:signed_out",
+        ),
+        // A missing capability or USER role on `current`, which no retry or
+        // sign-in changes; kgoose's own refusal for the role is `unauthorized`.
+        (|s| s.mapping_status = 403, "failed:not_offered"),
+        (
+            |s| {
+                s.mapping_status = 403;
+                s.mapping_body = Some(serde_json::json!({
+                    "error": {"code": "unauthorized", "message": "synthetic"},
+                    "correlation_id": "synthetic-correlation",
+                }));
+            },
+            "failed:not_offered",
+        ),
+        // Every other status stays unreachable.
+        (|s| s.me_status = 500, "failed:unreachable"),
+        (|s| s.enrollment_status = 409, "waiting:not_linked"),
+        (|s| s.enrollment_status = 403, "failed:not_offered"),
+        (|s| s.enrollment_status = 404, "failed:not_offered"),
+        (|s| s.enrollment_status = 401, "failed:signed_out"),
+        (|s| s.enrollment_status = 503, "failed:unreachable"),
+        (
+            |s| s.recipient_key = Some("malformed".into()),
+            "failed:invalid_service",
+        ),
+        (
+            |s| s.namespace = "backup/other".into(),
+            "failed:invalid_service",
+        ),
+        (|s| s.upload_status = 400, "failed:refused"),
+        (|s| s.upload_status = 409, "failed:refused"),
+        (|s| s.upload_status = 413, "failed:refused"),
+        (|s| s.upload_status = 403, "failed:other_key_linked"),
+        (|s| s.upload_status = 404, "failed:not_offered"),
+        (|s| s.upload_status = 503, "failed:unreachable"),
+        (|s| s.receipt_matches = false, "failed:unconfirmed"),
+        (|s| s.receipt_stored = false, "failed:unconfirmed"),
+    ];
+    for (index, (knob, expected)) in cases.into_iter().enumerate() {
+        let service = Service::new().await;
+        let directory = tempfile::tempdir().unwrap();
+        let host = service.host(directory.path());
+        let seen = record(&host, true);
+        service.enable(&host).await;
+        knob(&mut service.state.lock().unwrap());
+        host.state.lock().unwrap().sessions.push(service.session());
+        host.trigger(IdentityHost::fixture());
+        finish_background(&host).await;
+        assert_eq!(
+            statuses(&seen),
+            ["1 running".to_owned(), format!("1 {expected}")],
+            "case {index}"
+        );
+    }
+    // Another app copy holding the consent lock is `busy`, not a storage failure.
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    service.enable(&host).await;
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .open(directory.path().join("choice.lock"))
+        .unwrap();
+    fs2::FileExt::try_lock_exclusive(&lock).unwrap();
+    assert_eq!(
+        host.backup(&IdentityHost::fixture(), &service.session(), 0)
+            .await,
+        Err(Stop::Failed(Failure::Busy))
+    );
+    // Only a confirmed absent key is idle; a key that cannot be read is storage.
+    for (identity, expected) in [
+        (IdentityHost::fixture_without_key(true), Ok(Outcome::Idle)),
+        (
+            IdentityHost::fixture_without_key(false),
+            Err(Stop::Failed(Failure::Storage)),
+        ),
+    ] {
+        assert_eq!(
+            host.backup(&identity, &service.session(), 0).await,
+            expected
+        );
+    }
+    assert!(service.state.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn wakes_during_a_pass_queue_one_rerun_whose_pass_covers_their_tickets() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    let seen = record(&host, true);
+    let identity = IdentityHost::fixture();
+    service.enable(&host).await;
+    service.pause_upload.store(true, Ordering::SeqCst);
+    host.state.lock().unwrap().sessions.push(service.session());
+    assert_eq!(host.trigger(identity.clone()), Some(1));
+    upload_started(&service, &seen).await;
+    assert_eq!(host.trigger(identity.clone()), Some(2));
+    assert_eq!(host.retry(Source::Hosted, identity), Some(3));
+    service.pause_upload.store(false, Ordering::SeqCst);
+    service.release_upload.add_permits(1);
+    finish_background(&host).await;
+    assert_eq!(
+        statuses(&seen),
+        ["1 running", "1 complete", "3 running", "3 complete"]
+    );
+    assert_eq!(service.state.lock().unwrap().uploads.len(), 1);
+}
+
+#[tokio::test]
+async fn a_key_install_supersedes_a_pass_that_then_reports_nothing() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    let seen = record(&host, true);
+    service.enable(&host).await;
+    service.pause_upload.store(true, Ordering::SeqCst);
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    upload_started(&service, &seen).await;
+    let first = worker(&host);
+    // Hold the next pass until the retired one has released its record lock.
+    service.pause_current.store(true, Ordering::SeqCst);
+    host.local_key_installed(IdentityHost::fixture());
+    retired(&first).await;
+    upload_started(&service, &seen).await;
+    service.pause_current.store(false, Ordering::SeqCst);
+    service.pause_upload.store(false, Ordering::SeqCst);
+    service.release_upload.add_permits(2);
+    finish_background(&host).await;
+    assert_eq!(statuses(&seen), ["1 running", "2 running", "2 complete"]);
+}
+
+#[tokio::test]
+async fn a_null_handoff_reports_no_session_only_for_a_running_pass() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    // Admit hosted handoffs on the production origin; HTTP stays on the loopback fixture.
+    let login = NsecBackupHost {
+        federated: None,
+        state: host.state.clone(),
+        root: Some(directory.path().to_owned()),
+        config: production(),
+    };
+    let seen = record(&host, true);
+    service.enable(&host).await;
+    service.pause_upload.store(true, Ordering::SeqCst);
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    upload_started(&service, &seen).await;
+    let first = worker(&host);
+    // A wake during the pass holds a rerun ticket, which the retirement settles.
+    assert_eq!(host.trigger(IdentityHost::fixture()), Some(2));
+    assert_eq!(
+        login.session(Source::Hosted, 1, None, IdentityHost::fixture()),
+        Ok(None)
+    );
+    retired(&first).await;
+    assert_eq!(statuses(&seen), ["1 running", "2 waiting:no_session"]);
+    service.pause_upload.store(false, Ordering::SeqCst);
+    service.release_upload.add_permits(1);
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    finish_background(&host).await;
+    assert_eq!(
+        login.session(Source::Hosted, 2, None, IdentityHost::fixture()),
+        Ok(None)
+    );
+    assert_eq!(
+        statuses(&seen),
+        [
+            "1 running",
+            "2 waiting:no_session",
+            "3 running",
+            "3 complete"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_document_load_mid_pass_reports_idle_and_the_new_watcher_sees_later_passes() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    let stale = record(&host, false);
+    service.enable(&host).await;
+    service.pause_upload.store(true, Ordering::SeqCst);
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    upload_started(&service, &stale).await;
+    let first = worker(&host);
+    host.document_load();
+    retired(&first).await;
+    assert_eq!(statuses(&stale), ["1 running", "1 idle"]);
+    let current = record(&host, true);
+    service.pause_upload.store(false, Ordering::SeqCst);
+    service.release_upload.add_permits(1);
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    finish_background(&host).await;
+    assert_eq!(statuses(&stale).len(), 2);
+    assert_eq!(statuses(&current), ["2 running", "2 complete"]);
+}
+
+#[tokio::test]
+async fn a_pass_without_consent_waits_without_a_request() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    let seen = record(&host, true);
+    host.state.lock().unwrap().sessions.push(service.session());
+    assert_eq!(host.trigger(IdentityHost::fixture()), Some(1));
+    finish_background(&host).await;
+    assert_eq!(statuses(&seen), ["1 running", "1 waiting:no_consent"]);
+    assert!(service.state.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn an_unlinked_pass_waits_until_a_retry_after_binding_completes_it() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    let seen = record(&host, true);
+    service.enable(&host).await;
+    service.state.lock().unwrap().mapping = None;
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    finish_background(&host).await;
+    assert_eq!(statuses(&seen), ["1 running", "1 waiting:not_linked"]);
+    service.state.lock().unwrap().mapping = Some(pubkey([1; 32]));
+    assert_eq!(host.retry(Source::Hosted, IdentityHost::fixture()), Some(2));
+    finish_background(&host).await;
+    assert_eq!(
+        statuses(&seen),
+        [
+            "1 running",
+            "1 waiting:not_linked",
+            "2 running",
+            "2 complete"
+        ]
+    );
+    assert_eq!(service.state.lock().unwrap().uploads.len(), 1);
+}
+
+#[tokio::test]
+async fn handoffs_and_retries_return_a_ticket_only_when_a_pass_will_start() {
+    // No consent is saved, so admitted passes stop before any request.
+    let directory = tempfile::tempdir().unwrap();
+    let host = NsecBackupHost {
+        federated: None,
+        state: Default::default(),
+        root: Some(directory.path().to_owned()),
+        config: production(),
+    };
+    let foreign = NsecBackupHost {
+        federated: None,
+        state: Default::default(),
+        root: Some(directory.path().to_owned()),
+        config: Arc::new(Some(Config {
+            service_url: "https://backup.example/api/goose".into(),
+            namespace: "backup/staging".into(),
+        })),
+    };
+    let identity = IdentityHost::fixture();
+    let credential = || Some("synthetic-session".to_owned());
+    assert_eq!(host.retry(Source::Hosted, identity.clone()), None);
+    assert_eq!(
+        host.session(Source::Hosted, 1, None, identity.clone()),
+        Ok(None)
+    );
+    assert_eq!(
+        host.session(Source::Hosted, 2, credential(), identity.clone()),
+        Ok(Some(1))
+    );
+    assert_eq!(
+        host.session(Source::Hosted, 2, credential(), identity.clone()),
+        Ok(None)
+    );
+    assert_eq!(host.retry(Source::Hosted, identity.clone()), Some(2));
+    assert_eq!(
+        foreign.session(Source::Hosted, 3, credential(), identity.clone()),
+        Ok(None)
+    );
+    finish_background(&host).await;
+    assert_eq!(
+        host.session(Source::Hosted, 4, None, identity.clone()),
+        Ok(None)
+    );
+    host.close();
+    assert_eq!(
+        host.session(Source::Hosted, 5, credential(), identity.clone()),
+        Ok(None)
+    );
+    assert_eq!(host.retry(Source::Hosted, identity), None);
+    assert_eq!(host.status().pass, 2);
+}
+
+fn signed_in() -> (FederatedIdentity, String) {
+    let fi = crate::federated_identity::testing::signed_in(
+        "http://127.0.0.1:1".into(),
+        "wss://relay.example",
+        false,
+    );
+    let revision = fi
+        .with_session(|_, revision, _| revision.to_owned())
+        .unwrap();
+    (fi, revision)
+}
+
+#[tokio::test]
+async fn a_federated_session_sends_the_current_fi_token_as_bearer_only() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let (fi, revision) = signed_in();
+    let host = NsecBackupHost {
+        federated: Some(fi),
+        ..service.host(directory.path())
+    };
+    service.enable(&host).await;
+    let session = Session {
+        source: Source::Builderlab,
+        auth: Auth::Federated(revision),
+    };
+    // The fixture rejects any request without the Bearer token or with the legacy header.
+    assert_eq!(
+        host.backup(&IdentityHost::fixture(), &session, 0).await,
+        Ok(Outcome::Complete)
+    );
+    let requests = service.state.lock().unwrap().requests.clone();
+    for path in [
+        "/v1/auth/me",
+        "/v1/buzz/nostr-identities/current",
+        "/v1/buzz/nsec-backups/enrollment",
+        "/v1/buzz/nsec-backups",
+    ] {
+        assert_eq!(requests[path], 1, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_federated_session_is_signed_out_once_its_revision_is_not_current() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    for change in [
+        FederatedIdentity::sign_out_for_test as fn(&FederatedIdentity),
+        FederatedIdentity::switch_account_for_test,
+    ] {
+        let (fi, revision) = signed_in();
+        let host = NsecBackupHost {
+            federated: Some(fi.clone()),
+            ..service.host(directory.path())
+        };
+        service.enable(&host).await;
+        change(&fi);
+        let session = Session {
+            source: Source::Builderlab,
+            auth: Auth::Federated(revision),
+        };
+        assert_eq!(
+            host.backup(&IdentityHost::fixture(), &session, 0).await,
+            Err(Stop::Failed(Failure::SignedOut))
+        );
+        assert!(service.state.lock().unwrap().requests.is_empty());
+    }
+    // A host without FI can never resolve a federated session.
+    let host = service.host(directory.path());
+    let session = Session {
+        source: Source::Builderlab,
+        auth: Auth::Federated("revision".into()),
+    };
+    assert_eq!(
+        host.backup(&IdentityHost::fixture(), &session, 0).await,
+        Err(Stop::Failed(Failure::SignedOut))
+    );
+}
+
+#[tokio::test]
+async fn a_native_sign_out_mid_pass_stops_the_next_federated_request() {
+    for (paused, next) in [
+        ("/v1/auth/me", "/v1/buzz/nostr-identities/current"),
+        ("/v1/buzz/nsec-backups/enrollment", "/v1/buzz/nsec-backups"),
+    ] {
+        let service = Service::new().await;
+        let directory = tempfile::tempdir().unwrap();
+        let (fi, revision) = signed_in();
+        let host = NsecBackupHost {
+            federated: Some(fi.clone()),
+            ..service.host(directory.path())
+        };
+        service.enable(&host).await;
+        service.state.lock().unwrap().pause_path = Some(paused);
+        let session = Session {
+            source: Source::Builderlab,
+            auth: Auth::Federated(revision),
+        };
+        let pass =
+            tokio::spawn(async move { host.backup(&IdentityHost::fixture(), &session, 0).await });
+        service.upload_started.notified().await;
+        // No renderer handoff: only the native session changes.
+        fi.sign_out_for_test();
+        service.release_upload.add_permits(1);
+        assert_eq!(
+            pass.await.unwrap(),
+            Err(Stop::Failed(Failure::SignedOut)),
+            "{paused}"
+        );
+        assert!(
+            !service.state.lock().unwrap().requests.contains_key(next),
+            "{next}"
+        );
+    }
+}
+
+#[test]
+fn a_federated_handoff_stores_only_the_revision_and_requires_the_current_one() {
+    if buzzodz_plugins::BUILDERLAB_ORIGIN.is_empty() {
+        return;
+    }
+    let granted = format!(
+        "{}{}",
+        buzzodz_plugins::BUILDERLAB_ORIGIN,
+        buzzodz_plugins::BUILDERLAB_API_BASE_PATH.trim_end_matches('/')
+    );
+    let (fi, revision) = signed_in();
+    let host = |federated| NsecBackupHost {
+        federated,
+        state: Default::default(),
+        root: None,
+        config: Arc::new(Some(Config {
+            service_url: granted.clone(),
+            namespace: "backup/staging".into(),
+        })),
+    };
+    let identity = IdentityHost::fixture();
+    let federated = host(Some(fi.clone()));
+    let handoff = |host: &NsecBackupHost, generation, source, credential, federated| {
+        host.session_from_ipc(source, generation, credential, federated, identity.clone())
+    };
+    // Stale revisions, both and an FI-less host are refused without consuming
+    // the generation.
+    for (host, source, credential, revision) in [
+        (&federated, Source::Builderlab, None, "stale".to_owned()),
+        (
+            &federated,
+            Source::Builderlab,
+            Some("synthetic-session".to_owned()),
+            revision.clone(),
+        ),
+        (&host(None), Source::Builderlab, None, revision.clone()),
+    ] {
+        assert_eq!(
+            handoff(host, 1, source, credential, Some(revision)),
+            Err("Invalid backup session".into())
+        );
+        assert!(host.state.lock().unwrap().sessions.is_empty());
+        assert_eq!(host.state.lock().unwrap().generations, [None, None]);
+    }
+    // FI is Builderlab's alone: an admitted Hosted service refuses it. A
+    // service other than the FI identity root is ignored before that, so the
+    // adapter session never reaches another deployment.
+    let serving = |service_url: &str| NsecBackupHost {
+        config: Arc::new(Some(Config {
+            service_url: service_url.into(),
+            namespace: "backup/staging".into(),
+        })),
+        ..host(Some(fi.clone()))
+    };
+    for (service_url, source, expected) in [
+        (
+            "https://app.builderlab.xyz/api/goose",
+            Source::Hosted,
+            Err("Invalid backup session".into()),
+        ),
+        ("https://other.example/api/goose", Source::Hosted, Ok(None)),
+        (
+            "https://other.example/api/goose",
+            Source::Builderlab,
+            Ok(None),
+        ),
+    ] {
+        let host = serving(service_url);
+        assert_eq!(
+            handoff(&host, 1, source, None, Some(revision.clone())),
+            expected,
+            "{service_url}"
+        );
+        assert!(host.state.lock().unwrap().sessions.is_empty());
+        assert_eq!(host.state.lock().unwrap().generations, [None, None]);
+    }
+    assert_eq!(
+        handoff(
+            &federated,
+            1,
+            Source::Builderlab,
+            None,
+            Some(revision.clone())
+        ),
+        Ok(None)
+    );
+    let state = federated.state.lock().unwrap();
+    assert!(matches!(
+        state.sessions.as_slice(),
+        [Session { source: Source::Builderlab, auth: Auth::Federated(stored) }] if *stored == revision
+    ));
+    drop(state);
+    // A null handoff retires it, as for a credential.
+    assert_eq!(
+        handoff(&federated, 2, Source::Builderlab, None, None),
+        Ok(None)
+    );
+    assert!(federated.state.lock().unwrap().sessions.is_empty());
+}
+
+#[test]
+fn the_legacy_handoff_shape_is_unchanged() {
+    let host = NsecBackupHost {
+        federated: None,
+        state: Default::default(),
+        root: None,
+        config: production(),
+    };
+    let identity = IdentityHost::fixture();
+    assert_eq!(
+        host.session_from_ipc(
+            Source::Hosted,
+            1,
+            Some("synthetic-session".into()),
+            None,
+            identity.clone()
+        ),
+        Ok(None)
+    );
+    assert!(matches!(
+        host.state.lock().unwrap().sessions.as_slice(),
+        [Session { auth: Auth::Credential(c), .. }] if c.as_str() == "synthetic-session"
+    ));
+    assert_eq!(
+        host.session_from_ipc(Source::Hosted, 2, None, None, identity.clone()),
+        Ok(None)
+    );
+    assert!(host.state.lock().unwrap().sessions.is_empty());
+    assert_eq!(
+        host.session_from_ipc(Source::Hosted, 3, Some("not valid".into()), None, identity),
+        Err("Invalid backup session".into())
+    );
+}
+
+#[test]
+fn statuses_serialize_flat_and_report_whether_builderlab_backup_can_run() {
+    let status = |progress| {
+        serde_json::to_value(BackupStatus {
+            seq: 7,
+            pass: 3,
+            builderlab: true,
+            progress,
+        })
+        .unwrap()
+    };
+    let wire = |fields: serde_json::Value| {
+        let mut value = serde_json::json!({"seq":7,"pass":3,"builderlab":true});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        value
+    };
+    for (progress, name) in [
+        (Progress::Idle, "idle"),
+        (Progress::Running, "running"),
+        (Progress::Complete, "complete"),
+    ] {
+        assert_eq!(status(progress), wire(serde_json::json!({"status":name})));
+    }
+    for (reason, name) in [
+        (Waiting::NoConsent, "no_consent"),
+        (Waiting::NoSession, "no_session"),
+        (Waiting::NotLinked, "not_linked"),
+    ] {
+        assert_eq!(
+            status(Progress::Waiting { reason }),
+            wire(serde_json::json!({"status":"waiting","reason":name}))
+        );
+    }
+    for (kind, name) in [
+        (Failure::Busy, "busy"),
+        (Failure::SignedOut, "signed_out"),
+        (Failure::NotOffered, "not_offered"),
+        (Failure::OtherKeyLinked, "other_key_linked"),
+        (Failure::InvalidService, "invalid_service"),
+        (Failure::Refused, "refused"),
+        (Failure::Unreachable, "unreachable"),
+        (Failure::Unconfirmed, "unconfirmed"),
+        (Failure::Storage, "storage"),
+    ] {
+        assert_eq!(
+            status(Progress::Failed { kind }),
+            wire(serde_json::json!({"status":"failed","kind":name}))
+        );
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let granted = format!(
+        "{}{}",
+        buzzodz_plugins::BUILDERLAB_ORIGIN,
+        buzzodz_plugins::BUILDERLAB_API_BASE_PATH.trim_end_matches('/')
+    );
+    for (root, service_url, builderlab) in [
+        (None, granted.as_str(), false),
+        (
+            Some(directory.path()),
+            "https://backup.example/api/goose",
+            false,
+        ),
+        (
+            Some(directory.path()),
+            granted.as_str(),
+            !buzzodz_plugins::BUILDERLAB_ORIGIN.is_empty(),
+        ),
+    ] {
+        let host = NsecBackupHost {
+            federated: None,
+            state: Default::default(),
+            root: root.map(ToOwned::to_owned),
+            config: Arc::new(Some(Config {
+                service_url: service_url.into(),
+                namespace: "backup/staging".into(),
+            })),
+        };
+        assert_eq!(
+            serde_json::to_value(host.status()).unwrap(),
+            serde_json::json!({"seq":0,"pass":0,"builderlab":builderlab,"status":"idle"}),
+            "{service_url}"
+        );
     }
 }

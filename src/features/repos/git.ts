@@ -1,4 +1,5 @@
-import { ReadError } from "../relay/errors.ts";
+import { ReadError, transientStatus } from "../relay/errors.ts";
+import { isRetryableRead, retryRead } from "../relay/read-retry.ts";
 import { entityDtag, entityHex, gitHash } from "./routes.ts";
 
 export type GitRead = {
@@ -114,16 +115,27 @@ export function repoGitHost(
   return {
     async read(input, signal) {
       const body = parseGitRead(input);
-      const response = await request(body, signal);
-      if (!response.ok)
-        throw new ReadError(
-          response.status === 403 || response.status === 401
-            ? "denied"
-            : "unavailable",
-          "Repository content could not be read",
-          response.status,
-        );
-      const value = JSON.parse(await gitReadText(response)) as GitSnapshot;
+      const text = await retryRead(
+        async (signal) => {
+          const response = await request(body, signal);
+          if (!response.ok)
+            throw new ReadError(
+              response.status === 403 || response.status === 401
+                ? "denied"
+                : "unavailable",
+              "Repository content could not be read",
+              response.status,
+            );
+          return gitReadText(response);
+        },
+        signal,
+        // A missing repository or invalid request stays actionable.
+        (error) =>
+          error instanceof ReadError && error.status !== undefined
+            ? transientStatus(error.status)
+            : isRetryableRead(error),
+      );
+      const value = JSON.parse(text) as GitSnapshot;
       signal.throwIfAborted();
       if (
         !value ||

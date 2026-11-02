@@ -6,4 +6,4 @@ See who someone is, their status, and the channels they're in.
 
 1. Click a name or picture in a conversation to open their profile.
 2. Choose **Message** to start a direct message, or **Copy npub** to share their key.
-3. Choose **View your profile** in your profile menu to see your own.
+3. Open your own profile the same way, then choose **Edit profile** to change it.

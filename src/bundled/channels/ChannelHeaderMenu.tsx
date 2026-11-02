@@ -136,7 +136,7 @@ export function ChannelHeaderMenu({
       {prepared &&
       channel &&
       handoff &&
-      !channel.readOnly &&
+      (!channel.readOnly || channel.viewerRole === "guest") &&
       !channel.cached &&
       !channel.archived ? (
         <ChannelLifecycleMenu

@@ -60,12 +60,14 @@ export const test = base.extend({
   sortingSidebar: [false, { option: true }],
   initialSidebarSort: [{}, { option: true }],
   channelLifecycle: [false, { option: true }],
+  guestPermalinks: [false, { option: true }],
   lifecycleRole: ["owner", { option: true }],
   lifecycleOwnerAgent: [false, { option: true }],
   lifecycleVisibility: [{ archived: [], hidden: [] }, { option: true }],
   sidebarIcons: [false, { option: true }],
   channelNames: [{}, { option: true }],
   expectedPageFailure: [false, { option: true }],
+  expectedSidebarIconFailure: [false, { option: true }],
   largeSidebar: [false, { option: true }],
   iconCongestion: [false, { option: true }],
   dmLabels: [false, { option: true }],
@@ -85,6 +87,8 @@ export const test = base.extend({
   // Opt-in perf workload: let modeled HTTP pages arrive during wheel input.
   olderPageDelayMs: [null, { option: true }],
   membershipActivity: [false, { option: true }],
+  // Joins newer than all alpha history, by distinct new members.
+  membershipBurst: [0, { option: true }],
   launchAnimation: [false, { option: true }],
   historyCounts: [{ alpha: 1, beta: 1 }, { option: true }],
   // Rows sharing each history second; above the page size, pages split seconds.
@@ -127,12 +131,14 @@ export const test = base.extend({
       sortingSidebar,
       initialSidebarSort,
       channelLifecycle,
+      guestPermalinks,
       lifecycleRole,
       lifecycleOwnerAgent,
       lifecycleVisibility,
       sidebarIcons,
       channelNames,
       expectedPageFailure,
+      expectedSidebarIconFailure,
       largeSidebar,
       iconCongestion,
       dmLabels,
@@ -147,6 +153,7 @@ export const test = base.extend({
       firstSeenHistory,
       olderPageDelayMs,
       membershipActivity,
+      membershipBurst,
       launchAnimation,
       historyCounts,
       historyRowsPerSecond,
@@ -203,6 +210,10 @@ export const test = base.extend({
       secondary: "11234567-89ab-cdef-0123-456789abcdef",
     };
     const readEvents = new Map([
+      ["primary", new Map()],
+      ["secondary", new Map()],
+    ]);
+    const agentRecords = new Map([
       ["primary", new Map()],
       ["secondary", new Map()],
     ]);
@@ -319,6 +330,7 @@ export const test = base.extend({
           },
         ]
       : [];
+    const guestChannelId = guestPermalinks ? lifecycleRows[0].id : undefined;
     const archivedIds = new Set(lifecycleVisibility.archived);
     const hiddenDmIds = new Set(lifecycleVisibility.hidden);
     let lifecycleTime = 1700000001;
@@ -327,7 +339,11 @@ export const test = base.extend({
         ...channels,
         ...dmIds,
         ...sortingIds,
-        ...lifecycleRows.map((row) => row.id),
+        ...lifecycleRows
+          .filter(
+            (row) => row.id !== guestChannelId || lifecycleRole !== "nonmember",
+          )
+          .map((row) => row.id),
       ]),
     ];
     if (savedSidebar) {
@@ -521,6 +537,20 @@ export const test = base.extend({
           ),
         ]);
     const targetEvents = [];
+    // Enough newer roots to put the permalink outside the initial history page.
+    if (guestChannelId)
+      histories.set(
+        `primary/${guestChannelId}`,
+        Array.from({ length: 103 }, (_, i) =>
+          sign(
+            9,
+            [["h", guestChannelId]],
+            `Guest room history ${i}`,
+            peerKey,
+            1700000000 + i,
+          ),
+        ),
+      );
     let searchTarget;
     if (openSearch) {
       const root = sign(
@@ -545,12 +575,13 @@ export const test = base.extend({
     }
     let exact;
     if (exactMessages) {
-      const root = histories.get("primary/alpha")[2];
-      const replies = Array.from({ length: 80 }, (_, i) =>
+      const exactChannelId = guestChannelId ?? "alpha";
+      const root = histories.get(`primary/${exactChannelId}`)[2];
+      const replies = Array.from({ length: guestChannelId ? 3 : 80 }, (_, i) =>
         sign(
           9,
           [
-            ["h", "alpha"],
+            ["h", exactChannelId],
             ["e", root.id, "", "reply"],
             ["p", getPublicKey(peerKey)],
           ],
@@ -564,7 +595,7 @@ export const test = base.extend({
         replies[replies.length - 1] = sign(
           9,
           [
-            ["h", "alpha"],
+            ["h", exactChannelId],
             ["e", root.id, "", "root"],
             ["e", replies.at(-2).id, "", "reply"],
             ["p", getPublicKey(peerKey)],
@@ -604,6 +635,25 @@ export const test = base.extend({
       history.push(
         membershipEvent("member_joined", 0, 1700000740),
         membershipEvent("member_joined", 1, 1700000741),
+      );
+    }
+    if (membershipBurst) {
+      const history = histories.get(`primary/${channels[0]}`);
+      const start = history.at(-1).created_at + 1;
+      history.push(
+        ...Array.from({ length: membershipBurst }, (_, i) =>
+          sign(
+            40099,
+            [["h", channels[0]]],
+            JSON.stringify({
+              type: "member_joined",
+              actor: viewer,
+              target: getPublicKey(generateSecretKey()),
+            }),
+            relayKey,
+            start + i,
+          ),
+        ),
       );
     }
     let inboxDmAnchor;
@@ -1086,7 +1136,9 @@ export const test = base.extend({
                 viewer,
                 "",
                 lifecycleRows.some((row) => row.id === id)
-                  ? lifecycleRole
+                  ? lifecycleRole === "nonmember"
+                    ? "member"
+                    : lifecycleRole
                   : "member",
               ],
               ...(ownSoloChannels.includes(id)
@@ -1129,7 +1181,11 @@ export const test = base.extend({
           );
       if (filter.kinds?.includes(39000))
         return [
-          ...new Set([...rosterIds, ...(openSearch ? [OPEN_CHANNEL] : [])]),
+          ...new Set([
+            ...rosterIds,
+            ...(openSearch ? [OPEN_CHANNEL] : []),
+            ...(guestChannelId ? [guestChannelId] : []),
+          ]),
         ]
           .filter((id) => !filter["#d"] || filter["#d"].includes(id))
           .map(
@@ -1157,6 +1213,7 @@ export const test = base.extend({
                     lifecycleRows.find((row) => row.id === id)?.type ??
                       (dmIds.includes(id) ? "dm" : "stream"),
                   ],
+                  ...(id === guestChannelId ? [["join_role", "guest"]] : []),
                   ...(archivedIds.has(id) ? [["archived", "true"]] : []),
                   // Ordinary channels are explicitly public; do not add a public
                   // flag to private Solo chats or change the separate DM fixtures.
@@ -1246,7 +1303,7 @@ export const test = base.extend({
           kinds: [30177],
           limit: 500,
         });
-        return [];
+        return [...agentRecords.get(community).values()];
       }
       if (filter.kinds?.includes(30175) || filter.kinds?.includes(30177)) {
         expect(filter).toEqual({
@@ -1793,6 +1850,21 @@ export const test = base.extend({
         const channel = event.tags.find(([name]) => name === "h")?.[1];
         histories.get(`${community}/${channel}`).push(event);
         relay.publish(community, event);
+        return;
+      }
+      if (event.kind === 30177) {
+        const coordinates = event.tags.filter(([name]) => name === "d");
+        expect(coordinates).toEqual([
+          ["d", expect.stringMatching(/^[0-9a-f]{64}$/)],
+        ]);
+        expect(event.tags).toContainEqual(["runtime", expect.any(String)]);
+        const content = JSON.parse(event.content);
+        expect(content.name.trim()).not.toBe("");
+        expect(content.parallelism).toEqual(expect.any(Number));
+        expect(content.respond_to).toEqual(expect.any(String));
+        agentRecords.get(community).set(coordinates[0][1], event);
+        report.agentPublications ??= [];
+        report.agentPublications.push({ community, event });
         return;
       }
       if ([7, 5, 40003].includes(event.kind)) {
@@ -2688,23 +2760,28 @@ export const test = base.extend({
       const sidebarFailures = [
         ...(report.sidebarSortFailures ?? []),
         ...(report.sidebarMuteFailures ?? []),
-        ...(report.sidebarActivityFailures ?? []),
         ...(report.sidebarStarFailures ?? []),
         ...(report.sidebarAssignmentFailures ?? []),
         ...(report.sidebarRemovalFailures ?? []),
         ...(report.sidebarPreferenceFailures ?? []),
         ...(report.startupFailures ?? []),
       ];
+      // Activity reads retry a 502 quietly, so their journeys inject a 403.
+      const activityFailures = [...(report.sidebarActivityFailures ?? [])];
       const injectedSidebarFailure = (message, index) => {
-        if (
-          !/^Failed to load resource: the server responded with a status of 502/.test(
+        const status =
+          /^Failed to load resource: the server responded with a status of (502|403)/.exec(
             message,
-          )
-        )
-          return false;
-        const match = sidebarFailures.indexOf(consoleLocations.get(index));
+          )?.[1];
+        const failures =
+          status === "502"
+            ? sidebarFailures
+            : status === "403"
+              ? activityFailures
+              : undefined;
+        const match = failures?.indexOf(consoleLocations.get(index)) ?? -1;
         if (match < 0) return false;
-        sidebarFailures.splice(match, 1);
+        failures?.splice(match, 1);
         return true;
       };
       // Edge 403 pages (e.g. a VPN reconnecting) injected on relay reads.
@@ -2730,6 +2807,10 @@ export const test = base.extend({
             !retiredConsole(message, index) &&
             !injectedSidebarFailure(message, index) &&
             !injectedGitHubFailure(message, index) &&
+            !(
+              expectedSidebarIconFailure &&
+              message.includes("Fixture sidebar icon failure")
+            ) &&
             !(
               expectedPageFailure &&
               message.includes("Fixture page render failure")

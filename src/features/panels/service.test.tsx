@@ -8,6 +8,7 @@ import { SettingsCardsService } from "../settings/service";
 import { ShortcutsService } from "../shortcuts/service";
 import { provideRelay } from "../relay/service";
 import { provideNavigation } from "../navigation/service";
+import { emptySync } from "../communities/known-communities";
 import * as channelsPlugin from "../../bundled/channels";
 import * as githubPlugin from "../../bundled/github";
 import { flush } from "../relay/testing";
@@ -40,6 +41,17 @@ it("independently unloads panels without removing the page or shared data", asyn
     addTool: () => {},
     addAttentionSource: () => {},
   });
+  root.provide("communityReader", {
+    subscribe: () => () => {},
+    snapshot: () => ({
+      status: "unavailable",
+      relayAvailable: false,
+      profile: { name: "", picture: "" },
+      memberships: [],
+      selected: null,
+      sync: emptySync(),
+    }),
+  });
   // GitHub reads through gh where the host can run it; here it cannot.
   root.provide("host", {});
   provideNavigation(root);
@@ -52,6 +64,9 @@ it("independently unloads panels without removing the page or shared data", asyn
     expect(panels.resolve("https://github.com/block/buzz/pull/23")?.title).toBe(
       "GitHub",
     );
+    expect(
+      panels.resolve("https://github.com/block/buzz/pull/23")?.deferUntilShown,
+    ).toBe(true);
     const channelPanels = panels
       .snapshot()
       .filter((panel) => panel.pluginId === "channels");
@@ -252,6 +267,11 @@ it("validates and freezes launcher metadata without changing target resolution",
       expect(() => ctx.panels.register({ ...base, order } as never)).toThrow(
         "order",
       );
+    }
+    for (const deferUntilShown of [null, "true", 1, {}]) {
+      expect(() =>
+        ctx.panels.register({ ...base, deferUntilShown } as never),
+      ).toThrow("deferUntilShown");
     }
     for (const channelMenu of [
       null,

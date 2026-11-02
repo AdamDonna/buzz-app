@@ -1,20 +1,17 @@
 import { nativeIdentityEnabled } from "../identity/service";
+import { retryRead } from "../relay/read-retry";
 import { nativeCommunityRequest } from "./native-api";
 import { connectCommunityTransport, registerCommunity } from "./connection";
 import { settledRefusal, type SettledRefusal } from "./leave-protocol";
 import { registerBrokerCommunity } from "../relay/transport";
 import type { EventData } from "../relay/events";
 import type { RelaySession } from "../relay/session";
+import type { JoinPolicy } from "./join-policy";
 import type { PersonalProfile } from "./service";
 export type CommunityInfo = {
   name?: string;
   icon?: string;
-  policy: {
-    version: string;
-    terms_markdown?: string;
-    privacy_markdown?: string;
-    age_attestation_required: boolean;
-  } | null;
+  policy: JoinPolicy | null;
 };
 export async function communityRequest<T>(
   id: string,
@@ -55,7 +52,10 @@ export async function inspectProfile(id: string, session?: RelaySession) {
   // update its shared profile directory. Joining uses the selected host adapter.
   const transport =
     session ??
-    (await connectCommunityTransport(id, AbortSignal.timeout(12000)));
+    (await retryRead(
+      (signal) => connectCommunityTransport(id, signal),
+      AbortSignal.timeout(12000),
+    ));
   if (!transport.viewer) throw new Error("Profile identity is unavailable");
   const filters = [
     {
@@ -71,7 +71,10 @@ export async function inspectProfile(id: string, session?: RelaySession) {
           signal: AbortSignal.timeout(12000),
           fresh: true,
         })
-      : await transport.query(filters, AbortSignal.timeout(12000));
+      : await retryRead(
+          (signal) => transport.query(filters, signal),
+          AbortSignal.timeout(12000),
+        );
   const event = events
     .filter((e) => e.kind === 0 && e.pubkey === transport.viewer)
     .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];

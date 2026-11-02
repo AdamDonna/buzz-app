@@ -26,8 +26,34 @@ export async function newChat(page) {
   await expect(
     page.getByRole("button", { name: /^Community switcher:/ }),
   ).toBeVisible();
+  if (page.viewportSize().width <= 650) {
+    await settleShellToggle(page);
+    const show = page.getByRole("button", {
+      name: "Show navigation",
+      exact: true,
+    });
+    if (await show.isVisible()) await show.click();
+  }
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: "New chat", exact: true }).click();
+}
+
+// The agents-only composer pill's menu adds and removes agents, never the
+// last, and stays open: add this agent, drop the rest, then dismiss it, which
+// returns typing to the draft.
+export async function sendOnlyTo(page, pill, agent) {
+  await pill.click();
+  const menu = page.getByRole("dialog", { name: "Mention a member or agent" });
+  const name = `${agent.name} ${agent.pubkey}`;
+  const row = menu.getByRole("button", { name, exact: true });
+  if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+  await expect(row).toHaveAttribute("aria-pressed", "true");
+  const others = menu.locator(
+    `[aria-pressed="true"]:not([aria-label="${name}"])`,
+  );
+  while (await others.count()) await others.first().click();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
 }
 
 // Select from an already-open palette, including tests that inspect page order.
@@ -75,6 +101,16 @@ export async function selectPage(page, name, { connected = true } = {}) {
   }
   await input.press("Enter");
   await expect(dialog).not.toBeVisible();
+}
+
+// Activate a control by keyboard when the test is about the action, not
+// pointer hit testing: a click released after the control moved (a timeline's
+// re-pin after opening a thread, Virtua's pointer hold, a list's layout
+// motion) reaches whatever is under the pointer instead.
+export async function activate(control) {
+  await control.focus();
+  await expect(control).toBeFocused();
+  await control.press("Enter");
 }
 
 // The shell toggle's label follows a matchMedia change listener in AppShell,
@@ -137,23 +173,27 @@ export async function chooseColorMode(page, name) {
   await expect(choice).toHaveText(name);
 }
 
-// Secondary panels enter with a short horizontal transform. Positions compared
-// across separate reads must wait for that motion: each read sees a different
-// offset, so a fixed gap between two controls can appear to overlap.
+// Secondary panels enter with a transform and a parent grid transition.
+// Positions compared across separate reads must wait for both: each read sees
+// a different offset, so a fixed gap between controls can appear to overlap.
 export async function settlePanelMotion(page) {
-  await page.locator("[data-panel-dock]").evaluateAll((docks) =>
-    Promise.allSettled(
-      docks.flatMap((dock) =>
-        dock
-          .getAnimations({ subtree: true })
-          .filter(
-            (animation) =>
-              animation.effect?.getComputedTiming().endTime !== Infinity,
-          )
-          .map((animation) => animation.finished),
+  await page
+    .locator("[data-panel-dock]")
+    .evaluateAll((docks) =>
+      Promise.allSettled(
+        docks.flatMap((dock) =>
+          [
+            ...dock.getAnimations({ subtree: true }),
+            ...dock.parentElement.getAnimations(),
+          ]
+            .filter(
+              (animation) =>
+                animation.effect?.getComputedTiming().endTime !== Infinity,
+            )
+            .map((animation) => animation.finished),
+        ),
       ),
-    ),
-  );
+    );
 }
 
 // Dialogs enter with a short upward transform (overlays.css). Positions

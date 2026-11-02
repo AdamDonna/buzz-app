@@ -87,7 +87,15 @@ Plugins define integration-specific semantic mappings in their own styles, using
 shared roles where shared improvements should flow through. The shared system
 owns palette values and generic paint roles, not integration-specific status
 names. Categorical purple (`--text-categorical-purple` paired with
-`--surface-categorical-purple`) stays independent of customizable app accent.
+`--surface-categorical-purple`, and `--icon-categorical-purple` for state icons)
+stays independent of customizable app accent. Inside your own bubble the host
+hands state icons their `-own` pair (`--icon-subtle-own`, `--icon-success-own`,
+`--icon-categorical-purple-own`), which is the bubble's link ink at Buzzin’,
+where the solid accent fill clears neither grey nor any state hue. It does so
+through `--message-icon-subtle`, `--message-icon-success` and
+`--message-icon-categorical-purple`, which a state icon reads with the shared
+role as its fallback. Neutral insets in the bubble (code, tables, a revealed
+spoiler) drop them, as they drop own mention pairing.
 
 GitHub owns its `--github-*` status/diff mappings and browser coverage of the
 resolved text/fill pairs in both themes, including shared-role updates and merged

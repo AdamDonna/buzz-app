@@ -2,7 +2,7 @@
   "id": "block.builderlab",
   "name": "Builderlab",
   "apiVersion": 1,
-  "description": "Connect Buzz to Builderlab-hosted agents.",
+  "description": "Host communities and agents with your Builderlab account.",
   "discovery": {
     "category": "agents",
     "tags": ["Essentials", "builderlab"]

@@ -71,6 +71,8 @@ function fixture(t, { install = true } = {}) {
     "package.json",
     "lefthook.yml",
     "justfile",
+    // rustup selects the pinned toolchain from the working directory.
+    "rust-toolchain.toml",
     "scripts",
     ...biomePlugins.map((plugin) => path.normalize(plugin)),
   ];

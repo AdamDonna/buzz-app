@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { PageNavigation } from "../features/navigation/service";
 import type { Agents } from "../features/agents/service";
 import { AgentDefaults } from "../bundled/agents/AgentDefaults";
 import { Header, InlineHeader } from "../shared/design-system/ui/Header";
@@ -37,10 +38,14 @@ const delayLabel = (minutes: number) =>
 export function AgentSettings({
   agents,
   active = true,
+  navigation,
+  onProvider,
   keepAwakeAvailable = isTauri() && isApplePlatform(navigator.platform),
 }: {
   agents?: Agents | undefined;
   active?: boolean;
+  navigation?: PageNavigation | undefined;
+  onProvider?: ((provider?: string) => void) | undefined;
   /** Only the macOS app can keep the computer awake. */
   keepAwakeAvailable?: boolean;
 }) {
@@ -56,7 +61,13 @@ export function AgentSettings({
   return (
     <section aria-labelledby="agent-settings-title">
       <Header id="agent-settings-title" title="Agent setup" />
-      {agents && active && <AgentDefaults agents={agents} />}
+      {agents && active && (
+        <AgentDefaults
+          agents={agents}
+          navigation={navigation}
+          onProvider={onProvider}
+        />
+      )}
       <div className="mt-section-gap">
         <InlineHeader title="Agent behavior" />
         <SettingsGroup>

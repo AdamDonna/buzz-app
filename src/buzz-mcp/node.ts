@@ -299,20 +299,26 @@ export function nodeClient(
           heads.set(d, event);
       }
       const entries: Memory[] = [];
+      const deleted: { slug: string; createdAt: number }[] = [];
       for (const event of heads.values()) {
         try {
           const entry = JSON.parse(decrypt(event.content, key));
           const body = entry.slug === "core" ? entry.profile : entry.value;
-          if (typeof entry.slug === "string" && typeof body === "string")
+          if (typeof entry.slug !== "string") continue;
+          if (typeof body === "string")
             entries.push({
               slug: entry.slug,
               body,
               createdAt: event.created_at,
             });
+          // A write that recreates a deleted slug must follow its tombstone.
+          else if (body === null && entry.slug !== "core")
+            deleted.push({ slug: entry.slug, createdAt: event.created_at });
         } catch {}
       }
       return {
         entries: entries.sort((a, b) => a.slug.localeCompare(b.slug)),
+        ...(deleted.length ? { deleted } : {}),
         partial: events.length >= MEMORY_LIMIT,
       };
     },

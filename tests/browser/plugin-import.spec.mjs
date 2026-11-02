@@ -1,5 +1,6 @@
 import { pluginAction } from "./plugin-settings.mjs";
 import {
+  activate,
   chooseColorMode,
   closeSettings,
   openPage,
@@ -460,7 +461,7 @@ test("Settings controls scale together and keep enlarged labels reachable", asyn
           exact: true,
           includeHidden: true,
         }),
-      ).toHaveAttribute("data-icon-size", "sm");
+      ).toHaveAttribute("data-icon-size", "md");
       await expect
         .poll(() =>
           settingsDialog(page)
@@ -706,7 +707,10 @@ test("folder/Git preview selects the exact subfolder and preserves enabled state
 
   await button(page, "View Example two details").click();
   await expect(button(page, "Reload")).toHaveCount(0);
-  await enabled.click();
+  // Opening details narrows the catalog column, and the list's layout motion
+  // can still move the row after a pointer has pressed its button. The enabled
+  // state, not hit testing, is under test here.
+  await activate(enabled);
   await expect(enabled).toHaveAccessibleName("Disable Example two");
   await expect(button(page, "Reload")).toHaveCount(0);
   await page.evaluate(() => {

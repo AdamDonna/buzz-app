@@ -1,3 +1,4 @@
+import type { VerifiedProfileAuthority } from "./verified-profile";
 import type { ReminderHost } from "./reminders";
 import {
   memoryResponseText,
@@ -59,6 +60,7 @@ import { createRelayProfiler, type RelayProfiler } from "./profiling";
 import {
   subscribeRelayTraffic,
   type LiveCallbacks,
+  type LiveSocket,
   type LiveSubscription,
 } from "./live";
 import { subscribeBrokerTraffic } from "./broker-live";
@@ -160,6 +162,10 @@ export interface ReadTransport {
   readonly writeSidebarSectionOrder?: SidebarSectionOrderMutator;
   readonly renameSidebarSection?: SidebarSectionRenameMutator;
   readonly writeSidebarStar?: SidebarStarMutator;
+  /** Host-only private account record of the main agent the viewer chose:
+   * undefined when never saved. */
+  readMainAgent?(signal: AbortSignal): Promise<string | undefined>;
+  writeMainAgent?(agent: string, signal: AbortSignal): Promise<void>;
   readonly profiling?: RelayProfiler;
   /** Verified incoming traffic. The session owns this subscription and fences late delivery. */
   subscribe?(callbacks: LiveCallbacks): LiveSubscription;
@@ -175,6 +181,12 @@ export interface ReadTransport {
   readonly relayAuthor: string;
   /** Explicit NIP-11 self from this community, never a contact-key fallback. */
   readonly archiveAuthority?: string;
+  /** Optional verified-profile capability from this community's explicit NIP-11 self. */
+  readonly verifiedProfiles?: VerifiedProfileAuthority | undefined;
+  /** Refresh NIP-11; null is an explicit disable, rejection preserves discovery. */
+  readVerifiedProfileAuthority?(
+    signal: AbortSignal,
+  ): Promise<VerifiedProfileAuthority | null>;
   /** Purpose-bound authoritative recency, verified and max 128 channel IDs. */
   channelActivity?(
     channelIds: readonly string[],
@@ -1309,6 +1321,7 @@ export async function connectSignedTransport(
   signer: Signer,
   httpOrigin: string,
   relayAuthor: string,
+  socketFactory?: (url: string) => LiveSocket,
 ): Promise<ReadTransport> {
   const viewer = await signer.getPublicKey();
   httpOrigin = relayOrigin(httpOrigin);
@@ -1374,7 +1387,7 @@ export async function connectSignedTransport(
             ...callbacks,
             presence: presence.receive,
           }),
-          undefined,
+          socketFactory,
           owner.live,
         );
       } catch (error) {

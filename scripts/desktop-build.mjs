@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { loadEnv } from "vite";
 import { desktopOverlay, options } from "./desktop-config.mjs";
 
 // A debug bundle for the one thing `just desktop` cannot do: macOS routes a URL
@@ -23,7 +24,21 @@ const defaults = chose ? ["--debug"] : ["--debug", "--bundles", "app"];
 // Prepend, as `just desktop` does: Tauri treats everything after a bare positional
 // as runner arguments, and a user's own --config must merge after ours to win. The
 // overlay gives the bundle the development identifier and any worktree icon.
-forwarded.unshift("--config", JSON.stringify(desktopOverlay(root)));
+const config = desktopOverlay(root);
+if (process.platform === "darwin") {
+  const identity = loadEnv(
+    "development",
+    root,
+    "BUZZ_DEV_SIGNING_IDENTITY",
+  ).BUZZ_DEV_SIGNING_IDENTITY;
+  if (identity) {
+    config.bundle = {
+      ...config.bundle,
+      macOS: { signingIdentity: identity },
+    };
+  }
+}
+forwarded.unshift("--config", JSON.stringify(config));
 forwarded.push(...rest);
 const result = spawnSync(
   "pnpm",
