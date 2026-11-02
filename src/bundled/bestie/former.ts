@@ -105,8 +105,12 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
    * loop. */
   const saving = new Set<string>();
   const tried = new Map<string, string>();
+  // Saves under way when the plugin stops start nothing more.
+  const lifetime = new AbortController();
+  const { signal } = lifetime;
   let session = relay.snapshot().session;
   const reconcile = () => {
+    if (signal.aborted) return;
     const relaySnapshot = relay.snapshot();
     if (relaySnapshot.session !== session) {
       session = relaySnapshot.session;
@@ -144,13 +148,18 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
             const fresh = agents
               .snapshot()
               .agents.find((each) => each.key === agent.key);
-            if (!fresh || bestie.snapshot() === agent.pubkey) return;
-            await saveFeature(agents, fresh, feature, false, { timerOnly });
+            if (signal.aborted || !fresh || bestie.snapshot() === agent.pubkey)
+              return;
+            await saveFeature(agents, fresh, feature, false, {
+              timerOnly,
+              signal,
+            });
           }
         })
-        .catch((error: unknown) =>
-          console.warn("A former Bestie's check-ins didn't stop", error),
-        )
+        .catch((error: unknown) => {
+          if (!signal.aborted)
+            console.warn("A former Bestie's check-ins didn't stop", error);
+        })
         .finally(() => {
           saving.delete(agent.key);
           // What changed while it saved.
@@ -163,6 +172,7 @@ export function stopFormerCheckIns(relay: RelayData, agents: ReconcileAgents) {
   const stopRelay = relay.subscribe(reconcile);
   reconcile();
   return () => {
+    lifetime.abort();
     stopBestie();
     stopAgents();
     stopRelay();

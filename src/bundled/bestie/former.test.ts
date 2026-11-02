@@ -181,6 +181,29 @@ it("stops a timer left without its section, and doesn't retry a failed save unti
   warn.mockRestore();
 });
 
+it("starts no further save once stopped while a timer save is pending", async () => {
+  const { relay, settle } = community();
+  const { agents, save } = host([ada, bea]);
+  let resolve = () => {};
+  save.mockImplementationOnce(
+    () =>
+      new Promise<void>((done) => {
+        resolve = done;
+      }),
+  );
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const stop = stopFormerCheckIns(relay, agents);
+  await settle(bea.pubkey);
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  stop();
+  resolve();
+  await new Promise((done) => setTimeout(done, 0));
+  // Neither its instructions nor a final pass over the agents.
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(warn).not.toHaveBeenCalled();
+  warn.mockRestore();
+});
+
 it("turns memory on for a local agent made Bestie here, unless it has it", async () => {
   const { relay } = community();
   const { agents, save } = host([ada, bea]);

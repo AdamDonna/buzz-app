@@ -55,8 +55,9 @@ export function featurePresent(agent: Agent, feature: Feature) {
  * agent. With `timerOnly`, the instructions, which each of the agent's
  * communities shares, are left as they are. Attention is saved first: if the
  * instructions then fail to save, On undoes its timer, and the half Off
- * leaves reads as off, which turning it either way finishes. On refuses a section edited by hand: Restore puts
- * it back first. */
+ * leaves reads as off, which turning it either way finishes. On refuses a
+ * section edited by hand: Restore puts it back first. Once `signal` aborts,
+ * the instructions aren't saved. */
 export async function saveFeature(
   agents: FeatureAgents,
   agent: Agent,
@@ -65,7 +66,8 @@ export async function saveFeature(
   {
     channel,
     timerOnly = false,
-  }: { channel?: string; timerOnly?: boolean } = {},
+    signal,
+  }: { channel?: string; timerOnly?: boolean; signal?: AbortSignal } = {},
 ) {
   if (on && featureState(instructionsOf(agent), feature) === "edited")
     throw new Error(
@@ -112,6 +114,8 @@ export async function saveFeature(
     ? withFeature(instructions, feature, true)
     : off.reduce((text, item) => withFeature(text, item, false), instructions);
   if (next === instructions) return;
+  // The caller may have stopped while Attention saved.
+  signal?.throwIfAborted();
   try {
     await saveInstructions(agents, agent, next);
   } catch (cause) {
