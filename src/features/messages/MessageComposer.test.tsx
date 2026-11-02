@@ -477,6 +477,10 @@ function mount(
       removed = true;
       view.rerender(tree());
     },
+    restoreComposer() {
+      removed = false;
+      view.rerender(tree());
+    },
     retarget(
       next: Partial<
         Omit<MessageComposerProps, "session"> & { session: RelaySession }
@@ -14087,6 +14091,35 @@ it.each([
     expect(service.navigation.open).not.toHaveBeenCalled();
   },
 );
+
+it("keeps a spent /leave draft from coming back when its cleanup could not be saved after the composer was gone", async () => {
+  const service = await commandService();
+  const h = mount(
+    { extensions: service, slashCommands: true, scope: stewardScope },
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+  const world = stewardship(h, "member");
+  const left = deferred<void>();
+  world.lifecycle.mockImplementation(() => left.promise);
+  h.fill("/leave");
+  h.submit();
+  await waitFor(() => expect(world.lifecycle).toHaveBeenCalledOnce());
+  const fail = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw Error("full");
+  });
+  try {
+    act(() => h.removeComposer());
+    await act(async () => left.resolve());
+    expect(await screen.findByText("Channel left: General")).toBeVisible();
+  } finally {
+    fail.mockRestore();
+  }
+  act(() => h.restoreComposer());
+  expect(h.input()).not.toHaveValue("/leave");
+});
 
 it("refuses to publish a command's text into a destination that stopped being writable, and keeps the draft", async () => {
   const service = await commandService();

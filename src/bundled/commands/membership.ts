@@ -211,6 +211,7 @@ export function membershipCommands(navigation: Navigation): SlashCommand[] {
             failed.push(`${name} (${why(reason)})`);
             continue;
           }
+          signal.throwIfAborted();
           const { operation, error } = administration.snapshot(channelId);
           if (
             operation?.change.pubkey === pubkey &&

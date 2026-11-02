@@ -519,6 +519,25 @@ describe("/remove", () => {
     );
   });
 
+  it("stops without reporting when the send is abandoned during the last removal, which administration resolves as failed", async () => {
+    const w = world();
+    const abandon = new AbortController();
+    w.administration.run.mockImplementationOnce(async (_id, change) => {
+      abandon.abort();
+      w.administration.snapshot.mockReturnValueOnce({
+        status: "error",
+        authority: { roles: {} },
+        operation: { change, status: "failed" },
+        error: "Cancelled",
+      } as never);
+    });
+    await expect(
+      commandsFor(w).run("remove", "@Alice", [alice], {
+        signal: abandon.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("explains each member it will not remove, and removes no one", async () => {
     const w = world();
     const self = { pubkey: viewer, name: "Me" };
