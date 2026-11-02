@@ -700,10 +700,12 @@ it.each([
       expect(h.owner.session.channels.get?.("a")).toBeUndefined();
       expect(h.owner.session.channels.list().status).toBe("ready");
       expect(h.owner.session.live.snapshot().roster.state).toBe("verified");
-      if (reset === "disconnect") {
-        h.connected();
-        h.live.established();
-      } else h.owner.session.channels.refreshList?.();
+      // A continuous reconnect replays no hint and skips the full read, but
+      // the retired confirmation still owes its strong read.
+      if (reset === "cache-clear")
+        h.live.state({ status: "retrying", routes: [] });
+      h.connected();
+      h.live.established(undefined, { route: "membership", continuous: true });
       await flush();
       await recoverRetiredHint(h);
     } finally {

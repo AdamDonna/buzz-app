@@ -12,6 +12,7 @@ import {
   livePresenceAuthors,
   liveJoined,
   liveProvenance,
+  liveGlobal,
   type LiveCallbacks,
   type LiveSnapshot,
   type LiveSubscription,
@@ -331,8 +332,13 @@ export function subscribeBrokerTraffic(
                   if (current.length) callbacks.established(current);
                 } else {
                   const id = channelField(data);
-                  if (!id || currentChannel(id, revision))
-                    callbacks.established(id);
+                  if (id) {
+                    if (currentChannel(id, revision)) callbacks.established(id);
+                  } else
+                    callbacks.established(
+                      undefined,
+                      liveGlobal((data as { global?: unknown }).global),
+                    );
                 }
               } else if (kind === "recover") {
                 callbacks.recover?.();

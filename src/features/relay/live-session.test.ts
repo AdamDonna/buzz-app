@@ -2,7 +2,7 @@ import { ReadError } from "./errors";
 import { assert, expect, it, vi, afterEach } from "vitest";
 import { createRelaySession } from "./session";
 import type { ChannelStoreOptions } from "./store";
-import type { RelayEvent } from "./events";
+import type { ReadFilter, RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
 import { headRecovering } from "./live-recovery";
 import {
@@ -13,6 +13,7 @@ import {
   metadata,
   roster,
   scriptedTransport,
+  signed,
 } from "./testing";
 
 it("clears retained repository homes on live recovery, cache clearing, and disposal", async () => {
@@ -1223,5 +1224,165 @@ it("an older page still in flight when a catch-up fill settles is discarded, and
     });
   } finally {
     h.owner.dispose();
+  }
+});
+
+it("re-reads held profiles and the roster on reconnect only when their replay was cut, had no cursor, failed or went unreported, or an earlier read failed", async () => {
+  const relay = keypair(),
+    viewer = keypair(),
+    alice = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  let live!: LiveCallbacks;
+  const owner = createRelaySession({
+    ...wire.transport,
+    subscribe(callbacks) {
+      live = callbacks;
+      return { update() {}, retry() {}, dispose() {} };
+    },
+  });
+  let profile = signed(alice, {
+    kind: 0,
+    content: '{"name":"Alice"}',
+    tags: [],
+  });
+  // Every roster read finds the same channel, so no read revokes access.
+  const channel = [
+    roster(relay, "c", [viewer.pubkey]),
+    metadata(relay, "c", "C"),
+  ];
+  let refuseProfiles = false;
+  /** Answers every read until the wire is quiet; returns what was read. */
+  const drain = async () => {
+    const reads: (readonly ReadFilter[])[] = [];
+    for (let quiet = 0; quiet < 3; ) {
+      await flush();
+      if (!wire.pending.length) quiet++;
+      else quiet = 0;
+      for (const entry of wire.pending.splice(0)) {
+        reads.push(entry.filters);
+        const kinds = entry.filters.flatMap((f) => f.kinds ?? []);
+        if (refuseProfiles && kinds.includes(0)) {
+          entry.fail(new Error("refused"));
+          continue;
+        }
+        entry.respond(
+          kinds.includes(0)
+            ? [profile]
+            : kinds.includes(39002) || kinds.includes(39000)
+              ? channel
+              : [],
+        );
+      }
+    }
+    return reads;
+  };
+  const profileReads = (reads: (readonly ReadFilter[])[]) =>
+    reads.filter((filters) =>
+      filters.some(
+        (f) => f.kinds?.includes(0) && f.authors?.includes(alice.pubkey),
+      ),
+    );
+  const rosterReads = (reads: (readonly ReadFilter[])[]) =>
+    reads.filter((filters) => filters.some((f) => f.kinds?.includes(39002)));
+  /** Drop the stream, reconnect, and establish both globals. */
+  const reconnect = async (profiles?: boolean, membership = true) => {
+    live.state({ status: "retrying", routes: [] });
+    live.state({ status: "connected", routes: [] });
+    if (profiles === undefined) {
+      // A host that reports no route: both globals establish plainly.
+      live.established();
+      live.established();
+    } else {
+      live.established(undefined, { route: "profiles", continuous: profiles });
+      live.established(undefined, {
+        route: "membership",
+        continuous: membership,
+      });
+    }
+    return drain();
+  };
+  try {
+    owner.session.channels.ensureList();
+    await drain();
+    const held = owner.session.profiles.ensure([alice.pubkey]);
+    await drain();
+    await held;
+    expect(owner.session.profiles.snapshot().get(alice.pubkey)?.name).toBe(
+      "Alice",
+    );
+    // The first connection has no cursor: every held profile is read again.
+    live.state({ status: "connected", routes: [] });
+    live.established(undefined, { route: "profiles", continuous: false });
+    live.established(undefined, { route: "membership", continuous: false });
+    expect(profileReads(await drain())).toHaveLength(1);
+    // A continuous replay already delivered every change: no full read.
+    const quiet = await reconnect(true);
+    expect(profileReads(quiet)).toEqual([]);
+    expect(rosterReads(quiet)).toEqual([]);
+    // A cut replay may have left changes out: read what that route covers.
+    const cut = await reconnect(false);
+    expect(profileReads(cut)).toHaveLength(1);
+    expect(rosterReads(cut)).toEqual([]);
+    const cutRoster = await reconnect(true, false);
+    expect(profileReads(cutRoster)).toEqual([]);
+    expect(rosterReads(cutRoster)).toHaveLength(1);
+    // A read that fails stays owed: the next continuous reconnect reads again.
+    refuseProfiles = true;
+    expect(profileReads(await reconnect(false))).toHaveLength(1);
+    refuseProfiles = false;
+    expect(profileReads(await reconnect(true))).toHaveLength(1);
+    expect(profileReads(await reconnect(true))).toEqual([]);
+    // An older host reports no route: once per connection, as before.
+    expect(profileReads(await reconnect(undefined))).toHaveLength(1);
+    expect(owner.session.profiles.snapshot().get(alice.pubkey)?.name).toBe(
+      "Alice",
+    );
+    /** Drop the stream and reconnect without establishing anything yet. */
+    const drop = () => {
+      live.state({ status: "retrying", routes: [] });
+      live.state({ status: "connected", routes: [] });
+    };
+    // Membership reports its route but profiles report nothing, in either
+    // order: the missing report still reads every held profile again, once.
+    drop();
+    live.established(undefined, { route: "membership", continuous: true });
+    live.established();
+    expect(profileReads(await drain())).toHaveLength(1);
+    drop();
+    live.established();
+    live.established(undefined, { route: "membership", continuous: true });
+    expect(profileReads(await drain())).toHaveLength(1);
+    // The profiles route fails before it establishes while membership
+    // establishes: the finite reads replace its replay, once per connection.
+    profile = signed(alice, {
+      kind: 0,
+      content: '{"name":"Alice Two"}',
+      tags: [],
+      created_at: 1_700_000_100,
+    });
+    drop();
+    live.established(undefined, { route: "membership", continuous: true });
+    const failed = {
+      status: "connected",
+      routes: [
+        {
+          id: "profiles",
+          status: "error",
+          replay: "unknown",
+          error: "Live subscription setup timed out; retry available",
+        },
+      ],
+    } as const;
+    live.state(failed);
+    live.state(failed);
+    expect(profileReads(await drain())).toHaveLength(1);
+    expect(owner.session.profiles.snapshot().get(alice.pubkey)?.name).toBe(
+      "Alice Two",
+    );
+    // Its later continuous establishment on the same connection reads nothing.
+    live.established(undefined, { route: "profiles", continuous: true });
+    expect(profileReads(await drain())).toEqual([]);
+  } finally {
+    owner.dispose();
   }
 });

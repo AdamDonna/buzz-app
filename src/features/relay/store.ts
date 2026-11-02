@@ -3309,6 +3309,9 @@ export function createChannelStore(
   return {
     queries,
     roster: () => rosterRefresh,
+    /** A full roster read is still due: the last one did not verify, or a
+     * retired exact confirmation left a strong read owed. */
+    rosterOwed: () => rosterRefresh.state !== "verified" || strongListAgain,
     /** Preserve a retired exact confirmation's routing without scheduling work.
      * The next refresh/Retry owns dispatch and the existing cooldown. */
     requireStrongListRead() {

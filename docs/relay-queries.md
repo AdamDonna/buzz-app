@@ -632,7 +632,14 @@ The signed host and opt-in broker subscribe to authenticated Nostr traffic. Veri
 incoming events, finite reads and own echoes enter the same session reconciliation
 path. Reconnect performs bounded replay and revalidates retained channel heads and
 filtered views. History bounds still come from finite channel reads; replay does
-not claim complete history. Decryption, uploads and server-derived aggregate calculations remain domain capabilities.
+not claim complete history. Each global route reports at establishment whether it
+stayed continuous: it resumed from an earlier connection's cursor and its replay
+ended below the limit. Held profiles and the roster are read in full again only
+when their route (`profiles`, `membership`) was not continuous, failed or went
+unreported, or when the last full read has not succeeded yet. Continuity is a skip
+rule, not a delivery proof: the relay can drop a live frame for a slow client
+without telling it, and a replay does not reach a frame dropped long before the
+disconnect. Window focus does not read the roster. Decryption, uploads and server-derived aggregate calculations remain domain capabilities.
 
 `session.messages.send(channelId, text)`, `.reply(channelId, resolvedRootId, text)`,
 `.edit(messageId, text)` and `.retry(id)`
