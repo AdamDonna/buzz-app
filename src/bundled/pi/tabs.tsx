@@ -897,7 +897,9 @@ export function createTabs({
     settingsSection,
     settingsContent,
   }: AgentViewProps<Config>) {
-    const source = runtime.setupFor(agent.key);
+    const source = settingsHost?.pendingSave
+      ? setup
+      : runtime.setupFor(agent.key);
     const form = useId();
     const saved = readConfig(agent.config);
     const [draft, setDraft] = useState(saved);
