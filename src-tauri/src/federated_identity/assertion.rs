@@ -791,7 +791,6 @@ fn validate_jwt(
         || expiry > session_expiry
         || minted > now.saturating_add(5)
         || minted > expiry
-        || expiry - minted > 300
     {
         return Err("invalid-assertion".into());
     }
@@ -1123,6 +1122,14 @@ mod tests {
             validate_jwt(&valid, &viewer, 200, &viewer, relay, 250, 101).unwrap(),
             100
         );
+        for lifetime in [300, 86400, 86401, 604800] {
+            let expiry = 100 + lifetime;
+            let token = jwt(&viewer, relay, 100, expiry);
+            assert_eq!(
+                validate_jwt(&token, &viewer, expiry, &viewer, relay, expiry, 101).unwrap(),
+                100
+            );
+        }
         for (token, returned, expires, requested, community, session, time) in [
             (
                 valid.clone(),
@@ -1170,13 +1177,13 @@ mod tests {
                 200,
             ),
             (
-                jwt(&viewer, relay, 100, 401),
+                jwt(&viewer, relay, 100, 99),
                 viewer.clone(),
-                401,
+                99,
                 viewer.clone(),
                 relay,
-                500,
-                101,
+                250,
+                98,
             ),
             (
                 jwt(&viewer, relay, 107, 200),
