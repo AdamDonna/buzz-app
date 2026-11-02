@@ -1234,8 +1234,8 @@
 }
 
 :root {
-  --howdy-neutral-1-light: #f4eee2;
-  --howdy-neutral-2-light: #eae9e3;
+  --howdy-neutral-1-light: #f7f3ea;
+  --howdy-neutral-2-light: #f4f3f0;
   --howdy-neutral-3-light: #dde2e4;
   --howdy-neutral-4-light: #dadfe1;
   --howdy-neutral-5-light: #cbd1d3;
@@ -1325,6 +1325,8 @@
   --howdy-status-busy-light: #d9534f;
   --howdy-message-own-soft-light: #daf6d0;
   --howdy-message-own-soft-text-light: #122a10;
+  --howdy-message-own-soft-metadata-light: #4d743e;
+  --howdy-message-own-soft-mention-hover-light: #cdefc1;
 
   --howdy-sidebar-selected-dark: #22323b;
   --howdy-sidebar-selected-text-dark: #f2f6f7;
@@ -1336,6 +1338,8 @@
   --howdy-status-busy-dark: #e0625e;
   --howdy-message-own-soft-dark: #04594a;
   --howdy-message-own-soft-text-dark: #e9f3f0;
+  --howdy-message-own-soft-metadata-dark: #9fcbc3;
+  --howdy-message-own-soft-mention-hover-dark: #057662;
 }
 
 :root {
@@ -3262,6 +3266,143 @@
   );
   --theme-message-own-soft-mention-hover-dark: var(
     --cable-message-own-soft-mention-hover-dark
+  );
+}
+
+/* Howdy: a warm paper page, teal accents and minty replies. The frame follows
+   the page mode, so it defines no frame slots. */
+[data-theme="howdy"] {
+  --theme-neutral-1-light: var(--howdy-neutral-1-light);
+  --theme-neutral-2-light: var(--howdy-neutral-2-light);
+  --theme-neutral-3-light: var(--howdy-neutral-3-light);
+  --theme-neutral-4-light: var(--howdy-neutral-4-light);
+  --theme-neutral-5-light: var(--howdy-neutral-5-light);
+  --theme-neutral-6-light: var(--howdy-neutral-6-light);
+  --theme-neutral-7-light: var(--howdy-neutral-7-light);
+  --theme-neutral-8-light: var(--howdy-neutral-8-light);
+  --theme-neutral-9-light: var(--howdy-neutral-9-light);
+  --theme-neutral-10-light: var(--howdy-neutral-10-light);
+  --theme-neutral-11-light: var(--howdy-neutral-11-light);
+  --theme-neutral-12-light: var(--howdy-neutral-12-light);
+  --theme-neutral-standard-text-light: var(--howdy-neutral-standard-text-light);
+  --theme-neutral-navigation-text-light: var(
+    --howdy-neutral-navigation-text-light
+  );
+  --theme-neutral-navigation-unread-light: var(
+    --howdy-neutral-navigation-unread-light
+  );
+  --theme-neutral-navigation-quiet-light: var(
+    --howdy-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-light: var(--howdy-neutral-quiet-hover-light);
+  --theme-neutral-action-pressed-light: var(
+    --howdy-neutral-action-pressed-light
+  );
+  --theme-neutral-avatar-on-white-light: var(
+    --howdy-neutral-avatar-on-white-light
+  );
+  --theme-bubble-neutral-light: var(--howdy-bubble-neutral-light);
+  --theme-bubble-received-light: var(--howdy-bubble-received-light);
+  --theme-canvas-light: var(--howdy-frame-canvas-light);
+  --theme-sidebar-light: var(--howdy-frame-sidebar-light);
+  --theme-accent-1-light: var(--howdy-1-light);
+  --theme-accent-2-light: var(--howdy-2-light);
+  --theme-accent-3-light: var(--howdy-3-light);
+  --theme-accent-4-light: var(--howdy-4-light);
+  --theme-accent-5-light: var(--howdy-5-light);
+  --theme-accent-6-light: var(--howdy-6-light);
+  --theme-accent-7-light: var(--howdy-7-light);
+  --theme-accent-8-light: var(--howdy-8-light);
+  --theme-accent-9-light: var(--howdy-9-light);
+  --theme-accent-10-light: var(--howdy-10-light);
+  --theme-accent-11-light: var(--howdy-11-light);
+  --theme-accent-12-light: var(--howdy-12-light);
+  --theme-accent-contrast-light: var(--howdy-contrast-light);
+  --theme-accent-ink-light: var(--howdy-ink-light);
+  --theme-accent-pressed-light: var(--howdy-pressed-light);
+  --theme-accent-link-light: var(--howdy-link-light);
+  --theme-accent-link-hover-light: var(--howdy-link-hover-light);
+  --theme-sidebar-selected-light: var(--howdy-sidebar-selected-light);
+  --theme-sidebar-selected-text-light: var(--howdy-sidebar-selected-text-light);
+  --theme-sidebar-hover-light: var(--howdy-sidebar-hover-light);
+  --theme-sidebar-hover-text-light: var(--howdy-neutral-navigation-text-light);
+  --theme-badge-light: var(--howdy-badge-light);
+  --theme-badge-text-light: var(--howdy-badge-text-light);
+  --theme-status-online-light: var(--howdy-status-online-light);
+  --theme-status-away-light: var(--howdy-status-away-light);
+
+  --theme-neutral-1-dark: var(--howdy-neutral-1-dark);
+  --theme-neutral-2-dark: var(--howdy-neutral-2-dark);
+  --theme-neutral-3-dark: var(--howdy-neutral-3-dark);
+  --theme-neutral-4-dark: var(--howdy-neutral-4-dark);
+  --theme-neutral-5-dark: var(--howdy-neutral-5-dark);
+  --theme-neutral-6-dark: var(--howdy-neutral-6-dark);
+  --theme-neutral-7-dark: var(--howdy-neutral-7-dark);
+  --theme-neutral-8-dark: var(--howdy-neutral-8-dark);
+  --theme-neutral-9-dark: var(--howdy-neutral-9-dark);
+  --theme-neutral-10-dark: var(--howdy-neutral-10-dark);
+  --theme-neutral-11-dark: var(--howdy-neutral-11-dark);
+  --theme-neutral-12-dark: var(--howdy-neutral-12-dark);
+  --theme-neutral-navigation-quiet-dark: var(
+    --howdy-neutral-navigation-quiet-dark
+  );
+  --theme-neutral-raised-dark: var(--howdy-neutral-raised-dark);
+  --theme-neutral-quiet-hover-dark: var(--howdy-neutral-quiet-hover-dark);
+  --theme-neutral-action-pressed-dark: var(--howdy-neutral-action-pressed-dark);
+  --theme-bubble-neutral-dark: var(--howdy-bubble-neutral-dark);
+  --theme-bubble-received-dark: var(--howdy-bubble-received-dark);
+  --theme-canvas-dark: var(--howdy-frame-canvas-dark);
+  --theme-sidebar-dark: var(--howdy-frame-sidebar-dark);
+  --theme-accent-1-dark: var(--howdy-1-dark);
+  --theme-accent-2-dark: var(--howdy-2-dark);
+  --theme-accent-3-dark: var(--howdy-3-dark);
+  --theme-accent-4-dark: var(--howdy-4-dark);
+  --theme-accent-5-dark: var(--howdy-5-dark);
+  --theme-accent-6-dark: var(--howdy-6-dark);
+  --theme-accent-7-dark: var(--howdy-7-dark);
+  --theme-accent-8-dark: var(--howdy-8-dark);
+  --theme-accent-9-dark: var(--howdy-9-dark);
+  --theme-accent-10-dark: var(--howdy-10-dark);
+  --theme-accent-11-dark: var(--howdy-11-dark);
+  --theme-accent-12-dark: var(--howdy-12-dark);
+  --theme-accent-contrast-dark: var(--howdy-contrast-dark);
+  --theme-accent-ink-dark: var(--howdy-ink-dark);
+  --theme-accent-pressed-dark: var(--howdy-pressed-dark);
+  --theme-accent-link-dark: var(--howdy-link-dark);
+  --theme-accent-link-hover-dark: var(--howdy-link-hover-dark);
+  --theme-sidebar-selected-dark: var(--howdy-sidebar-selected-dark);
+  --theme-sidebar-selected-text-dark: var(--howdy-sidebar-selected-text-dark);
+  --theme-sidebar-hover-dark: var(--howdy-sidebar-hover-dark);
+  --theme-sidebar-hover-text-dark: var(--howdy-neutral-11-dark);
+  --theme-badge-dark: var(--howdy-badge-dark);
+  --theme-badge-text-dark: var(--howdy-badge-text-dark);
+  --theme-status-online-dark: var(--howdy-status-online-dark);
+  --theme-status-away-dark: var(--howdy-status-away-dark);
+  --theme-accent-overlay-dark: var(--tint-fill);
+  --theme-accent-overlay-hover-dark: var(--tint-hover-fill);
+  --theme-accent-overlay-soft-dark: var(--tint-soft-fill);
+  --theme-accent-overlay-quiet-dark: var(--tint-quiet-fill);
+  --theme-accent-overlay-highlight-dark: var(--tint-fill);
+}
+
+/* Own bubbles take the mint fill only with the Theme accent; a manual accent
+   keeps its own bubble. */
+[data-theme="howdy"][data-accent="theme"] {
+  --theme-message-own-soft-light: var(--howdy-message-own-soft-light);
+  --theme-message-own-soft-text-light: var(--howdy-message-own-soft-text-light);
+  --theme-message-own-soft-metadata-light: var(
+    --howdy-message-own-soft-metadata-light
+  );
+  --theme-message-own-soft-mention-hover-light: var(
+    --howdy-message-own-soft-mention-hover-light
+  );
+  --theme-message-own-soft-dark: var(--howdy-message-own-soft-dark);
+  --theme-message-own-soft-text-dark: var(--howdy-message-own-soft-text-dark);
+  --theme-message-own-soft-metadata-dark: var(
+    --howdy-message-own-soft-metadata-dark
+  );
+  --theme-message-own-soft-mention-hover-dark: var(
+    --howdy-message-own-soft-mention-hover-dark
   );
 }
 

@@ -73,7 +73,7 @@ test("a theme is picked by keyboard and pointer, survives reload and frames the 
 
   await appearance(page);
   const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
-  await expect(radios(page)).toHaveCount(3);
+  await expect(radios(page)).toHaveCount(4);
   await expect(group.getByRole("radio", { name: /^Buzz/ })).toBeChecked();
   await expect(group.getByRole("radio", { name: /^Relax/ })).not.toBeChecked();
   // The name and the description each have one owner; the thumbnail has none.
@@ -259,4 +259,59 @@ test("Cable fills own bubbles with green under the Theme accent and yields to a 
   await page.getByRole("button", { name: "Theme accent color" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-accent", "theme");
   expect((await ownBubble()).fill).toBe("rgb(232, 247, 219)");
+});
+
+test("Howdy gives own bubbles the mint fill only with the Theme accent", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await appearance(page);
+  const group = page.getByRole("radiogroup", { name: "Theme", exact: true });
+  await group.getByText("Howdy", { exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "howdy");
+  await expect(page.locator("html")).toHaveAttribute("data-accent", "theme");
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-color-level",
+    "touch",
+  );
+  expect(await resolved(page, "--surface-message-own")).toBe(
+    "rgb(218, 246, 208)",
+  );
+  expect(await resolved(page, "--surface-panel", "body")).toBe(
+    "rgb(247, 243, 234)",
+  );
+  await expectFramed(page, false);
+  const cardBubble = (theme) =>
+    group
+      .locator(`svg[data-theme="${theme}"]`)
+      .evaluate((node) =>
+        getComputedStyle(node).getPropertyValue("--surface-message-own"),
+      );
+  expect(
+    await cardBubble("howdy"),
+    "the Howdy card previews the mint fill",
+  ).not.toBe(await cardBubble("buzz"));
+  expect(
+    await cardBubble("relax"),
+    "another theme's card does not inherit the page theme's bubble",
+  ).not.toBe(await cardBubble("howdy"));
+  await chooseColorMode(page, "Dark");
+  expect(await resolved(page, "--surface-message-own")).toBe("rgb(4, 89, 74)");
+  expect(await resolved(page, "--affordance-mention-own-hover")).toBe(
+    "rgb(5, 118, 98)",
+  );
+  await chooseColorMode(page, "Light");
+
+  await page.getByRole("button", { name: "Cobalt accent color" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-accent", "cobalt");
+  expect(await resolved(page, "--surface-message-own")).toBe(
+    await resolved(page, "--accent-4"),
+  );
+  expect(await resolved(page, "--surface-message-own")).not.toBe(
+    "rgb(218, 246, 208)",
+  );
+  expect(await resolved(page, "--text-metadata-own")).toBe(
+    await resolved(page, "--text-metadata"),
+  );
 });

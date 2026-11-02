@@ -56,7 +56,7 @@
   document.documentElement.dataset.accent = accent;
   let theme = "buzz";
   try {
-    const themes = ["buzz", "relax", "cable"];
+    const themes = ["buzz", "relax", "cable", "howdy"];
     const saved = localStorage.getItem("buzz-theme.v1");
     if (themes.includes(saved)) theme = saved;
   } catch {

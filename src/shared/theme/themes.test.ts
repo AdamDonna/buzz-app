@@ -29,6 +29,8 @@ it.each([
   ["relax", "relax"],
   ["Cable", "buzz"],
   ["cable", "cable"],
+  ["Howdy", "buzz"],
+  ["howdy", "howdy"],
 ])("parses %j as %s", (value, expected) => {
   expect(parseTheme(value)).toBe(expected);
 });
@@ -40,6 +42,8 @@ it("opens a dark frame scope only on a light page for a dark-frame theme", () =>
   expect(frameScope("relax", "dark")).toBeUndefined();
   expect(frameScope("cable", "light")).toBeUndefined();
   expect(frameScope("cable", "dark")).toBeUndefined();
+  expect(frameScope("howdy", "light")).toBeUndefined();
+  expect(frameScope("howdy", "dark")).toBeUndefined();
 });
 
 const tokens = readFileSync(
@@ -71,14 +75,17 @@ const themeAccentBlock = (id: string) =>
     `\\[data-theme="${id}"\\]\\[data-accent="theme"\\]\\s*\\{([^}]*)\\}`,
   ).exec(tokens)?.[1];
 
-it.each(["cable"])("gives %s's own bubbles to the Theme accent only", (id) => {
-  expect(themeBlock(id)).not.toContain("--theme-message-own-soft");
-  const body = themeAccentBlock(id);
-  expect(body, `${id} needs a Theme accent block`).toBeDefined();
-  for (const mode of ["light", "dark"])
-    for (const part of ["", "-text", "-metadata", "-mention-hover"])
-      expect(body).toContain(`--theme-message-own-soft${part}-${mode}:`);
-});
+it.each(["cable", "howdy"])(
+  "gives %s's own bubbles to the Theme accent only",
+  (id) => {
+    expect(themeBlock(id)).not.toContain("--theme-message-own-soft");
+    const body = themeAccentBlock(id);
+    expect(body, `${id} needs a Theme accent block`).toBeDefined();
+    for (const mode of ["light", "dark"])
+      for (const part of ["", "-text", "-metadata", "-mention-hover"])
+        expect(body).toContain(`--theme-message-own-soft${part}-${mode}:`);
+  },
+);
 
 it("resets every slot a role reads for a scope that previews the baseline", () => {
   const reads = new Set(
