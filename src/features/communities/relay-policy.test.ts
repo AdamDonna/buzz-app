@@ -166,6 +166,45 @@ it("offers legacy relays a policy blocked once a build allows them", async () =>
   expect(confirm).toHaveBeenCalledWith(["https://evil.example"]);
 });
 
+it("keeps observed legacy removals across policy-skipped imports", async () => {
+  const legacyKey = `buzz-legacy-communities.v1:${viewer}`;
+  const legacy = vi.fn(async () => [
+    { relayUrl: "wss://evil.example", pubkey: viewer },
+  ]);
+  const confirm = vi.fn(async () => true);
+  // A removal recorded by an earlier import whose read failed.
+  const removedEarlier = new Map([
+    [legacyKey, JSON.stringify(["wss://evil.example"])],
+  ]);
+  const { client } = await startup(
+    { memberships: [], selected: null },
+    removedEarlier,
+  );
+  const { importLegacyCommunities } = await import("./legacy-communities");
+  importLegacyCommunities(client, confirm, legacy);
+  await vi.waitFor(() => expect(removedEarlier.get(legacyKey)).toBe("1"));
+  // A removal observed while a policy-skipped import is still pending.
+  const pending = new Map([[legacyKey, '1:["wss://evil.example"]']]);
+  const relaxed = await startup(
+    {
+      memberships: [],
+      selected: null,
+      sync: {
+        known: [],
+        outbox: [{ url: "wss://evil.example", removed: true }],
+      },
+    },
+    pending,
+    true,
+  );
+  const later = await import("./legacy-communities");
+  later.importLegacyCommunities(relaxed.client, confirm, async () => {
+    throw new Error("read failed");
+  });
+  await vi.waitFor(() => expect(pending.get(legacyKey)).toBe("1:[]"));
+  expect(confirm).not.toHaveBeenCalled();
+});
+
 it("keeps a saved Personal space choice", async () => {
   const { client, connect } = await startup({
     memberships: [],

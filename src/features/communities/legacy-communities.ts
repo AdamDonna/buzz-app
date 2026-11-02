@@ -3,6 +3,7 @@ import {
   communityDestination,
   RelayPolicyError,
   relayAddress,
+  relayOrigin,
 } from "./destination";
 import { enqueue } from "./known-communities";
 import type { Communities } from "./service";
@@ -12,11 +13,12 @@ export type LegacyCommunity = { relayUrl: string; pubkey?: string };
 
 const importedKey = (viewer: string) => `buzz-legacy-communities.v1:${viewer}`;
 const imported = "1";
-// `1:<relays>` completes an import except for the listed relays this build's
-// policy skipped; a build that allows them offers only those.
+// `1:<addresses>` completes an import except for the listed relays this
+// build's policy skipped; a build that allows them offers only those.
 const skippedPrefix = `${imported}:`;
-const isImported = (value: string | null) =>
-  value === imported || !!value?.startsWith(skippedPrefix);
+/** `relayAddress` without the policy check, so a blocked relay still matches its removal. */
+const legacyAddress = (url: string) =>
+  `wss://${new URL(relayOrigin(url)).host}`;
 function skippedRelays(marker: string | null): string[] | undefined {
   if (!marker?.startsWith(skippedPrefix)) return undefined;
   try {
@@ -95,7 +97,15 @@ export function importLegacyCommunities(
     if (known.removed.size > before) known.saved = false;
     if (!known.saved) {
       try {
-        if (!isImported(localStorage.getItem(importedKey(viewer))))
+        const marker = localStorage.getItem(importedKey(viewer));
+        const skipped = skippedRelays(marker);
+        if (skipped)
+          localStorage.setItem(
+            importedKey(viewer),
+            skippedPrefix +
+              JSON.stringify(skipped.filter((url) => !known.removed.has(url))),
+          );
+        else if (marker !== imported)
           localStorage.setItem(
             importedKey(viewer),
             JSON.stringify([...known.removed]),
@@ -125,18 +135,23 @@ export function importLegacyCommunities(
       const candidates = new Set<string>();
       const blocked: string[] = [];
       for (const { relayUrl, pubkey } of saved) {
-        if (pubkey !== viewer || (skipped && !skipped.includes(relayUrl)))
+        if (pubkey !== viewer) continue;
+        let address: string;
+        try {
+          address = legacyAddress(relayUrl);
+        } catch {
+          continue;
+        }
+        if (removed.has(address) || (skipped && !skipped.includes(address)))
           continue;
         let id: string;
         try {
           id = communityDestination(relayUrl).id;
         } catch (error) {
-          if (error instanceof RelayPolicyError) blocked.push(relayUrl);
+          if (error instanceof RelayPolicyError) blocked.push(address);
           continue;
         }
-        const address = relayAddress(id);
-        if (held.has(id) || removed.has(address)) continue;
-        candidates.add(id);
+        if (!held.has(id)) candidates.add(id);
       }
       const approved = candidates.size ? await confirm([...candidates]) : true;
       const current = communities.snapshot();
@@ -152,9 +167,10 @@ export function importLegacyCommunities(
       let sync = current.sync;
       for (const id of add) sync = enqueue(sync, relayAddress(id), false);
       if (add.length) await communities.applySync(sync, add);
+      const retained = blocked.filter((url) => !latest.removed.has(url));
       localStorage.setItem(
         importedKey(viewer),
-        blocked.length ? skippedPrefix + JSON.stringify(blocked) : imported,
+        retained.length ? skippedPrefix + JSON.stringify(retained) : imported,
       );
     } catch (error) {
       console.warn("Couldn't add old Buzz's communities", error);
