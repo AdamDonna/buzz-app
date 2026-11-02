@@ -12,6 +12,14 @@ import {
   type WorkOutcome,
 } from "./local-activity";
 import { createHash } from "node:crypto";
+import {
+  mkdtemp,
+  readFile as readLocalFile,
+  writeFile,
+  rm,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { npubEncode } from "nostr-tools/nip19";
@@ -11242,6 +11250,111 @@ const heldCommand = async () => ({
   kill: async () => {},
   write: async () => {},
   end: async () => {},
+});
+
+it("sends actual private-file bytes through the app-owned sourceCommand reader and existing attachment publication", async () => {
+  const { service, plugin, ctx, native } = await setup();
+  await service.create({ type: "example/echo", name: "Echo" });
+  await vi.waitFor(() => expect(plugin.agents.handle(bot)).toBeDefined());
+  const dir = await mkdtemp(join(tmpdir(), "buzz-reader-"));
+  const path = join(dir, "private-file");
+  const bytes = new Uint8Array([0, 159, 255, 17]);
+  await writeFile(path, bytes, { flag: "wx", mode: 0o600 });
+  let request!: import("../host/service").McpHandler;
+  let stop!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  // This is the external native read boundary, not an attachment implementation:
+  // read the real fixture path, letting AgentsService/appClient/core attach do the rest.
+  const readFile = vi.fn(
+    async (path: string) => new Uint8Array(await readLocalFile(path)),
+  );
+  ctx.provide("host", {
+    spawn: heldCommand,
+    readFile,
+    serveMcp: async (handler: import("../host/service").McpHandler) => {
+      request = handler;
+      return {
+        url: "http://127.0.0.1:1234/mcp",
+        headers: [],
+        close: async () => {
+          stop();
+        },
+        closed,
+      };
+    },
+  } as unknown as import("../host/service").Host);
+  const consumer = ctx.extend({
+    pluginOwner: Object.freeze({ id: "consumer", revision: "one" }),
+  });
+  const controller = new AbortController();
+  const connection = await sourceCommand(service, consumer, {
+    signal: controller.signal,
+    channel,
+  });
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  native.upload.mockResolvedValue({
+    url: "https://files.example.test/bytes",
+    sha256: hash,
+    size: bytes.length,
+    type: "application/octet-stream",
+  });
+  native.publish.mockClear();
+  try {
+    const result = await request({
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "send",
+        arguments: {
+          text: "File attached",
+          files: [path],
+          audience: "everyone",
+        },
+      },
+    });
+    expect(result).not.toHaveProperty("result.isError", true);
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(path, undefined);
+    expect(native.upload).toHaveBeenCalledExactlyOnceWith(
+      member(bot),
+      Buffer.from(bytes).toString("base64"),
+      "application/octet-stream",
+    );
+    const published = native.publish.mock.calls.find(
+      ([, template]) => template.kind === 9,
+    );
+    expect(published?.[0]).toEqual(member(bot));
+    expect(published?.[1].tags).toContainEqual(["h", channel]);
+    expect(published?.[1].tags).toContainEqual(
+      expect.arrayContaining(["imeta", `x ${hash}`, "filename private-file"]),
+    );
+    expect(published?.[1].content).toContain(
+      "https://files.example.test/bytes",
+    );
+    // A path with the same label but missing bytes must never synthesize an upload.
+    native.upload.mockClear();
+    native.publish.mockClear();
+    const missing = await request({
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "send",
+        arguments: {
+          text: "Missing",
+          files: [join(dir, "missing")],
+          audience: "everyone",
+        },
+      },
+    });
+    expect(missing).toHaveProperty("result.isError", true);
+    expect(native.upload).not.toHaveBeenCalled();
+    expect(native.publish).not.toHaveBeenCalled();
+  } finally {
+    await connection.close();
+    controller.abort();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 it.each(["close", "unload", "abort"])(
