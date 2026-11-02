@@ -4681,7 +4681,10 @@ it("runs bound Codex tools in the guest workspace, resumes, and stops on provide
     expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Stopped");
     await f.runtime.run(f.delivery("active at unload"));
     await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
+    const observed: unknown[] = [];
+    f.runtime.subscribe(() => observed.push(f.runtime.sessions(pubkey)));
     await target.dispose();
+    expect(observed.at(-1)).toEqual([]);
     await vi.waitFor(() => expect(f.process.end).toHaveBeenCalled());
     await expect(f.runtime.run(f.delivery("provider missing"))).rejects.toThrow(
       "Provider unloaded",

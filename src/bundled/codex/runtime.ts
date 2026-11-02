@@ -324,6 +324,7 @@ export class CodexRuntime {
       () => {
         this.previews.delete(agent);
         runtime.dispose();
+        for (const listener of this.listeners) listener();
       },
       { once: true },
     );
