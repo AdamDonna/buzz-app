@@ -44,7 +44,11 @@ export type SearchServices = Pick<
   Partial<
     Pick<
       AppServices,
-      "appearance" | "notifications" | "plugins" | "adminAccess"
+      | "appearance"
+      | "notifications"
+      | "plugins"
+      | "adminAccess"
+      | "settingsCards"
     >
   >;
 const SEARCH_ID = "global-search";
@@ -61,7 +65,7 @@ export function PageSearch({
   services,
 }: {
   pages: readonly RegisteredPage[];
-  onSelect: (key: string) => void;
+  onSelect: (key: string, options?: { section?: string }) => void;
   services?: SearchServices | undefined;
 }) {
   const [open, setOpen] = useState(false);
@@ -245,6 +249,11 @@ export function PageSearch({
                 returnFocus.current = document.getElementById("main-content");
                 setSearchOpen(false);
               }}
+              openSection={(section) => {
+                returnFocus.current = document.getElementById("main-content");
+                onSelect("settings", { section });
+                setSearchOpen(false);
+              }}
             />
           ) : (
             <SearchChoices
@@ -272,6 +281,7 @@ function CommunitySearch({
   onScopeChange,
   isOpen,
   close,
+  openSection,
 }: {
   services: SearchServices;
   pages: readonly SearchDestination[];
@@ -283,6 +293,7 @@ function CommunitySearch({
    * closed, such as a DM still opening, must not navigate. */
   isOpen: () => boolean;
   close: (channelId?: string) => void;
+  openSection: (section: string) => void;
 } & SearchInputProps) {
   const inlineSettings = useSearchSettings({
     query: scopedChannelId ? "" : query,
@@ -290,8 +301,11 @@ function CommunitySearch({
     notifications: services.notifications,
     plugins: services.plugins,
     adminAccess: services.adminAccess,
+    settingsCards: services.settingsCards,
+    communities: services.communities,
     navigation: services.navigation,
     close,
+    openSection,
   });
   const client = useSyncExternalStore(
     services.communities.subscribe,
