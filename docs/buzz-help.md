@@ -44,6 +44,8 @@ the interface unless an available tool actually supports that action.
 - A community invite or address connects someone to a community; creating an
   identity alone does not grant membership. The same identity can be used in
   more than one community.
+- Set or clear your status from the profile menu, or with **Update status** /
+  **Set a status** on your own profile.
 
 ## Conversations and communities
 
