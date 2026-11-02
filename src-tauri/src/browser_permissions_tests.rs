@@ -107,6 +107,7 @@ fn native_command_permissions_isolate_webviews() {
         "relay_sign_read_state",
         "relay_publish_read_state",
         "relay_http",
+        "relay_http_cancel",
         "relay_workflow_runs",
         "relay_project_git",
         "relay_project_git_cancel",

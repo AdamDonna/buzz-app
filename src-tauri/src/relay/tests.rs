@@ -4081,3 +4081,66 @@ mod federated_header {
         stream_block(false).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_native_reads_close_their_connection_and_writes_refuse_an_id() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = Url::parse(&format!("http://{}/query", listener.local_addr().unwrap())).unwrap();
+    let (connections, accepted) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            if connections.send(stream).is_err() {
+                break;
+            }
+        }
+    });
+    let id = "22222222-2222-4222-8222-222222222222";
+    let read = tokio::spawn(async move {
+        let host = IdentityHost::fixture();
+        let request = send(
+            &host,
+            None,
+            url,
+            "POST",
+            Some("[]".into()),
+            true,
+            MAX_RESPONSE,
+        );
+        cancellable(Some(id), "POST", "/query", request).await
+    });
+    let mut stream = accepted.recv_timeout(Duration::from_secs(5)).unwrap();
+    relay_http_cancel(id.into()).unwrap();
+    assert_eq!(read.await.unwrap().unwrap().status, CANCELLED_READ);
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut buffer = [0; 4096];
+    let closed = loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break true,
+            Ok(_) => continue,
+            Err(error) => break error.kind() == std::io::ErrorKind::ConnectionReset,
+        }
+    };
+    assert!(closed, "a cancelled read kept its relay connection open");
+
+    // A cancel that overtakes its read IPC still wins.
+    let early = "33333333-3333-4333-8333-333333333333";
+    relay_http_cancel(early.into()).unwrap();
+    let response = cancellable(Some(early), "POST", "/profiles/search", async {
+        unreachable!("an already cancelled read must not be sent")
+    })
+    .await
+    .unwrap();
+    assert_eq!(response.status, CANCELLED_READ);
+
+    // A dispatched write may already have reached the relay.
+    let Err(error) = cancellable(Some(id), "POST", "/events", async {
+        unreachable!("a write with a cancel id must not be sent")
+    })
+    .await
+    else {
+        panic!("a write accepted a cancel id");
+    };
+    assert!(error.to_string().contains("cannot be cancelled"));
+}

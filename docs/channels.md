@@ -374,7 +374,7 @@ The relay session exposes `directMessages` over its existing verified reader and
 outbox. People are kind-0 pages: a 15-profile browse preview (30 for search), followed by
 30-profile browse batches. Searches retain 30-profile pages because profile metadata
 can be large enough to exceed the read budget in larger batches. Remote name
-searches are debounced by 150 ms.
+searches are debounced by 300 ms and need at least two characters.
 Opening uses the development broker's purpose-bound `/direct-message` endpoint:
 it signs kind 41010 with one to eight distinct other participant keys, checks the
 exact command receipt, and returns the canonical channel ID. A unique client tag

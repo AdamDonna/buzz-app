@@ -2426,11 +2426,13 @@ function nativeRelay(
       return signed(member, (args as { event: EventTemplate }).event);
     if (command !== "relay_http")
       throw new Error(`Unexpected command ${command}`);
-    const request = args as {
+    // A read's cancel id is fresh per request; calls record what was sent.
+    const { id: _, ...request } = args as {
       community: string;
       path: string;
       method: string;
       body: string | null;
+      id?: string;
     };
     const body: unknown = request.body ? JSON.parse(request.body) : null;
     calls.push({ ...request, body });

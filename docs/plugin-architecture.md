@@ -1918,7 +1918,7 @@ provider so a delayed name can appear without another editor event.
 Channels filters the session's joined channel roster locally, including private
 channels and joined channels restored from cache (the store marks those
 `readOnly` and `cached` until the relay reconfirms them), but excluding DMs,
-sessions, archived, hidden, unnamed and other read-only entries. After a 180 ms
+sessions, archived, hidden, unnamed and other read-only entries. After a 300 ms
 typing pause, a query also asks `searchPublic`, through the same
 `usePublicChannelSearch` hook as Command-K, for open channels the viewer has not
 joined; they are labeled "Not joined", and private results are never offered.

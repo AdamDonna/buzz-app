@@ -39,6 +39,7 @@ import type { RelayEvent } from "../../features/relay/events";
 import { PublishRejected } from "../../features/relay/outbox";
 import type { AgentLibrary } from "../../features/agents/library";
 import { localAgentsFixture } from "../../features/agents/local-testing";
+import { SEARCH_DEBOUNCE_MS } from "../../shared/search-debounce";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { profileTarget } from "../../features/profiles/target";
 import { ChannelMembersButton } from "./ChannelMembersDialog";
@@ -1197,6 +1198,27 @@ it("searches outside the roster, prevents double submission, and moves confirmed
   expect(t.session.channels.list().channels[0]?.members).toContain(
     t.person.pubkey,
   );
+});
+it("sends a relay member search only from two typed characters", async () => {
+  const t = await setup();
+  const searches = () =>
+    t.query.mock.calls.filter(([filters]) =>
+      filters.some((filter) => filter.search),
+    );
+  // user-event awaits a real setTimeout(0), so these steps drive fireEvent.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const input = screen.getByRole("searchbox");
+  fireEvent.change(input, { target: { value: "M" } });
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  expect(searches()).toHaveLength(0);
+  // No search ran, so the dialog asks for more text rather than reporting none.
+  expect(
+    screen.getByText("Type at least 2 characters to search people."),
+  ).toBeVisible();
+  expect(screen.queryByText(/^No other matching/)).toBeNull();
+  fireEvent.change(input, { target: { value: "Mo" } });
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  expect(searches()).toHaveLength(1);
 });
 it("highlights the first person not in the channel so Enter adds them once", async () => {
   const t = await setup();

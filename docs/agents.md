@@ -588,7 +588,8 @@ append below the rows already shown, so a late page never moves a visible row.
 While a new query waits or loads, still-matching people from the last settled
 page of the same chooser stay visible (one picker, or one inline `@` token; inline
 completion remounts per keystroke, so the page is kept per session outside it) and the chooser shows "Searching community…". Uncached queries
-reach the network only after a 200 ms typing pause. Settled first pages are cached
+reach the network only after a 300 ms typing pause, and only once
+the query has at least two characters. Settled first pages are cached
 per session and query (100 queries); errors are not cached, and Retry reads the
 current query again. Chooser identity naming uses eligible candidates plus the
 current draft recipients, not every cached profile. Composer chips name their

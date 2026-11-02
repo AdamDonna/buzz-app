@@ -53,6 +53,7 @@
     "allow-relay-sign-read-state",
     "allow-relay-publish-read-state",
     "allow-relay-http",
+    "allow-relay-http-cancel",
     "allow-relay-workflow-runs",
     "allow-relay-admin-discover",
     "allow-relay-admin-request",

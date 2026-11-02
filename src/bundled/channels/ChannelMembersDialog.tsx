@@ -2,6 +2,7 @@ import { useProfileGeneration } from "../../features/relay/react";
 import { archiveHides } from "../../features/relay/identity-archives";
 import { Button as BaseButton } from "@base-ui/react/button";
 import referenceStyles from "../../shared/InlineReference.module.css";
+import { SEARCH_MIN_CHARS } from "../../shared/search-debounce";
 import { npubEncode } from "nostr-tools/nip19";
 import {
   memo,
@@ -2008,13 +2009,15 @@ export function ChannelMembersDialog({
                 )}
                 {!search.loading && !search.error && !available.length && (
                   <p className="px-control-inset text-body-sm text-subtle">
-                    {!solo
-                      ? "No other matching people or agents."
-                      : !canAddSoloAgents
-                        ? "No other matching people."
-                        : agentChoices.pending
-                          ? "Loading agents…"
-                          : "No other matching people or agents."}
+                    {search.tooShort
+                      ? `Type at least ${SEARCH_MIN_CHARS} characters to search people.`
+                      : !solo
+                        ? "No other matching people or agents."
+                        : !canAddSoloAgents
+                          ? "No other matching people."
+                          : agentChoices.pending
+                            ? "Loading agents…"
+                            : "No other matching people or agents."}
                   </p>
                 )}
                 {agentsByMention && (
