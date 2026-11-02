@@ -885,6 +885,10 @@
     border-radius: var(--radius-pill);
   }
 
+  .panel[data-sidebar] {
+    background: var(--surface-sidebar);
+  }
+
   /* A joined surface keeps one outer edge; nested panels retain opaque
      fills for responsive overlays while their layout owns the separators. */
   .panel[data-joined] .panel {

@@ -29,6 +29,7 @@ function resolvedPalette(
     /([^{}]+)\{([^{}]*)\}/g,
   )) {
     if (!selector.includes(":root") && !selector.includes(".dark")) continue;
+    if (selector.includes("data-theme")) continue;
     if (
       selector.includes('data-accent="') &&
       !selector.includes(`data-accent="${accent}"`)
@@ -53,13 +54,21 @@ function resolvedPalette(
 }
 
 function resolveAliases(values: Record<string, string>) {
+  const resolveValue = (value: string, seen: Set<string>): string => {
+    const alias = /^var\((--[\w-]+)(?:,\s*([\s\S]+))?\)$/.exec(value);
+    if (!alias?.[1]) return value;
+    const target = values[alias[1]];
+    if (target) return resolve(alias[1], seen);
+    // An unset slot takes its fallback, as the browser does.
+    if (alias[2]) return resolveValue(alias[2].trim(), seen);
+    throw new Error(`Missing token: ${alias[1]}`);
+  };
   const resolve = (name: string, seen = new Set<string>()): string => {
     if (seen.has(name)) throw new Error(`Cyclic token: ${name}`);
     seen.add(name);
     const value = values[name];
     if (!value) throw new Error(`Missing token: ${name}`);
-    const alias = /^var\((--[\w-]+)\)$/.exec(value);
-    return alias?.[1] ? resolve(alias[1], seen) : value;
+    return resolveValue(value, seen);
   };
   return Object.fromEntries(
     Object.keys(values).map((name) => [name, resolve(name)]),
@@ -171,7 +180,8 @@ it("a scoped dark surface rebinds glass roles inherited from a light app", () =>
   for (const [, selector = "", body = ""] of source.matchAll(
     /([^{}]+)\{([^{}]*)\}/g,
   )) {
-    if (!selector.includes(".dark")) continue;
+    if (!selector.includes(".dark") || selector.includes("data-theme"))
+      continue;
     for (const [, name = "", value = ""] of body.matchAll(
       /(--[\w-]+):\s*([^;]+);/g,
     ))

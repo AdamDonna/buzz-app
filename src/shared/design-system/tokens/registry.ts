@@ -326,6 +326,13 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "bg-surface-sidebar",
+        variable: "--surface-sidebar",
+        pointsAt: "surface-panel unless the active theme sets its own sidebar",
+        use: "The sidebar panel. Pair its text with text-navigation and text-sidebar-hover.",
+        status: "core",
+      },
+      {
         token: "bg-surface-composer",
         variable: "--surface-composer",
         pointsAt: "surface-panel light / neutral-4 dark",
@@ -911,29 +918,46 @@ export const ROLE_GROUPS: RoleGroup[] = [
       {
         token: "surface-sidebar-selected",
         variable: "--surface-sidebar-selected",
-        pointsAt: "accent 9",
+        pointsAt: "accent 9 unless the active theme sets its own selection",
         use: "Persistent sidebar selection, independent of vibe.",
         status: "core",
       },
       {
         token: "text-sidebar-selected",
         variable: "--text-sidebar-selected",
-        pointsAt: "accent contrast",
+        pointsAt:
+          "accent contrast unless the active theme sets its own selection",
         use: "Labels, icons and metadata on selected sidebar rows.",
         status: "core",
       },
       {
         token: "affordance-sidebar-hover",
         variable: "--affordance-sidebar-hover",
-        pointsAt: "accent 2 light / accent 3 dark",
+        pointsAt:
+          "accent 2 light / accent 3 dark unless the active theme sets its own hover",
         use: "Sidebar row hover and Solo card drop destinations, quieter than selection.",
         status: "core",
       },
       {
         token: "text-sidebar-hover",
         variable: "--text-sidebar-hover",
-        pointsAt: "accent 12",
+        pointsAt: "accent 12 unless the active theme sets its own hover",
         use: "Text on hovered sidebar rows.",
+        status: "core",
+      },
+      {
+        token: "bg-surface-badge",
+        variable: "--surface-badge",
+        pointsAt:
+          "affordance-subtle unless the active theme sets its own badge",
+        use: "Count badges on sidebar rows; pair with text-on-badge.",
+        status: "core",
+      },
+      {
+        token: "text-on-badge",
+        variable: "--text-on-badge",
+        pointsAt: "text-subtle unless the active theme sets its own badge",
+        use: "Counts on surface-badge.",
         status: "core",
       },
       {

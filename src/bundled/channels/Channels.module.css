@@ -1044,8 +1044,8 @@ html[data-keyboard-navigation]
   flex-shrink: 0;
   place-items: center;
   border-radius: var(--radius-pill);
-  background: var(--affordance-subtle);
-  color: var(--text-subtle);
+  background: var(--surface-badge);
+  color: var(--text-on-badge);
   font-size: var(--text-caption);
   line-height: var(--text-caption--line-height);
   letter-spacing: var(--text-caption--letter-spacing);

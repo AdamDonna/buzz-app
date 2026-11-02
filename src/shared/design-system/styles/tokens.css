@@ -773,32 +773,86 @@
      Keep these current. A step whose comment disagrees with its
      use is worse than no comment, because it reads as a decision
      someone made. `pnpm census` lists the real readers. */
-  --neutral-standard-text: #0f0f0f; /* Designer-requested light primary text and inherited icons. */
-  --bubble-neutral: #e9e9ea;
-  --bubble-received: #f3f3f4;
-  --neutral-navigation-text: #404040; /* Tailwind neutral-700. */
-  --neutral-navigation-unread: #262626; /* Tailwind neutral-800. */
-  --neutral-navigation-quiet: #f7f7f7; /* Designer-requested gentle sidenav states. */
-  --neutral-1: #ffffff; /* bg-panel, bg-float, bg-chrome-selected */
+  --neutral-standard-text: var(
+    --theme-neutral-standard-text-light,
+    #0f0f0f
+  ); /* Designer-requested light primary text and inherited icons. */
+  --bubble-neutral: var(--theme-bubble-neutral-light, #e9e9ea);
+  --bubble-received: var(--theme-bubble-received-light, #f3f3f4);
+  --neutral-navigation-text: var(
+    --theme-neutral-navigation-text-light,
+    #404040
+  ); /* Tailwind neutral-700. */
+  --neutral-navigation-unread: var(
+    --theme-neutral-navigation-unread-light,
+    #262626
+  ); /* Tailwind neutral-800. */
+  --neutral-navigation-quiet: var(
+    --theme-neutral-navigation-quiet-light,
+    #f7f7f7
+  ); /* Designer-requested gentle sidenav states. */
+  --neutral-1: var(
+    --theme-neutral-1-light,
+    #ffffff
+  ); /* bg-panel, bg-float, bg-chrome-selected */
   /* The first real compact control established this stop. Project Orbit's
      search field reads as #f5f5f6 over its panel. Its one blue-channel step
      is a deliberately cool near-neutral, not a warm tint; use it directly
      rather than preserve an exploratory #f9f9f9 stop or recreate it with
      alpha. */
-  --neutral-quiet-hover: #f1f1f2; /* hover between quiet fill and selection */
-  --neutral-2: #f5f5f6; /* quiet compact controls, callouts, and grouping */
-  --neutral-3: #e8e8e8; /* chrome track in light; bg-panel in dark */
-  --neutral-4: #dadada; /* border-primary in light mode            */
-  --neutral-5: #cccccc; /* unused in light; float + selected, dark */
-  --neutral-6: #b3b3b3; /* border-primary in dark mode             */
-  --neutral-7: #959595; /* no readers                              */
-  --neutral-8: #808080; /* text-disabled                           */
-  --neutral-9: #5f5f5f; /* metadata also clears AA on pressed fills */
-  --neutral-avatar-on-white: #525252; /* Fixed foreground for a fixed white avatar. */
-  --neutral-10: #525252; /* text-secondary                         */
-  --neutral-11: #191919; /* inverse fill, paired with neutral-1    */
-  --neutral-action-pressed: #525252;
-  --neutral-12: #000000; /* prominent controls and focus boundary   */
+  --neutral-quiet-hover: var(
+    --theme-neutral-quiet-hover-light,
+    #f1f1f2
+  ); /* hover between quiet fill and selection */
+  --neutral-2: var(
+    --theme-neutral-2-light,
+    #f5f5f6
+  ); /* quiet compact controls, callouts, and grouping */
+  --neutral-3: var(
+    --theme-neutral-3-light,
+    #e8e8e8
+  ); /* chrome track in light; bg-panel in dark */
+  --neutral-4: var(
+    --theme-neutral-4-light,
+    #dadada
+  ); /* border-primary in light mode            */
+  --neutral-5: var(
+    --theme-neutral-5-light,
+    #cccccc
+  ); /* unused in light; float + selected, dark */
+  --neutral-6: var(
+    --theme-neutral-6-light,
+    #b3b3b3
+  ); /* border-primary in dark mode             */
+  --neutral-7: var(
+    --theme-neutral-7-light,
+    #959595
+  ); /* no readers                              */
+  --neutral-8: var(
+    --theme-neutral-8-light,
+    #808080
+  ); /* text-disabled                           */
+  --neutral-9: var(
+    --theme-neutral-9-light,
+    #5f5f5f
+  ); /* metadata also clears AA on pressed fills */
+  --neutral-avatar-on-white: var(
+    --theme-neutral-avatar-on-white-light,
+    #525252
+  ); /* Fixed foreground for a fixed white avatar. */
+  --neutral-10: var(
+    --theme-neutral-10-light,
+    #525252
+  ); /* text-secondary                         */
+  --neutral-11: var(
+    --theme-neutral-11-light,
+    #191919
+  ); /* inverse fill, paired with neutral-1    */
+  --neutral-action-pressed: var(--theme-neutral-action-pressed-light, #525252);
+  --neutral-12: var(
+    --theme-neutral-12-light,
+    #000000
+  ); /* prominent controls and focus boundary   */
 
   /* Backdrop interaction fills let the shell and its dot texture show through. */
   --backdrop-hover-fill: rgb(0 0 0 / 6%);
@@ -858,7 +912,10 @@
   /* Decorative dots are a shade of the shell, never an independent gray.
      Mixing in sRGB preserves the background's hue while keeping the result
      in gamut. This is a shared texture recipe, not a component shade override. */
-  --texture-dots-color: color-mix(in srgb, var(--bg-app) 94%, black);
+  --texture-dots-color: var(
+    --theme-texture-dots-light,
+    color-mix(in srgb, var(--bg-app) 94%, black)
+  );
   --texture-dots-size: 24px;
 
   /* --- Blur. A separate axis from translucency. ------------ */
@@ -914,31 +971,34 @@
      are deliberately tighter at the bottom. A documented divergence, not drift:
      if these ever want to be palette steps, the palette's gray ramp is what
      should change. */
-  --neutral-navigation-quiet: #232323;
+  --neutral-navigation-quiet: var(
+    --theme-neutral-navigation-quiet-dark,
+    #232323
+  );
   --image-rim: oklch(1 0 0 / 0.1);
-  --neutral-raised: #282828;
-  --neutral-quiet-hover: #2e2e2e;
-  --bubble-neutral: #2e2e2e;
-  --bubble-received: #292929;
-  --neutral-1: #000000;
-  --neutral-2: #101010;
-  --neutral-3: #1a1a1a;
-  --neutral-4: #232323;
-  --neutral-5: #333333;
-  --neutral-6: #404040;
-  --neutral-7: #595959;
-  --neutral-8: #737373;
+  --neutral-raised: var(--theme-neutral-raised-dark, #282828);
+  --neutral-quiet-hover: var(--theme-neutral-quiet-hover-dark, #2e2e2e);
+  --bubble-neutral: var(--theme-bubble-neutral-dark, #2e2e2e);
+  --bubble-received: var(--theme-bubble-received-dark, #292929);
+  --neutral-1: var(--theme-neutral-1-dark, #000000);
+  --neutral-2: var(--theme-neutral-2-dark, #101010);
+  --neutral-3: var(--theme-neutral-3-dark, #1a1a1a);
+  --neutral-4: var(--theme-neutral-4-dark, #232323);
+  --neutral-5: var(--theme-neutral-5-dark, #333333);
+  --neutral-6: var(--theme-neutral-6-dark, #404040);
+  --neutral-7: var(--theme-neutral-7-dark, #595959);
+  --neutral-8: var(--theme-neutral-8-dark, #737373);
   /* Steps 9 and 10 are lighter than a linear ramp would put them, because in
      dark mode they carry text and APCA is polarity-asymmetric: light-on-dark
      needs more separation than the WCAG ratio implies. At #6e6e6e and #8f8f8f
      they measured Lc 23–26 and Lc 38–41 against the Lc 60 body-text target
      while passing WCAG AA — legal, and visibly murky. Sized against the
      lightest dark surface (bg-float #2a2a2a), which is the binding case. */
-  --neutral-9: #808080;
-  --neutral-10: #a4a4a4;
-  --neutral-11: #c7c7c7;
-  --neutral-action-pressed: #b8b8b8;
-  --neutral-12: #ffffff;
+  --neutral-9: var(--theme-neutral-9-dark, #808080);
+  --neutral-10: var(--theme-neutral-10-dark, #a4a4a4);
+  --neutral-11: var(--theme-neutral-11-dark, #c7c7c7);
+  --neutral-action-pressed: var(--theme-neutral-action-pressed-dark, #b8b8b8);
+  --neutral-12: var(--theme-neutral-12-dark, #ffffff);
 
   /* Every coloured family is absent here on purpose. A family points at a
      palette step, and `.dark` already redefines the whole palette — so
@@ -999,7 +1059,10 @@
     radial-gradient(at 48% 52%, rgba(109, 40, 217, 0.28) 0%, transparent 79%),
     linear-gradient(155deg, #100914 0%, #21113c 52%, #081622 100%);
 
-  --texture-dots-color: color-mix(in srgb, var(--bg-app) 92%, white);
+  --texture-dots-color: var(
+    --theme-texture-dots-dark,
+    color-mix(in srgb, var(--bg-app) 92%, white)
+  );
 }
 
 /* Plugin artwork aliases: existing palette steps own values in each theme.
@@ -1080,6 +1143,7 @@
 :root {
   --surface-base: var(--neutral-2);
   --surface-panel: var(--neutral-1);
+  --surface-sidebar: var(--theme-sidebar-light, var(--surface-panel));
   --surface-composer: var(--surface-panel);
   --surface-popover: var(--neutral-1);
   --surface-elevated-glass: var(--popover-glass-fill);
@@ -1137,10 +1201,12 @@
   --icon-success-own: var(--icon-success);
   --status-online: var(--green-11);
   --status-availability-online: var(--green-10);
-  --status-avatar-online: var(--green-10);
+  --status-avatar-online: var(--theme-status-online-light, var(--green-10));
   --status-avatar-online-border: var(--green-11);
-  --status-away: var(--amber-10);
+  --status-away: var(--theme-status-away-light, var(--amber-10));
   --status-offline: var(--neutral-8);
+  --surface-badge: var(--theme-badge-light, var(--affordance-subtle));
+  --text-on-badge: var(--theme-badge-text-light, var(--text-subtle));
   /* Chart series marks, in this order; validated as a set for colour-vision
    * separation and 3:1 against the panel. Text never uses them. */
   --chart-series-1: var(--blue-10);
@@ -1255,6 +1321,7 @@
   --shadow-panel: 0 0 0 1px rgba(255, 255, 255, 0.08);
   --surface-base: var(--neutral-1);
   --surface-panel: var(--neutral-3);
+  --surface-sidebar: var(--theme-sidebar-dark, var(--surface-panel));
   --surface-composer: var(--neutral-4);
   --surface-popover: var(--neutral-raised);
   --surface-elevated-glass: var(--popover-glass-fill);
@@ -1285,10 +1352,12 @@
   --icon-success-own: var(--icon-success);
   --status-online: var(--green-11);
   --status-availability-online: var(--green-10);
-  --status-avatar-online: var(--green-10);
+  --status-avatar-online: var(--theme-status-online-dark, var(--green-10));
   --status-avatar-online-border: var(--green-11);
-  --status-away: var(--amber-10);
+  --status-away: var(--theme-status-away-dark, var(--amber-10));
   --status-offline: var(--neutral-10);
+  --surface-badge: var(--theme-badge-dark, var(--affordance-subtle));
+  --text-on-badge: var(--theme-badge-text-dark, var(--text-subtle));
   /* Dark steps stay in the band where no series outshines the others. */
   --chart-series-1: var(--blue-9);
   --chart-series-2: var(--orange-8);
@@ -1378,7 +1447,7 @@
 
 .light,
 :root {
-  --bg-app: var(--neutral-quiet-hover);
+  --bg-app: var(--theme-canvas-light, var(--neutral-quiet-hover));
 }
 
 :root {
@@ -1523,7 +1592,7 @@
 
 :root[data-color-mode="dark"],
 .dark {
-  --bg-app: var(--neutral-2);
+  --bg-app: var(--theme-canvas-dark, var(--neutral-2));
   --bg-panel: var(--surface-panel);
   --border-image: var(--image-rim);
   --bg-float: var(--surface-popover);
@@ -1600,10 +1669,16 @@
   --affordance-accent-hover: var(--affordance-subtle-hover);
   --surface-message-highlight: var(--accent-3);
   --text-message-link: var(--accent-link);
-  --surface-sidebar-selected: var(--accent-9);
-  --text-sidebar-selected: var(--accent-contrast);
-  --text-sidebar-hover: var(--accent-12);
-  --affordance-sidebar-hover: var(--accent-2);
+  --surface-sidebar-selected: var(
+    --theme-sidebar-selected-light,
+    var(--accent-9)
+  );
+  --text-sidebar-selected: var(
+    --theme-sidebar-selected-text-light,
+    var(--accent-contrast)
+  );
+  --text-sidebar-hover: var(--theme-sidebar-hover-text-light, var(--accent-12));
+  --affordance-sidebar-hover: var(--theme-sidebar-hover-light, var(--accent-2));
   --affordance-accent-prominent: var(--accent-9);
   --affordance-accent-prominent-hover: var(--accent-10);
   --affordance-accent-prominent-pressed: var(--accent-pressed);
@@ -1640,10 +1715,16 @@
   --affordance-accent-hover: var(--affordance-subtle-hover);
   --surface-message-highlight: var(--accent-3);
   --text-message-link: var(--accent-link);
-  --surface-sidebar-selected: var(--accent-9);
-  --text-sidebar-selected: var(--accent-contrast);
-  --text-sidebar-hover: var(--accent-12);
-  --affordance-sidebar-hover: var(--accent-3);
+  --surface-sidebar-selected: var(
+    --theme-sidebar-selected-dark,
+    var(--accent-9)
+  );
+  --text-sidebar-selected: var(
+    --theme-sidebar-selected-text-dark,
+    var(--accent-contrast)
+  );
+  --text-sidebar-hover: var(--theme-sidebar-hover-text-dark, var(--accent-12));
+  --affordance-sidebar-hover: var(--theme-sidebar-hover-dark, var(--accent-3));
   --affordance-accent-prominent: var(--accent-9);
   --affordance-accent-prominent-hover: var(--accent-10);
   --affordance-accent-prominent-pressed: var(--accent-pressed);
@@ -1934,18 +2015,167 @@
   --accent-overlay-highlight-dark: var(--shade-fill);
 }
 
+/* The Theme accent follows the active theme's signature family. A theme assigns
+   --theme-accent-* in its [data-theme] block; without them it resolves to Citrus,
+   so the Buzz theme looks exactly as it did before themes existed. */
+:root[data-accent="theme"],
+[data-accent="theme"] {
+  --accent-1-light: var(--theme-accent-1-light, var(--citrus-1-light));
+  --accent-2-light: var(--theme-accent-2-light, var(--citrus-2-light));
+  --accent-3-light: var(--theme-accent-3-light, var(--citrus-3-light));
+  --accent-4-light: var(--theme-accent-4-light, var(--citrus-4-light));
+  --accent-5-light: var(--theme-accent-5-light, var(--citrus-5-light));
+  --accent-6-light: var(--theme-accent-6-light, var(--citrus-6-light));
+  --accent-7-light: var(--theme-accent-7-light, var(--citrus-7-light));
+  --accent-8-light: var(--theme-accent-8-light, var(--citrus-8-light));
+  --accent-9-light: var(--theme-accent-9-light, var(--citrus-9-light));
+  --accent-10-light: var(--theme-accent-10-light, var(--citrus-10-light));
+  --accent-11-light: var(--theme-accent-11-light, var(--citrus-11-light));
+  --accent-12-light: var(--theme-accent-12-light, var(--citrus-12-light));
+  --accent-contrast-light: var(
+    --theme-accent-contrast-light,
+    var(--citrus-contrast-light)
+  );
+  --accent-ink-light: var(--theme-accent-ink-light, var(--citrus-ink-light));
+  --accent-pressed-light: var(
+    --theme-accent-pressed-light,
+    var(--citrus-pressed-light)
+  );
+  --accent-link-light: var(--theme-accent-link-light, var(--citrus-link-light));
+  --accent-link-hover-light: var(
+    --theme-accent-link-hover-light,
+    var(--citrus-link-hover-light)
+  );
+  --accent-overlay-light: var(--theme-accent-overlay-light, var(--shade-fill));
+  --accent-overlay-hover-light: var(
+    --theme-accent-overlay-hover-light,
+    var(--shade-hover-fill)
+  );
+  --accent-overlay-soft-light: var(
+    --theme-accent-overlay-soft-light,
+    var(--shade-soft-fill)
+  );
+  --accent-overlay-quiet-light: var(
+    --theme-accent-overlay-quiet-light,
+    var(--shade-quiet-fill)
+  );
+  --accent-overlay-highlight-light: var(
+    --theme-accent-overlay-highlight-light,
+    var(--shade-fill)
+  );
+  --accent-1-dark: var(--theme-accent-1-dark, var(--citrus-1-dark));
+  --accent-2-dark: var(--theme-accent-2-dark, var(--citrus-2-dark));
+  --accent-3-dark: var(--theme-accent-3-dark, var(--citrus-3-dark));
+  --accent-4-dark: var(--theme-accent-4-dark, var(--citrus-4-dark));
+  --accent-5-dark: var(--theme-accent-5-dark, var(--citrus-5-dark));
+  --accent-6-dark: var(--theme-accent-6-dark, var(--citrus-6-dark));
+  --accent-7-dark: var(--theme-accent-7-dark, var(--citrus-7-dark));
+  --accent-8-dark: var(--theme-accent-8-dark, var(--citrus-8-dark));
+  --accent-9-dark: var(--theme-accent-9-dark, var(--citrus-9-dark));
+  --accent-10-dark: var(--theme-accent-10-dark, var(--citrus-10-dark));
+  --accent-11-dark: var(--theme-accent-11-dark, var(--citrus-11-dark));
+  --accent-12-dark: var(--theme-accent-12-dark, var(--citrus-12-dark));
+  --accent-contrast-dark: var(
+    --theme-accent-contrast-dark,
+    var(--citrus-contrast-dark)
+  );
+  --accent-ink-dark: var(--theme-accent-ink-dark, var(--citrus-ink-dark));
+  --accent-pressed-dark: var(
+    --theme-accent-pressed-dark,
+    var(--citrus-pressed-dark)
+  );
+  --accent-link-dark: var(--theme-accent-link-dark, var(--citrus-link-dark));
+  --accent-link-hover-dark: var(
+    --theme-accent-link-hover-dark,
+    var(--citrus-link-hover-dark)
+  );
+  --accent-overlay-dark: var(--theme-accent-overlay-dark, var(--shade-fill));
+  --accent-overlay-hover-dark: var(
+    --theme-accent-overlay-hover-dark,
+    var(--shade-hover-fill)
+  );
+  --accent-overlay-soft-dark: var(
+    --theme-accent-overlay-soft-dark,
+    var(--shade-soft-fill)
+  );
+  --accent-overlay-quiet-dark: var(
+    --theme-accent-overlay-quiet-dark,
+    var(--shade-quiet-fill)
+  );
+  --accent-overlay-highlight-dark: var(
+    --theme-accent-overlay-highlight-dark,
+    var(--shade-fill)
+  );
+}
+
+/* ============================================================
+   THEMES
+   A theme recolors the shell and nothing else. It assigns the slots
+   read above (--theme-*) in its own [data-theme] block, a light and
+   a dark half per slot, and nothing it leaves out changes. Shared
+   controls keep reading the neutral roles, so they stay neutral
+   inside each theme's tinted grays. Accents keep their scope.
+
+   A theme whose frame (canvas, top bar and sidebar) is dark on a light
+   page defines --theme-frame-* slots too. The shell wraps that frame in
+   `.dark[data-theme-frame]`, which re-enters the dark role blocks and
+   points their dark slots at the frame's light-mode values; a dark page
+   already renders its frame dark and needs no wrapper. Portaled menus,
+   popovers and toasts sit outside the wrapper and follow the page mode.
+   ============================================================ */
+
+.dark[data-theme-frame] {
+  --theme-neutral-1-dark: var(--theme-frame-neutral-1-light);
+  --theme-neutral-2-dark: var(--theme-frame-neutral-2-light);
+  --theme-neutral-3-dark: var(--theme-frame-neutral-3-light);
+  --theme-neutral-4-dark: var(--theme-frame-neutral-4-light);
+  --theme-neutral-5-dark: var(--theme-frame-neutral-5-light);
+  --theme-neutral-6-dark: var(--theme-frame-neutral-6-light);
+  --theme-neutral-7-dark: var(--theme-frame-neutral-7-light);
+  --theme-neutral-8-dark: var(--theme-frame-neutral-8-light);
+  --theme-neutral-9-dark: var(--theme-frame-neutral-9-light);
+  --theme-neutral-10-dark: var(--theme-frame-neutral-10-light);
+  --theme-neutral-11-dark: var(--theme-frame-neutral-11-light);
+  --theme-neutral-12-dark: var(--theme-frame-neutral-12-light);
+  --theme-neutral-navigation-quiet-dark: var(
+    --theme-frame-neutral-navigation-quiet-light
+  );
+  --theme-neutral-quiet-hover-dark: var(
+    --theme-frame-neutral-quiet-hover-light
+  );
+  --theme-neutral-raised-dark: var(--theme-frame-neutral-raised-light);
+  --theme-neutral-action-pressed-dark: var(
+    --theme-frame-neutral-action-pressed-light
+  );
+  --theme-bubble-neutral-dark: var(--theme-frame-bubble-neutral-light);
+  --theme-bubble-received-dark: var(--theme-frame-bubble-received-light);
+  --theme-canvas-dark: var(--theme-frame-canvas-light);
+  --theme-sidebar-dark: var(--theme-frame-sidebar-light);
+  --theme-sidebar-selected-dark: var(--theme-sidebar-selected-light);
+  --theme-sidebar-selected-text-dark: var(--theme-sidebar-selected-text-light);
+  --theme-sidebar-hover-dark: var(--theme-sidebar-hover-light);
+  --theme-sidebar-hover-text-dark: var(--theme-sidebar-hover-text-light);
+  --theme-badge-dark: var(--theme-badge-light);
+  --theme-badge-text-dark: var(--theme-badge-text-light);
+  --theme-status-online-dark: var(--theme-status-online-light);
+  --theme-status-away-dark: var(--theme-status-away-light);
+}
+
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
 :root[data-color-level="touch"],
 [data-color-level="touch"] .light {
-  --surface-message-own: var(--accent-4);
-  --text-message-own: var(--accent-12);
+  --surface-message-own: var(--theme-message-own-soft-light, var(--accent-4));
+  --text-message-own: var(
+    --theme-message-own-soft-text-light,
+    var(--accent-12)
+  );
   --text-message-link-own: var(--accent-link);
 }
 
 :root[data-color-level="touch"][data-color-mode="dark"],
 [data-color-level="touch"] .dark {
-  --surface-message-own: var(--accent-4);
-  --text-message-own: var(--accent-12);
+  --surface-message-own: var(--theme-message-own-soft-dark, var(--accent-4));
+  --text-message-own: var(--theme-message-own-soft-text-dark, var(--accent-12));
   --text-message-link-own: var(--accent-link);
 }
 
@@ -2013,6 +2243,9 @@
   --text-color-sidebar-selected: var(--text-sidebar-selected);
   --text-color-sidebar-hover: var(--text-sidebar-hover);
   --color-surface-sidebar-selected: var(--surface-sidebar-selected);
+  --color-surface-sidebar: var(--surface-sidebar);
+  --color-surface-badge: var(--surface-badge);
+  --text-color-on-badge: var(--text-on-badge);
   --color-affordance-sidebar-hover: var(--affordance-sidebar-hover);
   --text-color-message-own: var(--text-message-own);
   --text-color-message-link-own: var(--text-message-link-own);

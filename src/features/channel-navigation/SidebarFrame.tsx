@@ -24,6 +24,7 @@ export function SidebarFrame({
       as="aside"
       aria-label={label}
       aria-busy={busy}
+      data-sidebar=""
       data-buzz-launch-pending={launchPending}
     >
       <div className={styles.sidebar}>
