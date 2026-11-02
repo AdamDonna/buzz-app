@@ -185,7 +185,8 @@ export function liveProvenance(value: unknown): LiveProvenance {
 }
 /** A global route's establishment. `continuous`: the route resumed from the
  * cursor an earlier connection left, and its replay ended below the limit, so
- * it delivered every change since that connection last heard the relay. */
+ * it replayed every stored change since that connection last heard the relay.
+ * A frame the relay dropped silently before then is not replayed. */
 export type LiveGlobal = Readonly<{
   route: "profiles" | "membership";
   continuous: boolean;
@@ -747,8 +748,10 @@ export function subscribeRelayTraffic(
         Object.freeze({
           route: route.id,
           // The count covers every filter of the route, so any filter the
-          // limit cut marks it. A retry keeps the route's original since.
-          continuous: !!route.resumed && route.replay !== "limited",
+          // limit cut marks it. A retry keeps the route's original since; a
+          // live-only replacement replays nothing.
+          continuous:
+            !!route.resumed && !route.liveOnly && route.replay !== "limited",
         }),
       );
     else if (route.id !== "observer" && route.id !== "presence")

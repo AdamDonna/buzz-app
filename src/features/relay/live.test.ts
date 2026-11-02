@@ -3956,8 +3956,9 @@ it.each(["complete", "cut", "closed", "renewed"] as const)(
       for (const request of socket.requests())
         await socket.receive(["EOSE", request[1]]);
       const reads = await answer();
-      // A complete replay needs no read. A broken one re-reads the roster and
-      // the open channel's head, as after any outage.
+      // A complete replay needs no read. A broken one re-reads the open
+      // channel's head, as after any outage. The membership route itself
+      // stayed continuous, so the roster is not read again.
       stopSeen();
       if (mode === "complete") {
         expect(reads).toEqual([]);
@@ -3966,7 +3967,7 @@ it.each(["complete", "cut", "closed", "renewed"] as const)(
         // Agents start a new catch-up epoch on this drop and reconnect.
         expect(seen).toContain("connecting");
         expect(seen.at(-1)).toBe("connected");
-        expect(reads).toContainEqual([
+        expect(reads).not.toContainEqual([
           expect.objectContaining({ kinds: [39002] }),
         ]);
         expect(reads).toContainEqual([

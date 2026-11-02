@@ -1227,7 +1227,7 @@ it("an older page still in flight when a catch-up fill settles is discarded, and
   }
 });
 
-it("re-reads held profiles on reconnect only when the profiles replay was cut, had no cursor, failed, or went unreported", async () => {
+it("re-reads held profiles and the roster on reconnect only when their replay was cut, had no cursor, failed or went unreported, or an earlier read failed", async () => {
   const relay = keypair(),
     viewer = keypair(),
     alice = keypair();
@@ -1250,6 +1250,7 @@ it("re-reads held profiles on reconnect only when the profiles replay was cut, h
     roster(relay, "c", [viewer.pubkey]),
     metadata(relay, "c", "C"),
   ];
+  let refuseProfiles = false;
   /** Answers every read until the wire is quiet; returns what was read. */
   const drain = async () => {
     const reads: (readonly ReadFilter[])[] = [];
@@ -1260,6 +1261,10 @@ it("re-reads held profiles on reconnect only when the profiles replay was cut, h
       for (const entry of wire.pending.splice(0)) {
         reads.push(entry.filters);
         const kinds = entry.filters.flatMap((f) => f.kinds ?? []);
+        if (refuseProfiles && kinds.includes(0)) {
+          entry.fail(new Error("refused"));
+          continue;
+        }
         entry.respond(
           kinds.includes(0)
             ? [profile]
@@ -1310,13 +1315,23 @@ it("re-reads held profiles on reconnect only when the profiles replay was cut, h
     live.established(undefined, { route: "profiles", continuous: false });
     live.established(undefined, { route: "membership", continuous: false });
     expect(profileReads(await drain())).toHaveLength(1);
-    // A continuous replay already delivered every change: no profile read.
-    // The roster is still read again on each connection.
+    // A continuous replay already delivered every change: no full read.
     const quiet = await reconnect(true);
     expect(profileReads(quiet)).toEqual([]);
-    expect(rosterReads(quiet)).toHaveLength(1);
-    // A cut replay may have left changes out: read every held profile again.
+    expect(rosterReads(quiet)).toEqual([]);
+    // A cut replay may have left changes out: read what that route covers.
+    const cut = await reconnect(false);
+    expect(profileReads(cut)).toHaveLength(1);
+    expect(rosterReads(cut)).toEqual([]);
+    const cutRoster = await reconnect(true, false);
+    expect(profileReads(cutRoster)).toEqual([]);
+    expect(rosterReads(cutRoster)).toHaveLength(1);
+    // A read that fails stays owed: the next continuous reconnect reads again.
+    refuseProfiles = true;
     expect(profileReads(await reconnect(false))).toHaveLength(1);
+    refuseProfiles = false;
+    expect(profileReads(await reconnect(true))).toHaveLength(1);
+    expect(profileReads(await reconnect(true))).toEqual([]);
     // An older host reports no route: once per connection, as before.
     expect(profileReads(await reconnect(undefined))).toHaveLength(1);
     expect(owner.session.profiles.snapshot().get(alice.pubkey)?.name).toBe(
