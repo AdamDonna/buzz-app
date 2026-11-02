@@ -258,16 +258,12 @@ function ReactionEmoji({
   const [previewDismissed, setPreviewDismissed] = useState(false);
   const [previewTilt, setPreviewTilt] = useState("0deg");
   const emojiAnchor = useRef<HTMLSpanElement>(null);
+  const peopleList = useRef<HTMLElement>(null);
   const previewAuthors = useMemo(() => {
-    const first = authorIds.slice(0, 3);
     return session.viewer && authorIds.includes(session.viewer)
-      ? [session.viewer, ...first.filter((id) => id !== session.viewer)].slice(
-          0,
-          3,
-        )
-      : first;
+      ? [session.viewer, ...authorIds.filter((id) => id !== session.viewer)]
+      : authorIds;
   }, [authorIds, session.viewer]);
-  const remaining = authorIds.length - previewAuthors.length;
   const reactorProfiles = useMemo(
     () => selectProfiles(session.profiles, previewAuthors),
     [session.profiles, previewAuthors],
@@ -302,6 +298,10 @@ function ReactionEmoji({
         anchor={emojiAnchor}
         open={previewOpen && !previewDismissed && !unavailable}
         warm={previewWarm}
+        {...(grouped && {
+          actionRef: peopleList,
+          "aria-label": `People who reacted with ${name}`,
+        })}
         className={[
           styles.reactionPreview,
           previewSlide === "left" && styles.reactionPreviewSlideLeft,
@@ -312,8 +312,8 @@ function ReactionEmoji({
         onOpenChange={onPreviewChange}
         trigger={
           <Button
-            variant="link"
-            size="sm"
+            variant="plain"
+            size={grouped ? "caption" : "sm"}
             shape={grouped ? "capsule" : "icon"}
             data-reaction={reaction.content}
             data-reaction-url={reaction.emoji?.url}
@@ -365,21 +365,14 @@ function ReactionEmoji({
           >
             <ReactionGlyph reaction={reaction} session={session} />
           </span>
-          <span className={styles.reactionPreviewNames}>
-            {users.map((user, index) => (
-              <span
-                key={previewAuthors[index]}
-                className={styles.reactionPreviewPerson}
-              >
-                {user}
-              </span>
-            ))}
-          </span>
-          {remaining > 0 && (
-            <span className={styles.reactionPreviewNames}>
-              and {remaining} {remaining === 1 ? "other" : "others"}
-            </span>
-          )}
+          <section
+            ref={peopleList}
+            className={styles.reactionPreviewNames}
+            aria-label="Everyone who reacted"
+            tabIndex={grouped ? 0 : undefined}
+          >
+            {user}
+          </section>
           <span className={styles.reactionPreviewName}>{name}</span>
         </div>
       </PreviewCard>
@@ -437,7 +430,6 @@ export function MessageReactions(
       onMouseEnter={() => setPointerInRow(true)}
       onMouseLeave={() => {
         setPointerInRow(false);
-        setPreview(undefined);
       }}
     >
       {active &&

@@ -49,6 +49,10 @@ the interface unless an available tool actually supports that action.
 
 ## Conversations and communities
 
+- Each reaction emoji has its own capsule. Hover or focus it to see everyone
+  who reacted. Large lists scroll within the preview. With a keyboard, Tab into
+  the list to scroll it; Escape dismisses the preview. Clicking the emoji adds
+  or removes your reaction.
 - **Solo** organizes your chats with agents. Choose **New chat**, select or tag
   an agent, and send a message. Solo conversations continue at the chat's top
   level rather than requiring a new thread for each reply. Solo chats can also

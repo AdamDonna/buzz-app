@@ -310,7 +310,7 @@ test("keyboard removal keeps pointer retry reachable after a rejected deletion",
   await page.mouse.move(0, 0);
   await pill.press("Tab");
   await pill.focus();
-  const preview = page.locator('.buzz-preview-card[role="tooltip"][data-open]');
+  const preview = page.locator(".buzz-preview-card[data-open]");
   await expect(preview).toBeVisible();
   await page.evaluate(() => window.emojiFixture.rejectReaction());
   await pill.press("Space");

@@ -47,20 +47,24 @@ test("grouped reaction counts fit and preview in both themes and text sizes", as
   }
   // Activation dismisses the preview; keyboard re-entry opens it again.
   await group.press("Tab");
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("--buzz-text-scale", "1"),
+  );
   await group.focus();
-  const preview = page.locator('.buzz-preview-card[role="tooltip"]');
+  const preview = page.locator('.buzz-preview-card[role="dialog"]');
   await expect(preview).toBeVisible();
-  await page.screenshot({
+  await expect(preview).toHaveCSS("opacity", "1");
+  await preview.screenshot({
     path: test.info().outputPath("grouped-reactions.png"),
   });
   await page.keyboard.press("Escape");
   await expect(preview).toHaveCount(0);
 });
 
-// Browser-only: available popup height and real line clamping at enlarged text.
-test("large reaction previews keep the remainder count visible without scrolling", async ({
+// Browser-only: real wrapping, bounded scrolling, and portal focus/dismissal.
+test("all reactor names wrap and remain reachable with pointer and keyboard", async ({
   page,
-}) => {
+}, testInfo) => {
   for (const { count, width, scale } of [
     { count: 150, width: 1440, scale: 1 },
     { count: 40, width: 520, scale: 2 },
@@ -78,30 +82,54 @@ test("large reaction previews keep the remainder count visible without scrolling
       scale,
     );
     const group = page.getByRole("button", { name: `👍: ${count} people` });
-    await group.focus();
-    const preview = page.locator('.buzz-preview-card[role="tooltip"]');
-    const remainder = preview.getByText(`and ${count - 3} others`, {
-      exact: true,
+    await group.hover();
+    const preview = page.locator(
+      '.buzz-preview-card[role="dialog"][data-open]',
+    );
+    const people = preview.getByRole("region", {
+      name: "Everyone who reacted",
     });
-    await expect(remainder).toBeVisible();
-    await expect(preview).toContainText("Teammate 3");
-    await expect(preview).not.toContainText("Teammate 4 ");
+    await expect(people).toBeVisible();
+    for (let index = 1; index <= count; index++)
+      await expect(people).toContainText(`Teammate ${index} `);
+    await expect(preview).not.toContainText("others");
+    // The pointer must be able to leave the reaction row and enter its portal.
+    await people.hover();
+    await page.mouse.wheel(0, 400);
+    await expect
+      .poll(() => people.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
+    await expect(preview).toBeVisible();
+    await group.focus();
+    await page.keyboard.press("Tab");
+    await expect(people).toBeFocused();
+    await page.keyboard.press("ControlOrMeta+End");
+    // End is the native scrollport command; no app handler substitutes for it.
+    await page.keyboard.press("End");
+    await expect
+      .poll(() =>
+        people.evaluate((el) =>
+          Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop),
+        ),
+      )
+      .toBeLessThanOrEqual(1);
     for (const theme of ["light", "dark"]) {
       await page.evaluate(
         (theme) => (document.documentElement.dataset.colorMode = theme),
         theme,
       );
-      await expect
-        .poll(() =>
-          preview.evaluate((card) => card.scrollHeight <= card.clientHeight),
-        )
-        .toBe(true);
       const card = await preview.boundingBox();
-      const summary = await remainder.boundingBox();
-      expect(summary.y + summary.height).toBeLessThanOrEqual(
-        card.y + card.height,
-      );
+      expect(card.x).toBeGreaterThanOrEqual(0);
+      expect(card.x + card.width).toBeLessThanOrEqual(width);
+      expect(card.y).toBeGreaterThanOrEqual(0);
+      expect(card.y + card.height).toBeLessThanOrEqual(950);
+      await page.screenshot({
+        path: testInfo.outputPath(`all-reactors-${count}-${theme}.png`),
+      });
     }
+    await page.keyboard.press("Escape");
+    await expect(preview).toHaveCount(0);
+    await expect(group).toBeFocused();
   }
 });
 
@@ -118,9 +146,10 @@ test("reaction emojis and hit areas grow together without clipping", async ({
   const glyph = pill.locator("[data-reaction-glyph] > span");
   await expect(glyph).toBeVisible();
   const capsule = message.getByTestId("reaction-row");
-  await expect(capsule).toHaveCSS("column-gap", "0px");
-  await expect(capsule).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(pill.locator("..")).toHaveCSS(
+  await expect(capsule).toHaveCSS("column-gap", "4px");
+  await expect(capsule).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  const reactionCapsule = pill.locator("..");
+  await expect(reactionCapsule).not.toHaveCSS(
     "background-color",
     "rgba(0, 0, 0, 0)",
   );
@@ -128,7 +157,7 @@ test("reaction emojis and hit areas grow together without clipping", async ({
     name: "Add reaction",
     exact: true,
   });
-  await expect(addReaction.locator("..")).toHaveCSS(
+  await expect(capsule.getByTestId("inline-add-reaction")).toHaveCSS(
     "background-color",
     await pill
       .locator("..")
@@ -193,6 +222,7 @@ test("reaction emojis and hit areas grow together without clipping", async ({
   await expect(page.locator("html")).toHaveAttribute("data-keyboard-input", "");
   await pill.hover();
   await expect(pill).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(pill).toHaveCSS("text-decoration-line", "none");
   await expect
     .poll(() =>
       pill.locator("[data-reaction-glyph]").evaluate((el) => {
@@ -431,7 +461,7 @@ test("reaction previews center above each emoji bubble", async ({ page }) => {
   await expect(
     row.locator('button[data-reaction=":party:"] img'),
   ).toHaveJSProperty("naturalWidth", 16);
-  const preview = page.locator('.buzz-preview-card[role="tooltip"][data-open]');
+  const preview = page.locator(".buzz-preview-card[data-open]");
   for (const [theme, width, scale] of [
     ["light", 1440, 1],
     ["dark", 900, 2],
@@ -497,6 +527,8 @@ test("reaction previews use the delayed first open, immediate warm switch, and r
     await heart.hover();
     await expect(tooltip).toContainText("heart");
     await page.mouse.move(0, 0);
+    // Shared preview grace lets the pointer cross into the scrollable list.
+    await page.clock.runFor(75);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(151);
     await custom.hover();

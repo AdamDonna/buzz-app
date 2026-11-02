@@ -238,7 +238,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0;
+  gap: var(--space-1);
   margin: var(--space-1h) 0 0;
 }
 .reactions[data-populated],
@@ -247,14 +247,6 @@
   align-self: flex-start;
   width: fit-content;
   max-width: 100%;
-  padding-inline: var(--space-1);
-  border-radius: calc(var(--size-control-sm) / 2);
-  /* The strip follows the lightness of whatever it sits on, like a chip. */
-  background: var(--reaction-surface, var(--affordance-reaction));
-}
-/* The add control's circle meets the strip's rounded end. */
-.reactions[data-populated]:has(> .inlineReactionTool:not(:empty):last-child) {
-  padding-inline-end: 0;
 }
 .reactions:empty {
   margin-top: 0;
@@ -277,6 +269,12 @@
   display: inline-flex;
   max-width: 100%;
 }
+.reactionItem,
+.inlineReactionTool,
+.reactionFallback > span:not([role]) {
+  border-radius: var(--radius-capsule);
+  background: var(--reaction-surface, var(--affordance-reaction));
+}
 .reactionGlyph {
   display: inline-flex;
   align-items: center;
@@ -290,6 +288,7 @@
 }
 .reactionCount {
   @apply text-caption;
+  font-variant-numeric: tabular-nums;
 }
 .reactionItem [data-reaction] {
   color: var(--reaction-ink, var(--text-standard));
@@ -350,9 +349,12 @@
   display: grid;
   justify-items: center;
   gap: var(--space-1);
-  max-width: 14rem;
+  max-width: 28rem;
   text-align: center;
   overflow-wrap: anywhere;
+}
+.reactionPreview.reactionPreview {
+  max-width: min(30rem, 85vw, var(--available-width, 100vw));
 }
 .reactionPreviewEmoji {
   --reaction-preview-size: calc(var(--space-6) * 2);
@@ -376,13 +378,10 @@
 }
 .reactionPreviewNames {
   @apply text-caption text-standard;
-  display: grid;
   max-width: 100%;
-}
-.reactionPreviewPerson {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-height: min(20rem, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 @media (prefers-reduced-motion: reduce) {
   .reactionPreview.reactionPreview {
@@ -452,7 +451,7 @@
 }
 .inlineReactionTool
   [data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  /* The strip's own overlay again, laid on top of it. */
+  /* Reinforce the capsule on hover, keyboard focus, and while picking. */
   background: var(--reaction-surface, var(--affordance-reaction));
   color: var(--reaction-ink, var(--text-standard));
 }
@@ -3192,8 +3191,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 .message .messageBubble > .reactions {
   margin: var(--space-2) 0 0;
   margin-inline-start: calc(-1 * var(--space-2));
-  /* Short prose still leaves room for a reaction and its add control. The add
-     control ends the strip with no end padding, so only the start padding counts. */
+  /* Short prose still leaves room for a counted reaction, gap, and add control. */
   min-inline-size: calc(3 * var(--size-control-sm) + var(--space-1));
   max-width: calc(100% + 2 * var(--space-2));
   border: 0;
