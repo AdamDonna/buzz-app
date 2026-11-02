@@ -572,8 +572,9 @@ export function createThreadView({
     // Repair retains already-verified presentation; only a new/unavailable
     // selection waits for its initial fold. Never unmount a reader on reconnect.
     if (exact && replace && targetStatus !== "ready") targetStatus = "loading";
-    // A stream establishment (a reconnect, or a minute renewal) repairs a ready
-    // view in the background: it stays ready unless the repair changes it.
+    // A stream establishment (a reconnect, or a replacement that outlived its
+    // source) repairs a ready view in the background: it stays ready unless
+    // the repair changes it.
     if (!established || snapshot.status !== "ready")
       publishStatus({
         status: "loading",

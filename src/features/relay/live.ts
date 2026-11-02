@@ -1319,7 +1319,17 @@ export function subscribeRelayTraffic(
           );
       } else if (data[0] === "EOSE" && route.status === "pending") {
         clearTimeout(route.deadline);
-        if (route.previous) closeWire(route.previous);
+        const { previous } = route;
+        // A replacement made while its source stayed live missed nothing: the
+        // source delivered every event of this scope until now, so there is
+        // no gap to report.
+        const overlapped =
+          !!route.liveOnly &&
+          previous?.status === "live" &&
+          !!previous.wire &&
+          wires.get(previous.wire) === previous &&
+          scope(route).every((id) => scope(previous).includes(id));
+        if (previous) closeWire(previous);
         delete route.previous;
         route.status = "live";
         delete route.error;
@@ -1334,7 +1344,11 @@ export function subscribeRelayTraffic(
         // A cut replay establishes every live route, this one included, even
         // if a listener retired it meanwhile.
         if (broken) settle();
-        else if (!caughtUp && wires.get(route.wire ?? "") === route)
+        else if (
+          !caughtUp &&
+          !overlapped &&
+          wires.get(route.wire ?? "") === route
+        )
           establish(route);
         if (valid()) pump();
       } else if (data[0] === "CLOSED") {

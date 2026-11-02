@@ -943,7 +943,12 @@ the pending replacement, not that established source. Removed IDs are fenced
 immediately, including after re-addition. Original source scopes stay immutable;
 ambiguous auxiliary events never gain invented alert attribution. Replacements
 use fresh wire IDs, preserve `since`, and request `limit: 0`, so their events are
-live even before EOSE. Pending setup alone does not prove continuity. Narrowed-scope
+live even before EOSE. Pending setup alone does not prove continuity. A
+replacement whose established source was still live at the replacement's EOSE,
+over the same or a narrower scope, establishes nothing: the source delivered every
+event of that scope until then, so no channel or thread catch-up runs. This
+covers the recovery tick's minute renewal and a narrowed batch. When the source
+closed first, the replacement establishes as before. Narrowed-scope
 failure, denial and disposal release both sources. An undecodable event is dropped
 and logged; its route stays. For an
 unchanged scope, a renewal timeout or transient relay error retires only the

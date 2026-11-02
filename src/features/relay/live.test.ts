@@ -1553,6 +1553,50 @@ async function rebuilt(h: ReturnType<typeof setup>) {
   return next;
 }
 
+it("a recovery renewal whose source stayed live until its EOSE establishes nothing", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    let { renewal } = await renewing(h);
+    h.callbacks.established.mockClear();
+    for (let tick = 0; tick < 3; tick++) {
+      await h.first.receive(["EOSE", renewal[1]]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const next = h.first
+        .requests()
+        .filter((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 0)
+        .at(-1);
+      assert.exists(next);
+      expect(next[1]).not.toBe(renewal[1]);
+      renewal = next;
+    }
+    // Three minutes of renewals over a healthy socket: no catch-up obligation.
+    expect(h.callbacks.established).not.toHaveBeenCalled();
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("a recovery renewal establishes when its source closed before the renewal's EOSE", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, () => 0.5);
+  try {
+    const { renewal } = await renewing(h);
+    const source = h.first
+      .requests()
+      .find((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 500);
+    assert.exists(source);
+    h.callbacks.established.mockClear();
+    // The source stopped delivering before the live-only renewal took over,
+    // so events between the two may be missing.
+    await h.first.receive(["CLOSED", source[1], "error: shutting down"]);
+    await h.first.receive(["EOSE", renewal[1]]);
+    expect(h.callbacks.established).toHaveBeenCalledExactlyOnceWith(["a", "b"]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
 it("resumes a joined batch closed during its renewal from the source it kept", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup([], undefined, () => 0.5);
@@ -1869,14 +1913,15 @@ it("reports per channel which replays closed their gap: a cursor and fewer event
     // The limit cut a's replay; c had no cursor; b's replay closed its gap.
     expect(channels()).toEqual([[["a", "b", "c"], undefined, ["b"]]]);
     h.callbacks.established.mockClear();
-    // The recovery tick's live-only renewal replays nothing.
+    // The recovery tick's live-only renewal replays nothing, and its source
+    // stayed live until its EOSE: it reports no establishment at all.
     await vi.advanceTimersByTimeAsync(60_000);
     const renewal = second
       .requests()
       .find((r) => scopeOf(r).includes("a") && filtersOf(r)[0]?.limit === 0);
     assert.exists(renewal);
     await second.receive(["EOSE", renewal[1]]);
-    expect(channels()).toEqual([[["a", "b", "c"]]]);
+    expect(channels()).toEqual([]);
     h.callbacks.established.mockClear();
     second.close();
     await vi.advanceTimersByTimeAsync(1000);

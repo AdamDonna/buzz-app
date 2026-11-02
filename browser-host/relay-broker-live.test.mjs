@@ -1567,7 +1567,12 @@ test("joined batches survive the real HTTP boundary and retirement only rebuilds
     expect(h.requests).toHaveLength(29);
     const retained = joined.slice(1);
     traffic.update([...retained, "preview"], retained);
-    await until(() => established.mock.calls.length === 30);
+    // The narrowed replacement retires the old wire at its EOSE. The old wire
+    // stayed live until then, so the survivors missed nothing to catch up.
+    await until(() =>
+      h.frames.some((f) => f.kind === "CLOSE" && f.id === old.id),
+    );
+    expect(established).toHaveBeenCalledTimes(29);
     expect(h.requests).toHaveLength(30);
     expect(h.frames.filter((f) => f.kind === "CLOSE").map((f) => f.id)).toEqual(
       [old.id],
