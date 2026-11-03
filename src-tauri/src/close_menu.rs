@@ -127,7 +127,7 @@ fn paste_plain() {
     };
 }
 
-fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool {
+pub(crate) fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
@@ -145,7 +145,7 @@ fn send_request<R: Runtime>(app: &AppHandle<R>, script: &str) -> bool {
         .expect("Browser session IDs are JSON strings");
     let script = format!("{{ const browserSessionId = {browser};\n{script}\n}}");
     if let Err(error) = window.eval(script) {
-        eprintln!("Could not send Buzz tab request: {error}");
+        eprintln!("Could not send Buzz request: {error}");
         return false;
     }
     true

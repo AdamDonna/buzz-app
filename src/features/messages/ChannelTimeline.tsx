@@ -9,7 +9,11 @@ import {
   ChatCircleIcon,
 } from "../../shared/design-system/icons";
 import { MembershipRow } from "./MembershipRow";
-import { membershipRows, withoutStartingAgents } from "./membership-rows";
+import {
+  membershipRows,
+  renderedRowIndex,
+  withoutStartingAgents,
+} from "./membership-rows";
 import { activityGroups, RECENT_ACTIVITY_COUNT } from "./activity-groups";
 import { DayDivider } from "./MessageTimestamp";
 import type { ConversationExtensions } from "../conversation/contracts";
@@ -904,11 +908,7 @@ function Timeline({
         : null;
     const anchor = saved?.anchor;
     const restoreIndex = anchor
-      ? rows.findIndex(
-          (row) =>
-            row.id === anchor.id ||
-            row.membershipRows?.some((member) => member.id === anchor.id),
-        )
+      ? renderedRowIndex(rows, visibleRows, anchor.id)
       : -1;
     // Only a loaded row is a place to return to. Until it loads, an opening
     // reader follows the latest message and the saved row stays pending; a
@@ -1008,6 +1008,7 @@ function Timeline({
     };
   }, [
     rows,
+    visibleRows,
     size,
     prepend,
     recordPosition,

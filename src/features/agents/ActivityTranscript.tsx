@@ -1,12 +1,20 @@
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  Fragment,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type {
-  ToolDiff,
-  ToolItem,
-  Transcript,
-  TranscriptItem,
-  TranscriptTurn,
+import {
+  sectionTitle,
+  type PromptSection,
+  type ToolDiff,
+  type ToolItem,
+  type Transcript,
+  type TranscriptItem,
+  type TranscriptTurn,
 } from "./activity-transcript";
 import { MAX_MARKDOWN_LENGTH, scanMarkdown } from "../relay/message-content";
 import {
@@ -154,13 +162,21 @@ export function ActivityTranscript({
         </p>
       )}
       {transcript.turns.map((turn) => (
-        <Turn
-          key={turn.turnId}
-          turn={turn}
-          state={turn.endedAt ? "ended" : (state(turn.turnId) ?? "unknown")}
-          agentName={agentName}
-          openConversation={openConversation}
-        />
+        <Fragment key={turn.turnId}>
+          {(turn.newSession || turn.continued) && (
+            <p className={`text-body-sm ${styles.session}`}>
+              {turn.newSession
+                ? "New session"
+                : "Session continued; earlier turns not shown"}
+            </p>
+          )}
+          <Turn
+            turn={turn}
+            state={turn.endedAt ? "ended" : (state(turn.turnId) ?? "unknown")}
+            agentName={agentName}
+            openConversation={openConversation}
+          />
+        </Fragment>
       ))}
     </div>
   );
@@ -194,7 +210,6 @@ function Turn({
   const facts = [
     ...turn.config,
     turn.source === "heartbeat" ? "heartbeat" : "",
-    turn.newSession ? "new session" : "",
     turn.stopReason ?? "",
     turn.context
       ? `context ${Math.round(turn.context.used / 1000)}k/${Math.round(turn.context.size / 1000)}k`
@@ -275,7 +290,7 @@ function Sections({
   sections,
 }: {
   title: string;
-  sections: readonly { tag: string; body: string }[];
+  sections: readonly PromptSection[];
 }) {
   return (
     <details className={styles.context}>
@@ -290,7 +305,7 @@ function Sections({
         <details key={index} className={styles.section}>
           <summary className="text-body-sm text-subtle">
             <CaretRightIcon size={14} aria-hidden="true" />
-            <span>{section.tag}</span>
+            <span>{sectionTitle(section.tag)}</span>
           </summary>
           <pre className={styles.pre}>{section.body}</pre>
         </details>
