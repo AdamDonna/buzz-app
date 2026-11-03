@@ -6,6 +6,7 @@ import { provideNavigation } from "../navigation/service";
 import { NotificationsService, type Notifications } from "./service";
 import { createNotificationPreferences } from "./preferences";
 import type {
+  NotificationFailureStage,
   NotificationPlatform,
   NotificationPermissionState,
 } from "./platform";
@@ -39,7 +40,8 @@ function setup() {
   const preferences = createNotificationPreferences(host);
   const navigation = provideNavigation(ctx);
   const clicks: (() => void)[] = [];
-  const failures: ((error: Error) => void)[] = [];
+  const failures: ((error: Error, stage?: NotificationFailureStage) => void)[] =
+    [];
   let permission: NotificationPermissionState = "granted";
   const platform: NotificationPlatform = {
     label: "Test",
@@ -183,6 +185,17 @@ it("preserves the submission sound decision when native delivery fails late", as
   t.failures[0]?.(new Error("Late native failure"));
   expect(fallback).toHaveBeenCalledOnce();
   expect(t.plays).toEqual([]);
+});
+it("reports activation failures without showing a delivery fallback", async () => {
+  const t = setup();
+  const fallback = vi.fn();
+  await t.submit("activation-failure", () => true, fallback);
+  await flush();
+  t.failures[0]?.(new Error("Window focus failed"), "activation");
+  t.clicks[0]?.();
+  expect(fallback).not.toHaveBeenCalled();
+  expect(t.service.snapshot().error).toBe("Window focus failed");
+  expect(t.navigation.navigation.snapshot().entry.target).toEqual(target);
 });
 it("an off/on transition during a permission probe cancels the old candidate", async () => {
   const t = setup();

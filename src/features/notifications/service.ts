@@ -480,7 +480,11 @@ export class NotificationsService extends Service implements Notifications {
             foregroundBanner: item.category === "agent",
           },
           activate,
-          (error) => {
+          (error, stage = "delivery") => {
+            if (stage === "activation") {
+              this.reportError(error);
+              return;
+            }
             // Native failure can arrive before `show` resolves. Cancellation is
             // about this submission's audio decision, not whether its account
             // still owns visible error reporting.

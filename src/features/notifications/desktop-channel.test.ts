@@ -151,9 +151,36 @@ it("accepts a native failure before the command promise resolves", async () => {
     return null;
   });
   await platform.show(item(), vi.fn(), failed);
-  expect(failed).toHaveBeenCalledExactlyOnceWith(new Error("backend failure"));
+  expect(failed).toHaveBeenCalledExactlyOnceWith(
+    new Error("backend failure"),
+    "delivery",
+  );
   expect(callbacks.size).toBe(0);
   expect(invoke).toHaveBeenCalledOnce();
+  platform.dispose();
+});
+
+it("separates activation errors from delivery failures while still navigating", async () => {
+  const platform = createNotifications();
+  const activate = vi.fn(),
+    failed = vi.fn();
+  await platform.show(item(), activate, failed);
+  const { call, send } = callback();
+  send({
+    message: {
+      id: call.presentation.id,
+      kind: "activated",
+      error: "window focus failed",
+    },
+    index: 0,
+  });
+  send({ end: true, index: 1 });
+  expect(failed).toHaveBeenCalledExactlyOnceWith(
+    new Error("window focus failed"),
+    "activation",
+  );
+  expect(activate).toHaveBeenCalledOnce();
+  expect(callbacks.size).toBe(0);
   platform.dispose();
 });
 

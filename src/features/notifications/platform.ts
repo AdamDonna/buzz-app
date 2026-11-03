@@ -10,6 +10,7 @@ export type NotificationPresentation = Readonly<{
   body: string;
   foregroundBanner?: boolean;
 }>;
+export type NotificationFailureStage = "delivery" | "activation";
 export interface NotificationPlatform {
   readonly label: string;
   readonly systemManaged?: boolean;
@@ -18,7 +19,7 @@ export interface NotificationPlatform {
   show(
     item: NotificationPresentation,
     activate: () => void,
-    failed: (error: Error) => void,
+    failed: (error: Error, stage?: NotificationFailureStage) => void,
   ): Promise<void>;
   dispose(): void;
 }
@@ -61,7 +62,11 @@ export function createNotifications(): NotificationPlatform {
       const channel = new Channel<DesktopResponse>((response) => {
         if (disposed || response.id !== item.id || !active.has(item.id)) return;
         release(item.id, channel);
-        if (response.error) failed(new Error(response.error));
+        if (response.error)
+          failed(
+            new Error(response.error),
+            response.kind === "activated" ? "activation" : "delivery",
+          );
         if (response.kind === "activated") activate();
       });
       active.set(item.id, channel);
