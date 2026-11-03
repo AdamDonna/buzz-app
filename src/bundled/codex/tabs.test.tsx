@@ -1,6 +1,7 @@
 import type { AgentExecutionBinding } from "../../features/agents/execution";
 import { AgentTabs } from "../agents/AgentTabs";
 import type {
+  Agent,
   Agents,
   RegisteredAgentType,
 } from "../../features/agents/service";
@@ -1887,6 +1888,72 @@ it("shows a saved inventory read error and retries without opening execution", a
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   expect(f.spawn).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "removes a saved remote conversation on New (older read pending: %s)",
+  async (pendingRead) => {
+    const agent = "a".repeat(64);
+    const place = JSON.stringify(["channel", "channel"]);
+    const storage = localStore();
+    await storage.set(
+      `buzz.codex.sessions.execution.v1:test:${agent}:${place}`,
+      JSON.stringify({ key: "old-session", intent: "existing" }),
+    );
+    await storage.set(
+      `buzz.codex.sessions.v17:test:${agent}:session:old-session`,
+      JSON.stringify({
+        [place]: { threadId: "old-thread", workspace: "/guest" },
+      }),
+    );
+    const started = deferred<void>();
+    const release = deferred<void>();
+    let holdNext = false;
+    const f = fixture({
+      binding: { provider: "test/guest" },
+      sessionStorage: {
+        ...storage,
+        scan: async (prefix) => {
+          const saved = await storage.scan(prefix);
+          if (holdNext) {
+            holdNext = false;
+            started.resolve();
+            await release.promise;
+          }
+          return saved;
+        },
+      },
+    });
+    render(<f.tabs.ActivityTab {...f.props()} />);
+    expect(await screen.findByTitle("general · channel")).toBeVisible();
+    let read: Promise<unknown> | undefined;
+    if (pendingRead) {
+      holdNext = true;
+      read = f.runtime.listConversations(agent);
+      await started.promise;
+    }
+    try {
+      await act(() =>
+        f.runtime.session(
+          f.props().agent as unknown as Agent,
+          { channelId: "channel" },
+          "new",
+        ),
+      );
+      expect(
+        await screen.findByText(
+          "No other conversations saved in this app yet.",
+        ),
+      ).toBeVisible();
+    } finally {
+      await act(async () => {
+        release.resolve();
+        await read;
+      });
+    }
+    expect(f.runtime.conversations(agent)).toEqual([]);
+    expect(f.spawn).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps a later Activity read when an earlier closed tab finishes last", async () => {
   const agent = "a".repeat(64);

@@ -272,6 +272,7 @@ export class CodexRuntime {
   private views = new Map<AgentKey, readonly SessionView[]>();
   private inventories = new Map<AgentKey, SavedConversation[] | null>();
   private inventoryReads = new Map<AgentKey, object>();
+  private inventoryVersions = new Map<AgentKey, number>();
   private listeners = new Set<() => void>();
   /** Read-only model discovery, kept until effective model settings change. */
   private previews = new Map<
@@ -502,6 +503,17 @@ export class CodexRuntime {
               key,
               JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
             );
+            this.inventoryReads.delete(agent.key);
+            this.inventories.set(
+              agent.key,
+              (this.inventories.get(agent.key) ?? []).filter(
+                (row) => row.key !== conversation,
+              ),
+            );
+            this.inventoryVersions.set(
+              agent.key,
+              this.conversationVersion(agent.key) + 1,
+            );
             const prior = this.remote.get(key);
             this.remote.delete(key);
             prior?.runtime.dispose();
@@ -704,10 +716,14 @@ export class CodexRuntime {
       }
     }
     const present = new Set(agents.map((agent) => agent.key));
-    for (const key of this.inventoryReads.keys())
+    for (const key of new Set([
+      ...this.inventories.keys(),
+      ...this.inventoryReads.keys(),
+    ]))
       if (!present.has(key)) {
         this.inventories.delete(key);
         this.inventoryReads.delete(key);
+        this.inventoryVersions.delete(key);
       }
     for (const key of this.previews.keys())
       if (!present.has(key)) {
@@ -765,6 +781,7 @@ export class CodexRuntime {
     this.previews.clear();
     this.inventories.clear();
     this.inventoryReads.clear();
+    this.inventoryVersions.clear();
     for (const entry of this.entries.values()) entry.abort.abort();
     this.entries.clear();
     this.views.clear();
@@ -892,12 +909,20 @@ export class CodexRuntime {
     }
     if (!this.disposed && this.inventoryReads.get(agent) === request)
       this.inventories.set(agent, rows);
-    return rows ?? this.localConversations(agent);
+    return rows
+      ? this.withHeldConversations(agent, rows)
+      : this.localConversations(agent);
   }
+  conversationVersion = (agent: AgentKey) =>
+    this.inventoryVersions.get(agent) ?? 0;
   /** The last observed bindings, most recently used first. */
   conversations(agent: AgentKey): SavedConversation[] {
-    if (this.inventories.has(agent))
-      return this.inventories.get(agent) ?? this.localConversations(agent);
+    if (this.inventories.has(agent)) {
+      const rows = this.inventories.get(agent);
+      return rows
+        ? this.withHeldConversations(agent, rows)
+        : this.localConversations(agent);
+    }
     if (this.execution) {
       const scope = this.reads(agent)?.scope;
       if (scope) {
@@ -916,19 +941,22 @@ export class CodexRuntime {
             );
           })
           .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
-        const held = [...this.remote.values()]
-          .filter((entry) => entry.agent === agent)
-          .flatMap((entry) => entry.runtime.conversations(agent));
-        const conversations = [
-          ...new Map(
-            [...remote, ...held].map((row) => [row.key, row]),
-          ).values(),
-        ];
-        if (conversations.length)
-          return conversations.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+        const conversations = this.withHeldConversations(agent, remote);
+        if (conversations.length) return conversations;
       }
     }
     return this.localConversations(agent);
+  }
+  private withHeldConversations(
+    agent: AgentKey,
+    saved: readonly SavedConversation[],
+  ) {
+    const held = [...this.remote.values()]
+      .filter((entry) => entry.agent === agent)
+      .flatMap((entry) => entry.runtime.conversations(agent));
+    return [
+      ...new Map([...saved, ...held].map((row) => [row.key, row])).values(),
+    ].sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
   }
   private localConversations(agent: AgentKey) {
     const reads = this.reads(agent);

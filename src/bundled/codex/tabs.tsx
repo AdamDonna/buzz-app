@@ -899,11 +899,13 @@ export function createTabs(
    * transcripts. */
   function ActivityTab(props: Parameters<typeof ActivityContent>[0]) {
     const agent = props.agent.key;
-    const revision = useSyncExternalStore(runtime.subscribe, () =>
-      runtime
-        .sessions(agent)
-        .map(({ key, status }) => `${key}:${status}`)
-        .join("\0"),
+    const revision = useSyncExternalStore(
+      runtime.subscribe,
+      () =>
+        `${runtime.conversationVersion(agent)}:${runtime
+          .sessions(agent)
+          .map(({ key, status }) => `${key}:${status}`)
+          .join("\0")}`,
     );
     const [attempt, retry] = useState(0);
     const [read, setRead] = useState<{

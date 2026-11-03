@@ -4831,10 +4831,14 @@ it("gives each conversation a durable target key and rotates only its New sessio
   const f = fixture([], undefined, false, {}, undefined, undefined, execution);
   const first = f.delivery("first");
   const otherRoot = "e".repeat(64);
+  expect(await f.runtime.listConversations(pubkey)).toEqual([]);
   await f.runtime.run(first);
   await vi.waitFor(() => expect(guests[0]?.starts()).toHaveLength(1));
   await f.runtime.run(f.delivery("second conversation", otherRoot));
   await vi.waitFor(() => expect(guests[1]?.starts()).toHaveLength(1));
+  expect(f.runtime.conversations(pubkey).map(({ root }) => root)).toEqual(
+    expect.arrayContaining([root, otherRoot]),
+  );
   const calls = execution.mock.calls as unknown as [
     string,
     { key: string; intent: string },
