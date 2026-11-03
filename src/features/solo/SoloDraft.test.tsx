@@ -2306,6 +2306,7 @@ it.each(["remove", "change"] as const)(
           />,
         );
       let view = mount();
+      expect(screen.getByRole("heading", { name: "New task" })).toBeVisible();
       const user = userEvent.setup();
       expect(screen.queryByLabelText("Project Selected project")).toBeNull();
       expect(route.agent).toBeUndefined();

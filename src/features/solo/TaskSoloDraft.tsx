@@ -502,7 +502,7 @@ export function TaskSoloDraft({
   const selected = snapshot(state.draft);
   const canSubmit = !!selected?.primary && selected.recipients.every(eligible);
   return (
-    <SoloDraftView>
+    <SoloDraftView title="New task">
       <MessageComposer
         session={session}
         scope={scope}

@@ -10,17 +10,19 @@ import styles from "./Solo.module.css";
 export function SoloDraftView({
   children,
   actions,
+  title = "New chat",
 }: {
   actions?: ReactNode;
+  title?: string;
   children: ReactNode;
 }) {
   return (
     <section
       className={styles.work}
       data-attachment-drop-zone=""
-      aria-label="New chat"
+      aria-label={title}
     >
-      <SoloTitle channel={{ name: "New chat" }}>{actions}</SoloTitle>
+      <SoloTitle channel={{ name: title }}>{actions}</SoloTitle>
       <div className={styles.start}>
         <div className={styles.startContent}>{children}</div>
       </div>
