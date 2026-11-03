@@ -1302,14 +1302,21 @@ channel-scoped payloads from the connected relay become activity rows; malformed
 unknown and other authors' summaries are not rendered as JSON. These events do not
 grant/revoke access: the existing signed roster remains authoritative.
 
-The timeline groups adjacent arrivals/departures into compact avatar-and-text rows.
-Messages, local-day changes and gaps over an hour break groups; removals by different
-actors stay separate. Same-adder additions use “added by you” for the viewer;
-mixed arrivals do not invent an adder. Grouping is presentation-only: signed event
-IDs and cursors remain per event, and live activity counts against the row budget.
-Profiles reuse the
-shared background directory/cache, and reading anchors can resolve a member of a
-group. Activity has no message actions, thread, unread evidence or chat preview.
+The timeline shows only explicit additions by another actor and removals; self-joins
+and voluntary leaves are hidden before grouping. Each uninterrupted run of visible
+membership activity becomes one centered avatar-and-text row. Messages and huddles
+break runs; local-day changes, elapsed time and different removal actors do not.
+Each person appears only under their latest visible action in the run, including
+in the hover detail: removal followed by re-addition is described as an addition.
+The group keeps its newest event's identity and its oldest event's date.
+
+Small same-adder additions use “added by you” for the viewer; mixed additions do not
+invent an adder. Large or mixed summaries keep one name per action and a count;
+hovering, clicking or keyboard-opening the count shows the full scrollable people
+list for that action. Grouping is presentation-only: all signed events remain in
+the group, IDs and cursors remain per event, and reading anchors can resolve any
+member event. Profiles reuse the shared background directory/cache. Activity has no
+message actions, thread, unread evidence or chat preview.
 A Solo chat omits its owner's additions and removals of agents before its first
 message once history reaches its start; later changes, people and agents added by others still
 show. Membership, access and pagination are unchanged.

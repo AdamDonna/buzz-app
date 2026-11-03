@@ -67,6 +67,20 @@ the interface unless an available tool actually supports that action.
 
 ## Conversations and communities
 
+- Long message bubbles use the available conversation width, stopping 32px
+  before the opposite speaker’s avatar column. Short messages hug their text.
+- Hover over a message to reveal the capsule above it: add a reaction, reply,
+  copy its link, or open More. **Copy message** is in More. Keyboard focus also
+  reveals these actions; touch layouts keep actions inline.
+
+- Only explicit additions by another member and removals appear as centered
+  channel notices; self-joins and voluntary leaves are hidden.
+  Consecutive addition and removal notices collapse into one row between
+  conversation entries, even across long gaps or midnight. Large or mixed groups
+  keep one name per action,
+  such as “Pinky and 182 others were added.” Hover or activate “182 others” to see
+  the full, scrollable list of names. Messages and huddle entries split groups.
+
 - **Solo** organizes your chats with agents. Choose **New chat**, select or tag
   an agent, and send a message. Solo conversations continue at the chat's top
   level rather than requiring a new thread for each reply. Solo chats can also
