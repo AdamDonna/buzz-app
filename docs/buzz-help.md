@@ -67,6 +67,13 @@ the interface unless an available tool actually supports that action.
   stopped reading, or at the latest message once you had caught up. You and
   the person asking may have different channel access. A link alone never
   grants access.
+- **Mute** is available from a channel or DM's sidebar context menu. Once
+  confirmed, a crossed-out bell appears immediately after its name. New messages
+  do not make muted channel names bold; muted DM names still become bold.
+  Mute suppresses notifications for messages that do not mention you; mentions can still notify
+  you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
+  can still make the name bold. Muted rows show no unread dots, including thread
+  dots; muting does not mark messages or threads as read.
 - **Manage members** shows **General** access first in the member list. **Public**
   lets people in the community read and new people participate; **View only**
   lets them read; **Private** limits access to people added to the channel.

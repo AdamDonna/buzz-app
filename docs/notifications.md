@@ -80,7 +80,14 @@ checks, not that an OS banner was displayed or read.
   preference, independently of whether Channels is mounted. Muted channels suppress
   DM and participating-thread alerts; explicit mentions still pass the channel-mute
   gate, not global off/category/read/access/permission gates. This does not introduce
-  a broadcast notification category. Confirmed mute quiets ordinary channel unread styling and offscreen cues without clearing unread evidence; manual unread, directed attention and unread thread activity remain visible. Solo and DM unread emphasis is preserved. Unread thread cues are distinct from participating-thread alerts, which mute suppresses. Unknown or failed
+  a broadcast notification category. Confirmed mute quiets ordinary channel unread
+  styling and offscreen cues without clearing unread evidence. Muted channel and
+  DM sidebar rows show a crossed-out bell immediately after their names and hide
+  unread dots, including thread dots. Manual unread can still emphasize
+  the name, and thread activity remains available. Muted DMs retain automatic
+  unread emphasis, offscreen unread counts and avatar previews. Solo chat labels
+  retain unread emphasis. Unread thread cues are distinct from participating-thread alerts,
+  which mute suppresses. Unknown or failed
   preference reads hold non-mention candidates until explicit retry; a confirmed
   mute cancels pending candidates, including an in-flight permission check. Unmute
   does not replay cancelled alerts. Existing shown OS banners are not withdrawn.
