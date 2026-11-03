@@ -2216,12 +2216,13 @@ async function chooseFilter(label: string, control = "Activity type") {
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: "Inbox filters" });
   await user.click(trigger);
-  await screen.findByRole("menu", { name: "Inbox filters" });
+  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
+  const items = within(menu);
   if (control === "Show") {
-    await user.click(screen.getByRole("menuitemradio", { name: label }));
+    await user.click(items.getByRole("menuitemradio", { name: label }));
   } else if (control === "Sender") {
-    const people = screen.getByRole("menuitemcheckbox", { name: "People" });
-    const agents = screen.getByRole("menuitemcheckbox", { name: "Agents" });
+    const people = items.getByRole("menuitemcheckbox", { name: "People" });
+    const agents = items.getByRole("menuitemcheckbox", { name: "Agents" });
     // Enable the desired sender before disabling the other: never select none.
     if (label !== "Agents" && people.getAttribute("aria-checked") !== "true")
       await user.click(people);
@@ -2234,7 +2235,7 @@ async function chooseFilter(label: string, control = "Activity type") {
     await user.keyboard("{Escape}");
   } else {
     await user.click(
-      screen.getByRole("menuitemradio", {
+      items.getByRole("menuitemradio", {
         name: label === "All activity" ? "All" : label,
       }),
     );
