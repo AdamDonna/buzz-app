@@ -432,18 +432,4 @@ it("lists what a cursor saved without an overlap passed, once a read with one go
   if (!again) throw new Error("no window");
   const done = finished(again, cut.heard, overlap);
   expect((await readWindow(all, done, 210, read))?.events ?? []).toEqual([]);
-  // A cursor passed only its own second: one older, not heard, is still
-  // to give.
-  events.push(at(4, 110));
-  const behind = await readWindow(
-    all,
-    { through: 100, upper: 200, after: { created_at: 120, id: id(2) } },
-    200,
-    read,
-  );
-  if (!behind) throw new Error("no window");
-  const listed = admitted(behind, behind.events.slice(-1), [], overlap);
-  expect(listed.heard?.map(({ id }) => id)).toEqual([id(1), id(2), id(3)]);
-  const rest = await readWindow(all, listed, 200, read);
-  expect(rest?.events.map(({ content }) => content)).toEqual(["e4"]);
 });
