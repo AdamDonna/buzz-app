@@ -186,6 +186,13 @@ export class PiRuntime {
   private running = new Set<AgentKey>();
   /** Agents with a protection binding, which never use the shared host. */
   private bound = new Set<AgentKey>();
+  /** Agents retired here before their policy changed, until a sync gives
+   * their next protection revision. Until then a sync can still list one
+   * under the policy that ended, so only a handle tells it. */
+  private readonly retired = new Set<AgentKey>();
+  /** Agents whose retirement failed, so their storage may still be open
+   * under the policy that ended: each sync retires them again. */
+  private readonly unclosed = new Set<AgentKey>();
   /** Each agent's conversations as Pi's storage and this app run's
    * deliveries know them, by key; read from storage once, when first asked. */
   private readonly known = new Map<
@@ -246,10 +253,17 @@ export class PiRuntime {
           Promise.resolve(undefined),
       },
       (pubkey) => {
-        const protection = (
-          this.agents.get(pubkey)?.handle ?? this.handle(pubkey)
-        )?.protection;
-        if (!protection && this.bound.has(pubkey))
+        const handle = this.agents.get(pubkey)?.handle ?? this.handle(pubkey);
+        const protection = handle?.protection;
+        // Without a handle, only an agent that runs here unprotected, and
+        // was not retired for a change no sync has given yet, may use the
+        // shared host.
+        if (
+          !protection &&
+          (this.bound.has(pubkey) ||
+            (!handle &&
+              (!this.running.has(pubkey) || this.retired.has(pubkey))))
+        )
           throw new Error("The agent isn't connected yet. Try again shortly.");
         return protection;
       },
@@ -257,22 +271,42 @@ export class PiRuntime {
     this.setup = new PiSetup(this.pi);
   }
 
+  /** Before the agent's policy or type changes, which a sync gives after. */
   async retire(pubkey: string) {
+    this.retired.add(pubkey);
+    await this.close(pubkey);
+  }
+
+  /** Ends the agent's turns here and closes its storage in Pi. */
+  private async close(pubkey: string) {
     const entry = this.agents.get(pubkey);
     if (entry) {
       entry.closed = true;
     }
     this.agents.delete(pubkey);
-    await this.pi.retire(pubkey);
+    // Not tried again while under way.
+    this.unclosed.delete(pubkey);
+    try {
+      await this.pi.retire(pubkey);
+      this.unclosed.delete(pubkey);
+    } catch (error) {
+      this.unclosed.add(pubkey);
+      throw error;
+    }
   }
 
   /** Brings the runtime in line with this type's agents. A removed one's
    * storage closes; its unfinished runs continue when it is back. */
   sync(agents: readonly Agent[]) {
     const current = new Set(agents.map((agent) => agent.key));
+    // A failed retirement is tried again, but not for an agent a turn opened
+    // since: while it heads Pi's queue, each request closes the agent first.
+    const retiring = new Set(
+      [...this.unclosed].filter((agent) => !this.agents.has(agent)),
+    );
     // Its storage may be open for a turn or only for listing its sessions.
     for (const agent of new Set([...this.running, ...this.agents.keys()]))
-      if (!current.has(agent)) void this.retire(agent).catch(() => undefined);
+      if (!current.has(agent)) retiring.add(agent);
     this.running = current;
     this.bound = new Set(
       agents.filter((agent) => agent.protection).map((agent) => agent.key),
@@ -282,13 +316,22 @@ export class PiRuntime {
       const previous = this.revisions.get(agent.key);
       this.revisions.set(agent.key, revision);
       if (previous !== undefined && previous !== revision) {
-        void this.retire(agent.key).catch(() => undefined);
+        this.retired.delete(agent.key);
+        retiring.add(agent.key);
         continue;
       }
       const entry = this.agents.get(agent.key);
       if (!entry) continue;
       entry.config = config(agent.config);
       entry.name = agent.name;
+    }
+    for (const agent of retiring) {
+      // Said once, not at each sync that tries it again.
+      const again = this.unclosed.has(agent);
+      void this.close(agent).catch((error: unknown) => {
+        if (!again)
+          console.warn("Pi could not close a retired agent's storage", error);
+      });
     }
   }
 
@@ -566,7 +609,7 @@ export class PiRuntime {
     const handoff = this.controls.deliver(control, async () => {
       await wait;
       if (interrupted || (wake && current && !current())) return;
-      this.live(entry, agent.key);
+      this.live(entry);
       await this.open(agent.key);
       await this.adopted(entry, agent.key, { current: request });
       await Promise.all(
@@ -577,7 +620,7 @@ export class PiRuntime {
           )
           .map((receipt) => receipt.settled),
       );
-      this.live(entry, agent.key);
+      this.live(entry);
       if (interrupted || (wake && current && !current())) return;
       const { seen } = await this.pi.request<{ seen: number }>("place", {
         agent: agent.key,
@@ -632,7 +675,7 @@ export class PiRuntime {
       });
       const picked = await this.turnOf(entry, agent.key, model, effort);
       const text = await prompt();
-      this.live(entry, agent.key);
+      this.live(entry);
       if (interrupted || (wake && current && !current())) return;
       submitted = await this.deliver(
         entry,
@@ -885,13 +928,10 @@ export class PiRuntime {
    * them, and the hint says what to search for. The host does nothing for one
    * already open with these tools. */
   /** Throws for a removed agent, whose queued mention Pi must not run:
-   * Pi's coding tools have no sandbox. Its storage, opened again by the
-   * handover, closes. */
-  private live(entry: Entry, agent: AgentKey) {
-    if (!entry.closed) return;
-    if (!this.running.has(agent) && !this.agents.has(agent))
-      void this.pi.request("close", { agent }).catch(() => undefined);
-    throw new Error("The agent was removed");
+   * Pi's coding tools have no sandbox. Its retirement closes storage a
+   * handover opened before it, and Pi opens none for it after. */
+  private live(entry: Entry) {
+    if (entry.closed) throw new Error("The agent was removed");
   }
 
   /** Hands a turn to Pi. A host that stops before it answers may have taken
@@ -1105,7 +1145,7 @@ export class PiRuntime {
    * is ended first. */
   private async reopen(entry: Entry, agent: AgentKey) {
     await this.open(agent);
-    this.live(entry, agent);
+    this.live(entry);
     await this.adopted(entry, agent, { again: true });
   }
 

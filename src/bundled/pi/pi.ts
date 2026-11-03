@@ -112,7 +112,7 @@ export class Pi {
   private stopped = false;
   private hosts = new Map<
     string,
-    Promise<{ key: string; pi: Pi | undefined }>
+    Promise<{ key: string; pi: Pi | undefined } | undefined>
   >();
 
   constructor(
@@ -128,12 +128,22 @@ export class Pi {
   async request<T>(method: string, params: object = {}): Promise<T> {
     if (this.stopped) throw new Error("Pi has stopped");
     const agent = (params as { agent?: string }).agent;
-    if (agent && this.protection) {
-      const gate = this.protection(agent);
-      gate?.assertAvailable();
+    const protection = this.protection;
+    if (agent && protection) {
       const prior = this.hosts.get(agent);
+      let refused: Error | undefined;
       const next = (async () => {
         const previous = await prior?.catch(() => undefined);
+        // Resolved only now, so a request that waited for a retirement runs
+        // under the policy that follows it. Refused, it leaves the host as is.
+        let gate: AgentProtection | undefined;
+        try {
+          gate = protection(agent);
+          gate?.assertAvailable();
+        } catch (error) {
+          refused = error instanceof Error ? error : new Error(String(error));
+          return previous;
+        }
         if (previous?.key === (gate?.key ?? "")) return previous;
         if (previous?.pi) await previous.pi.dispose();
         else if (this.connection) await this.rawRequest("close", { agent });
@@ -147,7 +157,8 @@ export class Pi {
         return { key: gate?.key ?? "", pi };
       })();
       this.hosts.set(agent, next);
-      const child = (await next).pi;
+      const child = (await next)?.pi;
+      if (refused) throw refused;
       if (child) return child.request<T>(method, params);
     }
     return this.rawRequest<T>(method, params);

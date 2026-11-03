@@ -329,6 +329,85 @@ it("never opens a protected agent's storage in the shared host before its handle
   expect(host.processes).toEqual([]);
 });
 
+it.each(["never ran here", "stopped running here"])(
+  "lists an agent without its handle in no shared host when it %s",
+  async (state) => {
+    const { host, runtime, connection } = setup({
+      places: () => ({ places: [] }),
+    });
+    connection.live = false;
+    if (state === "stopped running here") {
+      runtime.sync([
+        {
+          key: self,
+          pubkey: self,
+          config: DEFAULT_CONFIG,
+          protection: { provider: "test", policy: {} },
+        },
+      ] as unknown as Agent[]);
+      runtime.sync([]);
+    }
+    await expect(runtime.places(self)).rejects.toThrow(
+      "The agent isn't connected yet",
+    );
+    expect(host.requests("places")).toEqual([]);
+  },
+);
+
+it("keeps a retired agent off the shared host until a handle gives its next policy", async () => {
+  const closing = deferred();
+  const { host, runtime, connection } = setup({
+    places: () => ({ places: [] }),
+    close: () => closing.promise,
+  });
+  const agent = { key: self, pubkey: self, config: DEFAULT_CONFIG };
+  runtime.sync([agent] as unknown as Agent[]);
+  await runtime.places(self);
+  // Its protection changes: Agents gives no handle until the change ends,
+  // and a snapshot from before it still lists the agent unprotected.
+  connection.live = false;
+  const retired = runtime.retire(self);
+  await vi.waitFor(() => expect(host.requests("close")).toHaveLength(1));
+  const during = expect(runtime.places(self)).rejects.toThrow(
+    "The agent isn't connected yet",
+  );
+  closing.resolve();
+  await retired;
+  await during;
+  runtime.sync([agent] as unknown as Agent[]);
+  await expect(runtime.places(self)).rejects.toThrow(
+    "The agent isn't connected yet",
+  );
+  // Its community reconnects mid-change, with that snapshot.
+  runtime.sync([]);
+  runtime.sync([agent] as unknown as Agent[]);
+  await expect(runtime.places(self)).rejects.toThrow(
+    "The agent isn't connected yet",
+  );
+  expect(host.requests("places")).toHaveLength(1);
+  connection.live = true;
+  await runtime.places(self);
+  expect(host.requests("places")).toHaveLength(2);
+  // A sync with its next revision gives its policy without a handle.
+  connection.live = false;
+  runtime.sync([{ ...agent, protectionRevision: 1 }] as unknown as Agent[]);
+  await runtime.places(self);
+  expect(host.requests("places")).toHaveLength(3);
+});
+
+it("lists an unprotected agent without its handle again once it is back in the list", async () => {
+  const { host, runtime, connection } = setup({
+    places: () => ({ places: [] }),
+  });
+  const agent = { key: self, pubkey: self, config: DEFAULT_CONFIG };
+  connection.live = false;
+  runtime.sync([agent] as unknown as Agent[]);
+  runtime.sync([]);
+  runtime.sync([agent] as unknown as Agent[]);
+  await runtime.places(self);
+  expect(host.requests("places")).toHaveLength(1);
+});
+
 it("hands an owner's mention to its thread's Pi conversation", async () => {
   const { host, deliver, published } = setup();
   const mention = reply("2", "@Pi can you look?");
@@ -1851,6 +1930,89 @@ it("leaves a removed agent's turn in Pi's storage without a report", async () =>
   await expect(settled(turn)).resolves.toEqual({ ok: true });
   expect(host.requests("close")[0]?.params).toEqual({ agent: self });
   expect(published).toEqual([]);
+});
+
+it.each(["removed", "policy"])(
+  "reports a failed automatic retirement and retires the agent again at the next sync (%s)",
+  async (change) => {
+    let failing = true;
+    const { host, runtime } = setup({
+      places: () => ({ places: [] }),
+      close: () => {
+        if (failing) throw new Error("A stream did not stop");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const close = vi.spyOn(
+      runtime as unknown as { close(pubkey: string): Promise<void> },
+      "close",
+    );
+    const agent = { key: self, pubkey: self, config: DEFAULT_CONFIG };
+    runtime.sync([agent] as unknown as Agent[]);
+    await runtime.places(self);
+    const next = (change === "removed"
+      ? []
+      : [{ ...agent, protectionRevision: 1 }]) as unknown as Agent[];
+    runtime.sync(next);
+    await expect(close.mock.results[0]?.value).rejects.toThrow(
+      "A stream did not stop",
+    );
+    // Nothing runs where the agent was not closed: a request closes it first.
+    await expect(runtime.places(self)).rejects.toThrow("A stream did not stop");
+    expect(host.requests("places")).toHaveLength(1);
+    // Tried again at each sync, and said once.
+    runtime.sync(next);
+    await expect(close.mock.results[1]?.value).rejects.toThrow(
+      "A stream did not stop",
+    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Pi could not close a retired agent's storage",
+      expect.any(Error),
+    );
+    const closes = host.requests("close").length;
+    failing = false;
+    runtime.sync(next);
+    await close.mock.results[2]?.value;
+    expect(host.requests("close")).toHaveLength(closes + 1);
+    // Closed now, it is not retired again.
+    runtime.sync(next);
+    expect(close).toHaveBeenCalledTimes(3);
+  },
+);
+
+it("leaves an agent a turn opened again after its failed retirement to that turn", async () => {
+  let failing = true;
+  const { host, runtime, deliver } = setup({
+    places: () => ({ places: [] }),
+    close: () => {
+      if (failing) throw new Error("A stream did not stop");
+    },
+  });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const close = vi.spyOn(
+    runtime as unknown as { close(pubkey: string): Promise<void> },
+    "close",
+  );
+  const agent = { key: self, pubkey: self, config: DEFAULT_CONFIG };
+  runtime.sync([agent] as unknown as Agent[]);
+  await runtime.places(self);
+  const changed = [{ ...agent, protectionRevision: 1 }] as unknown as Agent[];
+  runtime.sync(changed);
+  await expect(close.mock.results[0]?.value).rejects.toThrow(
+    "A stream did not stop",
+  );
+  failing = false;
+  await deliver({ type: "mention", event: reply("2", "@Pi look") }).run;
+  // Its first request closed the agent before opening it again.
+  const methods = host.processes[0]?.requests.map((request) => request.method);
+  expect(methods?.lastIndexOf("close")).toBeLessThan(
+    methods?.indexOf("open") ?? -1,
+  );
+  expect(host.requests("deliver")).toHaveLength(1);
+  // The next sync leaves its turn running.
+  runtime.sync(changed);
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(host.requests("close")).toHaveLength(2);
 });
 
 it("runs a standalone turn in a one-off conversation", async () => {

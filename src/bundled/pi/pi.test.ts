@@ -285,6 +285,77 @@ it.each(["dispose", "exit", "retire", "policy"])(
   },
 );
 
+it("runs a request that waited for a retirement under the policy that follows it", async () => {
+  const agent = "a".repeat(64);
+  const closing = deferred();
+  const host = fakeHost(
+    {
+      close: () => closing.promise,
+      runtime: () => ({
+        file: "/runtime/deps/host.mjs",
+        node: "/runtime/node/bin/node",
+        codeRoot: "/runtime/deps",
+        nodeRoot: "/runtime/node",
+        data: "/runtime/state",
+        auth: "/runtime/auth",
+      }),
+    },
+    { close: true },
+  );
+  let gate: AgentProtection | undefined;
+  let connected = true;
+  const pi = new Pi(
+    () => host.spawn,
+    handlers(),
+    () => {
+      if (!connected) throw new Error("The agent isn't connected yet");
+      return gate;
+    },
+  );
+  try {
+    await pi.request("open", { agent });
+    const retired = pi.retire(agent);
+    await vi.waitFor(() => expect(host.requests("close")).toHaveLength(1));
+    // Admitted unprotected; the change that retires the agent binds it.
+    const places = pi.request("places", { agent });
+    gate = {
+      key: "a:1",
+      stateKey: "a:1",
+      check: vi.fn(),
+      assertAvailable() {},
+      processProtection: { readOnlyPaths: [], hiddenPaths: [] },
+      spawn: async () => {
+        throw new Error("Unused protected runtime");
+      },
+    };
+    closing.resolve();
+    await retired;
+    await places;
+    const [shared, worker] = host.processes;
+    expect(shared?.requests.map((request) => request.method)).not.toContain(
+      "places",
+    );
+    expect(worker?.options.protection).toBeDefined();
+    expect(worker?.requests.map((request) => request.method)).toEqual([
+      "places",
+    ]);
+    // A refused request leaves the agent's worker to the next one.
+    connected = false;
+    await expect(pi.request("places", { agent })).rejects.toThrow(
+      "The agent isn't connected yet",
+    );
+    connected = true;
+    await pi.request("places", { agent });
+    expect(host.processes).toHaveLength(2);
+    expect(worker?.requests.map((request) => request.method)).toEqual([
+      "places",
+      "places",
+    ]);
+  } finally {
+    await pi.dispose();
+  }
+});
+
 it("isolates protected agents, contains their runtime code and rejects crossed native checks", async () => {
   const entered = deferred();
   let waiting: AbortSignal | undefined;
