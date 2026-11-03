@@ -45,7 +45,7 @@ it("redacts spoilers before handing the preview to reminder storage", async () =
       eventId: "m",
       channelId: "c",
       authorPubkey: "a",
-      preview: "The answer is [Spoiler]",
+      preview: "The answer is \\[Spoiler\\]",
     },
     expect.any(Number),
     "",

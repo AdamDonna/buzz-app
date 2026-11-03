@@ -32,6 +32,8 @@ import { liveRecoveryStatus } from "./live-recovery";
 import { createPresence } from "../presence/presence";
 import { matchesEvent } from "./projection";
 import { verifiedProfileFilter } from "./verified-profile";
+import type { IncomingMessage } from "./incoming";
+import { messageNotificationText } from "../notifications/content";
 type WireFilter = {
   kinds: number[];
   "#h"?: string[];
@@ -4003,6 +4005,51 @@ it("carries verified workflow attribution from live admission to notification ca
         workflowOwnerId: workflowOwner.pubkey,
       }),
     ]);
+  } finally {
+    owner.dispose();
+    h.owner.dispose();
+  }
+});
+
+it("carries truncation from live delivery to the notification spoiler formatter", async () => {
+  vi.useFakeTimers({ now: 1_700_000_100_000 });
+  const h = setup([]),
+    relay = keypair(),
+    sender = keypair();
+  const wire = scriptedTransport(h.key.pubkey, relay.pubkey);
+  const owner = createRelaySession({
+    ...wire.transport,
+    archiveAuthority: relay.pubkey,
+    subscribe(callbacks) {
+      h.callbacks.receive.mockImplementation(callbacks.receive);
+      h.callbacks.state.mockImplementation(callbacks.state);
+      return h.owner;
+    },
+  });
+  try {
+    h.callbacks.receive([roster(relay, "room", [h.key.pubkey, sender.pubkey])]);
+    await h.first.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const route = h.first
+      .requests()
+      .find((request) => scopeOf(request).includes("room"));
+    assert.exists(route);
+    await h.first.receive(["EOSE", route[1]]);
+    const incoming = vi.fn<(messages: readonly IncomingMessage[]) => void>();
+    owner.session.subscribeIncoming(incoming);
+    const source = `The answer is ||Rosebud. ${"filler ".repeat(700)}||`;
+    const event = message(sender, "room", source, 1_700_000_100, [
+      ["p", h.key.pubkey],
+    ]);
+    await h.first.receive(["EVENT", route[1], event]);
+    expect(incoming).toHaveBeenCalledOnce();
+    const candidate = incoming.mock.calls[0]?.[0][0];
+    assert.exists(candidate);
+    expect(candidate.previewContent).toHaveLength(4096);
+    expect(candidate.previewTruncated).toBe(true);
+    expect(
+      messageNotificationText(candidate, "mention", undefined, undefined).body,
+    ).toBe("The answer is [Spoiler]");
   } finally {
     owner.dispose();
     h.owner.dispose();

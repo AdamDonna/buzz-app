@@ -62,6 +62,41 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each([
+  ["The answer is ||Rosebud||", "The answer is [Spoiler]"],
+  ["run `a || b` now", "run a || b now"],
+])(
+  "projects the message preview in an Inbox row: %s",
+  async (content, expected) => {
+    const h = fixture();
+    render(h.view);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("list", { name: "Inbox conversations" }),
+      ).toHaveAttribute("aria-busy", "false"),
+    );
+    const fresh = message(
+      h.alice,
+      "room",
+      content,
+      Math.floor(Date.now() / 1000) + 1,
+      [["e", h.root?.id ?? "", "", "reply"]],
+    );
+    h.addEvent(fresh);
+    act(() => h.emit([fresh]));
+    await waitFor(() =>
+      expect(rows().some((row) => row.textContent?.includes(expected))).toBe(
+        true,
+      ),
+    );
+    if (content.includes("Rosebud"))
+      expect(rows().some((row) => row.textContent?.includes("Rosebud"))).toBe(
+        false,
+      );
+  },
+);
+
 it.each(["reply", "message", "message after reply"])(
   "reopens archived DMs durably for an ordinary %s without resurfacing old mentions",
   async (arrival) => {

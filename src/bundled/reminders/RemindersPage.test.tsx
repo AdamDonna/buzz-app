@@ -22,11 +22,56 @@ import userEvent from "@testing-library/user-event";
 import { RemindersPage } from "./RemindersPage";
 import { apply } from "./index";
 import { mediaUrl } from "../../features/relay/transport";
+import { RemindDialog } from "./RemindDialog";
+import type { ChannelMessage } from "../../features/relay/contracts";
+import type { RelaySession } from "../../features/relay/session";
 
 afterEach(cleanup);
 
 const viewer = "v";
 const now = 1_000_000;
+
+it.each([
+  ["run `a || b` now", "run a || b now"],
+  ["`a || b || c`", "a || b || c"],
+  [String.raw`\|\|literal\|\|`, "||literal||"],
+  ["&#124;&#124;literal&#124;&#124;", "||literal||"],
+  ["`\\*urgent\\* &amp;`", String.raw`\*urgent\* &amp;`],
+  ["The answer is ||Rosebud||", "The answer is [Spoiler]"],
+])(
+  "round-trips a newly saved preview through the reminder page: %s",
+  async (content, expected) => {
+    const saved: Reminder[] = [];
+    const create: Reminders["create"] = async (target, notBefore) => {
+      saved.push({
+        id: "saved",
+        eventId: "saved-event",
+        createdAt: now,
+        status: "pending",
+        target,
+        notBefore,
+      });
+    };
+    const close = vi.fn();
+    render(
+      <RemindDialog
+        message={
+          { id: "m", channelId: "c", authorId: "a", content } as ChannelMessage
+        }
+        session={{ reminders: { create } } as unknown as RelaySession}
+        close={close}
+      />,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Set reminder" }));
+    expect(close).toHaveBeenCalledOnce();
+    expect(saved).toHaveLength(1);
+    cleanup();
+    page(JSON.parse(JSON.stringify(saved)) as Reminder[]);
+    expect(screen.getByRole("listitem")).toHaveTextContent(expected);
+  },
+);
 const reminder = (
   id: string,
   status: Reminder["status"],

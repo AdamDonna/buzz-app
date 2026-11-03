@@ -3,7 +3,10 @@ import type { PluginModule } from "../../plugins/api";
 import type { RelaySession } from "../../features/relay/session";
 import type { Reminder, Reminders } from "../../features/relay/reminders";
 import type { OpenTarget } from "../../features/navigation/targets";
-import { plainText } from "../../features/notifications/content";
+import {
+  plainText,
+  redactStoredPreview,
+} from "../../features/notifications/content";
 import { AlarmIcon } from "../../shared/design-system/icons/index";
 import {
   countDue,
@@ -150,11 +153,10 @@ export const apply: PluginModule["apply"] = (ctx) => {
                   : "Reminder due",
               body:
                 [
-                  plainText(reminder.target?.preview ?? "", {
-                    storedPreview: true,
-                  }),
-                  plainText(reminder.note ?? ""),
-                ].find(Boolean) || "A reminder is waiting",
+                  redactStoredPreview(reminder.target?.preview ?? ""),
+                  reminder.note,
+                ].find((text) => text && plainText(text)) ??
+                "A reminder is waiting",
             })
             .catch(() => {});
         }

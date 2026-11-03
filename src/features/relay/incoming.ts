@@ -8,6 +8,8 @@ export type IncomingMessage = Readonly<{
   workflowOwnerId?: string | undefined;
   /** At most 4,096 source characters for a preview, not the complete message. */
   previewContent: string;
+  /** The source continues beyond previewContent; an open spoiler may continue too. */
+  previewTruncated?: boolean;
   /** Signed `audience` tag: `agents` is coordination between agents. */
   audience?: "agents";
 }>;

@@ -3403,6 +3403,7 @@ export function createRelaySession(
               authorId: event.pubkey,
               workflowOwnerId: workflowOwner(event, transport.archiveAuthority),
               previewContent: content.slice(0, 4096),
+              ...(content.length > 4096 ? { previewTruncated: true } : {}),
               ...(agentAudience(event) ? { audience: "agents" as const } : {}),
             }),
           ];

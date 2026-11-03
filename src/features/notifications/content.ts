@@ -46,19 +46,32 @@ function prose(node: TextNode): string {
   return (node.children ?? []).map(prose).join(separator);
 }
 
-type PreviewOptions = Readonly<{ storedPreview?: boolean }>;
+type PreviewOptions = Readonly<{
+  storedPreview?: boolean;
+  truncated?: boolean;
+}>;
+
+/** Legacy previews lost code/escape provenance. Leave one Markdown conversion
+ * to the final reader, hiding any ambiguous spoiler tail before that conversion. */
+export function redactStoredPreview(content: string): string {
+  const opener = content.indexOf("||");
+  return opener < 0 ? content : `${content.slice(0, opener)}[Spoiler]`;
+}
+
+/** Generic plugin prose has CommonMark semantics, without Buzz spoilers. */
+export function plainText(content: string) {
+  const end = /[\uD800-\uDBFF]/.test(content.charAt(4095)) ? 4095 : 4096;
+  const { tree, tooDeep } = scanMarkdown(content.slice(0, end));
+  return tooDeep ? "" : shortText(prose(tree), 200);
+}
 
 /** Flattened, bounded prose; empty when nothing displayable remains.
  * Stored previews have lost code/escape provenance and may have been cut. */
-export function plainText(content: string, options: PreviewOptions = {}) {
+function messageText(content: string, options: PreviewOptions) {
+  if (options.storedPreview) return plainText(redactStoredPreview(content));
   // Cut the source on a whole code point, never between a surrogate pair.
   const end = /[\uD800-\uDBFF]/.test(content.charAt(4095)) ? 4095 : 4096;
-  let bounded = content.slice(0, end);
-  // Old flattened text cannot distinguish a real closing delimiter from
-  // literal pipes inside the hidden text. Hide everything after its first
-  // possible opener; newly saved redacted previews contain no such delimiter.
-  const opener = options.storedPreview ? bounded.indexOf("||") : -1;
-  if (opener >= 0) bounded = `${bounded.slice(0, opener)}[Spoiler]`;
+  const bounded = content.slice(0, end);
   const original = scanMarkdown(bounded);
   if (original.tooDeep) return "";
   if (!bounded.includes("||")) return shortText(prose(original.tree), 200);
@@ -76,7 +89,8 @@ export function plainText(content: string, options: PreviewOptions = {}) {
   for (const offset of [...prepared.spoilerDelimiters].reverse())
     source = source.slice(0, offset) + delimiter + source.slice(offset + 2);
   const { tree, tooDeep } = scanMarkdown(source);
-  if (!tooDeep) remarkSpoilers(delimiter, content.length > end)(tree);
+  if (!tooDeep)
+    remarkSpoilers(delimiter, options.truncated || content.length > end)(tree);
   return tooDeep ? "" : shortText(prose(tree), 200);
 }
 
@@ -85,7 +99,7 @@ export function messagePreview(
   content: string,
   options: PreviewOptions = {},
 ): string {
-  return plainText(content, options) || "New message";
+  return messageText(content, options) || "New message";
 }
 
 /** Plugin text gets the same flattening and bounds; missing text keeps the category fallback. */
@@ -121,5 +135,10 @@ export function messageNotificationText(
       : category === "direct"
         ? `${sender} sent you a direct message`
         : `${sender} replied in ${destination}`;
-  return Object.freeze({ title, body: messagePreview(message.previewContent) });
+  return Object.freeze({
+    title,
+    body: messagePreview(message.previewContent, {
+      truncated: message.previewTruncated === true,
+    }),
+  });
 }

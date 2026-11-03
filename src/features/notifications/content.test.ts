@@ -39,7 +39,7 @@ it("conservatively redacts an old preview whose closing delimiter was truncated"
   ).toBe("The answer is [Spoiler]");
 });
 
-it("redacts spoilers in message and plugin notifications", () => {
+it("redacts message notifications while preserving generic plugin text", () => {
   expect(
     messageNotificationText(
       { ...message, previewContent: "The answer is ||Rosebud||" },
@@ -51,7 +51,27 @@ it("redacts spoilers in message and plugin notifications", () => {
   expect(
     pluginNotificationText({ body: "The answer is ||Rosebud||" }, "Reminders")
       .body,
+  ).toBe("The answer is ||Rosebud||");
+  expect(
+    pluginNotificationText({ body: "fix a || b || c" }, "GitHub").body,
+  ).toBe("fix a || b || c");
+});
+
+it("redacts an unfinished spoiler from a pre-cut notification body", () => {
+  const source = `The answer is ||Rosebud. ${"filler ".repeat(700)}||`;
+  expect(
+    messageNotificationText(
+      {
+        ...message,
+        previewContent: source.slice(0, 4096),
+        previewTruncated: true,
+      },
+      "mention",
+      undefined,
+      undefined,
+    ).body,
   ).toBe("The answer is [Spoiler]");
+  expect(messagePreview("literal ||unfinished")).toBe("literal ||unfinished");
 });
 
 const message = {

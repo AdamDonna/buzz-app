@@ -349,6 +349,16 @@ it("names the channel and the reminder in banners through the real notification 
           target: { ...target, preview: "[ref]: https://example.com/private" },
           note: "see note",
         }),
+        note("escaped-note", { note: String.raw`\*urgent\*` }),
+        note("literal-pipes", {
+          target: { ...target, preview: String.raw`run a \|\| b now` },
+        }),
+        note("paired-pipes", {
+          target: { ...target, preview: String.raw`a \|\| b \|\| c` },
+        }),
+        note("legacy-spoiler", {
+          target: { ...target, preview: "The answer is ||Rosebud…" },
+        }),
       ]),
     ).capability,
   );
@@ -367,6 +377,10 @@ it("names the channel and the reminder in banners through the real notification 
       title: "Reminder due · #general",
       body: "see note",
     }),
+    expect.objectContaining({ body: "*urgent*" }),
+    expect.objectContaining({ body: "run a || b now" }),
+    expect.objectContaining({ body: "a || b || c" }),
+    expect.objectContaining({ body: "The answer is [Spoiler]" }),
   ]);
   runtime.dispose();
   await ctx.fiber.dispose();

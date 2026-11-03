@@ -46,7 +46,12 @@ export function RemindDialog({
         {
           eventId: message.id,
           channelId: message.channelId,
-          preview: messagePreview(message.content),
+          // Encode plain preview punctuation for exactly one Markdown read.
+          // This preserves literal pipes, backslashes and entity-like text.
+          preview: messagePreview(message.content).replace(
+            /[!-/:-@[-`{-~]/g,
+            "\\$&",
+          ),
           authorPubkey: message.authorId,
         },
         notBefore,
