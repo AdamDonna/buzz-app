@@ -44,6 +44,13 @@ export function CanvasEditor({
   openLink?: (url: string) => boolean;
 }) {
   const panelId = useId();
+  // A stable callback keeps the retained View from re-rendering its Markdown.
+  const linkOpener = useRef(openLink);
+  linkOpener.current = openLink;
+  const openViewLink = useCallback(
+    (url: string) => linkOpener.current(url),
+    [],
+  );
   const [tab, setTab] = useState<"view" | "edit" | "history">("view");
   const key = `canvas-draft-v1:${channelId}`;
   const draftRevision = useSyncExternalStore(
@@ -325,18 +332,17 @@ export function CanvasEditor({
           id={`${panelId}-view`}
           aria-labelledby={`${panelId}-view-tab`}
         >
-          {tab === "view" && (
-            <CanvasView
-              content={head?.content}
-              loaded={loaded}
-              readError={readError}
-              busy={busy}
-              retry={() => recover(false, viewRetry.current)}
-              openLink={openLink}
-              focusRef={view}
-              retryRef={viewRetry}
-            />
-          )}
+          {/* View stays mounted so returning to it does not render again. */}
+          <CanvasView
+            content={head?.content}
+            loaded={loaded}
+            readError={readError}
+            busy={busy}
+            retry={() => recover(false, viewRetry.current)}
+            openLink={openViewLink}
+            focusRef={view}
+            retryRef={viewRetry}
+          />
         </div>
         <div
           hidden={tab !== "edit"}

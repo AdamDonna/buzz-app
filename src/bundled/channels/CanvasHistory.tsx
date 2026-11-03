@@ -279,11 +279,9 @@ export function CanvasHistory({
             onCheckedChange={setFull}
           />
           <div ref={comparisonRef} tabIndex={-1}>
-            {full ? (
-              fullContent()
-            ) : !loaded ? (
+            {!loaded ? (
               <LoadingRegion
-                pending={!headFailed}
+                pending={busy}
                 label="Reading the current Canvas…"
                 feedback={
                   headFailed ? (
@@ -301,6 +299,8 @@ export function CanvasHistory({
               >
                 {fullContent()}
               </LoadingRegion>
+            ) : full ? (
+              fullContent()
             ) : selected.id === head?.id || selected.content === headContent ? (
               <p>Same as current version.</p>
             ) : (

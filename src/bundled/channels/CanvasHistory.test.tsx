@@ -266,13 +266,14 @@ it("never compares against a current Canvas that could not be read", async () =>
   const show = (
     loaded: boolean,
     head: ReturnType<typeof revision> | undefined,
+    busy = false,
   ) => (
     <CanvasHistory
       canvas={canvas}
       channelId="x"
       profiles={directory.queries}
       head={head}
-      busy={false}
+      busy={busy}
       loaded={loaded}
       dirty={false}
       refreshHead={async () => {}}
@@ -295,6 +296,25 @@ it("never compares against a current Canvas that could not be read", async () =>
     ).toBeDisabled();
     act(() => screen.getByRole("button", { name: "Retry" }).click());
     expect(retryHead).toHaveBeenCalledTimes(1);
+    // A retry of a known failure is pending, and keeps its failure feedback.
+    view.rerender(show(false, undefined, true));
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toHaveAttribute("aria-busy", "true");
+    expect(retry.closest("[aria-busy]:not(button)")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    view.rerender(show(false, undefined));
+    // The read failure stays visible when showing full content.
+    act(() =>
+      screen.getByRole("checkbox", { name: "Show full content" }).click(),
+    );
+    expect(screen.getByText(/current Canvas could not be read/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+    expect(screen.getByLabelText("Revision Markdown")).toHaveValue("Plan");
+    act(() =>
+      screen.getByRole("checkbox", { name: "Show full content" }).click(),
+    );
     // Recovered: a genuinely absent head compares against empty.
     view.rerender(show(true, undefined));
     expect(lines()).toEqual(["+Plan"]);

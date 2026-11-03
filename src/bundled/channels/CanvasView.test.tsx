@@ -19,6 +19,18 @@ import type { ChannelCanvas } from "../../features/channel-templates/capability"
 import { CanvasEditor } from "./CanvasEditor";
 import { CANVAS_RENDER_CHARS, CanvasMarkdown } from "./CanvasView";
 
+// Counts Markdown renders while passing them through unchanged.
+const markdownRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("react-markdown", async (load) => {
+  const { default: Markdown } = await load<typeof import("react-markdown")>();
+  return {
+    default: (props: Parameters<typeof Markdown>[0]) => {
+      markdownRenders.count++;
+      return Markdown(props);
+    },
+  };
+});
+
 const profiles = {
   get: () => undefined,
   load: async () => undefined,
@@ -318,4 +330,24 @@ it("renders a Canvas larger than the shared-notes cutoff", async () => {
       screen.getByRole("heading", { name: "Tracker" }),
     ).toBeInTheDocument(),
   );
+});
+
+it("keeps View rendered across tab switches while the head is unchanged", async () => {
+  const user = userEvent.setup();
+  mount(async () =>
+    event("| Item | Status |\n| --- | --- |\n| Canvas | Ready |"),
+  );
+  const article = await waitFor(() => {
+    const found = view();
+    expect(within(found).getByRole("cell", { name: "Ready" })).toBeVisible();
+    return found;
+  });
+  const renders = markdownRenders.count;
+  await user.click(screen.getByRole("tab", { name: "Edit" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Canvas Markdown" }), {
+    target: { value: "Unsaved" },
+  });
+  await user.click(screen.getByRole("tab", { name: "View" }));
+  expect(view()).toBe(article);
+  expect(markdownRenders.count).toBe(renders);
 });
