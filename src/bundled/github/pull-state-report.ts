@@ -43,7 +43,9 @@ const factsOf = (facts: GitHubDetails["facts"]) =>
     ]),
   );
 
-/** What the panel shows beyond the state, for `details: true`. */
+/** What the panel shows beyond the state, for `details: true`. Lists and
+ * objects are copies: other plugins get this report, and a change they make
+ * must not change what the store holds. */
 const detailsOf = ({
   details,
   checklist,
@@ -56,21 +58,22 @@ const detailsOf = ({
     ? {
         review: {
           decision: checklist.review.decision,
-          approved: checklist.review.approved,
-          changes_requested: checklist.review.changes,
-          waiting: checklist.review.waiting,
+          approved: [...checklist.review.approved],
+          changes_requested: [...checklist.review.changes],
+          waiting: [...checklist.review.waiting],
         },
         unresolved_threads: checklist.unresolved,
         ...(checklist.moreThreads ? { more_threads_unread: true } : {}),
         merge_state: checklist.merge,
-        auto_merge: checklist.autoMerge ?? null,
+        auto_merge: checklist.autoMerge ? { ...checklist.autoMerge } : null,
         can_update_branch: checklist.canUpdateBranch,
       }
     : { checks: publicChecks?.state ?? "unknown" }),
 });
 
 /** `read`'s state as `github_pr_state` gives it, with the panel's details
- * when `details` and they were read. */
+ * when `details` and they were read. It shares no list or object with the
+ * store (see `detailsOf`). */
 export function pullStateReport(
   { state, readAt, error }: PullRead & { state: PullState },
   details: boolean,
@@ -81,7 +84,7 @@ export function pullStateReport(
     ...(state.head
       ? {
           checks: state.checks ?? "none",
-          failed: state.failed,
+          failed: state.failed && [...state.failed],
           settled: state.settled,
           conflicts: state.conflicts,
           head: state.head,

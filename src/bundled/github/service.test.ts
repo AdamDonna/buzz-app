@@ -184,11 +184,130 @@ it("answers as the agent tool github_pr_state does, without reading again", asyn
   expect(github.prState(pull, { details: true })).not.toHaveProperty("details");
   expect(gh).toHaveBeenCalledOnce();
 
+  // A plugin that changes its report changes nothing the app holds.
+  (report?.failed as string[] | undefined)?.splice(0);
+  expect(github.prState(pull)?.failed).toEqual(["unit"]);
+  expect(await ask({ url: pull })).toMatchObject({ failed: ["unit"] });
+
   // When reading it again fails, both give the last state and why.
   fail = true;
   vi.setSystemTime(readAt + 120_000);
   const stale = await ask({ url: pull });
   expect(stale.last_read_failed).toBe("socket hang up");
   expect(JSON.parse(JSON.stringify(github.prState(pull)))).toEqual(stale);
+  unwatch();
+});
+
+it("tells observers when reading again starts failing and when it works again", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  let fail: string | undefined;
+  const gh = vi.fn(async () => {
+    if (fail) throw new Error(fail);
+    return { r0: rollup("OPEN") };
+  }) as unknown as GitHubCli & ReturnType<typeof vi.fn>;
+  const states = createPullStates(gh);
+  const github = gitHubPulls(states);
+  const tools: AddedTool[] = [];
+  addPullStateTool({ addTool: (tool) => tools.push(tool) }, states);
+  const tool = tools[0] as AddedTool;
+  let at = Date.now();
+  // Each asks a minute and more after the last, so the tool reads again.
+  const read = async () => {
+    at += 120_000;
+    vi.setSystemTime(at);
+    await tool.call({} as BuzzClient, { channel: "c" }, { url: pull });
+  };
+  const observed = vi.fn();
+  github.subscribe(observed);
+
+  await read();
+  expect(observed).toHaveBeenCalledOnce();
+  expect(github.prState(pull)).not.toHaveProperty("last_read_failed");
+
+  fail = "socket hang up";
+  await read();
+  expect(github.prState(pull)?.last_read_failed).toBe("socket hang up");
+  expect(observed).toHaveBeenCalledTimes(2);
+  // Failing again the same way changes nothing an observer shows.
+  await read();
+  expect(observed).toHaveBeenCalledTimes(2);
+  fail = "GitHub did not answer in time";
+  await read();
+  expect(observed).toHaveBeenCalledTimes(3);
+
+  // It works again with the same state: what failed is gone, and told.
+  fail = undefined;
+  await read();
+  expect(github.prState(pull)?.state).toBe("open");
+  expect(github.prState(pull)).not.toHaveProperty("last_read_failed");
+  expect(observed).toHaveBeenCalledTimes(4);
+  // The same state read again only moves read_at, and is not told.
+  await read();
+  expect(observed).toHaveBeenCalledTimes(4);
+  expect(gh).toHaveBeenCalledTimes(6);
+});
+
+it("gives each plugin its own copy of the details' lists and objects", async () => {
+  const gh = vi.fn(async () => ({
+    r0: {
+      viewerDefaultMergeMethod: "SQUASH",
+      squashMergeAllowed: true,
+      pullRequest: {
+        id: "PR_7",
+        title: "A change",
+        state: "OPEN",
+        isDraft: false,
+        body: "",
+        author: { login: "wes" },
+        baseRefName: "main",
+        headRefName: "fix",
+        headRefOid: "abc123",
+        headRepository: { nameWithOwner: "block/buzz-app" },
+        headRepositoryOwner: { login: "block" },
+        baseRepository: { nameWithOwner: "block/buzz-app" },
+        additions: 3,
+        deletions: 1,
+        changedFiles: 2,
+        mergeStateStatus: "BLOCKED",
+        reviewDecision: "REVIEW_REQUIRED",
+        viewerCanUpdate: true,
+        viewerCanUpdateBranch: false,
+        viewerCanMergeAsAdmin: false,
+        viewerCanEnableAutoMerge: true,
+        viewerCanDisableAutoMerge: true,
+        autoMergeRequest: {
+          mergeMethod: "SQUASH",
+          enabledBy: { login: "wes" },
+        },
+        reviewRequests: { nodes: [{ requestedReviewer: { login: "rae" } }] },
+        latestOpinionatedReviews: { nodes: [] },
+        reviewThreads: { totalCount: 0, nodes: [] },
+        commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+      },
+    },
+  })) as unknown as GitHubCli & ReturnType<typeof vi.fn>;
+  const states = createPullStates(gh);
+  const github = gitHubPulls(states);
+  const unwatch = states.watch(pull, () => {}, "details");
+  await vi.waitFor(() =>
+    expect(states.get(pull)).toHaveProperty("details.checklist"),
+  );
+  const first = github.prState(pull, { details: true });
+  const expected = structuredClone(first);
+  const details = first?.details as {
+    review: {
+      approved: string[];
+      changes_requested: string[];
+      waiting: string[];
+    };
+    auto_merge: { method: string; by?: string };
+  };
+  expect(details.auto_merge).toEqual({ method: "SQUASH", by: "wes" });
+  details.review.waiting.splice(0);
+  details.review.approved.push("mallory");
+  details.review.changes_requested.push("mallory");
+  details.auto_merge.by = "mallory";
+  expect(github.prState(pull, { details: true })).toEqual(expected);
+  expect(gh).toHaveBeenCalledOnce();
   unwatch();
 });

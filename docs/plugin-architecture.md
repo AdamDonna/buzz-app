@@ -1800,7 +1800,11 @@ once something read them. Where the tool would read GitHub, `prState` gives
 undefined instead: the app holds no state for it (not read, could not be read,
 or forgotten after nobody showed it for a while), or `url` is not a pull
 request's. `subscribe(listener)` calls back after a read records a changed
-state; a state the app forgets is not announced.
+state, or when `last_read_failed` changes: reading again starts failing, fails
+for another reason, or works again. A read that finds the same state only moves
+`read_at` and `age_seconds` and is not announced, so show freshness from your
+own clock; a state the app forgets is not announced either. The report is a
+copy: changing it changes nothing the app holds.
 The service goes away when the GitHub plugin is turned off, so take it with
 `ctx.inject(["githubPulls"], (child) => …)` rather than a top-level `inject`, which
 would keep the plugin from starting without it.
