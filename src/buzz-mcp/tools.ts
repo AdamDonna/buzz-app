@@ -131,8 +131,8 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "agent_create",
-    "Submit an unsaved agent-creation draft for your owner to review. Nothing is created until they save it. Use a type key from agent_types.",
-    { type: str, name: str },
+    "Submit an unsaved agent-creation draft for your owner to review. Nothing is created until they save it. Use a type key from agent_types; instructions are optional.",
+    { type: str, name: str, instructions: str },
     ["type", "name"],
   ),
   tool(
@@ -454,7 +454,14 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const type = text(args.type)?.trim();
     const name = text(args.name)?.trim();
     if (!type || !name) throw new Error("type and name are required");
-    return JSON.stringify(await client.createAgent({ type, name }));
+    const instructions = text(args.instructions);
+    return JSON.stringify(
+      await client.createAgent({
+        type,
+        name,
+        ...(instructions && { instructions }),
+      }),
+    );
   },
   async self_handoff(tools, args) {
     const { client, context } = tools;

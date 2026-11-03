@@ -13,7 +13,7 @@ import { CreationReview } from "./CreationReview";
 
 afterEach(cleanup);
 
-function fixture() {
+function fixture(instructions?: string) {
   let requests: readonly AgentCreationRequest[] = [
     {
       id: "draft",
@@ -23,6 +23,7 @@ function fixture() {
       community: "https://relay.example",
       type: "test/echo",
       name: "Child",
+      ...(instructions && { instructions }),
     },
   ];
   const listeners = new Set<() => void>();
@@ -35,6 +36,9 @@ function fixture() {
       key: "test/echo",
       title: "Echo",
       defaults: () => ({ config: { reply: "default" } }),
+      adopt: (carry: { instructions?: string }, saved: { reply: string }) => ({
+        reply: carry.instructions ?? saved.reply,
+      }),
     },
   ] as unknown as readonly RegisteredAgentType[];
   const agents = {
@@ -77,6 +81,19 @@ it("prefills an editable review and creates only when the owner submits", async 
     ),
   );
   expect(agents.create).not.toHaveBeenCalled();
+});
+
+it("starts the review from the requested instructions", async () => {
+  const user = userEvent.setup();
+  const agents = fixture("Review PRs.");
+  await screen.findByDisplayValue("Child");
+  await user.click(screen.getByRole("button", { name: /^Create agent$/ }));
+  await waitFor(() =>
+    expect(agents.approveCreation).toHaveBeenCalledWith(
+      "draft",
+      expect.objectContaining({ config: { reply: "Review PRs." } }),
+    ),
+  );
 });
 
 it("dismisses an unsaved request when the owner closes its review", async () => {
