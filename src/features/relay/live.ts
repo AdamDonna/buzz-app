@@ -350,7 +350,8 @@ type Route = {
   /** Channels whose replay does not close their gap even below the limit: it
    * carried an edit or reaction that arrived before its target, a reply or
    * a deletion (they change a thread summary the relay never stores), or an
-   * event dropped before it was counted. */
+   * event the session could not apply. Present but empty on a global route,
+   * which then owes its repair read too. */
   repairs?: Set<string>;
   /** Events an edit or reaction in this replay refers to. */
   targets?: Set<string>;
@@ -1007,9 +1008,13 @@ export function subscribeRelayTraffic(
           route: route.id,
           // The count covers every filter of the route, so any filter the
           // limit cut marks it. A retry keeps the route's original since; a
-          // live-only replacement replays nothing.
+          // live-only replacement replays nothing. A replay event the session
+          // could not decode owes the route its repair read.
           continuous:
-            !!route.resumed && !route.liveOnly && route.replay !== "limited",
+            !!route.resumed &&
+            !route.liveOnly &&
+            route.replay !== "limited" &&
+            !route.repairs,
         }),
       );
     else if (route.id !== "observer" && route.id !== "presence") {
@@ -1646,6 +1651,8 @@ export function subscribeRelayTraffic(
         if (!checked) {
           // One undecodable event must not take the route (or its batch) down.
           log.warn(`${peer} dropped an undecodable live event`);
+          // It still spent one of the route's replay slots.
+          if (route.status === "pending" && !route.liveOnly) route.count++;
           owesRepair(route, scope(route));
           return;
         }

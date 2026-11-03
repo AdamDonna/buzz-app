@@ -2341,7 +2341,7 @@ it("reports a channel continuous only when the session can apply its whole repla
     );
   const author = keypair(),
     at = 1_700_000_000;
-  const ids = ["reply", "old", "order", "plain", "deleted", "edited"];
+  const ids = ["reply", "old", "order", "plain", "deleted", "edited", "atag"];
   const aux = (channelId: string, kind: number, target: string) =>
     signed(author, {
       kind,
@@ -2377,6 +2377,16 @@ it("reports a channel continuous only when the session can apply its whole repla
       sent,
       message(author, "plain", "a top-level message", at),
       aux("deleted", 5, "held"),
+      // A deletion by address alone changes a summary too.
+      signed(author, {
+        kind: 5,
+        content: "",
+        created_at: at,
+        tags: [
+          ["h", "atag"],
+          ["a", `30023:${author.pubkey}:post`],
+        ],
+      }),
     ])
       await second.receive(["EVENT", batch[1], event]);
     for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
@@ -2432,27 +2442,87 @@ it("reports only the granted channels of a grant's re-send as owing a catch-up",
   }
 });
 
-it("reports no channel of a batch continuous after it dropped an undecodable replay event", async () => {
+it.each([
+  ["an undecodable replay event", () => ({})],
+  [
+    "a replay event tagged for another channel",
+    () => message(keypair(), "elsewhere", "stray", 1_700_000_000),
+  ],
+] as const)(
+  "reports no channel of a batch continuous after it dropped %s",
+  async (_, event) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    const log = captureLog();
+    try {
+      age();
+      h.owner.update(["a", "b"], ["a", "b"]);
+      await establish(h.first);
+      h.callbacks.established.mockClear();
+      h.first.close();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = h.sockets[1];
+      assert.exists(second);
+      await second.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      const batch = second.requests().find((r) => scopeOf(r).includes("a"));
+      assert.exists(batch);
+      // It spent a replay slot of a channel the session cannot apply it to.
+      await second.receive(["EVENT", batch[1], event()]);
+      for (const [, id] of second.requests())
+        await second.receive(["EOSE", id]);
+      expect(h.callbacks.established).toHaveBeenCalledWith(["a", "b"]);
+    } finally {
+      log.restore();
+      h.owner.dispose();
+    }
+  },
+);
+
+it("reports a global route not continuous after it dropped an undecodable replay event, and counts it against the limit", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
-  const h = setup([], undefined, 10, () => 0.5);
+  const h = setup([], undefined, undefined, () => 0.5);
   const log = captureLog();
+  const globals = () =>
+    h.callbacks.established.mock.calls.flatMap(([channels, global]) =>
+      channels === undefined ? [global] : [],
+    );
   try {
     age();
-    h.owner.update(["a", "b"], ["a", "b"]);
     await establish(h.first);
     h.callbacks.established.mockClear();
     h.first.close();
     await vi.advanceTimersByTimeAsync(500);
-    const second = h.sockets[1];
-    assert.exists(second);
-    await second.auth();
+    const next = h.sockets[1];
+    assert.exists(next);
+    await next.auth();
     await vi.advanceTimersByTimeAsync(750);
-    const batch = second.requests().find((r) => scopeOf(r).includes("a"));
-    assert.exists(batch);
-    // It spent a replay slot of a channel the session cannot name.
-    await second.receive(["EVENT", batch[1], {}]);
-    for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
-    expect(h.callbacks.established).toHaveBeenCalledWith(["a", "b"]);
+    const profiles = next.requests().find(isProfiles);
+    const membership = next.requests().find((r) => !isProfiles(r));
+    assert.exists(profiles);
+    assert.exists(membership);
+    const event = signed(h.key, {
+      kind: 0,
+      content: "{}",
+      tags: [],
+      created_at: Math.floor(Date.now() / 1000),
+    });
+    // 499 events and one the session rejected fill the limit.
+    for (let i = 0; i < 499; i++)
+      await next.receive(["EVENT", profiles[1], event]);
+    await next.receive(["EVENT", profiles[1], {}]);
+    await next.receive(["EOSE", profiles[1]]);
+    await next.receive(["EVENT", membership[1], {}]);
+    await next.receive(["EOSE", membership[1]]);
+    expect(globals()).toEqual([
+      { route: "profiles", continuous: false },
+      { route: "membership", continuous: false },
+    ]);
+    expect(
+      h.callbacks.state.mock.lastCall?.[0].routes.find(
+        (r) => r.id === "profiles",
+      )?.replay,
+    ).toBe("limited");
   } finally {
     log.restore();
     h.owner.dispose();

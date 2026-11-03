@@ -482,6 +482,32 @@ it("passes the channels whose replay was continuous through, only among those es
   }
 });
 
+it("reports no channel of a batch continuous once one of its channels is no longer current", async () => {
+  const f = fixture();
+  const established = vi.fn();
+  const t = await connectBrokerTransport();
+  const owner = required(t.subscribe)({ ...f.callbacks, established });
+  try {
+    owner.update(["a", "b"], ["a", "b"]);
+    f.accept(0);
+    await tick();
+    required(f.interests[0]).resolve(new Response(null, { status: 200 }));
+    await tick();
+    // a changes membership class while the batch replays: the broker drops
+    // the batch's untagged traffic, so b's replay may be incomplete too.
+    owner.update(["a", "b"], ["b"]);
+    f.frame("established", {
+      channels: ["a", "b"],
+      continuous: ["a", "b"],
+      interestRevision: 1,
+    });
+    await tick();
+    expect(established.mock.calls).toEqual([[["b"]]]);
+  } finally {
+    owner.dispose();
+  }
+});
+
 it("coalesced remove/re-add with the same final IDs still advances host interest revision", async () => {
   const f = fixture();
   const t = await connectBrokerTransport();
