@@ -702,6 +702,8 @@
   /* A preview is supplemental context; destination cards can also open it.
      It is portal-rendered by Base UI so a clipped parent cannot hide it. */
   .buzz-preview-card-positioner[popover] {
+    /* Only interactive popup content owns hit-testing, never its empty shell. */
+    pointer-events: none;
     margin: 0;
     padding: 0;
     border: 0;

@@ -123,6 +123,21 @@ test("all reactor names wrap and remain reachable with pointer and keyboard", as
         .toBeLessThanOrEqual(1);
     } else {
       await expect(people).not.toHaveAttribute("tabindex", "0");
+      // A tooltip can overlap its trigger in a short viewport without taking
+      // its pointer. Otherwise unmounting it manufactures a fresh hover entry.
+      await expect
+        .poll(() =>
+          group.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return button.contains(
+              document.elementFromPoint(
+                box.x + box.width / 2,
+                box.y + box.height / 2,
+              ),
+            );
+          }),
+        )
+        .toBe(true);
       await group.focus();
     }
     for (const theme of ["light", "dark"]) {
