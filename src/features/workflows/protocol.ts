@@ -42,7 +42,9 @@ function one(event: Pick<EventData, "tags">, name: string): string {
     throw new Error(`Invalid workflow ${name} tag`);
   return tags[0][1];
 }
-export function workflowReference(event: EventData): WorkflowReference {
+export function workflowReference(
+  event: Pick<EventData, "kind" | "tags" | "pubkey">,
+): WorkflowReference {
   const channelId = one(event, "h");
   let id: string,
     owner = event.pubkey;
