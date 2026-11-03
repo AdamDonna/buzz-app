@@ -2,6 +2,7 @@ import { openPage } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 import {
   anchor,
+  edge,
   expectAnchor,
   open,
   settle,
@@ -101,8 +102,7 @@ test("saved top resumes automatic history on an upward gesture after remount", a
       exact: true,
     }),
   ).toHaveCount(0);
-  await history(page).hover();
-  await page.mouse.wheel(0, -100000);
+  await edge(page, -1);
   await expect.poll(() => app.pending.length).toBe(1);
   await settle(page);
   await expect.poll(() => history(page).evaluate((e) => e.scrollTop)).toBe(0);
