@@ -1653,7 +1653,8 @@ function ChannelWorkspace({
         tab.id === selectedTab &&
         tab.channelId === currentId,
     );
-  const split = usePanelSplit(scope, "channels");
+  // While the companion is in the dock it keeps the width it has on other pages.
+  const split = usePanelSplit(scope, companion ? "companion" : "channels");
   // A routed thread can mount behind a collapsed pane, where it cannot take
   // focus, or already be selected, so its pane does not move focus. Once its
   // tab shows, hand it focus nothing else took.

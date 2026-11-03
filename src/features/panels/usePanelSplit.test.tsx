@@ -9,6 +9,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { clearView, writeView } from "../../shared/view-state";
 import { usePanelSplit } from "./usePanelSplit";
 
 afterEach(() => {
@@ -217,4 +218,47 @@ test("frames sharing a page's width follow each other's saves", () => {
   expect(width("outer")).toBe("640px");
   fireEvent.doubleClick(inner);
   expect(width("outer")).toBe("");
+});
+
+test("a width that could not be saved survives other saves in its workspace", () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(960);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  function Page() {
+    const split = usePanelSplit("one", "inbox", 448, 320);
+    return (
+      <div ref={split.ref} data-testid="workspace">
+        {split.handle}
+      </div>
+    );
+  }
+  render(<Page />);
+  const width = () =>
+    screen
+      .getByTestId("workspace")
+      .style.getPropertyValue("--secondary-panel-width");
+  const handle = screen.getByRole("separator");
+  fireEvent.keyDown(handle, { key: "End" });
+  expect(width()).toBe("640px");
+  const setItem = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw new Error("quota");
+    });
+  fireEvent.keyDown(handle, { key: "Home" });
+  expect(width()).toBe("320px");
+  // An unrelated key in the same workspace notifies without replacing it.
+  act(() => clearView("one", "draft:abc"));
+  expect(width()).toBe("320px");
+  // A newer save of this page's width still applies.
+  setItem.mockRestore();
+  act(() => {
+    writeView("one", "panel-split:inbox", 500);
+  });
+  expect(width()).toBe("500px");
 });

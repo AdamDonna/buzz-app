@@ -858,12 +858,26 @@ companionTest(
     await expect(launch).toBeVisible();
     await expect(companion).toHaveCount(0);
     await launch.click();
+    // The companion keeps its one saved width as it moves into Messages' dock.
+    await openPage(page, "Inbox");
+    await expect(companion).toBeVisible();
+    const resize = page.getByRole("separator", {
+      name: "Resize main and secondary panels",
+    });
+    const resizedWidth = async () =>
+      Number(await resize.getAttribute("aria-valuenow"));
+    const initialWidth = await resizedWidth();
+    await resize.focus();
+    await resize.press("Shift+ArrowRight");
+    await expect.poll(resizedWidth).toBeLessThan(initialWidth - 40);
+    const companionWidth = await resizedWidth();
     await openPage(page, "Messages");
     const composer = page.getByRole("textbox", {
       name: "Message #Alpha",
       exact: true,
     });
     await expect(composer).toBeVisible();
+    await expect.poll(resizedWidth).toBe(companionWidth);
     await composer.fill("Companion draft");
     const conversation = page.getByRole("article", {
       name: "Conversation",

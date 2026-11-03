@@ -7,7 +7,6 @@ import {
 } from "react";
 import {
   clearView,
-  readView,
   subscribeView,
   viewRevision,
   writeView,
@@ -15,12 +14,21 @@ import {
 import { ResizeHandle } from "./ResizeHandle";
 import styles from "./Panels.module.css";
 
-function readSplit(scope: string | undefined, key: string) {
-  if (!scope) return undefined;
-  const saved = readView<unknown>(scope, key, undefined);
-  return typeof saved === "number" && Number.isFinite(saved) && saved > 0
-    ? saved
-    : undefined;
+// The revision records which saved value an in-memory width replaced or
+// became, so a failed save survives notifications about other keys.
+function loadSplit(scope: string | undefined, key: string) {
+  const revision = scope ? viewRevision(scope, key) : undefined;
+  let saved: unknown;
+  try {
+    saved = JSON.parse(revision ?? "null");
+  } catch {
+    // An unreadable record falls back to the default width.
+  }
+  const preferred =
+    typeof saved === "number" && Number.isFinite(saved) && saved > 0
+      ? saved
+      : undefined;
+  return { scope, key, revision, preferred };
 }
 
 /**
@@ -37,40 +45,35 @@ export function usePanelSplit(
 ) {
   const ref = useRef<HTMLDivElement>(null);
   const key = `panel-split:${name}`;
-  const [view, setView] = useState(() => ({
-    scope,
-    key,
-    preferred: readSplit(scope, key),
-  }));
+  const [view, setView] = useState(() => loadSplit(scope, key));
   // A workspace change reads that workspace's width without remounting the page.
-  if (view.scope !== scope || view.key !== key)
-    setView({ scope, key, preferred: readSplit(scope, key) });
+  if (view.scope !== scope || view.key !== key) setView(loadSplit(scope, key));
   const { preferred } = view;
-  // Follow saves from another frame or window sharing this page's width.
+  // Follow newer saves from another frame or window sharing this page's width.
   useLayoutEffect(() => {
     if (!scope) return;
     return subscribeView(scope, () => {
-      if (viewRevision(scope, key) === undefined) return;
-      const saved = readSplit(scope, key);
+      const revision = viewRevision(scope, key);
       setView((current) =>
-        current.scope === scope &&
-        current.key === key &&
-        current.preferred === saved
+        revision === undefined ||
+        (current.scope === scope &&
+          current.key === key &&
+          current.revision === revision)
           ? current
-          : { scope, key, preferred: saved },
+          : loadSplit(scope, key),
       );
     });
   }, [scope, key]);
   const setPreferred = (width: number | undefined) => {
-    setView({ scope, key, preferred: width });
-    if (!scope) return;
-    if (width !== undefined) writeView(scope, key, width);
-    else
+    if (scope && width !== undefined) writeView(scope, key, width);
+    else if (scope)
       try {
         clearView(scope, key);
       } catch {
         // The default still applies until the page next mounts.
       }
+    const revision = scope ? viewRevision(scope, key) : undefined;
+    setView({ scope, key, preferred: width, revision });
   };
   return {
     ref,
