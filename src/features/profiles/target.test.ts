@@ -86,18 +86,27 @@ it("asks for a transcript once per opening until its profile claims it", () => {
   const key = "cd".repeat(32);
   const plain = profileActivityViewTarget(key) ?? "";
   const transcript = profileActivityViewTarget(key, { transcript: true }) ?? "";
-  expect(openProfileTranscript(plain, () => true)).toBe(true);
+  const opened: string[] = [];
+  const open = (next: string) => {
+    opened.push(next);
+    return true;
+  };
+  expect(openProfileTranscript(plain, open)).toBe(true);
   expect(profileTranscriptRequest(plain)).toBeUndefined();
   // An opening that fails leaves nothing for a later remount to act on.
   expect(openProfileTranscript(transcript, () => false)).toBe(false);
-  expect(profileTranscriptRequest(transcript)).toBeUndefined();
-  expect(openProfileTranscript(transcript, () => true)).toBe(true);
-  const first = profileTranscriptRequest(transcript);
+  expect(profileTranscriptRequest(plain)).toBeUndefined();
+  // Asking opens the agent's one Activity destination, so its open tab is
+  // reused, and the request waits there.
+  expect(openProfileTranscript(transcript, open)).toBe(true);
+  expect(opened).toEqual([plain, plain]);
+  const first = profileTranscriptRequest(plain);
   expect(first).toBeDefined();
-  expect(claimProfileTranscript(transcript)).toBe(first);
   expect(profileTranscriptRequest(transcript)).toBeUndefined();
-  expect(claimProfileTranscript(transcript)).toBeUndefined();
+  expect(claimProfileTranscript(plain)).toBe(first);
+  expect(profileTranscriptRequest(plain)).toBeUndefined();
+  expect(claimProfileTranscript(plain)).toBeUndefined();
   // Opening the same target again is a new opening.
-  openProfileTranscript(transcript, () => true);
-  expect(claimProfileTranscript(transcript)).toBeGreaterThan(first ?? 0);
+  openProfileTranscript(transcript, open);
+  expect(claimProfileTranscript(plain)).toBeGreaterThan(first ?? 0);
 });

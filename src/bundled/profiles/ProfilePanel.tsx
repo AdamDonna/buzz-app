@@ -36,7 +36,6 @@ import { Tabs } from "../../shared/design-system/ui/Tabs";
 import type { PanelProps } from "../../features/panels/service";
 import {
   claimProfileTranscript,
-  profileActivityTranscript,
   profileActivityViewKey,
   profileTranscriptRequest,
   subscribeProfileTranscripts,
@@ -119,14 +118,13 @@ export function ProfilePanel({
 }) {
   const connection = useRelayConnection(relay);
   const activityKey = profileActivityViewKey(target);
-  const transcript = profileActivityTranscript(target);
-  const opening = transcript ? "transcript" : activityKey ? "activity" : "info";
+  const opening = activityKey ? "activity" : "info";
   // Asked once per opening. This profile takes the opening as soon as it is
   // shown, even on another section, so remounting with the channel finds
   // nothing to reopen; changing sections back after it was offered does not
   // ask again either.
   const asked = useSyncExternalStore(subscribeProfileTranscripts, () =>
-    transcript ? profileTranscriptRequest(target) : undefined,
+    activityKey ? profileTranscriptRequest(target) : undefined,
   );
   const [held, setHeld] = useState<number>();
   const [offered, setOffered] = useState(0);

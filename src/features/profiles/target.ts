@@ -72,16 +72,22 @@ export function subscribeProfileTranscripts(listener: () => void) {
   return () => void transcriptListeners.delete(listener);
 }
 /** Opens `target` through `open`, asking the profile it opens to show its
- * transcript once. A target that is only shown again, as when its retained
- * tab remounts on returning to the channel, asks for nothing. */
+ * transcript once. A transcript destination opens the agent's one Activity
+ * destination, so an Activity tab already open is reused rather than joined
+ * by another. A target that is only shown again, as when its retained tab
+ * remounts on returning to the channel, asks for nothing. */
 export function openProfileTranscript(
   target: string,
   open: (target: string) => boolean,
 ): boolean {
-  if (!profileActivityTranscript(target)) return open(target);
-  transcriptRequests.set(target, ++transcriptOpenings);
-  const opened = open(target);
-  if (!opened) transcriptRequests.delete(target);
+  const agent = profileActivityTranscript(target)
+    ? profileActivityViewKey(target)
+    : undefined;
+  const activity = agent && profileActivityViewTarget(agent);
+  if (!activity) return open(target);
+  transcriptRequests.set(activity, ++transcriptOpenings);
+  const opened = open(activity);
+  if (!opened) transcriptRequests.delete(activity);
   changed();
   return opened;
 }

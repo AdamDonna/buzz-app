@@ -20,6 +20,7 @@ import {
 } from "./ActivityAccessory";
 import { TypingPresentation } from "../../features/conversation/typing-presentation";
 import { TypingIndicator } from "../../features/messages/TypingIndicator";
+import { claimProfileTranscript } from "../../features/profiles/target";
 import { createAgentActivity } from "../../features/agents/activity";
 import { createAgentLibrary } from "../../features/agents/library";
 import type { RelaySession } from "../../features/relay/session";
@@ -255,9 +256,10 @@ it("previews only live scoped actions and retains profile navigation", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
-    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
-    );
+    const activity = `buzz:profile?agent=${A}&tab=activity`;
+    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(activity);
+    // It asks that Activity for this message's transcript, once.
+    expect(claimProfileTranscript(activity)).toBeDefined();
   } finally {
     view.unmount();
     f.dispose();
@@ -321,7 +323,7 @@ it("makes the compact avatar and tool preview one action, retaining the popup wh
     expect(row.querySelector(".buzz-avatar")).not.toBeNull();
     fireEvent.click(popup.getByText("file.ts"));
     expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
+      `buzz:profile?agent=${A}&tab=activity`,
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     view.rerender(
@@ -425,7 +427,7 @@ it("shows local receipt and failure without requiring an ACP transcript, and ope
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
     expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
+      `buzz:profile?agent=${A}&tab=activity`,
     );
   } finally {
     view.unmount();

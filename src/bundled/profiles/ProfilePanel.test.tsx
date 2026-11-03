@@ -394,6 +394,7 @@ function renderAgentActivity(
     disconnect() {},
     clearCache: async () => {},
   };
+  const offered = vi.fn();
   const type = {
     key: "test/echo",
     title: "Echo",
@@ -413,10 +414,11 @@ function renderAgentActivity(
         // Like a type's Activity tab: it acts on the request as it shows.
         const [first] = useState(!!initialTranscript);
         // biome-ignore lint/correctness/useExhaustiveDependencies: once per opening.
-        useEffect(
-          () => initialTranscript?.done(),
-          [initialTranscript?.opening],
-        );
+        useEffect(() => {
+          if (!initialTranscript) return;
+          offered(initialTranscript.opening);
+          initialTranscript.done();
+        }, [initialTranscript?.opening]);
         return (
           <>
             <p>Echo {title.toLowerCase()}</p>
@@ -467,10 +469,15 @@ function renderAgentActivity(
     registerTab: () => {},
     controlAttention: () => {},
   } as unknown as Agents;
-  const target =
-    profileActivityViewTarget(key, { transcript: !!transcript }) ?? "";
+  // What an opener that knows the conversation asks for.
+  const asking = profileActivityViewTarget(key, { transcript: true }) ?? "";
+  let target = profileActivityViewTarget(key) ?? "";
   // Like Working now: the opener asks as it opens the target.
-  if (transcript === "opened") openProfileTranscript(target, () => true);
+  if (transcript === "opened")
+    openProfileTranscript(asking, (next) => {
+      target = next;
+      return true;
+    });
   const panel = (mount: number) => (
     <ProfilePanel
       key={mount}
@@ -495,7 +502,8 @@ function renderAgentActivity(
       owner.dispose();
     },
     {
-      target,
+      asking,
+      offered,
       /** Remounts the retained profile, as on returning to its channel. */
       remount: () => view.rerender(panel(++mounts)),
     },
@@ -648,7 +656,7 @@ it("keeps a new opening for a profile on another section to itself, so a remount
   try {
     await user.click(screen.getByRole("tab", { name: "Identity" }));
     // Working now opens the retained profile again while it shows Identity.
-    act(() => void openProfileTranscript(dispose.target, () => true));
+    act(() => void openProfileTranscript(dispose.asking, () => true));
     dispose.remount();
     expect(screen.getByText("Echo activity")).toBeVisible();
     expect(screen.queryByText("Transcript first")).toBeNull();
@@ -658,13 +666,36 @@ it("keeps a new opening for a profile on another section to itself, so a remount
   dispose = renderAgentActivity(sections, "thread-root", "shown again");
   try {
     await user.click(screen.getByRole("tab", { name: "Identity" }));
-    act(() => void openProfileTranscript(dispose.target, () => true));
+    act(() => void openProfileTranscript(dispose.asking, () => true));
     // Not remounted, the profile still has the opening for its Activity tab.
     await user.click(screen.getByRole("tab", { name: "Activity" }));
     expect(screen.getByText("Transcript first")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Identity" }));
     await user.click(screen.getByRole("tab", { name: "Activity" }));
     expect(screen.queryByText("Transcript first")).toBeNull();
+  } finally {
+    dispose();
+  }
+});
+
+it("asks an Activity tab already open for the transcript, rather than opening another", () => {
+  const dispose = renderAgentActivity(
+    [{ title: "Activity", role: "activity" }],
+    "thread-root",
+  );
+  try {
+    expect(dispose.offered).not.toHaveBeenCalled();
+    const opened: string[] = [];
+    act(
+      () =>
+        void openProfileTranscript(dispose.asking, (next) => {
+          opened.push(next);
+          return true;
+        }),
+    );
+    // The opener reaches the same Activity destination this tab shows.
+    expect(opened).toEqual([profileActivityViewTarget(key)]);
+    expect(dispose.offered).toHaveBeenCalledOnce();
   } finally {
     dispose();
   }

@@ -107,13 +107,14 @@ it("opens one avatar by hover, with separate thread and activity actions and key
   await user.click(
     within(dialog).getByRole("button", { name: "View Agent activity" }),
   );
-  const transcript = profileActivityViewTarget(agent, { transcript: true });
-  expect(open).toHaveBeenLastCalledWith(transcript, {
+  // The agent's one Activity destination, so an open Activity tab is reused.
+  const activity = profileActivityViewTarget(agent);
+  expect(open).toHaveBeenLastCalledWith(activity, {
     rootId: root,
   });
   // The click asks the profile it opens for the transcript, once.
-  expect(profileTranscriptRequest(transcript ?? "")).toBeDefined();
-  claimProfileTranscript(transcript ?? "");
+  expect(profileTranscriptRequest(activity ?? "")).toBeDefined();
+  claimProfileTranscript(activity ?? "");
   trigger.focus();
   await user.keyboard("{Enter}");
   dialog = await screen.findByRole("dialog", { name: "Working now" });
@@ -318,12 +319,9 @@ it("opens activity for the composer's explicit thread", async () => {
     screen.queryByRole("button", { name: "Open thread for Agent" }),
   ).toBeNull();
   await user.click(screen.getByRole("button", { name: "View Agent activity" }));
-  expect(open).toHaveBeenLastCalledWith(
-    profileActivityViewTarget(agent, { transcript: true }),
-    {
-      rootId: root,
-    },
-  );
+  expect(open).toHaveBeenLastCalledWith(profileActivityViewTarget(agent), {
+    rootId: root,
+  });
 });
 
 it("retains one explicit live region from idle through work and back to idle", () => {
@@ -403,11 +401,11 @@ it.each([null, undefined])(
     await user.click(
       screen.getByRole("button", { name: "View Agent activity" }),
     );
-    expect(open).toHaveBeenLastCalledWith(
-      profileActivityViewTarget(agent, {
-        transcript: threadRootId === null,
-      }),
-      undefined,
+    const activity = profileActivityViewTarget(agent) ?? "";
+    expect(open).toHaveBeenLastCalledWith(activity, undefined);
+    // Only the channel's own known session is asked for its transcript.
+    expect(claimProfileTranscript(activity) !== undefined).toBe(
+      threadRootId === null,
     );
     // Opening the channel already shown would do nothing.
     expect(
@@ -552,7 +550,7 @@ it.each(["click", "Enter", "Space"])(
       await user.keyboard(activation === "Enter" ? "{Enter}" : " ");
     }
     expect(open).toHaveBeenCalledExactlyOnceWith(
-      profileActivityViewTarget(agent, { transcript: true }),
+      profileActivityViewTarget(agent),
       { rootId: root },
     );
     expect(
