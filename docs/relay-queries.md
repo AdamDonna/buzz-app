@@ -968,7 +968,9 @@ current, because it drops that batch's untagged traffic. A batch re-sent for a
 grant overlaps its live predecessor until EOSE, so it reports every channel but
 the granted ones continuous, and the session keeps what that connection's
 earlier establishment of them decided. The granted channels still catch up:
-the relay may have checked the predecessor's REQ before their grant. The
+the relay may have checked the predecessor's REQ before their grant. A re-send
+sent after its predecessor closed (a refusal closes both) overlaps nothing, so
+it reports no channel continuous. The
 membership replay re-delivers grants from its last 16 minutes, so a channel
 granted that recently (created, joined, added, a DM opened) catches up at every
 reconnect.

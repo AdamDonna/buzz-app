@@ -1167,6 +1167,17 @@ export function subscribeRelayTraffic(
       const wire = `live-${++serial}`;
       route.wire = wire;
       delete route.regranted; // This REQ is sent after every earlier grant.
+      // A re-send overlaps only a predecessor still live on its wire; after a
+      // failure closed both, the stream had a gap, so every channel owes it.
+      const { previous } = route;
+      if (
+        !(
+          previous?.status === "live" &&
+          previous.wire &&
+          wires.get(previous.wire) === previous
+        )
+      )
+        delete route.granted;
       // Their channels still owe the history from before their grant.
       if (route.grants && route.granted)
         for (const id of route.grants) route.granted.add(id);
@@ -2039,8 +2050,6 @@ export function subscribeRelayTraffic(
           route.counts = new Map();
           delete route.repairs;
           delete route.targets;
-          // A failed re-send may have lost the predecessor it overlapped.
-          delete route.granted;
           route.quotaRetries = 0;
         }
         pump();

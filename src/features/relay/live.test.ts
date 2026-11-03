@@ -2442,6 +2442,33 @@ it("reports only the granted channels of a grant's re-send as owing a catch-up",
   }
 });
 
+it("reports no channel continuous when a grant's re-send is retried after it lost its predecessor", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, 10, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    await grant(h, "b");
+    const resent = h.first.requests().at(-1);
+    assert.exists(resent);
+    // A refusal closes the re-send and its live predecessor.
+    await h.first.receive(["CLOSED", resent[1], "auth-required: sign in"]);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    const retried = h.first.requests().at(-1);
+    assert.exists(retried);
+    expect(retried[1]).not.toBe(resent[1]);
+    expect(scopeOf(retried)).toEqual(["a", "b"]);
+    await h.first.receive(["EOSE", retried[1]]);
+    expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+      [["a", "b"]],
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
 it.each([
   ["an undecodable replay event", () => ({})],
   [
