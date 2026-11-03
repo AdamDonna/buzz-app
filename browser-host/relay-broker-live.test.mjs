@@ -2288,13 +2288,7 @@ test("broker renewals retain establishment signals while channel status stays li
             .every((route) => route.status === "live"),
         ),
     ).toBe(true);
-    // The re-send overlapped the live batch: only the granted channel owes
-    // its catch-up.
-    expect(established.mock.calls.at(-1)).toEqual([
-      ids.sort(),
-      undefined,
-      ids.filter((id) => id !== ids[0]),
-    ]);
+    expect(established.mock.calls.at(-1)).toEqual([ids.sort()]);
     expect(h.sockets).toHaveLength(1);
   } finally {
     traffic?.dispose();

@@ -964,23 +964,7 @@ session could not decode, or an event whose `h` tag names none of the route's
 channels. A reaction or edit to a message held before the drop, a new
 top-level message and a membership notice keep it continuous. The broker
 reports no channel of a batch continuous when one of its channels is no longer
-current, because it drops that batch's untagged traffic. A batch re-sent for a
-grant overlaps its live predecessor until EOSE, so it reports every channel but
-the granted ones continuous, and the session keeps what that connection's
-earlier establishment of them decided. The granted channels still catch up:
-the relay may have checked the predecessor's REQ before their grant. A re-send
-sent after its predecessor closed (a refusal closes both) overlaps nothing, so
-it reports no channel continuous. A grant
-also ends its channel's cursor (the relay may have left the channel out before
-it), and only a stream that held the channel after the grant sets it again, so
-a re-send or renewal the drop cut leaves the channel to catch up. A batch REQ
-sent after the grant reports the channel as owing a catch-up too, because its
-replay was planned from the old cursor. The membership replay
-re-delivers grants from its last 16 minutes. The relay stamps a grant notice
-with its own clock after the grant commits, so an earlier connection whose
-membership replay was complete acted on every notice stamped at least a minute
-before it last heard the relay. A reconnect re-sends nothing for those; a
-notice stamped later, such as one stored during the outage, is a new grant.
+current, because it drops that batch's untagged traffic.
 
 A retained window that was verified when the stream dropped, and a thread view
 that was settled then, skip the head, page and thread reads for such a
@@ -991,8 +975,8 @@ membership notice read that failed or was cut before the drop resumes (it reads
 nothing when none is owed). Any other case keeps the catch-up above: a replay
 at the limit, a channel with no cursor, a window restored or read before the
 stream was up, a window or thread read again while the stream was down, a
-window still owed a catch-up from an earlier drop, and a live-only renewal (it
-replays nothing, so it proves nothing). While the session's initial five-minute
+window still owed a catch-up from an earlier drop, and a live-only renewal,
+including a batch re-sent for a grant (it replays nothing, so it proves nothing). While the session's initial five-minute
 floor truncates the resume lag, channel and global routes keep their reconnect
 repair reads even when the replay ends below the limit, so the skip applies
 only once the live connection is about 11 minutes old.

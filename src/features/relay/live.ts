@@ -57,16 +57,13 @@ const MAX_RECONNECT_DELAY = 30_000;
  * `MAX_TIMESTAMP_DRIFT_SECS`), so an event stored at time T can carry any
  * created_at in [T - 900, T + 900]. */
 export const RELAY_TIMESTAMP_DRIFT_SECS = 900;
-/** The one minute every resume rule allows for the clocks to disagree (see
- * `LIVE_RESUME_LAG`). */
-const LIVE_CLOCK_MARGIN = 60;
 /** A route that reached EOSE was delivered live until its connection last heard
  * the relay. An event stored just after that can be backdated by the full drift,
  * so resume this far before it, plus one minute shared by everything else the
  * clocks disagree on: fan-out still in flight when the relay closed (a draining
  * pod can trail its peers), the client clock's skew from the relay's, and the
  * relay's replica read budget for the unread repair, which uses the same margin. */
-export const LIVE_RESUME_LAG = RELAY_TIMESTAMP_DRIFT_SECS + LIVE_CLOCK_MARGIN;
+export const LIVE_RESUME_LAG = RELAY_TIMESTAMP_DRIFT_SECS + 60;
 /** Signature proofs a live subscription keeps across its reconnects. Each resume
  * replays `LIVE_RESUME_LAG` of events the subscription already verified; a
  * fresh signature check costs about 1 ms of main thread per event, a proof hit
@@ -362,12 +359,6 @@ type Route = {
   /** Its REQ was sent before a grant for one of its channels arrived, so the
    * relay may have left that channel out. Re-send at its EOSE. */
   regranted?: boolean;
-  /** The grants that re-send it, or will at its EOSE, or came before its REQ
-   * was sent and stay until EOSE. A re-send overlaps its live predecessor
-   * until EOSE, so only these channels can have a gap: the relay may have
-   * checked the predecessor's REQ before their grant. */
-  grants?: Set<string>;
-  granted?: Set<string>;
   /** When its REQ was sent (ms), for the slow batch refresh. */
   sentAt?: number;
   /** Consecutive refusals that need action, and when the recover tick may retry. */
@@ -474,11 +465,6 @@ export function subscribeRelayTraffic(
   // established it last heard the relay. A later connection that never
   // establishes it leaves the cursor, so flapping does not lose it.
   const cursors = new Map<string, LiveCursor>();
-  // The relay signs a 44100 with its own clock after the grant commits, so no
-  // drift backdates it. A membership stream whose replay was complete acted on
-  // every 44100 stored before it last heard the relay, less the clock margin.
-  // Its successors replay those again; only a later one is a new grant.
-  let grantsHeardUntil: number | undefined;
   // Outlives each socket, so a reconnect's replay reuses the proofs.
   const verify = createEventVerifier(LIVE_PROOF_ENTRIES, signatures);
   const cursorKeys = (route: Route) =>
@@ -632,8 +618,6 @@ export function subscribeRelayTraffic(
     };
     delete next.repairs;
     delete next.targets;
-    delete next.grants;
-    delete next.granted;
     delete next.replayChannels;
     if (replayChannels?.length) next.replayChannels = replayChannels;
     delete next.wire;
@@ -658,15 +642,10 @@ export function subscribeRelayTraffic(
     for (const route of [...routes.values()]) {
       if (!route.channelIds?.includes(id)) continue;
       if (route.status === "live" && !route.previous) {
-        replace(route).granted = new Set([id]);
+        replace(route);
         sent = true;
-      } else {
-        // One not sent yet follows the grant, but a drop first must not keep
-        // the channel's cursor from its predecessor.
-        if (route.status === "pending" && route.wire) route.regranted = true;
-        route.grants ??= new Set();
-        route.grants.add(id);
-      }
+      } else if (route.status === "pending" && route.wire)
+        route.regranted = true;
     }
     if (!sent) return;
     pump();
@@ -1030,24 +1009,16 @@ export function subscribeRelayTraffic(
       );
     else if (route.id !== "observer" && route.id !== "presence") {
       // A live-only route sends no replay, so it closes no gap; nor does a
-      // channel outside a re-sent route's replay subset. A re-send for a grant
-      // overlapped its live predecessor: only the granted channels can have
-      // one.
-      const { granted } = route;
-      const continuous = granted
-        ? scope(route).filter((id) => !granted.has(id))
-        : route.liveOnly
-          ? []
-          : scope(route).filter(
-              (id) =>
-                route.resumedChannels?.has(id) &&
-                (!route.replayChannels || route.replayChannels.includes(id)) &&
-                (route.counts?.get(id) ?? 0) < LIVE_REPLAY_LIMIT &&
-                !route.repairs?.has(id) &&
-                // A grant before its REQ: the replay was planned from the old
-                // cursor. A grant after it re-sends the batch at this EOSE.
-                (route.regranted || !route.grants?.has(id)),
-            );
+      // channel outside a re-sent route's replay subset.
+      const continuous = route.liveOnly
+        ? []
+        : scope(route).filter(
+            (id) =>
+              route.resumedChannels?.has(id) &&
+              (!route.replayChannels || route.replayChannels.includes(id)) &&
+              (route.counts?.get(id) ?? 0) < LIVE_REPLAY_LIMIT &&
+              !route.repairs?.has(id),
+          );
       const channels = route.channelIds ?? route.channelId;
       if (continuous.length)
         callbacks.established(channels, undefined, continuous);
@@ -1181,24 +1152,6 @@ export function subscribeRelayTraffic(
       const wire = `live-${++serial}`;
       route.wire = wire;
       delete route.regranted; // This REQ is sent after every earlier grant.
-      // A re-send overlaps only a predecessor still live on its wire; after a
-      // failure closed both, the stream had a gap, so every channel owes it.
-      const { previous } = route;
-      if (
-        !(
-          previous?.status === "live" &&
-          previous.wire &&
-          wires.get(previous.wire) === previous
-        )
-      )
-        delete route.granted;
-      // Their channels still owe the history from before their grant. With no
-      // overlap claim, keep them until EOSE: a drop first must still not keep
-      // their cursors from the predecessor.
-      if (route.granted) {
-        for (const id of route.grants ?? []) route.granted.add(id);
-        delete route.grants;
-      }
       route.sentAt = Date.now();
       wires.set(wire, route);
       route.deadline = setTimeout(() => {
@@ -1307,18 +1260,8 @@ export function subscribeRelayTraffic(
               : undefined;
         if (!source) continue;
         const kept = new Set(cursorKeys(source));
-        // The relay may have left a granted channel out of the predecessor;
-        // the re-send that holds it did not finish.
-        if (source !== route)
-          for (const id of [...(route.granted ?? []), ...(route.grants ?? [])])
-            kept.delete(`channel:${id}`);
         for (const key of cursorKeys(route))
           if (kept.has(key)) cursors.set(key, { liveUntil });
-        if (route.id === "membership" && source === route)
-          grantsHeardUntil =
-            route.replay !== "limited" && !route.repairs
-              ? liveUntil
-              : undefined;
       }
     }
     generation++;
@@ -1780,21 +1723,6 @@ export function subscribeRelayTraffic(
           )
             callbacks.telemetry?.(incoming, observer);
         } else if (incoming.kind !== OBSERVER_KIND) {
-          // A grant ends the channel's cursor, before the session can route
-          // the channel again: the relay may have left the channel out before
-          // it, so the cursor claims history nothing delivered. Only a stream
-          // that held the channel after the grant sets it again.
-          const granted =
-            route.id === "membership" &&
-            incoming.kind === 44100 &&
-            destination &&
-            !(
-              grantsHeardUntil !== undefined &&
-              incoming.created_at <= grantsHeardUntil - LIVE_CLOCK_MARGIN
-            )
-              ? destination
-              : undefined;
-          if (granted) cursors.delete(`channel:${granted}`);
           callbacks.receive(
             [incoming],
             Object.freeze({
@@ -1806,7 +1734,13 @@ export function subscribeRelayTraffic(
                   : {}),
             }),
           );
-          if (valid() && granted) grant(granted);
+          if (
+            valid() &&
+            route.id === "membership" &&
+            incoming.kind === 44100 &&
+            destination
+          )
+            grant(destination);
         }
       } else if (data[0] === "EOSE" && route.status === "pending") {
         if (route.history) {
@@ -1844,13 +1778,9 @@ export function subscribeRelayTraffic(
           routes.get(route.id) === route &&
           route.status === "live"
         ) {
-          const grants = route.grants;
-          delete route.grants;
-          replace(route).granted = grants ?? new Set();
+          replace(route);
           notify();
         }
-        // Established after its grants: its stream holds their channels.
-        else delete route.grants;
         if (valid()) pump();
       } else if (data[0] === "CLOSED") {
         const reason =

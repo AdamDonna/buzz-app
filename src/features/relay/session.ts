@@ -3506,10 +3506,6 @@ export function createRelaySession(
         // connection last heard the relay: a view live at the drop is
         // contiguous again with no read. Any other view catches up.
         const resumed = !!continuous?.includes(id);
-        // A re-sent route that overlapped this connection's earlier one: the
-        // verification or catch-up that establishment started stands.
-        if (resumed && catchups.get(id)?.generation === liveGeneration)
-          continue;
         for (const thread of threads)
           if (thread.channelId === id) void thread.established(resumed);
         const job = {
