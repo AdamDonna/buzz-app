@@ -14,6 +14,7 @@ const state = (agent: string, key: string) =>
   `${PREFIX}${agent}:session:${key}`;
 
 export class PiSessionStore {
+  private readonly requests = new Map<string, object>();
   private readonly observed = new Map<
     string,
     Map<string, PiSession | undefined>
@@ -21,38 +22,38 @@ export class PiSessionStore {
   constructor(private readonly storage: AgentStore) {}
 
   async read(agent: string, place: string): Promise<PiSession | undefined> {
-    const observed = this.observed.get(agent)?.get(place);
+    const request = this.request(agent, place);
     const key = await this.storage.read(pointer(agent, place));
     if (key === null) {
-      if (this.observed.get(agent)?.get(place) === observed)
+      if (this.requests.get(pointer(agent, place)) === request)
         this.observe(agent, place, undefined);
       return;
     }
-    return this.load(agent, key, place, observed);
+    return this.load(agent, key, place, request);
   }
 
   async current(agent: string, place: string): Promise<PiSession> {
     const saved = await this.read(agent, place);
     if (saved) return saved;
-    const observed = this.observed.get(agent)?.get(place);
+    const request = this.request(agent, place);
     const key = await this.storage.add(
       pointer(agent, place),
       crypto.randomUUID(),
     );
-    return this.load(agent, key, place, observed);
+    return this.load(agent, key, place, request);
   }
 
   private async load(
     agent: string,
     key: string,
     place: string,
-    observed: PiSession | undefined,
+    request: object,
   ): Promise<PiSession> {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(key))
       throw new Error("Invalid Pi session key");
     const text = await this.storage.read(state(agent, key));
     const session = text ? this.parse(text, key, place) : { key, place, at: 0 };
-    if (this.observed.get(agent)?.get(place) === observed)
+    if (this.requests.get(pointer(agent, place)) === request)
       this.observe(agent, place, session);
     return session;
   }
@@ -96,12 +97,19 @@ export class PiSessionStore {
     place: string,
     session: PiSession | undefined,
   ) {
+    this.requests.delete(pointer(agent, place));
     let current = this.observed.get(agent);
     if (!current) {
       current = new Map();
       this.observed.set(agent, current);
     }
     current.set(place, session);
+  }
+
+  private request(agent: string, place: string) {
+    const request = {};
+    this.requests.set(pointer(agent, place), request);
+    return request;
   }
 
   private parse(text: string, key: string, place: string): PiSession {
