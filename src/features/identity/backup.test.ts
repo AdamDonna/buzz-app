@@ -256,6 +256,41 @@ function backUp(host: ReturnType<typeof native>) {
 const settledAt = (seq: number, pass: number, settled: object) =>
   ({ seq, pass, builderlab: true, ...settled }) as BackupStatus;
 
+it("waits for a native first-run backup using a public revision rather than a renderer credential", async () => {
+  const host = native();
+  host.session.mockResolvedValueOnce(1);
+  const identity: Waiter = {
+    backup: host.store(),
+    setBackupChoice: vi.fn(async (pubkey, automatic) => ({
+      available: true,
+      pubkey,
+      automatic,
+    })),
+  };
+  const done = backUpWith(
+    identity,
+    pubkey,
+    { federated: "session-revision" },
+    { send: host.send as Send },
+  );
+  await vi.waitFor(() =>
+    expect(host.send).toHaveBeenCalledWith(
+      "nsec_backup_session",
+      expect.objectContaining({
+        credential: null,
+        federated: "session-revision",
+      }),
+    ),
+  );
+  host.watchers[0]?.onmessage(at(2, 1, "complete"));
+  await expect(done).resolves.toBeUndefined();
+  expect(
+    host.send.mock.calls.filter(
+      ([command]) => command === "nsec_backup_session",
+    ),
+  ).toHaveLength(1);
+});
+
 it("turns consent on, hands the credential over and waits for the pass its ticket names", async () => {
   // A stale failure from before the handoff must not answer.
   const host = native(

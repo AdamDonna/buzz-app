@@ -528,6 +528,17 @@ describe("bind", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("keeps another key's binding and refuses before requesting or signing a challenge", async () => {
+    const { request, sent } = kgoose(bound("cd".repeat(32)));
+    await expect(
+      builderlabAccount(credential, request, untouched).bind(pubkey),
+    ).rejects.toThrow();
+    expect(sent.map(({ url }) => url)).toEqual([
+      "https://t.example/api/goose/v1/buzz/nostr-identities/current",
+    ]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "a verify for an account bound to another key",

@@ -46,6 +46,42 @@ const failure = (answers: Record<string, Answer>) =>
       error instanceof FindCommunityError ? error.failure : error,
   );
 
+it.each([true, false, undefined])(
+  "keeps host requirement %s separate from FI capability",
+  async (required) => {
+    const found = await find({
+      "/": Response.json({
+        ...buzz,
+        requires_nip_fi: required,
+        limitation: { federated_identity: true },
+        federated_identity: {
+          core: "client-attached",
+          assertion_freshness: { class: "offline-jwt" },
+        },
+      }),
+      "/api/join-policy": html(404),
+    });
+    expect(found.requiresNipFi).toBe(required);
+  },
+);
+
+it.each([
+  { requires_nip_fi: "true" },
+  { requires_nip_fi: null },
+  { requires_nip_fi: true },
+  { requires_nip_fi: true, limitation: { federated_identity: false } },
+])(
+  "gives actionable discovery failure for an invalid requirement %j",
+  async (info) => {
+    expect(
+      await failure({
+        "/": Response.json({ ...buzz, ...info }),
+        "/api/join-policy": html(404),
+      }),
+    ).toBe("unsupported-auth");
+  },
+);
+
 it("reports only what the relay publishes, with the icon sanitized, from two unauthenticated reads", async () => {
   const request = fetcher({
     "/": Response.json(buzz),

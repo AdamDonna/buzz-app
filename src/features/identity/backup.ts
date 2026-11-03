@@ -153,15 +153,16 @@ function failure(status: BackupStatus): BackupFailureKind | undefined {
  * outlives the step; a settled pass is not running, so that publishes nothing
  * and the outcome stays visible. Consent stays on after a failure, so a later
  * Builderlab sign-in may finish what the user asked for; declining turns it off.
- * The caller must hold the `builderlab` slot alone for the step: handing it
- * back empties it rather than restoring an earlier credential, so a signed-in
- * Builderlab plugin would lose its native session until its own changes.
+ * Legacy credentials require the caller to hold the `builderlab` slot alone:
+ * handing it back empties it rather than restoring an earlier credential.
+ * An FI revision is the shared native session, so it stays installed for
+ * automatic backup after first run. Native session retirement still fences it.
  * Rejects with a `BackupError`.
  */
 export async function backUpWith(
   identity: Pick<Identity, "backup" | "setBackupChoice">,
   pubkey: string,
-  credential: string,
+  credential: string | Readonly<{ federated: string }>,
   {
     timeout = 60_000,
     after = timer,
@@ -183,7 +184,9 @@ export async function backUpWith(
   const settled = new AbortController();
   let unsubscribe = () => {};
   try {
-    const ticket = await handoffBackupSession("builderlab", credential, send);
+    const ticket = await (typeof credential === "string"
+      ? handoffBackupSession("builderlab", credential, send)
+      : handoffFederatedBackupSession(credential.federated, send));
     if (ticket === null) throw new BackupError("unavailable");
     const outcome = new Promise<BackupStatus>((resolve) => {
       const check = () => {
@@ -203,7 +206,9 @@ export async function backUpWith(
   } finally {
     unsubscribe();
     settled.abort();
-    // After a timeout this also retires the pass still running.
-    await handoffBackupSession("builderlab", null, send);
+    // A legacy timeout also retires its pass. The FI owner remains responsible
+    // for its bounded upload and session lifetime, including after this wait.
+    if (typeof credential === "string")
+      await handoffBackupSession("builderlab", null, send);
   }
 }

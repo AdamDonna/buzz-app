@@ -13,6 +13,8 @@ export function ConnectChoice({
   onConnect,
   onImport,
   onBack,
+  requiresSignIn = false,
+  signInOrigin,
 }: {
   /** The found community's host, as the find page shows it. */
   host: string;
@@ -22,6 +24,8 @@ export function ConnectChoice({
   onImport: () => void;
   /** Return to the landing with the address kept. */
   onBack: () => void;
+  requiresSignIn?: boolean;
+  signInOrigin?: string | undefined;
 }) {
   return (
     <>
@@ -39,8 +43,15 @@ export function ConnectChoice({
           {host}
         </p>
         <p className="mt-2 text-body text-subtle">
-          Buzz relies on a key for your identity.
+          {requiresSignIn
+            ? "This community requires account sign-in, including when you use an existing key. Buzz keeps that key."
+            : "Buzz relies on a key for your identity."}
         </p>
+        {signInOrigin && (
+          <p className="mt-2 break-all text-body text-subtle">
+            Sign in at {signInOrigin}.
+          </p>
+        )}
       </div>
       <div className="flex flex-col gap-3">
         <Button variant="prominent" size="lg" onClick={onConnect}>

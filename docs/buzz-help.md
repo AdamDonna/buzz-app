@@ -41,6 +41,12 @@ the interface unless an available tool actually supports that action.
   unavailable until you sign in. Sign-in, sign-out and when the current
   sign-in ends also live under
   **Settings → Buzz → Identity → Organization sign-in**.
+- A community may require account sign-in even when you already have a key.
+  Sign-in keeps that key. If the account is linked to another identity, review
+  the link or choose **Sign in with another account**; Buzz does not replace it
+  automatically. A build without authority configured for that exact community
+  needs the administrator's supported build. Sign-in alone does not grant
+  community membership or require joining a sponsor's billing workspace.
 - A community invite or address connects someone to a community; creating an
   identity alone does not grant membership. The same identity can be used in
   more than one community.

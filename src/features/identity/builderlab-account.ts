@@ -13,6 +13,7 @@ import {
 } from "../../bundled/builderlab/communities/api";
 import { enteredRelayOrigin, relayAddress } from "../communities/destination";
 import type { Host, HostResponse } from "../host/service";
+import type { BuilderlabSession } from "../../bundled/builderlab/session";
 import { BackupError, backUpWith } from "./backup";
 import type { BackupFailureKind } from "./backup-failure";
 import type { FirstRunAccountSeed } from "./first-run-seed";
@@ -338,6 +339,33 @@ export function builderlabAccount(
       },
       body: JSON.stringify(body),
     });
+  return accountFromRequests(portal, post, identity, credential.value);
+}
+
+/** Same account contract through the existing native session, without a renderer token. */
+export function builderlabSessionAccount(
+  session: BuilderlabSession,
+  identity: BackupIdentity,
+  federated: string,
+): FirstRunAccount {
+  const credential = session.credential();
+  const portal = new URL(oauthTarget()).origin;
+  const post = (path: string, body: object = {}) =>
+    session.request(credential, {
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: portal },
+      body: JSON.stringify(body),
+    });
+  return accountFromRequests(portal, post, identity, { federated });
+}
+
+function accountFromRequests(
+  portal: string,
+  post: (path: string, body?: object) => Promise<HostResponse>,
+  identity: BackupIdentity,
+  credential: string | Readonly<{ federated: string }>,
+): FirstRunAccount {
   /**
    * One POST; `read` turns the parsed reply (null when not linked) into the
    * answer. Any refusal of the answer is logged in development with the
@@ -393,7 +421,9 @@ export function builderlabAccount(
     linkedKey,
     async bind(pubkey) {
       // Re-running after a failure must not meet 409 `pubkey_already_bound`.
-      if ((await linkedKey()) === pubkey) return;
+      const bound = await linkedKey();
+      if (bound === pubkey) return;
+      if (bound) throw new Error(OTHER_KEY);
       const step = "account link";
       const fallback = "Could not link your key to this Builderlab account.";
       // The challenge refuses only with 403 `unauthorized` or `invalid_origin`,
@@ -505,7 +535,7 @@ export function builderlabAccount(
         { community_url: relayAddress(url) },
       );
     },
-    backUp: (pubkey) => backUpWith(identity, pubkey, credential.value),
+    backUp: (pubkey) => backUpWith(identity, pubkey, credential),
     // Backup routes answer plain text, not the card's reply shape, so only
     // the status and a 2xx body are read.
     async backupStatus() {

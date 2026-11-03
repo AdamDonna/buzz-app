@@ -352,6 +352,7 @@ const BUILDERLAB_FI_ROUTES: &[&str] = &[
     "v1/buzz/nostr-identities/delete",
     "v1/buzz/nostr-identities/challenge",
     "v1/buzz/nostr-identities/verify",
+    "v1/buzz/nsec-backups/status",
     "v1/buzz/communities/list",
     "v1/buzz/communities/availability",
     "v1/buzz/communities",

@@ -53,14 +53,69 @@ function Action({
     identity.snapshot,
   );
   const [failure, setFailure] = useState("");
+  const [switching, setSwitching] = useState(false);
   const refusal = error || state.failure || "";
-  if (/binding[-_]mismatch/.test(refusal))
+  const signIn = async (differentAccount = false) => {
+    setFailure("");
+    setSwitching(differentAccount);
+    try {
+      if (differentAccount) await identity.signOut();
+      const next = await identity.signIn();
+      if (next.status === "signed-in") retry();
+    } catch (error) {
+      setFailure(
+        error instanceof Error ? error.message : "Sign-in unavailable",
+      );
+    } finally {
+      setSwitching(false);
+    }
+  };
+  if (/not configured for this community/.test(refusal))
     return (
       <p role="alert" className="text-body-sm text-danger">
-        This account is linked to a different Buzz identity. Open Settings →
-        Builderlab hosting to review the existing identity link. Keep this key
-        until you have reviewed the link.
+        This Buzz build has no sign-in authority configured for this community.
+        Ask its administrator for a build configured for this exact host. Your
+        key is kept.
       </p>
+    );
+  if (/federated community discovery/i.test(refusal))
+    return (
+      <p role="alert" className="text-body-sm text-danger">
+        Buzz couldn’t confirm this community’s sign-in requirements. Check your
+        connection and retry. If it keeps happening, ask its administrator for a
+        supported build.
+      </p>
+    );
+  if (/binding[-_]mismatch/.test(refusal))
+    return (
+      <>
+        <p role="alert" className="text-body-sm text-danger">
+          This account is linked to a different Buzz identity. Open Settings →
+          Builderlab hosting to review the existing identity link. Keep this key
+          until you have reviewed the link.
+        </p>
+        {state.authority && (
+          <Button
+            disabled={switching && state.status !== "signing-in"}
+            onClick={() => {
+              if (state.status === "signing-in")
+                void identity
+                  .cancelSignIn()
+                  .catch(() => setFailure("sign-in-canceled"));
+              else void signIn(true);
+            }}
+          >
+            {state.status === "signing-in"
+              ? "Cancel sign-in"
+              : "Sign in with another account"}
+          </Button>
+        )}
+        {failure && (
+          <p role="alert" className="text-body-sm text-danger">
+            {recoveryMessage(failure)}
+          </p>
+        )}
+      </>
     );
   if (/authorization[-_]denied/.test(refusal))
     return (
@@ -89,14 +144,11 @@ function Action({
   return (
     <>
       <Button
+        disabled={switching}
         onClick={() => {
           setFailure("");
           const operation =
-            state.status === "signing-in"
-              ? identity.cancelSignIn()
-              : identity.signIn().then((next) => {
-                  if (next.status === "signed-in") retry();
-                });
+            state.status === "signing-in" ? identity.cancelSignIn() : signIn();
           void operation.catch((error: unknown) =>
             setFailure(
               error instanceof Error ? error.message : "Sign-in unavailable",

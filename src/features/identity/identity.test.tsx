@@ -32,6 +32,7 @@ import { IdentitySetup } from "./IdentitySetup";
 import { PrivateKey } from "./PrivateKey";
 import { SignOutDialog, WIPE_PHRASE } from "./SignOut";
 import { Welcome } from "./Welcome";
+import { federatedFixture } from "../federated-identity/testing";
 import type { Credential } from "../../bundled/builderlab/oauth/browser";
 import { BackupError, type BackupStatus } from "./backup";
 import {
@@ -75,6 +76,126 @@ const credential: Credential = {
   },
 };
 const welcomeHeading = () => screen.getByRole("heading", { name: "Buzz" });
+
+it.each([null, owned.pubkey])(
+  "FI first launch checks account binding %s before creating or importing a key",
+  async (linked) => {
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    const h = federatedFixture();
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "identity_restore") return null;
+      if (command === "identity_legacy_available") return false;
+      if (command === "nsec_backup_state")
+        return { seq: 1, pass: 0, builderlab: false, status: "idle" };
+      if (
+        command === "nsec_backup_watch" ||
+        command === "federated_identity_register" ||
+        command === "federated_identity_unregister"
+      )
+        return;
+      if (command === "federated_identity_request") {
+        const path = (args as { request?: { path?: string } } | undefined)
+          ?.request?.path;
+        const body = path?.endsWith("auth/me")
+          ? { subject: "account", email: "person@example.com" }
+          : path?.endsWith("nostr-identities/current")
+            ? { identity: linked ? { pubkey_hex: linked } : null }
+            : path?.endsWith("known-communities/list")
+              ? { communities: [] }
+              : undefined;
+        if (body)
+          return { status: 200, headers: {}, body: JSON.stringify(body) };
+      }
+      throw new Error(`Unexpected native command ${command}`);
+    });
+    const identity = createIdentity();
+    const view = render(
+      <Welcome
+        identity={identity}
+        communities={noJoin}
+        invites={invites}
+        federatedIdentity={h.service}
+      >
+        <p>App open</p>
+      </Welcome>,
+    );
+    try {
+      await userEvent
+        .setup()
+        .click(await screen.findByRole("button", { name: SIGN_IN }));
+      expect(
+        await screen.findByRole("heading", {
+          name: linked ? "Welcome back" : "Set up your key",
+        }),
+      ).toBeVisible();
+      expect(
+        screen.getByText("Signed in as person@example.com."),
+      ).toBeVisible();
+      if (linked) {
+        expect(screen.getByText(npubEncode(linked))).toBeVisible();
+        expect(
+          screen.queryByRole("button", { name: "Create my key" }),
+        ).toBeNull();
+      }
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command]) =>
+              command === "identity_create" ||
+              command === "identity_import" ||
+              command === "plugin_host_request",
+          ),
+      ).toBe(false);
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Use a different account" }));
+      expect(h.service.signOut).toHaveBeenCalledOnce();
+      expect(
+        await screen.findByRole("button", { name: SIGN_IN }),
+      ).toBeVisible();
+    } finally {
+      view.unmount();
+      identity.dispose();
+    }
+  },
+);
+
+it("FI Welcome leaves a saved Nostr identity in place and performs no first-run account requests", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "identity_restore") return owned.pubkey;
+    throw new Error(`Unexpected native command ${command}`);
+  });
+  const identity = createIdentity();
+  const h = federatedFixture();
+  h.publish({ status: "signed-in" });
+  const view = render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      federatedIdentity={h.service}
+    >
+      <p>App open</p>
+    </Welcome>,
+  );
+  try {
+    expect(await screen.findByText("App open")).toBeVisible();
+    expect(identity.snapshot()).toMatchObject({
+      status: "ready",
+      viewer: owned.pubkey,
+    });
+    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+      "identity_restore",
+    ]);
+    expect(h.service.signIn).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+    identity.dispose();
+  }
+});
 const connectButton = () => screen.getByRole("button", { name: SIGN_IN });
 function titleBar() {
   const header = document.querySelector("header");
