@@ -28,6 +28,8 @@ export function createVerifiedProfileDirectory(
   // Least recently ensured first.
   const wanted = new Set<string>();
   const checked = new Set<string>();
+  // Subjects whose head changed since the owner last took them.
+  const accepted = new Set<string>();
   type Batch = {
     stop(): void;
     subjects: readonly string[];
@@ -84,12 +86,14 @@ export function createVerifiedProfileDirectory(
           heads.clear();
         }
         // An equal refresh keeps the current object, so unchanged heads keep
-        // their projections.
+        // their projections. Re-enabling starts a new one: whatever was checked
+        // under the withdrawn authority must be checked again.
         if (
+          !enabled ||
           authority?.pubkey !== next.pubkey ||
           authority.multipleIssuers !== next.multipleIssuers
         )
-          authority = next;
+          authority = { ...next };
         enabled = true;
         schedule();
       }
@@ -133,6 +137,7 @@ export function createVerifiedProfileDirectory(
     const old = heads.peek(subject);
     if (newer(old, event) === old) return false;
     heads.set(subject, event);
+    accepted.add(subject);
     return true;
   }
   function start(
@@ -324,6 +329,18 @@ export function createVerifiedProfileDirectory(
       }
       // Stop the live syncs a shrink emptied now, not at the next ensure.
       schedule();
+    },
+    /** The current authority, or undefined while discovery disables marks. */
+    authority: (): VerifiedProfileAuthority | undefined =>
+      enabled ? authority : undefined,
+    /** Whether a head is held for `subject`: its snapshot entry, or its absence
+     * for an inactive or malformed head, is then the answer. */
+    holds: (subject: string) => enabled && !!heads.peek(subject),
+    /** Subjects whose head changed since the last call, held or since evicted. */
+    takeAccepted() {
+      const taken = [...accepted];
+      accepted.clear();
+      return taken;
     },
     snapshot(): ReadonlyMap<string, VerifiedProfile> {
       const currentAuthority = authority;

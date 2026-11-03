@@ -20,7 +20,7 @@ export function ordinaryUnread(
   const count = snapshot.observedCount ?? 0;
   return (
     snapshot.manual !== "none" ||
-    (dm ? count > 0 : !muted && count > (snapshot.attentionCount ?? 0))
+    (!muted && (dm ? count > 0 : count > (snapshot.attentionCount ?? 0)))
   );
 }
 

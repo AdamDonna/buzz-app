@@ -68,6 +68,7 @@ function setup(count = 1) {
       },
     },
     {
+      readStateFloor: () => 0,
       readStateStorage: {
         async update(change) {
           journal = readJournal(change(journal), viewer.pubkey);

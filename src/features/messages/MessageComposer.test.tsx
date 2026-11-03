@@ -8,7 +8,14 @@ import { createMemberAdditions } from "../channel-members/operations";
 import { addChannelMember } from "../channel-members/members";
 import "@testing-library/jest-dom/vitest";
 import { mentionHistory } from "./mention-history";
-import { composerDOMFixture, typedDraft } from "./composer-testing";
+import {
+  composerDOMFixture,
+  longMentionDraft,
+  longRichDraft,
+  pasteRichDraft,
+  placeholderPeople,
+  typedDraft,
+} from "./composer-testing";
 import { bindNames } from "../identity-names/service";
 import { createAgentDirectory } from "../identity-names/testing";
 import {
@@ -61,6 +68,8 @@ import { ConversationPresentation } from "../conversation/ConversationPresentati
 import { AgentsContext } from "../agents/react";
 import type { Agents } from "../agents/service";
 import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
+import { MessageMarkdown } from "./MessageMarkdown";
+import { InlineChip } from "../../shared/design-system/ui/InlineChip";
 import { MessageEditScope, useMessageEditScope } from "./MessageEditScope";
 import { registerMessageList } from "./message-selection";
 import { createRelaySession, type RelaySession } from "../relay/session";
@@ -89,6 +98,19 @@ import { ResourcePicker } from "../../bundled/repos/ResourcePicker";
 import { entityHref } from "../repos/routes";
 import type { Entity, RepositoryHome } from "../repos/destinations";
 import { HELPFUL_HINT_REST_MS } from "../../shared/design-system/ui/hoverIntent";
+
+// Pass-through spies: the real renderers run; tests count chip redraws.
+vi.mock("./MessageMarkdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./MessageMarkdown")>();
+  return { ...actual, MessageMarkdown: vi.fn(actual.MessageMarkdown) };
+});
+vi.mock("../../shared/design-system/ui/InlineChip", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../shared/design-system/ui/InlineChip")
+    >();
+  return { ...actual, InlineChip: vi.fn(actual.InlineChip) };
+});
 
 composerDOMFixture();
 
@@ -129,6 +151,16 @@ const resource = { uri: entityHref(resourceRoute), label: "Fix login" };
 
 beforeEach(() => {
   localStorage.clear();
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: {
+      request: async (
+        _name: string,
+        options: unknown,
+        callback?: (lock: unknown) => unknown,
+      ) => (callback ? callback({}) : (options as () => unknown)()),
+    },
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -141,6 +173,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   for (const owner of owners.splice(0)) owner.dispose();
+  Reflect.deleteProperty(navigator, "locks");
   vi.unstubAllGlobals();
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
@@ -303,6 +336,17 @@ function mount(
     },
     media: (url: string) => url,
     outbox: {
+      ready: async () => {},
+      recovery: async (key: string) =>
+        pending.find((item) => item.recovery?.key === key),
+      recover: async (
+        _id: string,
+        _recovery: unknown,
+        consume?: () => void,
+      ) => {
+        consume?.();
+      },
+      acknowledge: async () => {},
       observeDismiss: () => () => {},
       supports: () => true,
       snapshot: () => pending,
@@ -534,6 +578,56 @@ it("publishes typing for text edits but not caret-driven token expansion", () =>
   expect(send).not.toHaveBeenCalled();
   h.fill(`${text}x`);
   expect(send).toHaveBeenCalledTimes(1);
+});
+
+it("types into a long chip-heavy draft without redrawing its link chips", async () => {
+  const h = mount();
+  const renders = vi.mocked(MessageMarkdown);
+  renders.mockClear();
+  pasteRichDraft(h.input(), longRichDraft());
+  expect(h.input().querySelectorAll("[data-source]")).toHaveLength(45);
+  // The paste drew the chips, each as its link label.
+  expect(renders).toHaveBeenCalled();
+  const chip = h.input().querySelector<HTMLElement>("[data-source]");
+  expect(chip?.textContent).toBe(
+    chip?.dataset.source?.match(/^\[(.*)\]\(/)?.[1],
+  );
+  const text = h.input().value;
+  const middle = text.indexOf(" bravo", text.length / 2) + 1;
+  act(() => h.input().setSelectionRange(middle, middle));
+  renders.mockClear();
+  await h.user.keyboard("xyz");
+  // The composer re-renders per keystroke to save the draft; the chips'
+  // props (emoji, extensions, directory, members) must hold across it.
+  expect(renders).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue(
+    `${text.slice(0, middle)}xyz${text.slice(middle)}`,
+  );
+  expect(h.input().querySelectorAll("[data-source]")).toHaveLength(45);
+});
+
+it("types into a mention-heavy draft without redrawing its recipient chips", async () => {
+  const people = placeholderPeople(20);
+  writeView("scope", "draft:channel", longMentionDraft(people));
+  const h = mount();
+  const chips = () =>
+    [...h.input().querySelectorAll("[data-source] .inline-chip")].map((chip) =>
+      chip.getAttribute("aria-label"),
+    );
+  expect(chips()).toEqual(people.map((person) => `Person ${person.name}`));
+  const text = h.input().value;
+  act(() => {
+    h.input().focus();
+    h.input().setSelectionRange(text.length, text.length);
+  });
+  const renders = vi.mocked(InlineChip);
+  renders.mockClear();
+  await h.user.keyboard("xyz");
+  // Members, roster and archives feed the chip names; typing must not
+  // rebuild them.
+  expect(renders).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue(`${text}xyz`);
+  expect(chips()).toHaveLength(20);
 });
 
 it("retires reply controls immediately and preserves the draft when replying again", () => {
@@ -5612,7 +5706,13 @@ for (const threadRootId of [undefined, "f".repeat(64)])
         send: add,
         retry,
         ready: async () => {},
-        recover: async () => {},
+        recover: async (
+          _id: string,
+          _recovery: unknown,
+          consume?: () => void,
+        ) => {
+          consume?.();
+        },
         acknowledge: async () => {},
         snapshot: () => operations,
         subscribe: (fn: () => void) => {
@@ -5729,7 +5829,13 @@ it.each([false, true])(
         send: add,
         snapshot: () => operations,
         ready: async () => {},
-        recover: async () => {},
+        recover: async (
+          _id: string,
+          _recovery: unknown,
+          consume?: () => void,
+        ) => {
+          consume?.();
+        },
         acknowledge: async () => {},
       },
     });
@@ -11342,9 +11448,11 @@ it.each([
       fireEvent.click(
         screen.getByRole("button", { name: "Remove queued message" }),
       );
-      expect(
-        screen.queryByRole("region", { name: "Queued follow-ups" }),
-      ).toBeNull();
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("region", { name: "Queued follow-ups" }),
+        ).toBeNull(),
+      );
       expect(h.messages.send).not.toHaveBeenCalled();
       return;
     }
@@ -11354,6 +11462,9 @@ it.each([
         "@Honey Follow up",
         [first.pubkey],
         [],
+        expect.objectContaining({ key: expect.stringMatching(/^follow-up:/) }),
+        [],
+        {},
       ),
     );
     expect(h.input()).toHaveValue("Keep typing");

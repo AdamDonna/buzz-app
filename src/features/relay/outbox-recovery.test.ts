@@ -298,6 +298,140 @@ it("retires roster-confirmed member recovery without inventing a delivery receip
   expect(restored.publish).not.toHaveBeenCalled();
 });
 
+it("finds another window's durable recovery without importing or publishing its operation", async () => {
+  const store = memory();
+  const reader = setup(store);
+  await reader.outbox.ready();
+  const writer = setup(store);
+  await writer.outbox.ready();
+  const id = writer.outbox.send(input, recovery);
+  await vi.waitFor(() => expect(writer.publish).toHaveBeenCalledOnce());
+  expect(reader.outbox.snapshot()).toEqual([]);
+  expect(await reader.outbox.recovery(recovery.key)).toMatchObject({
+    event: { id },
+    recovery,
+  });
+  expect(reader.outbox.snapshot()).toEqual([]);
+  expect(reader.publish).not.toHaveBeenCalled();
+});
+
+it("forgets a dismissed hydrated receipt without saving it back to the shared journal", async () => {
+  const store = memory();
+  const original = setup(
+    store,
+    vi.fn(async () => {
+      throw new PublishRejected("Refused");
+    }),
+  );
+  await original.outbox.ready();
+  const id = original.outbox.send(input, recovery);
+  await vi.waitFor(() => expect(store.load()[0]?.delivery).toBe("failed"));
+  const save = vi.spyOn(store, "save");
+  const stale = setup(store);
+  await stale.outbox.ready();
+  await original.outbox.dismiss(id);
+  save.mockClear();
+  expect(await stale.outbox.recovery(recovery.key)).toBeUndefined();
+  expect(stale.outbox.snapshot()).toEqual([]);
+  expect(save).not.toHaveBeenCalled();
+  expect(store.load()).toEqual([]);
+});
+
+it("preserves locally owned intent when its first save fails", async () => {
+  const h = setup({
+    load: () => [],
+    save: async () => {
+      throw new Error("Disk full");
+    },
+  });
+  await h.outbox.ready();
+  const id = h.outbox.send(input, recovery);
+  await vi.waitFor(() =>
+    expect(h.outbox.snapshot()[0]?.delivery).toBe("failed"),
+  );
+  expect(await h.outbox.recovery(recovery.key)).toMatchObject({
+    event: { id },
+  });
+  expect(h.publish).not.toHaveBeenCalled();
+});
+
+it("returns newer shared ownership instead of a stale hydrated receipt", async () => {
+  const store = memory();
+  const original = setup(
+    store,
+    vi.fn(async () => {
+      throw new PublishRejected("Refused");
+    }),
+  );
+  await original.outbox.ready();
+  const old = original.outbox.send(input, recovery);
+  await vi.waitFor(() => expect(store.load()[0]?.delivery).toBe("failed"));
+  const stale = setup(store);
+  await stale.outbox.ready();
+  await original.outbox.dismiss(old);
+  const next = original.outbox.send(
+    { ...input, content: "New intent" },
+    recovery,
+  );
+  await vi.waitFor(() => expect(store.load()[0]?.event.id).toBe(next));
+  expect(await stale.outbox.recovery(recovery.key)).toMatchObject({
+    event: { id: next },
+  });
+  expect(stale.outbox.snapshot()).toEqual([]);
+  expect(stale.publish).not.toHaveBeenCalled();
+});
+
+it("keeps newly attached recovery ownership after a hydrated operation's save fails", async () => {
+  const store = memory();
+  const original = setup(
+    store,
+    vi.fn(async () => {
+      throw new PublishRejected("Refused");
+    }),
+  );
+  await original.outbox.ready();
+  const id = original.outbox.send(input);
+  await vi.waitFor(() => expect(store.load()[0]?.delivery).toBe("failed"));
+  const h = setup({
+    ...store,
+    save: async () => {
+      throw new Error("Disk full");
+    },
+  });
+  await h.outbox.ready();
+  await expect(h.outbox.recover(id, recovery)).rejects.toThrow("Disk full");
+  expect(await h.outbox.recovery(recovery.key)).toMatchObject({
+    event: { id },
+    recovery,
+  });
+});
+
+it("keeps a hydrated operation locally owned once Retry starts", async () => {
+  const store = memory();
+  const original = setup(
+    store,
+    vi.fn(async () => {
+      throw new PublishRejected("Refused");
+    }),
+  );
+  await original.outbox.ready();
+  const id = original.outbox.send(input, recovery);
+  await vi.waitFor(() => expect(store.load()[0]?.delivery).toBe("failed"));
+  const h = setup({
+    ...store,
+    save: async () => {
+      throw new Error("Disk full");
+    },
+  });
+  await h.outbox.ready();
+  await original.outbox.dismiss(id);
+  h.outbox.retry(id);
+  expect(await h.outbox.recovery(recovery.key)).toMatchObject({
+    event: { id },
+    recovery,
+  });
+});
+
 function legacyAddition(age = 901) {
   const event = signed(viewer, {
     kind: 9000,
@@ -514,6 +648,9 @@ it("keeps only the original recoverable intent when an atomic handoff cannot be 
 
 it("does not expose replacement intent to an earlier queued save", async () => {
   const { event, recovery, store } = legacyAddition();
+  // Attach recovery to an unowned receipt so both calls exercise queued saves.
+  // An already durable matching recovery deliberately performs no write.
+  store.save(store.load().map(({ recovery: _recovery, ...item }) => item));
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;

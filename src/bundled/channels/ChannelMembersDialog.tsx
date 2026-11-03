@@ -1,3 +1,7 @@
+import {
+  useVerifiedNames,
+  withVerifiedNames,
+} from "../../features/profiles/useVerifiedNames";
 import { useProfileGeneration } from "../../features/relay/react";
 import { archiveHides } from "../../features/relay/identity-archives";
 import { Button as BaseButton } from "@base-ui/react/button";
@@ -169,6 +173,7 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
   place,
   pubkey,
   name,
+  fullName,
   keyLabel,
   qualified,
   adding,
@@ -203,6 +208,8 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
   place: "chat" | "channel";
   pubkey: string;
   name: string;
+  /** A community-verified full name, shown beside the name. */
+  fullName: string | undefined;
   keyLabel: string | undefined;
   /** Another shown row has the same name; show the key so Add picks the right one. */
   qualified: boolean;
@@ -290,6 +297,11 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
               {name}
               {pubkey === session.viewer ? " (you)" : ""}
             </span>
+            {fullName && fullName !== name && (
+              <span className="min-w-0 truncate text-caption text-subtle">
+                {fullName}
+              </span>
+            )}
             {qualified && keyLabel && (
               <span className="shrink-0 text-caption text-subtle">
                 {keyLabel}
@@ -854,12 +866,26 @@ export function ChannelMembersDialog({
     query,
     canAddPeople || (largeRoster && !solo && channel?.channelType !== "dm"),
   );
+  // Searched people the community verified carry their verified names.
+  const searchVerified = useVerifiedNames(session, search.people, {
+    key: query,
+    settled: !search.loading,
+  });
+  const searchPeople = useMemo(
+    () => withVerifiedNames(search.people, searchVerified, profiles),
+    [search.people, searchVerified, profiles],
+  );
   const searchProfiles = new Map(
-    search.people.map((person) => [person.pubkey, person]),
+    searchPeople.map((person) => [person.pubkey, person]),
   );
   const members = new Set(channel?.members ?? []);
   const archived = new Set(archives.archived);
   const label = (key: string, fallback?: string) =>
+    // A name verified for this search is the label where the shared profiles
+    // show another, so the row reads as Command-K and mentions do.
+    (profiles.get(key)?.verified
+      ? undefined
+      : searchVerified.get(key)?.displayName) ??
     resolveName(
       key,
       profiles.get(key)?.name ??
@@ -872,9 +898,13 @@ export function ChannelMembersDialog({
   // Filters every roster identity using its currently available label.
   const matches = (key: string, name: string) =>
     !text ||
-    [searchProfiles.get(key)?.name, searchProfiles.get(key)?.username].some(
-      (name) => name && matchPerson(name, query),
-    ) ||
+    [
+      searchProfiles.get(key)?.name,
+      searchProfiles.get(key)?.username,
+      searchProfiles.get(key)?.fullName ??
+        profiles.get(key)?.verified?.fullName,
+      ...(searchProfiles.get(key)?.profileNames ?? []),
+    ].some((name) => name && matchPerson(name, query)) ||
     `${name} ${key} ${npubEncode(key)}`
       .toLowerCase()
       .includes(query.trim().toLowerCase());
@@ -1045,9 +1075,9 @@ export function ChannelMembersDialog({
       current = false;
     };
   }, [session, memberKey, profileKey, refresh, largeRoster, profileGeneration]);
-  const relayKeys = new Set(search.people.map((person) => person.pubkey));
+  const relayKeys = new Set(searchPeople.map((person) => person.pubkey));
   const candidates = new Map(
-    search.people.map((person) => [person.pubkey, person]),
+    searchPeople.map((person) => [person.pubkey, person]),
   );
   // Default suggestions use this client's agents; searches also include the
   // viewer's non-client inventory after people and other community agents.
@@ -1511,6 +1541,10 @@ export function ChannelMembersDialog({
         place={place}
         pubkey={key}
         name={name}
+        fullName={
+          profiles.get(key)?.verified?.fullName ??
+          searchProfiles.get(key)?.fullName
+        }
         keyLabel={keys.get(key)}
         qualified={(shownNames.get(name) ?? 0) > 1}
         adding={adding}

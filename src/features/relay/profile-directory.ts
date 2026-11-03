@@ -49,6 +49,20 @@ export interface ProfileQueries {
    * background reads. A view that requested names once and skips repeats must
    * request again after it moves. */
   evictions?(): number;
+  /** The community's current verified-profile authority, or undefined while
+   * it advertises none. Subscribers are notified when it changes. */
+  verifiedAuthority?(): VerifiedProfileAuthority | undefined;
+  /** Whether the shared verified directory holds a head for `pubkey`. Its
+   * profile's `verified`, present or not, then outranks a search's answer:
+   * a newer inactive or malformed head revokes an older name. */
+  verifiedHeld?(pubkey: string): boolean;
+  /** Moves with every change to the shared verified heads, including one that
+   * leaves every profile as it was (a first inactive head), and notifies. */
+  verifiedRevision?(): number;
+  /** Whether a `verifiedRevision()` after `revision` accepted a head for
+   * `pubkey`, even one the cache evicted before publishing it. Past what it
+   * remembers it answers yes, never no for a head it accepted. */
+  verifiedSince?(pubkey: string, revision: number): boolean;
 }
 
 /** Authors per profile read, the reader's largest page. A page that fills it
@@ -108,6 +122,11 @@ export function createProfileDirectory(
   // every profile. Coalesce them to one publish per macrotask so socket frames,
   // input and paint run between refolds instead of behind a burst.
   let verifiedFlush: ReturnType<typeof setTimeout> | undefined;
+  let verifiedRevision = 0;
+  // The revision that published each subject's latest accepted head, oldest
+  // first, so a search can tell a head the cache has already dropped.
+  const acceptedAt = new Map<string, number>();
+  let forgottenAt = 0;
   const verified =
     verification &&
     createVerifiedProfileDirectory(
@@ -116,6 +135,16 @@ export function createProfileDirectory(
       () => {
         verifiedFlush ??= setTimeout(() => {
           verifiedFlush = undefined;
+          verifiedRevision++;
+          for (const subject of verified?.takeAccepted() ?? []) {
+            acceptedAt.delete(subject);
+            acceptedAt.set(subject, verifiedRevision);
+          }
+          for (const [subject, revision] of acceptedAt) {
+            if (acceptedAt.size <= PROFILE_CACHE_MAX) break;
+            acceptedAt.delete(subject);
+            forgottenAt = revision;
+          }
           if (!closed) publish();
         });
       },
@@ -163,7 +192,11 @@ export function createProfileDirectory(
         if (!closed && settled.some(Boolean)) publish(true);
       });
   }
-  /** Notifies on display changes, and on winning-event changes for `event()` readers. */
+  let publishedAuthority: VerifiedProfileAuthority | undefined;
+  let publishedRevision = 0;
+  /** Notifies on display changes, on winning-event changes for `event()`
+   * readers, and on verified-authority and head changes for
+   * `verifiedAuthority()`, `verifiedHeld()` and `verifiedRevision()`. */
   function publish(headChanged = false) {
     folded = false;
     const next = foldProfiles([
@@ -242,7 +275,14 @@ export function createProfileDirectory(
       snapshot = next;
       if ([...unnamed].some((id) => next.has(id)))
         unnamed = new Set([...unnamed].filter((id) => !next.has(id)));
-    } else if (!headChanged) return;
+    } else if (
+      !headChanged &&
+      publishedAuthority === verified?.authority() &&
+      publishedRevision === verifiedRevision
+    )
+      return;
+    publishedAuthority = verified?.authority();
+    publishedRevision = verifiedRevision;
     for (const listener of listeners) notify(listener);
   }
   /** A completed read that returned no kind 0 is evidence too: the identity is known unnamed. */
@@ -456,6 +496,12 @@ export function createProfileDirectory(
     reserve,
     limit: () => limit,
     evictions: () => events.evictions + cancelled,
+    verifiedAuthority: () => verified?.authority(),
+    verifiedHeld: (pubkey: string) => !!verified?.holds(pubkey),
+    verifiedRevision: () => verifiedRevision,
+    verifiedSince: (pubkey: string, revision: number) =>
+      (acceptedAt.get(pubkey) ?? (revision < forgottenAt ? Infinity : 0)) >
+      revision,
     owner: (pubkey: string) => {
       const event = events.peek(pubkey);
       return event ? owners.get(event) : undefined;

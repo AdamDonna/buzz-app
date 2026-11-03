@@ -610,7 +610,13 @@ export function createUnread({
     const thread = rootId
       ? state.frontiers[`thread-activity:${rootId}`]
       : undefined;
-    const caughtUp = Math.max(frontier ?? -1, ordinary ?? -1, thread ?? -1);
+    // Past the retention window everything is read; overrides still force.
+    const caughtUp = Math.max(
+      frontier ?? -1,
+      ordinary ?? -1,
+      thread ?? -1,
+      reads.floor(),
+    );
     return event.created_at > caughtUp || !!forced;
   }
   /** An ordinary top-level message: the channel catch-up mark reads it. Its

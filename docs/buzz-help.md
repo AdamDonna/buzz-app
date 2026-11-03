@@ -64,6 +64,10 @@ the interface unless an available tool actually supports that action.
 - Where a community verifies names, the profile check appears beside the verified
   full name, or the verified username when no full name is supplied. The profile
   shows the issuer and verification time; cached verification has no check.
+  When you search for people (search, @mentions and adding channel members), a
+  verified person shows their verified name with the full name beside it.
+  Search finds people by their profile names; once found, a verified full name
+  also matches as you refine.
 
 ## Connect an external app
 
@@ -93,6 +97,10 @@ that agent in Buzz; they do not notify the external app through this connection.
   who reacted. Large lists scroll within the preview. With a keyboard, Tab into
   the list to scroll it; Escape dismisses the preview. Clicking the emoji adds
   or removes your reaction.
+- With **Voice Notes** enabled, use the microphone in the composer to record
+  and attach a voice note. Sending requires ffmpeg on the host computer. Sent
+  notes support playback and seeking; a note's duration appears once it
+  starts playing.
 - Long message bubbles use the available conversation width, stopping 32px
   before the opposite speaker’s avatar column. Short messages hug their text.
 - Hover over a message to reveal the capsule above it: add a reaction, reply,
@@ -127,7 +135,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   grants access.
 - **Mute** is available from a channel or DM's sidebar context menu. Once
   confirmed, a crossed-out bell appears immediately after its name. New messages
-  do not make muted channel names bold; muted DM names still become bold.
+  do not make muted channel or DM names bold.
   Mute suppresses notifications for messages that do not mention you; mentions can still notify
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
@@ -206,6 +214,23 @@ that agent in Buzz; they do not notify the external app through this connection.
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
+
+## Saved Solo follow-ups
+
+Messages queued behind a working agent are saved on this device for the current
+account and community. Saved text, recipients, uploaded attachments, references,
+and model choices survive a reload or restart; uploads still in progress are not
+queued yet.
+
+After restart, saved messages stay paused. **Send** sends a selected row, and
+**Remove** discards an unsent row. **Resume** restarts supported interrupted turns
+and unpauses saved follow-ups in those chats, sending them in order as turns finish.
+**Don’t resume** leaves them paused. Chats outside that recovery stay paused too.
+
+If another window may be sending a message, check the conversation before sending
+again. Remove is unavailable once delivery owns the message; use its delivery
+recovery controls instead. A save or recovery error keeps the draft or queued row
+available rather than silently discarding it.
 
 ## Choosing and customizing agents
 
