@@ -306,7 +306,8 @@ test.describe("pages inside one second", () => {
     page,
     app,
   }) => {
-    const pending = await reading(page, app, 1400);
+    // Leave room above the reader for the drag, even with short same-second pages.
+    const pending = await reading(page, app, 250);
     const box = await history(page).boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
