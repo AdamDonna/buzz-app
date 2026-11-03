@@ -9,6 +9,10 @@ import {
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import type { PanelOpening } from "../../features/panels/service";
+import {
+  profileHistoryActive,
+  profilePanelKey,
+} from "../../features/profiles/target";
 
 export type ConversationTab =
   | {
@@ -111,8 +115,15 @@ const empty: State = {
   thread: undefined,
   settings: undefined,
 };
+/** A version inspector changes the address within one profile, not its tab. */
+export const panelContentTarget = (entry: PanelOpening) =>
+  entry.panel.key === "buzz.profiles/profile" &&
+  profileHistoryActive(entry.target) &&
+  profilePanelKey(entry.target)
+    ? (entry.target.split("#")[0] as string)
+    : entry.target;
 export const panelTabId = (entry: PanelOpening) =>
-  `${entry.panel.key}:${entry.target}`;
+  `${entry.panel.key}:${panelContentTarget(entry)}`;
 /** Which pane a panel tab is in, given its state's main-pane ids. */
 export const entryPane = (
   mainEntries: readonly string[] | undefined,

@@ -58,8 +58,9 @@ visits. Closing Settings retires its sections and nested provider visits togethe
 Restoration opens controls, never an install, sign-in or save operation. This does
 not add new history visits to every existing confirmation or editor.
 
-Agent config version dialogs retain an expanded Previous versions list underneath,
-in both the Agents page and owned-agent profiles. Back returns to that list;
+Agent config version dialogs retain an expanded Previous versions list and its
+scroll position underneath, in both the Agents page and owned-agent profiles.
+Back returns to that list;
 Forward restores the selected version using the current config store. Close,
 Escape, outside dismissal and a confirmed revert retire that version's visits
 within the same account/community scope. Restoring a dialog never submits a revert.
