@@ -31,23 +31,30 @@ replay arbitrary failures or change the request's original session revision.
 ## Producer prerequisite and rollout
 
 [BUZZ-511](https://linear.app/squareup/issue/BUZZ-511) owns the discovery producer
-and specification. Its local, unvalidated checkpoint is
-`c7661f64302cad3208676deb6ed20fb43ea8208a`, pending the revised BUZZ-510 parent;
-it is not a published prerequisite release. The proposed contract text is
-`block/buzz/docs/community-auth-upgrades.md`, section **Request enforcement and
-discovery (BUZZ-511)**. It specifies the same host-specific boolean on root NIP-11
-and `/info`, `no-store`, generic 404 for a non-serving host, and 503 on policy lookup
-failure. `required=true` implies FI capability and a compatible descriptor, while
-optional hosts may still advertise FI capability. This is a Buzz extension to
-discovery, not a field already specified by NIP-FI itself.
+and specification, published as draft [block/buzz#8988](https://github.com/block/buzz/pull/8988).
+The consumer fixture `src/features/communities/discovery-fixture.ts` pins selected
+emitted fields to producer head `d3ae4935b11e207f0736833cd5220f207be359fd`:
 
-Pin the client fixtures to the final committed producer output after its handoff.
-Until that happens, the fixtures express the proposed contract and do not prove
-producer interoperability. This prerequisite and the live checks below block
-readiness; BUZZ-510's operator receipt alone is not a discovery producer.
+- [Normative Discovery contract](https://github.com/block/buzz/blob/d3ae4935b11e207f0736833cd5220f207be359fd/docs/nips/NIP-FI.md#L891).
+- [Executable host/mode matrix](https://github.com/block/buzz/blob/d3ae4935b11e207f0736833cd5220f207be359fd/crates/buzz-relay/src/nip_fi_policy/tests.rs#L247).
+- [Producer response](https://github.com/block/buzz/blob/d3ae4935b11e207f0736833cd5220f207be359fd/crates/buzz-relay/src/nip11.rs#L400).
 
-1. Finalize and publish the BUZZ-511 producer/specification on the revised parent,
-   then pin and validate fixtures from that exact head.
+The top-level boolean is stored requirement OR global Enforce. Capability remains
+mode.evaluates OR effective requirement: a free Shadow host advertises capability
+without requiring FI; a free Off host omits FI capability. Required output includes
+`core: "client-attached"`, freshness class `offline-jwt`, and a null residual upstream
+revocation bound. Neither capability nor policy grants issuer/account-origin trust.
+Root NIP-11 and `/info` agree and return `no-store`; unknown/non-serving hosts return
+404 and unavailable policy returns 503. Client policy remains separate from descriptor
+compatibility, including unsupported descriptors in negative fixtures.
+
+This pins a published draft, not a deployed producer. Producer review remains
+pending; update the pin if its contract changes. Production baseline verification
+and activation/live-fleet gates remain unresolved.
+Static fixtures do not establish live interoperability or completed activation.
+
+1. Finalize and release the BUZZ-511 producer/specification on the revised BUZZ-510
+   parent; revalidate the pinned fixture after any producer revision.
 2. Produce exact-host clients and verify discovery, signup/linking and recovery.
    With the field absent, both shipped and new clients retain legacy discovery
    and denial behavior. Shipped FI clients still use the existing capability

@@ -1,3 +1,4 @@
+import { requiredFiDiscovery } from "./discovery-fixture";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
@@ -47,11 +48,11 @@ it.each([
     const request = relay(() => ({
       "/": Response.json({
         ...buzz,
+        ...requiredFiDiscovery,
         requires_nip_fi: required,
-        limitation: { federated_identity: true },
         federated_identity: {
+          ...requiredFiDiscovery.federated_identity,
           core: compatible ? "client-attached" : "unsupported",
-          assertion_freshness: { class: "offline-jwt" },
           identityOrigin: "https://untrusted.invalid",
         },
       }),

@@ -1,3 +1,4 @@
+import { requiredFiDiscovery } from "../communities/discovery-fixture";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
@@ -1351,11 +1352,10 @@ it.each([
   async (fi, compatible) => {
     vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", fi ? "1" : "0");
     const relay = landingRelay(undefined, undefined, {
-      requires_nip_fi: true,
-      limitation: { federated_identity: true },
+      ...requiredFiDiscovery,
       federated_identity: {
+        ...requiredFiDiscovery.federated_identity,
         core: compatible ? "client-attached" : "unsupported",
-        assertion_freshness: { class: "offline-jwt" },
         identityOrigin: "https://untrusted.invalid",
       },
     });
@@ -1422,12 +1422,7 @@ it("a required hosted community does not automatically start legacy OAuth in a n
   vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "0");
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
   const relay = landingRelay("https://team.communities.buzz.xyz", undefined, {
-    requires_nip_fi: true,
-    limitation: { federated_identity: true },
-    federated_identity: {
-      core: "client-attached",
-      assertion_freshness: { class: "offline-jwt" },
-    },
+    ...requiredFiDiscovery,
   });
   const identity = createIdentity();
   const connect = vi.fn();

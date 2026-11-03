@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { expect, it, vi } from "vitest";
+import { requiredFiDiscovery } from "./discovery-fixture";
 import {
   FindCommunityError,
   findCommunity,
@@ -52,18 +53,24 @@ it.each([true, false, undefined])(
     const found = await find({
       "/": Response.json({
         ...buzz,
+        ...requiredFiDiscovery,
         requires_nip_fi: required,
-        limitation: { federated_identity: true },
-        federated_identity: {
-          core: "client-attached",
-          assertion_freshness: { class: "offline-jwt" },
-        },
       }),
       "/api/join-policy": html(404),
     });
     expect(found.requiresNipFi).toBe(required);
+    expect(found.nipFiCompatible).toBe(required ? true : undefined);
   },
 );
+
+it("accepts a free Off host without capability or a descriptor", async () => {
+  const found = await find({
+    "/": Response.json({ ...buzz, requires_nip_fi: false }),
+    "/api/join-policy": html(404),
+  });
+  expect(found.requiresNipFi).toBe(false);
+  expect(found.nipFiCompatible).toBeUndefined();
+});
 
 it.each([{ requires_nip_fi: "true" }, { requires_nip_fi: null }])(
   "gives actionable discovery failure for an invalid requirement %j",
