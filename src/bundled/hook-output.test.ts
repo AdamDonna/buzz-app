@@ -20,20 +20,23 @@ it("attributes native hook explanations without rewriting decisions or tool payl
   const original = structuredClone(output);
   expect(nativeHookOutput(output, "berd-call")).toEqual({
     ...output,
-    reason: "[berd-call] Reply first",
-    stopReason: "[berd-call] Stop here",
-    systemMessage: "[berd-call] Policy notice",
+    reason: "[plugin: berd-call] Reply first",
+    stopReason: "[plugin: berd-call] Stop here",
+    systemMessage: "[plugin: berd-call] Policy notice",
     hookSpecificOutput: {
       ...output.hookSpecificOutput,
-      permissionDecisionReason: "[berd-call] Reply first",
-      additionalContext: "[berd-call] Policy context",
-      decision: { behavior: "deny", message: "[berd-call] Permission denied" },
+      permissionDecisionReason: "[plugin: berd-call] Reply first",
+      additionalContext: "[plugin: berd-call] Policy context",
+      decision: {
+        behavior: "deny",
+        message: "[plugin: berd-call] Permission denied",
+      },
     },
   });
   expect(output).toEqual(original);
   expect(nativeHookOutput({ decision: "block" }, "policy")).toEqual({
     decision: "block",
-    reason: "[policy]",
+    reason: "[plugin: policy]",
   });
   expect(
     nativeHookOutput(
@@ -43,19 +46,22 @@ it("attributes native hook explanations without rewriting decisions or tool payl
   ).toEqual({
     hookSpecificOutput: {
       permissionDecision: "deny",
-      permissionDecisionReason: "[policy]",
+      permissionDecisionReason: "[plugin: policy]",
     },
   });
   expect(nativeHookOutput({ continue: false }, "policy")).toEqual({
     continue: false,
-    stopReason: "[policy]",
+    stopReason: "[plugin: policy]",
   });
   expect(nativeHookOutput({}, "policy")).toEqual({});
 });
 
 it("attributes Pi blocks and replacement output without changing arguments or image data", () => {
   expect(piHookOutput({ block: "Reply first" }, "berd-call")).toEqual({
-    block: "[berd-call] Reply first",
+    block: "[plugin: berd-call] Reply first",
+  });
+  expect(piHookOutput({ block: "" }, "policy")).toEqual({
+    block: "[plugin: policy]",
   });
   const args = { arguments: { text: "literal text", block: "literal block" } };
   expect(piHookOutput(args, "policy")).toEqual(args);
@@ -68,7 +74,7 @@ it("attributes Pi blocks and replacement output without changing arguments or im
   };
   expect(piHookOutput(output, "policy")).toEqual({
     ...output,
-    output: [{ type: "text", text: "[policy]" }, ...output.output],
+    output: [{ type: "text", text: "[plugin: policy]" }, ...output.output],
   });
   expect(piHookOutput(null, "policy")).toBeNull();
 });

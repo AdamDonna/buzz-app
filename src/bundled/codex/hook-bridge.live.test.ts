@@ -342,7 +342,7 @@ it.skipIf(!binary).each([false, true])(
       await completed;
       expect(observed, stderr).toContain("PreToolUse");
       expect(JSON.stringify(modelInputs)).toContain(
-        "[policy] Fixture blocks the command",
+        "[plugin: policy] Fixture blocks the command",
       );
       expect(observed, stderr).toContain("Stop");
       expect(denied, stderr).toContain("call_parent");

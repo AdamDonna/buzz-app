@@ -248,7 +248,7 @@ it.skipIf(!process.env.CLAUDE_FACADE_BINARY).each(["deny", "throw"])(
       expect(outcome).toMatchObject({ ok: true });
       expect(observed).toContain("PreToolUse");
       expect(JSON.stringify(modelInputs)).toContain(
-        "[fixture-policy] Fixture blocks the command",
+        "[plugin: fixture-policy] Fixture blocks the command",
       );
     } finally {
       await claude?.kill();
