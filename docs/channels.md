@@ -997,7 +997,7 @@ control for roster, verified roles, missing member names, shared agent choices,
 archive visibility, agent ownership/manager names and the active directory search. Errors stay near their data,
 without separate fetch-retry buttons. The current search text is retained; directory
 refresh starts at page one rather than mixing old pages with fresh results. Empty
-queries and view-only membership do not trigger directory searches. Cached names
+queries and DM membership do not trigger directory searches. Large channel rosters also use directory search when the viewer cannot add members. Cached names
 reuse the shared profile directory; failed/missing names are retried. The separate
 roster read remains usable when role verification fails. The refresh icon spins
 linearly until all these reads settle (except with reduced motion), but stays still
@@ -1032,7 +1032,7 @@ addition to the heading’s own top inset; invitation/recovery spacing is unchan
 The search composition reduces the shared header-to-body gap by `--space-2`
 (16px normally, 8px at the compact breakpoint) without affecting other dialogs.
 The member-list area flexes into the remaining dialog height and owns the only
-scrollbar, including search results and recovery messages. The role groups and
+scrollbar, including search results and recovery messages. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
 Not in this channel flow naturally one after the other; empty groups are hidden. Only the bordered viewport fills spare
 height, never a group inside it. The shared Dialog's opt-in flex body
 keeps the outer body non-scrolling; other dialogs are unchanged.
