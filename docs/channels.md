@@ -1615,6 +1615,7 @@ Image attachments reserve loading geometry from valid `imeta dim` metadata,
 bounded to 360px wide and 320px tall without enlarging the frame beyond the
 original dimensions. Missing/invalid dimensions, including metadata that would
 reserve less than one CSS pixel on either axis, use a 360:320 loading frame.
+When sending media, the app copies `dim` from the relay's upload result.
 After the original decodes, its natural dimensions replace metadata and the
 loading frame. Loaded previews follow the image's aspect ratio with no grey
 backing or letterboxing, bounded to 360px wide and 320px tall. Exceptionally thin
