@@ -1239,7 +1239,7 @@ test.each([
   ],
   ["/api/relay/archive", 4096, "bytes", "Archive request too large"],
   ["/api/relay/stream-presence", 256, "bytes", "Live control too large"],
-  ["/api/relay/stream", 300000, "bytes", "Live interests too large"],
+  ["/api/relay/stream", 64 * 1024 * 1024, "bytes", "Live interests too large"],
   ["/api/relay/query", 65536, "chars", "Filter body too large"],
   ["/api/relay/presence-snapshot", 20 * 1024, "bytes", "Filter body too large"],
 ])(
