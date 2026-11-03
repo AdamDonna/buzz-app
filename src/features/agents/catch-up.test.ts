@@ -5,6 +5,8 @@ import {
   CATCH_UP_PAGE,
   CATCH_UP_PAGES,
   catchUpKey,
+  finished,
+  HEARD_LIMIT,
   readCheckpoints,
   readWindow,
   splitLegacyCheckpoints,
@@ -247,4 +249,67 @@ it("keeps the old shared progress when the move cannot be saved", async () => {
   error.mockRestore();
   expect(storage.get(CATCH_UP_KEY)).toBe(shared);
   expect(readCheckpoints(storage)).toEqual({ [a]: { through: 100 } });
+});
+
+it("keeps an overlap open and finds an event stored late, once", async () => {
+  const events: Stored[] = [{ id: id(1), created_at: 480, content: "a" }];
+  const { read } = relay(events);
+  const first = await readWindow(all, { through: 100 }, 490, read);
+  if (!first) throw new Error("no window");
+  expect(first.events.map(({ content }) => content)).toEqual(["a"]);
+  const checkpoint = finished(first, [], 60);
+  expect(checkpoint).toEqual({
+    through: 430,
+    read: 490,
+    heard: [{ created_at: 480, id: id(1) }],
+  });
+  // Read through its upper already: nothing to read again.
+  expect(await readWindow(all, checkpoint, 490, read)).toBeUndefined();
+  // The relay stores one late, with a time behind the last read.
+  events.push({ id: id(2), created_at: 470, content: "late" });
+  const second = await readWindow(all, checkpoint, 520, read);
+  if (!second) throw new Error("no window");
+  expect(second.events.map(({ content }) => content)).toEqual(["late"]);
+  const next = finished(second, checkpoint.heard, 60);
+  expect(next).toEqual({
+    through: 460,
+    read: 520,
+    heard: [
+      { created_at: 470, id: id(2) },
+      { created_at: 480, id: id(1) },
+    ],
+  });
+  const third = await readWindow(all, next, 550, read);
+  expect(third?.events).toEqual([]);
+});
+
+it("shrinks the overlap to keep the newest heard events", () => {
+  const read = Array.from({ length: HEARD_LIMIT + 2 }, (_, i) => ({
+    id: id(i + 1),
+    created_at: 1000 + i,
+  }));
+  const upper = 1000 + HEARD_LIMIT + 2;
+  const checkpoint = finished(
+    {
+      events: [],
+      read,
+      upper,
+      checkpoint: { through: 0, upper },
+      skipped: false,
+    },
+    [],
+    10_000,
+  );
+  expect(checkpoint.through).toBe(1001);
+  expect(checkpoint.heard).toHaveLength(HEARD_LIMIT);
+  expect(checkpoint.heard?.[0]).toEqual({ created_at: 1002, id: id(3) });
+  expect(
+    finished({
+      events: [],
+      read,
+      upper,
+      checkpoint: { through: 0 },
+      skipped: false,
+    }),
+  ).toEqual({ through: upper });
 });

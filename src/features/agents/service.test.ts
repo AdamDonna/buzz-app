@@ -7686,9 +7686,11 @@ it.each([
       );
       await vi.advanceTimersByTimeAsync(20_000);
       await settle();
-      // Ticks do not pass over it.
+      // Ticks do not pass over it: it is read up to the connect, no further.
       expect(
-        Object.values(readCheckpoints(storage)).map(({ through }) => through),
+        Object.values(readCheckpoints(storage)).map(
+          ({ read, through }) => read ?? through,
+        ),
       ).toEqual([now + 1]);
       expect(heard(run)).toEqual([]);
       // A read a little behind now gives it, with no reconnect.
@@ -7701,6 +7703,71 @@ it.each([
     }
   },
 );
+
+it("finds an event the relay stores late with an older time, after a read passed that time, once", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    const { service, run, history, recover, storage, connect } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/notes": { ...chat["watch/chat"], kinds: [30023] },
+      },
+    });
+    await settle();
+    vi.setSystemTime((now + 1) * 1000);
+    recover();
+    await settle();
+    // A read while connected passes now + 30 or so, with nothing to give.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(heard(run)).toEqual([]);
+    // Then the relay stores one from a client whose clock is behind.
+    history.push(
+      eventDto(
+        signed(author, {
+          kind: 30023,
+          content: "stored late",
+          created_at: nowSeconds() - 55,
+          tags: [["h", channel]],
+        }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    await settle();
+    expect(heard(run)).toEqual(["stored late"]);
+    // Later reads cover its time again and give it no second time.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await settle();
+    expect(heard(run)).toEqual(["stored late"]);
+    // Nor after a restart, whose first read covers it again from what was
+    // saved.
+    connect(false);
+    const second = await setup({
+      storage,
+      identities: [echo],
+      history: [...history],
+    });
+    second.recover();
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(
+      vi
+        .mocked(second.session.read)
+        .mock.calls.some(([filters]) => filters[0]?.kinds?.includes(30023)),
+    ).toBe(true);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 it("reads what a route missed while it was down, though it comes back between reads", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
@@ -8016,12 +8083,9 @@ it("waits for a confirmed roster before catching up, saving no progress past wha
     confirm("saved", [viewer, bot]);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(heard(run)).toEqual(missed);
-    // 64 to a turn. The window is not read again; later reads, as live does
-    // not cover every channel, start past it.
+    // 64 to a turn. Later reads, as live does not cover every channel, read
+    // its newest again for events stored late, and give none twice.
     expect(run).toHaveBeenCalledTimes(5);
-    expect(
-      catchUpReads(session).filter(({ since }) => (since ?? 0) <= now + 400),
-    ).toHaveLength(reads);
   } finally {
     vi.useRealTimers();
   }

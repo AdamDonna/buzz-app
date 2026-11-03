@@ -78,9 +78,11 @@ import { type Pulses, pulseTyping } from "./typing";
 import {
   CATCH_UP_PAGES,
   delivered,
+  finished,
   HEARD_LIMIT,
   inStream,
   oldestFirst,
+  POLL_OVERLAP,
   readWindow,
   streamKey,
   streamsOf,
@@ -374,6 +376,11 @@ const coveredSince = (stream: Stream, live: ReadonlyMap<string, number>) =>
   stream.kinds.every((kind) => CHANNEL_KINDS.includes(kind))
     ? live.get(stream.channel)
     : undefined;
+
+/** How much of its last window each stream reads again: one live does not
+ * cover could still get an event the relay stores late. */
+const overlapOf = (live: ReadonlyMap<string, number>) => (stream: Stream) =>
+  coveredSince(stream, live) === undefined ? POLL_OVERLAP : 0;
 
 const seconds = () => Math.floor(Date.now() / 1000);
 const message = (error: unknown) =>
@@ -1120,14 +1127,22 @@ export class AgentRunners {
     };
     return true;
   }
-  /** Sets a stream's checkpoint, keeping what it heard live past it. */
+  /** Sets a stream's checkpoint, keeping what it heard live past it as well
+   * as what the checkpoint itself lists as heard. */
   private setCheckpoint(key: string, checkpoint: Checkpoint) {
-    const heard = this.checkpoints[key]?.heard?.filter((event) =>
+    const kept = (this.checkpoints[key]?.heard ?? []).filter((event) =>
       undelivered({ ...checkpoint, heard: [] }, event),
     );
+    const ids = new Set(checkpoint.heard?.map(({ id }) => id));
+    const heard = [
+      ...kept.filter(({ id }) => !ids.has(id)),
+      ...(checkpoint.heard ?? []),
+    ]
+      .sort(oldestFirst)
+      .slice(-HEARD_LIMIT);
     this.checkpoints = {
       ...this.checkpoints,
-      [key]: heard?.length ? { ...checkpoint, heard } : checkpoint,
+      [key]: heard.length ? { ...checkpoint, heard } : checkpoint,
     };
   }
   /** Keeps each agent's catch-up going: on start, and after each connect, its
@@ -1228,8 +1243,12 @@ export class AgentRunners {
         // Read up to the connect, and to when live began to cover it.
         const due = (stream: Stream) =>
           Math.max(since, coveredSince(stream, channels) ?? since);
-        const through = (stream: Stream) =>
-          this.checkpoints[stream.key]?.through ?? 0;
+        // How far it was read: one read with an overlap keeps its
+        // checkpoint behind that.
+        const through = (stream: Stream) => {
+          const checkpoint = this.checkpoints[stream.key];
+          return checkpoint?.read ?? checkpoint?.through ?? 0;
+        };
         const ticks = (stream: Stream) =>
           coveredSince(stream, channels) !== undefined &&
           through(stream) >= due(stream);
@@ -1267,6 +1286,7 @@ export class AgentRunners {
               now - CATCH_UP_POLL_LAG,
               behind.includes(stream) ? due(stream) : since,
             ),
+          overlapOf(channels),
         );
         continue;
       }
@@ -1279,7 +1299,13 @@ export class AgentRunners {
       };
       this.passes.set(runner.key, next);
       this.setCatching(runner, new Set(reading.map(({ slug }) => slug)));
-      void this.readMissed(runner, next, reading, since);
+      void this.readMissed(
+        runner,
+        next,
+        reading,
+        since,
+        overlapOf(live ?? new Map()),
+      );
     }
     // Once each catch-up is under way, so they are heard after what it reads.
     if (!held && this.heldForStartup) {
@@ -1381,13 +1407,15 @@ export class AgentRunners {
   /** Reads each stream's missed events through `upper`, or its own `upper`
    * when that is a function, a window at a time,
    * and delivers them oldest first, in batches, saving its checkpoint after
-   * each. A watch's streams are read one after another; once all of them are
-   * read, its live events that waited go on. */
+   * each. A stream with an `overlap` keeps that many seconds below its
+   * window open for its next read. A watch's streams are read one after
+   * another; once all of them are read, its live events that waited go on. */
   private async readMissed(
     runner: Runner,
     pass: Pass,
     streams: readonly Stream[],
     upper: number | ((stream: Stream) => number),
+    overlap: (stream: Stream) => number,
   ) {
     const signal = AbortSignal.any([
       pass.controller.signal,
@@ -1445,7 +1473,14 @@ export class AgentRunners {
               const last = events[index - 1] as RelayEvent;
               progress(stream.key, delivered(window.upper, last));
             }
-            progress(stream.key, delivered(window.upper));
+            progress(
+              stream.key,
+              finished(
+                window,
+                this.checkpoints[stream.key]?.heard,
+                overlap(stream),
+              ),
+            );
           }
         const catching = new Set(runner.catching);
         catching.delete(slug);
