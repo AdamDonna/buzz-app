@@ -350,7 +350,7 @@ function NoteCollection({
   const [author, setAuthor] = useState("");
   const [opened, setOpened] = useState<EventData[]>([]);
   const [selected, setSelected] = useState("");
-  const split = usePanelSplit(448, 320);
+  const split = usePanelSplit(session.scope, "notes", 448, 320);
   const origin = useRef<HTMLElement | null>(null);
   const refreshRef = useRef<HTMLButtonElement>(null);
   const preserveControlFocus = useCallback((node: HTMLButtonElement | null) => {

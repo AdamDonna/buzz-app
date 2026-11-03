@@ -103,6 +103,9 @@ the interface unless an available tool actually supports that action.
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
+- **Panel dividers**: the divider between a page and its side panel (such as
+  the Inbox list and a conversation) works the same way. Each page remembers
+  its own width within the same community and identity; double-click to reset.
 
 ## Choosing and customizing agents
 

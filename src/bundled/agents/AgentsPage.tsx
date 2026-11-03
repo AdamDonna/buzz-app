@@ -169,9 +169,9 @@ export function AgentsPage({
   navigation?: PageNavigation;
   navigator?: Navigation;
 }) {
-  const split = usePanelSplit(448, 320);
   const { snapshot, types } = useAgents(agents);
   const connection = useRelayConnection(relay);
+  const split = usePanelSplit(connection.scope, "agents", 448, 320);
   const channels = useChannelChoices(
     connection.status === "ready" ? connection.session.channels : undefined,
   );

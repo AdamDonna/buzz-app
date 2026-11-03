@@ -202,7 +202,7 @@ export function ChannelsPage({
   return (
     <section className={styles.root} aria-label="Channels">
       {session.status !== "ready" && !session.cached ? (
-        <PanelFrame companion={companion}>
+        <PanelFrame scope={session.scope} companion={companion}>
           {session.status === "disconnected" ? (
             <div className={styles.connect}>
               <div className={styles.connectIcon}>
@@ -1653,7 +1653,7 @@ function ChannelWorkspace({
         tab.id === selectedTab &&
         tab.channelId === currentId,
     );
-  const split = usePanelSplit();
+  const split = usePanelSplit(scope, "channels");
   // A routed thread can mount behind a collapsed pane, where it cannot take
   // focus, or already be selected, so its pane does not move focus. Once its
   // tab shows, hand it focus nothing else took.

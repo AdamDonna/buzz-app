@@ -90,7 +90,7 @@ export function WorkflowCommunity({
   const [deleteError, setDeleteError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [filter, setFilter] = useState<readonly string[]>([]);
-  const split = usePanelSplit(448, 320);
+  const split = usePanelSplit(session.scope, "workflows", 448, 320);
   const [detail, setDetail] = useState<{ key: string; name: string }>();
   const [detailTarget, setDetailTarget] = useState<HTMLElement | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
