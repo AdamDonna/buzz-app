@@ -55,7 +55,11 @@
   }
   .buzz-settings-group[data-layout="rows"]
     > .buzz-accordion[data-variant="settings"]
-    :is(.buzz-accordion-item, .buzz-accordion-trigger) {
+    :is(
+      .buzz-accordion-item,
+      .buzz-accordion-trigger,
+      .buzz-accordion-content
+    ) {
     border: 0;
     border-radius: 0;
   }
