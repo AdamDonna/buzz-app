@@ -495,6 +495,7 @@ it("loads Pi setup before a pending harness change is saved", async () => {
 });
 
 it("shows a bound agent's fixed workspace as read-only", async () => {
+  const save = vi.fn(async () => {});
   const { SettingsTab } = createTabs({
     setup: new PiSetup(fakePi()),
     runtime: fakeRuntime(),
@@ -504,18 +505,15 @@ it("shows a bound agent's fixed workspace as read-only", async () => {
       workspace: "/remote/task",
     }),
   });
-  render(
-    <SettingsTab
-      agent={AGENT}
-      save={vi.fn(async () => {})}
-      settingsSection="runtime"
-    />,
-  );
+  render(<SettingsTab agent={AGENT} save={save} settingsSection="runtime" />);
   const workspace = screen.getByRole("textbox", { name: "Workspace" });
   expect(workspace).toHaveValue("/remote/task");
   expect(workspace).toHaveAttribute("readonly");
   await userEvent.setup().type(workspace, "/other");
   expect(workspace).toHaveValue("/remote/task");
+  await choose("Conversations", "One conversation per channel");
+  await userEvent.setup().click(screen.getByRole("button", { name: "Save" }));
+  expect(save).toHaveBeenCalledWith({ ...AGENT.config, scope: "channel" });
 });
 
 it("shows the provider, model and thinking level in Identity, and the provider's setup in Settings", async () => {

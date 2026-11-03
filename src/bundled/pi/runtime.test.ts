@@ -411,6 +411,41 @@ it("disposes execution that resolves after the agent retires", async () => {
   }
 });
 
+it("retires a remote target before Pi sends ready", async () => {
+  const remote = fakeHost({}, { ready: false });
+  const spawned = deferred();
+  const execution: AgentExecution = {
+    binding: {
+      provider: "internal/remote",
+      target: "guest-1",
+      workspace: "/remote/task",
+    },
+    signal: new AbortController().signal,
+    spawn: async (program, options) => {
+      const process = await remote.spawn(program, options);
+      spawned.resolve();
+      return process;
+    },
+    readFile: vi.fn(),
+    resolveDirectory: vi.fn(),
+    dispose: vi.fn(async () => {
+      for (const process of remote.processes) process.exit(null);
+    }),
+  };
+  const f = setup({}, [], undefined, undefined, async () => execution);
+  const opening = f.runtime.places(self);
+  const failed = expect(opening).rejects.toThrow();
+  try {
+    await spawned.promise;
+    await f.runtime.retire(self);
+    await failed;
+    expect(execution.dispose).toHaveBeenCalledOnce();
+  } finally {
+    for (const process of remote.processes) process.exit(null);
+    f.runtime.dispose();
+  }
+});
+
 it.each(["Stop", "adapter unload"] as const)(
   "runs a bound Pi conversation with remote files, native Buzz tools and %s",
   async (ending) => {

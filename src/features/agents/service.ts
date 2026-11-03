@@ -4,7 +4,9 @@ import {
   type AgentExecution,
   type AgentExecutionBinding,
   type AgentExecutionProvider,
+  type AgentExecutionSession,
 } from "./execution";
+import type { JsonValue } from "../navigation/targets";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
 import { respond } from "../../buzz-mcp/rpc";
 import { connectMcp } from "../../buzz-mcp/connection";
@@ -181,7 +183,10 @@ import { readInterrupted, writeInterrupted } from "./interrupted";
 import { AttentionSources, type AttentionProducer } from "./attention-sources";
 import { type AddedTool, BUZZ_SESSION } from "../../buzz-mcp/session-tools";
 import { nameSoloChat } from "./solo-chat-name";
-import { forgetDefaultAgent } from "../solo/default-agent";
+import {
+  clearDeletedDefaultAgent,
+  forgetDefaultAgent,
+} from "../solo/default-agent";
 
 /** Where an agent runs: `here`, with its key on this device; `hosted`, by its
  * type's provider; or `elsewhere`, on another of the owner's devices. Only an
@@ -297,6 +302,8 @@ export type AgentViewProps<Config = unknown> = {
  * starting config, from `defaults`, to fill in. The app owns its key, name and
  * picture around it. */
 export type AgentCreateProps<Config = unknown> = {
+  /** The existing membership when this control appears on its library card. */
+  agentKey?: AgentKey;
   /** Model fields may use the compact card treatment in the library. */
   modelAppearance?: "glass-ghost";
   config: Config;
@@ -1018,14 +1025,18 @@ export type NewAgent = Readonly<{
 }>;
 export type Agents = {
   registerExecution(provider: AgentExecutionProvider): void;
-  /** Bind a dedicated agent before its first local runtime use. This is write-once. */
+  /** Select the adapter before first runtime use. This is write-once. */
   bindExecution(
     agent: AgentKey,
-    binding: Readonly<{ id: string; target: string; workspace: string }>,
+    binding: Readonly<{ id: string; config?: JsonValue }>,
   ): Promise<void>;
   executionBinding(agent: AgentKey): AgentExecutionBinding | undefined;
+  inspectExecution(agent: AgentKey): Promise<AgentExecutionBinding | undefined>;
   /** Only the agent's native harness can open its bound target. */
-  execution(agent: AgentKey): Promise<AgentExecution | undefined>;
+  execution(
+    agent: AgentKey,
+    session: AgentExecutionSession,
+  ): Promise<AgentExecution | undefined>;
   registerHook(hook: AgentHook): void;
   /** Dispatches hooks for this plugin's agent types in contribution order. */
   dispatchHook(
@@ -1494,7 +1505,7 @@ const wssOf = (origin: string) =>
 export class AgentsService extends Service implements Agents {
   private readonly executions;
   private async checkExecution(key: AgentKey, type: string) {
-    if (!this.executions.read(key)) return;
+    if (!(await this.executions.inspect(key))) return;
     if (!this.types().find((kind) => kind.key === type)?.execution)
       throw new Error(
         "This runtime does not support the saved execution binding",
@@ -1512,7 +1523,7 @@ export class AgentsService extends Service implements Agents {
   }
   async bindExecution(
     key: AgentKey,
-    binding: Readonly<{ id: string; target: string; workspace: string }>,
+    binding: Readonly<{ id: string; config?: JsonValue }>,
   ) {
     const member = this.liveMember(key);
     if (
@@ -1532,12 +1543,16 @@ export class AgentsService extends Service implements Agents {
     if (!this.liveMember(key)) throw new Error("No such agent on this device");
     return this.executions.read(key);
   }
-  async execution(key: AgentKey) {
+  async inspectExecution(key: AgentKey) {
+    if (!this.liveMember(key)) throw new Error("No such agent on this device");
+    return this.executions.inspect(key);
+  }
+  async execution(key: AgentKey, session: AgentExecutionSession) {
     const member = this.liveMember(key);
     if (!member) throw new Error("No such agent on this device");
     if (member.protection && (await this.executions.binding(key)))
       throw new Error("Plugin execution does not support protected agents");
-    return this.executions.open(this.ctx, key, member.type);
+    return this.executions.open(this.ctx, key, member.type, session);
   }
   private readonly hookContributions;
   registerHook(hook: AgentHook) {
@@ -3711,6 +3726,14 @@ export class AgentsService extends Service implements Agents {
     // one that is not stays listed here with Forget.
     const shown = this.selectedOrigin();
     const rows = this.liveRows(pubkey);
+    const roleBindings = [
+      ...new Map(
+        rows.flatMap((row) => {
+          const binding = this.bindingOf(row);
+          return binding ? [[binding.scope, binding] as const] : [];
+        }),
+      ).values(),
+    ];
     const unfinished = `${identity.name} isn't deleted yet and may still be in some channels. It stays stopped; Delete it again to finish.`;
     // Left its home, which keeps its config: that is archived first, so a
     // failure leaves it listed here to Delete again.
@@ -3754,6 +3777,17 @@ export class AgentsService extends Service implements Agents {
     // Drops its settings.
     await this.refresh();
     forgetDefaultAgent(pubkey);
+    const failed: string[] = [];
+    for (const binding of roleBindings)
+      try {
+        await clearDeletedDefaultAgent(binding.session, binding.scope, pubkey);
+      } catch {
+        failed.push(binding.origin);
+      }
+    if (failed.length)
+      throw new Error(
+        `${identity.name} was deleted, but Buzz couldn't clear it as your Bestie in ${failed.join(", ")}. Open Bestie to choose another.`,
+      );
   }
   /** Archives the config channel in the agent's home community, which it is
    * no longer a member of. Nothing to do when its config never synced. */
@@ -4017,7 +4051,13 @@ export class AgentsService extends Service implements Agents {
       await this.writeUnfinished(
         this.unfinished.filter((setup) => setup.pubkey !== pubkey),
       );
-      await handOnMainAgent(binding.session, pubkey);
+      try {
+        await handOnMainAgent(binding.session, pubkey);
+      } catch {
+        throw new Error(
+          `${agent.name} was deleted, but Buzz couldn't clear it as your Bestie. Open Bestie to choose another.`,
+        );
+      }
     });
   }
   private async exclusive<T>(pubkey: string, step: () => Promise<T>) {
@@ -5562,6 +5602,7 @@ async function leaveCommunity(
 async function handOnMainAgent(session: RelaySession, pubkey: string) {
   await session.agentChoices.refresh(true, { fresh: true });
   forgetDefaultAgent(pubkey);
+  await clearDeletedDefaultAgent(session, session.scope, pubkey);
 }
 /** The membership's community, as its owner knows it. */
 /** The origin of the agent's home community, as native saved it on the row:

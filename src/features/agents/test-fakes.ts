@@ -39,6 +39,7 @@ export function sharedFiles(initial: Record<string, string> = {}) {
         disk.set(key, value);
         return null;
       },
+      async (key) => disk.get(key) ?? null,
     );
   return { disk, open };
 }

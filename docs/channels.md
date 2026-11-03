@@ -997,7 +997,7 @@ control for roster, verified roles, missing member names, shared agent choices,
 archive visibility, agent ownership/manager names and the active directory search. Errors stay near their data,
 without separate fetch-retry buttons. The current search text is retained; directory
 refresh starts at page one rather than mixing old pages with fresh results. Empty
-queries and view-only membership do not trigger directory searches. Cached names
+queries and DM membership do not trigger directory searches. Large channel rosters also use directory search when the viewer cannot add members. Cached names
 reuse the shared profile directory; failed/missing names are retried. The separate
 roster read remains usable when role verification fails. The refresh icon spins
 linearly until all these reads settle (except with reduced motion), but stays still
@@ -1032,7 +1032,7 @@ addition to the heading’s own top inset; invitation/recovery spacing is unchan
 The search composition reduces the shared header-to-body gap by `--space-2`
 (16px normally, 8px at the compact breakpoint) without affecting other dialogs.
 The member-list area flexes into the remaining dialog height and owns the only
-scrollbar, including search results and recovery messages. The role groups and
+scrollbar, including search results and recovery messages. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
 Not in this channel flow naturally one after the other; empty groups are hidden. Only the bordered viewport fills spare
 height, never a group inside it. The shared Dialog's opt-in flex body
 keeps the outer body non-scrolling; other dialogs are unchanged.
@@ -1549,6 +1549,39 @@ options exposes local-only manual unread, explicit mark-through and sync recover
 Older synchronized hints may expire under bounded retention. Synced manual-unread
 and OS notifications are not enabled by this feature.
 
+### Keyboard navigation and reading
+
+The Channels plugin registers Slack-style shortcuts through the shared dispatcher, so
+each is listed in Settings → Shortcuts and can be rebound. All run while typing in the
+message editor and are ignored behind a dialog. None run in a terminal, which keeps
+Escape and Option+Arrow for the shell.
+
+- **Previous/next conversation** (Option+Up/Down) and **previous/next unread
+  conversation** (Option+Shift+Up/Down) step through the sidebar's rendered order,
+  Solo chats and team rows alike. `conversation-rows.ts` scans the sidebar's
+  `Subscribed channels` list, so sorting, sections, filters and the All/Solo/Team pane
+  are already applied; rows in a collapsed section or the inactive pane are skipped. A
+  row is unread when it shows the unread or thread-activity marker that
+  `SidebarUnread` also reads. The open conversation is the row marked `aria-current`.
+  Stepping does not wrap, and at either end it does nothing. When the open
+  conversation is not among the rows, next starts from the top and previous from the
+  bottom. A conversation listed in two sections is stepped over once. The shortcuts
+  are unavailable, leaving the key alone, while the sidebar renders no rows (for
+  example behind another page's own sidebar). Stepping activates the row's own
+  button, so it takes the exact path of a click: the saved selection, navigation
+  intent, session staleness guard and Solo's immediate activation. The list scrolls
+  just far enough to show the row, and nothing above it moves.
+- **Mark conversation as read** (Escape) uses the open conversation's
+  `unread.markChannelRead`, as the row menu's Mark as read does, with no success toast.
+  A failure shows an error toast. The page publishes it only for a joined,
+  non-preview conversation (not the new message page), and it is available only while
+  the connection has `frontier-sync`, the conversation shows unread and focus is not a
+  text field outside the composer. It never consumes a dismissal: the dispatcher skips
+  events something already handled, panels, tabs, completions and message edits stop
+  Escape themselves, and the narrow navigation drawer now prevents it when it closes.
+- **Mark all as read** (Shift+Escape) is registered by the shell; see
+  [shell design](shell-design.md).
+
 
 ### Attachment layout and scrolling
 
@@ -1582,6 +1615,7 @@ Image attachments reserve loading geometry from valid `imeta dim` metadata,
 bounded to 360px wide and 320px tall without enlarging the frame beyond the
 original dimensions. Missing/invalid dimensions, including metadata that would
 reserve less than one CSS pixel on either axis, use a 360:320 loading frame.
+When sending media, the app copies `dim` from the relay's upload result.
 After the original decodes, its natural dimensions replace metadata and the
 loading frame. Loaded previews follow the image's aspect ratio with no grey
 backing or letterboxing, bounded to 360px wide and 320px tall. Exceptionally thin

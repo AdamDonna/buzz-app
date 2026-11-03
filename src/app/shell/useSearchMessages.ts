@@ -1,6 +1,9 @@
 import { workflowOwner } from "../../features/relay/workflow-attribution";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { searchDebounce, searchable } from "../../shared/search-debounce";
+import {
+  messageSearchable,
+  searchDebounce,
+} from "../../shared/search-debounce";
 import { objectBody } from "../../features/relay/body";
 import type { RelaySession } from "../../features/relay/session";
 import type { ReadFilter } from "../../features/relay/events";
@@ -162,8 +165,9 @@ export function useSearchMessages(
   const unfinishedAuthor = /(?:^|\s)from:(@?)([^\s]*)$/i.exec(query);
   const canSearch =
     !(unfinishedAuthor && !isHexPubkey(unfinishedAuthor[2] ?? "")) &&
-    // A filter already narrows the read, so short text may refine it.
-    (hasFilters || searchable(parsed.text));
+    // A filter alone reads history; typed text is always a relay search,
+    // which answers a short last word with no hits, filter or not.
+    (parsed.text ? messageSearchable(parsed.text) : hasFilters);
   const newest = sort === "newest" && session.searchSort;
   // Without text the relay reads its ordinary newest-first history.
   const newestFirst = newest || !parsed.text;
@@ -363,8 +367,8 @@ export function useSearchMessages(
       ordinaryChannel(message.channelId),
     ),
     loading: canSearch && !unresolvedChannel && !current,
-    /** Typed text is too short to search and no filter narrows it. */
-    tooShort: !!parsed.text && !hasFilters && !searchable(parsed.text),
+    /** The last typed word is too short to search messages. */
+    tooShort: !!parsed.text && !messageSearchable(parsed.text),
     error: current?.error,
     ambiguousAuthor: current?.ambiguousAuthor,
     newestFirst,

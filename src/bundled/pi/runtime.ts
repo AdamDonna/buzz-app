@@ -416,8 +416,7 @@ export class PiRuntime {
     const remote = this.remote.get(pubkey);
     if (remote) {
       this.remote.delete(pubkey);
-      await remote.pi.dispose();
-      await remote.execution.dispose();
+      await Promise.all([remote.pi.dispose(), remote.execution.dispose()]);
     } else await this.pi.retire(pubkey);
   }
 

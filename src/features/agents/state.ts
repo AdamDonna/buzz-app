@@ -7,7 +7,8 @@
 // Storage reads are synchronous, so the app reads every file once before it
 // starts, and then keeps a copy in memory. Each write changes the copy at once
 // and is then saved, in order, to its key's file. Another program's later
-// writes reach this copy only when the app starts again.
+// writes reach this copy only when the app starts again. `read` reads saved
+// state without changing this copy.
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CONFIG_STORAGE_KEY } from "./agent-config";
 import { CATCH_UP_KEY, CATCH_UP_PREFIX } from "./catch-up";
@@ -40,6 +41,7 @@ export function isAgentKey(key: string) {
     // The sessions the bundled agent types save.
     key.startsWith("buzz.claude-code.sessions.") ||
     key.startsWith("buzz.codex.sessions.") ||
+    key.startsWith("buzz.pi.sessions.v1:") ||
     // The relay-synced copies of agent settings that starts use.
     key === CONFIG_STORAGE_KEY ||
     // The synced team rosters that starts use.
@@ -66,6 +68,11 @@ export function executionStorage(fallback: AgentStore): AgentStore {
   if (loaded) return loaded;
   return Object.freeze({
     ...fallback,
+    read: async () => {
+      throw new Error(
+        "Native agent storage is unavailable. Restart Buzz before running agents.",
+      );
+    },
     add: async () => {
       throw new Error(
         "Native agent storage is unavailable. Restart Buzz before running agents.",
@@ -75,7 +82,7 @@ export function executionStorage(fallback: AgentStore): AgentStore {
 }
 
 type Native = Readonly<{
-  load(): Promise<Record<string, string>>;
+  load(key?: string): Promise<Record<string, string>>;
   set(key: string, value: string | null): Promise<void>;
   /** Saves `value` only if no file holds `key`, in one step; resolves with
    * what the file held when one did, else null. */
@@ -83,7 +90,7 @@ type Native = Readonly<{
 }>;
 
 const native: Native = {
-  load: () => invoke("app_agent_state_load"),
+  load: (key) => invoke("app_agent_state_load", { key }),
   set: async (key, value) => {
     await invoke("app_agent_state_set", { key, value });
   },
@@ -117,6 +124,7 @@ export async function loadAgentStorage(
       new Map(Object.entries(await files.load())),
       files.set,
       files.add,
+      async (key) => (await files.load(key))[key] ?? null,
     );
     const moved: string[] = [];
     for (let index = 0; index < local.length; index++) {
@@ -181,6 +189,7 @@ export function fileStore(
     await save(key, value);
     return null;
   },
+  read?: (key: string) => Promise<string | null>,
 ): AgentStore {
   /** What each key's file holds, as far as this program saved it. */
   const durable = new Map(items);
@@ -223,6 +232,10 @@ export function fileStore(
   return Object.freeze({
     keys: () => [...items.keys()],
     get: (key: string) => items.get(key) ?? null,
+    read: async (key: string) => {
+      await pending.get(key);
+      return read ? read(key) : (durable.get(key) ?? null);
+    },
     set: async (key: string, value: string | null) => {
       if (value === null) items.delete(key);
       else items.set(key, value);

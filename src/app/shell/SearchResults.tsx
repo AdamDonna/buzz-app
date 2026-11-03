@@ -55,6 +55,7 @@ import {
 import { usePublicChannelSearch } from "../../features/channels/usePublicChannelSearch";
 import { type SearchSort, useSearchMessages } from "./useSearchMessages";
 import {
+  MESSAGE_SEARCH_MIN_CHARS,
   SEARCH_MIN_CHARS,
   searchDebounce,
   searchable,
@@ -1043,7 +1044,9 @@ export function SearchResults({
           ? directoryPending
             ? undefined
             : search.tooShort
-              ? `Type at least ${SEARCH_MIN_CHARS} characters to search messages.`
+              ? // Only the last word is matched as a prefix, so name it
+                // once earlier words make the whole query long enough.
+                `Type at least ${MESSAGE_SEARCH_MIN_CHARS} characters${/\s/.test(parsed.text.trim()) ? " in the last word" : ""} to search messages.`
               : "No matching messages in accessible conversations."
           : scopedChannelId
             ? "Type to search messages in this conversation."
@@ -1066,9 +1069,11 @@ export function SearchResults({
                 ? "Searching people…"
                 : authorSuggestions.lookupFailed
                   ? "People search is unavailable. Try a longer name."
-                  : authorNeedle
-                    ? "No matching people. Try a different name."
-                    : "Type a name to search people.",
+                  : authorNeedle && !searchable(authorNeedle)
+                    ? `Type at least ${SEARCH_MIN_CHARS} characters to search people.`
+                    : authorNeedle
+                      ? "No matching people. Try a different name."
+                      : "Type a name to search people.",
           },
           {
             label: "Agents",

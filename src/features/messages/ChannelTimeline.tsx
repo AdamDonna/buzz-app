@@ -38,6 +38,8 @@ import type { PageNavigation } from "../navigation/service";
 import { messageViewKey } from "./view-key";
 import { useKnownAgentPubkeys } from "../agents/use-known";
 import { JumpToLatestButton } from "./JumpToLatestButton";
+import { moveMessageSelection } from "./message-selection";
+import { useMessageSelection } from "./use-message-selection";
 
 // Native upward scrolling can start on a focused message link or button.
 // Inner scrollports own the key while they can move. At their top boundary,
@@ -325,6 +327,7 @@ function Timeline({
   );
   const scroller = useRef<HTMLElement>(null);
   const edge = useRef<HTMLDivElement>(null);
+  useMessageSelection(scroller, rows, queries);
   // Keep pagination space through EOF so removing its control cannot change
   // Virtua's start margin in the same measurement cycle as a prepend.
   const [reserveHistorySpace, setReserveHistorySpace] = useState(false);
@@ -660,12 +663,17 @@ function Timeline({
         : virtualizer.getItemOffset(index) - element.scrollTop;
     };
     let logical = logicalTop();
+    let offset = element.scrollTop;
     // A drag can carry the reader away from that row, and Virtua unmounts
     // rows the reader leaves. Hold the row they read instead, or correcting
     // for the old one would move the rows in view.
     const read = () => {
       const position = positionAt(element, anchor.id).anchor;
-      if (position) Object.assign(anchor, position);
+      // Keep the ideal Y through integer scrollTop rounding; only a handover
+      // adopts rendered geometry. Our own corrections contribute no user delta.
+      if (position?.id === anchor.id) anchor.y += offset - element.scrollTop;
+      else if (position) Object.assign(anchor, position);
+      offset = element.scrollTop;
       logical = logicalTop();
     };
     let height = list.style.height;
@@ -703,6 +711,7 @@ function Timeline({
           delta = next - logical;
         correctScrollTop(element, delta);
       }
+      offset = element.scrollTop;
       logical = logicalTop();
     });
     const release = (keepAnchor = false) => {
@@ -1099,7 +1108,10 @@ function Timeline({
         );
         touchY.current = next;
       }}
-      onKeyDown={(event) => gesture(scrollsHistoryUp(event))}
+      onKeyDown={(event) => {
+        moveMessageSelection(event);
+        gesture(scrollsHistoryUp(event));
+      }}
       onPointerDown={() => {
         pointerHeld.current = true;
         // A press can end outside history.
