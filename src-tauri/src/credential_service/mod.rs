@@ -14,6 +14,10 @@
 //! - It binds only `127.0.0.1`. `Host` must name the bound address, a request
 //!   that sends `Origin` (a web page) is refused, and nothing is logged.
 //! - Windows has no transport in version 1, so no token is issued there.
+mod advertise;
+mod keychain;
+mod owner;
+mod pairing;
 mod policy;
 // No token is issued on Windows, so there is nothing to test there.
 #[cfg(all(test, not(windows)))]
@@ -21,12 +25,16 @@ pub(crate) mod tests;
 
 use crate::app_agents::AppAgentHost;
 use crate::federated_identity::agent::Stamp;
+use crate::federated_identity::FederatedIdentity;
 use crate::host_mcp::header;
+use crate::identity::IdentityHost;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{self as headers, HeaderName};
 use hyper::{server::conn::http1, service::service_fn, Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
+pub(crate) use pairing::Notice;
+use pairing::Pairings;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -82,6 +90,12 @@ struct Inner {
     endpoint: OnceCell<String>,
     /// By the SHA-256 of their token, so a lookup reveals nothing of it.
     callers: Mutex<HashMap<[u8; 32], Caller>>,
+    /// Paired tools act as the human: its key and its NIP-FI session.
+    identity: IdentityHost,
+    session: FederatedIdentity,
+    pairings: Pairings,
+    /// Each paired token's rate, by its digest; only for this run.
+    owner_budgets: Mutex<HashMap<[u8; 32], [Budget; METHODS.len() + 1]>>,
 }
 struct Caller {
     agent: Option<Bound>,
@@ -134,13 +148,34 @@ impl Drop for Issued {
 }
 
 impl CredentialService {
-    pub(crate) fn new(agents: AppAgentHost, instance: String) -> Self {
+    pub(crate) fn new(
+        agents: AppAgentHost,
+        instance: String,
+        identity: IdentityHost,
+        session: FederatedIdentity,
+        keychain: Arc<dyn keychain::Keychain>,
+        notify: pairing::Notify,
+    ) -> Self {
         Self(Arc::new(Inner {
             agents,
             instance,
             endpoint: OnceCell::new(),
             callers: Mutex::default(),
+            identity,
+            session,
+            pairings: Pairings::new(keychain, notify),
+            owner_budgets: Mutex::default(),
         }))
+    }
+    /// The OS keychain item this instance's pairings live in.
+    pub(crate) fn keychain(instance: &str) -> Arc<dyn keychain::Keychain> {
+        #[cfg(not(test))]
+        return Arc::new(keychain::Os(keychain::account(instance)));
+        #[cfg(test)]
+        {
+            let _ = instance;
+            Arc::new(Arc::new(keychain::Memory::default()))
+        }
     }
     fn callers(&self) -> MutexGuard<'_, HashMap<[u8; 32], Caller>> {
         self.0
@@ -164,10 +199,7 @@ impl CredentialService {
             .get_or_try_init(|| self.listen())
             .await?
             .clone();
-        let mut secret = Zeroizing::new([0u8; 32]);
-        getrandom::fill(secret.as_mut()).map_err(|_| "Could not issue a Buzz credential")?;
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-        let token = Zeroizing::new(URL_SAFE_NO_PAD.encode(secret.as_ref()));
+        let token = new_token()?;
         let key = digest(&token);
         self.callers().insert(
             key,
@@ -175,10 +207,7 @@ impl CredentialService {
                 agent: None,
                 retirements: self.0.agents.caller_retirements(),
                 revoked: false,
-                budgets: [Budget {
-                    tokens: BURST,
-                    at: Instant::now(),
-                }; METHODS.len() + 1],
+                budgets: full_budgets(),
             },
         );
         let env = Zeroizing::new(json!({ "url": url, "token": &*token }).to_string());
@@ -250,6 +279,57 @@ impl CredentialService {
         })
     }
 
+    /// Starts the listener now, not at the first agent spawn, and advertises
+    /// it, so a command-line tool can pair with no agent running.
+    pub(crate) async fn start(&self) -> Result<(), String> {
+        if cfg!(windows) {
+            return Ok(());
+        }
+        let url = self
+            .0
+            .endpoint
+            .get_or_try_init(|| self.listen())
+            .await?
+            .clone();
+        #[cfg(unix)]
+        if let Some(home) = dirs::home_dir() {
+            advertise::write(&home, &self.0.instance, &url)
+                .map_err(|_| "Could not advertise the Buzz credential service")?;
+        }
+        Ok(())
+    }
+    /// Removes the advertisement, on quit.
+    pub(crate) fn stop(&self) {
+        if let Some(home) = dirs::home_dir() {
+            advertise::remove(&home, &self.0.instance);
+        }
+    }
+    /// Revokes every pairing when the human signs out of NIP-FI or changes
+    /// account. A restart under another human or account revokes them too,
+    /// since each is bound to who approved it.
+    pub(crate) fn watch_account(&self) {
+        let service = self.clone();
+        let mut changes = self.0.session.account_changes();
+        tauri::async_runtime::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let change = changes.borrow_and_update().clone();
+                if matches!(
+                    change,
+                    Some(crate::federated_identity::SessionChange::SignedOut)
+                        | Some(crate::federated_identity::SessionChange::AccountChanged)
+                ) {
+                    if let Err(error) = service.0.pairings.clear().await {
+                        eprintln!("Paired tools were not revoked: {error}");
+                    }
+                }
+            }
+        });
+    }
+    /// Revokes every pairing, durably, before Buzz signs out.
+    pub(crate) async fn clear_pairings(&self) -> Result<(), String> {
+        self.0.pairings.clear().await
+    }
+
     async fn listen(&self) -> Result<String, String> {
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .and_then(|listener| listener.set_nonblocking(true).map(|()| listener))
@@ -310,23 +390,7 @@ impl CredentialService {
     fn admit(&self, token: &str, method: &str) -> Result<Bound, Failure> {
         let mut callers = self.callers();
         let (caller, bound) = self.acting(&mut callers, token)?;
-        let budget = &mut caller.budgets[METHODS
-            .iter()
-            .position(|known| *known == method)
-            .unwrap_or(METHODS.len())];
-        let now = Instant::now();
-        budget.tokens =
-            (budget.tokens + now.duration_since(budget.at).as_secs_f64() * REFILL).min(BURST);
-        budget.at = now;
-        if budget.tokens < 1.0 {
-            let wait = ((1.0 - budget.tokens) / REFILL).ceil().max(1.0) as u64;
-            return Err(Failure {
-                code: "rate_limited",
-                message: "Too many requests".into(),
-                retry_after: Some(wait),
-            });
-        }
-        budget.tokens -= 1.0;
+        spend(&mut caller.budgets, method)?;
         Ok(bound)
     }
 
@@ -429,6 +493,43 @@ impl CredentialService {
             )),
         }
     }
+}
+
+/// Spends one request of `method` from `budgets`.
+fn spend(budgets: &mut [Budget; METHODS.len() + 1], method: &str) -> Result<(), Failure> {
+    let budget = &mut budgets[METHODS
+        .iter()
+        .position(|known| *known == method)
+        .unwrap_or(METHODS.len())];
+    let now = Instant::now();
+    budget.tokens =
+        (budget.tokens + now.duration_since(budget.at).as_secs_f64() * REFILL).min(BURST);
+    budget.at = now;
+    if budget.tokens < 1.0 {
+        let wait = ((1.0 - budget.tokens) / REFILL).ceil().max(1.0) as u64;
+        return Err(Failure {
+            code: "rate_limited",
+            message: "Too many requests".into(),
+            retry_after: Some(wait),
+        });
+    }
+    budget.tokens -= 1.0;
+    Ok(())
+}
+
+fn full_budgets() -> [Budget; METHODS.len() + 1] {
+    [Budget {
+        tokens: BURST,
+        at: Instant::now(),
+    }; METHODS.len() + 1]
+}
+
+/// A fresh 256-bit token, base64url.
+fn new_token() -> Result<Zeroizing<String>, String> {
+    let mut secret = Zeroizing::new([0u8; 32]);
+    getrandom::fill(secret.as_mut()).map_err(|_| "Could not issue a Buzz credential")?;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    Ok(Zeroizing::new(URL_SAFE_NO_PAD.encode(secret.as_ref())))
 }
 
 fn digest(token: &str) -> [u8; 32] {
@@ -601,9 +702,14 @@ async fn respond(
         }
         let message = message.map_err(|_| Failure::new("invalid_request", "Invalid request"))?;
         if message.method == "pair" {
-            return Err(Failure::new("unknown_method", "pair is not supported"));
+            return service.pair(&message.params).await;
         }
         let token = token.ok_or(Failure::revoked())?;
+        if !service.callers().contains_key(&digest(token)) {
+            return service
+                .owner_request(token, &message.method, &message.params)
+                .await;
+        }
         let caller = service.admit(token, &message.method)?;
         let result = service
             .call(&caller, &message.method, &message.params)
@@ -632,4 +738,28 @@ async fn respond(
             (failure.status(), reply)
         }
     }
+}
+
+#[tauri::command]
+pub(crate) fn credential_pair_answer(
+    service: tauri::State<'_, CredentialService>,
+    id: String,
+    approve: bool,
+) {
+    service.0.pairings.answer(&id, approve);
+}
+
+#[tauri::command]
+pub(crate) async fn credential_pairings_list(
+    service: tauri::State<'_, CredentialService>,
+) -> Result<Vec<pairing::Listed>, String> {
+    service.0.pairings.list().await
+}
+
+#[tauri::command]
+pub(crate) async fn credential_pairing_revoke(
+    service: tauri::State<'_, CredentialService>,
+    id: String,
+) -> Result<(), String> {
+    service.0.pairings.revoke(&id).await
 }

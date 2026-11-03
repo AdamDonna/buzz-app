@@ -622,6 +622,9 @@ async fn update_restart<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(
 }
 fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        credential_service::credential_pair_answer,
+        credential_service::credential_pairings_list,
+        credential_service::credential_pairing_revoke,
         window_state::onboarding_preserve_window,
         huddle_window_reset_incoming,
         huddle_window_open,
@@ -997,10 +1000,25 @@ pub fn run() {
                 !tauri::is_dev() && app.config().identifier == sign_out::legacy_identifier::CURRENT,
                 tokens,
             );
-            app.manage(credential_service::CredentialService::new(
+            let notices = app.handle().clone();
+            let credentials = credential_service::CredentialService::new(
                 agents.clone(),
                 app.config().identifier.clone(),
-            ));
+                app.state::<IdentityHost>().inner().clone(),
+                app.state::<federated_identity::FederatedIdentity>()
+                    .inner()
+                    .clone(),
+                credential_service::CredentialService::keychain(&app.config().identifier),
+                std::sync::Arc::new(move |notice| credential_notice(&notices, notice)),
+            );
+            credentials.watch_account();
+            let starting = credentials.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = starting.start().await {
+                    eprintln!("{error}");
+                }
+            });
+            app.manage(credentials);
             app.manage(agents);
             Ok(())
         });
@@ -1134,9 +1152,31 @@ pub fn run() {
         });
 }
 
+/// Tells the page about a pairing request, its end, or a change to the list.
+fn credential_notice<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    notice: credential_service::Notice,
+) {
+    use credential_service::Notice;
+    use tauri::Emitter;
+    let _ = match notice {
+        Notice::Ask(request) => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+            }
+            app.emit_to("main", "credential-pair-request", request)
+        }
+        Notice::Closed(id) => app.emit_to("main", "credential-pair-closed", id),
+        Notice::Changed => app.emit_to("main", "credential-pairings-changed", ()),
+    };
+}
+
 /// Best-effort native teardown when Buzz exits, from Quit or a fenced sign-out.
 pub(crate) fn shut_down<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     app.state::<NsecBackupHost>().close();
+    if let Some(credentials) = app.try_state::<credential_service::CredentialService>() {
+        credentials.stop();
+    }
     app.state::<federated_identity::FederatedIdentity>().close();
     app.state::<federated_identity::access::Registrations>()
         .clear();

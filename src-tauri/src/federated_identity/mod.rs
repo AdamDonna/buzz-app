@@ -333,6 +333,19 @@ impl FederatedIdentity {
     pub(crate) fn agent_grant_key(&self, owner: &str, agent: &str) -> String {
         store::agent_grant_key(&self.0.account, owner, agent)
     }
+    /// The account a local pairing is bound to: the secure-store account and
+    /// the signed-in email (`None` without NIP-FI or when signed out). `None`
+    /// overall while that is not settled yet (restoring, signing in, expired,
+    /// unavailable), so nothing is judged against a session still loading.
+    pub(crate) fn pairing_account(&self) -> Option<(String, Option<String>)> {
+        let state = self.state();
+        let email = match state.snapshot.status {
+            Status::SignedIn => state.snapshot.email.clone(),
+            Status::Unconfigured | Status::SignedOut if !state.closed => None,
+            _ => return None,
+        };
+        Some((self.0.account.clone(), email))
+    }
     /// How many times derived agent credentials have been retired this run.
     pub(crate) fn retirements(&self) -> u64 {
         self.state().retirements

@@ -882,6 +882,13 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
     };
     // Agents run as plugin host processes, which stop when Buzz exits.
     let shutdown = || async { Ok(()) };
+    // Paired tools act as this human. Should the keychain refuse, each
+    // pairing is still bound to this human key, so none acts after restart.
+    if let Some(credentials) = app.try_state::<crate::credential_service::CredentialService>() {
+        if let Err(error) = credentials.clear_pairings().await {
+            eprintln!("Paired tools were not revoked before sign-out: {error}");
+        }
+    }
     let identity = app.state::<crate::identity::IdentityHost>().inner().clone();
     let pairing = app.state::<crate::pairing::Pairing>().inner().clone();
     let backup = app

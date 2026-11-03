@@ -13,6 +13,8 @@ pub(crate) struct Fixture {
     pub(crate) agent: AppAgent,
     key: Secret,
     pub(crate) _dir: tempfile::TempDir,
+    pub(crate) keychain: Arc<super::keychain::Memory>,
+    pub(crate) notices: Arc<Mutex<Vec<Notice>>>,
 }
 
 pub(crate) fn fixture() -> Fixture {
@@ -52,14 +54,44 @@ fn fixture_with(
         Secret::parse(&key.hex(), key.pubkey()).unwrap(),
         tokens,
     );
+    let keychain = Arc::new(super::keychain::Memory::default());
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let service = service_over(
+        &host,
+        &identity,
+        &keychain,
+        &notices,
+        IdentityHost::fixture(),
+    );
     Fixture {
-        service: CredentialService::new(host.clone(), "xyz.block.buzz.test".into()),
+        service,
+        keychain,
+        notices,
         host,
         identity,
         agent,
         key,
         _dir: dir,
     }
+}
+
+/// A service as a new run of the app would make it, over `keychain`.
+pub(crate) fn service_over(
+    host: &AppAgentHost,
+    identity: &FederatedIdentity,
+    keychain: &Arc<super::keychain::Memory>,
+    notices: &Arc<Mutex<Vec<Notice>>>,
+    human: IdentityHost,
+) -> CredentialService {
+    let notices = notices.clone();
+    CredentialService::new(
+        host.clone(),
+        "xyz.block.buzz.test".into(),
+        human,
+        identity.clone(),
+        Arc::new(keychain.clone()),
+        Arc::new(move |notice| notices.lock().unwrap().push(notice)),
+    )
 }
 
 fn token(env: &str) -> String {
@@ -366,9 +398,6 @@ async fn versions_and_envelopes_are_checked_first() {
     let reply = ask(&fixture, &token, "sign_event", &[]).await;
     assert_eq!(error(&reply), (StatusCode::BAD_REQUEST, "invalid_request"));
     let reply = ask(&fixture, &token, "connect", &[]).await;
-    assert_eq!(error(&reply), (StatusCode::BAD_REQUEST, "unknown_method"));
-    // Pairing is not offered yet, with or without a token.
-    let reply = ask(&fixture, "", "pair", &["buzz", RELAY]).await;
     assert_eq!(error(&reply), (StatusCode::BAD_REQUEST, "unknown_method"));
     // Unknown fields are ignored.
     let body =
@@ -835,3 +864,5 @@ fn a_launch_token_reaches_no_child_the_app_spawns() {
     assert!(out.status.success(), "{stdout}");
     assert!(stdout.contains("child saw [unset]"), "{stdout}");
 }
+
+mod pairing;

@@ -329,3 +329,19 @@ pub(crate) fn reply(status: &str, body: &str) -> String {
         body.len()
     )
 }
+
+/// A configured session still restoring, as at launch; [`FederatedIdentity::finish_restore_for_test`] signs it in.
+pub(crate) fn restoring() -> FederatedIdentity {
+    tests::at_adapter(
+        Arc::new(tests::Memory::default()),
+        "http://127.0.0.1:9".into(),
+    )
+}
+impl FederatedIdentity {
+    /// The restore found the saved session, as `restore` does: signed in.
+    pub(crate) fn finish_restore_for_test(&self) {
+        let mut state = self.state();
+        self.install_session(&mut state, tests::record());
+        state.restored = true;
+    }
+}
