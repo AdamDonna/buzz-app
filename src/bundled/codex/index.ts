@@ -120,6 +120,14 @@ export const apply: PluginModule["apply"] = (ctx) => {
   } = createTabs(providerController, runtime, start, setup);
   ctx.agents.register<Config>({
     id: TYPE_ID,
+    voice: async (seat) => {
+      if (typeof RTCPeerConnection !== "function")
+        throw new Error("Voice is unsupported on this device");
+      await setup.installed(seat.signal);
+      const handle = ctx.agents.handle(seat.agent.key);
+      if (!handle) throw new Error("The Codex agent is not running");
+      return runtime.voice(seat, handle);
+    },
     hooks: { events: CODEX_HOOK_EVENTS },
     title: "Codex",
     icon: CodexLogoIcon,

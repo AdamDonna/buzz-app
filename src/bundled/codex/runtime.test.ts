@@ -1,3 +1,5 @@
+import { openVoice } from "./voice";
+import { huddleDescription } from "../../features/huddle/lifecycle";
 import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
@@ -7,7 +9,11 @@ import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
 import { localStore } from "../../features/agents/state";
 import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
-import type { Agent, Delivery } from "../../features/agents/service";
+import type {
+  Agent,
+  AgentVoiceSeat,
+  Delivery,
+} from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
 import type { EventData } from "../../features/relay/events";
 import { eventDto } from "../../features/relay/events";
@@ -22,6 +28,10 @@ import { config } from "./config";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { wake } from "../../features/agent-harness/wakes";
 import type { Wire } from "./rpc";
+
+vi.mock("./voice", () => ({
+  openVoice: vi.fn(async () => ({ input: vi.fn(), close: vi.fn() })),
+}));
 
 // The plugin registers only in the Mac/Linux desktop app.
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
@@ -271,12 +281,14 @@ function fixture(
   const memoryOpen = vi.fn(() => memoryView);
   // The owner's view, with no channel an own Solo chat unless a test does so.
   const soloChannels = new Set<string>();
+  const huddleChannels = new Set<string>();
   const snapshot = {
     status: "ready",
     scope: scope as string | undefined,
     viewer: owner,
     session: {
       workflowAuthority: undefined as string | undefined,
+      names: { resolve: () => "Owner" },
       profiles: {
         ensure: vi.fn(async () => {}),
         event: vi.fn(
@@ -292,6 +304,13 @@ function fixture(
             {
               id: "channel",
               name: "test",
+              ...(huddleChannels.has("channel")
+                ? {
+                    description: huddleDescription(
+                      "00000000-0000-0000-0000-000000000001",
+                    ),
+                  }
+                : {}),
               channelType: soloChannels.has("channel") ? "solo" : "stream",
             },
           ],
@@ -453,6 +472,7 @@ function fixture(
   let runPlugin: (delivery: Delivery) => Promise<void> = (delivery) =>
     runtime.run(delivery);
   let pluginDispose = () => {};
+  let voicePlugin: ((seat: AgentVoiceSeat) => Promise<unknown>) | undefined;
   if (plugin) {
     vi.stubGlobal("localStorage", local);
     vi.stubGlobal("navigator", { platform: "MacIntel" });
@@ -467,8 +487,12 @@ function fixture(
           listeners.push(listener);
           return () => {};
         },
-        register: (type: { run: typeof runPlugin }) => {
+        register: (type: {
+          run: typeof runPlugin;
+          voice: typeof voicePlugin;
+        }) => {
           runPlugin = type.run;
+          voicePlugin = type.voice;
         },
       },
       effect: (effect: () => () => void) => {
@@ -585,6 +609,10 @@ function fixture(
         listener();
       }),
     pluginDispose: () => pluginDispose(),
+    voicePlugin: (seat: AgentVoiceSeat) => {
+      if (!voicePlugin) throw new Error("Voice hook was not registered");
+      return voicePlugin(seat);
+    },
     spawn,
     adopted,
     process,
@@ -602,6 +630,7 @@ function fixture(
     interrupt,
     snapshot,
     soloChannels,
+    huddleChannels,
     exits,
   };
 }
@@ -4652,4 +4681,317 @@ it("keeps interrupting an idle existing conversation a no-op", async () => {
   await expect(
     f.runtime.session(agent, { channelId: "channel", root }, "interrupt"),
   ).resolves.toBeUndefined();
+});
+
+describe("voice seats", () => {
+  async function seated(overrides: Partial<AgentVoiceSeat> = {}) {
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture();
+    f.huddleChannels.add("channel");
+    const delivery = f.delivery("hello");
+    const abort = new AbortController();
+    const ended = vi.fn();
+    const seat = {
+      config: delivery.config,
+      transcript: vi.fn(async () => {}),
+      agent: { ...delivery.agent, config: delivery.config } as unknown as Agent,
+      conversation: { channelId: "channel" },
+      signal: abort.signal,
+      output: vi.fn(async () => {}),
+      ended,
+      ...overrides,
+    };
+    const connection = await f.runtime.voice(seat, delivery.agent);
+    return { ...f, initial: delivery, abort, ended, connection, seat };
+  }
+  it("uses resolved seat config and team instead of the local agent config", async () => {
+    const f = await seated({
+      config: { workspace: "/tmp/resolved-voice", model: "test-model" },
+      team: "<team>Resolved voice crew</team>",
+    });
+    const started = f.sent.find(
+      (wire) => wire.method === "thread/start",
+    )?.params;
+    expect(started).toMatchObject({
+      cwd: "/tmp/resolved-voice",
+      model: "test-model",
+    });
+    expect((started as Record<string, unknown>).developerInstructions).toEqual(
+      expect.stringContaining("Resolved voice crew"),
+    );
+    expect(vi.mocked(openVoice).mock.calls.at(-1)?.[5]).toContain(
+      "Resolved voice crew",
+    );
+    await f.connection.close();
+  });
+  it("preserves the mention path's synced-effort refusal", async () => {
+    await expect(
+      seated({
+        config: {
+          workspace: "/tmp/resolved-voice",
+          model: "test-model",
+          effort: "xhigh",
+        },
+        synced: { effort: "xhigh" },
+      }),
+    ).rejects.toThrow('synced effort "xhigh"');
+  });
+  it("adopts voice tools with owner mention authority and steers room mentions", async () => {
+    const f = await seated();
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "voice-1" } },
+    });
+    const result = await f.tool(
+      "send",
+      { text: "voice work", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(result?.result).toMatchObject({ success: true });
+    expect(f.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tags: [["h", "channel"]] }),
+      expect.any(Function),
+    );
+    await f.runtime.run(f.delivery("change that"));
+    await vi.waitFor(() =>
+      expect(f.sent.some((w) => w.method === "turn/steer")).toBe(true),
+    );
+    expect(f.starts()).toHaveLength(0);
+    const steer = f.sent.find((w) => w.method === "turn/steer");
+    expect(steer?.params).toMatchObject({
+      threadId: "thread-1",
+      expectedTurnId: "voice-1",
+    });
+    f.abort.abort();
+    await f.connection.close();
+    expect(f.sent.some((w) => w.method === "turn/interrupt")).toBe(true);
+    expect(f.sent.some((w) => w.method === "thread/unsubscribe")).toBe(true);
+    expect(f.process.end).not.toHaveBeenCalled();
+    const late = await f.tool(
+      "send",
+      { text: "late", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(late?.result).toMatchObject({ success: false });
+  });
+  it("posts only nonempty final transcripts without notifying or replying", async () => {
+    const f = await seated();
+    for (const [method, text] of [
+      ["thread/realtime/transcript/done", "hello @someone"],
+      ["thread/realtime/transcript/done", "  "],
+      ["item/completed", "duplicate"],
+    ] as const)
+      f.emit({ method, params: { threadId: "thread-1", role: "user", text } });
+    await vi.waitFor(() => expect(f.seat.transcript).toHaveBeenCalledTimes(1));
+    expect(f.seat.transcript).toHaveBeenCalledWith("owner", "hello @someone");
+    await f.connection.close();
+    f.emit({
+      method: "thread/realtime/transcript/done",
+      params: { threadId: "thread-1", role: "assistant", text: "late" },
+    });
+    expect(f.seat.transcript).toHaveBeenCalledTimes(1);
+  });
+  it("rejects unsupported devices at registration before opening media", async () => {
+    vi.stubGlobal("RTCPeerConnection", undefined);
+    const f = fixture([], undefined, true);
+    const d = f.delivery("hello");
+    vi.mocked(openVoice).mockClear();
+    await expect(
+      f.voicePlugin({
+        config: d.config,
+        transcript: vi.fn(async () => {}),
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: new AbortController().signal,
+        output: async () => {},
+        ended() {},
+      }),
+    ).rejects.toThrow("Voice is unsupported");
+    expect(openVoice).not.toHaveBeenCalled();
+  });
+  it("runs a mention arriving while the aborted seat is still closing", async () => {
+    const stopped = deferred<void>();
+    const closing = deferred<void>();
+    vi.mocked(openVoice).mockResolvedValueOnce({
+      input() {},
+      close: () => {
+        closing.resolve();
+        return stopped.promise;
+      },
+    });
+    const f = await seated();
+    f.abort.abort();
+    await closing.promise;
+    await f.runtime.run(f.delivery("after hangup"));
+    expect(f.starts()).toHaveLength(0);
+    stopped.resolve();
+    await f.connection.close();
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.complete(0, "DONE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalled());
+  });
+  it("keeps a running typed turn alive when its seat aborts", async () => {
+    vi.mocked(openVoice).mockImplementationOnce(async (rpc, threadId) => ({
+      input() {},
+      close: async () => {
+        await rpc.request("thread/realtime/stop", { threadId });
+      },
+    }));
+    const f = await seated();
+    await f.runtime.run(f.delivery("typed work"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.abort.abort();
+    expect(f.sent.some((wire) => wire.method === "thread/realtime/stop")).toBe(
+      true,
+    );
+    await expect(
+      f.runtime.voice(
+        { ...f.seat, signal: new AbortController().signal },
+        f.initial.agent,
+      ),
+    ).rejects.toThrow("already has a voice seat");
+    const result = await f.tool(
+      "send",
+      { text: "still working", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "turn-1" },
+    );
+    expect(result?.result).toMatchObject({ success: true });
+    expect(f.sent.some((wire) => wire.method === "turn/interrupt")).toBe(false);
+    f.complete(0, "DONE");
+    await f.connection.close();
+  });
+  it("does not let queued text overwrite a backend turn arriving during media open", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof openVoice>>>();
+    const entered = deferred<void>();
+    vi.mocked(openVoice).mockImplementationOnce(() => {
+      entered.resolve();
+      return pending.promise;
+    });
+    const f = fixture();
+    f.huddleChannels.add("channel");
+    const d = f.delivery("hello");
+    const opening = f.runtime.voice(
+      {
+        config: d.config,
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: new AbortController().signal,
+        async output() {},
+        async transcript() {},
+        ended() {},
+      },
+      d.agent,
+    );
+    await entered.promise;
+    await f.runtime.run(f.delivery("queued text"));
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "voice-1" } },
+    });
+    pending.resolve({ input() {}, close() {} });
+    const connection = await opening;
+    const result = await f.tool(
+      "send",
+      { text: "voice result", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-1" },
+    );
+    expect(result?.result).toMatchObject({ success: true });
+    expect(f.starts()).toHaveLength(0);
+    f.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "voice-1", status: "completed" },
+      },
+    });
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    f.complete(0, "DONE");
+    await connection.close();
+  });
+  it("closes a late media open after the seat was aborted", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof openVoice>>>();
+    const entered = deferred<void>();
+    vi.mocked(openVoice).mockImplementationOnce(() => {
+      entered.resolve();
+      return pending.promise;
+    });
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture();
+    const d = f.delivery("hello");
+    const abort = new AbortController();
+    const opening = f.runtime.voice(
+      {
+        config: d.config,
+        transcript: vi.fn(async () => {}),
+        agent: { ...d.agent, config: d.config } as unknown as Agent,
+        conversation: { channelId: "channel" },
+        signal: abort.signal,
+        output: async () => {},
+        ended() {},
+      },
+      d.agent,
+    );
+    await entered.promise;
+    abort.abort();
+    const close = vi.fn();
+    pending.resolve({ close, input() {} });
+    await expect(opening).rejects.toThrow();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+  it("rejects foreign turns and adopts consecutive backend turns before cleanup yields", async () => {
+    const f = await seated();
+    const notify = (method: string, id: string) =>
+      f.emit({
+        method,
+        params: { threadId: "thread-1", turn: { id, status: "completed" } },
+      });
+    notify("turn/started", "voice-1");
+    const wrong = await f.tool(
+      "send",
+      { text: "wrong", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "foreign" },
+    );
+    expect(wrong?.result).toMatchObject({ success: false });
+    notify("turn/completed", "voice-1");
+    notify("turn/started", "voice-2");
+    const right = await f.tool(
+      "send",
+      { text: "second", audience: "everyone" },
+      0,
+      { threadId: "thread-1", turnId: "voice-2" },
+    );
+    expect(right?.result).toMatchObject({ success: true });
+    notify("turn/completed", "voice-2");
+    await f.connection.close();
+    expect(f.publish).toHaveBeenCalledTimes(1);
+  });
+  it("refuses a protected agent before thread preparation", async () => {
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const f = fixture();
+    const d = f.delivery("hello");
+    await expect(
+      f.runtime.voice(
+        {
+          config: d.config,
+          async transcript() {},
+          agent: {
+            ...d.agent,
+            protection: {},
+            config: d.config,
+          } as unknown as Agent,
+          conversation: { channelId: "channel" },
+          signal: new AbortController().signal,
+          output: async () => {},
+          ended() {},
+        },
+        d.agent,
+      ),
+    ).rejects.toThrow("protection policy");
+    expect(f.spawn).not.toHaveBeenCalled();
+  });
 });
