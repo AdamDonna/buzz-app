@@ -163,8 +163,31 @@ that agent in Buzz; they do not notify the external app through this connection.
   between pages set to three fingers (or two or three fingers). Two-finger
   scrolling does not navigate.
 - **Sharing a Solo chat** grants access to its conversation history, not only
-  the next message. Copying its link alone does not grant access. Check the
-  intended people and destination before changing access.
+  the next message. Its access dialog offers **View only** for community reading
+  or **Private** for people added to the chat. Public is not offered in
+  this UI; a Public policy set through another client appears as
+  **Public (existing)**. This is not protocol enforcement. View-only visitors
+  cannot post; existing members keep their roles. Returning to Private warns
+  about retained viewers unless verified roles show no Guests, including while
+  roles load or fail to load; remove them in People to end their access. Public
+  (existing) → Private also warns that joined members retain their access.
+  Public (existing) → View only confirms that existing
+  members keep their access. Agents the owner adds through
+  access search or a composer mention receive Bot access so they can reply,
+  including with a Guest admission default. Conversion to a channel offers
+  Private, View only and Public, starts from the chat's current access, and saves
+  the selected policy. Choosing Private during conversion also warns that people
+  who joined keep their access until removed in People. Opening a private chat to the community warns that its full
+  history and Canvas, including workspace folders and agent instructions, become
+  readable. View only retains Guest admission. Copying its link alone does not grant access. Check the intended people
+  and destination before changing access. If an older saved invitation granted
+  view-only access, remove that person in People and invite them again for
+  participation. For an older unresolved invitation, use **Retry** in Outbox
+  or add the person again if the receipt is already Seen. After its 15-minute
+  delivery window, Buzz verifies the original command and current membership
+  before allowing a fresh participation invitation; failed checks keep the original.
+  If the original invitation was applied and the person was later removed, Retry
+  clears the old row without re-adding them. Use **Add** in People to invite them again.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
