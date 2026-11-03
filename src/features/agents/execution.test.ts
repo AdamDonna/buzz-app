@@ -200,7 +200,7 @@ it("retires owned processes on adapter unload and never opens local execution fo
   const process = await execution.spawn("node");
   f.deactivate();
   expect(execution.signal.aborted).toBe(true);
-  await expect(process.write("prompt")).rejects.toThrow("stopped");
+  await expect(process.write("prompt")).rejects.toBe(execution.signal.reason);
   await expect(execution.readFile("result")).rejects.toThrow();
   await expect(
     f.registry.open(f.native, agent, harness, session),
@@ -221,7 +221,7 @@ it("kills a process that finishes starting after its adapter unloads", async () 
   const spawned = execution.spawn("node");
   f.deactivate();
   starting.resolve(f.process);
-  await expect(spawned).rejects.toThrow("stopped");
+  await expect(spawned).rejects.toBe(execution.signal.reason);
   expect(f.process.kill).toHaveBeenCalledOnce();
 });
 

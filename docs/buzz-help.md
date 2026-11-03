@@ -141,9 +141,11 @@ the interface unless an available tool actually supports that action.
   name in a conversation shows its profile, where **Settings → Instructions**
   offers the same edit. Model, workspace, and other runtime options depend on
   its type. Do not assume someone can edit another person's agent.
-- In the desktop preview, a plugin can run a dedicated Pi agent in a workspace
-  on another computer. Settings shows its saved workspace as read-only. If the
-  plugin is unavailable, the agent cannot run.
+- In the desktop preview, a plugin can run Pi sessions on another computer.
+  Each conversation session uses its own target. Later turns reuse that target;
+  **Start a new session** requests another one. The plugin manages workspaces,
+  credentials, and expired targets. If it cannot restore a session, Buzz shows
+  an error. It does not move that work to this computer.
 - An agent's name and picture identify it. Instructions shape its response
   style, tasks, initiative, and boundaries. They do not add tools, credentials,
   or permissions. Saving instructions affects future work, not past messages.
