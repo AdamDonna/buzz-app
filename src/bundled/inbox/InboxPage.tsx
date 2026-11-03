@@ -409,7 +409,6 @@ function InboxList({
     | {
         work: () => Promise<unknown>;
         valid: () => boolean;
-        onSuccess: (() => void) | undefined;
       }
     | undefined
   >(undefined);
@@ -636,27 +635,21 @@ function InboxList({
       row?.querySelector<HTMLElement>("button") ?? fallbackControl.current
     )?.focus({ preventScroll: true });
   });
-  async function run(
-    work: () => Promise<unknown>,
-    valid?: () => boolean,
-    onSuccess?: () => void,
-  ) {
+  async function run(work: () => Promise<unknown>, valid?: () => boolean) {
     if (!active.current || busy.current) return;
     busy.current = true;
     setPending(true);
     failedMutation.current = undefined;
-    let succeeded = false;
     try {
       if (valid && !valid())
         throw new Error(
           "Inbox action expired. Close and reopen the conversation.",
         );
       await work();
-      succeeded = true;
       if (active.current) setError(undefined);
     } catch (cause) {
       if (active.current) {
-        if (valid?.()) failedMutation.current = { work, valid, onSuccess };
+        if (valid?.()) failedMutation.current = { work, valid };
         setError(
           cause instanceof Error
             ? cause.message
@@ -667,8 +660,6 @@ function InboxList({
       busy.current = false;
       if (active.current) setPending(false);
     }
-    // Follow-up reads must run after the mutation releases the busy guard, on Retry too.
-    if (succeeded && active.current) onSuccess?.();
   }
   function refresh(retrySync = false) {
     void run(async () => {
@@ -721,9 +712,11 @@ function InboxList({
       );
     };
     // The next conversation's read starts as it opens, so a later arrival or
-    // a later Mark as unread is never overridden by it; Retry repeats it.
+    // a later Mark as unread is never overridden by it.
     let readNext: (() => Promise<unknown>) | undefined;
     let reading: Promise<unknown> | undefined;
+    // A failed read retries only while no newer read or unread has been saved.
+    let failedAt: number | undefined;
     // Archiving the open conversation closes its tab and opens the next;
     // restoring it keeps its tab.
     const navigate = () => {
@@ -813,14 +806,21 @@ function InboxList({
     };
     void run(async () => {
       navigate();
+      if (!reading && failedAt !== session.unread.revision())
+        readNext = undefined;
       const following = reading ?? readNext?.();
       reading = undefined;
-      await Promise.all([
-        readShared(),
-        following?.then(() => {
-          readNext = undefined;
-        }),
-      ]);
+      try {
+        await Promise.all([
+          readShared(),
+          following?.then(() => {
+            readNext = undefined;
+          }),
+        ]);
+      } catch (cause) {
+        failedAt = session.unread.revision();
+        throw cause;
+      }
     }, valid);
   }
   function mutate(item: InboxItem, unread: boolean) {
@@ -900,7 +900,7 @@ function InboxList({
     setError(failure);
     const mutation = failedMutation.current;
     if (mutation) {
-      void run(mutation.work, mutation.valid, mutation.onSuccess);
+      void run(mutation.work, mutation.valid);
       return;
     }
     refresh(true);

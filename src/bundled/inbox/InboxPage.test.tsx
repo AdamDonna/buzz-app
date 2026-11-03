@@ -3774,6 +3774,31 @@ it("archiving the open shared chat reads the next conversation only as it was sh
   );
 });
 
+it("Retry gives up the next conversation's failed read once it is marked unread again", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const shared = rows().find((row) => row.textContent?.includes("Design"));
+  if (!shared) throw new Error("Missing shared chat row");
+  fireEvent.click(within(shared).getByRole("button", { name: /^Open / }));
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  h.failSave();
+  await archiveOpened(h);
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  const dm = { kind: "channel", channelId: "dm-room" } as const;
+  await act(() => h.owner.session.unread.markUnreadLocal(dm));
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  expect(h.owner.session.unread.snapshot(dm).manual).toBe("local-only");
+});
+
 it("a failed read brings an archived shared chat back, through Retry cancellation and reload", async () => {
   const h = fixture({ sharedSolo: true, withDm: true });
   const view = render(h.view);
