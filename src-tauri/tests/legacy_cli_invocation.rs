@@ -4,8 +4,19 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 fn invoke(args: &[&str]) -> Output {
+    let home = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_Buzz"))
         .args(args)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("XDG_DATA_HOME", home.path())
+        .env("XDG_CACHE_HOME", home.path())
+        .env("APPDATA", home.path())
+        .env("LOCALAPPDATA", home.path())
+        // Directory overrides do not isolate Keychain. If recognition regresses,
+        // this existing refusal stops run() before identity, erase work or IPC.
+        .env("BUZZ_NATIVE_MCP_PORT", "invalid")
+        .env("BUZZ_DEV_VIEWER", "")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -33,7 +44,7 @@ fn legacy_cli_commands_fail_without_echoing_payloads() {
         vec!["--format", "compact", "channels", "list"],
     ] {
         let output = invoke(&args);
-        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("Buzz desktop app"));
@@ -42,5 +53,24 @@ fn legacy_cli_commands_fail_without_echoing_payloads() {
         assert!(!stderr.contains("private-message-payload"));
         assert!(!stderr.contains("private-gif-query"));
         assert!(!stderr.contains("private-key-payload"));
+    }
+}
+
+#[test]
+fn ordinary_launch_arguments_reach_the_pre_identity_startup_refusal() {
+    for args in [
+        vec![],
+        vec!["buzz://message?channel=messages&id=help"],
+        vec!["-psn_0_12345"],
+        vec!["-NSDocumentRevisionsDebugMode", "messages"],
+        vec!["unknown-launch-argument", "messages"],
+        vec!["--", "messages", "send"],
+    ] {
+        let output = invoke(&args);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.starts_with("Cannot enable native MCP: "), "{stderr}");
+        assert!(!stderr.contains("no CLI command was executed"));
     }
 }

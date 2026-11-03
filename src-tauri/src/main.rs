@@ -16,7 +16,7 @@ fn main() -> std::process::ExitCode {
              Buzz.app/Contents/Resources/bin/buzz). Update your script or PATH \
              to point to that executable."
         );
-        return std::process::ExitCode::from(2);
+        return std::process::ExitCode::from(1);
     }
     buzz_foundation_lib::run();
     std::process::ExitCode::SUCCESS
