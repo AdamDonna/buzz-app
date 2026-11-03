@@ -2332,6 +2332,89 @@ it("reports per channel which replays closed their gap: a cursor and fewer event
   }
 });
 
+it("reports a channel continuous only when the session can apply its whole replay", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, 10, () => 0.5);
+  const channels = () =>
+    h.callbacks.established.mock.calls.flatMap((call) =>
+      call[0] === undefined ? [] : [call],
+    );
+  const author = keypair(),
+    at = 1_700_000_000;
+  const ids = ["reply", "old", "order", "plain", "deleted", "edited"];
+  const aux = (channelId: string, kind: number, target: string) =>
+    signed(author, {
+      kind,
+      content: kind === 7 ? "+" : "",
+      created_at: at,
+      tags: [
+        ["h", channelId],
+        ["e", target],
+      ],
+    });
+  try {
+    age();
+    h.owner.update(ids, ids);
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const batch = second.requests().find((r) => scopeOf(r).includes("reply"));
+    assert.exists(batch);
+    const sent = message(author, "order", "sent in the outage", at - 1);
+    for (const event of [
+      // A reply changes its root's summary, which no replay carries.
+      message(author, "reply", "a reply", at, [["e", "root", "", "reply"]]),
+      // An edit or reaction to a message held before the drop applies as is.
+      aux("old", 7, "held"),
+      aux("edited", 40003, "held"),
+      // Newest first: this reaction arrives before the message it targets.
+      aux("order", 7, sent.id),
+      sent,
+      message(author, "plain", "a top-level message", at),
+      aux("deleted", 5, "held"),
+    ])
+      await second.receive(["EVENT", batch[1], event]);
+    for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
+    expect(channels()).toEqual([
+      [[...ids].sort(), undefined, ["edited", "old", "plain"]],
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
+it("reports no channel of a batch continuous after it dropped an undecodable replay event", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, 10, () => 0.5);
+  const log = captureLog();
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const batch = second.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(batch);
+    // It spent a replay slot of a channel the session cannot name.
+    await second.receive(["EVENT", batch[1], {}]);
+    for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
+    expect(h.callbacks.established).toHaveBeenCalledWith(["a", "b"]);
+  } finally {
+    log.restore();
+    h.owner.dispose();
+  }
+});
+
 it("reports a singleton channel route's continuity with its establishment", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup(["a"], undefined, 10, () => 0.5);

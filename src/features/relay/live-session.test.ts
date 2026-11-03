@@ -416,11 +416,14 @@ it.each([1, 2, 130])(
   },
 );
 
-function reconnectHarness(options: ChannelStoreOptions = {}) {
+function reconnectHarness(
+  options: ChannelStoreOptions = {},
+  scripted: { notices?: boolean } = {},
+) {
   const relay = keypair(),
     viewer = keypair(),
     alice = keypair();
-  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey, scripted);
   let live!: LiveCallbacks;
   /** Every read sent, membership notice reads included. */
   const queries: (readonly ReadFilter[])[] = [];
@@ -1697,6 +1700,42 @@ describe("a reconnect whose replay was continuous", () => {
     }
   });
 
+  it("applies an outage edit and reaction to a held message from a continuous replay", async () => {
+    const h = reconnectHarness();
+    try {
+      const seen = await verifiedThenDropped(h);
+      const edit = signed(h.alice, {
+          kind: 40003,
+          content: "edited",
+          created_at: 40,
+          tags: [
+            ["h", "c"],
+            ["e", seen.id],
+          ],
+        }),
+        reaction = signed(h.alice, {
+          kind: 7,
+          content: "+",
+          created_at: 41,
+          tags: [
+            ["h", "c"],
+            ["e", seen.id],
+          ],
+        });
+      // Newest first, as the relay replays.
+      await resume(h, [reaction, edit], true);
+      expect(channelReads(h)).toEqual([]);
+      expect(h.window().rows).toMatchObject([
+        { id: seen.id, content: "edited", edited: true },
+      ]);
+      expect(JSON.stringify(h.window().rows[0]?.reactions ?? [])).toContain(
+        '"+"',
+      );
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
   it("clears a failed outage page read when a continuous replay verifies the window", async () => {
     const h = reconnectHarness();
     try {
@@ -1785,6 +1824,62 @@ describe("a reconnect whose replay was continuous", () => {
     }
   });
 
+  it("catches up a window read again during the outage, though its replay was continuous", async () => {
+    // The rows it shows came from that read, not from the stream.
+    const h = reconnectHarness();
+    try {
+      const seen = await verifiedThenDropped(h);
+      const between = message(h.alice, "c", "between", 20);
+      h.owner.session.channels.ensure("c");
+      h.read().respond(h.page("head", [between, seen], seen));
+      await flush();
+      expect(h.rows()).toEqual([seen.id, between.id]);
+      h.queries.length = 0;
+      await resume(h, [], true);
+      expect(h.window().freshness).toBe("cached");
+      h.read().respond(h.page("head", [between, seen], seen));
+      await flush();
+      expect(h.window().freshness).toBe("verified");
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
+  it("finishes a membership notice read still owed when a continuous replay verifies the window", async () => {
+    const h = reconnectHarness({}, { notices: true });
+    try {
+      const notices = () =>
+        h.wire.pending.filter(
+          (entry) =>
+            !entry.signal?.aborted && entry.filters[0]?.kinds?.[0] === 40099,
+        );
+      const seen = message(h.alice, "c", "seen", 10);
+      await h.list();
+      await h.open(seen);
+      for (const entry of notices()) entry.respond([]);
+      h.live.state({ status: "connected", routes: [] });
+      h.live.established("c");
+      await flush();
+      h.read().respond(h.page("head", [seen], seen));
+      await flush();
+      expect(h.window().freshness).toBe("verified");
+      // The catch-up's notice read fails: its notices are still owed.
+      const owed = notices();
+      expect(owed).toHaveLength(1);
+      owed[0]?.fail(new Error("Membership notices did not advance"));
+      await flush();
+      expect(notices()).toHaveLength(0);
+      await h.drop();
+      h.queries.length = 0;
+      await resume(h, [], true);
+      expect(h.window().freshness).toBe("verified");
+      expect(h.reads()).toHaveLength(0);
+      expect(notices()).toHaveLength(1);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
   it("refreshes an open thread only when its channel's replay was cut", async () => {
     const h = reconnectHarness();
     try {
@@ -1828,6 +1923,64 @@ describe("a reconnect whose replay was continuous", () => {
       h.owner.dispose();
     }
   });
+
+  it.each(["a refresh during the outage", "a refresh between two drops"])(
+    "refreshes a thread after %s, though its channel's replay was continuous",
+    async (change) => {
+      // Its replies came from that read, not from the stream.
+      const h = reconnectHarness();
+      try {
+        const root = message(h.alice, "c", "root", 10);
+        await verifiedThenDropped(h);
+        await resume(h, [], true);
+        const thread = h.owner.session.thread("c", root.id);
+        const answer = async () => {
+          for (let quiet = 0; quiet < 3; ) {
+            await flush();
+            if (!h.wire.pending.length) quiet++;
+            else quiet = 0;
+            for (const entry of h.wire.pending.splice(0))
+              entry.respond(
+                entry.filters[0]?.ids?.includes(root.id) ? [root] : [],
+              );
+          }
+        };
+        const threadReads = () =>
+          h.queries.filter((filters) =>
+            filters.some(
+              (f) => f.ids?.includes(root.id) || f["#e"]?.includes(root.id),
+            ),
+          );
+        if (change === "a refresh during the outage") {
+          void thread.refresh();
+          await answer();
+          await h.drop();
+          void thread.refresh();
+          await answer();
+        } else {
+          void thread.refresh();
+          await answer();
+          await h.drop();
+          void thread.refresh();
+          await answer();
+          // A connection that drops before it establishes the channel: the
+          // second drop keeps what the first took.
+          h.live.state({ status: "connected", routes: [] });
+          await flush();
+          await h.drop();
+        }
+        expect(thread.snapshot().status).toBe("ready");
+        h.queries.length = 0;
+        await resume(h, [], true);
+        await answer();
+        expect(threadReads().length).toBeGreaterThan(0);
+        expect(thread.snapshot().status).toBe("ready");
+        thread.dispose();
+      } finally {
+        h.owner.dispose();
+      }
+    },
+  );
 
   it.each(["a cache clear", "a failed refresh"])(
     "refreshes a thread after %s between the drop and a continuous replay",

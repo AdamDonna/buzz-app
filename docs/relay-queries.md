@@ -951,27 +951,50 @@ proportional to it.
 
 A channel route also reports at establishment which of its channels stayed
 continuous: the channel resumed from an earlier connection's cursor, its replay
-covers the full 960 s resume lag before that cursor, and its own
-filter's replay ended below that filter's limit (an event that names no single
-channel of a batch counts against each of them). A retained window that was
-verified when the stream dropped, and a thread view that was settled then, skip
-the head, page, notice and thread reads for such a channel: the replay already
-delivered every channel event since the drop, including ones backdated within
-the resume lag, and the live stream had delivered everything before it. The
-window becomes verified at once. Any other case keeps the catch-up above: a
-replay at the limit, a channel with no cursor, a window restored or read before
-the stream was up, a window still owed a catch-up from an earlier drop, and a
-live-only renewal (it replays nothing, so it proves nothing). While the session's
-initial five-minute floor truncates the resume lag, channel and global routes
-keep their reconnect repair reads even when the replay ends below the limit.
-An event that
-neither the live stream nor the replay carries is no longer repaired by that
-reconnect's head read for a continuous channel. Two known cases: the relay
-omits a channel deleted during the outage from the replay without a frame, so
-it reports continuous (the recovery tick's roster read removes it); and a
-reaction or deletion whose `h` tag names another channel takes one of the
-filter's SQL slots and is then dropped, so a replay the limit cut can arrive
-with fewer events than the limit.
+covers the full 960 s resume lag before that cursor, its own filter's replay
+ended below that filter's limit (an event that names no single channel of a
+batch counts against each of them), and the session could apply every event of
+that replay by itself. A replay is not continuous for a channel when it carries
+a reply or a deletion (each changes a thread summary, kind 39005, which the
+relay never stores, so no replay carries the new one), an edit or reaction that
+arrives before the message it targets (the replay is newest first, and the
+session drops an auxiliary event whose target it does not hold), an event the
+session could not decode, or an event whose `h` tag names none of the route's
+channels. A reaction or edit to a message held before the drop, a new
+top-level message and a membership notice keep it continuous. The broker
+reports no channel of a batch continuous when one of its channels is no longer
+current, because it drops that batch's untagged traffic.
+
+A retained window that was verified when the stream dropped, and a thread view
+that was settled then, skip the head, page and thread reads for such a
+channel: the replay already delivered every channel event since the drop,
+including ones backdated within the resume lag, and the live stream had
+delivered everything before it. The window becomes verified at once, and a
+membership notice read that failed or was cut before the drop resumes (it reads
+nothing when none is owed). Any other case keeps the catch-up above: a replay
+at the limit, a channel with no cursor, a window restored or read before the
+stream was up, a window or thread read again while the stream was down, a
+window still owed a catch-up from an earlier drop, and a live-only renewal (it
+replays nothing, so it proves nothing). While the session's initial five-minute
+floor truncates the resume lag, channel and global routes keep their reconnect
+repair reads even when the replay ends below the limit, so the skip applies
+only once the live connection is about 11 minutes old.
+
+An event that neither the live stream nor the replay carries is no longer
+repaired by that reconnect's head read for a continuous channel. In general, a
+replay with fewer events than its limit is complete only if the relay applies
+every filter before the limit. Known cases where it does not: the relay omits a
+channel deleted during the outage from the replay without a frame, so it
+reports continuous (the recovery tick's roster read removes it); the relay
+checks some per-reader visibility (`event_visible_to_reader`) after the limit,
+so a replay the limit cut can arrive with fewer events than the limit; and
+the relay drops a live frame without notice when the connection's send buffer
+is full (`try_send_ws_message`, `BUZZ_SEND_BUFFER`), most likely while batch
+replays fill it, so the live stream before a drop can have a gap that no replay
+covers. The live connection has that same gap with no reconnect at all; the fix
+belongs in the relay (end the subscription when it drops a frame). The count
+also requires a relay that sends `CLOSED`, not `EOSE`, after a failed history
+read (block/buzz #8692).
 
 Removing a batch member rebuilds only that batch's survivor scope. One established
 source overlaps its zero-replay replacement until EOSE; another removal supersedes

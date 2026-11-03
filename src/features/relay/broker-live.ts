@@ -395,10 +395,14 @@ export function subscribeBrokerTraffic(
                     current,
                   );
                 if (ids !== undefined) {
-                  const current = liveChannels(ids).filter((id) =>
+                  const all = liveChannels(ids);
+                  const current = all.filter((id) =>
                     currentChannel(id, revision),
                   );
-                  const resumed = continuous(current);
+                  // Traffic naming a channel no longer current was dropped
+                  // for the whole batch, so no channel of it is continuous.
+                  const resumed =
+                    current.length < all.length ? [] : continuous(current);
                   if (resumed.length)
                     callbacks.established(current, undefined, resumed);
                   else if (current.length) callbacks.established(current);

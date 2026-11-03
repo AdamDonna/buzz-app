@@ -3577,6 +3577,9 @@ export function createChannelStore(
       state.kept = undefined;
       state.keptLive = undefined;
       setWindow(state, { freshness: "verified", error: undefined });
+      // The replay holds only the outage's notices: finish a notice read that
+      // failed or was cut before the drop. It reads nothing when none is owed.
+      void fillNotices(state, false);
       return true;
     },
     retainedChannels: () => [...windows.keys()],
