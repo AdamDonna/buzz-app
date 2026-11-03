@@ -228,7 +228,12 @@ function PagePreview({
         );
       }}
     >
-      <PopoverTrigger openOnHover="preview" render={children} />
+      {/* Marked transient, so a conversation's default focus is not held back. */}
+      <PopoverTrigger
+        openOnHover="preview"
+        data-popup-preview=""
+        render={children}
+      />
       <PopoverPopup
         size="wide"
         padding="list"

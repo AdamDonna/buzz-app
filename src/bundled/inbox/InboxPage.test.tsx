@@ -1620,28 +1620,44 @@ it("previews recent conversations without archived ones and opens a row directly
   expect(screen.queryByText("A direct reply")).not.toBeInTheDocument();
   expect(screen.getByText("1 mention · 1 thread unread")).toBeInTheDocument();
 
+  // The newest row opens at its exact message, in its thread when it has one.
+  const [newest] = h.session.unread
+    .inbox()
+    .items.filter((item) => item.channelId === "room")
+    .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+  if (!newest) throw new Error("Missing room conversation");
   fireEvent.click(
     within(previewRows()[0] as HTMLElement).getByRole("button", {
       name: /^Open Alice in #Design/,
     }),
   );
   expect(close).toHaveBeenCalledOnce();
-  expect(h.open).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      kind: "conversation",
-      scope: h.scope,
-      channelId: "room",
-    }),
-  );
+  expect(h.open).toHaveBeenLastCalledWith({
+    version: 1,
+    kind: "conversation",
+    scope: h.scope,
+    channelId: "room",
+    messageId: newest.messageId,
+    ...(newest.rootId && { threadRootId: newest.rootId }),
+  });
   fireEvent.click(screen.getByRole("button", { name: "Open Inbox" }));
   expect(close).toHaveBeenCalledTimes(2);
   expect(h.open).toHaveBeenLastCalledWith(inboxTarget);
+
+  act(() => {
+    for (const item of h.session.unread.inbox().items)
+      updateArchive(h.session.scope, item, true, Math.floor(Date.now() / 1000));
+  });
+  expect(await screen.findByText("No recent activity")).toBeInTheDocument();
 });
 
 it("keeps Unread only to the card and offers recent activity once caught up", async () => {
   const h = fixture({ withDm: true });
+  // The page's own Unread only neither seeds the card nor changes with it.
+  writeView(h.owner.session.scope, "inbox:filters", { attention: "unread" });
   const view = render(previewAt(h));
   await waitFor(() => expect(previewRows()).toHaveLength(3));
+  expect(screen.getByRole("switch", { name: "Unread only" })).not.toBeChecked();
   await markRead(h, "dm-room");
   await waitFor(() =>
     expect(screen.getByText("1 mention · 1 thread unread")).toBeInTheDocument(),
@@ -1656,7 +1672,7 @@ it("keeps Unread only to the card and offers recent activity once caught up", as
   render(previewAt(h));
   await waitFor(() => expect(previewRows()).toHaveLength(2));
   expect(unreadOnly()).toBeChecked();
-  expect(savedFilters(h)).toBeNull();
+  expect(savedFilters(h)).toEqual({ attention: "unread" });
 
   await markRead(h, "room");
   expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
@@ -1693,6 +1709,44 @@ it("shows the card's connection and read failures with their recovery", async ()
   }
   await waitFor(() => expect(previewRows()).toHaveLength(2));
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("retries the card's connection, activity and read-state failures", async () => {
+  const h = fixture();
+  const view = render(previewAt(h));
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  await waitFor(() =>
+    expect(h.owner.session.inboxFeed.snapshot().status).toBe("ready"),
+  );
+  // Activity failures retry the reads, then read-state sync, as on the page.
+  h.failAux();
+  await act(async () => h.owner.session.inboxFeed.refresh());
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "auxiliary history unavailable",
+  );
+  h.failAux(false);
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() => expect(h.retrySync).toHaveBeenCalledOnce());
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+
+  // Cleared activity is not reported as nothing to read.
+  await act(async () => {
+    await h.owner.clearCache();
+  });
+  expect(
+    screen.queryByRole("list", { name: "Recent Inbox conversations" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("No recent activity")).not.toBeInTheDocument();
+  expect(screen.queryByText("Nothing unread")).not.toBeInTheDocument();
+  view.unmount();
+
+  act(() => h.failConnection("relay offline"));
+  render(previewAt(h));
+  expect(await screen.findByText("relay offline")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry connection" }));
+  expect(h.retryConnection).toHaveBeenCalledOnce();
 });
 
 function fixture(
@@ -2052,13 +2106,14 @@ function fixture(
     session: observedSession,
   };
   const subscribers = new Set<() => void>();
+  const retryConnection = vi.fn();
   const relay: RelayData = {
     snapshot: () => connection,
     subscribe(listener) {
       subscribers.add(listener);
       return () => subscribers.delete(listener);
     },
-    retry() {},
+    retry: retryConnection,
     disconnect() {},
     clearCache: owner.clearCache,
   };
@@ -2288,6 +2343,11 @@ function fixture(
     },
     disconnect() {
       connection = { ...connection, status: "disconnected", generation: 2 };
+      for (const listener of subscribers) listener();
+    },
+    retryConnection,
+    failConnection(error: string) {
+      connection = { ...connection, status: "error", error, generation: 2 };
       for (const listener of subscribers) listener();
     },
   };

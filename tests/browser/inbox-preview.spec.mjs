@@ -43,6 +43,12 @@ test("hovering the sidebar Inbox row previews recent conversations and opens one
       rows.getByText("Unread reply 1", { exact: true }),
     ).toBeVisible();
     await expect(card.getByText("Checking recent activity…")).toHaveCount(0);
+    // Measure after the open transition, which offsets the card while it runs.
+    await card.evaluate((element) =>
+      Promise.all(
+        element.getAnimations().map((animation) => animation.finished),
+      ),
+    );
     const row = await inboxRow.boundingBox();
     const box = await card.boundingBox();
     // Where there is room the card sits 6px past the row's hover background,

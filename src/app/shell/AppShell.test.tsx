@@ -612,6 +612,7 @@ it("previews a sidebar page on hover only, away from its selected page and heade
     removeEventListener() {},
   }));
   const user = userEvent.setup();
+  const onSelect = vi.fn();
   const page = (
     id: string,
     preview: RegisteredPage["preview"],
@@ -645,7 +646,7 @@ it("previews a sidebar page on hover only, away from its selected page and heade
         pages={pages}
         selected={selected}
         navigationAttempt=""
-        onSelect={() => {}}
+        onSelect={onSelect}
         tone="default"
         communities={current.communities}
         accountActions={current.accountActions}
@@ -668,9 +669,12 @@ it("previews a sidebar page on hover only, away from its selected page and heade
     );
     await user.hover(inbox);
     const card = await screen.findByRole("dialog", { name: "Inbox" });
-    // Content closes the card, for example after opening a conversation.
+    expect(inbox).toHaveAttribute("data-popup-preview");
+    // Content closes the card, for example after opening a conversation, and
+    // focus is not pulled back to the row.
     await user.click(within(card).getByRole("button", { name: "Recent item" }));
     await waitFor(() => expect(card).not.toBeInTheDocument());
+    expect(inbox).not.toHaveFocus();
 
     // A throwing preview renders nothing and leaves navigation usable.
     const broken = within(nav).getByRole("button", { name: "Broken" });
@@ -678,7 +682,18 @@ it("previews a sidebar page on hover only, away from its selected page and heade
     expect(
       await screen.findByRole("dialog", { name: "Broken" }),
     ).toBeEmptyDOMElement();
-    expect(broken).toBeEnabled();
+    await user.click(broken);
+    expect(onSelect).toHaveBeenLastCalledWith("example/Broken");
+    await user.unhover(broken);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+
+    // Pressing or focusing the row selects its page instead of opening the card.
+    fireEvent.focus(inbox);
+    fireEvent.click(inbox);
+    expect(onSelect).toHaveBeenLastCalledWith("example/Inbox");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     // A selected page shows no preview of itself.
     view.rerender(shell("example/Inbox"));

@@ -119,6 +119,11 @@ function InboxPreviewCard({
     session.inboxFeed.snapshot,
     session.inboxFeed.snapshot,
   );
+  const sync = useSyncExternalStore(
+    session.unread.subscribeSync,
+    session.unread.sync,
+    session.unread.sync,
+  );
   const viewScope = session.scope;
   const subscribeViews = useCallback(
     (listener: () => void) => subscribeView(viewScope, listener),
@@ -139,10 +144,12 @@ function InboxPreviewCard({
     writeView(viewScope, unreadOnlyKey, value);
   };
   useEffect(() => {
+    // As on the page, a completed discovery revision can retire a feed attempt.
+    void list.asOf;
     if (list.status !== "ready") return;
     void session.unread.ensure();
     void session.inboxFeed.ensure();
-  }, [session, list.status]);
+  }, [session, list.status, list.asOf]);
   const channelOf = (channelId: string) =>
     list.channels.find((channel) => channel.id === channelId);
   // Read archives only: reopening archived conversations is the Inbox page's write.
@@ -187,11 +194,17 @@ function InboxPreviewCard({
     list.status === "loading" ||
     inbox.status === "loading" ||
     feed.status === "loading";
-  const failure = list.error ?? inbox.error ?? feed.error;
-  const retry = () => {
+  // As on the page, an empty result is only shown once activity was checked.
+  const checked = inbox.status === "ready" || feed.status === "ready";
+  const failure = list.error ?? inbox.error ?? feed.error ?? sync.error;
+  const retry = async () => {
     if (list.status !== "ready") session.channels.ensureList();
     else
-      void Promise.all([session.unread.refresh(), session.inboxFeed.refresh()]);
+      await Promise.all([
+        session.unread.refresh(),
+        session.inboxFeed.refresh(),
+      ]);
+    await session.unread.retrySync();
   };
   // Each conversation counts once, under its most specific kind.
   let dms = 0;
@@ -211,7 +224,9 @@ function InboxPreviewCard({
     ? "Checking recent activity…"
     : unread.length
       ? `${kinds.length ? kinds.join(" · ") : unread.length} unread`
-      : "Nothing unread";
+      : checked
+        ? "Nothing unread"
+        : undefined;
   const open = (item: (typeof rows)[number]) => {
     close();
     void navigator.open({
@@ -234,7 +249,7 @@ function InboxPreviewCard({
       {failure && (
         <div className={styles.notice} role="alert">
           <p className="text-body">{failure}</p>
-          <Button size="sm" onClick={retry}>
+          <Button size="sm" onClick={() => void retry()}>
             Retry inbox
           </Button>
         </div>
@@ -270,7 +285,7 @@ function InboxPreviewCard({
             </span>
           </div>
         ))
-      ) : failure ? null : (
+      ) : failure || !checked ? null : (
         <div className={styles.empty} role="status">
           {unreadOnly ? (
             <EmptyState
@@ -316,7 +331,7 @@ function Card({
   children,
 }: PagePreviewProps & {
   navigator: Navigation;
-  summary?: string;
+  summary?: string | undefined;
   unreadOnly?: boolean;
   onUnreadOnlyChange?: (value: boolean) => void;
   children: ReactNode;
