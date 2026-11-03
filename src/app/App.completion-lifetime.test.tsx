@@ -58,6 +58,16 @@ it("observes live Solo completions through community restoration without replayi
 
   const current = createServices();
   services = current;
+  const viewer = "a".repeat(64);
+  vi.spyOn(current.communities, "snapshot").mockReturnValue({
+    ...current.communities.snapshot(),
+    status: "ready",
+    viewer,
+    memberships: [
+      { id: "https://community.example", name: "Fixture community" },
+    ],
+  });
+  current.notifications.selectViewer(viewer);
   const admit = vi.spyOn(current.notifications, "admit");
   let snapshot = current.relay.snapshot();
   const listeners = new Set<() => void>();
@@ -86,8 +96,8 @@ it("observes live Solo completions through community restoration without replayi
     scope: `https://community.example:${"a".repeat(64)}`,
     agent: "agent",
     channelId: "live-chat",
-    messageId: "live-message",
-    threadRootId: "live-message",
+    messageId: "b".repeat(64),
+    threadRootId: "b".repeat(64),
     soloChat: true,
     conversationName: "Live chat",
   });
@@ -103,10 +113,12 @@ it("observes live Solo completions through community restoration without replayi
 
   act(() => live.finish({ ok: true }));
   expect(admit).toHaveBeenCalledOnce();
+  await expect(admit.mock.results[0]?.value).resolves.toBe(true);
   expect(admit.mock.calls[0]?.[5]?.()).toEqual({
     title: "Agent is done",
     body: "View in Live chat",
   });
+  expect(await screen.findByText("Agent is done in Live chat")).toBeVisible();
   expect(screen.queryByText(/Old chat/)).not.toBeInTheDocument();
 
   act(() => {
@@ -114,4 +126,5 @@ it("observes live Solo completions through community restoration without replayi
     for (const listener of listeners) listener();
   });
   expect(admit).toHaveBeenCalledOnce();
+  expect(screen.getAllByText("Agent is done in Live chat")).toHaveLength(1);
 });

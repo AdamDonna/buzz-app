@@ -51,6 +51,14 @@ export function completionBody(
     : destination;
 }
 
+export function completionToast(
+  agentName: string,
+  work: Pick<LocalWork, "state" | "conversationName">,
+) {
+  const title = completionTitle(agentName, work);
+  return work.conversationName ? `${title} in ${work.conversationName}` : title;
+}
+
 export function isViewingCompletedWork(
   active: OpenTarget,
   completed: OpenTarget,

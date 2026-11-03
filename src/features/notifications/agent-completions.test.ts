@@ -7,6 +7,7 @@ import {
   completionSourceKey,
   completionTarget,
   completionTitle,
+  completionToast,
   isViewingCompletedWork,
 } from "./agent-completions";
 
@@ -93,6 +94,37 @@ describe("agent completion notifications", () => {
     await focus;
     await Promise.resolve();
     expect(desktop).toHaveBeenCalledOnce();
+    stop();
+  });
+
+  it("stays quiet when an async focus check resolves on the visible chat", async () => {
+    const activity = createLocalAgentActivity();
+    let decide!: (focused: boolean) => void;
+    const focus = new Promise<boolean>((resolve) => {
+      decide = resolve;
+    });
+    const desktop = vi.fn();
+    const stop = bindAgentCompletionNotifications(activity.reader, {
+      focused: () => focus,
+      active: () => active("chat", "thread"),
+      target: (work) => completionTarget(work, scope),
+      desktop,
+    });
+    const work = activity.begin({
+      scope: `https://buzz.example:${scope.viewer}`,
+      agent: "agent",
+      channelId: "chat",
+      messageId: "message",
+      threadRootId: "thread",
+      thread: true,
+      soloChat: true,
+    });
+    work.started();
+    work.finish({ ok: true });
+    decide(true);
+    await focus;
+    await Promise.resolve();
+    expect(desktop).not.toHaveBeenCalled();
     stop();
   });
 
@@ -217,13 +249,14 @@ it("gives each retry attempt its own completion source identity", () => {
   );
 });
 
-it("names the Solo chat in native completion copy", () => {
+it("names the Solo chat in native and fallback completion copy", () => {
   const done = {
     state: "done" as const,
     conversationName: "Launch planning",
   };
   expect(completionTitle("Echo", done)).toBe("Echo is done");
   expect(completionBody(done)).toBe("View in Launch planning");
+  expect(completionToast("Echo", done)).toBe("Echo is done in Launch planning");
   const failed = {
     state: "error" as const,
     error: "The run failed",
@@ -232,6 +265,9 @@ it("names the Solo chat in native completion copy", () => {
   expect(completionTitle("Echo", failed)).toBe("Echo encountered an error");
   expect(completionBody(failed)).toBe(
     "View in Launch planning · The run failed",
+  );
+  expect(completionToast("Echo", failed)).toBe(
+    "Echo encountered an error in Launch planning",
   );
 });
 

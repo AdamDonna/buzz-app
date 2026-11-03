@@ -75,13 +75,19 @@ function setup() {
     permission(value: NotificationPermissionState) {
       permission = value;
     },
-    submit(id = "event", eligible: () => boolean | "wait" = () => true) {
+    submit(
+      id = "event",
+      eligible: () => boolean | "wait" = () => true,
+      fallback?: (activate: () => void) => void,
+    ) {
       return service.admit(
         "mention",
         "Mentions",
         { sourceKey: id, target },
         () => true,
         eligible,
+        undefined,
+        fallback,
       );
     },
     install(value: PluginModule) {
@@ -138,6 +144,34 @@ it("retains a fresh candidate for explicit permission, without prompting on arri
   await flush();
   expect(t.platform.show).toHaveBeenCalledTimes(1);
 });
+it("uses an in-app fallback once when native permission is unavailable", async () => {
+  const t = setup();
+  const fallback = vi.fn();
+  t.permission("default");
+  expect(await t.submit("fallback", () => true, fallback)).toBe(true);
+  await flush();
+  expect(fallback).toHaveBeenCalledOnce();
+  expect(t.platform.show).not.toHaveBeenCalled();
+  expect(t.plays).toEqual(["flutter"]);
+  t.permission("granted");
+  await t.service.requestPermission();
+  await flush();
+  expect(fallback).toHaveBeenCalledOnce();
+  expect(t.platform.show).not.toHaveBeenCalled();
+});
+it("falls back after a native submission failure without replaying sound", async () => {
+  const t = setup();
+  const fallback = vi.fn();
+  await t.submit("failed-native", () => true, fallback);
+  await flush();
+  expect(t.platform.show).toHaveBeenCalledOnce();
+  expect(t.plays).toEqual(["flutter"]);
+  t.failures[0]?.(new Error("Native presentation failed"));
+  expect(fallback).toHaveBeenCalledOnce();
+  expect(t.plays).toEqual(["flutter"]);
+  t.failures[0]?.(new Error("Duplicate failure"));
+  expect(fallback).toHaveBeenCalledOnce();
+});
 it("an off/on transition during a permission probe cancels the old candidate", async () => {
   const t = setup();
   await flush();
@@ -153,6 +187,24 @@ it("an off/on transition during a permission probe cancels the old candidate", a
   expect(release).toBeTypeOf("function");
   t.service.updatePreferences({ enabled: false });
   t.service.updatePreferences({ enabled: true });
+  release("granted");
+  await flush();
+  expect(t.platform.show).not.toHaveBeenCalled();
+});
+it("rechecks visibility after a delayed permission probe", async () => {
+  const t = setup();
+  await flush();
+  let release!: (value: NotificationPermissionState) => void;
+  let visible = false;
+  vi.mocked(t.platform.permission).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  await t.submit("visibility", () => !visible);
+  await flush();
+  visible = true;
   release("granted");
   await flush();
   expect(t.platform.show).not.toHaveBeenCalled();

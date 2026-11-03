@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppServices } from "../../app/services";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { splitPartition } from "../relay/partition";
 import {
   bindAgentCompletionNotifications,
@@ -9,6 +10,8 @@ import {
   completionSourceKey,
   completionTarget,
   completionTitle,
+  completionToast,
+  isViewingCompletedWork,
 } from "./agent-completions";
 
 export function AgentCompletionNotifications({
@@ -19,6 +22,7 @@ export function AgentCompletionNotifications({
     "agentActivity" | "agents" | "navigation" | "notifications"
   >;
 }) {
+  const notify = useToastNotification();
   useEffect(
     () =>
       bindAgentCompletionNotifications(services.agentActivity, {
@@ -36,15 +40,28 @@ export function AgentCompletionNotifications({
               target,
             },
             () => true,
-            () => true,
+            () =>
+              !(
+                document.hasFocus() &&
+                isViewingCompletedWork(
+                  services.navigation.snapshot().entry.target,
+                  target,
+                )
+              ),
             () => ({
               title: completionTitle(name, work),
               body: completionBody(work),
             }),
+            (activate) =>
+              notify(
+                completionToast(name, work),
+                work.state === "error" ? "error" : "success",
+                { label: "View", onClick: activate },
+              ),
           );
         },
       }),
-    [services],
+    [notify, services],
   );
   return null;
 }
