@@ -713,23 +713,42 @@ test("a grouped reaction toggles my contribution while its preview is open", asy
   await expect(button).toHaveCount(1);
   await expect(matching).toHaveCount(1);
   await expect(button).toHaveAccessibleName("😂: 2 people");
-  for (let cycle = 0; cycle < 2; cycle++) {
-    await page.mouse.move(0, 0);
-    await button.hover();
-    const preview = page.locator(".buzz-preview-card[data-open]");
-    await expect(preview).toBeVisible();
-    await expect(preview).toContainText("Fixture Member");
-    await button.click();
-    await expect(button).toHaveAttribute("aria-pressed", "true");
-    await expect(matching).toHaveCount(1);
-    await expect(button).toHaveAccessibleName("😂: 3 people");
-    await expect(button).toHaveAttribute("aria-disabled", "false");
-    await button.click();
-    await expect(button).toHaveAttribute("aria-pressed", "false");
-    await expect(matching).toHaveCount(1);
-    await expect(button).toHaveAccessibleName("😂: 2 people");
-    await expect(button).toHaveCount(1);
-    await expect(button).toHaveAttribute("aria-disabled", "false");
+  let exit;
+  try {
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await page.mouse.move(0, 0);
+      await button.hover();
+      // Unmount the old popup while the trigger's new hover is still pending.
+      if (exit) await exit.evaluate((animation) => animation.finish());
+      const preview = page.locator(".buzz-preview-card[data-open]");
+      await expect(preview).toBeVisible();
+      await expect(preview).toContainText("Fixture Member");
+      if (cycle === 0) {
+        // Hold the popup through both clicks and re-entry, independent of how
+        // quickly this runner completes delivery and the native exit animation.
+        exit = await preview.evaluateHandle((card) => {
+          const animation = card.animate([{ opacity: 1 }, { opacity: 1 }], {
+            duration: 1000,
+          });
+          animation.pause();
+          return animation;
+        });
+      }
+      await button.click();
+      await expect(button).toHaveAttribute("aria-pressed", "true");
+      await expect(matching).toHaveCount(1);
+      await expect(button).toHaveAccessibleName("😂: 3 people");
+      await expect(button).toHaveAttribute("aria-disabled", "false");
+      await button.click();
+      await expect(button).toHaveAttribute("aria-pressed", "false");
+      await expect(matching).toHaveCount(1);
+      await expect(button).toHaveAccessibleName("😂: 2 people");
+      await expect(button).toHaveCount(1);
+      await expect(button).toHaveAttribute("aria-disabled", "false");
+    }
+  } finally {
+    await exit?.evaluate((animation) => animation.finish());
+    await exit?.dispose();
   }
 });
 

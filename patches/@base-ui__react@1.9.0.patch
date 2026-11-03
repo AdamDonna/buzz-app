@@ -464,3 +464,43 @@ index 2287f76c2a9c52f40af2f1176f7350b4f0c8d40b..d926b05704eff551df940968390332ec
    const state = {
      open: isOpenedByThisTrigger
    };
+diff --git a/floating-ui-react/hooks/useHoverInteractionSharedState.js b/floating-ui-react/hooks/useHoverInteractionSharedState.js
+index 32bc1256e55cb111e1b0996a3bbfaecd52ef1dac..845062a634cc7b7abcc8d4c4427c0c2f53624ad7 100644
+--- a/floating-ui-react/hooks/useHoverInteractionSharedState.js
++++ b/floating-ui-react/hooks/useHoverInteractionSharedState.js
+@@ -39,8 +39,14 @@ class HoverInteraction {
+     this.restTimeout.clear();
+   };
+   disposeEffect = () => {
+-    return this.dispose;
++    this.mountedConsumers++;
++    return () => {
++      // A closing popup can unmount while its trigger is waiting to reopen.
++      // Only the last consumer owns disposal of their shared hover timers.
++      if (--this.mountedConsumers === 0) this.dispose();
++    };
+   };
++  mountedConsumers = 0;
+ }
+ exports.HoverInteraction = HoverInteraction;
+ const pointerEventsMutationOwnerByScopeElement = new WeakMap();
+diff --git a/floating-ui-react/hooks/useHoverInteractionSharedState.mjs b/floating-ui-react/hooks/useHoverInteractionSharedState.mjs
+index 21df34aa63dd82e50a3f946ab9e6c3a2e6bccbe4..4e1cd295f1b0ca265eae7185f5ca271cb603ddb0 100644
+--- a/floating-ui-react/hooks/useHoverInteractionSharedState.mjs
++++ b/floating-ui-react/hooks/useHoverInteractionSharedState.mjs
+@@ -26,8 +26,14 @@ export class HoverInteraction {
+     this.restTimeout.clear();
+   };
+   disposeEffect = () => {
+-    return this.dispose;
++    this.mountedConsumers++;
++    return () => {
++      // A closing popup can unmount while its trigger is waiting to reopen.
++      // Only the last consumer owns disposal of their shared hover timers.
++      if (--this.mountedConsumers === 0) this.dispose();
++    };
+   };
++  mountedConsumers = 0;
+ }
+ const pointerEventsMutationOwnerByScopeElement = new WeakMap();
+ export function clearSafePolygonPointerEventsMutation(instance) {
