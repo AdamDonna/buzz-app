@@ -139,7 +139,10 @@ it("keeps unknown versions inert and fallback labels literal", () => {
     label: "#Do not send this project tag",
   };
   expect(taskTokenFallback([project, token])).toBe(taskTokenFallback([token]));
-  expect(readTaskTokens(taskTokenTags([project]))).toEqual([project]);
+  expect(readTaskTokens(taskTokenTags([project]))).toEqual([]);
+  expect(
+    readTaskTokens([["nexus.tokens.v1", JSON.stringify([project])]]),
+  ).toEqual([project]);
   expect(readTaskTokens([["nexus.tokens.v2", "invalid future bytes"]])).toEqual(
     [],
   );
@@ -152,4 +155,19 @@ it("keeps unknown versions inert and fallback labels literal", () => {
       (node) => node.type === "inlineCode",
     ),
   ).toBe(true);
+});
+
+it("keeps personal workspace filing out of signed task tags", () => {
+  const workspace = {
+    kind: "nexus.project" as const,
+    id: "solo-workspace:private",
+    label: "Private workspace",
+  };
+  expect(taskTokenTags([workspace])).toEqual([]);
+  const folder = {
+    kind: "nexus.folder" as const,
+    id: "/tmp/context",
+    label: "Context",
+  };
+  expect(readTaskTokens(taskTokenTags([workspace, folder]))).toEqual([folder]);
 });

@@ -26,7 +26,12 @@ function checked(value: unknown): readonly ComposerToken[] {
 
 export function taskTokenTags(tokens: readonly ComposerToken[]): string[][] {
   if (!tokens.length) return [];
-  const json = JSON.stringify(checked(tokens));
+  // Filing is personal composer metadata, never part of a signed task message.
+  const references = checked(tokens).filter(
+    (token) => token.kind !== "nexus.project",
+  );
+  if (!references.length) return [];
+  const json = JSON.stringify(references);
   if (new TextEncoder().encode(json).length > MAX_BYTES)
     throw new Error("Task tokens are too large. Remove some before sending.");
   return [[TASK_TOKENS_TAG, json]];
