@@ -68,3 +68,151 @@ it.each([
     }
   },
 );
+
+const radio = (index: number) =>
+  screen.getAllByRole("radio")[index] as HTMLElement;
+const author = keypair();
+const revision = (content: string, created_at = 1700000000) =>
+  signed(author, { kind: 40100, content, tags: [["h", "x"]], created_at });
+
+function mount(
+  history: ReturnType<typeof vi.fn>,
+  head: ReturnType<typeof revision> | undefined,
+) {
+  const canvas = { available: true, history } as unknown as ChannelCanvas;
+  const wire = scriptedTransport(keypair().pubkey, keypair().pubkey);
+  const reader = createRelayReader(wire.transport);
+  const directory = createProfileDirectory(reader.reader);
+  render(
+    <CanvasHistory
+      canvas={canvas}
+      channelId="x"
+      profiles={directory.queries}
+      head={head}
+      busy={false}
+      loaded
+      dirty={false}
+      refreshHead={async () => {}}
+      restore={async () => {}}
+    />,
+  );
+  return () => {
+    cleanup();
+    directory.dispose();
+    reader.dispose();
+  };
+}
+
+const lines = () =>
+  [
+    ...screen
+      .getByRole("region", { name: "Changes from current version" })
+      .querySelectorAll("[data-change], div:not([data-change])"),
+  ].map((row) =>
+    [...row.childNodes]
+      .filter((node) => !(node as Element).classList?.contains("sr-only"))
+      .map((node) => node.textContent)
+      .join(""),
+  );
+
+const diff = () =>
+  screen.getByRole("region", { name: "Changes from current version" });
+
+it("diffs a revision against the current Canvas, with markers and collapsed context", async () => {
+  const older = revision(
+    ["a", "b", "c", "d", "e", "F", "g", "h", "i", "j"].join("\n"),
+    1,
+  );
+  const current = revision(
+    ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].join("\n"),
+    2,
+  );
+  const dispose = mount(
+    vi.fn().mockResolvedValue({ revisions: [current, older], next: undefined }),
+    current,
+  );
+  try {
+    expect(await screen.findByText("Same as current version.")).toBeVisible();
+    act(() => radio(1).click());
+    expect(diff()).toBeVisible();
+    expect(lines()).toEqual([
+      "⋯ 2 unchanged lines",
+      " c",
+      " d",
+      " e",
+      "−f",
+      "+F",
+      " g",
+      " h",
+      " i",
+      " j",
+    ]);
+    expect(screen.getAllByText("Removed:")).toHaveLength(1);
+    expect(screen.getAllByText("Added:")).toHaveLength(1);
+    act(() =>
+      screen.getByRole("checkbox", { name: "Show full content" }).click(),
+    );
+    expect(screen.getByLabelText("Revision Markdown")).toHaveValue(
+      older.content,
+    );
+  } finally {
+    dispose();
+  }
+});
+
+it("diffs empty revisions and an empty current Canvas, and treats identical content as current", async () => {
+  const empty = revision("", 1);
+  const same = revision("x\ny", 2);
+  const current = revision("x\ny", 3);
+  const dispose = mount(
+    vi.fn().mockResolvedValue({
+      revisions: [current, same, empty],
+      next: undefined,
+    }),
+    current,
+  );
+  try {
+    await screen.findAllByRole("radio");
+    act(() => radio(1).click());
+    expect(screen.getByText("Same as current version.")).toBeVisible();
+    act(() => radio(2).click());
+    expect(lines()).toEqual(["−x", "−y"]);
+    expect(screen.getByText("This version is empty.")).toBeVisible();
+  } finally {
+    dispose();
+  }
+  const dispose2 = mount(
+    vi.fn().mockResolvedValue({ revisions: [empty, same], next: undefined }),
+    empty,
+  );
+  try {
+    await screen.findAllByRole("radio");
+    act(() => radio(1).click());
+    expect(lines()).toEqual(["+x", "+y"]);
+  } finally {
+    dispose2();
+  }
+});
+
+it("shows full content when a comparison exceeds its bounds", async () => {
+  const many = (prefix: string) =>
+    Array.from({ length: 5001 }, (_, i) => `${prefix}${i}`).join("\n");
+  const current = revision(many("b"), 2);
+  const dispose = mount(
+    vi.fn().mockResolvedValue({
+      revisions: [current, revision(many("a"), 1)],
+      next: undefined,
+    }),
+    current,
+  );
+  try {
+    await screen.findAllByRole("radio");
+    act(() => radio(1).click());
+    expect(
+      screen.getByText("Comparison too large; showing full content."),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Revision Markdown")).toHaveValue(many("a"));
+  } finally {
+    dispose();
+  }
+});

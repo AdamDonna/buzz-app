@@ -17,11 +17,13 @@ import type { ProfileQueries } from "../../features/relay/profile-directory";
 import { useProfileGeneration } from "../../features/relay/react";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { publicKeyLabels } from "../../shared/identity/public-key";
+import { Checkbox } from "../../shared/design-system/ui/Checkbox";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { Textarea } from "../../shared/design-system/ui/Textarea";
+import { CanvasDiff } from "./CanvasDiff";
 import styles from "./ChannelTemplates.module.css";
 
 export function CanvasHistory({
@@ -51,6 +53,7 @@ export function CanvasHistory({
   const [selected, setSelected] = useState<RelayEvent>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [full, setFull] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirm, setConfirm] = useState(false);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -138,6 +141,19 @@ export function CanvasHistory({
     };
     // This panel is keyed by the owning channel/session and mounted lazily.
   }, [load]);
+  const headContent = head?.content ?? "";
+  const fullContent = (note?: string) => (
+    <>
+      {note && <p>{note}</p>}
+      <Textarea
+        aria-label="Revision Markdown"
+        variant="code"
+        rows={10}
+        readOnly
+        value={selected?.content ?? ""}
+      />
+    </>
+  );
   const tooLarge =
     selected &&
     new TextEncoder().encode(selected.content).length > CANVAS_BYTES;
@@ -244,13 +260,22 @@ export function CanvasHistory({
       )}
       {selected && (
         <>
-          <Textarea
-            aria-label="Revision Markdown"
-            variant="code"
-            rows={10}
-            readOnly
-            value={selected.content}
+          <Checkbox
+            label="Show full content"
+            checked={full}
+            onCheckedChange={setFull}
           />
+          {full ? (
+            fullContent()
+          ) : selected.id === head?.id || selected.content === headContent ? (
+            <p>Same as current version.</p>
+          ) : (
+            <CanvasDiff
+              current={headContent}
+              revision={selected.content}
+              fallback={fullContent}
+            />
+          )}
           {!selected.content && <p>This version is empty.</p>}
           {tooLarge && (
             <p>

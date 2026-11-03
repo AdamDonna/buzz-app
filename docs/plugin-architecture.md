@@ -856,7 +856,15 @@ kind-40100 revisions in pages of 25, ordered by `created_at DESC, id ASC` with
 revision is visible; older pages remain replica-eligible. The current marker uses
 the editor's strong-read head, not list position. Refresh history rechecks the
 head without replacing the editor draft. Author labels use the shared profile
-directory, with public-key fallbacks; previews are read-only Markdown source.
+directory, with public-key fallbacks. The selected revision shows a line diff
+(`diff` package `diffLines(current, revision)`) against the editor's strong-read
+head, as old Buzz did: added lines are the revision's lines the current Canvas
+lacks, removed lines are current lines the revision drops. Lines carry +/−
+markers alongside colour and unchanged runs collapse to 3 lines of context. The
+head, or a revision with identical content, shows "Same as current version".
+Comparisons over 5,000 lines or past the library's edit-length or time bound
+show the full content with a label, and "Show full content" switches to the
+read-only Markdown source at any time.
 
 Restore requires explicit confirmation and publishes the selected content as a
 new signed revision through the existing Canvas save/outbox owner. Its precondition
@@ -869,8 +877,8 @@ which may automatically replay the exact signed event with its original
 precondition to retry. If confirmation ultimately fails or remains uncertain,
 the dialog retains drafts and shows the error without starting another restore.
 Empty revisions can be restored; revisions exceeding the existing 24 KiB save
-limit remain previewable but cannot be restored here. No diff viewer or new
-delivery owner is introduced.
+limit remain previewable but cannot be restored here. No new delivery owner is
+introduced.
 
 ### Top-bar launchers and the companion slot
 
