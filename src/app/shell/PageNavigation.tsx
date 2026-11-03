@@ -113,6 +113,20 @@ export function PageNavigation({
         strokeWidth={2.5}
       />
     );
+    if (placement === "toolbar")
+      return (
+        <span className="shell-toolbar-page" key={page.key}>
+          <IconButton
+            aria-label={label}
+            title={label}
+            variant="chrome"
+            aria-current={selected === page.key ? "page" : undefined}
+            onClick={select}
+            icon={pageIcon}
+          />
+          {badge && <span className="shell-toolbar-badge">{badge}</span>}
+        </span>
+      );
     const item = (
       <NavigationItem
         key={page.key}
@@ -143,19 +157,7 @@ export function PageNavigation({
         }
       />
     );
-    return placement === "toolbar" ? (
-      <span className="shell-toolbar-page" key={page.key}>
-        <IconButton
-          aria-label={label}
-          title={label}
-          variant="chrome"
-          aria-current={selected === page.key ? "page" : undefined}
-          onClick={select}
-          icon={pageIcon}
-        />
-        {badge && <span className="shell-toolbar-badge">{badge}</span>}
-      </span>
-    ) : page.preview && previewed(page) ? (
+    return page.preview && previewed(page) ? (
       <PagePreview
         key={page.key}
         page={page}
