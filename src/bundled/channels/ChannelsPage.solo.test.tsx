@@ -1047,7 +1047,7 @@ it.each([
   },
 );
 
-it("lets a joined Solo viewer leave from Chat actions without offering write access", async () => {
+it("lets a joined Solo viewer cancel Leave and restores focus to Chat actions", async () => {
   const f = fixture({ placed: false, viewOnly: true });
   f.mountWithSidebar();
   const row = await screen.findByRole("button", { name: /^Planning/ });
