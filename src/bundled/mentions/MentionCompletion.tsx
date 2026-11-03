@@ -81,9 +81,12 @@ export function MentionCompletion({
     if (!ids.length) return;
     for (const id of ids) requested.add(id);
     let live = true;
-    void session.profiles.ensure(ids, "background").catch(() => {
-      if (live) setError(true);
-    });
+    // Retry is explicit: a foreground read rereads known absences.
+    void session.profiles
+      .ensure(ids, attempt > 0 ? "foreground" : "background")
+      .catch(() => {
+        if (live) setError(true);
+      });
     return () => {
       live = false;
     };
