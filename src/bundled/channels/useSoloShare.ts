@@ -1,11 +1,5 @@
 import { useProfileGeneration } from "../../features/relay/react";
-import {
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type RefObject,
-} from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import type { Navigation } from "../../features/navigation/controller";
 import { buzzLinkTarget } from "../../features/navigation/buzz-links";
@@ -40,8 +34,6 @@ export function useSoloShare({
   enabled,
   signal,
   query,
-  setQuery,
-  input,
   close,
 }: {
   session: RelaySession;
@@ -51,8 +43,6 @@ export function useSoloShare({
   enabled: boolean;
   signal?: AbortSignal | undefined;
   query: string;
-  setQuery(query: string): void;
-  input: RefObject<HTMLElement | null>;
   close(): void;
 }) {
   const notify = useToastNotification();
@@ -155,43 +145,29 @@ export function useSoloShare({
     // stays unlabeled rather than being represented as private.
     void session.memberAdministration.refresh(channelId).catch(() => {});
   }, [session, channelId, memberKeys]);
-  const channels: ShareChannel[] = destination
-    ? []
-    : list.channels
-        .filter(
-          (item) =>
-            item.id !== channelId &&
-            !item.huddle &&
-            !item.metadataPending &&
-            !item.readOnly &&
-            !item.cached &&
-            !item.archived &&
-            ["stream", "forum"].includes(item.channelType ?? "") &&
-            item.members?.includes(session.viewer ?? "") &&
-            item.name
-              .toLowerCase()
-              .includes(query.trim().toLowerCase().replace(/^#/, "")),
-        )
-        .map((item) => ({
-          id: item.id,
-          name: item.name,
-          ...(item.private ? { private: item.private } : {}),
-          ...(item.channelType ? { channelType: item.channelType } : {}),
-        }));
-  const choose = (channel: ShareChannel) => {
-    if (busy || !eligible || destination) return;
-    setDestination(channel.id);
-    setQuery("");
-    setError("");
-    setFailed(false);
-    input.current?.focus();
-  };
-  const submit = async (confirmed?: ChannelDetails) => {
-    if (!visible() || running.current) return;
-    if (!destination) {
-      close();
-      return;
-    }
+  const channels: ShareChannel[] = list.channels
+    .filter(
+      (item) =>
+        item.id !== channelId &&
+        !item.huddle &&
+        !item.metadataPending &&
+        !item.readOnly &&
+        !item.cached &&
+        !item.archived &&
+        ["stream", "forum"].includes(item.channelType ?? "") &&
+        item.members?.includes(session.viewer ?? "") &&
+        item.name
+          .toLowerCase()
+          .includes(query.trim().toLowerCase().replace(/^#/, "")),
+    )
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      ...(item.private ? { private: item.private } : {}),
+      ...(item.channelType ? { channelType: item.channelType } : {}),
+    }));
+  const submit = async (target: string, confirmed?: ChannelDetails) => {
+    if (!visible() || running.current || !target) return;
     if (!eligible) {
       setError(
         "Chat access changed. Close and reopen to check current access before retrying.",
@@ -199,6 +175,8 @@ export function useSoloShare({
       return;
     }
     running.current = true;
+    setDestination(target);
+    setFailed(false);
     setBusy(true);
     setError("");
     setProgress("Checking chat access…");
@@ -206,7 +184,6 @@ export function useSoloShare({
     const cancelled = () => controller.abort();
     signal?.addEventListener("abort", cancelled, { once: true });
     if (signal?.aborted) controller.abort();
-    const target = destination;
     try {
       const active = controller.signal;
       await checkShareDestination(session, target, active);
@@ -281,26 +258,17 @@ export function useSoloShare({
     eligible,
     confirmation,
     cancelConfirmation: () => setConfirmation(undefined),
-    confirm: () => submit(confirmation),
+    confirm: () => submit(destination, confirmation),
     checkRequired,
     busy,
     failed,
     destination,
     chosen,
-    removeDestination: () => {
-      if (running.current) return;
-      setDestination("");
-      setConfirmation(undefined);
-      setError("");
-      setFailed(false);
-      input.current?.focus();
-    },
     source,
     rosterState,
     rosterError,
     reloadRoster: () => setRosterReload((value) => value + 1),
     channels,
-    choose,
     submit,
     error,
     progress,

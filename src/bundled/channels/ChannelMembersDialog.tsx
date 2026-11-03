@@ -702,8 +702,6 @@ export function ChannelMembersDialog({
     enabled: soloSharing,
     signal,
     query,
-    setQuery,
-    input,
     close,
   });
   // A Solo owner adds agents directly; people join through sharing.
@@ -1619,7 +1617,6 @@ export function ChannelMembersDialog({
       ? additionRoles.find((option) => option.role === selection.role)
       : undefined;
   const chosen = share.chosen;
-  const DestinationIcon = chosen ? channelIcon(chosen) : undefined;
   const searchFeedback = (
     <>
       {search.loading && (
@@ -1856,29 +1853,8 @@ export function ChannelMembersDialog({
                     : `Set to ${memberAccessLabel(selection.role).toLowerCase()}`}
             </Button>
           </>
-        ) : solo ? (
-          <Button
-            ref={shareAction}
-            variant="prominent"
-            title={
-              share.destination
-                ? "Sharing opens Private chats as View only and posts a link."
-                : undefined
-            }
-            loading={share.busy}
-            disabled={!share.eligible && !!share.destination}
-            onClick={() => void share.submit()}
-          >
-            {share.destination
-              ? share.checkRequired
-                ? "Check access and share"
-                : share.failed
-                  ? "Retry share"
-                  : "Share"
-              : "Done"}
-          </Button>
         ) : (
-          <Button variant="prominent" onClick={close}>
+          <Button variant="prominent" disabled={share.busy} onClick={close}>
             Done
           </Button>
         )
@@ -1896,28 +1872,6 @@ export function ChannelMembersDialog({
       ) : (
         <div className={styles.layout}>
           <div className={styles.searchControls}>{searchField}</div>
-          {chosen && DestinationIcon && (
-            <section
-              aria-label="Selected channel"
-              className="space-y-2 px-control-inset"
-            >
-              <p className="text-caption text-subtle">Share link to</p>
-              <InlineHeader
-                title={chosen.name}
-                icon={<DestinationIcon size={20} aria-hidden="true" />}
-                actions={
-                  <Button
-                    variant="subtle"
-                    size="sm"
-                    disabled={share.busy}
-                    onClick={share.removeDestination}
-                  >
-                    Change
-                  </Button>
-                }
-              />
-            </section>
-          )}
           {(administrationError ||
             rosterError ||
             nameError ||
@@ -2217,6 +2171,13 @@ export function ChannelMembersDialog({
                 <ul aria-busy={refreshing}>
                   {shareChannels.map((item) => {
                     const Icon = channelIcon(item);
+                    const active = share.destination === item.id;
+                    const action =
+                      active && share.checkRequired
+                        ? "Check access and share"
+                        : active && share.failed
+                          ? "Retry share"
+                          : "Share";
                     return (
                       <li key={item.id} className={styles.member}>
                         <div className={styles.profileContent}>
@@ -2231,15 +2192,15 @@ export function ChannelMembersDialog({
                           <Button
                             variant="prominent"
                             size="xs"
-                            aria-label={`Select ${channelText(item)}`}
-                            disabled={share.busy}
-                            onClick={() => {
-                              share.choose(item);
-                              if (scrollport.current)
-                                scrollport.current.scrollTop = 0;
+                            aria-label={`${action} ${channelText(item)}`}
+                            loading={share.busy && active}
+                            disabled={share.busy || !share.eligible}
+                            onClick={(event) => {
+                              shareAction.current = event.currentTarget;
+                              void share.submit(item.id);
                             }}
                           >
-                            Select
+                            {action}
                           </Button>
                         </span>
                       </li>
@@ -2318,12 +2279,16 @@ export function ChannelMembersDialog({
       )}
       {share.confirmation && chosen && (
         <AlertDialog
-          title="Change general access?"
+          title={`Share chat in ${channelText(chosen)}?`}
           description={`${SOLO_ACCESS_DISCLOSURE} The chat will be View only, and its link will be posted in ${channelText(chosen)}.`}
           pending={share.busy}
           onClose={share.cancelConfirmation}
           initialFocus={cancelShare}
-          finalFocus={shareAction}
+          finalFocus={() =>
+            shareAction.current?.isConnected
+              ? shareAction.current
+              : input.current
+          }
           actions={
             <>
               <Button

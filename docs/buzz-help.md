@@ -177,8 +177,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   between pages set to three fingers (or two or three fingers). Two-finger
   scrolling does not navigate.
 - **Sharing a Solo chat** grants access to its conversation history, not only
-  the next message. In its access dialog, choosing a channel and **Share** makes
-  a Private chat **View only** and posts a link there, after confirming community
+  the next message. Search for a channel in its access dialog and click **Share**
+  beside the result. This makes a Private chat **View only** and posts a link
+  there, after confirming community
   access to the full history and Canvas. Public and View only chats keep their
   current access and just post the link.
   Opening a shared chat link creates no sidebar entry.

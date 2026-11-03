@@ -243,30 +243,7 @@ test.describe("View only channel share", () => {
       scroll: false,
     });
     await page.setViewportSize({ width: 1280, height: 850 });
-    await search.fill("Alpha");
-    await dialog
-      .getByRole("button", { name: "Select #Alpha", exact: true })
-      .click();
-    await expect(
-      dialog.getByRole("region", { name: "Selected channel" }),
-    ).toContainText("Alpha");
-    const selectedChannel = dialog.getByRole("region", {
-      name: "Selected channel",
-    });
-    await expect(selectedChannel).toContainText("Share link to");
-    await selectedChannel
-      .getByRole("button", { name: "Change", exact: true })
-      .click();
-    await expect(selectedChannel).not.toBeVisible();
-    await expect(search).toBeFocused();
-    await search.fill("Alpha");
-    await dialog
-      .getByRole("button", { name: "Select #Alpha", exact: true })
-      .click();
-    const share = dialog.getByRole("button", {
-      name: "Share",
-      exact: true,
-    });
+    const done = dialog.getByRole("button", { name: "Done", exact: true });
     for (const [width, scale] of [
       [1280, 1],
       [390, 2],
@@ -285,7 +262,7 @@ test.describe("View only channel share", () => {
         name: /^(Copy link|Link copied)$/,
       });
       // Each button gets its own flex item. Horizontal overflow is allowed
-      // only for a single oversized action, not the combined Copy/Share row.
+      // only for a single oversized action, not the combined Copy/Done row.
       await expect
         .poll(() =>
           footer.evaluate((el) => {
@@ -306,19 +283,19 @@ test.describe("View only channel share", () => {
         await expect
           .poll(() => footer.evaluate((el) => el.scrollWidth - el.clientWidth))
           .toBeLessThanOrEqual(1);
-        await reachable(share, { scroll: false });
+        await reachable(done, { scroll: false });
         await reachable(copy, { scroll: false });
       } else {
         await expect
           .poll(async () => {
-            const shared = await share.boundingBox();
+            const shared = await done.boundingBox();
             const copied = await copy.boundingBox();
             return shared.y >= copied.y + copied.height;
           })
           .toBe(true);
         // Real Tab still reaches both wrapped controls, without programmatic
         // scrolling or focus bypassing the actual tab order.
-        for (const action of [share, copy]) {
+        for (const action of [done, copy]) {
           for (
             let step = 0;
             !(await action.evaluate((el) => el === document.activeElement));
@@ -357,18 +334,26 @@ test.describe("View only channel share", () => {
         await expect(copy).toBeFocused();
       }
     }
-    // Submit the wrapped primary action through its actual keyboard path too.
-    await page.keyboard.press("Tab");
-    await expect(share).toBeFocused();
-    await page.keyboard.press("Enter");
+    // A channel's search-result action opens the confirmation directly.
+    await search.fill("Alpha");
+    const share = dialog.getByRole("button", {
+      name: "Share #Alpha",
+      exact: true,
+    });
+    await reachable(share);
+    await share.press("Enter");
     const confirmation = page.getByRole("alertdialog", {
-      name: "Change general access?",
+      name: "Share chat in #Alpha?",
     });
     await expect(confirmation).toContainText("full history and Canvas");
     await confirmation
       .getByRole("button", { name: "Cancel", exact: true })
       .click();
     await expect(share).toBeFocused();
+    await expect(search).toHaveValue("Alpha");
+    await expect(
+      dialog.getByRole("region", { name: "Selected channel" }),
+    ).toHaveCount(0);
     expect(app.report.detailsPublications ?? []).toHaveLength(0);
     expect(
       app.report.publications.filter(({ event }) => event.kind === 9),
@@ -409,16 +394,13 @@ test.describe("View only channel share", () => {
       await trigger.click();
       await expect(search).toBeFocused();
       await search.fill("Alpha");
-      await dialog
-        .getByRole("button", { name: "Select #Alpha", exact: true })
-        .click();
+      await reachable(share);
       await expect(
-        selectedChannel.getByRole("button", { name: "Change", exact: true }),
-      ).toBeVisible();
-      await expect(selectedChannel).toBeInViewport({ ratio: 1 });
+        dialog.getByRole("status").filter({ hasText: "Searching…" }),
+      ).toHaveCount(0);
       if (info.project.name === "chromium")
         await dialog.screenshot({
-          path: info.outputPath(`SOLO_SHARE_DESTINATION_${mode}_${width}.png`),
+          path: info.outputPath(`SOLO_SHARE_RESULTS_${mode}_${width}.png`),
         });
       await share.click();
       const cancel = confirmation.getByRole("button", {
@@ -832,11 +814,18 @@ async function openChat(page, app, channelId, messageId) {
 }
 
 test.describe("Messages Share navigation", () => {
+  const firstChat = "55555555-5555-4555-8555-555555555555";
+  const secondChat = "66666666-6666-4666-8666-666666666666";
   test.use({
-    soloChannels: ["alpha", "beta"],
-    channelIds: ["alpha", "beta", "gamma"],
-    channelNames: { gamma: "Gamma" },
-    historyCounts: { alpha: 1, beta: 1, gamma: 0 },
+    soloChannels: [firstChat, secondChat],
+    ownSoloChannels: [firstChat, secondChat],
+    channelIds: [firstChat, secondChat, "gamma"],
+    channelNames: {
+      [firstChat]: "Alpha",
+      [secondChat]: "Beta",
+      gamma: "Gamma",
+    },
+    historyCounts: { [firstChat]: 1, [secondChat]: 1, gamma: 0 },
   });
 
   // Browser-only: production ChannelsPage reconciliation and host/browser history
@@ -846,7 +835,7 @@ test.describe("Messages Share navigation", () => {
     app,
   }) => {
     await page.goto(app.origin);
-    await openChat(page, app, "alpha");
+    await openChat(page, app, firstChat);
     await page
       .getByRole("button", { name: "Share access", exact: true })
       .click();
@@ -856,13 +845,15 @@ test.describe("Messages Share navigation", () => {
     });
     await search.fill("Gamma");
     await dialog
-      .getByRole("button", { name: "Select #Gamma", exact: true })
+      .getByRole("button", { name: "Share #Gamma", exact: true })
       .click();
-    await expect(
-      dialog.getByRole("region", { name: "Selected channel" }),
-    ).toBeVisible();
-    await openChat(page, app, "beta");
+    const confirmation = page.getByRole("alertdialog", {
+      name: "Share chat in #Gamma?",
+    });
+    await expect(confirmation).toBeVisible();
+    await openChat(page, app, secondChat);
     await expect(dialog).toHaveCount(0);
+    await expect(confirmation).toHaveCount(0);
     await page
       .getByRole("button", { name: "Share access", exact: true })
       .click();
@@ -880,8 +871,9 @@ test.describe("Messages Share navigation", () => {
           status: window.fixtureNavigation.snapshot().status,
         })),
       )
-      .toEqual({ channel: "alpha", status: "opened" });
+      .toEqual({ channel: firstChat, status: "opened" });
     await expect(dialog).toHaveCount(0);
+    await expect(confirmation).toHaveCount(0);
     await page
       .getByRole("button", { name: "Share access", exact: true })
       .click();
@@ -894,11 +886,17 @@ test.describe("Messages Share navigation", () => {
     // Another message visit in the same source also discards unsent UI.
     await search.fill("Gamma");
     await dialog
-      .getByRole("button", { name: "Select #Gamma", exact: true })
+      .getByRole("button", { name: "Share #Gamma", exact: true })
       .click();
-    const next = app.append("primary", "alpha", "A new visit in the same chat");
-    await openChat(page, app, "alpha", next.id);
+    await expect(confirmation).toBeVisible();
+    const next = app.append(
+      "primary",
+      firstChat,
+      "A new visit in the same chat",
+    );
+    await openChat(page, app, firstChat, next.id);
     await expect(dialog).toHaveCount(0);
+    await expect(confirmation).toHaveCount(0);
     await page
       .getByRole("button", { name: "Share access", exact: true })
       .click();
@@ -919,10 +917,10 @@ test.describe("Messages Share navigation", () => {
     await expect(settings).toBeVisible();
     const following = app.append(
       "primary",
-      "alpha",
+      firstChat,
       "Another visit retires chat settings",
     );
-    await openChat(page, app, "alpha", following.id);
+    await openChat(page, app, firstChat, following.id);
     await expect(settings).toHaveCount(0);
   });
 });

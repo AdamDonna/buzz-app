@@ -94,8 +94,9 @@ behavior on the label, so a rename touches copy only.
   chat's actions menu and opens the explicit visibility confirmation.
   Name and lifetime are not sharing controls.
 - **Chat access** adds a person immediately, without a DM or link delivery;
-  the owner can also add agents there (below). Choosing one existing channel and Share makes the
-  Private chat View only and posts a link, after confirming full-history and
+  the owner can also add agents there (below). Search for a channel and click
+  **Share** beside its result to make the
+  Private chat View only and post a link, after confirming full-history and
   Canvas disclosure. Public and View only chats keep their access and only post
   the link. Pasting an owned Private chat link uses the same confirmation before
   sending the original message. Opening the link creates no sidebar entry.

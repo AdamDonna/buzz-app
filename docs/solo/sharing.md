@@ -58,16 +58,14 @@ for sharing; this presentation grants no additional authority.
 Solo and channels intentionally share the device-local `channel-members` usage
 picks, so a choice in either surface can improve its order in the other.
 
-While searching, eligible stream/forum channels appear in a **Channels** group;
-**Select** chooses one. **Share link to** names the destination; **Change** returns
-focus to search so you can choose another channel. **Share** checks current access.
-If it is Private, the owner confirms that the community can read the full history and
-Canvas before one signed edit makes it View only. Public (existing) and View only
-chats keep their current access; no confirmation or access write is needed. The
-flow then posts one link through the Outbox and closes; no one is mentioned.
-The toast **Shared in #channel** offers **View**, which opens the posted link.
-Cancel changes nothing. With no
-channel selected, **Done** closes without writes.
+While searching, eligible stream/forum channels appear in a **Channels** group.
+Each result has a **Share** action. It checks current access and opens a
+confirmation for a Private chat, explaining community reading of the full history
+and Canvas and link delivery to that channel. **Share as View only** saves that
+access and posts the link in one step. Public (existing) and View only chats keep
+their access and post the link directly. Cancel returns focus to the same Share
+result and preserves the search. The toast **Shared in #channel** offers **View**,
+which opens the posted link. **Done** closes the access dialog without writes.
 
 An access failure leaves the link unsent. An uncertain access save offers
 **Check access and share**: it checks the existing write without resending, then

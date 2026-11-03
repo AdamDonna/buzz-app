@@ -2772,7 +2772,7 @@ it("keeps Solo channel sharing search-only while suggesting your agents when alo
   await t.user.type(input, "Plan");
   const channels = await screen.findByRole("region", { name: "Channels" });
   expect(
-    within(channels).getByRole("button", { name: "Select #Planning" }),
+    within(channels).getByRole("button", { name: "Share #Planning" }),
   ).toBeVisible();
   await t.user.clear(input);
   expect(screen.queryByRole("region", { name: "Channels" })).toBeNull();
