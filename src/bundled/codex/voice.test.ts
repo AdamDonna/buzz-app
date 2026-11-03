@@ -206,7 +206,7 @@ it("schedules native 480-sample owner frames for 10 ms", async () => {
   const connection = await f.open();
   connection.input(Array(480).fill(0.2));
   expect(f.context.createBuffer).toHaveBeenCalledWith(1, 480, 48000);
-  expect(f.context.createBuffer.mock.results[0].value.duration).toBe(0.01);
+  expect(f.context.createBuffer.mock.results[0]?.value.duration).toBe(0.01);
   expect(f.source.start).toHaveBeenNthCalledWith(1, 0.02);
   connection.input(Array(480).fill(0.2));
   expect(f.source.start).toHaveBeenNthCalledWith(2, 0.03);
