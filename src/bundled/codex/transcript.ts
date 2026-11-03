@@ -318,7 +318,10 @@ export async function findConversation(
 ) {
   return withServer(spawn, signal, async (rpc) => {
     for (const thread of await findThreads(rpc, lookup))
-      if (!thread.legacy || startedFor(await turns(rpc, thread.id, 1), lookup))
+      if (
+        !thread.legacy ||
+        startedFor(await turns(rpc, thread.id, 1, signal), lookup)
+      )
         return { threadId: thread.id, at: thread.updatedAt * 1000 };
     return undefined;
   });
@@ -330,7 +333,12 @@ type Page = { data: Turn[]; nextCursor: string | null };
  * ones, or undefined when Codex no longer has it. Turns are listed without
  * their items, which are read a page at a time: app-server's output frame
  * bounds a page of items, while one long turn can exceed it. */
-async function page(rpc: AppServer, threadId: string, limit: number) {
+async function page(
+  rpc: AppServer,
+  threadId: string,
+  limit: number,
+  signal: AbortSignal,
+) {
   const data: Turn[] = [];
   let cursor: string | null = null;
   try {
@@ -346,7 +354,7 @@ async function page(rpc: AppServer, threadId: string, limit: number) {
       cursor = next.data.length ? next.nextCursor : null;
     } while (cursor && data.length < limit);
     for (const turn of data.slice(0, limit))
-      turn.items = await items(rpc, threadId, turn.id);
+      turn.items = await items(rpc, threadId, turn.id, signal);
   } catch (error) {
     if (missing(error)) return undefined;
     throw error;
@@ -357,7 +365,12 @@ async function page(rpc: AppServer, threadId: string, limit: number) {
 /** A turn's items, oldest first, a page per request. A page over app-server's
  * frame closes the connection, so it is read again from its cursor on a fresh
  * one, at half the size, as is the rest of the turn. */
-async function items(rpc: AppServer, threadId: string, turnId: string) {
+async function items(
+  rpc: AppServer,
+  threadId: string,
+  turnId: string,
+  signal: AbortSignal,
+) {
   const all: Json[] = [];
   let cursor: string | null = null;
   for (let limit = ITEM_PAGE; ; ) {
@@ -373,6 +386,8 @@ async function items(rpc: AppServer, threadId: string, turnId: string) {
       if (!(error instanceof Oversized) || limit === 1) throw error;
       limit = Math.ceil(limit / 2);
       await rpc.reopen();
+      // An abort while reopening closed the connection it replaced.
+      signal.throwIfAborted();
       continue;
     }
     all.push(...next.data.map((entry) => entry.item));
@@ -380,8 +395,12 @@ async function items(rpc: AppServer, threadId: string, turnId: string) {
     if (!cursor) return all;
   }
 }
-const turns = async (rpc: AppServer, threadId: string, limit: number) =>
-  (await page(rpc, threadId, limit))?.data ?? [];
+const turns = async (
+  rpc: AppServer,
+  threadId: string,
+  limit: number,
+  signal: AbortSignal,
+) => (await page(rpc, threadId, limit, signal))?.data ?? [];
 
 /** Runs `use` with a short-lived app-server, closed when it ends or `signal`
  * aborts. */
@@ -427,7 +446,7 @@ export async function readTranscript(
     let more = false;
     let working = false;
     for (const [threadId, legacy] of threads) {
-      const read = await page(rpc, threadId, TURN_LIMIT);
+      const read = await page(rpc, threadId, TURN_LIMIT, signal);
       if (!read || (legacy && !startedFor(read.data, lookup))) continue;
       found = true;
       more ||= read.more;

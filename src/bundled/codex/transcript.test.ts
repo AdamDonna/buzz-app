@@ -510,6 +510,47 @@ it("reads a page over app-server's output frame again on a fresh connection, at 
   );
 });
 
+it("stops a transcript aborted while reopening after an oversized page", async () => {
+  const commands = Array.from({ length: 40 }, (_, index) => ({
+    type: "commandExecution",
+    id: `c${index}`,
+    command: "cat log",
+    aggregatedOutput: "x".repeat(200 * 1024),
+    status: "completed",
+  }));
+  const { spawn, sent } = server(paged([turn({ items: commands })]));
+  const controller = new AbortController();
+  const ended = vi.fn();
+  let opened = 0;
+  const aborting: typeof spawn = vi.fn(async (id, options) => {
+    const process = await spawn(id, options);
+    if (id !== "app-server") return process;
+    const n = ++opened;
+    return {
+      ...process,
+      end: async () => {
+        // The transcript is closed while the oversized connection is closing.
+        if (n === 1) controller.abort();
+        ended(n);
+        await process.end();
+      },
+    };
+  });
+  await expect(
+    readTranscript(
+      aborting,
+      { ...lookup, threadId: "thread-1" },
+      controller.signal,
+    ),
+  ).rejects.toThrow(/abort/i);
+  expect(
+    sent
+      .filter((w) => w.method === "thread/items/list")
+      .map((w) => (w.params as { limit: number }).limit),
+  ).toEqual([50]);
+  expect(ended).toHaveBeenLastCalledWith(2);
+});
+
 it("fails a transcript with an item over app-server's output frame", async () => {
   const huge = {
     type: "commandExecution",
