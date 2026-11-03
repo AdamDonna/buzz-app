@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { stats } from "../usage/stats";
 import type {
   AgentExecution,
   AgentExecutionBinding,
@@ -757,60 +758,92 @@ it.each([
     code: "EXECUTION_SESSION_RESET_REQUIRED",
     omit: true,
     cancel: false,
+    nextTurn: true,
+  },
+  {
+    failure: "expired target before another turn",
+    code: "EXECUTION_SESSION_RESET_REQUIRED",
+    omit: true,
+    cancel: false,
+    nextTurn: false,
   },
   {
     failure: "other replaced target error",
     code: "EXECUTION_UNAVAILABLE",
     omit: false,
     cancel: false,
+    nextTurn: true,
   },
   {
     failure: "cancelled history read",
     code: "EXECUTION_SESSION_RESET_REQUIRED",
     omit: false,
     cancel: true,
+    nextTurn: true,
   },
-])("keeps healthy usage with $failure", async ({ code, omit, cancel }) => {
-  const f = fixture();
-  const first = f.delivery();
-  await f.runtime.run(first);
-  await f.result(first);
-  const oldKey = [...f.targets.keys()][0];
-  await f.runtime.session(
-    { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent,
-    { channelId, root },
-    "new",
-  );
-  const next = f.delivery();
-  await f.runtime.run(next);
-  await f.result(next);
-  const currentKey = [...f.targets.keys()][1];
-  await f.runtime.retire(self);
-  const connect = f.execute.getMockImplementation();
-  if (!connect) throw new Error("Missing target adapter");
-  const lifetime = new AbortController();
-  const failure = Object.assign(new Error("Target unavailable"), { code });
-  const stopped = new Error("Usage cancelled");
-  f.execute.mockImplementation(async (agent, session) => {
-    if (session.key === oldKey) {
-      if (cancel) lifetime.abort(stopped);
-      throw failure;
+])(
+  "keeps healthy usage with $failure",
+  async ({ code, omit, cancel, nextTurn }) => {
+    const f = fixture();
+    const first = f.delivery();
+    await f.runtime.run(first);
+    await f.result(first);
+    const oldKey = [...f.targets.keys()][0];
+    await f.runtime.session(
+      { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent,
+      { channelId, root },
+      "new",
+    );
+    if (nextTurn) {
+      const next = f.delivery();
+      await f.runtime.run(next);
+      await f.result(next);
     }
-    return connect(agent, session);
-  });
-  const usage = f.runtime.usage(self, 0, lifetime.signal);
-  if (omit) {
-    const snapshots = await usage;
-    expect(
-      snapshots.find((session) => session.id === `${currentKey}/1`),
-    ).toMatchObject({ gaps: [], observations: [expect.any(Object)] });
-    expect(
-      snapshots.find((session) => session.id === `${oldKey}/1`),
-    ).toMatchObject({ gaps: [expect.any(String)], observations: [] });
-  } else {
-    await expect(usage).rejects.toBe(cancel ? stopped : failure);
-  }
-});
+    const currentKey = [...f.targets.keys()][1];
+    await f.runtime.retire(self);
+    const connect = f.execute.getMockImplementation();
+    if (!connect) throw new Error("Missing target adapter");
+    const lifetime = new AbortController();
+    const failure = Object.assign(new Error("Target unavailable"), { code });
+    const stopped = new Error("Usage cancelled");
+    f.execute.mockImplementation(async (agent, session) => {
+      if (session.key === oldKey) {
+        if (cancel) lifetime.abort(stopped);
+        throw failure;
+      }
+      return connect(agent, session);
+    });
+    const usage = f.runtime.usage(self, 0, lifetime.signal);
+    if (omit) {
+      const snapshots = await usage;
+      if (nextTurn) {
+        expect(
+          snapshots.find((session) => session.id === `${currentKey}/1`),
+        ).toMatchObject({ gaps: [], observations: [expect.any(Object)] });
+      } else {
+        const total = stats(
+          [
+            {
+              agent: f.agent as unknown as Agent,
+              harness: "buzz.pi/pi",
+              sessions: snapshots,
+            },
+          ],
+          102_000,
+          1,
+        );
+        expect(total.sessions).toBe(1);
+        expect(total.cost).toEqual({ partial: true });
+        expect(total.tokens).toEqual({ partial: true });
+      }
+      expect(
+        snapshots.find((session) => session.id === `${oldKey}/1`),
+      ).toMatchObject({ gaps: [expect.any(String)], observations: [] });
+    } else {
+      await expect(usage).rejects.toBe(cancel ? stopped : failure);
+    }
+  },
+);
 
 it("keeps reset errors visible for current usage and resume", async () => {
   const f = fixture();
