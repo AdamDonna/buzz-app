@@ -96,7 +96,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   reveals these actions; touch layouts keep actions inline.
 
 - Only explicit additions by another member and removals appear as centered
-  channel notices; self-joins and voluntary leaves are hidden.
+  channel notices; self-joins and voluntary leaves are hidden. When recorded by
+  the relay, additions state the access granted at that time; older notices
+  remain generic. Later access changes do not rewrite earlier notices.
   Consecutive addition and removal notices collapse into one row between
   conversation entries, even across long gaps or midnight. Large or mixed groups
   keep one name per action,

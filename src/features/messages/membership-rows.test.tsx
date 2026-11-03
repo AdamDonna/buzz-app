@@ -412,3 +412,53 @@ it("omits only the owner's starting agents once history reaches the start", () =
     ).map((row) => row.id),
   ).toEqual(["left", "message"]);
 });
+
+it("shows admission roles to every viewer while keeping self-joins and leaves hidden", () => {
+  for (const [role, suffix] of [
+    ["guest", " with view-only access"],
+    ["member", " as a participant"],
+    ["bot", " as a participant"],
+    ["admin", " as an admin"],
+    ["owner", " as an owner"],
+  ] as const) {
+    const addition = row("add", { ...joined(wes, pinky), role });
+    expect(membershipDescription([addition], profiles, pinky).text).toBe(
+      `You were added by Wes${suffix}`,
+    );
+    expect(membershipDescription([addition], profiles, wes).text).toBe(
+      `Pinky added by you${suffix}`,
+    );
+    expect(
+      membershipRows([
+        row("self", { ...joined(brain, brain), role }),
+        addition,
+        row("left", left(brain)),
+      ]).map((row) => row.id),
+    ).toEqual(["add"]);
+  }
+});
+
+it("keeps one latest-action summary while separating admission roles and legacy additions", () => {
+  const rows = [
+    row("a", { ...joined(wes, pinky), role: "guest" }),
+    row("b", { ...joined(wes, brain), role: "member" }),
+    row("c", joined(pinky, wes)),
+  ];
+  expect(membershipRows(rows)).toHaveLength(1);
+  const description = membershipDescription(rows, profiles);
+  expect(description.text).toBe(
+    "Pinky was added with view-only access · Brain was added as a participant · Wes was added",
+  );
+  expect(description.title).toContain(
+    "Pinky was added by Wes with view-only access",
+  );
+  expect(
+    membershipDescription([...rows, row("d", removed(wes, pinky))], profiles)
+      .text,
+  ).toBe(
+    "Brain was added as a participant · Wes was added · Pinky was removed",
+  );
+  expect(membershipDescription(rows, new Map(), pinky).text).toContain(
+    "You were added with view-only access",
+  );
+});

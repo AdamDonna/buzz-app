@@ -103,6 +103,8 @@ export type Attachment = Readonly<{
 }>;
 /** Relay-authored membership activity, not a membership grant or user message. */
 export type MembershipChange = Readonly<{
+  /** Role written by this operation; display history, never current authority. */
+  role?: "guest" | "member" | "bot" | "admin" | "owner";
   type: "member_joined" | "member_left" | "member_removed";
   actor: string;
   target: string;

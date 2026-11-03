@@ -499,3 +499,32 @@ it("a catch-up head rereads the newest notices, and restarts the descent only wh
     owner.dispose();
   }
 });
+
+it("retains only recognized event roles without inferring current access", () => {
+  for (const role of [
+    "guest",
+    "member",
+    "bot",
+    "admin",
+    "owner",
+    undefined,
+    "future",
+    7,
+    {},
+  ]) {
+    const event = activity({
+      type: "member_joined",
+      actor: viewer.pubkey,
+      target: pinky.pubkey,
+      role,
+    });
+    const change = foldMessages("a", relay.pubkey, [event])[0]?.membership;
+    assert.exists(change);
+    expect(change.role).toBe(
+      typeof role === "string" &&
+        ["guest", "member", "bot", "admin", "owner"].includes(role)
+        ? role
+        : undefined,
+    );
+  }
+});

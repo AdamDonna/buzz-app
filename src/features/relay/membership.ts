@@ -33,6 +33,11 @@ export function membershipChange(
       type: body.type,
       actor: body.actor,
       target: body.target,
+      ...(body.type === "member_joined" &&
+      typeof body.role === "string" &&
+      ["guest", "member", "bot", "admin", "owner"].includes(body.role)
+        ? { role: body.role as NonNullable<MembershipChange["role"]> }
+        : {}),
     });
 }
 

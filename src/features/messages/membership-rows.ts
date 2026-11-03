@@ -100,6 +100,23 @@ export type MembershipPart = {
   preview?: { label: string; members: readonly { id: string; name: string }[] };
 };
 
+/** The relay's event role is historical; absent or future roles stay generic. */
+function roleSuffix(role: MembershipChange["role"], plural = false): string {
+  switch (role) {
+    case "guest":
+      return " with view-only access";
+    case "member":
+    case "bot":
+      return plural ? " as participants" : " as a participant";
+    case "admin":
+      return plural ? " as admins" : " as an admin";
+    case "owner":
+      return plural ? " as owners" : " as an owner";
+    default:
+      return "";
+  }
+}
+
 export function membershipDescription(
   rows: readonly ChannelMessage[],
   profiles: ReadonlyMap<string, Profile>,
@@ -141,6 +158,11 @@ export function membershipDescription(
   if (
     targets.length > 3 ||
     kinds.size > 1 ||
+    new Set(
+      changes
+        .filter((change) => change.type === "member_joined")
+        .map((change) => change.role),
+    ).size > 1 ||
     (first.type === "member_removed" &&
       changes.some((change) => change.actor !== first.actor))
   ) {
@@ -149,37 +171,46 @@ export function membershipDescription(
       ["member_joined", "added"],
       ["member_removed", "removed"],
     ] as const) {
-      const people = [
-        ...new Set(
-          changes
-            .filter((change) => change.type === type)
-            .map((change) => change.target),
+      const matching = changes.filter((change) => change.type === type);
+      for (const role of new Set(
+        matching.map((change) =>
+          type === "member_joined" ? change.role : undefined,
         ),
-      ];
-      const person = people[0];
-      if (!person) continue;
-      if (parts.length) parts.push(plain(" · "));
-      parts.push(name(person, true));
-      if (people.length > 1) {
-        parts.push(plain(" and "), {
-          text: `${people.length - 1} ${people.length === 2 ? "other" : "others"}`,
-          preview: {
-            label: `People who were ${label}`,
-            members: people.map((id) => ({ id, name: name(id, true).text })),
-          },
-        });
+      )) {
+        const people = [
+          ...new Set(
+            matching
+              .filter(
+                (change) => type !== "member_joined" || change.role === role,
+              )
+              .map((change) => change.target),
+          ),
+        ];
+        const person = people[0];
+        if (!person) continue;
+        if (parts.length) parts.push(plain(" · "));
+        parts.push(name(person, true));
+        if (people.length > 1) {
+          parts.push(plain(" and "), {
+            text: `${people.length - 1} ${people.length === 2 ? "other" : "others"}`,
+            preview: {
+              label: `People who were ${label}${roleSuffix(role, true)}`,
+              members: people.map((id) => ({ id, name: name(id, true).text })),
+            },
+          });
+        }
+        parts.push(
+          plain(
+            ` ${people.length > 1 || person === viewer ? "were" : "was"} ${label}${roleSuffix(role, people.length > 1)}`,
+          ),
+        );
       }
-      parts.push(
-        plain(
-          ` ${people.length > 1 || person === viewer ? "were" : "was"} ${label}`,
-        ),
-      );
     }
     const text = parts.map((part) => part.text).join("");
     const detail = changes.map((change) => {
       const subject = name(change.target, true).text;
       const action = change.type === "member_removed" ? "removed" : "added";
-      return `${subject} ${change.target === viewer ? "were" : "was"} ${action} by ${name(change.actor).text}`;
+      return `${subject} ${change.target === viewer ? "were" : "was"} ${action} by ${name(change.actor).text}${change.type === "member_joined" ? roleSuffix(change.role) : ""}`;
     });
     return {
       targets,
@@ -209,7 +240,14 @@ export function membershipDescription(
           name(first.actor),
         ]
       : [plain(` ${first.target === viewer ? "were" : "was"} added`)];
-    parts = [lead, ...action, ...alongWith(sameAdder ? "," : "")];
+    parts = [
+      lead,
+      ...action,
+      ...alongWith(sameAdder ? "," : ""),
+      ...(first.role
+        ? [plain(roleSuffix(first.role, targets.length > 1))]
+        : []),
+    ];
   }
   return {
     targets,
