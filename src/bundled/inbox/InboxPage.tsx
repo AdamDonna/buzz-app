@@ -720,8 +720,10 @@ function InboxList({
           )
       );
     };
-    let advanced: InboxItem | undefined;
-    let advancedRead: (() => Promise<unknown>) | undefined;
+    // The next conversation's read starts as it opens, so a later arrival or
+    // a later Mark as unread is never overridden by it; Retry repeats it.
+    let readNext: (() => Promise<unknown>) | undefined;
+    let reading: Promise<unknown> | undefined;
     // Archiving the open conversation closes its tab and opens the next;
     // restoring it keeps its tab.
     const navigate = () => {
@@ -755,14 +757,24 @@ function InboxList({
         closeTab(current.opened)
       ) {
         if (next && openRow(next, channelOf(next))) {
-          advanced = next;
-          // Reading the next conversation covers what it held when it opened,
-          // not what arrives while this archive finishes saving.
-          if (canRead && hasUnread(next) && next.target.kind === "channel")
+          if (canRead && hasUnread(next))
             try {
-              advancedRead = session.unread.prepareChannelRead(next.channelId);
+              readNext =
+                next.target.kind === "channel"
+                  ? session.unread.prepareChannelRead(next.channelId)
+                  : () =>
+                      Promise.all(
+                        next.readThrough.map((step) =>
+                          session.unread.markThrough(
+                            step.target,
+                            step.messageId,
+                          ),
+                        ),
+                      );
+              reading = readNext();
             } catch {
-              advancedRead = undefined;
+              // A conversation that can no longer be read stays as it is.
+              readNext = undefined;
             }
           setSelectedTarget(targetOf(next));
           return;
@@ -771,54 +783,47 @@ function InboxList({
       }
       focusRow.current = next?.id ?? "";
     };
-    void run(
-      async () => {
-        navigate();
-        // Someone else's chat has no sidebar row to carry its dot, so archiving
-        // its tags also reads them. The reads follow navigation, so a tab chosen
-        // while they save is never replaced.
-        const shared = session.channels
-          .list()
-          .channels.find((entry) => entry.id === item.channelId);
-        if (
-          !value ||
-          !canRead ||
-          !hasUnread(conversation) ||
-          shared?.channelType !== "solo" ||
-          ownSolo(shared)
-        )
-          return;
+    const readShared = async () => {
+      // Someone else's chat has no sidebar row to carry its dot, so archiving
+      // its tags also reads them. The reads follow navigation, so a tab chosen
+      // while they save is never replaced.
+      const shared = session.channels
+        .list()
+        .channels.find((entry) => entry.id === item.channelId);
+      if (
+        !value ||
+        !canRead ||
+        !hasUnread(conversation) ||
+        shared?.channelType !== "solo" ||
+        ownSolo(shared)
+      )
+        return;
+      try {
+        for (const step of conversation.readThrough)
+          await session.unread.markThrough(step.target, step.messageId);
+      } catch (cause) {
+        // Unsaved reads bring the row back, so its unread tags stay visible.
         try {
-          for (const step of conversation.readThrough)
-            await session.unread.markThrough(step.target, step.messageId);
-        } catch (cause) {
-          // Unsaved reads bring the row back, so its unread tags stay visible.
-          try {
-            updateArchive(archiveScope, conversation, false);
-          } catch {
-            // The read failure is the error to show.
-          }
-          throw cause;
+          updateArchive(archiveScope, conversation, false);
+        } catch {
+          // The read failure is the error to show.
         }
-      },
-      valid,
-      () => {
-        if (
-          advanced &&
-          hasUnread(advanced) &&
-          canRead &&
-          intentRevision.current === intent
-        )
-          mutate(advanced, false, advancedRead);
-      },
-    );
+        throw cause;
+      }
+    };
+    void run(async () => {
+      navigate();
+      const following = reading ?? readNext?.();
+      reading = undefined;
+      await Promise.all([
+        readShared(),
+        following?.then(() => {
+          readNext = undefined;
+        }),
+      ]);
+    }, valid);
   }
-  function mutate(
-    item: InboxItem,
-    unread: boolean,
-    // A read prepared when the conversation was shown, so its cutoff is then.
-    prepared?: () => Promise<unknown>,
-  ) {
+  function mutate(item: InboxItem, unread: boolean) {
     // An open menu is not authority: recheck the current session at action entry.
     if (
       !active.current ||
@@ -866,7 +871,7 @@ function InboxList({
       );
     };
     // Prepare once per click, not once per Retry: later arrivals are a new intent.
-    let readChannel = prepared;
+    let readChannel: (() => Promise<unknown>) | undefined;
     const work = async () => {
       if (unread) await session.unread.markUnreadLocal(item.target);
       else if (item.target.kind === "channel") {

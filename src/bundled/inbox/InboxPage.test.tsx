@@ -3720,7 +3720,7 @@ it("archiving the open shared chat moves on before its reads finish saving", asy
   }
 });
 
-it("archiving the open shared chat reads the next conversation only as it was shown", async () => {
+it("archiving the open shared chat reads the next conversation only as it was shown, before a later Mark as unread", async () => {
   const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
   render(h.view);
   await waitFor(() => expect(rows()).toHaveLength(2));
@@ -3748,6 +3748,11 @@ it("archiving the open shared chat reads the next conversation only as it was sh
     // at the clock, so it is stamped after it.
     const later = Math.floor(Date.now() / 1000) + 60;
     act(() => h.emit([message(h.alice, "dm-room", "Arrived later", later)]));
+    // Marking it unread from the sidebar meanwhile also outlasts that read.
+    void h.owner.session.unread.markUnreadLocal({
+      kind: "channel",
+      channelId: "dm-room",
+    });
   } finally {
     await act(async () => release());
   }
@@ -3759,10 +3764,14 @@ it("archiving the open shared chat reads the next conversation only as it was sh
   await waitFor(() =>
     expect(h.journal()?.state.frontiers["dm-room"]).toBeDefined(),
   );
-  expect(
-    h.owner.session.unread.snapshot({ kind: "channel", channelId: "dm-room" })
-      .observedCount,
-  ).toBe(1);
+  await waitFor(() =>
+    expect(
+      h.owner.session.unread.snapshot({
+        kind: "channel",
+        channelId: "dm-room",
+      }),
+    ).toMatchObject({ observedCount: 1, manual: "local-only" }),
+  );
 });
 
 it("a failed read brings an archived shared chat back, through Retry cancellation and reload", async () => {
