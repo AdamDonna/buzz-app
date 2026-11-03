@@ -225,6 +225,8 @@ export function claudeTurns(
   }
   const current = turns.at(-1);
   if (current && !working) current.endedAt = Math.max(last, current.startedAt);
+  // A session file holds the whole session, from its start.
+  if (turns[0] && !turns[0].partial) turns[0].newSession = true;
   return turns;
 }
 

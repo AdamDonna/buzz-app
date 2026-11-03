@@ -111,6 +111,8 @@ export type SessionsOptions = Readonly<{
   fingerprint(): string;
   /** Where each conversation's last use is saved. */
   store?: SessionStore;
+  /** Told of each session opened, with the prompt it was opened with. */
+  started?(sessionId: string, systemPrompt: string): void;
   /** Called when a conversation's session opens, is sent a message, or
    * closes. */
   onChange?(): void;
@@ -528,6 +530,7 @@ export class AgentSessions {
       void this.close(live);
       return this.open(key, title, use, named);
     }
+    this.options.started?.(session.id, launch.systemPrompt);
     use(live);
     return live;
   }
