@@ -5233,7 +5233,10 @@ it("preserves blocked agents' settings and teams without binding or publishing t
   }
 });
 
-it("refuses Delete before saving anything when its config's home is blocked", async () => {
+it.each([
+  ["refuses Delete before saving anything", true],
+  ["deletes as before with no config", false],
+])("%s when its home is blocked", async (_, synced) => {
   const resolve = destinations.communityDestination;
   const policy = destinations.parseRelayPolicy(
     JSON.stringify({ pinned: "relay.example.test", allowlist: [] }),
@@ -5241,7 +5244,16 @@ it("refuses Delete before saving anything when its config's home is blocked", as
   const gate = vi
     .spyOn(destinations, "communityDestination")
     .mockImplementation((value) => resolve(value, undefined, policy));
+  const subject: Subject = {
+    owner: viewer,
+    community: "https://blocked.example",
+    subject: bot,
+    channel: "9b353519-f4fe-4757-aef4-bec6cc0ae54c",
+    type: "buzz.agent.instructions",
+  };
   const fixture = await setup({
+    binding: () =>
+      synced ? { instructions: { mode: "synced", subject } } : {},
     identities: [
       {
         pubkey: bot,
@@ -5256,10 +5268,15 @@ it("refuses Delete before saving anything when its config's home is blocked", as
   });
   try {
     await fixture.service.refresh();
-    await expect(fixture.service.remove(bot)).rejects.toThrow(
-      "Away can't be deleted here: its home community's relay is not allowed by this build's relay policy.",
-    );
-    expect(fixture.native.beginDelete).not.toHaveBeenCalled();
+    if (synced) {
+      await expect(fixture.service.remove(bot)).rejects.toThrow(
+        "Away can't be deleted here: its home community's relay is not allowed by this build's relay policy.",
+      );
+      expect(fixture.native.beginDelete).not.toHaveBeenCalled();
+    } else {
+      await fixture.service.remove(bot);
+      expect(fixture.native.beginDelete).toHaveBeenCalledOnce();
+    }
   } finally {
     await fixture.ctx.fiber.dispose();
     gate.mockRestore();

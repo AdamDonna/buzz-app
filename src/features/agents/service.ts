@@ -3756,8 +3756,7 @@ export class AgentsService extends Service implements Agents {
     // never could be: refused before anything is saved.
     if (
       relayBlocked(homeOf(identity)) &&
-      (!this.homeRemains(pubkey) ||
-        Object.keys(this.configBinding(identity)).length)
+      Object.keys(this.configBinding(identity)).length
     )
       throw new Error(
         `${identity.name} can't be deleted here: its home community's relay is not allowed by this build's relay policy.`,
