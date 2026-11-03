@@ -316,4 +316,29 @@ test("section labels fade on overflow and recover when widened", async ({
   });
   await expect(title).not.toHaveAttribute("data-overflowing");
   await expect(title).toHaveCSS("mask-image", "none");
+
+  // Enlarging a narrow saved section must preserve useful text space without
+  // changing this same single-line fading contract.
+  await page.evaluate(() => {
+    localStorage.setItem("buzz-font-scale.v1", "2");
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "buzz-font-scale.v1",
+        storageArea: localStorage,
+      }),
+    );
+  });
+  await expect(page.locator("html")).toHaveCSS("font-size", "32px");
+  await page.getByRole("separator", { name: "Resize sidebar" }).press("Home");
+  await expect(title).toHaveAttribute("data-overflowing", "true");
+  await expect
+    .poll(() =>
+      title.evaluate((element) => ({
+        readable: element.clientWidth >= 64,
+        wrapped:
+          element.getBoundingClientRect().height >
+          Number.parseFloat(getComputedStyle(element).lineHeight) + 1,
+      })),
+    )
+    .toEqual({ readable: true, wrapped: false });
 });

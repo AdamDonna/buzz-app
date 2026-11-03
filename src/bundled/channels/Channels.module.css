@@ -414,6 +414,15 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   -webkit-user-select: none;
   user-select: none;
 }
+/* Cap the action reservation before it consumes the label and chevron.
+   In cramped enlarged headers, revealed actions overlay the trailing text. */
+.sectionHeader > :where(details) > summary {
+  padding-inline-end: clamp(
+    var(--space-1),
+    calc(100% - (3 * var(--size-control-sm))),
+    calc((2 * var(--size-control-sm)) + var(--space-2))
+  );
+}
 .channelSection summary::-webkit-details-marker {
   display: none;
 }
@@ -484,6 +493,10 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
 }
 .untitledSectionContent {
   padding-inline-end: calc(var(--space-8) + var(--space-1));
+}
+/* Revealed actions cover trailing text when the reservation is capped. */
+.sectionHeader:has(> details) > .sectionActions {
+  background: var(--surface-panel);
 }
 html[data-keyboard-navigation] .sectionActions:focus-within,
 .sectionHeader:hover :is(.sectionActions, .sectionChevron),
