@@ -1022,6 +1022,39 @@ mod tests {
             assert!(heard.lock().unwrap().iter().all(|peer| *peer == owner));
         }
 
+        /// In its organization's community, a seat's upgrade carries exactly
+        /// the agent's own assertion, minted for that community.
+        #[tokio::test]
+        async fn an_agent_seat_carries_its_own_assertion_to_its_community() {
+            use crate::federated_identity::agent::tests::{enrolled, fixture_at, issued, issuer};
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (acceptor, connector) = tls();
+            let listener = Relay(listener, acceptor);
+            let authority = listener.0.local_addr().unwrap().to_string();
+            let probe = fixture_at("http://unused".into(), &authority);
+            let minted = issued(&probe.agent, json!({"aud": format!("https://{authority}")}));
+            let token = minted["assertion"].as_str().unwrap().to_owned();
+            let (base, served) =
+                issuer(vec![(200, enrolled(&probe.agent.owner)), (200, minted)]).await;
+            let f = fixture_at(base, &authority);
+            let (agent, key) = (probe.agent, probe.key);
+            let stamp = f.tokens.stamp(&agent.pubkey, &agent.relay).unwrap();
+            let admission = f.tokens.authorize(&agent, &key, stamp).await.unwrap();
+            served.await.unwrap();
+            let parent = uuid::Uuid::new_v4().to_string();
+            let seating = seat_via(&agent, &key, admission, &parent, "room", connector);
+            let relay_side = async {
+                let (mut socket, _, headers) = upgrade(&listener).await;
+                admit(&mut socket, &agent.pubkey).await;
+                headers
+            };
+            let (seated, headers) = tokio::join!(seating, relay_side);
+            assert!(seated.unwrap().expires_at.is_some());
+            let carried: Vec<_> = headers.get_all(assertion::HEADER).iter().collect();
+            assert_eq!(carried, [format!("Bearer {token}").as_str()]);
+            assert!(headers.get("authorization").is_none());
+        }
+
         /// Retire the session at `gate`, then let the relay continue: the retired
         /// connect must end without authenticating or returning a socket.
         async fn retired_at(gate: &str, retire: impl FnOnce(&FederatedIdentity)) {

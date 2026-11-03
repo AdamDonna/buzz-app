@@ -95,8 +95,18 @@ pub(crate) struct Fixture {
 }
 /// An owner signed in as `a@example.com` at `base`, and one agent.
 pub(crate) fn fixture(base: String) -> Fixture {
+    fixture_at(base, "relay.example")
+}
+/// `fixture`, with the organization's community, and the agent, at `community`.
+pub(crate) fn fixture_at(base: String, community: &str) -> Fixture {
     let session_store = Arc::new(Memory::default());
-    let identity = at_adapter(session_store.clone(), base);
+    let mut identity = at_adapter(session_store.clone(), base);
+    Arc::get_mut(&mut identity.0)
+        .unwrap()
+        .config
+        .as_mut()
+        .unwrap()
+        .community_hosts = vec![community.into()];
     let mut session = record();
     Arc::get_mut(&mut session).unwrap().record.email = Some("a@example.com".into());
     {
@@ -109,7 +119,7 @@ pub(crate) fn fixture(base: String) -> Fixture {
     let key = Secret::generate().unwrap();
     let agent = AppAgent {
         pubkey: key.pubkey().into(),
-        relay: "wss://relay.example".into(),
+        relay: format!("wss://{community}"),
         owner: "b".repeat(64),
         auth: r#"["auth","owner","conditions","sig"]"#.into(),
         agent_type: "p/t".into(),
