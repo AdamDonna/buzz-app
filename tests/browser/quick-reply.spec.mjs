@@ -1,7 +1,7 @@
 import { openPage } from "./navigation.mjs";
 import { fixtureRelayUrl } from "../relay-config.ts";
 import { test, expect } from "./fixture.mjs";
-import { open, settle } from "./timeline.mjs";
+import { open, settle, end } from "./timeline.mjs";
 import { hoverMessage } from "./message-actions.mjs";
 
 test.use({ productionBroker: true, historyCounts: { alpha: 30, beta: 1 } });
@@ -28,7 +28,21 @@ test("main conversation replies inline and keeps the existing thread summary", a
       .getByRole("button", { name: "Reply in thread", exact: true })
       .click();
   };
+  // Hover can scroll the virtualized row into view and replace estimated row
+  // heights. Establish bottom geometry after that preparation, before Reply.
+  await end(page);
+  await hoverMessage(row);
   await settle(page);
+  await expect
+    .poll(() =>
+      page
+        .getByRole("region", { name: "Channel message history" })
+        .evaluate(
+          (element) =>
+            element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+    )
+    .toBeLessThanOrEqual(1);
   await page.evaluate(() => {
     window.replyFrames = [];
     window.replySampling = true;
@@ -48,7 +62,30 @@ test("main conversation replies inline and keeps the existing thread summary", a
   });
   let frames;
   try {
-    await chooseReply();
+    await row
+      .getByRole("button", { name: "Reply in thread", exact: true })
+      .click();
+    const form = page.locator("form").filter({
+      has: page.getByRole("textbox", {
+        name: "Reply to thread",
+        exact: true,
+      }),
+    });
+    await expect(
+      form.getByText("Reply in thread", { exact: true }),
+    ).toBeVisible();
+    // Stable polling can fall between WebKit animation frames. Wait for the
+    // actual transition, then let ResizeObserver and the next paint finish.
+    await form.evaluate(async (element) => {
+      await Promise.all(
+        element
+          .getAnimations({ subtree: true })
+          .map((animation) => animation.finished),
+      );
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+    });
     await settle(page);
   } finally {
     frames = await page.evaluate(() => {
