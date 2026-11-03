@@ -103,6 +103,9 @@ the interface unless an available tool actually supports that action.
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
+- **Sidebar sections**: in **All**, use the arrow beside **Solo** or **Team** to
+  collapse either section independently. Buzz remembers the collapsed sections
+  for that community and identity.
 
 ## Choosing and customizing agents
 

@@ -218,6 +218,10 @@ it("filters the combined sidebar without navigating or resetting Solo sections",
   );
   await user.click(solo);
   expect(screen.getByRole("button", { name: "Inbox" })).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Solo" })).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "New chat or workspace" }),
+  ).toBeVisible();
   expect(screen.getByRole("button", { name: "Chats" })).toHaveAttribute(
     "aria-expanded",
     "false",
@@ -252,6 +256,39 @@ it("filters the combined sidebar without navigating or resetting Solo sections",
     scope: { viewer, communityOrigin: "https://relay.test" },
     route: { version: 1, params: "new-message" },
   });
+});
+
+it("collapses the Solo and Team inventories independently in All", async () => {
+  const user = userEvent.setup();
+  fixture(true);
+  const section = (key: "solo" | "team") => {
+    const summary = document.querySelector<HTMLElement>(
+      `[data-sidebar-section="scope:${key}"] summary`,
+    );
+    expect(summary).not.toBeNull();
+    const panel = document.getElementById(
+      summary?.getAttribute("aria-controls") ?? "",
+    );
+    expect(panel).not.toBeNull();
+    return { summary: summary as HTMLElement, panel: panel as HTMLElement };
+  };
+  const solo = section("solo");
+  const team = section("team");
+  expect(solo.panel).not.toHaveAttribute("hidden");
+  expect(team.panel).not.toHaveAttribute("hidden");
+
+  await user.click(solo.summary);
+  expect(solo.panel).toHaveAttribute("hidden");
+  expect(team.panel).not.toHaveAttribute("hidden");
+
+  await user.click(team.summary);
+  expect(solo.panel).toHaveAttribute("hidden");
+  expect(team.panel).toHaveAttribute("hidden");
+
+  await user.click(screen.getByRole("tab", { name: "Solo" }));
+  await user.click(screen.getByRole("tab", { name: "All" }));
+  expect(section("solo").panel).toHaveAttribute("hidden");
+  expect(section("team").panel).toHaveAttribute("hidden");
 });
 
 it.each([
@@ -696,6 +733,11 @@ it("uses one contributed heading and the prior All Team Nexus order without losi
     ]);
     expect(screen.queryByText("Solo")).not.toBeInTheDocument();
     expect(screen.getAllByText("Nexus")).toHaveLength(2);
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Nexus" }));
+    expect(screen.getAllByText("Nexus")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Create" })).toBeVisible();
+    await userEvent.setup().click(screen.getByRole("tab", { name: "All" }));
+    expect(screen.getAllByText("Nexus")).toHaveLength(2);
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: "Create" }));
@@ -783,7 +825,7 @@ it("merged Create keeps workspace creation and return focus when a plugin menu f
   }
 });
 
-it("collapsing the contributed task section keeps ordinary chats visible", async () => {
+it("collapsing the contributed Solo section in All hides its ordinary chats", async () => {
   const h = createSoloRegionFixture(viewer);
   await h.register({
     title: "Nexus",
@@ -806,14 +848,16 @@ it("collapsing the contributed task section keeps ordinary chats visible", async
   );
   try {
     const heading = view.container.querySelector(
-      "[data-sidebar-section] summary",
+      '[data-sidebar-section^="solo-region:"] summary',
     );
     expect(heading).not.toBeNull();
     await userEvent.setup().click(heading as HTMLElement);
     await waitFor(() =>
       expect(heading?.closest("details")).not.toHaveAttribute("open"),
     );
-    expect(screen.getByRole("button", { name: /^Chat$/ })).toBeVisible();
+    expect(
+      document.getElementById(heading?.getAttribute("aria-controls") ?? ""),
+    ).toHaveAttribute("hidden");
   } finally {
     view.unmount();
     await h.dispose();
