@@ -89,6 +89,10 @@ that agent in Buzz; they do not notify the external app through this connection.
 
 ## Conversations and communities
 
+- With **Voice Notes** enabled, use the microphone in the composer to record
+  and attach a voice note. Sending requires ffmpeg on the host computer. Sent
+  notes support playback and seeking; a note's duration appears once it
+  starts playing.
 - Long message bubbles use the available conversation width, stopping 32px
   before the opposite speaker’s avatar column. Short messages hug their text.
 - Hover over a message to reveal the capsule above it: add a reaction, reply,
