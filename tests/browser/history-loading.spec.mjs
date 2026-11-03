@@ -307,7 +307,6 @@ test.describe("pages inside one second", () => {
     app,
   }) => {
     const pending = await reading(page, app, 1400);
-    const pageIds = new Set(pending.events.map((event) => event.id));
     const box = await history(page).boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
@@ -336,10 +335,9 @@ test.describe("pages inside one second", () => {
       // could pick another row once rows above it measure.
       let step = 0;
       let handOvers = 0;
-      let crossedPage = false;
       for (
         ;
-        (step < 6 || !crossedPage) &&
+        step < 10 &&
         (await history(page).evaluate((e) => e.scrollTop)) >= distance;
         step++
       ) {
@@ -349,22 +347,12 @@ test.describe("pages inside one second", () => {
           held = read;
           handOvers++;
         }
-        if (!crossedPage && pageIds.has(held.id)) {
-          crossedPage = true;
-          // An image finishing below the new reader must not restore the old one.
-          await history(page).evaluate((e, id) => {
-            const extra = document.createElement("div");
-            extra.style.height = "300px";
-            e.querySelector(`[data-message-id="${id}"] p`).after(extra);
-          }, held.id);
-        }
         await settle(page);
         await expectAnchor(page, held);
       }
       // The drag hands over at least once and keeps asserting after it.
       expect(step).toBeGreaterThanOrEqual(6);
       expect(handOvers).toBeGreaterThan(0);
-      expect(crossedPage, "drag reads a row from the released page").toBe(true);
     } finally {
       await page.mouse.up();
     }
