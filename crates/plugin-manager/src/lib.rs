@@ -1645,6 +1645,33 @@ mod tests {
             .collect();
         assert_eq!(native, expected);
 
+        let storage = fs::read_to_string(format!("{root}/../plugins/storage.ts")).unwrap();
+        let mut browser_legacy_on: Vec<_> = storage
+            .split("(existing && (")
+            .nth(1)
+            .expect("browser legacy-On condition")
+            .split("))")
+            .next()
+            .unwrap()
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+        browser_legacy_on.sort_unstable();
+        let mut upgraded = super::Registry::default();
+        super::pin_bundled_defaults(&mut upgraded, true);
+        let native_legacy_on: Vec<_> = upgraded
+            .bundled_overrides
+            .iter()
+            .filter_map(|(id, enabled)| {
+                (*enabled && !enabled_by_default(id)).then_some(id.as_str())
+            })
+            .collect();
+        assert_eq!(
+            native_legacy_on, browser_legacy_on,
+            "legacy-On migration set"
+        );
+
         let features =
             fs::read_to_string(format!("{root}/../app/conversation-features.ts")).unwrap();
         let manifests: BTreeMap<_, _> = features
