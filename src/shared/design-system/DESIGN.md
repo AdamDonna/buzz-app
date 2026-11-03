@@ -1827,9 +1827,8 @@ a tint. Magenta, Iris and Cobalt carry white text there, so they take the
 strong shade. System notices name people as quiet text, never as chips.
 
 Reactions sit on `affordance-reaction`, a softer overlay than a chip: black 6%
-or white 10%, in the same direction as the chips. Hovering or focusing the add
-control brightens its icon without adding another background overlay; the icon
-stays emphasized while the picker is open. Inside your bubble reactions take
+or white 10%, in the same direction as the chips. Hovering the add control lays
+the same overlay again on top of the strip. Inside your bubble reactions take
 its ink and `affordance-reaction-own`; outside it, under an emoji-only message,
 they keep the standard ink and overlay of the panel they sit on.
 

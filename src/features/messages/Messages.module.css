@@ -447,20 +447,14 @@
   width: 100%;
   height: 100%;
   border: 1px solid transparent;
-  border-radius: inherit;
   background: transparent;
   color: var(--reaction-ink, var(--text-secondary));
 }
 .inlineReactionTool
   [data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  /* The strip already supplies the background; keep its opacity uniform. */
-  background: transparent;
+  /* The strip's own overlay again, laid on top of it. */
+  background: var(--reaction-surface, var(--affordance-reaction));
   color: var(--reaction-ink, var(--text-standard));
-}
-.inlineReactionTool
-  :where([data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]))
-  svg {
-  opacity: 1;
 }
 .attachment {
   display: inline-block;

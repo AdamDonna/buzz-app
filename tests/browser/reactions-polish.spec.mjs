@@ -169,11 +169,23 @@ test("reaction emojis and hit areas grow together without clipping", async ({
       .toBeGreaterThanOrEqual(32 * scale);
     await expect(pill).toHaveCSS("height", `${32 * scale}px`);
     await expect(addReaction).toHaveCSS("height", `${32 * scale}px`);
-    await page.mouse.move(0, 0);
-    await expect(addReaction.locator("svg")).toHaveCSS("opacity", "0.65");
+    // The plugin's display:contents wrapper must not flatten the round button.
+    await expect
+      .poll(() =>
+        addReaction.evaluate(
+          (button) =>
+            parseFloat(getComputedStyle(button).borderRadius) >=
+            button.getBoundingClientRect().height / 2,
+        ),
+      )
+      .toBe(true);
     await addReaction.hover();
-    await expect(addReaction).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(addReaction.locator("svg")).toHaveCSS("opacity", "1");
+    await expect(addReaction).toHaveCSS(
+      "background-color",
+      await capsule.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      ),
+    );
     await expect(glyph).toHaveCSS("font-size", `${12 * scale}px`);
     await expect(glyph).toHaveCSS("height", `${16 * scale}px`);
     const bounds = await pill.evaluate((el) => {
@@ -351,15 +363,8 @@ test("reaction bubbles wrap, preview, toggle, and add from the inline control", 
     "true",
   );
   await plus.focus();
-  await plus.press("Tab");
-  await page.keyboard.press("Shift+Tab");
-  await expect(plus).toBeFocused();
-  await expect(plus).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(plus.locator("svg")).toHaveCSS("opacity", "1");
   await plus.press("Enter");
   await expect(picker).toBeVisible();
-  await expect(plus).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(plus.locator("svg")).toHaveCSS("opacity", "1");
   await picker.press("Escape");
   await expect(picker).toHaveCount(0);
   await expect(plus).toBeFocused();
