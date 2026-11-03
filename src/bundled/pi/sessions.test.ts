@@ -931,10 +931,25 @@ it("keeps a usage runtime when a delivery joins its held read", async () => {
   }
 });
 
-it.each(["interrupt", "activity", "admission"])(
-  "cancels pending allocation on %s and retries its saved key",
-  async (action) => {
+it.each([
+  ["interrupt", false],
+  ["activity", false],
+  ["admission", false],
+  ["interrupt", true],
+  ["activity", true],
+  ["admission", true],
+] as const)(
+  "cancels pending allocation on %s with prior execution %s and retries its saved key",
+  async (action, established) => {
     const f = fixture();
+    if (established) {
+      const first = f.delivery();
+      await f.runtime.run(first);
+      await f.result(first);
+      const initial = [...f.targets.values()][0];
+      if (!initial) throw new Error("Missing established target");
+      initial.lifetime.abort(new Error("Provider unloaded"));
+    }
     const entered = deferred<AbortSignal>();
     const release = deferred<AgentExecution>();
     f.execute.mockImplementationOnce(async (_agent, session) => {
@@ -955,6 +970,7 @@ it.each(["interrupt", "activity", "admission"])(
       signal: admission.signal,
       interruptible: vi.fn<NonNullable<Delivery["interruptible"]>>(),
     };
+    const openingCall = f.execute.mock.calls.length;
     const running = f.runtime.run(turn);
     let stopped: Promise<void> | undefined;
     try {
@@ -976,14 +992,14 @@ it.each(["interrupt", "activity", "admission"])(
       await stopped;
       await running;
       await f.result(turn);
-      const saved = f.execute.mock.calls[0]?.[1].key;
+      const saved = f.execute.mock.calls[openingCall]?.[1].key;
       const retry = f.delivery();
       const retryCall = f.execute.mock.calls.length;
       await f.runtime.run(retry);
       await expect(f.result(retry)).resolves.toMatchObject({ ok: true });
       expect(f.execute.mock.calls[retryCall]?.[1]).toMatchObject({
         key: saved,
-        intent: "new",
+        intent: established ? "existing" : "new",
       });
     } finally {
       release.reject(new Error("Release allocation"));
@@ -1093,4 +1109,46 @@ it("rejects usage from a guest conversation that differs from saved metadata", a
   await expect(
     f.runtime.usage(self, 0, new AbortController().signal),
   ).rejects.toThrow("saved conversation");
+});
+
+it("returns fresh places while usage joins the pending inventory refresh", async () => {
+  const files = sharedFiles();
+  const f = fixture(files.open());
+  const storage = { ...files.open() };
+  const reader = fixture(storage);
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  await f.runtime.retire(self);
+  const connect = f.execute.getMockImplementation();
+  if (!connect) throw new Error("Missing target adapter");
+  reader.execute.mockImplementation(connect);
+  const scan = storage.scan;
+  const entered = deferred();
+  const first = deferred();
+  const second = deferred();
+  let index = 0;
+  vi.spyOn(storage, "scan").mockImplementation(async (prefix) => {
+    const snapshot = await scan(prefix);
+    if (index++ === 0) {
+      entered.resolve();
+      await first.promise;
+    } else await second.promise;
+    return snapshot;
+  });
+  const places = reader.runtime.places(self);
+  let usage: ReturnType<PiSessions["usage"]> | undefined;
+  try {
+    await entered.promise;
+    usage = reader.runtime.usage(self, 0, new AbortController().signal);
+    // Both consumers finish their memory-backed selection reads in this task.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    first.resolve();
+    expect(await places).toHaveLength(1);
+    expect(reader.runtime.sessions(self)).toHaveLength(1);
+  } finally {
+    first.resolve();
+    second.resolve();
+    await Promise.all([places, usage]);
+  }
 });

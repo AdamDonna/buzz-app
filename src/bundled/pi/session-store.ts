@@ -15,6 +15,7 @@ const state = (agent: string, key: string) =>
 
 export class PiSessionStore {
   private readonly inventory = new Map<string, Record<string, string>>();
+  private readonly refreshing = new Map<string, Promise<void>>();
   private readonly refreshes = new Map<string, object>();
   private readonly requests = new Map<string, object>();
   private readonly observed = new Map<
@@ -23,16 +24,29 @@ export class PiSessionStore {
   >();
   constructor(private readonly storage: AgentStore) {}
 
-  async refresh(agent: string) {
+  refresh(agent: string): Promise<void> {
+    const held = this.refreshing.get(agent);
+    if (held) return held;
+    const pending = this.refreshInventory(agent).finally(() => {
+      if (this.refreshing.get(agent) === pending) this.refreshing.delete(agent);
+    });
+    this.refreshing.set(agent, pending);
+    return pending;
+  }
+
+  private async refreshInventory(agent: string) {
     const prefix = `${PREFIX}${agent}:`;
-    const request = {};
-    this.refreshes.set(agent, request);
-    for (const key of this.requests.keys())
-      if (key.startsWith(prefix)) this.requests.delete(key);
-    const entries = await this.storage.scan(prefix);
-    if (this.refreshes.get(agent) !== request) return;
-    this.inventory.set(agent, entries);
-    this.observed.delete(agent);
+    for (;;) {
+      const request = {};
+      this.refreshes.set(agent, request);
+      for (const key of this.requests.keys())
+        if (key.startsWith(prefix)) this.requests.delete(key);
+      const entries = await this.storage.scan(prefix);
+      if (this.refreshes.get(agent) !== request) continue;
+      this.inventory.set(agent, entries);
+      this.observed.delete(agent);
+      return;
+    }
   }
 
   private entries(agent: string) {

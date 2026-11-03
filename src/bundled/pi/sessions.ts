@@ -26,7 +26,8 @@ type Open = {
   display: number;
   stop(): void;
   lifetime: AbortController;
-  allocated: boolean;
+  execution: AgentExecution | undefined;
+  readonly allocated: boolean;
   admissions: Set<() => void>;
   retained: boolean;
   readers: number;
@@ -146,7 +147,7 @@ export class PiSessions {
             intent: opened.session.opened ? "existing" : "new",
             signal: lifetimeSignal.signal,
           });
-          opened.allocated = execution !== undefined;
+          opened.execution = execution;
         } finally {
           for (const stop of opened.admissions) stop();
           opened.admissions.clear();
@@ -201,7 +202,10 @@ export class PiSessions {
       session,
       runtime,
       lifetime: lifetimeSignal,
-      allocated: false,
+      execution: undefined,
+      get allocated() {
+        return this.execution?.signal.aborted === false;
+      },
       admissions: new Set(),
       retained: retain,
       readers: 0,
