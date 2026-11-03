@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { getEventHash, verifyEvent, verifiedSymbol } from "nostr-tools";
-import { createEventVerifier, eventDto } from "./events";
+import { createEventVerifier, eventDto, hasEventProof } from "./events";
 import { connectBrokerTransport, connectSignedTransport } from "./transport";
 import { hostSigner, keypair, signed } from "./testing";
 import { ByteLru } from "./budget";
@@ -188,3 +188,34 @@ it.each(["broker", "signed"])(
     await expect(first.query(filters, aborted.signal)).rejects.toThrow();
   },
 );
+
+it("batches memo misses to the host's signature checker and rejects a whole response on any failure", async () => {
+  const check = vi.fn(async (claims: readonly { sig: string }[]) =>
+    claims.map((claim) => claim.sig !== "0".repeat(128)),
+  );
+  const { native } = createEventVerifier(undefined, check);
+  if (!native) throw new Error("expected a native verifier");
+  const batch = async (values: unknown[]) =>
+    native.settle(values.map((value) => native.prepare(value)));
+  const second = signed(key, { kind: 9, content: "second", tags: [] });
+  const events = await batch([wire(), second]);
+  expect(check).toHaveBeenCalledTimes(1);
+  expect(check.mock.calls[0]?.[0]).toEqual([
+    { id: event.id, pubkey: event.pubkey, sig: event.sig },
+    { id: second.id, pubkey: second.pubkey, sig: second.sig },
+  ]);
+  expect(verifyEvent).not.toHaveBeenCalled();
+  expect(events.map((item) => item[verifiedSymbol])).toEqual([true, true]);
+  expect(events.every((item) => hasEventProof(item))).toBe(true);
+  expect(Object.isFrozen(events[0])).toBe(true);
+  await batch([wire()]); // remembered: no host call
+  expect(check).toHaveBeenCalledTimes(1);
+  await expect(batch([{ ...wire(), content: "changed" }])).rejects.toThrow(
+    "invalidly signed",
+  );
+  const forged = { ...signed(other, { kind: 9, content: "x", tags: [] }) };
+  await expect(
+    batch([wire(), { ...forged, sig: "0".repeat(128) }]),
+  ).rejects.toThrow("invalidly signed");
+  expect(createEventVerifier().native).toBeUndefined();
+});

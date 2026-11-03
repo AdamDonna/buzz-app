@@ -105,6 +105,7 @@ fn main() {
             "relay_publish_read_state",
             "relay_http",
             "relay_http_cancel",
+            "relay_verify_signatures",
             "relay_workflow_runs",
             "relay_admin_discover",
             "relay_admin_request",

@@ -335,6 +335,8 @@ export function nativeRelaySigner(community: string): Signer {
     },
     upload: (file, signal) => nativeUpload(origin, file, signal),
     media: nativeMediaUrl,
+    verifySignatures: (claims) =>
+      nativeReadInvoke<boolean[]>("relay_verify_signatures", { claims }),
   };
 }
 

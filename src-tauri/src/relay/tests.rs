@@ -4144,3 +4144,28 @@ async fn cancelled_native_reads_close_their_connection_and_writes_refuse_an_id()
     };
     assert!(error.to_string().contains("cannot be cancelled"));
 }
+
+#[tokio::test]
+async fn native_signature_checks_reject_tampered_and_malformed_claims() {
+    let secp = secp256k1::Secp256k1::new();
+    let keys = secp256k1::Keypair::from_secret_key(
+        &secp,
+        &secp256k1::SecretKey::from_byte_array([7; 32]).unwrap(),
+    );
+    let digest = [9u8; 32];
+    let claim = |id: [u8; 32], sig: &str| SignatureClaim {
+        id: id.iter().map(|b| format!("{b:02x}")).collect(),
+        pubkey: keys.x_only_public_key().0.to_string(),
+        sig: sig.into(),
+    };
+    let sig = secp.sign_schnorr_no_aux_rand(&digest, &keys).to_string();
+    let checked = relay_verify_signatures(vec![
+        claim(digest, &sig),
+        claim([8; 32], &sig),
+        claim(digest, &"0".repeat(128)),
+        claim(digest, "zz"),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(checked, [true, false, false, false]);
+}

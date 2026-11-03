@@ -54,6 +54,7 @@
     "allow-relay-publish-read-state",
     "allow-relay-http",
     "allow-relay-http-cancel",
+    "allow-relay-verify-signatures",
     "allow-relay-workflow-runs",
     "allow-relay-admin-discover",
     "allow-relay-admin-request",
