@@ -264,6 +264,13 @@ type InboxViewProps = {
 };
 
 const never = () => false;
+/** Waits for every save, then rethrows the first failure. */
+async function settled(saves: readonly (Promise<unknown> | undefined)[]) {
+  const failed = (await Promise.allSettled(saves)).find(
+    (result) => result.status === "rejected",
+  );
+  if (failed) throw failed.reason;
+}
 
 /** The conversation list is Inbox's first tab; conversations open beside it. */
 export function InboxView({ tabs: Tabs, ...props }: InboxViewProps) {
@@ -759,7 +766,7 @@ function InboxList({
                 next.target.kind === "channel"
                   ? session.unread.prepareChannelRead(next.channelId)
                   : () =>
-                      Promise.all(
+                      settled(
                         next.readThrough.map((step) =>
                           session.unread.markThrough(
                             step.target,
@@ -815,7 +822,9 @@ function InboxList({
       const following = reading ?? readNext?.();
       reading = undefined;
       try {
-        await Promise.all([
+        // Every save settles first, so the watch below starts from this
+        // attempt's final state, not one of its own queued saves.
+        await settled([
           readShared(),
           following?.then(() => {
             readNext = undefined;

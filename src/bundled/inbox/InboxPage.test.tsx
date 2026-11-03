@@ -3833,6 +3833,56 @@ it("Retry still reads the next conversation after an unrelated save", async () =
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it("Retry repeats a failed step of the next conversation after its other steps clear its mark", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
+  const root = h.root;
+  if (!root) throw new Error("Missing fixture root");
+  h.events.push(
+    message(h.alice, "room", "Newer threaded tag", 40, [
+      ["e", root.id, "", "reply"],
+      ["p", h.viewer.pubkey],
+    ]),
+  );
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const sharedRow = () =>
+    h.owner.session.unread
+      .inbox()
+      .items.find((item) => item.channelId === "room");
+  await waitFor(() => expect(sharedRow()?.readThrough.length).toBe(2));
+  const target = sharedRow()?.target;
+  if (!target) throw new Error("Missing shared chat row");
+  await act(() => h.owner.session.unread.markUnreadLocal(target));
+  const dm = rows().find((row) => row.textContent?.includes("A direct reply"));
+  fireEvent.click(
+    within(dm as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  // The first step's save fails while the newest tag's step, which clears
+  // the mark, is still queued behind it.
+  const first = h.holdSave();
+  h.failSave();
+  await archiveOpened(h);
+  await waitFor(() => expect(h.saveStarted()).toBe(true));
+  const second = h.holdSave();
+  await act(async () => first());
+  await waitFor(() => expect(h.saveStarted()).toBe(true));
+  await act(async () => second());
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() =>
+    expect(
+      h.owner.session.unread.snapshot({ kind: "channel", channelId: "room" })
+        .observedCount,
+    ).toBe(0),
+  );
+});
+
 it("a failed read brings an archived shared chat back, through Retry cancellation and reload", async () => {
   const h = fixture({ sharedSolo: true, withDm: true });
   const view = render(h.view);
