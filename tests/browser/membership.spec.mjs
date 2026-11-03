@@ -182,7 +182,9 @@ keyboardTest(
     await settle(page);
     const saved = await anchor(page);
     await expect.poll(() => app.relay.hasRoute("primary", "alpha")).toBe(true);
-    app.membership("member_left", 0);
+    // Brain's join keys the arrivals row. When Brain leaves, both rows get
+    // new keys, but only one event is new.
+    app.membership("member_left", 1, 1);
     const after = app.append(
       "primary",
       "alpha",
@@ -191,6 +193,13 @@ keyboardTest(
     await expect(
       feed.locator(`[data-message-id="${after.id}"]`),
     ).toBeAttached();
+    await expect(feed.locator("[data-membership-row]")).toContainText([
+      "Pinky added by you",
+      "Brain left the channel",
+    ]);
+    await expect(
+      feed.locator("button[data-jump-to-latest]"),
+    ).toHaveAccessibleName("2 new messages");
     await settle(page);
     await expectAnchor(page, saved);
     expect(await distance()).toBeGreaterThan(200);

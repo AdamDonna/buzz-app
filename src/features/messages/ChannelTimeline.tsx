@@ -9,7 +9,11 @@ import {
   ChatCircleIcon,
 } from "../../shared/design-system/icons";
 import { MembershipRow } from "./MembershipRow";
-import { membershipRows, withoutStartingAgents } from "./membership-rows";
+import {
+  membershipRows,
+  type TimelineRow,
+  withoutStartingAgents,
+} from "./membership-rows";
 import { activityGroups, RECENT_ACTIVITY_COUNT } from "./activity-groups";
 import { DayDivider } from "./MessageTimestamp";
 import type { ConversationExtensions } from "../conversation/contracts";
@@ -832,22 +836,29 @@ function Timeline({
               ),
           )
         : -1;
+    // Count events, not rows: a membership row's key can change when its run
+    // regroups, though only one of its events is new.
+    const events = (row: TimelineRow) =>
+      row.membershipRows?.map((member) => member.id) ?? [row.id];
     const previousIds = edges.current.ids;
     // Rows before the loaded first row's second are history. A page also
     // returns rows of that second, and can land after a retained first row:
     // when one lands, only rows after the previous last row are new.
     const { floor, order } = edges.current;
     const paged = edges.current.paging && !loadingOlder.current;
-    const tail = rows.findIndex((row) => row.id === order.at(-1));
-    const arrivals = rows.filter(
-      (row, index) =>
-        !previousIds.has(row.id) &&
+    const last = order.at(-1);
+    const tail = rows.findIndex((row) => last && events(row).includes(last));
+    const arrivals = rows.reduce(
+      (count, row, index) =>
         (!paged || index > tail) &&
-        (row.createdAt > floor || (row.createdAt === floor && !paged)),
-    ).length;
+        (row.createdAt > floor || (row.createdAt === floor && !paged))
+          ? count + events(row).filter((id) => !previousIds.has(id)).length
+          : count,
+      0,
+    );
     edges.current = {
       order: rows.map((row) => row.id),
-      ids: new Set(rows.map((row) => row.id)),
+      ids: new Set(rows.flatMap(events)),
       floor: rows[0]?.createdAt ?? 0,
       paging: loadingOlder.current,
     };
