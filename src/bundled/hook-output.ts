@@ -1,7 +1,7 @@
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const label = (pluginId: string, text: string) =>
-  `[plugin: ${pluginId}]${text ? ` ${text}` : ""}`;
+  `[Buzz plugin: ${pluginId}]${text ? ` ${text}` : ""}`;
 
 /** Claude and Codex share these native hook explanation fields. */
 export function nativeHookOutput(output: unknown, pluginId: string): unknown {

@@ -576,7 +576,7 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       conversation: out.a.conversation,
     });
     expect(JSON.stringify(out.blocked.messages)).toContain(
-      "[plugin: fixture-policy] Fixture blocks the command",
+      "[Buzz plugin: fixture-policy] Fixture blocks the command",
     );
     expect(out.cleanupFailure).toMatchObject({
       status: "done",
@@ -630,7 +630,7 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
     // What a Buzz tool answered is what the model reads.
     expect(out.c.rewritten).toMatchObject({ text: "Rewritten arguments" });
     expect(out.c.results.at(-1)).toEqual([
-      { type: "text", text: "[plugin: fixture-policy]" },
+      { type: "text", text: "[Buzz plugin: fixture-policy]" },
       { type: "text", text: "Replaced result" },
     ]);
     expect(out.stopped).toEqual({ status: "closed" });
