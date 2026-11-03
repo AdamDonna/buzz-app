@@ -3,6 +3,13 @@ import { usePanelSplit } from "./usePanelSplit";
 import { PanelDock } from "./PanelDock";
 import styles from "./Panels.module.css";
 
+/** The companion's split on every host; `.frame`/`.dock` CSS mirrors it. */
+export const COMPANION_SPLIT = {
+  name: "companion",
+  defaultWidth: 420,
+  min: 300,
+} as const;
+
 // Keep this frame mounted even while closed: changing ancestry resets page state.
 export function PanelFrame({
   scope,
@@ -14,7 +21,12 @@ export function PanelFrame({
   companion?: ReactNode;
   children: ReactNode;
 }) {
-  const split = usePanelSplit(scope, "companion", 420, 300);
+  const split = usePanelSplit(
+    scope,
+    COMPANION_SPLIT.name,
+    COMPANION_SPLIT.defaultWidth,
+    COMPANION_SPLIT.min,
+  );
   return (
     <div
       ref={split.ref}

@@ -486,8 +486,9 @@ dividers share that grip and support dragging, arrow keys (Shift for larger
 steps), Home/End, and double-click to reset. Each page saves its chosen split on
 this device, per community and viewer workspace like the sidebar width, so it
 survives the panel closing, page switches, and restarts. While a companion is
-open, the right column keeps the companion's one width on every page, including
-Messages; otherwise Messages keeps its own thread-panel width. Reset clears the saved width. Widths clamp to the
+open, the right column keeps the companion's one width, default, and minimum on
+every page, including Messages; otherwise Messages keeps its own thread-panel
+width. Reset clears the saved width. Widths clamp to the
 available space. Narrow overlay layouts hide this divider and keep their normal
 responsive sizing.
 
