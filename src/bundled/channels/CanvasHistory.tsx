@@ -1,4 +1,5 @@
 import {
+  type Ref,
   useCallback,
   useEffect,
   useMemo,
@@ -20,6 +21,7 @@ import { publicKeyLabels } from "../../shared/identity/public-key";
 import { Checkbox } from "../../shared/design-system/ui/Checkbox";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
+import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { Textarea } from "../../shared/design-system/ui/Textarea";
@@ -35,6 +37,9 @@ export function CanvasHistory({
   loaded,
   dirty,
   refreshHead,
+  retryHead,
+  comparisonRef,
+  retryRef,
   restore,
   readOnly = false,
 }: {
@@ -47,6 +52,10 @@ export function CanvasHistory({
   dirty: boolean;
   readOnly?: boolean;
   refreshHead(): Promise<void>;
+  /** Retries a failed head read from `retryRef`, which keeps focus. */
+  retryHead(): void;
+  comparisonRef?: Ref<HTMLDivElement>;
+  retryRef?: Ref<HTMLButtonElement>;
   restore(revision: RelayEvent): Promise<void>;
 }) {
   const [page, setPage] = useState<CanvasHistoryPage>();
@@ -141,6 +150,10 @@ export function CanvasHistory({
     };
     // This panel is keyed by the owning channel/session and mounted lazily.
   }, [load]);
+  // A head read that has failed stays failed through its retry, so Retry
+  // keeps its place and focus until a read lands.
+  const [headFailed, setHeadFailed] = useState(false);
+  if (loaded ? headFailed : !busy && !headFailed) setHeadFailed(!loaded);
   const headContent = head?.content ?? "";
   const fullContent = (note?: string) => (
     <>
@@ -265,32 +278,39 @@ export function CanvasHistory({
             checked={full}
             onCheckedChange={setFull}
           />
-          {full ? (
-            fullContent()
-          ) : !loaded ? (
-            <>
-              {busy ? (
-                <p role="status">Reading the current Canvas…</p>
-              ) : (
-                <div className={styles.actions}>
-                  <p role="alert">
-                    The current Canvas could not be read, so this version cannot
-                    be compared with it.
-                  </p>
-                  <Button onClick={() => void refreshHead()}>Retry</Button>
-                </div>
-              )}
-              {fullContent()}
-            </>
-          ) : selected.id === head?.id || selected.content === headContent ? (
-            <p>Same as current version.</p>
-          ) : (
-            <CanvasDiff
-              current={headContent}
-              revision={selected.content}
-              fallback={fullContent}
-            />
-          )}
+          <div ref={comparisonRef} tabIndex={-1}>
+            {full ? (
+              fullContent()
+            ) : !loaded ? (
+              <LoadingRegion
+                pending={!headFailed}
+                label="Reading the current Canvas…"
+                feedback={
+                  headFailed ? (
+                    <div className={styles.actions}>
+                      <p role="alert">
+                        The current Canvas could not be read, so this version
+                        cannot be compared with it.
+                      </p>
+                      <Button ref={retryRef} loading={busy} onClick={retryHead}>
+                        Retry
+                      </Button>
+                    </div>
+                  ) : undefined
+                }
+              >
+                {fullContent()}
+              </LoadingRegion>
+            ) : selected.id === head?.id || selected.content === headContent ? (
+              <p>Same as current version.</p>
+            ) : (
+              <CanvasDiff
+                current={headContent}
+                revision={selected.content}
+                fallback={fullContent}
+              />
+            )}
+          </div>
           {!selected.content && <p>This version is empty.</p>}
           {tooLarge && (
             <p>

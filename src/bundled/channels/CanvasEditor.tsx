@@ -85,6 +85,8 @@ export function CanvasEditor({
   const operation = useRef(0);
   const editor = useRef<HTMLTextAreaElement>(null);
   const recovery = useRef<HTMLButtonElement>(null);
+  const comparison = useRef<HTMLDivElement>(null);
+  const historyRetry = useRef<HTMLButtonElement>(null);
   const [recovering, setRecovering] = useState(false);
   // The tab host places focus when Canvas opens, and a recovery button holds
   // it while its read is pending. Take it into the editor once a read lands
@@ -104,8 +106,8 @@ export function CanvasEditor({
       previous === document.activeElement ||
       (!previous.isConnected && document.activeElement === document.body)
     )
-      editor.current?.focus();
-  }, [loaded, busy]);
+      (tab === "history" ? comparison : editor).current?.focus();
+  }, [loaded, busy, tab]);
   const [confirmReload, setConfirmReload] = useState(false);
   const cancelReload = useRef<HTMLButtonElement>(null);
   useEffect(
@@ -165,8 +167,11 @@ export function CanvasEditor({
     if (edited) replaceView(scope, key, null, { content: draft, base });
     void load(!edited);
   }, [draftRevision, loaded, busy, edited, load, scope, key, draft, base]);
-  const recover = (replace: boolean) => {
-    handoff.current = recovery.current;
+  const recover = (
+    replace: boolean,
+    control: HTMLElement | null = recovery.current,
+  ) => {
+    handoff.current = control;
     setRecovering(true);
     void load(replace, replace).finally(() => setRecovering(false));
   };
@@ -354,6 +359,9 @@ export function CanvasEditor({
               dirty={dirty}
               readOnly={readOnly}
               refreshHead={() => load()}
+              retryHead={() => recover(false, historyRetry.current)}
+              comparisonRef={comparison}
+              retryRef={historyRetry}
               restore={restore}
             />
           )}

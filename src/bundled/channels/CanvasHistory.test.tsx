@@ -52,6 +52,7 @@ it.each([
         dirty={false}
         readOnly={readOnly}
         refreshHead={async () => {}}
+        retryHead={() => {}}
         restore={async () => {}}
       />
     );
@@ -98,6 +99,7 @@ function mount(
       loaded
       dirty={false}
       refreshHead={async () => {}}
+      retryHead={() => {}}
       restore={async () => {}}
     />,
   );
@@ -228,8 +230,15 @@ it("falls back when a comparison exceeds the edit-length bound", () => {
       { length: CANVAS_DIFF_EDIT_LENGTH },
       (_, i) => `${prefix}${i}`,
     ).join("\n");
-  expect(canvasDiffRows(side("a"), side("a"))).toBeDefined();
-  expect(canvasDiffRows(side("a"), side("b"))).toBeUndefined();
+  // A fixed clock keeps the time bound from also tripping on this fixture.
+  const now = vi.spyOn(Date, "now").mockReturnValue(0);
+  try {
+    expect(canvasDiffRows(side("a"), side("a"))).toBeDefined();
+    expect(canvasDiffRows("a\nb", "a\nc")).toBeDefined();
+    expect(canvasDiffRows(side("a"), side("b"))).toBeUndefined();
+  } finally {
+    now.mockRestore();
+  }
 });
 
 it("falls back when a comparison exceeds its time bound", () => {
@@ -253,7 +262,7 @@ it("never compares against a current Canvas that could not be read", async () =>
   const wire = scriptedTransport(keypair().pubkey, keypair().pubkey);
   const reader = createRelayReader(wire.transport);
   const directory = createProfileDirectory(reader.reader);
-  const refreshHead = vi.fn(async () => {});
+  const retryHead = vi.fn();
   const show = (
     loaded: boolean,
     head: ReturnType<typeof revision> | undefined,
@@ -266,7 +275,8 @@ it("never compares against a current Canvas that could not be read", async () =>
       busy={false}
       loaded={loaded}
       dirty={false}
-      refreshHead={refreshHead}
+      refreshHead={async () => {}}
+      retryHead={retryHead}
       restore={async () => {}}
     />
   );
@@ -284,7 +294,7 @@ it("never compares against a current Canvas that could not be read", async () =>
       screen.getByRole("button", { name: "Restore this version" }),
     ).toBeDisabled();
     act(() => screen.getByRole("button", { name: "Retry" }).click());
-    expect(refreshHead).toHaveBeenCalledTimes(1);
+    expect(retryHead).toHaveBeenCalledTimes(1);
     // Recovered: a genuinely absent head compares against empty.
     view.rerender(show(true, undefined));
     expect(lines()).toEqual(["+Plan"]);
