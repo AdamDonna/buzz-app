@@ -1,3 +1,8 @@
+import type { MentionDraft } from "../messages/mention-draft";
+import {
+  composerSchema,
+  projectComposerDocument,
+} from "../messages/composer-document";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { webcrypto } from "node:crypto";
@@ -2543,9 +2548,12 @@ it("rejects multiple task targets before preparation or creation and retains the
   }
 });
 
-it.each([false, true])(
+it.each(["text", "token", "workspace", "legacy-workspace"] as const)(
   "resumes the saved task pair before prepare and transfers edits, including token-only identity change=%s",
-  async (tokenOnly) => {
+  async (variant) => {
+    const tokenOnly = variant === "token";
+    const personalOnly =
+      variant === "workspace" || variant === "legacy-workspace";
     const f = setup();
     const region = createSoloRegionFixture(f.session.viewer);
     let eligible = true;
@@ -2636,7 +2644,7 @@ it.each([false, true])(
       label: "@repo",
       verified: false,
     };
-    const draft = tokenOnly
+    const draft: MentionDraft = tokenOnly
       ? mentionDraft({
           text: "",
           recipients: [],
@@ -2683,6 +2691,40 @@ it.each([false, true])(
         .join("\n\n");
       event.tags.push(...taskTokenTags([oldToken]));
     }
+    if (personalOnly) {
+      const workspace = {
+        kind: "nexus.project" as const,
+        id: "solo-workspace:private",
+        label: "Private workspace",
+      };
+      const snapshot = composerSchema.nodeFromJSON({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "token",
+                attrs: {
+                  source: "@Member agent",
+                  recipient: { pubkey: "a".repeat(64), name: "Member agent" },
+                },
+              },
+              { type: "text", text: " original" },
+            ],
+          },
+        ],
+      });
+      const withWorkspace = composerSchema.nodes.doc.create(
+        { projects: [workspace] },
+        snapshot.content,
+      );
+      Object.assign(draft, projectComposerDocument(withWorkspace).draft);
+      expect(draft.tokens?.map((span) => span.token)).toEqual([workspace]);
+      event.content = composerMarkdown(draft);
+      if (variant === "legacy-workspace")
+        event.tags.push(["nexus.tokens.v1", JSON.stringify([workspace])]);
+    }
     writeView("task-resume", `solo:task:${route.draftId}:new-draft`, draft);
     const started = vi.fn();
     try {
@@ -2711,6 +2753,11 @@ it.each([false, true])(
       expect(
         readView("task-resume", `solo:task:${route.draftId}:new-draft`, null),
       ).toBe("");
+      if (personalOnly) {
+        expect(readView("task-resume", `draft:${channelId}`, null)).toBeNull();
+        mounted.unmount();
+        return;
+      }
       expect(readView("task-resume", `draft:${channelId}`, null)).toMatchObject(
         draft,
       );

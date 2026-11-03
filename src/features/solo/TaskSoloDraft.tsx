@@ -294,8 +294,9 @@ export function TaskSoloDraft({
         }
         const edited =
           !unchanged ||
-          JSON.stringify(draft.tokens?.map((item) => item.token) ?? []) !==
-            JSON.stringify(tokens) ||
+          JSON.stringify(
+            taskTokenTags(draft.tokens?.map((item) => item.token) ?? []),
+          ) !== JSON.stringify(taskTokenTags(tokens)) ||
           JSON.stringify([...(selection?.recipients ?? [])].sort()) !==
             JSON.stringify([...new Set(recipients)].sort());
         const targetFiles = attachmentDraft(
