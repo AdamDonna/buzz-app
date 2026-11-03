@@ -19,7 +19,9 @@ import {
 import { BestieChooser } from "./BestieChooser";
 import { PinnedBestie } from "./PinnedBestie";
 import { bestieRoute } from "./routes";
-import { bestieTab } from "./BestieTab";
+import { onBestieMade } from "../agents/BestieChoice";
+import { bestieTab, formerBestieTab } from "./BestieTab";
+import { rememberNewBestie, stopFormerCheckIns } from "./former";
 
 export const inject = [
   "pages",
@@ -31,6 +33,18 @@ export const inject = [
 ];
 export const apply: PluginModule["apply"] = (ctx) => {
   ctx.agents.registerTab(bestieTab(ctx.relay, ctx.agents));
+  ctx.agents.registerTab(formerBestieTab(ctx.relay, ctx.agents));
+  // Whoever is Bestie, on any device, only it checks in.
+  ctx.effect(() => stopFormerCheckIns(ctx.relay, ctx.agents));
+  // A Bestie made on this device starts out remembering its owner. One made
+  // elsewhere keeps what it has, so memory turned off stays off.
+  ctx.effect(() =>
+    onBestieMade((pubkey) => {
+      rememberNewBestie(ctx.relay, ctx.agents, pubkey).catch((error) =>
+        console.warn("Bestie's memory wasn't turned on", error),
+      );
+    }),
+  );
   ctx.pages.register({
     id: "bestie",
     title: "Bestie",
