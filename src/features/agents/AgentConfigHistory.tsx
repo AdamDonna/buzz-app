@@ -142,7 +142,7 @@ export function AgentConfigHistory({
 
   const gapAction = (gap: Gap) =>
     gap === "unloaded" || gap === "failed" ? (
-      <Button size="sm" variant="subtle" loading={loading} onClick={more}>
+      <Button size="inline" variant="subtle" loading={loading} onClick={more}>
         {gap === "failed" ? "Retry" : "Load older"}
       </Button>
     ) : null;
@@ -243,7 +243,7 @@ export function AgentConfigHistory({
               !deleted && revisionProblem(expected, event, settings);
             return (
               <li className={styles.row} key={event.id}>
-                <span className={`text-body-sm ${styles.label}`}>
+                <span className={`text-caption ${styles.label}`}>
                   <span>
                     {artifactOp(event)}
                     {current ? " · Current" : ""}
@@ -255,8 +255,8 @@ export function AgentConfigHistory({
                 </span>
                 {!deleted && (
                   <Button
-                    size="sm"
-                    variant="ghost"
+                    size="inline"
+                    variant="plain"
                     aria-expanded={open === event.id}
                     onClick={() =>
                       setOpen(open === event.id ? undefined : event.id)
@@ -267,7 +267,7 @@ export function AgentConfigHistory({
                 )}
                 {!deleted && !invalid && !current && head && (
                   <Button
-                    size="sm"
+                    size="inline"
                     variant="subtle"
                     loading={reverting === event.id}
                     disabled={reverting !== undefined && reverting !== event.id}

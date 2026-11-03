@@ -53,8 +53,8 @@ function HistoryRow({ history }: { history: ConfigHistory }) {
             </span>
           ),
           content: (
-            <div className="grid gap-4">
-              <p className="m-0 text-body-sm text-secondary">
+            <div className="grid gap-2">
+              <p className="m-0 text-caption text-secondary">
                 Versions are kept automatically when changes are saved.
               </p>
               {history.sides.map(({ side, expected, head, version }) => (
