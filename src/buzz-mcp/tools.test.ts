@@ -3897,6 +3897,16 @@ it("uploads a proposed picture as the agent and drafts its URL", async () => {
   const saved = async () => ({ requestId: "draft", saved: false as const });
   client.updateAgent = vi.fn(saved);
   client.createAgent = vi.fn(saved);
+  await expect(
+    callTool(client, {}, "agent_update", { agent: "Child", picture: "me.png" }),
+  ).rejects.toThrow("Picture proposals are unavailable");
+  expect(client.read).not.toHaveBeenCalledWith("me.png");
+  client.uploadPicture = vi.fn(async (_data: Uint8Array, type: string) => ({
+    url: "https://relay/media/x.png",
+    sha256: "ab",
+    size: 7,
+    type,
+  }));
   for (const [name, args] of [
     ["agent_update", { agent: "Child" }],
     ["agent_create", { type: "codex/codex", name: "Child" }],
@@ -3916,7 +3926,8 @@ it("uploads a proposed picture as the agent and drafts its URL", async () => {
     name: "Kid",
     picture: "kid.png",
   });
-  expect(client.upload).toHaveBeenCalledWith(PNG, "image/png");
+  expect(client.uploadPicture).toHaveBeenCalledWith(PNG, "image/png");
+  expect(client.upload).not.toHaveBeenCalled();
   expect(client.updateAgent).toHaveBeenCalledWith({
     agent: "Child",
     picture: "https://relay/media/x.png",

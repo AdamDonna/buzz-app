@@ -124,6 +124,9 @@ export interface BuzzClient {
   publish(event: Template): Promise<BuzzEvent>;
   /** Uploads a file; `mime` is a hint, and the community decides the type. */
   upload(data: Uint8Array, mime: string): Promise<Upload>;
+  /** Uploads an image for an avatar, without its metadata, as the owner's
+   * own avatar upload prepares it. Only where the host can prepare images. */
+  uploadPicture?(data: Uint8Array, mime: string): Promise<Upload>;
   /** Saves a community media blob of any type, by its URL or
    * `sha256[.ext]`, to a local file. */
   media(url: string): Promise<Media>;

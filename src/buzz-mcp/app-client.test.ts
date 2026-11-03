@@ -3,6 +3,7 @@ import type { AgentHandle } from "../features/agents/service";
 import type { AgentProtection } from "../features/agent-protection/service";
 import { appClient, readFile } from "./app-client";
 import type { Host } from "../features/host/service";
+import { pngChunks } from "../features/messages/image-metadata";
 
 function gate<T>() {
   let resolve!: (value: T) => void;
@@ -209,4 +210,53 @@ it("refuses creation after the calling turn ends and surfaces native failures", 
     client.createAgent?.({ type: "codex/codex", name: "Child" }),
   ).rejects.toThrow("Turn ended");
   expect(createAgent).toHaveBeenCalledOnce();
+});
+
+it("strips a proposed picture's metadata before uploading it as the agent", async () => {
+  const chunk = (kind: string, payload: number[] | string = []) => {
+    const data =
+      typeof payload === "string" ? new TextEncoder().encode(payload) : payload;
+    return [
+      ...[0, 0, 0, data.length],
+      ...new TextEncoder().encode(kind),
+      ...data,
+      ...[0, 0, 0, 0],
+    ];
+  };
+  const png = new Uint8Array([
+    137,
+    80,
+    78,
+    71,
+    13,
+    10,
+    26,
+    10,
+    ...chunk("IHDR", Array(13).fill(0)),
+    ...chunk("tEXt", "GPS\u000051.5,-0.12"),
+    ...chunk("IDAT", [1, 2]),
+    ...chunk("IEND"),
+  ]);
+  const upload = vi.fn(async (_data: string, type: string) => ({
+    url: "https://relay/media/x.png",
+    sha256: "ab",
+    size: 1,
+    type,
+  }));
+  const client = appClient(
+    { pubkey: "agent", upload } as unknown as AgentHandle,
+    {
+      read: vi.fn(),
+      memories: async () => ({ entries: [], partial: false }),
+    },
+  );
+  await expect(client.uploadPicture?.(png, "image/png")).resolves.toMatchObject(
+    {
+      url: "https://relay/media/x.png",
+    },
+  );
+  const [data, type] = upload.mock.calls[0] ?? [];
+  expect(type).toBe("image/png");
+  const sent = Uint8Array.from(atob(data ?? ""), (c) => c.charCodeAt(0));
+  expect(pngChunks(sent).map((c) => c.kind)).toEqual(["IHDR", "IDAT", "IEND"]);
 });

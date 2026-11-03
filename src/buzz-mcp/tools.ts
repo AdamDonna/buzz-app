@@ -2102,11 +2102,13 @@ function imeta(upload: Upload) {
 async function uploadPicture(client: BuzzClient, path: unknown) {
   const file = text(path)?.trim();
   if (!file) return undefined;
+  if (!client.uploadPicture)
+    throw new Error("Picture proposals are unavailable on this host");
   const data = await client.read(file);
   const type = sniff(data);
   if (!type?.startsWith("image/"))
     throw new Error("picture must be a PNG, JPEG, GIF or WebP image");
-  return (await client.upload(data, type)).url;
+  return (await client.uploadPicture(data, type)).url;
 }
 
 /** An image or MP4's type, by the file's leading bytes. */
