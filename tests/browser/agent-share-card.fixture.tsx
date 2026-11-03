@@ -46,6 +46,7 @@ const type = {
 // Stable snapshots, as the stores they stand in for keep.
 const nothing: never[] = [];
 const channels = { channels: nothing };
+const profiles = new Map();
 const session = {
   read: async () => [],
   outbox: {
@@ -56,6 +57,10 @@ const session = {
   },
   viewer: owner,
   scope: `wss://relay.example ${owner}`,
+  profiles: {
+    snapshot: () => profiles,
+    subscribe: () => () => {},
+  },
   directMessages: {
     available: true,
     people: async () => ({ people: [], hasMore: false }),
