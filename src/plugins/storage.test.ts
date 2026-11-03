@@ -76,10 +76,14 @@ it("restores required Channels from saved disabled settings and rejects disablin
   });
 });
 
-it.each([true, undefined])(
-  "preserves saved Bestie=%s over a changed default without migrating storage",
-  async (saved) => {
-    const flags = saved === undefined ? {} : { "buzz.bestie": saved };
+it.each(
+  ["buzz.bestie", "buzz.reminders", "buzz.workflows"].flatMap((id) =>
+    [true, false, undefined].map((saved) => ({ id, saved })),
+  ),
+)(
+  "preserves saved $id=$saved over a changed default without migrating storage",
+  async ({ id, saved }) => {
+    const flags = saved === undefined ? {} : { [id]: saved };
     const raw = JSON.stringify({ version: 3, enabled: flags });
     const values = new Map([["buzzodz.plugins.v1", raw]]);
     vi.stubGlobal("localStorage", {
@@ -94,7 +98,7 @@ it.each([true, undefined])(
         previous: null,
         reloadable: false,
         error: null,
-        manifest: { id: "buzz.bestie", name: "Bestie", apiVersion: 1 as const },
+        manifest: { id, name: id, apiVersion: 1 as const },
         enabled: false,
       },
     ];

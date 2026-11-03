@@ -1146,7 +1146,13 @@ fn bundled_defaults_preserve_saved_choices_and_only_channels_is_required() {
         let id = plugin.manifest.id.as_str();
         let default = !matches!(
             id,
-            "buzz.bestie" | "buzz.pi" | "buzz.todos" | "buzz.usage" | "buzz.relay-notes"
+            "buzz.bestie"
+                | "buzz.pi"
+                | "buzz.todos"
+                | "buzz.usage"
+                | "buzz.relay-notes"
+                | "buzz.reminders"
+                | "buzz.workflows"
         );
         assert_eq!(plugin.enabled, default, "{id}");
         if id == "buzz.channels" {
@@ -1171,19 +1177,27 @@ fn bundled_defaults_preserve_saved_choices_and_only_channels_is_required() {
             }
         }
     }
-    // Existing native profiles can keep Bestie on across process restarts.
-    manager.change("enable", "buzz.bestie").unwrap();
-    let reopened = Manager::open(Some(_root.path().to_path_buf()), "test", false).unwrap();
-    assert!(
-        reopened
-            .catalog()
-            .unwrap()
-            .plugins
-            .iter()
-            .find(|p| p.manifest.id == "buzz.bestie")
-            .unwrap()
-            .enabled
-    );
+    // Saved choices override default-off even across process restarts.
+    for id in ["buzz.bestie", "buzz.reminders", "buzz.workflows"] {
+        for enabled in [true, false] {
+            manager
+                .change(if enabled { "enable" } else { "disable" }, id)
+                .unwrap();
+            let reopened = Manager::open(Some(_root.path().to_path_buf()), "test", false).unwrap();
+            assert_eq!(
+                reopened
+                    .catalog()
+                    .unwrap()
+                    .plugins
+                    .iter()
+                    .find(|p| p.manifest.id == id)
+                    .unwrap()
+                    .enabled,
+                enabled,
+                "{id}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -162,7 +162,7 @@ export const bundledPlugins: readonly BundledPlugin[] = [
   {
     manifest: { ...remindersManifest, apiVersion: 1 },
     module: reminders,
-    enabledByDefault: true,
+    enabledByDefault: false,
   },
   {
     manifest: { ...reposManifest, apiVersion: 1 },
@@ -202,7 +202,7 @@ export const bundledPlugins: readonly BundledPlugin[] = [
   {
     manifest: { ...workflowsManifest, apiVersion: 1 },
     module: workflows,
-    enabledByDefault: true,
+    enabledByDefault: false,
   },
   {
     manifest: { ...moderationManifest, apiVersion: 1 },

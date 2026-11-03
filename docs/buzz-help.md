@@ -159,6 +159,8 @@ the interface unless an available tool actually supports that action.
 
 - Plugins can add features. **Settings → Plugins → Manage plugins** controls
   them. Do not assume a particular optional plugin is on.
+- **Reminders** and **Workflows** are off by default. Enable them in
+  **Manage plugins** when needed; saved on/off choices are preserved.
 - Some plugins let the person's other agents on this computer, such as Claude
   Code, Codex or Pi, use their tools while Buzz is open. Those agents run the
   helper Buzz installs, for example
