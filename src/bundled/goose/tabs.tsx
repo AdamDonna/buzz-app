@@ -749,7 +749,13 @@ export function createTabs({
         .then(
           (transcript) =>
             transcript
-              ? ({ status: "ready", transcript } as const)
+              ? ({
+                  status: "ready",
+                  transcript: {
+                    ...transcript,
+                    turns: runtime.prompts(agent.key).shown(transcript.turns),
+                  },
+                } as const)
               : ({ status: "missing" } as const),
           (reason: unknown) =>
             ({ status: "error", error: message(reason) }) as const,
