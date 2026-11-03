@@ -24,6 +24,8 @@ import {
   contentEmojiTags,
   EMOJI_SET,
   EMOJI_SET_KIND,
+  emojiTags,
+  normalizeShortcode,
   referencedEmoji,
 } from "../features/relay/emoji";
 import { newer } from "../features/relay/events";
@@ -99,6 +101,10 @@ export async function captureToolBody(
   args: Record<string, unknown>,
 ) {
   const message = name === "send" || name === "reply_in_subthread";
+  if (name === "emoji_set" && text(args.path))
+    throw new Error(
+      "Protected uploads are not supported; pass a Buzz media url instead.",
+    );
   if (
     !message &&
     name !== "mem_set" &&
@@ -362,6 +368,12 @@ export const TOOLS: readonly Tool[] = [
     "Get a file of any type from a Buzz media URL: saves it locally and gives its path; an image is also shown.",
     { url: str },
     ["url"],
+  ),
+  tool(
+    "emoji_set",
+    "Add a custom emoji to your set, for everyone in the community to use, or change one you added. path: a local image to upload; url: a Buzz media URL.",
+    { shortcode: str, path: str, url: str },
+    ["shortcode"],
   ),
   tool(
     "repo",
@@ -1233,6 +1245,78 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const coordinate = `${NOTE}:${client.pubkey}:${name}`;
     await client.publish({ kind: 5, content: "", tags: [["a", coordinate]] });
     return `deleted ${coordinate}`;
+  },
+
+  async emoji_set({ client }, args) {
+    const shortcode = normalizeShortcode(required(args, "shortcode"));
+    if (!shortcode)
+      throw new Error("A shortcode is 1 to 64 letters, digits, _ or -.");
+    const path = text(args.path);
+    const given = text(args.url);
+    if (!path === !given) throw new Error("Pass path or url, not both.");
+    if (given && (!/^https:\/\/\S+$/.test(given) || given.length > 2048))
+      throw new Error("url must be a Buzz media URL.");
+    // Read from the writer, so a lagging replica cannot hide the set this
+    // write replaces.
+    const own = {
+      kinds: [EMOJI_SET_KIND],
+      authors: [client.pubkey],
+      "#d": [EMOJI_SET],
+      limit: 1,
+      consistency: "strong",
+    };
+    const [community, ownSet] = await Promise.all([
+      client.query([
+        { kinds: [EMOJI_SET_KIND], "#d": [EMOJI_SET], limit: 500 },
+      ]),
+      client.query([own]),
+    ]);
+    const sets = new Map<string, BuzzEvent>();
+    for (const event of [...community, ...ownSet])
+      sets.set(event.pubkey, newer(sets.get(event.pubkey), event));
+    const prior = sets.get(client.pubkey);
+    const mine = emojiTags(prior ?? { tags: [] });
+    // The newest set with a shortcode decides it for everyone, so adding one
+    // would replace someone else's emoji.
+    if (
+      !mine.some((emoji) => emoji.shortcode === shortcode) &&
+      communityEmoji(sets.values()).some(
+        (emoji) => emoji.shortcode === shortcode,
+      )
+    )
+      throw new Error(`:${shortcode}: is taken; choose another shortcode.`);
+    let url = given ?? "";
+    if (path) {
+      const data = await client.read(path);
+      const type = sniff(data);
+      if (!type?.startsWith("image/"))
+        throw new Error(`${path} is not a PNG, JPEG, GIF or WebP image.`);
+      url = (await client.upload(data, type)).url;
+    }
+    const after = prior ? (prior.created_at + 1) * 1000 : 0;
+    if (after - Date.now() > 5000)
+      throw new Error("Your emoji set was just changed; try again.");
+    await waitUntil(after);
+    const saved = await client.publish({
+      kind: EMOJI_SET_KIND,
+      content: "",
+      tags: [
+        ["d", EMOJI_SET],
+        ...mine
+          .filter((emoji) => emoji.shortcode !== shortcode)
+          .map((emoji) => ["emoji", emoji.shortcode, emoji.url]),
+        ["emoji", shortcode, url],
+      ],
+    });
+    // The community accepts a write that loses to another of the same second.
+    let current: BuzzEvent | undefined;
+    for (const event of await client.query([own]))
+      current = newer(current, event);
+    if (current?.id !== saved.id)
+      throw new Error(
+        "conflict: your emoji set changed while this was saved; try again.",
+      );
+    return `Added :${shortcode}: (${url}).`;
   },
 
   async canvas_get(tools, args) {

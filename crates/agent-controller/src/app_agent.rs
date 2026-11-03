@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 /// What a plugin agent may publish: a deletion (5), a reaction (7), a message
 /// (9), a channel member change (9000, 9001), edit (9002), creation (9007),
 /// deletion (9008), join (9021) or leave (9022), typing (20002), an edit of its
-/// own message (40003), a shared note (30023), a channel canvas (40100), a
-/// request to open a DM (41010), a repository announcement (30617) or an
-/// artifact revision (45010). The relay decides which channel changes and
-/// artifact edits it may make. Its profile (0) is the app's, and
-/// its memory (30174) is written by `memory`.
-const KINDS: [u16; 17] = [
-    5, 7, 9, 9000, 9001, 9002, 9007, 9008, 9021, 9022, 20002, 30023, 30617, 40003, 40100, 41010,
-    45010,
+/// own message (40003), a shared note (30023), its custom emoji set (30030), a
+/// channel canvas (40100), a request to open a DM (41010), a repository
+/// announcement (30617) or an artifact revision (45010). The relay decides
+/// which channel changes and artifact edits it may make. Its profile (0) is
+/// the app's, and its memory (30174) is written by `memory`.
+const KINDS: [u16; 18] = [
+    5, 7, 9, 9000, 9001, 9002, 9007, 9008, 9021, 9022, 20002, 30023, 30030, 30617, 40003, 40100,
+    41010, 45010,
 ];
 
 /// One saved identity. The key itself stays in the OS credential store.
@@ -172,7 +172,7 @@ impl AppAgent {
     ) -> Result<serde_json::Value> {
         if !KINDS.contains(&kind) {
             return Err(
-                "Agents can sign messages, edits, reactions, deletions, notes, channel changes, repositories and artifacts only"
+                "Agents can sign messages, edits, reactions, deletions, notes, emoji, channel changes, repositories and artifacts only"
                     .into(),
             );
         }

@@ -37,6 +37,14 @@ const event = (fields: Partial<BuzzEvent>): BuzzEvent => ({
   ...fields,
 });
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+const emojiSet = (pubkey: string, created_at: number, entries: string[][]) =>
+  event({
+    id: `${created_at}`.padStart(64, "d"),
+    pubkey,
+    created_at,
+    kind: 30030,
+    tags: [["d", "buzz:custom-emoji"], ...entries.map((e) => ["emoji", ...e])],
+  });
 
 /** A community with `events` in it, answering filters by kind and a few tags,
  * newest first and a page at a time, as the relay does. */
@@ -489,17 +497,6 @@ it("posts at the channel's top level when given a channel", async () => {
 
 it("tags the community emoji a message or edit uses, as the composer does", async () => {
   const stamp = "https://relay/media/stamp.png";
-  const emojiSet = (pubkey: string, created_at: number, entries: string[][]) =>
-    event({
-      id: `${created_at}`.padStart(64, "d"),
-      pubkey,
-      created_at,
-      kind: 30030,
-      tags: [
-        ["d", "buzz:custom-emoji"],
-        ...entries.map((e) => ["emoji", ...e]),
-      ],
-    });
   const { client, published } = fake([
     ...community,
     // Alice's newer set replaces her older one, so its :gone: is not used.
@@ -1228,6 +1225,91 @@ it("shows a media image to the agent, and gives any media's saved path", async (
   ).resolves.toBe(
     "Saved /cache/abc.mp4 (video/mp4, 3 bytes). Open it with your own tools.",
   );
+});
+
+it("adds an uploaded image to the agent's own emoji set, keeping the rest", async () => {
+  const { client, published } = fake(
+    [
+      emojiSet(me, 10, [
+        ["wave", "https://relay/media/wave.png"],
+        ["brows", "https://relay/media/old.png"],
+      ]),
+      emojiSet(alice, 20, [["party", "https://relay/media/party.png"]]),
+    ],
+    { keep: true },
+  );
+  await expect(
+    callTool(client, {}, "emoji_set", { shortcode: ":Brows:", path: "b.png" }),
+  ).resolves.toBe("Added :brows: (https://relay/media/x.png).");
+  expect(client.upload).toHaveBeenCalledWith(PNG, "image/png");
+  await callTool(client, {}, "emoji_set", {
+    shortcode: "nod",
+    url: "https://relay/media/nod.gif",
+  });
+  expect(published).toEqual([
+    {
+      kind: 30030,
+      content: "",
+      tags: [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "wave", "https://relay/media/wave.png"],
+        ["emoji", "brows", "https://relay/media/x.png"],
+      ],
+    },
+    {
+      kind: 30030,
+      content: "",
+      tags: [
+        ["d", "buzz:custom-emoji"],
+        ["emoji", "wave", "https://relay/media/wave.png"],
+        ["emoji", "brows", "https://relay/media/x.png"],
+        ["emoji", "nod", "https://relay/media/nod.gif"],
+      ],
+    },
+  ]);
+});
+
+it("refuses an emoji it cannot add without changing anyone else's", async () => {
+  const { client, published } = fake([
+    emojiSet(alice, 20, [["party", "https://relay/media/party.png"]]),
+  ]);
+  const add = (args: Record<string, unknown>) =>
+    callTool(client, {}, "emoji_set", args);
+  await expect(
+    add({ shortcode: "party", url: "https://x/p.png" }),
+  ).rejects.toThrow(":party: is taken");
+  await expect(
+    add({ shortcode: "a b", url: "https://x/p.png" }),
+  ).rejects.toThrow("A shortcode is 1 to 64");
+  await expect(add({ shortcode: "ok" })).rejects.toThrow("Pass path or url");
+  await expect(
+    add({ shortcode: "ok", path: "a.png", url: "https://x/p.png" }),
+  ).rejects.toThrow("Pass path or url");
+  await expect(add({ shortcode: "ok", path: "notes.md" })).rejects.toThrow(
+    "not a PNG, JPEG, GIF or WebP image",
+  );
+  await expect(add({ shortcode: "ok", url: "file:///p.png" })).rejects.toThrow(
+    "url must be a Buzz media URL",
+  );
+  // Without keep, the read after the write does not find it.
+  await expect(
+    add({ shortcode: "ok", url: "https://x/p.png" }),
+  ).rejects.toThrow("conflict");
+  expect(published).toHaveLength(1);
+  expect(client.upload).not.toHaveBeenCalled();
+});
+
+it("refuses a protected emoji upload before reading the file", async () => {
+  const { client, published } = fake();
+  client.protect = vi.fn(async () => {});
+  await expect(
+    callSessionTool(client, {}, "emoji_set", {
+      shortcode: "ok",
+      path: "a.png",
+    }),
+  ).rejects.toThrow("Protected uploads are not supported");
+  expect(client.read).not.toHaveBeenCalled();
+  expect(published).toEqual([]);
 });
 
 const room = "0e4c2f1a-8b3d-4c5e-9f60-718293a4b5c6";
