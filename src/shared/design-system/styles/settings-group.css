@@ -50,6 +50,10 @@
   }
   /* Embedded disclosures share the group's frame and row content inset. */
   .buzz-settings-group[data-layout="rows"]
+  > .buzz-accordion[data-variant="settings"] {
+    margin-inline: calc(0px - var(--settings-group-inset));
+  }
+  .buzz-settings-group[data-layout="rows"]
     > .buzz-accordion[data-variant="settings"]
     :is(.buzz-accordion-item, .buzz-accordion-trigger) {
     border: 0;
@@ -58,7 +62,7 @@
   .buzz-settings-group[data-layout="rows"]
     > .buzz-accordion[data-variant="settings"]
     :is(.buzz-accordion-trigger, .buzz-accordion-content) {
-    padding-inline: 0;
+    padding-inline: var(--settings-group-inset);
   }
   .buzz-settings-group[data-layout="form"] {
     display: grid;

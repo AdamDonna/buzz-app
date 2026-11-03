@@ -133,6 +133,8 @@ Use `Accordion` for optional details, retaining mounted draft input where needed
 Use `Accordion variant="settings"` for disclosures alongside preference rows.
 Inside a row-layout `SettingsGroup`, it shares the group's frame and content inset,
 with square trigger corners so the hover fill follows the flat row dividers.
+The disclosure spans the group's inner width; its trigger and content retain the
+group's horizontal inset, so text has padding inside the hover fill.
 Standalone triggers use the settings container shape and spacing; the chevron
 is decorative, and the entire row expands the content. `Select variant="preference"` uses the same
 label and compact choice control without adding a group container.
