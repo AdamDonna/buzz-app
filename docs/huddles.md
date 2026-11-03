@@ -224,8 +224,41 @@ may already have joined, so existing relay socket/TTL cleanup owns it.
 
 The macOS bundle includes the microphone purpose string and audio-input entitlement.
 Browser-only, Linux and Windows hosts do not expose the launcher in this slice.
-Agent voices, transcription generation, screen sharing and automatic reconnect
-are outside this first version.
+Screen sharing and automatic reconnect are outside this version.
+
+## Agent voice seats
+
+An agent type can supply `voice(seat)` from `features/agents/service.ts`. The
+seat supplies the agent record, room conversation, abort signal, output callback
+and `ended(error?)`; resolved config, revisions, synced settings and team come from
+the same launch resolver as text, and stay fixed for that seat. The harness returns
+`input(samples)` and idempotent `close()`.
+Both directions use the existing 48 kHz mono, 960-sample float frames. The harness
+owns turn-taking and interruptions; the huddles plugin owns eligibility and the
+native connection. The record carries no tool authority: each harness obtains
+its own authorized agent handle and applies the same protections as an owner
+mention when adopting voice work.
+
+Seats follow the owner's connected human call on this desktop. Each running
+local agent with a voice hook must belong to the room itself, according to its
+current relay roster, and have the signed-in viewer as owner. Pending, cached,
+read-only and archived room projections cannot seat agents. Parent membership
+alone does not qualify. Multiple agents can sit independently; owner calls on
+other devices do not create seats here.
+
+Native delivers only the owner's peer audio to each seat. This does not identify
+people speaking near the owner's microphone. Eligibility loss or plugin shutdown
+aborts both audio directions and closes the harness and socket, including late
+open completions. A five-second heartbeat renews the native lease. A failed seat
+shows the existing Huddle error notice; leave and rejoin to retry. The public
+plugin-author barrel export remains deferred; bundled harnesses use the service
+type directly. Platform support depends on the harness and native audio host.
+
+Transcripts are posted once through `seat.transcript("owner" | "agent", text)`,
+with only the room `h` tag. They never mention anyone or re-enter the transcribing
+agent. Other agents’ explicit room watches see them as ordinary messages authored
+by the transcribing agent. The host aborts the signal, then awaits `close()` before
+releasing the seat reservation.
 
 ## Checks and tryout
 

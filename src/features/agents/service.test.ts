@@ -50,6 +50,7 @@ import {
   type Agent,
   AgentsService,
   type AgentType,
+  type AgentVoiceSeat,
   type ConfigBinding,
   type Delivery,
   type Trigger,
@@ -159,6 +160,7 @@ async function setup({
   history = [] as RelayEvent[],
   timeoutMs = 60_000,
   runOnce = undefined as AgentType<Config>["runOnce"],
+  voice = undefined as AgentType<Config>["voice"],
   jev = undefined as FakeJev | undefined,
   binding = undefined as ((agent: Agent) => ConfigBinding) | undefined,
   sessionControls = undefined as
@@ -277,6 +279,7 @@ async function setup({
       ],
     }),
     run,
+    ...(voice ? { voice } : {}),
     ...(protection ? { protection } : {}),
     ...(retire ? { retire } : {}),
     ...(runOnce ? { runOnce } : {}),
@@ -2154,6 +2157,124 @@ it("starts each run from the start resolver, local with no synced revisions", as
   expect(run.mock.calls[0]?.[0]).toMatchObject({
     config: { reply: "local" },
     revisions: [],
+  });
+});
+
+describe("voice launch and transcripts", () => {
+  const subject: Subject = {
+    owner: viewer,
+    community: "https://relay.example.test",
+    subject: bot,
+    channel: "9b353519-f4fe-4757-aef4-bec6cc0ae54c",
+    type: "buzz.agent.instructions",
+  };
+  it("resolves synced opening config and refuses an unresolved launch", async () => {
+    const voice = vi.fn(async (_seat: AgentVoiceSeat<Config>) => ({
+      input: vi.fn(),
+      close: vi.fn(),
+    }));
+    let synced = false;
+    const f = await setup({
+      voice,
+      binding: () =>
+        synced ? { instructions: { mode: "synced", subject } } : {},
+    });
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      await f.service.save(bot, {
+        config: { reply: "local", instructions: "stale local" },
+      });
+      const agent = f.service.find(bot);
+      const open = f.service
+        .types()
+        .find((type) => type.key === "example/echo")?.voice;
+      if (!agent || !open) throw new Error("Missing voice fixture");
+      const pipe = {
+        agent,
+        conversation: { channelId: channel },
+        signal: new AbortController().signal,
+        output: async () => {},
+        ended: () => {},
+      };
+      synced = true;
+      await expect(open(pipe)).rejects.toThrow(
+        "Waiting for this agent's config to sync",
+      );
+      expect(voice).not.toHaveBeenCalled();
+      const head = finalizeEvent(
+        {
+          kind: 45010,
+          created_at: 1,
+          content: JSON.stringify({ version: 1, text: "synced instructions" }),
+          tags: [["op", "create"]],
+        },
+        generateSecretKey(),
+      ) as RelayEvent;
+      const store = internals(f.service).configStore;
+      store.applyRead(subject, store.capture(subject), {
+        kind: "head",
+        event: head,
+      });
+      await open(pipe);
+      expect(voice.mock.calls[0]?.[0]).toMatchObject({
+        config: { reply: "local", instructions: "synced instructions" },
+      });
+      expect(voice.mock.calls[0]?.[0].revisions).toEqual([head.id]);
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  });
+  it("publishes final h-only transcripts without triggering its own agent", async () => {
+    const voice = vi.fn(async (_seat: AgentVoiceSeat<Config>) => ({
+      input: vi.fn(),
+      close: vi.fn(),
+    }));
+    const f = await setup({ voice });
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      await f.service.save(bot, {
+        attentionEnabled: true,
+        attention: { ...chat, "watch/channel": null },
+      });
+      await settle();
+      const agent = f.service.find(bot);
+      const open = f.service
+        .types()
+        .find((type) => type.key === "example/echo")?.voice;
+      if (!agent || !open) throw new Error("Missing voice fixture");
+      const controller = new AbortController();
+      await open({
+        agent,
+        conversation: { channelId: channel },
+        signal: controller.signal,
+        output: async () => {},
+        ended: () => {},
+      });
+      const seat = voice.mock.calls[0]?.[0];
+      if (!seat) throw new Error("Missing opened seat");
+      await seat.transcript("agent", "Spoken answer");
+      const lines = await published(f.native, 9);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        pubkey: bot,
+        tags: [["h", channel]],
+        content: "Echo (transcribed by Echo): Spoken answer",
+      });
+      await seat.transcript("owner", "  ");
+      controller.abort();
+      await seat.transcript("owner", "late");
+      expect(await published(f.native, 9)).toHaveLength(1);
+      f.emit({ events: lines, channelId: channel });
+      await settle();
+      expect(f.run).not.toHaveBeenCalled();
+      f.emit({
+        events: [event("voice-control", { tags: [["h", channel]] })],
+        channelId: channel,
+      });
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
   });
 });
 

@@ -413,6 +413,10 @@ export function createHuddles(
     );
   return {
     snapshot: () => snapshot,
+    voiceError(error?: string) {
+      const { error: _previous, ...rest } = snapshot;
+      update(error ? { ...rest, error } : rest);
+    },
     canJoin(scope: string, room: string) {
       return !unavailable.has(`${scope}:${room}`);
     },

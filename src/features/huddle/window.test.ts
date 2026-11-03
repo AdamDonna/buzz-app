@@ -26,6 +26,7 @@ function harness() {
   };
   const listeners = new Set<() => void>();
   const call: Huddles = {
+    voiceError() {},
     snapshot: () => snapshot,
     subscribe(fn) {
       listeners.add(fn);
