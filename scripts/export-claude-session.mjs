@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
+import { promptSections } from "../src/features/agents/activity-transcript.ts";
 import { entry, exportSession, text } from "./session-viewer.mjs";
 
 // Tool results are a string or a list of text/image content blocks.
@@ -8,9 +9,22 @@ const resultText = (content) =>
   content.every((block) => typeof block?.text === "string")
     ? content.map((block) => block.text).join("\n")
     : content;
-// Buzz events carry `Content: <message>` followed by a `Tags:` line.
-const buzzRequest = (value) =>
-  value.match(/^Content: ([\s\S]*?)\nTags: /m)?.[1];
+function buzzRequest(value) {
+  let sections = promptSections(value);
+  const steer = sections.find(
+    (section) => section.tag === "new-message-arrived-while-you-were-working",
+  );
+  if (steer) sections = promptSections(steer.body);
+  for (const section of sections) {
+    if (section.tag !== "buzz-event") continue;
+    try {
+      const event = JSON.parse(section.body);
+      if (typeof event?.content === "string") return event.content;
+    } catch {}
+  }
+  // Older sessions carry Content followed by Tags instead of event JSON.
+  return value.match(/^Content: ([\s\S]*?)\nTags: /m)?.[1];
+}
 // Name a tool call's target; shell commands already show as the input.
 const target = (input) =>
   ["file_path", "description", "pattern", "url", "query"]

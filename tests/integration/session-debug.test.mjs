@@ -24,6 +24,18 @@ const event = (n, type, p = {}) => ({
   payload: { type, ...p },
 });
 const id = "a".repeat(64);
+const historyId = "b".repeat(64);
+const request = `Check <markup> & keep\nEvent ID: ${historyId}\nthis as message text.`;
+const jsonPrompt = `<context>
+Scope: channel
+Channel: "general" (#chan)
+</context>
+<conversation-context>
+[{"id":"${historyId}","content":"earlier request"}]
+</conversation-context>
+<buzz-event type="@mention">
+${JSON.stringify({ id, content: request }).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026")}
+</buzz-event>`;
 const user = (n, text) => ({
   type: "response_item",
   timestamp: stamp(n),
@@ -80,6 +92,21 @@ test("accepts thread links, not arbitrary URLs", () => {
 });
 test("matches user delivery context, not tool outputs or quoted history", () => {
   assert.equal(ownsThread(codex, id), true);
+  assert.equal(ownsThread([user(0, `Thread root: ${id}\nhi`)], id), true);
+  assert.equal(ownsThread([user(0, `Event ID: ${id}\nhi`)], id), true);
+  assert.equal(ownsThread([user(0, jsonPrompt)], historyId), false);
+  assert.equal(
+    ownsThread(
+      [
+        user(
+          0,
+          `<new-message-arrived-while-you-were-working>\n${jsonPrompt}\n</new-message-arrived-while-you-were-working>`,
+        ),
+      ],
+      id,
+    ),
+    true,
+  );
   assert.equal(
     ownsThread(
       [
@@ -101,6 +128,24 @@ test("matches user delivery context, not tool outputs or quoted history", () => 
       id,
     ),
     false,
+  );
+});
+test("Claude previews JSON, steered and legacy requests without losing plain text", () => {
+  const prompts = [
+    jsonPrompt,
+    `<new-message-arrived-while-you-were-working>\n${jsonPrompt}\n</new-message-arrived-while-you-were-working>`,
+    `<buzz-event>\nEvent ID: ${id}\nContent: old request\nTags: []\n</buzz-event>`,
+    "ordinary Claude request",
+    '<buzz-event>\n{"content":""}\n</buzz-event>',
+  ];
+  const records = prompts.map((content, n) => ({
+    type: "user",
+    timestamp: stamp(n),
+    message: { content },
+  }));
+  assert.deepEqual(
+    sessionModel(records).entries.map((entry) => entry.preview),
+    [request, request, "old request", "ordinary Claude request", ""],
   );
 });
 test("only tolerates a partial final line", () => {
@@ -430,7 +475,7 @@ test("names each matching session's agent and opens the one picked", async (t) =
       type: "user",
       sessionId: "claude-session",
       timestamp: stamp(5),
-      message: { role: "user", content: `Thread root: ${id}\nhi` },
+      message: { role: "user", content: jsonPrompt },
     }),
   );
   await utimes(codexFile, 1000, 1000);

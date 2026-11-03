@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { promptSections } from "../src/features/agents/activity-transcript.ts";
 import { parseLines, sessionModel } from "./session-model.mjs";
 
 export function threadId(value) {
@@ -55,6 +56,17 @@ export function ownsThread(records, id) {
     for (const m of body.matchAll(/<context>\s*([^<]+)\s*<\/context>/g)) {
       try {
         if (JSON.parse(m[1]).session_thread === id) return true;
+      } catch {}
+    }
+    let sections = promptSections(body);
+    const steer = sections.find(
+      (section) => section.tag === "new-message-arrived-while-you-were-working",
+    );
+    if (steer) sections = promptSections(steer.body);
+    for (const section of sections) {
+      if (section.tag !== "buzz-event") continue;
+      try {
+        if (JSON.parse(section.body)?.id === id) return true;
       } catch {}
     }
     return (

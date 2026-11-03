@@ -109,7 +109,7 @@ const time = (seconds: number) => new Date(seconds * 1000).toISOString();
 export function turnPrompt(input: TurnInput) {
   const { event, channel, thread } = input;
   const channelLabel = channel.name
-    ? `${quoted(channel.name).slice(1, -1)} (#${channel.id})`
+    ? `${quoted(channel.name)} (#${channel.id})`
     : channel.id;
   // A session shared by a channel's threads (or a DM's) cannot tell which
   // thread a reply is for, so it names the thread itself.
