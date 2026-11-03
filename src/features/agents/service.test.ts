@@ -486,15 +486,18 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     adapter.agents.bindExecution(agent.key, binding),
   ).rejects.toThrow("Another copy of Buzz is running this agent");
   expect(service.executionBinding(agent.key)).toBeUndefined();
-  const retiring = Promise.withResolvers<void>();
+  let finishRetirement = () => {};
+  const retiring = new Promise<void>((resolve) => {
+    finishRetirement = resolve;
+  });
   retire.mockClear();
-  retire.mockImplementationOnce(() => retiring.promise);
+  retire.mockImplementationOnce(() => retiring);
   const changing = adapter.agents.bindExecution(agent.key, binding);
   try {
     await vi.waitFor(() => expect(retire).toHaveBeenCalledWith(agent.key));
     expect(service.executionBinding(agent.key)).toBeUndefined();
   } finally {
-    retiring.resolve();
+    finishRetirement();
   }
   await changing;
   expect(service.executionBinding(agent.key)).toEqual({
