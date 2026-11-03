@@ -1700,7 +1700,7 @@ patches over the display parsing budget retain escaped raw text. Unconsumed
 patch lines and unsupported binary payloads also fall back to the complete raw
 patch; metadata-only rename/mode/binary summaries retain rich presentation.
 Preview, file and raw scroll regions support native keyboard navigation. Diff
-messages are not editable, including through the composer's Up-arrow shortcut.
+messages are not editable, including through the selected-message Edit shortcut.
 Diff search remains deferred: the client accepts kind 40008 hits, but relays
 whose search index allowlist excludes that kind cannot return them. Metadata is
 untrusted presentation, not repository access authority. No sending, applying,
@@ -2235,6 +2235,49 @@ the original event to this same dispatcher through a private DOM handoff. Eligib
 app shortcuts (including live rebinds) win there; unhandled keys stay with xterm.
 No plugin shortcut API or preference access is added. Ordinary editors continue
 to handle keys before the window's bubbling dispatcher.
+
+Slack-style message keys are host bindings. In an empty composer, Up selects the
+newest message (by id, not tree order) of the timeline or thread sharing its edit scope (on macOS ⌘↑ keeps editing
+the latest own message directly; elsewhere use Up, then E); a selection is
+DOM focus on that message's box (`features/messages/message-selection.ts`), so
+the timeline's Virtua keeps the row mounted and assistive technology follows it.
+Membership notices and folded or collapsed rows are skipped. While a message
+itself is focused, Up/Down move between rendered messages, Down past the newest and
+Escape return to the composer (a handled Escape does not also close the thread),
+and Up at the oldest rendered row stays native so history can load. When the
+timeline is scrolled far enough that the newest message is unmounted, Up from the
+composer keeps its old edit-last behavior, Down at the last rendered row scrolls
+natively, and ⌘⇧\ does nothing rather than act on an older message. E edits a selected eligible own message through the scope's
+editor, R opens the row's reaction picker through the host-owned
+`[data-reaction-tool]` trigger, and ⌘⇧\ selects the newest message in the focused
+pane, even from another selected message, and does the same. T or → clicks the row's Reply action (open or answer its
+thread), U marks unread from it (`useMessageKeyActions` in `MessageManagement.tsx`,
+the menu's own call), and Delete or Backspace opens the menu's delete confirmation
+for your own message; agent-owner deletion stays in the menu because it needs
+ownership evidence a key cannot wait for. Remind me (M) has no key: plugin message
+actions have no binding in their contract. Single-letter bindings never run in
+editable targets. ⌘1–⌘9 select the community switcher's entries in its order
+(⌘1 is Personal space) and ⌘⇧] / ⌘⇧[ step through them, wrapping
+(`app/shell/CommunityShortcuts.tsx`); Ctrl+Tab stays Buzz's tab switching.
+⌘T opens Search Buzz as a default alias of ⌘K (Slack's switcher answers to
+both); a shortcut may ship several default chords, and Settings → Shortcuts lists each
+distinct one ("⌘K or ⌘T") while showing layout aliases of one physical key (⌘=
+and ⌘+) once, but a Settings rebind replaces them with one. Plain-Escape
+dismissals (thread, panels, drawer, plugin details) ignore Shift so ⇧Esc reaches
+Mark all as read. The message editor's own keys (`composerFormats` and `linkBindings` in
+`features/messages/composer-dom.ts`, plus undo, redo and new line) are listed
+read-only under Message formatting, which says once under its heading that they
+belong to the editor; the editor matches them before any shortcut,
+so rebinding a shortcut onto one warns. Slack's ⌘⇧C (code), ⌘⇧9 (quote), ⌘⌥⇧C
+(code block) and ⌘⇧U (link) are aliases of Buzz's chords. ⌘/ opens Settings →
+Shortcuts, which is built the first time it is shown rather than with every
+Settings open. ⌘⇧Y opens Set a status while the profile menu
+can (the message editor keeps it as Redo). Home is on the placeholder ⌘⇧O while
+⌘⇧A opens Inbox's unread view. Inbox's ⌘⇧A, ⌘⇧T, ⌘⇧M and ⌘⇧K are ordinary
+`buzz.inbox` plugin contributions, so they follow the plugin precedence above: a
+plugin whose namespaced ID sorts first and claims the same chord wins it while
+eligible. Settings → Shortcuts marks such rows "Also used by"; rebinding either one
+resolves it.
 
 Known limitations. Capture and matching both use the logical `KeyboardEvent.key`.
 On macOS an Option chord reports the composed character, so Option+K is stored

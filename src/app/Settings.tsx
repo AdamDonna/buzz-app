@@ -348,7 +348,8 @@ function PluginDetails({
       className={styles.pluginAside}
       aria-label={`${plugin.manifest.name} details`}
       onKeyDown={(event) => {
-        if (event.defaultPrevented || event.key !== "Escape") return;
+        if (event.defaultPrevented || event.key !== "Escape" || event.shiftKey)
+          return;
         event.stopPropagation();
         onClose();
       }}
@@ -713,6 +714,10 @@ export function Settings({
     [contributed, departureCommunity],
   );
   const [selected, setSelected] = useState(defaultSection);
+  // Shortcuts lists every binding with its own controls, so it is built on
+  // first visit rather than with every Settings open, then kept like the rest.
+  const [shortcutsVisited, setShortcutsVisited] = useState(false);
+  if (selected === "shortcuts" && !shortcutsVisited) setShortcutsVisited(true);
   // A switch made from inside the content hides or removes the control that
   // made it, so focus moves into the section it opened.
   const contentFocus = useRef<string>(undefined);
@@ -1235,11 +1240,13 @@ export function Settings({
           />
         </div>
         <div hidden={selected !== "shortcuts"}>
-          <ShortcutSettings
-            shortcuts={shortcuts}
-            bindings={shortcutBindings}
-            plugins={plugins}
-          />
+          {shortcutsVisited && (
+            <ShortcutSettings
+              shortcuts={shortcuts}
+              bindings={shortcutBindings}
+              plugins={plugins}
+            />
+          )}
         </div>
         <div hidden={selected !== "agents"}>
           <AgentSettings
