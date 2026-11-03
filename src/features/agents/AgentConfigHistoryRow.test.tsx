@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RelayEvent } from "../relay/events";
@@ -81,11 +82,17 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
     screen.queryByRole("region", { name: "Instructions" }),
   ).not.toBeInTheDocument();
   await user.click(row);
-  expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
-  const instructions = within(
-    screen.getByRole("region", { name: "Instructions" }),
+  const feed = within(screen.getByRole("list", { name: "Previous versions" }));
+  expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Instructions" })).toBeNull();
+  const entries = feed.getAllByRole("button");
+  expect(entries).toHaveLength(3);
+  expect(entries[0]).toHaveTextContent("Instructions · update · Current");
+  expect(entries[1]).toHaveTextContent("Instructions · create");
+  expect(entries[2]).toHaveTextContent("Settings · create · Current");
+  await user.click(
+    feed.getByRole("button", { name: /^Instructions · create / }),
   );
-  await user.click(instructions.getByRole("button", { name: /^create / }));
   const dialog = within(
     screen.getByRole("dialog", { name: "Instructions version" }),
   );
@@ -105,7 +112,9 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
   await user.click(dialog.getByRole("button", { name: "Close" }));
   await user.click(row);
   await user.click(row);
-  await user.click(instructions.getByRole("button", { name: /^create / }));
+  await user.click(
+    feed.getByRole("button", { name: /^Instructions · create / }),
+  );
   expect(screen.getByRole("region", { name: "Changes" })).toBeVisible();
   expect(screen.getByRole("alert")).toBeVisible();
   expect(read).toHaveBeenCalledTimes(2);
@@ -119,4 +128,86 @@ it("marks paginated counts as incomplete and updates the count after Load older"
   await user.click(screen.getByRole("button", { name: "Previous versions" }));
   await user.click(screen.getByRole("button", { name: "Load older" }));
   expect(await screen.findByText("102 versions")).toBeInTheDocument();
+});
+
+it("restores an expanded history address on the first commit and keeps it expanded across dialog selection", async () => {
+  const { agents } = fixture();
+  const commits: string[] = [];
+  const select = vi.fn();
+  function Probe({
+    selected,
+  }: {
+    selected?: { side: "instructions"; id: string };
+  }) {
+    useLayoutEffect(() => {
+      commits.push(
+        screen
+          .getByRole("button", { name: "Previous versions", hidden: true })
+          .getAttribute("aria-expanded") ?? "missing",
+      );
+    });
+    return (
+      <AgentConfigHistoryRow
+        agents={agents}
+        pubkey="a"
+        presentation={{ active: true, selected, select }}
+      />
+    );
+  }
+  const view = render(<Probe />);
+  expect(commits[0]).toBe("true");
+  await screen.findByText("3 versions");
+  view.rerender(
+    <Probe selected={{ side: "instructions", id: "instructions-1" }} />,
+  );
+  expect(
+    await screen.findByRole("dialog", { name: "Instructions version" }),
+  ).toBeVisible();
+  view.rerender(<Probe />);
+  expect(commits.every((value) => value === "true")).toBe(true);
+});
+
+it("keeps loaded pages in the feed's first commit after a dialog-route remount", async () => {
+  const { agents, read } = fixture(HISTORY_PAGE + 1);
+  const user = userEvent.setup();
+  const view = render(
+    <AgentConfigHistoryRow
+      agents={agents}
+      pubkey="a"
+      presentation={{ active: true, select: vi.fn() }}
+    />,
+  );
+  await screen.findByText("101+ versions");
+  await user.click(screen.getByRole("button", { name: "Load older" }));
+  await screen.findByText("102 versions");
+  expect(read).toHaveBeenCalledTimes(3);
+  view.unmount();
+  const firstCommit: number[] = [];
+  function Probe() {
+    useLayoutEffect(() => {
+      firstCommit.push(
+        within(
+          screen.getByRole("list", { name: "Previous versions", hidden: true }),
+        ).getAllByRole("listitem", { hidden: true }).length,
+      );
+    }, []);
+    return (
+      <AgentConfigHistoryRow
+        agents={agents}
+        pubkey="a"
+        presentation={{
+          active: true,
+          selected: { side: "instructions", id: "instructions-0" },
+          select: vi.fn(),
+        }}
+      />
+    );
+  }
+  render(<Probe />);
+  expect(firstCommit).toEqual([102]);
+  expect(
+    await screen.findByRole("dialog", { name: "Instructions version" }),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Revert to this" })).toBeVisible();
+  expect(read).toHaveBeenCalledTimes(3);
 });

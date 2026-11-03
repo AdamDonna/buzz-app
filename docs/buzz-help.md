@@ -265,8 +265,9 @@ available rather than silently discarding it.
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.
 - **Settings → Agent details → Previous versions** expands saved revisions for
-  agents whose configuration syncs here. Settings and instructions have separate
-  histories, kept automatically when changes are saved. Click a version to open
+  agents whose configuration syncs here. Settings and instructions appear together
+  in one feed, newest first, with a label on each version. Versions are kept
+  automatically when changes are saved. Click a version to open
   its changes in a dialog; older valid versions offer **Revert to this** (or
   **Restore this** after deletion). The current version is labelled and has no
   restore action. **Load older** fetches more history. Reverting one track saves

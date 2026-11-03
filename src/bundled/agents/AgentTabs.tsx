@@ -65,7 +65,11 @@ export function AgentTabs(props: {
     },
   ];
   const [tab, setTab] = useState<string>(
-    props.initialActivity ? "agent:activity" : (sections[0]?.value ?? ""),
+    props.showSettings
+      ? "agent:management"
+      : props.initialActivity
+        ? "agent:activity"
+        : (sections[0]?.value ?? ""),
   );
   useEffect(() => {
     if (props.showSettings) setTab("agent:management");

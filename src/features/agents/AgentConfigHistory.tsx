@@ -16,6 +16,8 @@ import {
   type History,
   lineDiff,
   loadOlder,
+  recalledHistory,
+  rememberHistory,
   revertTemplate,
   revisionProblem,
   type SettingsCheck,
@@ -63,7 +65,9 @@ export function AgentConfigHistory({
   onHistoryChange,
   selected,
   onSelect,
+  showRevisions = true,
 }: {
+  showRevisions?: boolean;
   selected?: string | undefined;
   onSelect?: ((id?: string) => void) | undefined;
   expected: Expected;
@@ -82,7 +86,9 @@ export function AgentConfigHistory({
   /** Reports loaded counts without a separate history read. */
   onHistoryChange?: (history: History) => void;
 }) {
-  const [history, setHistory] = useState<History>(emptyHistory);
+  const [history, setHistory] = useState<History>(
+    () => recalledHistory(read, expected, head, version) ?? emptyHistory,
+  );
   const [loading, setLoading] = useState(false);
   const [localSelection, setLocalSelection] = useState<string>();
   const open = onSelect ? selected : localSelection;
@@ -94,6 +100,7 @@ export function AgentConfigHistory({
   live.current = history;
   const signal = useRef<AbortController>(undefined);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only artifact identity and revision identifiers invalidate a read.
   const more = useCallback(async () => {
     signal.current ??= new AbortController();
     const controller = signal.current;
@@ -107,15 +114,18 @@ export function AgentConfigHistory({
     );
     if (controller.signal.aborted) return;
     live.current = next;
+    rememberHistory(read, expected, head, version, next);
     setHistory(next);
     setLoading(false);
-  }, [read, expected.channel, expected.d]);
+  }, [read, expected.channel, expected.d, head?.id, version]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: A new head or a history change reloads history from the newest page.
   useEffect(() => {
-    setHistory(emptyHistory);
-    live.current = emptyHistory;
-    void more();
+    const remembered = recalledHistory(read, expected, head, version);
+    const initial = remembered ?? emptyHistory;
+    setHistory(initial);
+    live.current = initial;
+    if (!remembered) void more();
     return () => {
       signal.current?.abort();
       signal.current = undefined;
@@ -243,54 +253,54 @@ export function AgentConfigHistory({
     !deleted &&
     !revisionProblem(expected, event, settings);
   return (
-    <section className={styles.history} aria-label={title}>
-      <InlineHeader title={title} />
-      {!history.revisions.length && !history.failed && (
-        <p className="text-body-sm">
-          {loading ? "Loading history…" : "No revisions returned."}
-        </p>
-      )}
+    <section
+      className={showRevisions ? styles.history : "contents"}
+      aria-label={title}
+    >
+      {showRevisions && <InlineHeader title={title} />}
+      {!history.revisions.length &&
+        !history.failed &&
+        (showRevisions || (!loading && history.next > 0)) && (
+          <p className="text-body-sm">
+            {!showRevisions && `${title}: `}
+            {loading ? "Loading history…" : "No revisions returned."}
+          </p>
+        )}
       {!history.revisions.length && history.failed && (
         <div className={styles.gap}>
           <span className={styles.label}>{GAP_TEXT.failed}</span>
           {gapAction("failed")}
         </div>
       )}
-      {all.map((segment) => (
-        <ol className={styles.list} key={segment.revisions[0]?.id}>
-          {segment.revisions.map((event) => {
-            const invalid =
-              artifactOp(event) !== "delete" &&
-              revisionProblem(expected, event, settings);
-            return (
-              <li className={styles.row} key={event.id}>
-                <Button
-                  size="inline"
-                  variant="plain"
-                  style={{ width: "100%", justifyContent: "flex-start" }}
-                  aria-haspopup="dialog"
-                  onClick={() => setOpen(event.id)}
-                >
-                  <span className="text-caption text-left">
-                    {artifactOp(event)}
-                    {event.id === head?.id ? " · Current" : ""}
-                    {invalid ? " · Not valid" : ""}{" "}
-                    <span className="text-secondary">
-                      {new Date(event.created_at * 1000).toLocaleString()}
-                    </span>
-                  </span>
-                </Button>
+      {all.map((segment) =>
+        showRevisions ? (
+          <ol className={styles.list} key={segment.revisions[0]?.id}>
+            {segment.revisions.map((event) => (
+              <AgentConfigVersionRow
+                key={event.id}
+                event={event}
+                head={head}
+                expected={expected}
+                settings={settings}
+                onSelect={() => setOpen(event.id)}
+              />
+            ))}
+            {segment.gap && (
+              <li className={styles.gap}>
+                <span className={styles.label}>{GAP_TEXT[segment.gap]}</span>
+                {gapAction(segment.gap)}
               </li>
-            );
-          })}
-          {segment.gap && (
-            <li className={styles.gap}>
-              <span className={styles.label}>{GAP_TEXT[segment.gap]}</span>
-              {gapAction(segment.gap)}
-            </li>
-          )}
-        </ol>
-      ))}
+            )}
+          </ol>
+        ) : segment.gap ? (
+          <div className={styles.gap} key={segment.revisions[0]?.id}>
+            <span className={`text-caption ${styles.label}`}>
+              {title}: {GAP_TEXT[segment.gap]}
+            </span>
+            {gapAction(segment.gap)}
+          </div>
+        ) : null,
+      )}
       <Dialog
         open={!!open}
         onOpenChange={(next) => {
@@ -357,5 +367,47 @@ export function AgentConfigHistory({
         </div>
       </Dialog>
     </section>
+  );
+}
+
+/** The same compact version target in a track or the combined feed. */
+export function AgentConfigVersionRow({
+  event,
+  head,
+  expected,
+  settings,
+  label,
+  onSelect,
+}: {
+  event: RelayEvent;
+  head: RelayEvent | undefined;
+  expected: Expected;
+  settings?: SettingsCheck | undefined;
+  label?: string;
+  onSelect(): void;
+}) {
+  const invalid =
+    artifactOp(event) !== "delete" &&
+    revisionProblem(expected, event, settings);
+  return (
+    <li className={styles.row}>
+      <Button
+        size="inline"
+        variant="plain"
+        style={{ width: "100%", justifyContent: "flex-start" }}
+        aria-haspopup="dialog"
+        onClick={onSelect}
+      >
+        <span className="text-caption text-left">
+          {label && `${label} · `}
+          {artifactOp(event)}
+          {event.id === head?.id ? " · Current" : ""}
+          {invalid ? " · Not valid" : ""}{" "}
+          <span className="text-secondary">
+            {new Date(event.created_at * 1000).toLocaleString()}
+          </span>
+        </span>
+      </Button>
+    </li>
   );
 }

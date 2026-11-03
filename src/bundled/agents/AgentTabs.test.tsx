@@ -10,7 +10,7 @@ import type {
   AgentViewProps,
   RegisteredAgentType,
 } from "../../features/agents/service";
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useState } from "react";
 import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { AgentTabs } from "./AgentTabs";
@@ -433,4 +433,22 @@ it("places plugin tabs after Activity and before Settings", () => {
     "Watching",
     "Settings",
   ]);
+});
+
+it("restores Settings on the first commit without briefly selecting Identity", () => {
+  const { props } = editingFixture(false);
+  const selected: string[] = [];
+  function Probe() {
+    useLayoutEffect(() => {
+      selected.push(
+        screen
+          .getAllByRole("tab")
+          .find((tab) => tab.getAttribute("aria-selected") === "true")
+          ?.textContent ?? "missing",
+      );
+    }, []);
+    return <AgentTabs {...props} showSettings />;
+  }
+  render(<Probe />);
+  expect(selected).toEqual(["Settings"]);
 });
