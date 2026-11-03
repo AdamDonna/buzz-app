@@ -26,7 +26,10 @@ import {
 import { readProject } from "../../features/agent-harness/project";
 import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
 import { type AgentKey, pubkeyOf } from "../../features/agents/membership";
-import { sessionPrompts } from "../../features/agents/session-prompts";
+import {
+  sessionPrompts,
+  withSessionPrompts,
+} from "../../features/agents/session-prompts";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import type { AgentReads } from "../../features/agents/reads";
 import type {
@@ -613,11 +616,15 @@ export class PiRuntime {
       signal,
     ).then((transcript) => ({
       ...transcript,
-      turns: this.prompts(agent).shown(transcript.turns),
+      turns: withSessionPrompts(transcript.turns, (id) =>
+        this.prompts(agent).get(this.promptId(id)),
+      ),
     }));
   }
-  /** What each of the agent's sessions started with, by
-   * `conversation:session`. */
+  private promptId(id: string) {
+    return this.routing.sessionKey ? `${this.routing.sessionKey}/${id}` : id;
+  }
+  /** Each agent's session prompts share one storage budget. */
   private prompts(agent: AgentKey) {
     return sessionPrompts(this.storage, "pi", agent);
   }
@@ -886,7 +893,7 @@ export class PiRuntime {
       }
       if (submitted.session !== undefined)
         void this.prompts(agent.key).save(
-          `${submitted.conversation}:${submitted.session}`,
+          this.promptId(`${submitted.conversation}:${submitted.session}`),
           [
             { label: "instructions", text: picked.instructions },
             { label: "core memory", text: picked.core?.text ?? "" },

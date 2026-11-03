@@ -12,8 +12,15 @@ import type {
 } from "../../features/agents/service";
 import type { EventData, RelayEvent } from "../../features/relay/events";
 import type { RelayData } from "../../features/relay/service";
+import { memoryStorage } from "../../features/agents/test-fakes";
+import type { AgentStore } from "../../features/agents/store";
 import { deferred, fakeHost, type Handler } from "./pi-testing";
-import { type Config, DEFAULT_CONFIG, PiRuntime } from "./runtime";
+import {
+  type Config,
+  DEFAULT_CONFIG,
+  PiRuntime,
+  type PiRuntimeOptions,
+} from "./runtime";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -60,6 +67,8 @@ function setup(
     key: string,
   ) => AgentExecution | undefined | Promise<AgentExecution | undefined>,
   hook?: ConstructorParameters<typeof PiRuntime>[6],
+  routing?: PiRuntimeOptions,
+  storage?: AgentStore,
 ) {
   let submissions = 0;
   const host = fakeHost({
@@ -139,6 +148,8 @@ function setup(
     hook,
     undefined,
     execution ? async (key) => execution(key) : undefined,
+    routing,
+    storage,
   );
   const published: { kind: number; content: string; tags: string[][] }[] = [];
   const agent = {
@@ -2759,3 +2770,70 @@ it.each(["stop", "retire"])(
     expect(check).not.toHaveBeenCalled();
   },
 );
+
+it("keeps prompt metadata separate for remote sessions with equal guest IDs", async () => {
+  const storage = memoryStorage();
+  const fixtures: ReturnType<typeof setup>[] = [];
+  try {
+    for (const [sessionKey, hasCore] of [
+      ["first", false],
+      ["second", true],
+    ] as const) {
+      const f = setup(
+        {
+          deliver: () => ({ submission: 1, conversation: 1, session: 1 }),
+          wait: () => ({ status: "done" }),
+          entries: () => ({
+            session: 1,
+            entries: [
+              {
+                id: 1,
+                kind: "pi.user",
+                model: [{ role: "user", content: "Request", timestamp: 100 }],
+              },
+            ],
+          }),
+        },
+        [],
+        undefined,
+        undefined,
+        async () => ({
+          workspace: `/remote/${sessionKey}`,
+          signal: new AbortController().signal,
+          spawn: f.host.spawn,
+          readFile: async () => new Uint8Array(),
+          resolveDirectory: async (path) => path,
+          dispose: async () => {},
+        }),
+        undefined,
+        { sessionKey },
+        storage,
+      );
+      fixtures.push(f);
+      f.core.mockResolvedValue(hasCore ? "Fixture memory" : undefined);
+      const turn = f.deliver({ type: "mention", event: root });
+      await turn.run;
+      await f.settled(turn);
+    }
+    for (const [index, f] of fixtures.entries()) {
+      const transcript = await f.runtime.transcript(
+        self,
+        { key: channel, channelId: channel, at: 100, conversation: 1 },
+        false,
+        new AbortController().signal,
+      );
+      expect(transcript.turns[0]?.sessionId).toBe("1:1");
+      const metadata = transcript.turns[0]?.items.filter(
+        (item) => item.type === "system",
+      );
+      expect(metadata).toHaveLength(1);
+      expect(
+        metadata?.[0]?.sections.some(
+          (section) => section.tag === "core-memory",
+        ),
+      ).toBe(index === 1);
+    }
+  } finally {
+    for (const f of fixtures) f.runtime.dispose();
+  }
+});
