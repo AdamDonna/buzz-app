@@ -19,6 +19,16 @@ use objc2_user_notifications::{
     UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
 
+const AGENT_COMPLETION_CATEGORY: &str = "buzz.agent-completion";
+
+fn foreground_presentation(agent_completion: bool) -> UNNotificationPresentationOptions {
+    if agent_completion {
+        UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List
+    } else {
+        UNNotificationPresentationOptions::List
+    }
+}
+
 use super::{Outcome, Pending};
 
 static REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
@@ -120,14 +130,13 @@ define_class!(
         fn will_present_notification(
             &self,
             _center: &UNUserNotificationCenter,
-            _notification: &objc2_user_notifications::UNNotification,
+            notification: &objc2_user_notifications::UNNotification,
             completion: &Block<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
-            // Keep foreground completions native too: macOS otherwise suppresses
-            // the banner while Buzz is the active app.
-            completion
-                .call((UNNotificationPresentationOptions::Banner
-                    | UNNotificationPresentationOptions::List,));
+            let category = notification.request().content().categoryIdentifier();
+            completion.call((foreground_presentation(
+                category.to_string() == AGENT_COMPLETION_CATEGORY,
+            ),));
         }
 
         #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
@@ -174,7 +183,13 @@ pub(crate) fn init() {
     });
 }
 
-pub(super) fn show(id: String, title: String, body: String, pending: Arc<Pending>) {
+pub(super) fn show(
+    id: String,
+    title: String,
+    body: String,
+    foreground_banner: bool,
+    pending: Arc<Pending>,
+) {
     if !crate::dock::bundled() {
         pending.finish(Outcome::Failed(
             "macOS notifications are unavailable when Buzz is not running from an app bundle"
@@ -210,6 +225,9 @@ pub(super) fn show(id: String, title: String, body: String, pending: Arc<Pending
         let content = UNMutableNotificationContent::new();
         content.setTitle(&NSString::from_str(&title));
         content.setBody(&NSString::from_str(&body));
+        if foreground_banner {
+            content.setCategoryIdentifier(&NSString::from_str(AGENT_COMPLETION_CATEGORY));
+        }
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
             &NSString::from_str(&id),
             &content,
@@ -262,6 +280,17 @@ fn submission_error_message(code: isize, detail: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_agent_completions_request_foreground_banners() {
+        assert_eq!(
+            foreground_presentation(true),
+            UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List
+        );
+        assert_eq!(
+            foreground_presentation(false),
+            UNNotificationPresentationOptions::List
+        );
+    }
     #[test]
     fn unbundled_process_never_initializes_center() {
         assert!(!crate::dock::bundled());

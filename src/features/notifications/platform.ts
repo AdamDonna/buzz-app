@@ -8,6 +8,7 @@ export type NotificationPresentation = Readonly<{
   id: string;
   title: string;
   body: string;
+  foregroundBanner?: boolean;
 }>;
 export interface NotificationPlatform {
   readonly label: string;
@@ -71,6 +72,7 @@ export function createNotifications(): NotificationPlatform {
           id: item.id,
           title: item.title,
           body: item.body,
+          foregroundBanner: item.foregroundBanner ?? false,
           onEvent: channel,
         });
         if (retired) {

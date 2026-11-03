@@ -83,6 +83,7 @@ it("the default service sends desktop banners via the native bridge and shared p
     title: "Buzz",
     body: "New mentions",
     id: expect.any(String),
+    foregroundBanner: false,
     onEvent: expect.objectContaining({ onmessage: expect.any(Function) }),
   });
   service.updatePreferences({ enabled: false });
@@ -216,6 +217,25 @@ it("the production desktop adapter forwards the message title and preview unchan
     title: "Pinky mentioned you in #Room",
     body: "Hello Wes",
     id: expect.any(String),
+    foregroundBanner: false,
+    onEvent: expect.objectContaining({ onmessage: expect.any(Function) }),
+  });
+});
+
+it("marks only agent completions for foreground native banners", async () => {
+  const { service } = setup();
+  await service.admit(
+    "agent",
+    "Solo chat completions",
+    { sourceKey: "agent", target: { version: 1, kind: "settings" } },
+    () => true,
+  );
+  await flush();
+  expect(sdk.show).toHaveBeenCalledExactlyOnceWith("notification_show", {
+    title: "Buzz",
+    body: "New solo chat completions",
+    id: expect.any(String),
+    foregroundBanner: true,
     onEvent: expect.objectContaining({ onmessage: expect.any(Function) }),
   });
 });

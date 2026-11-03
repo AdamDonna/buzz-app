@@ -436,6 +436,7 @@ export class NotificationsService extends Service implements Notifications {
           {
             id: crypto.randomUUID(),
             ...item.text(),
+            foregroundBanner: item.category === "agent",
           },
           () => {
             if (this.closed || generation !== this.generation) return;
