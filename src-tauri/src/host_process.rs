@@ -614,6 +614,21 @@ impl HostProcesses {
         pubkey: String,
         relay: String,
     ) -> Result<Option<String>, String> {
+        self.tool_credential_after_miss(credentials, id, handle, pubkey, relay, async {})
+            .await
+    }
+
+    /// [`Self::tool_credential`], awaiting `after_miss` once no current token
+    /// was found, so a test can hold competing callers past that point.
+    async fn tool_credential_after_miss(
+        &self,
+        credentials: &CredentialService,
+        id: &str,
+        handle: u64,
+        pubkey: String,
+        relay: String,
+        after_miss: impl std::future::Future<Output = ()>,
+    ) -> Result<Option<String>, String> {
         let tools = self.owned(id, handle, |entry| entry.tools.clone())?;
         // This agent's token, if it still acts. One outlived by the agent's
         // removal and re-adding, or by a sign-out, is dropped, which revokes it
@@ -632,6 +647,7 @@ impl HostProcesses {
                 return Ok(Some(env));
             }
         }
+        after_miss.await;
         let Some((issued, env)) = credentials.issue().await? else {
             return Ok(None);
         };

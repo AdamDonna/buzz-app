@@ -864,7 +864,8 @@ async fn a_shared_host_replaces_a_token_its_agent_outlived() {
     }
 }
 
-/// Two calls replacing the same stale token at once settle on one fresh one.
+/// Two calls replacing the same stale token at once, both held past their
+/// cache miss so each issues a replacement, settle on one fresh one.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_replacements_of_a_stale_token_keep_one() {
@@ -873,12 +874,29 @@ async fn concurrent_replacements_of_a_stale_token_keep_one() {
     let fixture = fixture();
     let (processes, handle, _other) = shared_host(&fixture).await;
     let pubkey = fixture.agent.pubkey.clone();
-    let credential =
-        || processes.tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into());
-    let old = env_token(&credential().await.unwrap().unwrap());
+    let old = env_token(
+        &processes
+            .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+            .await
+            .unwrap()
+            .unwrap(),
+    );
     fixture.host.forget_row_for_test(&pubkey, RELAY);
     fixture.host.reopen_row_for_test(&pubkey, RELAY);
-    let (first, second) = tokio::join!(credential(), credential());
+    let missed = tokio::sync::Barrier::new(2);
+    let replace = || {
+        processes.tool_credential_after_miss(
+            &fixture.service,
+            "p",
+            handle,
+            pubkey.clone(),
+            RELAY.into(),
+            async {
+                missed.wait().await;
+            },
+        )
+    };
+    let (first, second) = tokio::join!(replace(), replace());
     let (first, second) = (
         env_token(&first.unwrap().unwrap()),
         env_token(&second.unwrap().unwrap()),
@@ -889,5 +907,15 @@ async fn concurrent_replacements_of_a_stale_token_keep_one() {
         ask(&fixture, &first, "get_public_key", &[]).await.0,
         StatusCode::OK
     );
-    assert_eq!(env_token(&credential().await.unwrap().unwrap()), first);
+    // The losing replacement was revoked, so only one token for this agent is held.
+    assert_eq!(
+        env_token(
+            &processes
+                .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+                .await
+                .unwrap()
+                .unwrap()
+        ),
+        first
+    );
 }
