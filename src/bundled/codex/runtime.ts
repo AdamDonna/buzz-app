@@ -1267,7 +1267,7 @@ export class CodexRuntime {
    * and a top-level chat is one scope. */
   private acknowledgeActivity(active: Active, request: Request) {
     if (!request.step) return;
-    // Voice requests are top-level; the event fallback only satisfies narrowing.
+    // Voice requests are top-level; the event guard only satisfies narrowing.
     const scope = request.conversation.topLevel
       ? request.conversation.channelId
       : request.event
