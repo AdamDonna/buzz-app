@@ -742,7 +742,18 @@ export class AgentRunners {
   ) {
     const agent = this.host.ready(seat.agent.key);
     const handle = agent && this.handle(agent.key, pluginId);
-    if (!agent || !handle) throw new Error("This agent is no longer running");
+    const type = this.runners.get(seat.agent.key)?.type;
+    if (!agent || !handle || !type)
+      throw new Error("This agent is no longer running");
+    // Huddle seats close on protectionRevision changes, so this gate is reapplied.
+    if (agent.protection) {
+      if (!type.protection || !handle.protection)
+        throw new Error(
+          type.protectionUnavailable ??
+            "This runtime does not support the agent's protection policy",
+        );
+      handle.protection.assertAvailable();
+    }
     const start = this.host.start(agent);
     if (!start.ok) throw new Error(start.reason);
     const team = this.host.team(agent.key);

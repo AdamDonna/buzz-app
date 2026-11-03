@@ -2224,6 +2224,45 @@ describe("voice launch and transcripts", () => {
       await f.ctx.fiber.dispose();
     }
   });
+  it("refuses protected voice before calling a runtime without protection integration", async () => {
+    const identities: AgentIdentity[] = [];
+    const voice = vi.fn(async (_seat: AgentVoiceSeat<Config>) => ({
+      input: vi.fn(),
+      close: vi.fn(),
+    }));
+    const f = await setup({ identities, voice });
+    try {
+      await f.service.create({ type: "example/echo", name: "Worker" });
+      const identity = identities[0];
+      if (!identity) throw new Error("Missing native identity");
+      identities[0] = {
+        ...identity,
+        protection: { provider: "example", policy: {} },
+        protectionRevision: 1,
+      };
+      await f.service.refresh();
+      await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
+      const agent = f.service.find(bot);
+      const open = f.service
+        .types()
+        .find((type) => type.key === "example/echo")?.voice;
+      if (!agent || !open) throw new Error("Missing voice fixture");
+      await expect(
+        open({
+          agent,
+          conversation: { channelId: channel },
+          signal: new AbortController().signal,
+          output: async () => {},
+          ended: () => {},
+        }),
+      ).rejects.toThrow(
+        "This runtime does not support the agent's protection policy",
+      );
+      expect(voice).not.toHaveBeenCalled();
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  });
   it("publishes final h-only transcripts without triggering its own agent", async () => {
     const voice = vi.fn(async (_seat: AgentVoiceSeat<Config>) => ({
       input: vi.fn(),
