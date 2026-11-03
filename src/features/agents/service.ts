@@ -184,6 +184,7 @@ import {
   clearDeletedDefaultAgent,
   forgetDefaultAgent,
 } from "../solo/default-agent";
+import type { AgentPlugins } from "../../plugins/requests";
 
 /** Where an agent runs: `here`, with its key on this device; `hosted`, by its
  * type's provider; or `elsewhere`, on another of the owner's devices. Only an
@@ -424,6 +425,8 @@ export type AgentHandle = Readonly<{
   updateAgent?(
     input: AgentUpdateInput,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
+  /** This device's plugins, as the agent may read and change them. */
+  plugins?: AgentPlugins | undefined;
   /** On a run's handle only: wakes this agent in another of its
    * conversations, as `Agents.wake` would, telling it the wake is its own. */
   handoff?(handoff: AgentHandoff): void;
@@ -1886,6 +1889,12 @@ export class AgentsService extends Service implements Agents {
         this.notify();
         return { requestId: id, saved: false };
       },
+      plugins: (agent) =>
+        this.ctx.pluginRequests?.forAgent({
+          pubkey: agent.pubkey,
+          name: agent.name,
+          live: () => !!this.liveMember(agent.key),
+        }),
       handoff: (agent, { from, ...wake }) =>
         this.wakeIn(agent.key, wake, { from }),
       templates: (agent) => {
