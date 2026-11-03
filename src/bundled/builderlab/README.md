@@ -206,8 +206,10 @@ The plugin uses the `BUZZ_BUILDERLAB_URL` [build input](../../../docs/configurat
 as its server address and appends `/api/goose`.
 
 On desktop, the plugin supplies `/v1/auth/login` with `type=cli` and
-`product=builderlab` to the shared native
+`product=buzz` to the shared native
 [`oauth_callback` module](../../../src-tauri/src/oauth_callback/README.md).
+Every desktop sign-in starts and ends in Buzz, so the hosted login uses the Buzz
+branding. `product` only selects that branding; account access is unaffected.
 Native code inserts a loopback `redirect_uri` address, opens the browser, and returns
 callback parameters to the plugin. Native code generates and validates OAuth
 state; the plugin also uses a random callback path.

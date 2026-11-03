@@ -137,7 +137,7 @@ it("completes browser sign-in through a loopback callback without exposing the c
   });
   expect(JSON.stringify(auth)).not.toContain("secret");
   expect(h.opened().pathname).toBe("/api/goose/v1/auth/login");
-  expect(h.opened().searchParams.get("product")).toBe("builderlab");
+  expect(h.opened().searchParams.get("product")).toBe("buzz");
   const exchange = JSON.parse(h.requests[0].init.body);
   expect(exchange.code).toBe("one-time");
   const { createHash } = await import("node:crypto");

@@ -200,7 +200,7 @@ function awaitCallback(signal, open, api, verifier) {
       const returnTo = `http://127.0.0.1:${server.address().port}/callback/${nonce}`;
       const login = new URL(`${api}/v1/auth/login`);
       login.searchParams.set("type", "cli");
-      login.searchParams.set("product", "builderlab");
+      login.searchParams.set("product", "buzz");
       login.searchParams.set("state", state);
       login.searchParams.set(
         "code_challenge",

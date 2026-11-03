@@ -89,7 +89,7 @@ export async function browserCredential(
     signal.throwIfAborted();
     login.search = new URLSearchParams({
       type: "cli",
-      product: "builderlab",
+      product: "buzz",
       code_challenge: base64url(new Uint8Array(digest)),
       code_challenge_method: "S256",
     }).toString();

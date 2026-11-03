@@ -66,7 +66,7 @@ it("acquires a verified credential with the RFC 7636 S256 proof", async () => {
   expect(login.pathname).toBe("/api/goose/v1/auth/login");
   expect(Object.fromEntries(login.searchParams)).toEqual({
     type: "cli",
-    product: "builderlab",
+    product: "buzz",
     code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
     code_challenge_method: "S256",
   });
