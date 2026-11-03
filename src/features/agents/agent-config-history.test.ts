@@ -319,10 +319,19 @@ describe("revert", () => {
     );
   });
 
-  it("refuses to revert over or to a deletion", () => {
-    const old = rev("r0");
-    const deleted = rev("r1", "r0", { op: "delete", content: "" });
-    expect(() => revertTemplate(expected, deleted, old)).toThrow();
+  it("restores over a deletion with op=restore, and never reverts to one", () => {
+    const old = rev("r0", undefined, { tags: [["client", "old"]] });
+    const deleted = rev("r1", "r0", {
+      op: "delete",
+      content: "",
+      tags: [["client", "gone"]],
+    });
+    const template = revertTemplate(expected, deleted, old);
+    expect(template.content).toBe(old.content);
+    expect(template.tags).toContainEqual(["op", "restore"]);
+    expect(template.tags).toContainEqual(["prev", "r1"]);
+    expect(template.tags).toContainEqual(["client", "old"]);
+    expect(template.tags).not.toContainEqual(["client", "gone"]);
     expect(() => revertTemplate(expected, rev("r2", "r1"), deleted)).toThrow();
   });
 });

@@ -621,3 +621,17 @@ it("keeps normal Markdown formatting and routes Buzz links through navigation", 
     entityTarget({ type: "repo", owner, dtag: "repo", tab: "issues" }, scope),
   );
 });
+it("reads a repository refused while signed out again once the organization signs in", async () => {
+  const t = setup({ type: "repo", owner, dtag: "repo" });
+  t.readGit.mockRejectedValueOnce(new Error("Federated sign-in is required"));
+  t.mount();
+  await screen.findByText("Repository files are unavailable.");
+  expect(t.readGit).toHaveBeenCalledTimes(1);
+  act(() => t.store.session.recovery?.retryAll());
+  await waitFor(() =>
+    expect(
+      screen.queryByText("Repository files are unavailable."),
+    ).not.toBeInTheDocument(),
+  );
+  expect(t.readGit).toHaveBeenCalledTimes(2);
+});

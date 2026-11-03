@@ -115,7 +115,6 @@ export function HuddleDiscussionView({
           {discussion.rows.map((row) => (
             <div key={row.id}>
               <MessageRow
-                staticMentions
                 row={{
                   id: row.id,
                   channelId: row.channelId,

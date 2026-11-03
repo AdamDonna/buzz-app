@@ -11,7 +11,47 @@ See the [capability contract](../src/features/workflows/types.ts).
 - Channel-scoped saved configurations; new drafts start disabled.
 - The landing groups compact workflow rows under prominent channel headings,
   sorted by channel name and filtered in place by channel. The filter lists only
-  channels with loaded workflows; discovery still reads all eligible channels.
+  channels with loaded workflows and supports multiple selections. An empty
+  channel selection shows all channels. Selection is not persisted across sessions.
+  Separate Owner, Status, Trigger, and Channels dropdowns sit above the collection,
+  with Clear all alongside the controls. A filtered empty result offers Clear
+  filters and returns focus to Owner; an unfiltered setup state offers New workflow
+  only when creation is available. Active dropdown triggers show the selected
+  value and its icon, or a count with a generic icon when several values are
+  selected. Each active trigger has a separate clear icon.
+  Owner and Status use inline radios;
+  Trigger and Channels use inline checkboxes. Popups have no Clear action.
+  My workflows is the default and matches the current viewer's saved workflow
+  ownership. All channel workflows includes other owners in participating channels;
+  the Owner trigger names whichever option is selected. When only My workflows
+  hides other owners' workflows, the empty state says so and offers All channel
+  workflows.
+  Rows and their details show the owner's current identity name, with an abbreviated
+  public-key fallback while a profile is unavailable or nameless, including through
+  the active naming policy. Fallbacks lengthen their suffix to stay distinct across
+  visible owners. Visible owners hydrate together in background profile
+  batches of up to 500 identities. Narrow rows reflow their artwork, text, and
+  independent controls as text grows. Ownership and management
+  permissions remain tied to the signing identity, including agent-owned workflows.
+  Clearing the owner filter or Clear all shows all channel workflows.
+  Enabled and Disabled match saved configuration (omitted means enabled), not
+  confirmed runtime activity; unreadable configurations are excluded from both.
+  Trigger filters use the same saved-type interpretation as the workflow rows:
+  Message, Reaction, Diff, Schedule, or Webhook. Unknown/unreadable trigger types
+  remain visible when no trigger types are selected. Selected trigger types match
+  any of those types; this result intersects with Owner, Status, and Channels.
+  Selected channels include workflows from any of those channels.
+  Trigger and channel choices use wide popups with scrollable two-column lists.
+  Channel choices remain available regardless of the other filters.
+  An icon-only sort menu stays at the far right of the filter row. By channel
+  keeps the channel groups; Recently updated shows a flat list ordered by saved
+  configuration timestamp, newest first, with channel names on each row. Equal
+  timestamps use the workflow coordinate (channel, owner, UUID) as a stable tiebreak.
+  Saving an edit, including toggling configured state, updates the saved timestamp;
+  edits within the same second still follow that tiebreak.
+  Sorting is local to the page and Clear all only resets filters. Switching sort
+  recreates the row/detail views, resetting run-history paging and card-local state.
+  Discovery still reads all eligible channels.
   Creating a workflow can still target any eligible channel. Each row runs the
   saved configuration in one click and toggles its configured state. Selecting
   a row shows its detail, actions and run history in a resizable side pane, as

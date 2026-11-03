@@ -1,24 +1,56 @@
-import { BestieIcon } from "../../shared/design-system/icons";
+import type { ReactNode } from "react";
 import type { PluginModule } from "../../plugins/api";
+import type { Navigation } from "../../features/navigation/controller";
+import type { PageNavigation } from "../../features/navigation/service";
+import { useSavedAgentState } from "../../features/solo/default-agent";
+import type { ConversationExtensions } from "../../features/conversation/contracts";
+import type { ConversationHostServices } from "../../features/conversation/ConversationHost";
+import type { Agents } from "../../features/agents/service";
+import type { RelayData } from "../../features/relay/service";
+import { useRelayConnection } from "../../features/relay/react";
+import { BestieIcon } from "../../shared/design-system/icons";
+import { Button } from "../../shared/design-system/ui/Button";
+import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { FullPageSurface } from "../../shared/design-system/ui/FullPageSurface";
 import {
   PanelHeader,
   PanelHeaderLabel,
 } from "../../shared/design-system/ui/PanelHeader";
+import { BestieChooser } from "./BestieChooser";
+import { PinnedBestie } from "./PinnedBestie";
+import { bestieRoute } from "./routes";
+import { bestieTab } from "./BestieTab";
 
-export const inject = ["pages"];
+export const inject = [
+  "pages",
+  "relay",
+  "navigation",
+  "agents",
+  "conversation",
+  "panels",
+];
 export const apply: PluginModule["apply"] = (ctx) => {
+  ctx.agents.registerTab(bestieTab(ctx.relay, ctx.agents));
   ctx.pages.register({
     id: "bestie",
     title: "Bestie",
     layout: "workspace",
     primary: true,
-    component: BestiePage,
+    route: { version: 1, validate: (params) => !!bestieRoute(params) },
+    component: ({ navigation: pageNavigation }) => (
+      <BestieDestination
+        relay={ctx.relay}
+        navigation={ctx.navigation}
+        extensions={ctx.conversation}
+        host={ctx}
+        agents={ctx.agents}
+        pageNavigation={pageNavigation}
+      />
+    ),
   });
 };
 
-// Bestie's home page until agent chat connects.
-function BestiePage() {
+function BestieStatus({ children }: { children: ReactNode }) {
   return (
     <div className="h-full min-h-0">
       <FullPageSurface aria-label="Bestie">
@@ -31,8 +63,8 @@ function BestiePage() {
               />
             }
           />
-          <div className="min-h-0 flex-1 overflow-auto">
-            <Bestie />
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-6">
+            <div className="w-full max-w-md">{children}</div>
           </div>
         </div>
       </FullPageSurface>
@@ -40,14 +72,90 @@ function BestiePage() {
   );
 }
 
-function Bestie() {
-  return (
-    <div className="flex min-h-full flex-col items-center justify-center gap-4 p-6 text-center">
-      <img src="/bestie.png" alt="" className="size-20 object-contain" />
-      <h2 className="text-heading">Meet your Bestie</h2>
-      <p className="max-w-xs text-body-sm text-muted">
-        Your companion’s home in Buzz. Agent chat isn’t connected yet.
-      </p>
-    </div>
+function BestieDestination({
+  relay,
+  ...props
+}: {
+  relay: RelayData;
+  navigation: Navigation;
+  extensions: ConversationExtensions;
+  host: ConversationHostServices;
+  agents: Agents;
+  pageNavigation?: PageNavigation | undefined;
+}) {
+  const connection = useRelayConnection(relay);
+  const saved = useSavedAgentState(connection.session, connection.scope ?? "");
+  const established =
+    connection.status === "ready" &&
+    !!connection.viewer &&
+    !!connection.scope?.endsWith(`:${connection.viewer}`);
+  if (!established && !saved.agent)
+    return (
+      <BestieStatus>
+        <EmptyState
+          icon={<BestieIcon />}
+          title={
+            connection.status === "connecting"
+              ? "Connecting…"
+              : connection.status === "error"
+                ? "This community is unavailable"
+                : "No community selected"
+          }
+          description={
+            connection.status === "connecting"
+              ? "Your Bestie opens once this community is connected."
+              : (connection.error ??
+                "Choose a community to continue with your Bestie.")
+          }
+          action={
+            connection.status === "error" ? (
+              <Button onClick={relay.retry}>Retry connection</Button>
+            ) : undefined
+          }
+        />
+      </BestieStatus>
+    );
+  if (!saved.read || saved.error)
+    return (
+      <BestieStatus>
+        <EmptyState
+          icon={<BestieIcon />}
+          title={
+            saved.error ? "Your Bestie is unavailable" : "Loading your Bestie…"
+          }
+          description={
+            saved.error ? (
+              <span role="alert">{saved.error}</span>
+            ) : (
+              <span role="status">Reading your saved choice.</span>
+            )
+          }
+          action={
+            saved.error ? (
+              <Button onClick={saved.retry}>Try again</Button>
+            ) : undefined
+          }
+        />
+      </BestieStatus>
+    );
+  return saved.agent ? (
+    <PinnedBestie
+      relay={relay}
+      host={props.host}
+      extensions={props.extensions}
+      navigator={props.navigation}
+      agents={props.agents}
+      navigation={props.pageNavigation}
+    />
+  ) : (
+    <BestieStatus>
+      <BestieChooser
+        key={connection.scope}
+        session={connection.session}
+        scope={connection.scope ?? ""}
+        community={connection.origin}
+        agents={props.agents}
+      />
+    </BestieStatus>
   );
 }

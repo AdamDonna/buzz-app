@@ -1,7 +1,7 @@
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import { channelIcon } from "../../features/channels/channel-icon";
-import { ChatCircleIcon, CheckIcon } from "../../shared/design-system/icons";
+import { CheckIcon } from "../../shared/design-system/icons";
 import {
   MenuIcon,
   MenuItem,
@@ -25,7 +25,7 @@ export function ChannelSidebarMenuItem({
   onSelect: () => void;
 }) {
   const dm = channel.channelType === "dm";
-  const Icon = dm ? ChatCircleIcon : channelIcon(channel);
+  const Icon = channelIcon(channel);
   const { ordinary } = useUnreadState(session, channel.id, dm);
   const { agents, agentProfiles, waiting } = useWorkingAgents(
     session,

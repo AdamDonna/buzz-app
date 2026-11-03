@@ -107,6 +107,7 @@ export function createChannelSetup({
   const encoder = new TextEncoder();
   let pending: Progress | undefined;
   let admitting: ReturnType<typeof run> | undefined;
+  let admittingRequest: string | undefined;
   function write(p: Progress) {
     const raw = JSON.stringify(p);
     signal.throwIfAborted();
@@ -147,7 +148,28 @@ export function createChannelSetup({
     input: ChannelCreationInput,
     viewer: string,
   ): { admission: Promise<string>; completion: Promise<void> } {
-    if (admitting) return admitting;
+    if (admitting) {
+      if (admittingRequest === requested(input)) return admitting;
+      // A different request waits its turn instead of sharing this admission.
+      const next = admitting.admission
+        .then(
+          () => {},
+          () => {},
+        )
+        .then(() => {
+          // Queued work never abandons an unconfirmed attempt; only a request
+          // its owner makes may.
+          if (pending && requested(pending.input) !== requested(input))
+            throw new Error(
+              "Another channel's creation is unconfirmed; try again shortly",
+            );
+          return run(input, viewer);
+        });
+      return {
+        admission: next.then((queued) => queued.admission),
+        completion: next.then((queued) => queued.completion),
+      };
+    }
     // Only an identical request rechecks the unconfirmed attempt; any other
     // request abandons it.
     const checking =
@@ -282,6 +304,17 @@ export function createChannelSetup({
             create(p.id, p.input, active),
           );
           await delivered(id);
+          // Place before the row first lists, so it renders in its destination
+          // and the creation reveal targets that entry.
+          const setup = p.input.setup;
+          const placement = setup?.starred
+            ? star(p.id)
+            : setup?.groupId
+              ? place(p.id, setup.groupId)
+              : undefined;
+          // Observed after admission. If admission fails its result is dropped,
+          // but the delivered channel still lists in its destination.
+          placement?.catch(() => {});
           await refresh(p.id, viewer, p.input);
           p.created = true;
           pending = undefined;
@@ -290,11 +323,9 @@ export function createChannelSetup({
           // A subsequent storage/setup failure belongs to its completion notice.
           opened(p.id);
           await persist();
-          const setup = p.input.setup;
           let placementError: unknown;
           try {
-            if (setup?.starred) await star(p.id);
-            else if (setup?.groupId) await place(p.id, setup.groupId);
+            await placement;
           } catch (error) {
             placementError = error;
           }
@@ -393,6 +424,7 @@ export function createChannelSetup({
     void completion.catch(rejected);
     const result = { admission, completion };
     admitting = result;
+    admittingRequest = requested(input);
     void admission
       .finally(() => {
         if (admitting === result) admitting = undefined;

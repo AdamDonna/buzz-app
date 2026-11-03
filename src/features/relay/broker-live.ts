@@ -1,20 +1,25 @@
 import { observerFrame, observerGeneration } from "../agents/observer";
-import { eventDto } from "./events";
+import { createEventVerifier } from "./events";
 import type {
   ArtifactSyncFilter,
   ArtifactSyncSink,
 } from "./artifact-sync-filter.ts";
 import {
+  LIVE_PROOF_ENTRIES,
+  LIVE_RECOVERY_INTERVAL,
+  liveSlowRetryDelay,
   liveChannels,
   livePresenceAuthors,
   liveJoined,
   liveProvenance,
+  liveGlobal,
   type LiveCallbacks,
   type LiveSnapshot,
+  type LiveRoute,
   type LiveSubscription,
 } from "./live";
 
-const MAX_FRAME = 1024 * 1024;
+const MAX_FRAME = 8 * 1024 * 1024;
 const MAX_RETRY_MS = 30_000;
 /** A generation owns its stream, parser, retry and heartbeat. Interest changes
  * use the same host owner so they cannot interrupt pending publications. */
@@ -24,11 +29,14 @@ export function subscribeBrokerTraffic(
 ): LiveSubscription {
   let closed = false,
     generation = 0,
-    attempts = 0;
+    attempts = 0,
+    refusals = 0;
+  // Outlives each stream, so a reconnect's replay reuses the proofs.
+  const verify = createEventVerifier(LIVE_PROOF_ENTRIES);
   let channels: string[] = [];
   let joined: string[] = [];
   let sentChannels: string[] = [];
-  // Only IDs in the last dispatched snapshot can have a host wire (at most 1024).
+  // Only IDs in the last dispatched snapshot can have a host wire.
   const removed = new Set<string>();
   let interestRevision = 0;
   const addedAt = new Map<string, number>();
@@ -53,6 +61,7 @@ export function subscribeBrokerTraffic(
   let streamId: string | undefined;
   let controlPending = false;
   let receiving = false;
+  const routeState = new Map<string, LiveRoute>();
   let latest: LiveSnapshot = { status: "connecting", routes: [] };
   const publish = (snapshot: LiveSnapshot) => {
     latest = snapshot;
@@ -158,6 +167,7 @@ export function subscribeBrokerTraffic(
     controller = owned;
     const valid = () =>
       !closed && current === generation && !owned.signal.aborted;
+    routeState.clear();
     state("connecting");
     const pulse = () => {
       clearTimeout(heartbeat);
@@ -174,6 +184,7 @@ export function subscribeBrokerTraffic(
     const startingObserver = observer;
     const startingPresence = JSON.stringify(presenceAuthors);
     void (async () => {
+      let opened: number | undefined;
       try {
         const response = await fetch(`${endpoint}/stream`, {
           method: "POST",
@@ -186,6 +197,7 @@ export function subscribeBrokerTraffic(
             observer,
             presenceAuthors,
             interestRevision,
+            statusDeltas: true,
           }),
           signal: owned.signal,
         });
@@ -196,10 +208,12 @@ export function subscribeBrokerTraffic(
           !response.headers.get("content-type")?.startsWith("text/event-stream")
         ) {
           if ([400, 401, 403, 413].includes(response.status)) {
+            // A broker restart drops registrations, so even a 4xx can clear.
             state(
               "error",
               `Live broker rejected subscription (${response.status})`,
             );
+            retryTimer = setTimeout(start, liveSlowRetryDelay(++refusals));
             return;
           }
           throw new Error(`Live broker unavailable (${response.status})`);
@@ -208,6 +222,7 @@ export function subscribeBrokerTraffic(
         if (identity !== null && !/^[0-9a-f]{32}$/.test(identity))
           throw new Error("Invalid live broker control identity");
         streamId = identity ?? undefined;
+        opened = Date.now();
         if (startingInterests !== interestRevision) sendInterests();
         if (startingPriority !== JSON.stringify(priority)) sendPriority();
         if (startingObserver !== observer) sendObserver();
@@ -243,7 +258,7 @@ export function subscribeBrokerTraffic(
               if (!lines.length) continue; // Keepalives carry no data.
               const data: unknown = JSON.parse(lines.join("\n"));
               if (!valid()) return;
-              if (kind === "message") callbacks.receive([eventDto(data)]);
+              if (kind === "message") callbacks.receive([verify(data)]);
               else if (kind === "traffic") {
                 if (
                   !data ||
@@ -259,9 +274,9 @@ export function subscribeBrokerTraffic(
                   provenance.sourceChannels ??
                   (provenance.channelId ? [provenance.channelId] : []);
                 if (scopes.every((id) => currentChannel(id, revision)))
-                  callbacks.receive([eventDto(data.event)], provenance);
+                  callbacks.receive([verify(data.event)], provenance);
               } else if (kind === "presence") {
-                const event = eventDto(data);
+                const event = verify(data);
                 if (
                   event.kind === 20001 &&
                   presenceAuthors.includes(event.pubkey)
@@ -280,7 +295,7 @@ export function subscribeBrokerTraffic(
                     : undefined;
                 if (sync && sync.sent === current) {
                   if (frame.type === "event")
-                    sync.sink.event(eventDto(frame.event));
+                    sync.sink.event(verify(frame.event));
                   else if (frame.type === "eose") sync.sink.eose();
                   else if (frame.type === "closed") {
                     syncs.delete(sync.id);
@@ -298,6 +313,65 @@ export function subscribeBrokerTraffic(
                 };
                 if (observer !== null && record.generation === observer)
                   callbacks.observer?.(observerFrame(record.frame), observer);
+              } else if (kind === "state-delta") {
+                const snapshot = liveSnapshot(data);
+                const delta = data as {
+                  interestRevision?: unknown;
+                  reset?: unknown;
+                  removed?: unknown;
+                };
+                if (
+                  !Number.isSafeInteger(delta.interestRevision) ||
+                  (delta.interestRevision as number) < 0 ||
+                  (delta.interestRevision as number) > interestRevision ||
+                  snapshot.routes.some((route) =>
+                    route.channelId
+                      ? route.id !== `channel:${route.channelId}`
+                      : ![
+                          "profiles",
+                          "membership",
+                          "observer",
+                          "presence",
+                        ].includes(route.id),
+                  ) ||
+                  snapshot.routes.length > 512 ||
+                  !Array.isArray(delta.removed) ||
+                  delta.removed.length + snapshot.routes.length > 512 ||
+                  delta.removed.some((id) => typeof id !== "string")
+                )
+                  throw new Error("Invalid live status delta");
+                if (delta.reset === true) {
+                  routeState.clear();
+                  for (const channelId of channels)
+                    routeState.set(
+                      `channel:${channelId}`,
+                      Object.freeze({
+                        id: `channel:${channelId}`,
+                        channelId,
+                        status: "pending",
+                        replay: "unknown",
+                      }),
+                    );
+                }
+                for (const id of delta.removed as string[]) {
+                  const route = routeState.get(id);
+                  if (
+                    !route?.channelId ||
+                    currentChannel(route.channelId, delta.interestRevision)
+                  )
+                    routeState.delete(id);
+                }
+                for (const route of snapshot.routes)
+                  if (
+                    !route.channelId ||
+                    currentChannel(route.channelId, delta.interestRevision)
+                  ) {
+                    routeState.set(route.id, route);
+                  }
+                for (const [id, route] of routeState)
+                  if (route.channelId && !addedAt.has(route.channelId))
+                    routeState.delete(id);
+                publish({ ...snapshot, routes: [...routeState.values()] });
               } else if (kind === "state") {
                 const snapshot = liveSnapshot(data);
                 const revision = (data as { interestRevision?: unknown })
@@ -321,8 +395,13 @@ export function subscribeBrokerTraffic(
                   if (current.length) callbacks.established(current);
                 } else {
                   const id = channelField(data);
-                  if (!id || currentChannel(id, revision))
-                    callbacks.established(id);
+                  if (id) {
+                    if (currentChannel(id, revision)) callbacks.established(id);
+                  } else
+                    callbacks.established(
+                      undefined,
+                      liveGlobal((data as { global?: unknown }).global),
+                    );
                 }
               } else if (kind === "recover") {
                 callbacks.recover?.();
@@ -353,6 +432,13 @@ export function subscribeBrokerTraffic(
       } catch (error) {
         if (closed || current !== generation) return;
         loseSyncs("disconnected: live broker interrupted");
+        // A stream up for a minute proves the broker healthy again. Its first
+        // frame does not: every accepted stream sends its state at once.
+        if (
+          opened !== undefined &&
+          Date.now() - opened >= LIVE_RECOVERY_INTERVAL
+        )
+          attempts = refusals = 0;
         state(
           "retrying",
           error instanceof Error ? error.message : "Live broker interrupted",
@@ -578,16 +664,29 @@ export function subscribeBrokerTraffic(
       )
         return;
       interestRevision++;
+      const nextSet = new Set(next),
+        joinedSet = new Set(joined),
+        nextJoinedSet = new Set(nextJoined),
+        sentSet = new Set(sentChannels);
       for (const id of channels)
-        if (
-          !next.includes(id) ||
-          joined.includes(id) !== nextJoined.includes(id)
-        ) {
+        if (!nextSet.has(id) || joinedSet.has(id) !== nextJoinedSet.has(id)) {
           addedAt.delete(id);
-          if (sentChannels.includes(id)) removed.add(id);
+          routeState.delete(`channel:${id}`);
+          if (sentSet.has(id)) removed.add(id);
         }
       for (const id of next)
-        if (!addedAt.has(id)) addedAt.set(id, interestRevision);
+        if (!addedAt.has(id)) {
+          addedAt.set(id, interestRevision);
+          routeState.set(
+            `channel:${id}`,
+            Object.freeze({
+              id: `channel:${id}`,
+              channelId: id,
+              status: "pending",
+              replay: "unknown",
+            }),
+          );
+        }
       channels = next;
       joined = nextJoined;
       sendInterests();
@@ -659,8 +758,6 @@ function liveSnapshot(value: unknown): LiveSnapshot {
       snapshot.status,
     ) ||
     !Array.isArray(snapshot.routes) ||
-    // Keep limited channels visible alongside both globals and the optional observer.
-    snapshot.routes.length > 1027 ||
     (snapshot.error !== undefined && typeof snapshot.error !== "string")
   )
     throw new Error("Invalid live broker status");

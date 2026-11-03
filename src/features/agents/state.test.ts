@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { fileStore, loadAgentStorage, MOVED_KEY } from "./state";
 import { memoryStorage } from "./test-fakes";
+import { SyncedTeams, teamSources } from "./team-config";
 
 const files = (items: Record<string, string> = {}) => {
   const saved = new Map(Object.entries(items));
@@ -105,6 +106,30 @@ it("keeps the moved state when a later start without agent storage saves", async
   expect(next.get("buzz.claude-code.sessions.v1")).toBe("all sessions");
   expect(next.get("buzz.agent.v1:bb")).toBe("new agent");
   expect(native.saved.get("buzz.claude-code.sessions.v1")).toBe("all sessions");
+  expect(local.length).toBe(0);
+});
+
+it("keeps synced team rosters a start without agent storage saved", async () => {
+  const local = memoryStorage();
+  const native = files();
+  await loadAgentStorage(local, native);
+
+  native.load.mockRejectedValueOnce(new Error("denied"));
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const fallback = await loadAgentStorage(local, native);
+  error.mockRestore();
+  new SyncedTeams(fallback).set("o", "wss://home", [
+    { id: "crew", channel: "ch", archived: false, members: ["a"] },
+  ]);
+  await vi.waitFor(() =>
+    expect(local.getItem("buzz.agents.teams.synced.v1")).not.toBeNull(),
+  );
+
+  // Agent storage is back; the home community isn't reachable yet.
+  const next = await loadAgentStorage(local, native);
+  expect(
+    teamSources(new SyncedTeams(next), "o", "a").map((team) => team.id),
+  ).toEqual(["crew"]);
   expect(local.length).toBe(0);
 });
 

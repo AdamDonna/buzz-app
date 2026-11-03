@@ -1,6 +1,7 @@
 // A Buzz conversation's Pi conversation, read from the agent's Pi durable
 // storage through the host and shown in the host's turn-transcript model. Pi
 // owns the entries; nothing here writes or keeps them.
+import { isMessageTool } from "../../buzz-mcp/session-tools";
 import {
   promptMessage,
   promptSections,
@@ -215,7 +216,11 @@ export function piTurns(
         else if (part.type === "toolCall") {
           const name = str(part.name);
           const input = part.arguments ?? {};
-          if (name === `${PREFIX}send` && str(input.text).trim()) {
+          if (
+            name.startsWith(PREFIX) &&
+            isMessageTool(name.slice(PREFIX.length)) &&
+            str(input.text).trim()
+          ) {
             const message: TranscriptItem & { posted?: boolean } = {
               id: key,
               at,
@@ -286,7 +291,6 @@ export async function readTranscript(
   const all = piTurns(entries.reverse(), conversation, working);
   return {
     turns: all.slice(-TURN_LIMIT),
-    unknownThread: 0,
     more: all.length > TURN_LIMIT,
   };
 }

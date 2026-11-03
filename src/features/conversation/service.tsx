@@ -41,7 +41,18 @@ export type ChatIcon = Readonly<{
   component: ComponentType<ChatIconProps>;
 }>;
 
+export type ChatMenuProps = Readonly<{
+  session: RelaySession;
+  channelId: string;
+}>;
+export type ChatMenu = Readonly<{
+  id: string;
+  component: ComponentType<ChatMenuProps>;
+}>;
+
 export type Conversation = {
+  chatMenus: ContributionReader<ChatMenu>;
+  registerChatMenu(component: ComponentType<ChatMenuProps>): void;
   attachments: ContributionReader<AttachmentRenderer>;
   registerAttachment(renderer: AttachmentRenderer): void;
   messages: ContributionReader<MessageRenderer>;
@@ -137,6 +148,8 @@ export class ConversationService extends Service implements Conversation {
   readonly actions;
   private readonly actionEntries;
   private readonly tabEntries;
+  readonly chatMenus;
+  private readonly chatMenuEntries;
   readonly chatIcons;
   private readonly chatIconEntries;
   readonly ui: Conversation["ui"];
@@ -189,6 +202,12 @@ export class ConversationService extends Service implements Conversation {
       component: ComponentType<PageTabsProps>;
     }>(ctx);
     this.tabEntries = tabs;
+    const chatMenus = createContributions<ChatMenu>(ctx);
+    this.chatMenuEntries = chatMenus;
+    this.chatMenus = {
+      snapshot: chatMenus.snapshot,
+      subscribe: chatMenus.subscribe,
+    };
     const chatIcons = createContributions<ChatIcon>(ctx);
     this.chatIconEntries = chatIcons;
     this.chatIcons = {
@@ -218,6 +237,11 @@ export class ConversationService extends Service implements Conversation {
     if (typeof component !== "function")
       throw new Error("Page tabs need a component");
     this.tabEntries.register(this.ctx, { id: "tabs", component });
+  }
+  registerChatMenu(component: ComponentType<ChatMenuProps>) {
+    if (typeof component !== "function")
+      throw new Error("A chat menu needs a component");
+    this.chatMenuEntries.register(this.ctx, { id: "chat-menu", component });
   }
   registerChatIcon(component: ComponentType<ChatIconProps>) {
     if (typeof component !== "function")

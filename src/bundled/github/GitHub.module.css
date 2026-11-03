@@ -34,6 +34,10 @@
 .identity > div {
   min-width: 0;
 }
+.identityAction {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+}
 .repository {
   font-size: var(--text-label);
   font-weight: var(--text-label--font-weight);
@@ -293,6 +297,7 @@
 }
 
 .checklist {
+  container-type: inline-size;
   list-style: none;
   margin: var(--space-4) 0 0;
   padding: var(--space-1) var(--space-3);
@@ -350,13 +355,33 @@
   line-height: var(--text-caption--line-height);
   letter-spacing: var(--text-caption--letter-spacing);
 }
-.pullActions > :last-child:is([aria-haspopup]) {
+.pullActions > [aria-haspopup="menu"] {
   margin-left: auto;
 }
 .pullActionError {
   margin: var(--space-2) 0 0;
   color: var(--text-danger);
   overflow-wrap: anywhere;
+}
+.review {
+  display: grid;
+  gap: var(--space-4);
+}
+.review p {
+  margin: 0;
+}
+.reviewNotice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.reviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 .description {
   margin-top: var(--space-4);
@@ -368,10 +393,24 @@
   justify-content: center;
   width: var(--space-5);
   flex: 0 0 var(--space-5);
+}
+/* The sidebar's icon and a message link's icon take one colour per state, as
+   the panel's chip above does; a link's text stays a link. Open and merged
+   use the icon-tier roles: the chip's step-12 text inks are indistinguishable
+   from a bubble's own ink. Draft, closed and not yet read are quiet: closed is
+   not red here. Only the sidebar shows an open one's checks and conflicts.
+   The sidebar's quiet icon is the row's subtle ink, which a hovered or
+   selected row rebinds; a message's icons take the pair the bubble hands
+   them, if any. */
+.soloPull {
   color: var(--text-subtle);
 }
-.soloPull[data-tone="open"] {
-  color: var(--text-success);
+.pullState {
+  color: var(--message-icon-subtle, var(--icon-subtle));
+}
+.soloPull[data-tone="open"],
+.pullState[data-pr-state="open"] {
+  color: var(--message-icon-success, var(--icon-success));
 }
 .soloPull[data-tone="failure"] {
   color: var(--text-danger);
@@ -379,8 +418,9 @@
 .soloPull[data-tone="pending"] {
   color: var(--text-warning);
 }
-.soloPull[data-tone="merged"] {
-  color: var(--text-categorical-purple);
+.soloPull[data-tone="merged"],
+.pullState[data-pr-state="merged"] {
+  color: var(--message-icon-categorical-purple, var(--icon-categorical-purple));
 }
 .soloLink {
   display: flex;
@@ -392,4 +432,37 @@
 }
 .soloLink > [role="alert"] {
   flex-basis: 100%;
+}
+
+.checklistContent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.checklistContent > .checklistValue {
+  flex: 1 1 auto;
+  width: max-content;
+  max-width: 100%;
+}
+.checklistAction {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.resolutionAction {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.checklistDetails {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.checklistDetails ul {
+  margin: 0;
+  padding-inline-start: var(--space-6);
 }

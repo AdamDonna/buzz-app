@@ -24,6 +24,8 @@ export const personKey = (pubkey: string) => `person:${pubkey}`;
  * after every shown name, as `mentionMatch` ranks hidden aliases.
  */
 export function personMatch(person: PersonCandidate, needle: string) {
+  // Blank suggestions have no exact name; relationship and usage order them.
+  if (!needle.trim()) return 1;
   const tier = (name: string | undefined) =>
     name === undefined ? undefined : matchPerson(name, needle)?.tier;
   const shown = [tier(person.label), tier(person.username)].filter(

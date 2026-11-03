@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,7 +12,13 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { Agent } from "../../features/agents/service";
+import type {
+  Agent,
+  Agents,
+  RegisteredAgentType,
+} from "../../features/agents/service";
+import type { ChannelLabel } from "../../features/channels/channel-icon";
+import { AgentTabs } from "../agents/AgentTabs";
 import { type Config, DEFAULT_CONFIG, type Place } from "./runtime";
 import { type Provider, type Providers, PiSetup } from "./setup";
 import { createTabs } from "./tabs";
@@ -90,7 +97,8 @@ function fakePi(
   return { request: request as unknown as Request, calls: request };
 }
 
-/** The runtime's conversations: a thread Pi works in, and a channel. */
+/** The runtime's conversations: a thread Pi works in, in a channel the
+ * community lists, and a channel it does not. */
 function fakeRuntime() {
   const places: Place[] = [
     {
@@ -98,16 +106,29 @@ function fakeRuntime() {
       conversation: 1,
       channelId: "chan",
       root: "root",
-      name: "general",
       at: 2_000,
     },
     { key: "other", conversation: 2, channelId: "other", at: 1_000 },
   ];
+  const labels = new Map<string, ChannelLabel>([
+    ["chan", { name: "general", channelType: "stream" }],
+  ]);
+  const listeners = new Set<() => void>();
   const working = [1];
   return {
     places: vi.fn(async () => places),
     working: () => working,
     subscribe: () => () => {},
+    channelLabel: (_agent: string, channelId: string) => labels.get(channelId),
+    subscribeChannels: (_agent: string, listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    /** The community's channel list changed: these channels read so now. */
+    relabel(changes: Readonly<Record<string, ChannelLabel>>) {
+      for (const [id, label] of Object.entries(changes)) labels.set(id, label);
+      for (const listener of listeners) listener();
+    },
     transcript: vi.fn(async (_agent: string, place: Place) => ({
       turns: piTurns(
         [
@@ -137,7 +158,6 @@ function fakeRuntime() {
         place,
         true,
       ),
-      unknownThread: 0,
       more: false,
     })),
   };
@@ -379,6 +399,84 @@ it("keeps Try again's providers for what the dialog's Use allows", async () => {
   );
 });
 
+it("guards an invalid Pi provider draft through an agent tab switch", async () => {
+  const user = userEvent.setup();
+  const { SettingsTab } = createTabs({
+    setup: new PiSetup(fakePi()),
+    runtime: fakeRuntime(),
+  });
+  const save = vi.fn(async () => {});
+  const agent: Agent<Config> = {
+    ...AGENT,
+    place: "here",
+    relay: "wss://example.com",
+    attention: {},
+    skipped: {},
+    timers: {},
+    attentionEnabled: true,
+  };
+  const type = {
+    key: AGENT.type,
+    tabs: [
+      {
+        id: "settings",
+        title: "Settings",
+        role: "settings",
+        splitSettings: true,
+        component: SettingsTab,
+      },
+    ],
+  } as unknown as RegisteredAgentType;
+  render(
+    <AgentTabs
+      agents={
+        {
+          save,
+          subscribe: () => () => {},
+          memberships: () => [],
+          configHistory: () => undefined,
+          addedTabs: () => [],
+          registerTab: () => {},
+          controlAttention: () => {},
+        } as unknown as Agents
+      }
+      agent={agent}
+      type={type}
+      channels={[]}
+      settingsHost={{}}
+      memories={undefined}
+      settingsContent={null}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("combobox", { name: "Provider" }),
+    ).toHaveTextContent("Anthropic"),
+  );
+  await choose("Provider", "OpenAI");
+  expect(
+    await screen.findByText(
+      "Pi's settings name no model for OpenAI. Choose one.",
+    ),
+  ).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  await user.click(screen.getByRole("tab", { name: "Memory" }));
+  expect(await screen.findByRole("alertdialog")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.getByRole("combobox", { name: "Provider" })).toHaveTextContent(
+    "OpenAI",
+  );
+  await user.click(screen.getByRole("tab", { name: "Memory" }));
+  await user.click(screen.getByRole("button", { name: "Discard changes" }));
+  await user.click(screen.getByRole("tab", { name: "Identity" }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("combobox", { name: "Provider" }),
+    ).toHaveTextContent("Anthropic"),
+  );
+  expect(save).not.toHaveBeenCalled();
+});
+
 it("shows the provider, model and thinking level in Identity, and the provider's setup in Settings", async () => {
   const { SettingsTab } = createTabs({
     setup: new PiSetup(fakePi()),
@@ -441,6 +539,76 @@ it("saves a key on Enter without saving the agent's settings", async () => {
   expect(save).not.toHaveBeenCalled();
 });
 
+it("settles a transcript request without opening it once Pi's late listing arrives", async () => {
+  const runtime = fakeRuntime();
+  const { ActivityTab } = createTabs({ setup: new PiSetup(fakePi()), runtime });
+  const done = vi.fn();
+  render(
+    <ActivityTab
+      agent={AGENT}
+      conversation={{ channelId: "chan", rootId: "root" }}
+      initialTranscript={{ opening: 1, done }}
+    />,
+  );
+  expect(done).toHaveBeenCalled();
+  const here = await screen.findByRole("region", { name: "This thread" });
+  expect(
+    within(here).getByRole("button", { name: /^View transcript/ }),
+  ).toBeVisible();
+  expect(runtime.transcript).not.toHaveBeenCalled();
+  expect(screen.queryByText("Hello from chan/root")).toBeNull();
+});
+
+it("shows a channel's lock as soon as the community makes it private, without reading Pi again", async () => {
+  const runtime = fakeRuntime();
+  const { ActivityTab } = createTabs({ setup: new PiSetup(fakePi()), runtime });
+  render(<ActivityTab agent={AGENT} />);
+  const name = await screen.findByTitle("general · thread root");
+  expect(name.querySelector("svg")).toHaveClass("tabler-icon-hash");
+
+  act(() => {
+    runtime.relabel({
+      chan: { name: "general", channelType: "stream", private: true },
+    });
+  });
+  expect(
+    screen.getByTitle("general · thread root").querySelector("svg"),
+  ).toHaveClass("tabler-icon-lock");
+  expect(runtime.places).toHaveBeenCalledTimes(1);
+  expect(runtime.transcript).not.toHaveBeenCalled();
+});
+
+it("relabels the opened-from channel too when the thread has no Pi conversation of its own", async () => {
+  const runtime = fakeRuntime();
+  const { ActivityTab } = createTabs({ setup: new PiSetup(fakePi()), runtime });
+  render(
+    <ActivityTab
+      agent={AGENT}
+      conversation={{ channelId: "other", rootId: "zzz" }}
+    />,
+  );
+  // The thread has no conversation: the channel's stands in for it.
+  const here = await screen.findByRole("region", { name: "This thread" });
+  await waitFor(() =>
+    expect(
+      within(here).getByRole("button", { name: "View transcript: other" }),
+    ).toBeInTheDocument(),
+  );
+  expect(here.querySelector("svg")).toBeNull();
+
+  act(() => {
+    runtime.relabel({
+      other: { name: "secret", channelType: "stream", private: true },
+    });
+  });
+  const name = within(here).getByTitle("secret");
+  expect(name.querySelector("svg")).toHaveClass("tabler-icon-lock");
+  expect(
+    within(here).getByRole("button", { name: "View transcript: secret" }),
+  ).toBeInTheDocument();
+  expect(runtime.places).toHaveBeenCalledTimes(1);
+});
+
 it("lists Pi's conversations in the Activity tab, and shows a transcript", async () => {
   const runtime = fakeRuntime();
   const { ActivityTab } = createTabs({ setup: new PiSetup(fakePi()), runtime });
@@ -452,11 +620,14 @@ it("lists Pi's conversations in the Activity tab, and shows a transcript", async
   );
   const user = userEvent.setup();
   const here = await screen.findByRole("region", { name: "This thread" });
-  expect(here).toHaveTextContent("#general");
+  expect(here).toHaveTextContent("general");
+  expect(here.querySelector("svg")).toHaveClass("tabler-icon-hash");
   expect(here).toHaveTextContent("Working");
   expect(screen.getAllByRole("listitem").map((row) => row.textContent)).toEqual(
-    [expect.stringContaining("other · channel")],
+    [expect.stringMatching(/^otherChannel · /)],
   );
+  // Unlisted, its kind is unknown: no icon claims one.
+  expect(screen.getByTitle("other · channel").querySelector("svg")).toBeNull();
 
   await user.click(
     within(here).getByRole("button", { name: /^View transcript/ }),
@@ -472,7 +643,7 @@ it("lists Pi's conversations in the Activity tab, and shows a transcript", async
   await user.click(screen.getByRole("button", { name: "Back to profile" }));
   await user.click(
     within(screen.getByRole("listitem")).getByRole("button", {
-      name: "View transcript",
+      name: "View transcript: other · channel",
     }),
   );
   expect(await screen.findByText("Hello from other")).toBeVisible();

@@ -27,9 +27,15 @@ import {
 } from "../../features/channel-navigation/routes";
 import { linkedDraftKey } from "../../features/solo/linked-chat";
 import { readView, writeView } from "../../shared/view-state";
-import { ChannelsPage, type ArchiveShortcut } from "./ChannelsPage";
+import { splitPartition } from "../../features/relay/partition";
+import {
+  ChannelsPage,
+  type ArchiveShortcut,
+  type ReadShortcut,
+} from "./ChannelsPage";
 import { SoloWorkspaces } from "./SoloWorkspaces";
 import type { RelaySession } from "../../features/relay/session";
+import type { ReadTarget } from "../../features/relay/read-state-model";
 
 composerDOMFixture();
 const owners: ReturnType<typeof createRelaySession>[] = [];
@@ -56,7 +62,13 @@ function fixture({
   archived = false,
   viewerNamed = false,
   others = [],
+  unread,
+  capability = "frontier-sync",
 }: {
+  /** Observed unread messages in this chat; fakes the read state when given. */
+  unread?: number;
+  /** What the read state can do on this connection. */
+  capability?: "unsupported" | "read-only" | "frontier-sync";
   /** Other Solo chats listed after this one in the sidebar's Chats. */
   others?: readonly string[];
   /** The viewer's own profile has loaded too. */
@@ -174,6 +186,25 @@ function fixture({
       : people.map((key) => [key, { name: "Teammate" }] as const)),
     ...(viewerNamed ? [[viewer.pubkey, { name: "Viewer" }] as const] : []),
   ]);
+  const markRead = vi.fn(async (_channelId: string) => ({}) as never);
+  // useSyncExternalStore needs stable snapshots.
+  const unreadState = {
+    observedCount: unread ?? 0,
+    attentionCount: 0,
+    coverage: "observed" as const,
+    freshness: "observed" as const,
+    manual: "none" as const,
+  };
+  const unreadStates = new Map<
+    string,
+    typeof unreadState & { target: ReadTarget }
+  >();
+  const noActivity = {
+    channelId: id,
+    items: [],
+    coverage: "observed" as const,
+    freshness: "observed" as const,
+  };
   const session = {
     ...owner.session,
     profiles: {
@@ -240,6 +271,30 @@ function fixture({
       },
     },
     messages: { ...owner.session.messages, send },
+    unread:
+      unread === undefined
+        ? owner.session.unread
+        : {
+            ...owner.session.unread,
+            sync: () => ({
+              capability,
+              status: "reconciled" as const,
+              completeness: "snapshot" as const,
+            }),
+            snapshot: (
+              target: Parameters<typeof owner.session.unread.snapshot>[0],
+            ) => {
+              const key = JSON.stringify(target);
+              let state = unreadStates.get(key);
+              if (!state) {
+                state = { ...unreadState, target };
+                unreadStates.set(key, state);
+              }
+              return state;
+            },
+            activity: () => noActivity,
+            markChannelRead: markRead,
+          },
     channelWrites: {
       ...owner.session.channelWrites,
       available: true,
@@ -285,6 +340,8 @@ function fixture({
     entryId: "visit",
     target: target?.(scope) ?? conversationTarget(scope, id),
     signal: abort.signal,
+    position: () => undefined,
+    savePosition() {},
     forSession: () => navigation,
     complete,
     resolve: () => true,
@@ -304,6 +361,7 @@ function fixture({
     }),
   } as unknown as Navigation;
   const archive: ArchiveShortcut = {};
+  const read: ReadShortcut = {};
   const page = (sidebar = false) => (
     <ChannelNavigationProvider relay={relay}>
       {sidebar && (
@@ -331,6 +389,7 @@ function fixture({
         navigation={navigation}
         navigator={navigator}
         archive={archive}
+        read={read}
       />
     </ChannelNavigationProvider>
   );
@@ -340,11 +399,20 @@ function fixture({
     mountWithToasts: () => render(<ToastProvider>{page()}</ToastProvider>),
     abort,
     archive,
+    read,
+    markRead,
     open,
     run,
     send,
     scope,
     session,
+    setArchived(archived: boolean) {
+      const next = { ...channel };
+      if (archived) next.archived = true;
+      else delete next.archived;
+      list = { ...list, channels: [next] };
+      emitList();
+    },
     // Chat activity: a new summary object for the same chat.
     retitle(name: string) {
       list = { ...list, channels: [{ ...channel, name }] };
@@ -352,7 +420,7 @@ function fixture({
     },
   };
 }
-it("confirms Archive from the shortcut, then opens a new Solo draft", async () => {
+it("archives from the shortcut without confirmation, then opens a new Solo draft", async () => {
   const f = fixture();
   f.mount();
   await waitFor(() => expect(f.archive.current?.available()).toBe(true));
@@ -361,15 +429,8 @@ it("confirms Archive from the shortcut, then opens a new Solo draft", async () =
     id,
     expect.any(AbortSignal),
   );
-  const dialog = screen.getByRole("dialog", {
-    name: "Archive chat: Planning",
-  });
-  expect(f.run).not.toHaveBeenCalled();
-  const user = userEvent.setup();
-  await user.click(
-    within(dialog).getByRole("button", { name: "Archive chat" }),
-  );
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.queryByRole("dialog", { name: /^Archive chat/ })).toBeNull();
+  await waitFor(() => expect(f.open).toHaveBeenCalled());
   expect(f.run).toHaveBeenCalledExactlyOnceWith(
     "archive",
     id,
@@ -434,7 +495,7 @@ it("keeps a shortcut Archive across chat activity during the permission read", a
           });
       }),
   );
-  f.mount();
+  f.mountWithToasts();
   await waitFor(() => expect(f.archive.current).toBeDefined());
   let pending: Promise<void> | undefined;
   act(() => {
@@ -445,9 +506,9 @@ it("keeps a shortcut Archive across chat activity during the permission read", a
     release();
     await pending;
   });
-  // The confirmation names the latest summary, not the one at keypress.
+  // The result names the latest summary, not the one at keypress.
   expect(
-    screen.getByRole("dialog", { name: "Archive chat: Roadmap" }),
+    await screen.findByRole("dialog", { name: "Chat archived: Roadmap" }),
   ).toBeInTheDocument();
 });
 
@@ -491,21 +552,23 @@ it("starts a Solo draft route in its project, with that project's saved draft", 
   );
 });
 
-it("tags a Solo draft route's agent in the new chat", async () => {
+it("addresses a Solo draft route's agent in the new chat without tagging the text", async () => {
   const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
   f.mount();
   const region = await screen.findByRole("region", { name: "New chat" });
-  await waitFor(() =>
-    expect(
-      within(region).getByRole("textbox", { name: "Message your agents" }),
-    ).toHaveTextContent("@Scout"),
-  );
-  expect(
-    within(region).getByRole("textbox", { name: "Message your agents" }),
-  ).not.toHaveTextContent("@Helper");
+  const input = within(region).getByRole("textbox", {
+    name: "Message your agents",
+  });
   expect(
     within(region).getByRole("button", { name: "Add workspace" }),
   ).toBeVisible();
+  // The routed agent is the recipient, held outside the text.
+  const user = userEvent.setup();
+  await user.click(input);
+  expect(input).not.toHaveTextContent("@");
+  await user.keyboard("Hello{Enter}");
+  await waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+  expect(f.send).toHaveBeenCalledWith(expect.any(String), "Hello", [agent]);
 });
 
 it("a new Solo chat finishing behind Settings stays put and retires its draft", async () => {
@@ -546,7 +609,7 @@ it("a new Solo chat finishing behind Settings stays put and retires its draft", 
   }
 });
 
-it("gives the owner's Solo chat its tag requirement and project", async () => {
+it("sends the owner's Solo chat to its only agent without a tag, and gives it its project", async () => {
   const f = fixture();
   f.mount();
   const input = await screen.findByRole("textbox", {
@@ -558,15 +621,15 @@ it("gives the owner's Solo chat its tag requirement and project", async () => {
   const user = userEvent.setup();
   await user.click(input);
   await user.keyboard("Untagged{Enter}");
+  // The chat's only agent is already in the pill, so no tag is needed.
+  await waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+  expect(f.send.mock.calls[0]?.[2]).toEqual([agent]);
   expect(
-    await screen.findByText("Tag a person or agent to send", {
-      selector: "[role=alert]",
-    }),
-  ).toBeVisible();
-  expect(f.send).not.toHaveBeenCalled();
+    screen.queryByText("Choose an agent to send", { selector: "[role=alert]" }),
+  ).toBeNull();
 });
 
-it("requires a tag from a guest alone with agents, who can still file the chat", async () => {
+it("sends a guest alone with agents to the chat's only agent, who can still file the chat", async () => {
   const f = fixture({ placed: false });
   f.mount();
   const input = await screen.findByRole("textbox", {
@@ -579,12 +642,12 @@ it("requires a tag from a guest alone with agents, who can still file the chat",
   const user = userEvent.setup();
   await user.click(input);
   await user.keyboard("Hello team{Enter}");
+  // The chat's only agent is already in the pill, so no tag is needed.
+  await waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+  expect(f.send.mock.calls[0]?.[2]).toEqual([agent]);
   expect(
-    await screen.findByText("Tag a person or agent to send", {
-      selector: "[role=alert]",
-    }),
-  ).toBeVisible();
-  expect(f.send).not.toHaveBeenCalled();
+    screen.queryByText("Choose an agent to send", { selector: "[role=alert]" }),
+  ).toBeNull();
 });
 
 it.each([
@@ -677,7 +740,7 @@ it("refuses an untagged send once the fresh roster has no other person", async (
 });
 
 it.each([
-  ["archive", "Archive chat", "Archive chat: Planning"],
+  ["archive", "Archive chat", undefined],
   ["delete", "Delete chat", "Delete Planning?"],
 ] as const)(
   "runs %s from Chat actions, then opens a new Solo draft",
@@ -689,8 +752,12 @@ it.each([
       await screen.findByRole("button", { name: "Chat actions" }),
     );
     await user.click(await screen.findByRole("menuitem", { name: label }));
-    const dialog = screen.getByRole("dialog", { name: title });
-    await user.click(within(dialog).getByRole("button", { name: label }));
+    // Archive is undoable from its result toast, so only Delete confirms.
+    if (title) {
+      const dialog = screen.getByRole("dialog", { name: title });
+      await user.click(within(dialog).getByRole("button", { name: label }));
+    }
+    await waitFor(() => expect(f.run).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(f.run).toHaveBeenCalledExactlyOnceWith(
       action,
@@ -718,12 +785,7 @@ it.each([
     await user.click(
       await screen.findByRole("menuitem", { name: "Archive chat" }),
     );
-    const dialog = await screen.findByRole("dialog", {
-      name: "Archive chat: Planning",
-    });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Archive chat" }),
-    );
+    await waitFor(() => expect(f.run).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(f.run).toHaveBeenCalledExactlyOnceWith(
       "archive",
@@ -737,9 +799,9 @@ it.each([
 );
 
 it.each([
-  ["Chat actions", "archive", "Archive chat", "Archive chat: Planning"],
+  ["Chat actions", "archive", "Archive chat", undefined],
   ["Chat actions", "delete", "Delete chat", "Delete Planning?"],
-  ["Actions for Planning", "archive", "Archive chat", "Archive chat: Planning"],
+  ["Actions for Planning", "archive", "Archive chat", undefined],
 ] as const)(
   "from %s, %s leaves the open chat for its sidebar neighbor",
   async (trigger, action, label, title) => {
@@ -749,8 +811,12 @@ it.each([
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: trigger }));
     await user.click(await screen.findByRole("menuitem", { name: label }));
-    const dialog = await screen.findByRole("dialog", { name: title });
-    await user.click(within(dialog).getByRole("button", { name: label }));
+    // Archive is undoable from its result toast, so only Delete confirms.
+    if (title) {
+      const dialog = await screen.findByRole("dialog", { name: title });
+      await user.click(within(dialog).getByRole("button", { name: label }));
+    }
+    await waitFor(() => expect(f.open).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(f.run).toHaveBeenCalledExactlyOnceWith(
       action,
@@ -763,7 +829,7 @@ it.each([
   },
 );
 
-it("offers the same chat actions from the header and the sidebar row", async () => {
+it("offers the header's chat actions from the sidebar row, plus inline Rename", async () => {
   const f = fixture();
   f.mountWithSidebar();
   const user = userEvent.setup();
@@ -788,7 +854,7 @@ it("offers the same chat actions from the header and the sidebar row", async () 
     "Archive chat",
     "Delete chat",
   ]);
-  expect(await items("Actions for Planning")).toEqual(header);
+  expect(await items("Actions for Planning")).toEqual(["Rename", ...header]);
 });
 
 it("runs the header's own chat actions and returns focus to Chat actions", async () => {
@@ -877,7 +943,7 @@ it("returns focus to Chat actions when its confirmation is cancelled", async () 
   const trigger = await screen.findByRole("button", { name: "Chat actions" });
   await user.click(trigger);
   await user.click(
-    await screen.findByRole("menuitem", { name: "Archive chat" }),
+    await screen.findByRole("menuitem", { name: "Delete chat" }),
   );
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
@@ -943,7 +1009,47 @@ it("marks an archived chat once and keeps only its lifecycle actions", async () 
   await screen.findByRole("button", { name: "Chat actions" });
   expect(screen.getAllByText("Archived")).toHaveLength(1);
   expect(screen.queryByRole("button", { name: "Share access" })).toBeNull();
+  expect(
+    await screen.findByRole("region", { name: "Archived chat" }),
+  ).toHaveTextContent("This chat is archived");
+  expect(screen.queryByRole("textbox")).toBeNull();
 });
+
+it.each(["solo", "stream"] as const)(
+  "replaces an archived %s composer with a notice and restores its draft on unarchive",
+  async (type) => {
+    const f = fixture({ type });
+    const place = type === "solo" ? "chat" : "channel";
+    f.mount();
+    const editor = await screen.findByRole("textbox");
+    expect(editor).toHaveFocus();
+    const user = userEvent.setup();
+    await user.click(editor);
+    await user.keyboard("Keep this draft");
+    await act(() => f.run("archive"));
+    expect(
+      await screen.findByRole("region", { name: `Archived ${place}` }),
+    ).toHaveTextContent(`This ${place} is archived`);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
+    // Remote unarchive restores composition without taking the reader's focus.
+    const history = screen.getByRole("region", {
+      name: "Channel message history",
+    });
+    history.focus();
+    expect(history).toHaveFocus();
+    act(() => f.setArchived(false));
+    expect(await screen.findByRole("textbox")).toHaveTextContent(
+      "Keep this draft",
+    );
+    expect(
+      screen.queryByRole("region", { name: `Archived ${place}` }),
+    ).toBeNull();
+    expect(history).toHaveFocus();
+    expect(f.send).not.toHaveBeenCalled();
+  },
+);
 
 it("does not recreate a consumed linked draft on history navigation", () => {
   const linked = "22222222-2222-4222-8222-222222222222";
@@ -976,4 +1082,67 @@ it("finishes a linked chat across roster updates without appending source prose"
   expect(f.send.mock.calls[0]?.[1]).not.toContain("Source:");
   expect(f.session.channelWrites.start).toHaveBeenCalledOnce();
   expect(f.send.mock.calls[0]?.[1]).toContain(source.link);
+});
+
+it("marks the open conversation read from Escape while it shows unread", async () => {
+  const f = fixture({ unread: 3 });
+  f.mount();
+  await waitFor(() => expect(f.read.current?.available()).toBe(true));
+  await act(async () => f.read.current?.run());
+  expect(f.markRead).toHaveBeenCalledExactlyOnceWith(id);
+});
+
+it("offers no Escape mark-read for a read chat, without read sync, or after the visit", async () => {
+  const read = fixture();
+  read.mount();
+  await waitFor(() => expect(read.read.current).toBeDefined());
+  expect(read.read.current?.available()).toBe(false);
+  cleanup();
+  const unsynced = fixture({ unread: 2, capability: "read-only" });
+  unsynced.mount();
+  await waitFor(() => expect(unsynced.read.current).toBeDefined());
+  expect(unsynced.read.current?.available()).toBe(false);
+  cleanup();
+  const visit = fixture({ unread: 2 });
+  visit.mount();
+  await waitFor(() => expect(visit.read.current?.available()).toBe(true));
+  visit.abort.abort();
+  expect(visit.read.current?.available()).toBe(false);
+});
+
+it("offers no Escape mark-read for a read-only preview or the new message page", async () => {
+  const f = fixture({
+    unread: 2,
+    target: (scope) => ({
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.channels",
+      pageId: "channels",
+      scope: splitPartition(scope) as never,
+      route: { version: 1, params: "new-message" },
+    }),
+  });
+  f.mount();
+  await screen.findByRole("textbox", { name: /message/i }).catch(() => {});
+  expect(f.read.current).toBeUndefined();
+});
+
+it("reports a failed Escape mark-read in a toast and keeps the chat open", async () => {
+  const f = fixture({ unread: 1 });
+  f.markRead.mockRejectedValueOnce(new Error("offline"));
+  f.mountWithToasts();
+  await waitFor(() => expect(f.read.current?.available()).toBe(true));
+  await act(async () => f.read.current?.run());
+  expect(await screen.findByText("Couldn’t mark as read.")).toBeInTheDocument();
+});
+
+it("leaves Escape to a text field outside the composer", async () => {
+  const f = fixture({ unread: 1 });
+  f.mount();
+  await waitFor(() => expect(f.read.current?.available()).toBe(true));
+  const field = document.createElement("input");
+  document.body.append(field);
+  field.focus();
+  expect(f.read.current?.available()).toBe(false);
+  field.remove();
 });

@@ -1,3 +1,4 @@
+import { CODEX_HOOK_EVENTS } from "./hook-bridge";
 import { repositoriesContext } from "../../features/communities/repositories";
 import { isTauri } from "@tauri-apps/api/core";
 import { pubkeyOf } from "../../features/agents/membership";
@@ -30,6 +31,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ctx.agents.storage,
     setup,
   );
+  const typeKey = `${ctx.pluginOwner?.id ?? "buzz.codex"}/${TYPE_ID}`;
   const runtime = new CodexRuntime(
     start,
     (key) => ownerReads(ctx.agents.relay(key), pubkeyOf(key)),
@@ -38,8 +40,27 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (raw) => providerController.resolve(raw),
     () => ctx.agents.tools(),
     repositoriesContext,
+    ctx.host.serveMcp
+      ? {
+          serve: ctx.host.serveMcp.bind(ctx.host),
+          run: async (agent, session, event, input) => {
+            return ((await ctx.agents.dispatchHook(
+              typeKey,
+              event,
+              input,
+              { agent, session },
+              {
+                accepts: (output) =>
+                  !!output &&
+                  typeof output === "object" &&
+                  Object.keys(output).length > 0,
+                milliseconds: event === "Interrupt" ? 2500 : 25000,
+              },
+            )) ?? {}) as Record<string, unknown>;
+          },
+        }
+      : undefined,
   );
-  const typeKey = `${ctx.pluginOwner?.id ?? "buzz.codex"}/${TYPE_ID}`;
   /** A Codex agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */
   let needed: boolean | undefined;
@@ -99,6 +120,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   } = createTabs(providerController, runtime, start, setup);
   ctx.agents.register<Config>({
     id: TYPE_ID,
+    hooks: { events: CODEX_HOOK_EVENTS },
     title: "Codex",
     icon: CodexLogoIcon,
     description:
@@ -111,6 +133,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
       (!source.provider || source.provider === "openai")
         ? { ...defaults, model: source.model }
         : undefined,
+    exportShared: (saved) => ({ runtime: "codex", model: config(saved).model }),
     adopt: (carry, saved) => ({
       ...saved,
       instructions: carry.instructions ?? saved.instructions,

@@ -24,6 +24,7 @@ const channels = [{ id: fixtureChannel, name: "Fixture channel" }];
 function Fixture() {
   useKeyboardFocusVisibility();
   const [mounted, setMounted] = useState(true);
+  const [filter, setFilter] = useState<readonly string[]>([]);
   const [opened, setOpened] = useState<WorkflowDefinition | "new">();
   // The modal editor hides the toolbar, so journeys unmount through this.
   useEffect(() => {
@@ -74,8 +75,8 @@ function Fixture() {
             <>
               <WorkflowWebhookSecrets capability={fixture.capability} />
               <WorkflowLanding
-                onFilterChange={() => {}}
-                filter=""
+                onFilterChange={setFilter}
+                filter={filter}
                 capability={fixture.capability}
                 channels={channels}
                 detailTarget={null}
@@ -95,7 +96,7 @@ function Fixture() {
                     fixture.capability.delete(definition)
                   }
                   channelId={fixtureChannel}
-                  channelName="Fixture channel"
+                  channel={{ name: "Fixture channel" }}
                   initialSelection={opened}
                   onClose={() => setOpened(undefined)}
                   viewer={fixtureViewer}

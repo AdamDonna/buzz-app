@@ -1,5 +1,6 @@
 //! Purpose-bound agent operations. Never return key material or unscoped plaintext.
 use super::{origin, send, Result};
+use crate::federated_identity::FederatedIdentity;
 use crate::identity::IdentityHost;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use buzz_agent_controller::AppAgents;
@@ -378,6 +379,7 @@ fn memory_address(conversation: &ConversationKey, name: &str) -> Result<String> 
 #[tauri::command]
 pub(crate) async fn relay_agent_memories_read(
     host: tauri::State<'_, IdentityHost>,
+    fi: tauri::State<'_, FederatedIdentity>,
     community: String,
     agent: String,
     slug: Option<String>,
@@ -432,32 +434,7 @@ pub(crate) async fn relay_agent_memories_read(
                 page["until"] = json!(until);
                 page["before_id"] = json!(before_id);
             }
-            let url = url.clone();
-            let host = host.inner();
-            async move {
-                let response = send(
-                    host,
-                    url,
-                    "POST",
-                    Some(json!([page]).to_string()),
-                    true,
-                    MEMORY_RESPONSE_BYTES,
-                )
-                .await?;
-                if response.status == 429 {
-                    return Ok(MemoryPage::Limited);
-                }
-                if response.status == 401 || response.status == 403 {
-                    return Err("MemoryDenied".into());
-                }
-                if response.status != 200 || response.body.len() > MEMORY_RESPONSE_BYTES {
-                    return Err("Memory read failed".into());
-                }
-                Ok(MemoryPage::Records(
-                    memory_wire_records(&response.body)?,
-                    response.body.len(),
-                ))
-            }
+            memory_page(host.inner(), fi.inner(), url.clone(), page)
         },
         decode,
     )
@@ -468,6 +445,39 @@ pub(crate) async fn relay_agent_memories_read(
         }
     }
     Ok(listing)
+}
+
+/// One page of the memory listing at `url`, sent with the community's
+/// assertion when it requires NIP-FI.
+async fn memory_page(
+    host: &IdentityHost,
+    fi: &FederatedIdentity,
+    url: url::Url,
+    page: Value,
+) -> Result<MemoryPage> {
+    let response = send(
+        host,
+        Some(fi),
+        url,
+        "POST",
+        Some(json!([page]).to_string()),
+        true,
+        MEMORY_RESPONSE_BYTES,
+    )
+    .await?;
+    if response.status == 429 {
+        return Ok(MemoryPage::Limited);
+    }
+    if response.status == 401 || response.status == 403 {
+        return Err("MemoryDenied".into());
+    }
+    if response.status != 200 || response.body.len() > MEMORY_RESPONSE_BYTES {
+        return Err("Memory read failed".into());
+    }
+    Ok(MemoryPage::Records(
+        memory_wire_records(&response.body)?,
+        response.body.len(),
+    ))
 }
 
 type MemoryDecoding = std::sync::Arc<std::sync::Mutex<MemoryDecoder>>;
@@ -605,13 +615,20 @@ struct MemoryDecoder {
 
 impl MemoryDecoder {
     fn listing(&self) -> Value {
-        let entries: Vec<_> = self
+        let (deleted, entries): (Vec<_>, Vec<_>) = self
             .heads
             .values()
             .map(|(_, _, entry)| entry)
-            .filter(|entry| !entry["body"].is_null())
-            .collect();
-        json!({"entries": entries, "partial": self.partial})
+            .partition(|entry| entry["body"].is_null());
+        let mut listing = json!({"entries": entries, "partial": self.partial});
+        // A write that recreates a deleted slug must be dated after its tombstone.
+        if !deleted.is_empty() {
+            listing["deleted"] = deleted
+                .into_iter()
+                .map(|entry| json!({"slug": entry["slug"], "createdAt": entry["createdAt"]}))
+                .collect();
+        }
+        listing
     }
 }
 
@@ -868,6 +885,30 @@ mod tests {
         }
     }
 
+    /// A memory page sends exactly the issued assertion to a community that
+    /// requires NIP-FI, and nothing to one that does not.
+    async fn memory(required: bool) {
+        use crate::federated_identity::testing::{community, reply};
+        let community = community(required).await;
+        let server = community.serve(vec![reply("200 OK", "[]")]);
+        let _ = memory_page(
+            &community.host,
+            &community.fi,
+            community.origin.join("/query").unwrap(),
+            json!({"kinds": [30078], "limit": 1}),
+        )
+        .await;
+        community.assert_carried(&server.heads().await[0]);
+    }
+    #[tokio::test]
+    async fn memory_page_attaches_for_required_discovery() {
+        memory(true).await;
+    }
+    #[tokio::test]
+    async fn memory_page_omits_for_ordinary_discovery() {
+        memory(false).await;
+    }
+
     fn fixture() -> ([u8; 32], String) {
         let secret = [1; 32];
         let secp = Secp256k1::signing_only();
@@ -949,7 +990,7 @@ mod tests {
         .map(|(slug, body)| {
             Some(
                 agent_key
-                    .memory_event(&owner, slug, body, 1_700_000_001)
+                    .memory_event(&owner, slug, Some(body), 1_700_000_001)
                     .unwrap(),
             )
         })
@@ -960,7 +1001,44 @@ mod tests {
         assert_eq!(listing["partial"], false);
         assert_eq!(listing["entries"][0]["body"], "private fixture core");
         assert_eq!(listing["entries"][1]["body"], "private fixture entry");
+        assert!(listing.get("deleted").is_none());
         assert_ne!(agent, owner);
+    }
+
+    #[test]
+    fn a_deleted_entry_reports_its_tombstone_so_a_recreation_can_follow_it() {
+        let agent_key = buzz_agent_controller::Secret::generate().unwrap();
+        let agent = agent_key.pubkey().to_owned();
+        let owner_bytes = [2; 32];
+        let owner = signed_event(&owner_bytes, 1, vec![], String::new()).pubkey;
+        let event = |body, created_at| {
+            Some(
+                agent_key
+                    .memory_event(&owner, "mem/one", body, created_at)
+                    .unwrap(),
+            )
+        };
+        let read = |events: &[Option<Value>]| {
+            decode_memories_with_key(&owner_bytes, &owner, &owner, &agent, events, || false)
+                .unwrap()
+        };
+        // An entry dated ahead of the clock, then the tombstone that follows it.
+        let mut events = vec![
+            event(Some("kept"), 4_000_000_000),
+            event(None, 4_000_000_001),
+        ];
+        let listing = read(&events);
+        assert_eq!(listing["entries"], json!([]));
+        assert_eq!(
+            listing["deleted"],
+            json!([{"slug": "mem/one", "createdAt": 4_000_000_001u64}])
+        );
+        // A recreation dated after the reported tombstone is the entry again.
+        let after = listing["deleted"][0]["createdAt"].as_u64().unwrap();
+        events.push(event(Some("again"), after + 1));
+        let listing = read(&events);
+        assert_eq!(listing["entries"][0]["body"], "again");
+        assert!(listing.get("deleted").is_none());
     }
 
     #[test]

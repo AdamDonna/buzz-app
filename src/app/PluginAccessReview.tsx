@@ -1,4 +1,7 @@
-import type { Ref } from "react";
+import { type Ref, useContext, useSyncExternalStore } from "react";
+import { AgentsContext } from "../features/agents/react";
+import type { RegisteredAgentType } from "../features/agents/service";
+
 import type { PluginManifest } from "../plugins/api";
 import { Accordion } from "../shared/design-system/ui/Accordion";
 import { Button } from "../shared/design-system/ui/Button";
@@ -10,6 +13,11 @@ import {
   MonitorIcon,
 } from "../shared/design-system/icons/index";
 import styles from "./PluginImport.module.css";
+
+const noSubscribe = () => () => {};
+const noTypes = () => EMPTY_TYPES;
+const EMPTY_TYPES: readonly RegisteredAgentType[] = [];
+
 function ProgramDetails({
   program,
   args,
@@ -42,8 +50,20 @@ function ProgramDetails({
   );
 }
 
-function hostDeclarations(manifest: PluginManifest) {
+function hostDeclarations(
+  manifest: PluginManifest,
+  types: readonly RegisteredAgentType[],
+) {
   return [
+    ...(manifest.host?.agentHooks ?? []).map((harness) => ({
+      key: `agentHooks:${harness}`,
+      signature: `Agent hooks: ${harness}`,
+      title: "Agent hooks:",
+      label: `Observe and influence ${types.find((type) => type.key === harness)?.title ?? harness}`,
+      hint: "Can read hook events and change or block agent actions.",
+      icon: PlugIcon,
+      details: <code className={styles.sourcePath}>{harness}</code>,
+    })),
     ...(manifest.host?.commands ?? []).map((command) => ({
       key: `command:${command.id}`,
       signature: `Command ${command.id}: ${JSON.stringify([command.program, ...command.args])} · input: ${command.maxInputBytes === undefined ? "none" : `up to ${command.maxInputBytes} bytes`} · output: up to ${command.maxOutputBytes ?? 4096} bytes`,
@@ -76,6 +96,17 @@ function hostDeclarations(manifest: PluginManifest) {
       icon: GlobeIcon,
       details: <code className={styles.sourcePath}>{origin}</code>,
     })),
+    ...(manifest.host?.federatedIdentity?.operations ?? []).map(
+      (operation) => ({
+        key: `federated:${operation.method} ${operation.path}`,
+        signature: `Federated authority ${manifest.host?.federatedIdentity?.authority}: ${operation.method} ${operation.path}`,
+        title: `Federated authority ${manifest.host?.federatedIdentity?.authority}:`,
+        label: `${operation.method} ${operation.path}`,
+        hint: "Buzz can call this route with your community session for the plugin.",
+        icon: GlobeIcon,
+        details: <code className={styles.sourcePath}>{operation.path}</code>,
+      }),
+    ),
     ...(manifest.host?.processes ?? []).map((process) => ({
       key: `process:${process.id}`,
       signature: `Process ${process.id}: ${JSON.stringify([process.program, ...(process.args ?? [])])}${process.bundled ? " (bundled with Buzz)" : ""} and any further arguments · stdin, full user access`,
@@ -107,6 +138,29 @@ function hostDeclarations(manifest: PluginManifest) {
             details: (
               <p className="m-0">
                 Tools served to local agents over loopback HTTP.
+              </p>
+            ),
+          },
+        ]
+      : []),
+    ...(manifest.host?.managedFiles
+      ? [
+          {
+            key: "managedFiles",
+            signature:
+              "Managed files: temporary private saves · no file reading",
+            title: "Managed files:",
+            label: "Save temporary plugin files",
+            hint: "Save up to 16 MiB at a time in host-selected private storage, without file-reading access.",
+            icon: FolderOpenIcon,
+            details: (
+              <p className="m-0">
+                Shared storage is limited to 64 MiB and 16 files; any plugin can
+                fill it. Files normally remain for 24 hours, survive plugin
+                unload and app restart, and are removed on a later save after
+                expiry. Explicit app-data erase or user deletion can remove them
+                sooner. This does not grant file reading or arbitrary-path
+                writes.
               </p>
             ),
           },
@@ -147,10 +201,16 @@ export function PluginAccessReview({
   unchangedTrigger?: Ref<HTMLButtonElement>;
   onShowUnchanged?: () => void;
 }) {
+  const agents = useContext(AgentsContext);
+  const types = useSyncExternalStore(
+    agents?.subscribe ?? noSubscribe,
+    agents?.types ?? noTypes,
+    noTypes,
+  );
   const updating = !!previousManifest;
-  const declaredDetails = hostDeclarations(manifest);
+  const declaredDetails = hostDeclarations(manifest, types);
   const previousDetails = previousManifest
-    ? hostDeclarations(previousManifest)
+    ? hostDeclarations(previousManifest, types)
     : [];
   const previousGrants = previousDetails.map((grant) => grant.signature);
   const removedDetails = previousDetails.filter(

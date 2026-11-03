@@ -1,6 +1,7 @@
+import { pauseClock } from "./clock.mjs";
 import { test, expect } from "./fixture.mjs";
 import { generateSecretKey, verifyEvent } from "nostr-tools";
-import { newChat, openPage } from "./navigation.mjs";
+import { newChat, openPage, sendOnlyTo } from "./navigation.mjs";
 
 const id = "33333333-3333-4333-8333-333333333333";
 const destination = "55555555-5555-4555-8555-555555555555";
@@ -117,7 +118,13 @@ test.describe("Berd-style Solo project organization", () => {
     await page.getByRole("menuitem", { name: "Move to", exact: true }).hover();
     await page.getByRole("menuitem", { name: "New workspace" }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByRole("textbox", { name: "Workspace name" }).fill("Work");
+    // Wait until the exiting menus are gone and the dialog's initial focus has
+    // settled on the field. The modal hides the menus from role queries.
+    await expect(page.locator('[role="menu"]')).toHaveCount(0);
+    const field = dialog.getByRole("textbox", { name: "Workspace name" });
+    await expect(field).toBeFocused();
+    await field.fill("Work");
+    await expect(field).toHaveValue("Work");
     await dialog.getByRole("button", { name: "Create and move" }).click();
     await expect(dialog).not.toBeVisible();
     await expect(sidebar.getByText("Saving workspace…")).not.toBeVisible();
@@ -182,26 +189,24 @@ test.describe("Berd-style Solo project organization", () => {
     ).toBeVisible();
     app.soloAgentMessage(id, "Agent follow-up fixture");
     const [agent] = app.soloAgents;
-    const tag = page.getByRole("button", {
-      name: `Remove mention ${agent.name} ${agent.pubkey}`,
-      exact: true,
-    });
-    await expect(tag).toHaveCount(0);
-    await page
-      .getByRole("button", { name: "Mention a member", exact: true })
-      .click();
-    await page
-      .getByRole("dialog", { name: "Mention a member or agent" })
-      .getByRole("button", {
-        name: `${agent.name} ${agent.pubkey}`,
-        exact: true,
-      })
-      .click();
-    await expect(tag).toBeVisible();
     const composer = page.getByRole("textbox", {
       name: "Message your agents",
       exact: true,
     });
+    // Agents-only Solo chats address agents from the composer's pill, not the
+    // text.
+    await expect(composer).toHaveText("");
+    const pill = page.getByRole("button", {
+      name: /Change agents$|^Choose agent$/,
+    });
+    // An existing chat starts addressed to one of its agents.
+    await expect(pill).toHaveAccessibleName(/^Sending to .+\. Change agents$/);
+    await sendOnlyTo(page, pill, agent);
+    const tag = page.getByRole("button", {
+      name: `Sending to ${agent.name}. Change agents`,
+      exact: true,
+    });
+    await expect(tag).toBeVisible();
     const agentMessage = page.getByText("Agent follow-up fixture", {
       exact: true,
     });
@@ -281,7 +286,13 @@ test("dragging a chat between a project and Chats saves and reloads like Move to
   await page.getByRole("menuitem", { name: "Move to", exact: true }).hover();
   await page.getByRole("menuitem", { name: "New workspace" }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByRole("textbox", { name: "Workspace name" }).fill("Work");
+  // Wait until the exiting menus are gone and the dialog's initial focus has
+  // settled on the field. The modal hides the menus from role queries.
+  await expect(page.locator('[role="menu"]')).toHaveCount(0);
+  const field = dialog.getByRole("textbox", { name: "Workspace name" });
+  await expect(field).toBeFocused();
+  await field.fill("Work");
+  await expect(field).toHaveValue("Work");
   await dialog.getByRole("button", { name: "Create and move" }).click();
   await expect(inProject("Alpha")).toBeVisible();
   const work = (await published(1))[id];
@@ -519,7 +530,7 @@ test("Share grants access and posts a link without promoting or moving the Solo 
   await expect(hint).not.toBeVisible();
   await expect(dialog).toBeVisible();
   // Hold the page clock so the held readback cannot reach its read deadline.
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+  await pauseClock(page, 100);
   try {
     await page.keyboard.press("Enter");
     await requestedReadback;
@@ -1006,7 +1017,7 @@ test("unified chat naming and lifetime retain host focus and save only explicit 
 // Native caret placement after focus handoffs and popup picks needs a browser.
 test.describe("Solo composer caret", () => {
   test.use({ soloAgentNames: ["Owned Honey", "Owned Brain"] });
-  test("a returning draft resumes at its end and picked agents join the leading tags", async ({
+  test("a returning draft resumes at its end and picking agents leaves the text alone", async ({
     page,
     app,
   }) => {
@@ -1019,19 +1030,20 @@ test.describe("Solo composer caret", () => {
     const caret = () =>
       composer.evaluate((el) => [el.value, el.selectionStart, el.selectionEnd]);
     const [honey, brain] = app.soloAgents;
+    // Agents-only Solo chats address agents from the composer's pill.
+    const pill = page.getByRole("button", {
+      name: /Change agents$|^Choose agent$/,
+    });
     const pick = async (agent) => {
-      await page
-        .getByRole("button", { name: "Mention a member", exact: true })
-        .click();
-      await page
-        .getByRole("dialog", { name: "Mention a member or agent" })
-        .getByRole("button", {
-          name: `${agent.name} ${agent.pubkey}`,
-          exact: true,
-        })
-        .click();
+      await sendOnlyTo(page, pill, agent);
+      await expect(pill).toHaveAccessibleName(
+        `Sending to ${agent.name}. Change agents`,
+      );
     };
-    await expect(composer).toHaveText(`@${honey.name} `);
+    await expect(pill).toHaveAccessibleName(
+      `Sending to ${honey.name}. Change agents`,
+    );
+    await expect(composer).toHaveText("");
     await page.keyboard.insertText("first");
     const sidebar = page.getByRole("navigation", {
       name: "Solo conversations",
@@ -1040,30 +1052,78 @@ test.describe("Solo composer caret", () => {
     await expect(composer).toHaveText("");
     await composer.click();
     await page.keyboard.insertText("alpha draft");
-    // Returning focuses the restored draft at its end, not before its tag.
+    // Returning focuses the restored draft at its end.
     await newChat(page);
-    await expect.poll(caret).toEqual([`@${honey.name} first`, 18, 18]);
+    await expect.poll(caret).toEqual(["first", 5, 5]);
 
-    // The picker files the agent after the leading tag; typing continues
+    // Picking an agent changes the pill, not the text; typing continues
     // where the caret was.
     await pick(brain);
-    const tagged = `@${honey.name} @${brain.name} first`;
-    await expect.poll(caret).toEqual([tagged, tagged.length, tagged.length]);
+    await expect.poll(caret).toEqual(["first", 5, 5]);
+    await expect(composer).toBeFocused();
     await page.keyboard.insertText(" again");
-    await expect(composer).toHaveText(`${tagged} again`);
+    await expect(composer).toHaveText("first again");
 
-    // Untagged prose gets its tag in front, even from a blurred composer.
+    // A blurred composer's prose is left alone too.
     await sidebar.getByRole("button", { name: "Alpha", exact: true }).click();
     await expect(composer).toHaveText("alpha draft");
     await composer.blur();
     await pick(honey);
-    const alpha = `@${honey.name} alpha draft`;
-    await expect.poll(caret).toEqual([alpha, alpha.length, alpha.length]);
-    // Undo removes the tag and returns to the prose caret, not the front.
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect.poll(caret).toEqual(["alpha draft", 11, 11]);
-    await page.keyboard.insertText("!");
-    await expect(composer).toHaveText("alpha draft!");
+    await expect(composer).toHaveText("alpha draft");
+  });
+
+  test("menu picks that edit typed tags keep keyboard focus in the menu, and Tab leaves it", async ({
+    page,
+    app,
+  }) => {
+    await page.goto(app.origin);
+    await newChat(page);
+    const composer = page.getByRole("textbox", {
+      name: "Message your agents",
+      exact: true,
+    });
+    const [honey, brain] = app.soloAgents;
+    await composer.click();
+    await page.keyboard.type(`@${honey.name}`);
+    await page.keyboard.press("Enter");
+    await page.keyboard.insertText("hello");
+    await expect(composer).toHaveText(`@${honey.name} hello`);
+    await page.getByRole("button", { name: /Change agents$/ }).click();
+    const menu = page.getByRole("dialog", {
+      name: "Mention a member or agent",
+    });
+    const search = menu.getByRole("searchbox");
+    await expect(search).toBeFocused();
+    await page.keyboard.insertText(brain.name);
+    await page.keyboard.press("Enter");
+    // The tag joins the text while focus and typing stay in the search.
+    await expect(composer).toHaveText(`@${honey.name} @${brain.name} hello`);
+    await expect(search).toBeFocused();
+    await page.keyboard.insertText("x");
+    await expect(search).toHaveValue(`${brain.name}x`);
+    await expect(composer).toHaveText(`@${honey.name} @${brain.name} hello`);
+    // Tab out closes the menu and leaves focus where Tab put it.
+    await search.focus();
+    const outside = () =>
+      page.evaluate(() => {
+        const active = document.activeElement;
+        return active?.closest('[role="dialog"]')
+          ? ""
+          : (active?.getAttribute("aria-label") ?? "");
+      });
+    for (let i = 0; i < 20 && !(await outside()); i++)
+      await page.keyboard.press("Tab");
+    const destination = await outside();
+    expect(destination).not.toBe("");
+    await expect(menu).toBeHidden();
+    // Base UI settles final focus a frame or two after the popup hides.
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    );
+    expect(await outside()).toBe(destination);
   });
 });
 
@@ -1095,16 +1155,11 @@ test.describe("Solo send focus", () => {
       .getByRole("button", { name: "Alpha", exact: true })
       .click();
     const [agent] = app.soloAgents;
-    await page
-      .getByRole("button", { name: "Mention a member", exact: true })
-      .click();
-    await page
-      .getByRole("dialog", { name: "Mention a member or agent" })
-      .getByRole("button", {
-        name: `${agent.name} ${agent.pubkey}`,
-        exact: true,
-      })
-      .click();
+    await sendOnlyTo(
+      page,
+      page.getByRole("button", { name: /Change agents$|^Choose agent$/ }),
+      agent,
+    );
     const composer = page.getByRole("textbox", {
       name: "Message your agents",
       exact: true,

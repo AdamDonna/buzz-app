@@ -1,3 +1,4 @@
+import { CLAUDE_HOOK_EVENTS } from "./hooks";
 import { repositoriesContext } from "../../features/communities/repositories";
 // Claude agents: an agent type whose agents are Claude sessions on
 // this computer. Each conversation the agent is in is one continuing session;
@@ -37,6 +38,21 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (raw) => providerDefaults.resolve(raw),
     () => agents.tools(),
     repositoriesContext,
+    async (agent, session, event, input) => {
+      return ((await agents.dispatchHook(
+        typeKey,
+        event,
+        input,
+        { agent, session },
+        {
+          accepts: (output) =>
+            !!output &&
+            typeof output === "object" &&
+            Object.keys(output).length > 0,
+          milliseconds: 25000,
+        },
+      )) ?? {}) as Record<string, unknown>;
+    },
   );
   /** A Claude agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */
@@ -86,6 +102,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   });
   agents.register<Config>({
     id: TYPE_ID,
+    hooks: { events: CLAUDE_HOOK_EVENTS },
     title: "Claude",
     icon: ClaudeLogoIcon,
     description:
@@ -93,6 +110,15 @@ export const apply: PluginModule["apply"] = (ctx) => {
     defaults: () => ({ config: DEFAULT_CONFIG }),
     Create,
     CreateModel,
+    importShared: (source) =>
+      source.runtime === "claude" &&
+      (!source.provider || source.provider === "anthropic")
+        ? { ...DEFAULT_CONFIG, model: source.model }
+        : undefined,
+    exportShared: (saved) => ({
+      runtime: "claude",
+      model: config(saved).model,
+    }),
     adopt: (carry, saved) => ({
       ...saved,
       instructions: carry.instructions ?? saved.instructions,

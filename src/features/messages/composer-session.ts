@@ -9,6 +9,7 @@ export type ComposerSession = Pick<
   "viewer" | "media" | "scope"
 > & {
   names?: import("../identity-names/service").IdentityNameView | undefined;
+  recovery?: RelaySession["recovery"];
   repositories: Pick<
     RelaySession["repositories"],
     "home" | "load" | "peekHome"
@@ -18,13 +19,13 @@ export type ComposerSession = Pick<
     | "list"
     | "subscribeList"
     | "get"
-    | "window"
     | "ensureList"
     | "refreshList"
     | "searchPublic"
     | "matchPublic"
+    | "openDirectory"
   > &
-    Partial<Pick<RelaySession["channels"], "subscribeWindow">>;
+    Partial<Pick<RelaySession["channels"], "subscribeWindow" | "window">>;
   profiles: RelaySession["profiles"];
   emoji: Pick<
     RelaySession["emoji"],

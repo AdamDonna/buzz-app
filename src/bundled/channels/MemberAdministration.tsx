@@ -21,9 +21,24 @@ import {
   MenuTrigger,
   MenuPopup,
   MenuSeparator,
+  MenuRadioGroup,
+  MenuRadioItem,
 } from "../../shared/design-system/ui/Menu";
 import { DotsThreeIcon } from "../../shared/design-system/icons";
 import styles from "./ChannelMembersDialog.module.css";
+
+export function memberAccessLabel(role: MemberChange["expectedRole"]) {
+  return {
+    owner: "Owner",
+    admin: "Admin",
+    member: "Participating",
+    bot: "Participating",
+    guest: "Viewing only",
+    unknown: "Unconfirmed access",
+    none: "No access",
+    absent: "No access",
+  }[role];
+}
 
 export function useMemberAdministration(
   session: RelaySession,
@@ -107,7 +122,14 @@ export function MemberRow({
   useEffect(() => {
     const viewport = scrollport.current;
     if (!menuOpen || !viewport) return;
-    const dismiss = () => setMenuOpen(undefined);
+    // Revealing the trigger can queue a scroll event before this listener mounts.
+    // Only subsequent movement should dismiss the newly opened menu.
+    const top = viewport.scrollTop;
+    const left = viewport.scrollLeft;
+    const dismiss = () => {
+      if (viewport.scrollTop !== top || viewport.scrollLeft !== left)
+        setMenuOpen(undefined);
+    };
     viewport.addEventListener("scroll", dismiss, { passive: true });
     return () => viewport.removeEventListener("scroll", dismiss);
   }, [menuOpen, scrollport]);
@@ -126,6 +148,10 @@ export function MemberRow({
       pubkey,
       verifiedOwner,
     );
+  const roleCaption =
+    role === "unknown" || role === "member" || role === "bot"
+      ? undefined
+      : memberAccessLabel(role);
   const locked =
     state.operation?.status === "pending" ||
     state.operation?.status === "uncertain";
@@ -166,15 +192,23 @@ export function MemberRow({
       {(canEdit || canRemove) && !locked && (
         <>
           <MenuSeparator />
-          {canEdit &&
-            editableMemberRoles
-              // Guest assignment is hidden until its permission contract is settled.
-              .filter((next) => next !== role && next !== "guest")
-              .map((next) => (
-                <MenuItem key={next} onClick={() => choose(next)}>
-                  Make {next}
-                </MenuItem>
+          {canEdit && (
+            <MenuRadioGroup
+              value={role === "bot" ? "member" : role}
+              onValueChange={(next) => {
+                const target = editableMemberRoles.find(
+                  (value) => value === next,
+                );
+                if (target && target !== role) choose(target);
+              }}
+            >
+              {editableMemberRoles.map((next) => (
+                <MenuRadioItem key={next} value={next}>
+                  {memberAccessLabel(next)}
+                </MenuRadioItem>
               ))}
+            </MenuRadioGroup>
+          )}
           {canEdit && <MenuSeparator />}
           {canRemove && (
             <MenuItem tone="danger" onClick={() => choose("remove")}>
@@ -231,6 +265,11 @@ export function MemberRow({
         {invitationAction}
         {!invitationAction && (
           <span className={styles.memberActions}>
+            {roleCaption && (
+              <span className="self-center px-2 text-body-sm text-subtle">
+                {roleCaption}
+              </span>
+            )}
             {/* A regular trigger needs its own root: registering it on the
                   context root replaces Base UI's context-menu interaction owner. */}
             <MenuRoot

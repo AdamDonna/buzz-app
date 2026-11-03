@@ -482,6 +482,7 @@ export function UsagePage({
             actions={
               targets.length > 0 && (
                 <IconButton
+                  hint="familiar"
                   ref={refresh}
                   size="sm"
                   variant="ghost"

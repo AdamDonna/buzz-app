@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { AvatarArtworkContext } from "../../shared/design-system/ui/Avatar";
 import { agentAvatars } from "./avatar-packs";
-import { PackedAgentAvatar } from "./PackedAgentAvatar";
 
 const packsBySource = new Map(
   agentAvatars.flatMap((avatar) => [
@@ -11,10 +10,17 @@ const packsBySource = new Map(
 );
 function renderArtwork(src: string) {
   const avatar = packsBySource.get(src);
-  return avatar ? <PackedAgentAvatar avatar={avatar} /> : null;
+  return avatar ? (
+    <img
+      data-loaded="true"
+      src={avatar.preview}
+      alt=""
+      style={{ width: "100%", height: "100%", objectFit: "contain" }}
+    />
+  ) : null;
 }
 
-/** One pack renderer for all avatars, including portalled profiles and menus. */
+/** Shared avatars stay static; the Agents page opts into animated artwork directly. */
 export function AgentAvatarArtworkProvider({
   children,
 }: {

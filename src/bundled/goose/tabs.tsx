@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { ProviderDialogActions } from "../../features/agents/ProviderDialogActions";
+import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
 import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
@@ -33,6 +34,8 @@ import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Combobox } from "../../shared/design-system/ui/Combobox";
 import { Select } from "../../shared/design-system/ui/Select";
+import { formatItemTimestamp } from "../../shared/datetime";
+import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { GooseLogoIcon } from "../../shared/design-system/icons";
 import { validWorkspace } from "../codex/config";
@@ -119,10 +122,6 @@ type Row = Readonly<{
   root?: string;
   at?: number;
 }>;
-const modelLabel = (provider: string | undefined, model: string | undefined) =>
-  provider?.startsWith("databricks")
-    ? model?.replace(/^(?:databricks|goose)-/i, "")
-    : model;
 const placeOf = (key: string): Place => {
   const [channelId = key, root] = key.split("/");
   return { channelId, ...(root ? { root } : {}) };
@@ -184,8 +183,9 @@ export function createTabs({
                 : undefined
             }
             defaultLabel="Provider default"
-            disabled={saving || !!state.blocking || !id}
+            disabled={!id}
             loading={models.status === "loading"}
+            pending={saving || !!state.blocking}
             onConfigure={onConfigure}
             onChange={(model) => {
               setSaving(true);
@@ -452,7 +452,7 @@ export function createTabs({
             models={models.value ?? []}
             loading={models.status === "loading"}
             value={value.model}
-            defaultLabel={modelLabel(id, modelDefault) || "Provider model"}
+            defaultLabel={modelDefault || "Provider model"}
             {...(!provider.configured
               ? { description: `Available once ${provider.name} is set up.` }
               : models.status === "error"
@@ -715,10 +715,12 @@ export function createTabs({
     agent,
     row,
     working,
+    openConversation,
   }: {
     agent: AgentViewProps<Config>["agent"];
     row: Row;
     working?: string | undefined;
+    openConversation: AgentViewProps<Config>["openConversation"];
   }) {
     const workspace = readConfig(agent.config).workspace;
     const [read, setRead] = useState<
@@ -788,6 +790,7 @@ export function createTabs({
           <ActivityTranscript
             transcript={read.transcript}
             agentName={agent.name}
+            openConversation={openConversation}
             state={() => (working ? "working" : undefined)}
             before={
               read.transcript.more && (
@@ -807,9 +810,15 @@ export function createTabs({
   function ActivityTab({
     agent,
     conversation,
+    initialTranscript,
+    close,
+    openConversation,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation?: AgentViewProps<Config>["conversation"];
+    initialTranscript?: AgentViewProps<Config>["initialTranscript"];
+    close?: AgentViewProps<Config>["close"];
+    openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
     const workspace = readConfig(agent.config).workspace;
     const live = useSyncExternalStore(
@@ -858,13 +867,18 @@ export function createTabs({
       row.title
         ? titled(agent.name, row.title)
         : `${row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
-    const { open, show, back } = useOpenTranscript(conversation, label);
+    const { open, show, back } = useOpenTranscript(
+      conversation,
+      label,
+      initialTranscript && { initial: here, searching, ...initialTranscript },
+      close,
+    );
     const rows = (recent.value ?? [])
       .filter((row) => row.sessionId !== here?.sessionId)
       .slice(0, RECENT_LIMIT)
       .map((row): Row => ({ ...row, key: row.sessionId, channelId: "" }));
     return (
-      <div className="grid gap-4">
+      <div className={activityStyles.activity}>
         {conversation && (
           <OpenedConversation
             conversation={conversation}
@@ -876,56 +890,73 @@ export function createTabs({
             onView={() => here && show(here)}
           />
         )}
-        <section className="grid gap-1">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="m-0 text-body">Recent sessions</h3>
-            <Button
-              type="button"
-              variant="ghost"
-              loading={recent.status === "loading"}
-              onClick={reload}
-            >
-              Refresh
-            </Button>
-          </div>
+        <section className={activityStyles.section}>
+          <InlineHeader
+            title="Recent sessions"
+            actions={
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                loading={recent.status === "loading"}
+                onClick={reload}
+              >
+                Refresh
+              </Button>
+            }
+          />
           {recent.status === "error" ? (
             <p role="alert" className="buzz-field-error m-0">
               Could not list goose's sessions: {recent.error}
             </p>
           ) : rows.length ? (
-            <ul className="m-0 grid list-none gap-2 p-0">
-              {rows.map((row) => (
-                <li
-                  key={row.sessionId}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate">{label(row)}</span>
-                    <span className="block text-body-sm text-subtle">
-                      {[
-                        status(row.sessionId),
-                        row.at && new Date(row.at).toLocaleString(),
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
-                  </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    aria-label={`View transcript: ${label(row)}`}
-                    onClick={() => show(row)}
-                  >
-                    View transcript
-                  </Button>
-                </li>
-              ))}
-            </ul>
+            <SettingsGroup layout="form">
+              <ul className={activityStyles.list}>
+                {rows.map((row) => (
+                  <li key={row.sessionId} className={activityStyles.entry}>
+                    <div className={activityStyles.row}>
+                      <span className={activityStyles.copy}>
+                        <span
+                          className="block truncate text-label-sm"
+                          title={label(row)}
+                        >
+                          {label(row)}
+                        </span>
+                        <span className="block text-body-sm text-subtle">
+                          {[
+                            status(row.sessionId),
+                            row.at &&
+                              formatItemTimestamp(row.at / 1000, {
+                                withTime: true,
+                              }),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      </span>
+                      <Button
+                        type="button"
+                        variant="subtle"
+                        size="sm"
+                        aria-label={`View transcript: ${label(row)}`}
+                        onClick={() => show(row)}
+                      >
+                        View transcript
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </SettingsGroup>
           ) : recent.status === "ready" ? (
             <p className="m-0 text-body-sm text-subtle">
               None. A conversation's session starts when the agent is mentioned.
             </p>
-          ) : null}
+          ) : (
+            <p role="status" className="m-0 text-body-sm text-subtle">
+              Reading goose's sessions…
+            </p>
+          )}
         </section>
         {open && (
           <PanelSubview
@@ -934,9 +965,11 @@ export function createTabs({
             onBack={back}
           >
             <TranscriptView
+              key={open.key}
               agent={agent}
               row={open}
               working={busy(open.sessionId) ? open.sessionId : undefined}
+              openConversation={openConversation}
             />
           </PanelSubview>
         )}
@@ -1105,7 +1138,7 @@ export function createTabs({
             models={choices}
             value={current.model}
             defaultModel={fallback}
-            defaultLabel={modelLabel(provider, fallback) || "Choose model"}
+            defaultLabel={fallback || "Choose model"}
             effort={current.effort}
             // A card's chip keeps its room for the model name; its menu
             // still shows and sets the level.

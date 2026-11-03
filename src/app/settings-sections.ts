@@ -1,5 +1,6 @@
 // One Settings section policy for the standalone and shell presentations and
 // route classification. Visibility and authorization stay with settingsCards.
+import { developerMode } from "../features/developer/mode";
 import {
   BellIcon,
   BrainIcon,
@@ -36,11 +37,7 @@ export type SettingsGroup = {
   sections: readonly SettingsSection[];
 };
 
-// DEV alone is not enough: packaged desktop builds load a production bundle
-// from tauri://localhost, so the hostname check excludes them too.
-export const developerMode =
-  import.meta.env.DEV &&
-  /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+export { developerMode };
 
 const profile: SettingsSection = {
   id: "profile",

@@ -233,6 +233,7 @@ it("finds the agent's threads by name, reads their rollouts, and later only thos
     },
   ];
   const searches: unknown[] = [];
+  let scans = 0;
   const spawn = processes((params) => {
     // As Codex does, list only the default provider's threads, here none,
     // unless asked for every provider's.
@@ -240,6 +241,8 @@ it("finds the agent's threads by name, reads their rollouts, and later only thos
       Array.isArray(params.modelProviders) && !params.modelProviders.length;
     if (!every) return { data: [], nextCursor: null };
     searches.push(params.searchTerm ?? params.parentThreadId);
+    // Answered from Codex's thread database, not a scan of every rollout.
+    if (params.useStateDbOnly !== true) scans += 1;
     // One thread a page.
     const start = Number(params.cursor ?? 0);
     const found = threads.filter((thread) =>
@@ -269,6 +272,7 @@ it("finds the agent's threads by name, reads their rollouts, and later only thos
     );
   const sessions = await read();
   expect(sessions.map((session) => session.id)).toEqual(["mine"]);
+  expect(scans).toBe(0);
   // The thread's own response, and one from each of its subagents.
   expect(
     sessions[0]?.observations.map((entry) => [entry.model, entry.tokens]),

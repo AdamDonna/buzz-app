@@ -51,6 +51,15 @@
     min-width: 0;
     gap: var(--space-row-gap);
   }
+  /* Profile choices need a full-width label with comfortable side insets. */
+  .buzz-button[data-size="row"] {
+    padding: var(--space-2) var(--space-4);
+  }
+  .buzz-button[data-size="row"] > .buzz-button-label {
+    flex: 1;
+    justify-content: flex-start;
+    text-align: left;
+  }
   .buzz-button-label > svg,
   .buzz-button-spinner {
     width: var(--space-6);
@@ -115,6 +124,13 @@
   .buzz-button[data-size="sm"] .buzz-button-spinner {
     width: var(--space-4);
     height: var(--space-4);
+  }
+  /* Small identity buttons: leading avatars sit as close to the leading
+     edge as to the top and bottom, and a trailing icon tucks in to match. */
+  .buzz-button[data-size="sm"]:has(
+    > .buzz-button-label > [data-avatar-stack]:first-child
+  ) {
+    padding-inline: var(--space-1h) var(--space-3);
   }
   .buzz-button[data-size="lg"] {
     min-height: var(--size-control-lg);
@@ -404,6 +420,49 @@
     width: var(--size-control-lg);
     height: var(--size-control-lg);
   }
+  /* A split button is one capsule: the action, then its menu. Filled halves
+     part with a hairline; outlined halves share one stroke. */
+  .buzz-split-button {
+    display: inline-flex;
+    max-width: 100%;
+    gap: 1px;
+  }
+  .buzz-split-button[data-variant="outline"] {
+    gap: 0;
+  }
+  .buzz-split-button > .buzz-button {
+    border-radius: var(--radius-capsule);
+  }
+  /* Menu focus guards add spans around its trigger while open. Select the
+     buttons by type so those siblings cannot detach the joined edges. */
+  .buzz-split-button > .buzz-button:first-of-type {
+    flex-shrink: 1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+  }
+  .buzz-split-button > .buzz-button:where(:first-of-type) .buzz-button-label {
+    flex-wrap: wrap;
+  }
+  .buzz-split-button > .buzz-button:last-of-type {
+    height: auto;
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+  }
+  /* Compact icon-only menus keep equal insets rather than the leading-icon text inset. */
+  .buzz-split-button
+  > .buzz-button[data-icon-variant][data-icon-size="xs"][aria-haspopup="menu"] {
+    width: auto;
+    padding-inline: var(--space-2);
+  }
+  .buzz-split-button[data-variant="outline"] > .buzz-button:last-of-type {
+    margin-inline-start: -1px;
+  }
+  /* The focused half's ring stays above its neighbour. */
+  .buzz-split-button > .buzz-button:focus-visible {
+    z-index: 1;
+  }
   /* Preserve fill avatars and pointer-origin Tab traversal in WebKit. */
   .buzz-button[data-icon-variant] .buzz-button-label {
     width: 100%;
@@ -548,6 +607,9 @@
     background: var(--affordance-danger-pressed);
     color: var(--text-danger);
   }
+  .buzz-button[data-icon-variant="inset"] {
+    --interaction-fill: var(--surface-inset);
+  }
   .buzz-button[data-icon-variant="chrome"] {
     background: transparent;
   }
@@ -608,6 +670,7 @@
   ) {
     background: transparent;
   }
+  .buzz-button[data-variant="prominent"][data-disabled]:not([data-loading]),
   .buzz-button[data-variant="outline"][data-disabled]:not([data-loading]) {
     box-shadow: inset 0 0 0 1px var(--border-standard);
   }
@@ -710,6 +773,11 @@
      height until its poster or metadata arrives. */
   .buzz-avatar:has(> [data-avatar-fallback]) {
     place-content: center;
+  }
+
+  .buzz-avatar[data-fallback-surface="panel"]:has([data-avatar-fallback]) {
+    background: var(--surface-panel);
+    color: var(--text-standard);
   }
 
   /* Matches reply-stack artwork inside its 24px slot and 1.5px ring. */
@@ -826,6 +894,13 @@
     border-radius: var(--radius-container);
     background: var(--surface-panel);
     box-shadow: var(--shadow-panel);
+  }
+
+  /* Shared with Builderlab/Auth0 standalone account setup cards. */
+  .panel[data-shape="card"] {
+    height: auto;
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
   }
 
   .panel[data-shape="capsule"] {
@@ -1057,6 +1132,14 @@
     border-radius: var(--radius-pill);
     color: var(--text-subtle);
   }
+  .buzz-tabs:is(
+      [data-variant="segmented"],
+      [data-variant="segmented-icons"]
+    ):where([data-size="sm"])
+    .buzz-tabs-tab {
+    min-height: calc(var(--size-control-sm) - 2 * var(--space-1));
+    padding-block: 0;
+  }
   .buzz-tabs:is([data-variant="segmented"], [data-variant="segmented-icons"])
     .buzz-tabs-tab:hover:not([data-selected], [data-disabled]) {
     background: var(--affordance-subtle-hover);
@@ -1072,6 +1155,11 @@
     border-radius: var(--radius-pill);
     background: var(--surface-control-selected);
     box-shadow: var(--shadow-xs);
+  }
+  /* Only a new selection travels; resizing the selected tab follows layout. */
+  .buzz-tabs:is([data-variant="segmented"], [data-variant="segmented-icons"])
+  .buzz-tabs-indicator:not([data-selection-change]) {
+    transition: none;
   }
 
   /* --- panel: an underline on a plain surface ---------------- */
@@ -1316,6 +1404,232 @@
      Base UI Button's native button behavior. It does not compose Buzz Button:
      a navigation destination is not an ordinary action button, and sharing the
      styling made the generic ghost hover compete with navigation's own states. */
+  .navigation-card {
+    display: block;
+    border-radius: var(--radius-row);
+    color: var(--text-standard);
+    --interaction-row-hover: transparent;
+    --interaction-selected: transparent;
+    --interaction-pressed: transparent;
+  }
+  .navigation-card-row {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    min-width: 0;
+  }
+  .navigation-card-row > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+  .navigation-card-body {
+    padding-block-end: var(--space-1);
+  }
+  .navigation-card-body:has(> [hidden]:only-child) {
+    display: none;
+  }
+  .navigation-card:not([data-tone="tonal"], [data-tone="inset"]):has(
+    > .navigation-card-body > :not([hidden])
+  ) {
+    background: var(--affordance-subtle);
+  }
+  .navigation-card-footer:empty,
+  .navigation-card-body:empty {
+    display: none;
+  }
+  .navigation-card-footer {
+    padding: var(--space-1) var(--space-2);
+  }
+  .navigation-card-footer
+    .buzz-button[data-variant="plain"][data-size="inline"] {
+    color: var(--text-navigation);
+  }
+  .navigation-card:not([data-tone="tonal"], [data-tone="inset"]):is(
+    :has(
+      > .navigation-card-row:hover,
+      > .navigation-card-footer:hover,
+      > .navigation-card-row :focus-visible,
+      > .navigation-card-footer :focus-visible,
+      > .navigation-card-row [data-context-menu-present],
+      > .navigation-card-row [aria-expanded="true"][aria-haspopup="menu"]
+    ),
+    [data-context-menu-present]
+  ):not(:has(> .navigation-card-row [aria-current="page"])) {
+    background: var(--affordance-panel-hover);
+  }
+  .navigation-card:not([data-tone="tonal"], [data-tone="inset"]):has(
+    > .navigation-card-row [aria-current="page"]
+  ) {
+    background: var(--surface-sidebar-selected);
+  }
+  .navigation-card:has(> .navigation-card-row [aria-current="page"])
+    > :is(.navigation-card-row, .navigation-card-footer) {
+    --text-subtle: var(--text-row-selected-subtle);
+  }
+  /* Task navigation has a tonal selected surface; the card still owns all paint. */
+  .navigation-card:is([data-tone="tonal"], [data-tone="inset"]) {
+    --affordance-panel-hover: var(--affordance-subtle-hover);
+    --text-row-selected: var(--text-standard);
+    --text-row-selected-subtle: var(--text-metadata);
+    --text-row-selected-metadata: var(--text-metadata);
+    --interaction-selected-text: var(--text-row-selected-subtle);
+    --interaction-selected-metadata: var(--text-metadata);
+    --interaction-row-text: var(--text-subtle);
+    --interaction-row-metadata: var(--text-metadata);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-chip);
+  }
+  .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+    :is(
+      :has(
+        > :is(.navigation-card-row, .navigation-card-footer):hover,
+        > :is(.navigation-card-row, .navigation-card-footer)
+          :is(
+            :focus-visible,
+            [data-context-menu-present],
+            [aria-expanded="true"][aria-haspopup="menu"]
+          )
+      ),
+      [data-context-menu-present]
+    ):not(:has(> .navigation-card-row [aria-current="page"]))
+  ) {
+    background: var(--affordance-panel-hover);
+  }
+  /* Contained destinations align at every depth rather than adding tree insets. */
+  :where(.navigation-card-body)
+  .navigation-card:is([data-tone="tonal"], [data-tone="inset"]) {
+    border-inline-width: 0;
+  }
+  .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+    :has(> .navigation-card-row [aria-current="page"])
+  ) {
+    background: var(--affordance-selected);
+    border-color: var(--border-standard);
+  }
+  .navigation-card[data-tone="inset"] {
+    --affordance-panel-hover: var(--surface-inset);
+  }
+  .navigation-card[data-tone="inset"]:where(
+    :has(> .navigation-card-row [aria-current="page"])
+  ) {
+    background: var(--surface-inset);
+  }
+  /* Deeper interaction wins. Own interaction may still paint over child selection. */
+  .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+    :has(> .navigation-card-body .navigation-card:hover),
+    :has(
+      > .navigation-card-body
+        :is(
+          :focus-visible,
+          [data-context-menu-present],
+          [aria-expanded="true"][aria-haspopup="menu"]
+        )
+    ),
+    :has(> .navigation-card-body [aria-current="page"]):not(
+      :has(
+        > :is(.navigation-card-row, .navigation-card-footer):hover,
+        > :is(.navigation-card-row, .navigation-card-footer)
+          :is(
+            :focus-visible,
+            [data-context-menu-present],
+            [aria-expanded="true"][aria-haspopup="menu"]
+          )
+      ),
+      [data-context-menu-present]
+    )
+  ) {
+    background: transparent;
+    border-color: transparent;
+  }
+  /* An active enclosing row owns one uniform surface until a child is interacted with. */
+  :where(
+    .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):is(
+        :has(
+          > :is(.navigation-card-row, .navigation-card-footer):hover,
+          > :is(.navigation-card-row, .navigation-card-footer)
+            :is(
+              :focus-visible,
+              [data-context-menu-present],
+              [aria-expanded="true"][aria-haspopup="menu"]
+            )
+        ),
+        [data-context-menu-present]
+      ):not(
+        :has(
+          > .navigation-card-body .navigation-card:hover,
+          > .navigation-card-body
+            :is(
+              :focus-visible,
+              [data-context-menu-present],
+              [aria-expanded="true"][aria-haspopup="menu"]
+            )
+        )
+      )
+      > .navigation-card-body
+  ) .navigation-card:is([data-tone="tonal"], [data-tone="inset"]) {
+    background: transparent;
+    border-color: transparent;
+  }
+  /* A hovered task card is the sidebar's only shaded card until hover leaves. */
+  :where(
+    .buzz-sidebar-navigation:has(
+      .navigation-card
+        > :is(.navigation-card-row, .navigation-card-footer):hover
+    )
+  )
+  .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+    :not(:has(> :is(.navigation-card-row, .navigation-card-footer):hover))
+  ) {
+    background: transparent;
+    border-color: transparent;
+  }
+  /* Let pointer travel settle before restoring the selected task's surface. */
+  @media (prefers-reduced-motion: no-preference) {
+    :where(html:not([data-keyboard-navigation]) .buzz-sidebar-navigation)
+      .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+        :has(> .navigation-card-row [aria-current="page"])
+      ) {
+      transition:
+        background-color var(--duration-fast) var(--easing-state)
+        var(--duration-state),
+        border-color var(--duration-fast) var(--easing-state)
+        var(--duration-state);
+    }
+    :where(
+        .buzz-sidebar-navigation:has(
+          .navigation-card
+            > :is(.navigation-card-row, .navigation-card-footer):hover
+        )
+      )
+      .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+        :has(> .navigation-card-row [aria-current="page"])
+      ) {
+      transition-delay: 0ms;
+    }
+    .buzz-sidebar-navigation
+      .navigation-card:is([data-tone="tonal"], [data-tone="inset"]):where(
+        :has(> :is(.navigation-card-row, .navigation-card-footer):hover),
+        [data-drop-target]
+      ) {
+      transition: none;
+    }
+  }
+  /* Accepted drag destinations override selection and contained interaction paint. */
+  .navigation-card[data-drop-target] {
+    background: var(--affordance-sidebar-hover);
+    border-color: var(--border-standard);
+  }
+  .navigation-card[data-drop-target] .navigation-card {
+    background: transparent;
+    border-color: transparent;
+  }
+  .navigation-item[data-multiline] {
+    height: auto;
+    min-height: var(--space-8);
+    align-items: flex-start;
+    padding-block: var(--space-1);
+  }
   .navigation-item {
     display: inline-flex;
     width: 100%;
@@ -1461,6 +1775,9 @@
     white-space: nowrap;
   }
 
+  .navigation-item[data-multiline] .navigation-item-label {
+    white-space: normal;
+  }
   .navigation-item-trailing {
     flex: 0 0 auto;
     color: var(--text-metadata);
@@ -1496,6 +1813,9 @@
     padding: var(--space-half) calc(var(--space-1) + var(--space-half))
       var(--space-half) var(--space-2);
     border-radius: var(--radius-row);
+  }
+  .buzz-sidebar-navigation .navigation-item[data-multiline] {
+    height: auto;
   }
   .buzz-sidebar-navigation .navigation-item[data-variant="row"][data-selected] {
     --navigation-item-text: var(--text-row-selected);
@@ -1599,6 +1919,11 @@
     .navigation-item {
     background: transparent;
     cursor: default;
+  }
+  /* A hidden-selection strip is a single title, not a row of tabs: it fills
+     the header's title slot and truncates only when the header runs out of room. */
+  .buzz-tabs[data-variant="navigation"][data-selection-hidden] .buzz-tabs-item {
+    max-width: 100%;
   }
   .buzz-tabs[data-variant="navigation"]
     .buzz-tabs-item[data-closable]
@@ -1709,8 +2034,8 @@
   }
   /* Floating rows need more separation than controls on a darker panel.
      Supporting copy follows the brighter fill so it remains readable. */
-  .buzz-menu-item[data-highlighted],
-  .buzz-menu-item[data-popup-open],
+  .buzz-menu-item[data-highlighted]:not([data-disabled]),
+  .buzz-menu-item[data-popup-open]:not([data-disabled]),
   .buzz-select-option[data-highlighted] {
     --text-subtle: var(--text-standard);
     --text-metadata: var(--text-standard);
@@ -1764,13 +2089,14 @@
     color: var(--text-subtle);
   }
   .buzz-menu-group-label {
-    padding: var(--space-2) var(--space-2) var(--space-1);
+    padding: var(--space-2) var(--space-3) var(--space-1);
     color: var(--text-subtle);
   }
   .buzz-menu-group-label[data-emphasis="quiet"] {
     color: var(--text-metadata);
   }
-  .buzz-menu-separator {
+  .buzz-menu-separator,
+  .buzz-select-separator {
     height: 1px;
     margin: var(--space-1) 0;
     background: var(--border-standard);
@@ -1807,6 +2133,9 @@
     --floating-inset: var(--space-half);
     padding: var(--space-half);
   }
+  .buzz-menu-popup[data-size="compact"] .buzz-menu-group-label {
+    padding-inline: var(--space-2);
+  }
   .buzz-menu-popup[data-size="compact"] .buzz-menu-item {
     padding: var(--space-1) var(--space-2);
   }
@@ -1842,6 +2171,7 @@
     min-width: 0;
     align-items: center;
     gap: var(--space-row-gap);
+    color: inherit;
   }
   .buzz-choice-row-leading {
     display: flex;

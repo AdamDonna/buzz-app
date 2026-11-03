@@ -5,7 +5,8 @@ import {
 } from "../../features/conversation/Conversation";
 import type { PageNavigation } from "../../features/navigation/service";
 import { useChannelWindow } from "../../features/relay/react";
-import { useRecoveryShown } from "../../features/relay/RecoveryNotice";
+import { useRecoveryOwns } from "../../features/relay/RecoveryNotice";
+import { headRecovering } from "../../features/relay/live-recovery";
 import { clientMetrics } from "../../features/developer/client-metrics";
 import { Button } from "../../shared/design-system/ui/Button";
 import styles from "./Channels.module.css";
@@ -54,7 +55,9 @@ export const ChannelBody = memo(function ChannelBody({
     clientMetrics.channelMounted(channelId);
     return () => clientMetrics.channelUnmounted(channelId);
   }, [channelId]);
-  const recoveryShown = useRecoveryShown(queries.recovery);
+  const headRecovers = useRecoveryOwns(queries, (live) =>
+    headRecovering(live, channelId),
+  );
   const newest = window.rows.at(-1)?.id;
   const settled = window.status === "ready" || window.status === "error";
   useEffect(() => {
@@ -83,12 +86,17 @@ export const ChannelBody = memo(function ChannelBody({
     )
       return;
     if (window.status === "ready") navigation?.complete({ status: "opened" });
+    // The timeline shows this failure in place, beside its own Retry.
     else if (!cached && window.status === "error")
-      navigation?.complete({ status: "failed", reason: "unavailable" });
+      navigation?.complete({
+        status: "failed",
+        reason: "unavailable",
+        presented: true,
+      });
   }, [cached, navigation, window.status]);
-  // While the recovery notice shows, it owns the one Retry now; an empty
-  // failed timeline waits for it instead of offering a second Retry.
-  if (window.status === "error" && !window.rows.length && !recoveryShown)
+  // While recovery retries this timeline's head read it owns the one Retry
+  // now, in its notice after the quiet delay; the empty timeline waits.
+  if (window.status === "error" && !window.rows.length && !headRecovers)
     return (
       <div
         className={`${styles.empty} ${styles.timelinePlaceholder}`}

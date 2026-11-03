@@ -45,3 +45,28 @@ it("observes saved sessions with the live status of running ones", () => {
     { channelId: "old", at: 1 },
   ]);
 });
+
+it("shares a Claude agent's model as the claude runtime and imports it back", () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  let type: AgentType | undefined;
+  apply({
+    pluginOwner: { id: "buzz.claude-code", revision: "r1" },
+    host: { request: vi.fn() },
+    agents: {
+      register: (registered: AgentType) => {
+        type = registered;
+      },
+      relay: () => undefined,
+    },
+    effect: vi.fn(),
+  } as never);
+  const shared = type?.exportShared?.({ model: "opus", workspace: "/private" });
+  expect(shared).toEqual({ runtime: "claude", model: "opus" });
+  expect(type?.importShared?.(shared ?? { model: "" })).toMatchObject({
+    model: "opus",
+    workspace: "~/.buzz",
+  });
+  expect(
+    type?.importShared?.({ runtime: "goose", model: "opus" }),
+  ).toBeUndefined();
+});

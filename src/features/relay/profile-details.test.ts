@@ -357,3 +357,187 @@ it("promotes a queued background profile read when foreground demand joins it", 
     reader.dispose();
   }
 });
+
+it("records identities a completed read found no profile for, until one arrives", async () => {
+  const other = keypair();
+  const third = keypair();
+  const read = vi.fn(async () => [profile(user, { name: "Mic" })]);
+  const directory = createProfileDirectory({ read });
+  const listener = vi.fn();
+  directory.queries.subscribe(listener);
+  try {
+    await directory.ensure([user.pubkey, other.pubkey]);
+    const absent = directory.queries.unnamed?.();
+    expect(absent).toEqual(new Set([other.pubkey]));
+    // Once for the profile, once for the absence.
+    expect(listener).toHaveBeenCalledTimes(2);
+    // A failed read is not evidence.
+    read.mockRejectedValueOnce(new Error("offline"));
+    await expect(directory.ensure([third.pubkey])).rejects.toThrow("offline");
+    expect(directory.queries.unnamed?.()).toBe(absent);
+    // A profile that arrives later outranks the absence.
+    directory.accept([profile(other, { name: "Nu" })]);
+    expect(directory.queries.snapshot().get(other.pubkey)?.name).toBe("Nu");
+    expect(directory.queries.unnamed?.()).toEqual(new Set());
+    // Clearing forgets the evidence and tells subscribers so.
+    await directory.ensure([third.pubkey]);
+    expect(directory.queries.unnamed?.()).toEqual(new Set([third.pubkey]));
+    listener.mockClear();
+    directory.clear();
+    expect(directory.queries.unnamed?.()).toEqual(new Set());
+    expect(listener).toHaveBeenCalled();
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("background enrichment does not reread a known absence until reconnect", async () => {
+  const other = keypair();
+  const read = vi.fn(async () => [profile(user, { name: "Mic" })]);
+  const directory = createProfileDirectory({ read });
+  try {
+    await directory.ensure([user.pubkey, other.pubkey], "background");
+    expect(directory.queries.unnamed?.()).toEqual(new Set([other.pubkey]));
+    await directory.ensure([user.pubkey, other.pubkey], "background");
+    expect(read).toHaveBeenCalledTimes(1);
+    // A demanded read still asks again.
+    await directory.ensure([other.pubkey], "foreground");
+    expect(read).toHaveBeenCalledTimes(2);
+    // A kind 0 that arrives later ends the absence, so eviction rereads it.
+    directory.accept([profile(other, { name: "Nu" })]);
+    const filler = profile(user, { name: "Filler" });
+    directory.accept(
+      Array.from({ length: 1024 }, (_, i) => ({
+        ...filler,
+        pubkey: i.toString(16).padStart(64, "0"),
+      })),
+    );
+    expect(directory.queries.snapshot().has(other.pubkey)).toBe(false);
+    await directory.ensure([other.pubkey], "background");
+    expect(read).toHaveBeenCalledTimes(3);
+    // The live route may have missed a kind 0 while offline.
+    await directory.reconnect();
+    read.mockClear();
+    await directory.ensure([other.pubkey], "background");
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("records no absence for a returned profile the cache evicted", async () => {
+  // A short response can still outgrow the directory's byte budget.
+  const big = profile(user, { name: "Big", about: "x".repeat(5 * 1024) });
+  const ids = Array.from({ length: 450 }, (_, i) =>
+    i.toString(16).padStart(64, "0"),
+  );
+  const first = "0".repeat(64);
+  const read = vi.fn(async () => ids.map((pubkey) => ({ ...big, pubkey })));
+  const directory = createProfileDirectory({ read });
+  try {
+    await directory.ensure(ids, "background");
+    expect(directory.queries.snapshot().has(first)).toBe(false);
+    // Returned, so not known unnamed either.
+    expect(directory.queries.unnamed?.().has(first)).toBe(false);
+    await directory.ensure([first], "background");
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("a background skip never leaves an identity neither named nor unnamed", async () => {
+  const ids = Array.from({ length: 1024 }, (_, i) =>
+    i.toString(16).padStart(64, "0"),
+  );
+  const first = "0".repeat(64);
+  const later = "f".repeat(64);
+  const read = vi.fn(async () => []);
+  const directory = createProfileDirectory({ read });
+  try {
+    await directory.ensure(ids, "background");
+    // Unnamed survives the reconnect; the absence does not.
+    await directory.reconnect();
+    await directory.ensure([first], "background");
+    // A new absence trims the oldest unnamed identity.
+    await directory.ensure([later], "background");
+    expect(directory.queries.unnamed?.().has(first)).toBe(false);
+    read.mockClear();
+    await directory.ensure([first], "background");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(directory.queries.unnamed?.().has(first)).toBe(true);
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("records no absence from a read that filled its page", async () => {
+  const other = keypair();
+  // A relay that keeps every kind 0 can fill the page from one author. The
+  // directory does not verify events, so older versions are cheap copies.
+  const head = profile(user, { name: "Mic" }, 1_700_000_500);
+  const versions = Array.from({ length: 500 }, (_, i) => ({
+    ...head,
+    id: i.toString(16).padStart(64, "0"),
+    created_at: head.created_at - i,
+  }));
+  const read = vi.fn(async () => versions);
+  const directory = createProfileDirectory({ read });
+  try {
+    await directory.ensure([user.pubkey, other.pubkey]);
+    expect(directory.queries.snapshot().get(user.pubkey)?.name).toBe("Mic");
+    expect(directory.queries.unnamed?.()).toEqual(new Set());
+    // One short of the limit is complete.
+    read.mockResolvedValueOnce(versions.slice(1));
+    await directory.ensure([other.pubkey]);
+    expect(directory.queries.unnamed?.()).toEqual(new Set([other.pubkey]));
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("moves the purge generation and notifies on every clear, even with nothing loaded", () => {
+  const wire = scriptedTransport(user.pubkey, keypair().pubkey);
+  const reader = createRelayReader(wire.transport);
+  const directory = createProfileDirectory(reader.reader);
+  const changed = vi.fn();
+  const unsubscribe = directory.queries.subscribe(changed);
+  try {
+    expect(directory.queries.generation?.()).toBe(0);
+    directory.clear();
+    expect(directory.queries.generation?.()).toBe(1);
+    expect(changed).toHaveBeenCalledTimes(1);
+    directory.accept([profile(user, { name: "Mic" }, 1)]);
+    changed.mockClear();
+    directory.clear();
+    expect(directory.queries.snapshot().size).toBe(0);
+    expect(directory.queries.generation?.()).toBe(2);
+    expect(changed).toHaveBeenCalledTimes(1);
+  } finally {
+    unsubscribe();
+    directory.dispose();
+    reader.dispose();
+  }
+});
+
+it("evicts the least recently ensured profile, not the oldest stored one", async () => {
+  const read = vi.fn(async () => []);
+  const directory = createProfileDirectory({ read });
+  try {
+    const people = Array.from({ length: 1024 }, () => keypair());
+    directory.accept(
+      people.map((key, index) => profile(key, { name: `P${index}` })),
+    );
+    expect(directory.queries.snapshot().size).toBe(1024);
+    const [oldest, next] = people as [typeof user, typeof user];
+    await directory.ensure([oldest.pubkey]);
+    expect(read).not.toHaveBeenCalled();
+    directory.accept([profile(keypair(), { name: "Newcomer" })]);
+    const snapshot = directory.queries.snapshot();
+    expect(snapshot.size).toBe(1024);
+    expect(snapshot.get(oldest.pubkey)?.name).toBe("P0");
+    expect(snapshot.has(next.pubkey)).toBe(false);
+  } finally {
+    directory.dispose();
+  }
+});

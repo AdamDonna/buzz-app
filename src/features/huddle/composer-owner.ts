@@ -1,6 +1,5 @@
 import { communityFromScope, relayGifRequests } from "../relay/gifs";
 import { MAX_VOICE_SECONDS } from "../relay/voice-media";
-import { rememberedMentions } from "../messages/remembered-mentions";
 import { mentionDraft } from "../messages/mention-draft";
 import { readView, writeView } from "../../shared/view-state";
 import type { RelaySession } from "../relay/session";
@@ -68,6 +67,7 @@ export function createHuddleComposerOwner(
   let client = "";
   let highest = 0;
   let uploadBytes = 0;
+  const gifUrls = new Set<string>();
   const active = new Map<number, AbortController>();
   const results = new Map<number, ComposerResponse>();
   const uploaded = new Map<
@@ -117,6 +117,7 @@ export function createHuddleComposerOwner(
     for (const profile of profiles.values()) remember(profile.picture);
     for (const emoji of session.emoji.snapshot().entries) remember(emoji.url);
     for (const { file } of uploaded.values()) remember(file.url);
+    for (const url of gifUrls) remember(url);
     let writable = true;
     try {
       check(true);
@@ -140,6 +141,7 @@ export function createHuddleComposerOwner(
         ],
       },
       profiles,
+      profileGeneration: session.profiles.generation?.() ?? 0,
       emoji: session.emoji.snapshot(),
       agents: session.agentChoices.snapshot(),
       library: session.agentLibrary.snapshot(),
@@ -175,7 +177,21 @@ export function createHuddleComposerOwner(
           return relayGifRequests.supports(community, signal);
         if (typeof request.args !== "string" || request.args.length > 256)
           throw new Error("Invalid GIF search.");
-        return relayGifRequests.search(community, request.args, signal);
+        const gifs = await relayGifRequests.search(
+          community,
+          request.args,
+          signal,
+        );
+        signal.throwIfAborted();
+        check();
+        for (const gif of gifs) {
+          // Match the URL escaping used by gifMarkdown when the picker inserts it.
+          gifUrls.add(
+            gif.original.url.replace(/\(/g, "%28").replace(/\)/g, "%29"),
+          );
+        }
+        publish();
+        return gifs;
       }
       case "models":
         return modelChoices(request.args);
@@ -262,19 +278,13 @@ export function createHuddleComposerOwner(
           picks,
         );
         // Admission owns the persisted draft too: closing the child before its
-        // acknowledgement must not restore a message already in the main outbox.
+        // acknowledgement must not restore a message already in the main
+        // outbox. The stub is what the composer saves for every send; it
+        // keeps the remembered agents in memory (see seedMentions).
         const scope = session.scope;
         const key = `draft:${room}`;
         if (JSON.stringify(readView(scope, key, null)) === draft)
-          writeView(
-            scope,
-            key,
-            rememberedMentions(
-              session,
-              mentionDraft(readView(scope, key, "")),
-              mentions,
-            ),
-          );
+          writeView(scope, key, mentionDraft(""));
         for (const file of files) release(file);
         return id;
       }
@@ -372,6 +382,7 @@ export function createHuddleComposerOwner(
     active.clear();
     results.clear();
     uploaded.clear();
+    gifUrls.clear();
     highest = 0;
   }
   channel.onmessage = ({ data }: MessageEvent<ComposerCommand>) => {

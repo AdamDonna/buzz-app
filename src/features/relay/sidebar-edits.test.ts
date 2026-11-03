@@ -103,6 +103,12 @@ it("validates create-section policy separately from the host envelope", () => {
     name: " Work ",
   };
   expect(validSidebarAssignment({ channelId: "c", createSection })).toBe(true);
+  expect(
+    validSidebarAssignment({
+      channelId: "c",
+      createSection: { ...createSection, position: "first" },
+    }),
+  ).toBe(true);
   expect(validSidebarAssignment({ channelId: "c" })).toBe(true);
   for (const intent of [
     { channelId: "c", sectionId: "" },

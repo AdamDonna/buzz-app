@@ -256,7 +256,7 @@ describe("semantic contrast contract", () => {
     ],
     [
       "accent hover",
-      "--cobalt-10-light: #2176d9;",
+      "--cobalt-10-light: #0968d6;",
       "--cobalt-10-light: #9a5cd0;",
       "--text-on-accent",
     ],
@@ -270,6 +270,44 @@ describe("semantic contrast contract", () => {
       expect(result.output).toContain("needs 4.5:1");
     },
   );
+
+  it.each([
+    [
+      "shade",
+      "--shade-fill: rgb(0 0 0 / 10%);",
+      "--shade-fill: rgb(0 0 0 / 45%);",
+      "light --text-mention (",
+      "on --affordance-mention (",
+    ],
+    [
+      "tint",
+      "--tint-hover-fill: rgb(255 255 255 / 20%);",
+      "--tint-hover-fill: rgb(255 255 255 / 70%);",
+      "dark --text-mention (",
+      "on --affordance-mention-hover (",
+    ],
+  ])(
+    "measures a see-through %s chip as the colour it makes on its bubble",
+    (_name, from, to, text, pairing) => {
+      expect(tokens).toContain(from);
+      const result = check(tokens.replace(from, to));
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain(text);
+      expect(result.output).toContain(pairing);
+    },
+  );
+
+  it("fails when an accent is missing an overlay it is measured on", () => {
+    const from = "  --accent-overlay-soft-dark: var(--shade-soft-fill);\n";
+    const bee = tokens.indexOf('[data-accent="bee"] {');
+    const at = tokens.indexOf(from, bee);
+    expect(at).toBeGreaterThan(bee);
+    const result = check(tokens.slice(0, at) + tokens.slice(at + from.length));
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain(
+      "bee/high/dark: unresolved overlay pair --text-message-own on --affordance-reaction-own",
+    );
+  });
 
   it.each(["danger", "warning"])(
     "rejects the former low-contrast %s boundary",
@@ -381,6 +419,50 @@ describe("semantic contrast contract", () => {
       expect(result.status, result.output).toBe(1);
       expect(result.output).toContain(`--text-${role}`);
       expect(result.output).toContain(`on --affordance-${role}`);
+    },
+  );
+
+  // Green-10 still clears the page surfaces and falls short only on the light
+  // tinted own bubbles, through the -own pair. Purple-10 passes the whole
+  // guard (3.01–3.22:1 on the dark bubbles), so purple-9 is the first step it
+  // can see; purple-9 also fails the dark popover, but the pinned pairing is
+  // the dark received bubble. At Buzzin’ the own bubble is solid accent-9,
+  // which the base role never clears: pointing the -own pair back at it fails
+  // the own-bubble pairing on the high level. Subtle grey falls short of that
+  // fill on most families in both modes (1.04–2.98:1); the dark pairing from
+  // the report, 1.07:1 on citrus, is the one pinned here.
+  it.each([
+    [
+      "success",
+      "--icon-success: var(--green-11);",
+      "--icon-success: var(--green-10);",
+      "--icon-success-own on --surface-message-own",
+    ],
+    [
+      "categorical purple",
+      "--icon-categorical-purple: var(--purple-11);",
+      "--icon-categorical-purple: var(--purple-9);",
+      "--icon-categorical-purple on --surface-message",
+    ],
+    [
+      "high-level own success",
+      "--icon-success-own: var(--text-message-link-own);",
+      "--icon-success-own: var(--icon-success);",
+      "/high/light: --icon-success-own on --surface-message-own",
+    ],
+    [
+      "high-level own subtle",
+      "--icon-subtle-own: var(--text-message-link-own);",
+      "--icon-subtle-own: var(--icon-subtle);",
+      "/high/dark: --icon-subtle-own on --surface-message-own",
+    ],
+  ])(
+    "checks the %s state icon against the message bubbles, not only the page",
+    (_name, from, to, pairing) => {
+      expect(tokens).toContain(from);
+      const result = check(tokens.replaceAll(from, to));
+      expect(result.status, result.output).toBe(1);
+      expect(result.output).toContain(pairing);
     },
   );
 });

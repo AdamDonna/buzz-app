@@ -77,7 +77,7 @@ function validAssignmentIntent(intent) {
     intent &&
     typeof intent === "object" &&
     !Array.isArray(intent) &&
-    typeof intent.channelId === "string" &&
+    (intent.channelId === undefined || typeof intent.channelId === "string") &&
     (intent.sectionId === undefined || typeof intent.sectionId === "string") &&
     (intent.createSection === undefined ||
       (intent.createSection &&
@@ -86,7 +86,7 @@ function validAssignmentIntent(intent) {
         typeof intent.createSection.id === "string" &&
         typeof intent.createSection.name === "string" &&
         Object.keys(intent.createSection).every((key) =>
-          ["id", "name"].includes(key),
+          ["id", "name", "position"].includes(key),
         ))) &&
     validSidebarAssignment(intent) &&
     Object.keys(intent).every((key) =>

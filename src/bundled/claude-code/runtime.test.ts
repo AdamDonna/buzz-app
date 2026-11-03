@@ -3,12 +3,17 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BuzzClient } from "../../buzz-mcp/client";
+import { appClient } from "../../buzz-mcp/app-client";
 import { callTool } from "../../buzz-mcp/tools";
 import { createAgentMemories } from "../../features/agents/memory";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
 import { localStore } from "../../features/agents/state";
-import type { Agent, Delivery } from "../../features/agents/service";
+import type {
+  Agent,
+  AgentHandle,
+  Delivery,
+} from "../../features/agents/service";
 import type { Host } from "../../features/host/service";
 import type {
   EventData,
@@ -92,10 +97,12 @@ function setup(
   };
   const host = { spawn, request: vi.fn() } as unknown as Host;
   const read = vi.fn(async (_filters: readonly ReadFilter[]) => thread);
-  const memoryRead = vi.fn(async () => ({
-    entries: [] as readonly MemoryEntry[],
-    partial: false,
-  }));
+  const memoryRead = vi.fn(
+    async (_pubkey: string, _signal: AbortSignal, _slug?: string) => ({
+      entries: [] as readonly MemoryEntry[],
+      partial: false,
+    }),
+  );
   const session = {
     workflowAuthority: options.workflowAuthority,
     read,
@@ -308,6 +315,7 @@ it("names each saved session's channel as the community lists it", () => {
       sessionId: "s1",
       channelId: channel,
       name: "general",
+      channelType: "stream",
       at: 5,
     },
     {
@@ -614,6 +622,175 @@ it("runs a mention on the model and effort its delivery picked", async () => {
   expect((await runtime.models(self)).current).toBe("opus");
   runtime.dispose();
 });
+it("refuses a synced effort its model lacks, but lets a busy turn take a steer", async () => {
+  const root = message("2", "@Claude hi", {
+    tags: [
+      ["h", channel],
+      ["p", self],
+    ],
+  });
+  const reply = message("3", "@Claude also", {
+    tags: [
+      ["h", channel],
+      ["e", root.id, "", "reply"],
+      ["p", self],
+    ],
+  });
+  const { runtime, claudes, agent } = setup([root, reply], { hold: true });
+  const config = { ...DEFAULT_CONFIG, model: "haiku", effort: "medium" };
+  runtime.sync([{ pubkey: self, config } as Agent]);
+  const settled: Promise<unknown>[] = [];
+  const run = (event: typeof root, synced?: Record<string, string>) =>
+    runtime.run({
+      trigger: { type: "mention", event },
+      channelId: channel,
+      agent,
+      config,
+      ...(synced ? { synced } : {}),
+      signal: new AbortController().signal,
+      workingUntil: (done: Promise<unknown>) => settled.push(done),
+    } as unknown as Delivery);
+  const prompts = () =>
+    claudes().reduce((sum, process) => sum + process.prompts.length, 0);
+  await run(root, { effort: "medium" });
+  await flush(10);
+  expect(prompts()).toBe(0);
+  await expect(settled[0]).resolves.toMatchObject({
+    ok: false,
+    error:
+      "This agent's synced effort \"medium\" isn't offered by Haiku 5.5. Change it in Settings.",
+  });
+  // A local effort runs; a synced follow-up then steers the busy process,
+  // which keeps the settings it started on.
+  await run(root);
+  await flush(10);
+  expect(prompts()).toBe(1);
+  await run(reply, { effort: "medium" });
+  await flush(10);
+  expect(prompts()).toBe(2);
+  runtime.dispose();
+});
+it("checks a synced effort when a saved session resumes or a folder change relaunches it", async () => {
+  const mention = (id: string, resumed?: boolean) => ({
+    type: "mention" as const,
+    event: message(id, "@Claude go", {
+      tags: [
+        ["h", channel],
+        ["p", self],
+      ],
+    }),
+    ...(resumed ? { resumed } : {}),
+  });
+  const canvas = { content: workspaceCanvas({ folders: ["~/a"], canvas: "" }) };
+  const { deliver, claudes, runtime, workingUntil } = setup([], {
+    solo: new Set([channel]),
+    canvas,
+  });
+  const config = { ...DEFAULT_CONFIG, model: "haiku", effort: "medium" };
+  runtime.sync([{ pubkey: self, config } as Agent]);
+  const synced = { config, synced: { effort: "medium" } };
+  const prompts = () =>
+    claudes().reduce((sum, process) => sum + process.prompts.length, 0);
+  const refused = async (index: number) =>
+    expect(workingUntil.mock.calls[index]?.[0]).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('synced effort "medium"'),
+    });
+  // A turn a reload stopped resumes its saved session only if admitted.
+  await deliver(mention("1", true), synced);
+  await flush(10);
+  await refused(0);
+  expect(prompts()).toBe(0);
+  await deliver(mention("2"), { config });
+  await flush(10);
+  expect(prompts()).toBe(1);
+  // New folders relaunch the idle session, which is checked like a start.
+  canvas.content = workspaceCanvas({ folders: ["~/b"], canvas: "" });
+  await deliver(mention("3"), synced);
+  await flush(10);
+  await refused(2);
+  expect(prompts()).toBe(1);
+  runtime.dispose();
+});
+it("refuses a synced effort it can't confirm, keeping the saved session for the next turn", async () => {
+  const event = (id: string) =>
+    message(id, "@Claude go", {
+      tags: [
+        ["h", channel],
+        ["p", self],
+      ],
+    });
+  const { runtime, claudes, agent } = setup([], { solo: new Set([channel]) });
+  const settled: Promise<unknown>[] = [];
+  const run = (id: string, model: string, synced?: string) => {
+    const config = { ...DEFAULT_CONFIG, model, effort: synced ?? "" };
+    runtime.sync([{ pubkey: self, config } as Agent]);
+    return runtime.run({
+      trigger: { type: "mention", event: event(id) },
+      channelId: channel,
+      agent,
+      config,
+      ...(synced ? { synced: { effort: synced } } : {}),
+      signal: new AbortController().signal,
+      workingUntil: (done: Promise<unknown>) => settled.push(done),
+    } as unknown as Delivery);
+  };
+  const prompted = () => claudes().filter((process) => process.prompts.length);
+  await run("1", "opus");
+  await flush(10);
+  expect(prompted()).toHaveLength(1);
+  // A model that takes no effort, and one Claude doesn't list, are refused.
+  await run("2", "legacy", "low");
+  await flush(10);
+  await expect(settled[1]).resolves.toMatchObject({
+    ok: false,
+    error: expect.stringContaining("isn't offered by Legacy 1"),
+  });
+  await run("3", "claude-sonnet-9-9", "low");
+  await flush(10);
+  await expect(settled[2]).resolves.toMatchObject({
+    ok: false,
+    error: expect.stringContaining("Couldn't check that Sonnet 9.9 offers"),
+  });
+  expect(prompted()).toHaveLength(1);
+  // The next valid turn resumes the conversation the refusals left alone.
+  await run("4", "haiku", "low");
+  await flush(10);
+  expect(prompted()).toHaveLength(2);
+  const arg = (
+    process: ReturnType<typeof claudes>[number] | undefined,
+    flag: string,
+  ) => {
+    const args = process?.options.args ?? [];
+    return args[args.indexOf(flag) + 1];
+  };
+  expect(arg(prompted()[1], "--resume")).toBe(
+    arg(prompted()[0], "--session-id"),
+  );
+  runtime.dispose();
+});
+it("refuses a watch's standalone turn on a synced effort its model lacks", async () => {
+  const { runtime, claudes, agent } = setup();
+  const config = { ...DEFAULT_CONFIG, model: "haiku", effort: "medium" };
+  runtime.sync([{ pubkey: self, config } as Agent]);
+  const prompt = vi.fn(() => "check the build");
+  const turn = (synced?: Record<string, string>) =>
+    runtime.runOnce({
+      delivery: { agent, config, ...(synced ? { synced } : {}) },
+      key: "watch",
+      signal: new AbortController().signal,
+      prompt,
+    } as unknown as Parameters<typeof runtime.runOnce>[0]);
+  await expect(turn({ effort: "medium" })).resolves.toEqual({
+    ok: false,
+    error:
+      "This agent's synced effort \"medium\" isn't offered by Haiku 5.5. Change it in Settings.",
+  });
+  expect(prompt).not.toHaveBeenCalled();
+  await expect(turn()).resolves.toMatchObject({ ok: true });
+  expect(claudes().some((process) => process.prompts.length)).toBe(true);
+  runtime.dispose();
+});
 it("puts the agent's teams in its system prompt, resuming idle sessions when they change", async () => {
   const root = message("2", "@Claude hi", {
     tags: [
@@ -664,7 +841,7 @@ it("puts the agent's teams in its system prompt, resuming idle sessions when the
   runtime.dispose();
 });
 
-it("starts each session from the host's core memory, reading none from the relay", async () => {
+it("starts each session from the host's core memory, reading only recent notes from the relay", async () => {
   const { deliver, claudes, core, memoryRead } = setup();
   const mention = (id: string) =>
     deliver({
@@ -687,13 +864,157 @@ it("starts each session from the host's core memory, reading none from the relay
   await flush(10);
   expect(asked("1")).toContain("<core-memory>\nI am Claude.\n</core-memory>");
   expect(core).toHaveBeenCalledWith(self);
-  expect(memoryRead).not.toHaveBeenCalled();
+  // Core memory comes from the host; the relay reads are yesterday's and
+  // today's notes, each by its slug.
+  expect(memoryRead).toHaveBeenCalledTimes(2);
+  for (const [pubkey, , slug] of memoryRead.mock.calls) {
+    expect(pubkey).toBe(self);
+    expect(slug).toMatch(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/);
+  }
   // The host could not read it: the session starts without it.
   core.mockResolvedValueOnce(undefined);
   await mention("2");
   await flush(10);
   expect(asked("2")).toContain("## Agent Memory");
   expect(asked("2")).not.toContain("<core-memory>");
+});
+
+it("starts a session without recent notes the relay is slow to give", async () => {
+  const { deliver, claudes, memoryRead } = setup();
+  memoryRead.mockImplementation(() => new Promise(() => {}));
+  await deliver({
+    type: "mention",
+    event: message("1", "@Claude 1", {
+      tags: [
+        ["h", channel],
+        ["p", self],
+      ],
+    }),
+  });
+  await vi.waitFor(
+    () =>
+      expect(claudes().find((process) => process.prompts.length)).toBeDefined(),
+    { timeout: 4_000 },
+  );
+  expect(
+    systemPromptOf(claudes().find((process) => process.prompts.length)),
+  ).not.toContain("<recent-notes>");
+});
+
+it("stops a stalled startup notes read when its budget runs out, so another agent's slow memory read still succeeds", async () => {
+  vi.useFakeTimers();
+  // AbortSignal.timeout runs on real time; put it on the fake clock.
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController();
+    setTimeout(
+      () => controller.abort(new DOMException("", "TimeoutError")),
+      ms,
+    );
+    return controller.signal;
+  });
+  try {
+    const other = "d".repeat(64);
+    const stopped: (string | undefined)[] = [];
+    // The agent's notes never answer, and stop only when told to. Another
+    // agent's core memory takes 2.5 seconds, behind the session's real
+    // serialized memory reads.
+    const queue = createAgentMemories(
+      (agent, signal, slug) =>
+        agent === other
+          ? new Promise((done) =>
+              setTimeout(
+                () =>
+                  done({
+                    entries: [
+                      {
+                        slug: "core",
+                        body: "I am another.",
+                        eventId: "e".repeat(64),
+                        createdAt: 1,
+                      },
+                    ],
+                    partial: false,
+                  }),
+                2_500,
+              ),
+            )
+          : new Promise((_, fail) =>
+              signal.addEventListener("abort", () => {
+                stopped.push(slug);
+                fail(signal.reason);
+              }),
+            ),
+      alice,
+      () => true,
+    ).capability;
+    const f = setup();
+    f.memoryRead.mockImplementation(queue.read);
+    void f.deliver({
+      type: "mention",
+      event: message("1", "@Claude 1", {
+        tags: [
+          ["h", channel],
+          ["p", self],
+        ],
+      }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const read = (
+      f.runtime as unknown as {
+        memories(
+          pubkey: string,
+          slug?: string,
+        ): ReturnType<BuzzClient["memories"]>;
+      }
+    ).memories(other, "core");
+    // The start gives up on its notes at two seconds, and both reads stop.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(stopped).toHaveLength(2);
+    for (const slug of stopped) expect(slug).toMatch(/^mem\/notes\//);
+    expect(f.claudes().find((process) => process.prompts.length)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(2_500);
+    await expect(read).resolves.toMatchObject({
+      entries: [{ slug: "core", body: "I am another." }],
+    });
+  } finally {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  }
+});
+
+it("starts each session with the agent's recent notes after its core memory", async () => {
+  const { deliver, claudes, core, memoryRead } = setup();
+  core.mockResolvedValueOnce("I am Claude.");
+  memoryRead.mockImplementation(async (_pubkey, _signal, slug) => ({
+    entries: slug?.startsWith("mem/notes/")
+      ? [
+          {
+            slug,
+            body: `Noted in ${slug}.`,
+            eventId: "e".repeat(64),
+            createdAt: 1,
+          },
+        ]
+      : [],
+    partial: false,
+  }));
+  await deliver({
+    type: "mention",
+    event: message("1", "@Claude 1", {
+      tags: [
+        ["h", channel],
+        ["p", self],
+      ],
+    }),
+  });
+  await flush(10);
+  const prompt = systemPromptOf(
+    claudes().find((process) => process.prompts.length),
+  );
+  const [yesterday, today] = memoryRead.mock.calls.map(([, , slug]) => slug);
+  expect(prompt).toContain(
+    `</core-memory>\n\n<recent-notes>\n<note slug="${yesterday}">\nNoted in ${yesterday}.\n</note>\n<note slug="${today}">`,
+  );
 });
 
 it("names the agent in its system prompt, resuming idle sessions when it is renamed", async () => {
@@ -1595,7 +1916,9 @@ it("always offers attention tools, on search, and says in each turn whether atte
   expect(await names(off, 2)).toContain("watch_add");
   expect(systemPromptOf(off)).toBe(systemPromptOf(on));
   // Only the turn says that attention is off, and the tools refuse.
-  expect(off?.prompts[0]).toMatch(/<attention>\nYour owner has attention off/);
+  expect(off?.prompts[0]).toMatch(
+    /<attention>\nAttention is off on this device/,
+  );
   expect(off?.prompts[0]).not.toContain("Handle the work");
   const refused = (await mcp(off, 3, "tools/call", {
     name: "interest_list",
@@ -1996,6 +2319,42 @@ it("gives a tool the partial listing a slow native read answers", async () => {
   }
 });
 
+it("dates a recreated memory entry after the tombstone the native read reports", async () => {
+  // The in-app path end to end: the host's listing, the session's memory
+  // reads, the runtime's shared reads and the app client, into mem_set.
+  const agentMemories = createAgentMemories(
+    async () => ({
+      entries: [],
+      deleted: [{ slug: "mem/gone", createdAt: 4_000_000_001 }],
+      partial: false,
+    }),
+    alice,
+    () => true,
+  ).capability;
+  const relay = {
+    snapshot: () => ({ status: "ready", session: { agentMemories } }),
+  } as unknown as RelayData;
+  const runtime = new ClaudeRuntime(
+    {} as Host,
+    (key) => ownerReads(relay, pubkeyOf(key)),
+    async () => null,
+  ) as unknown as {
+    memories(pubkey: string, slug?: string): ReturnType<BuzzClient["memories"]>;
+  };
+  const remember = vi.fn<AgentHandle["remember"]>();
+  const client = appClient(
+    { pubkey: self, remember } as unknown as AgentHandle,
+    {
+      read: vi.fn(),
+      memories: (slug) => runtime.memories(self, slug),
+    },
+  );
+  await expect(
+    callTool(client, {}, "mem_set", { slug: "gone", text: "back" }),
+  ).resolves.toMatch(/^saved; version /);
+  expect(remember).toHaveBeenCalledWith("mem/gone", "back", 4_000_000_001);
+});
+
 it("method calls: a session launch makes no config call on the relay session; only the conversation name lookup (launch-boundary.test.ts runs the real service path)", async () => {
   const f = setup();
   // Every relay-facing call the runtime can make, by name.
@@ -2028,10 +2387,16 @@ it("method calls: a session launch makes no config call on the relay session; on
   await flush(10);
   expect(f.claudes()).toHaveLength(1);
   expect(systemPromptOf(f.claudes()[0])).toContain("I am Claude.");
-  // The start makes no config requests. The only call is the conversation's
-  // name lookup for the sender and mentioned agent, which requests only
-  // profiles missing from the cache (none when both are cached).
-  expect(made()).toEqual({
+  // The start makes no config requests. The only calls are the agent's
+  // recent notes, by slug, and the conversation's name lookup for the sender
+  // and mentioned agent, which requests only profiles missing from the cache
+  // (none when both are cached).
+  const { "agentMemories.read": notes, ...rest } = made();
+  expect(notes?.map(([pubkey, , slug]) => [pubkey, slug])).toEqual([
+    [self, expect.stringMatching(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/)],
+    [self, expect.stringMatching(/^mem\/notes\/\d{4}-\d{2}-\d{2}$/)],
+  ]);
+  expect(rest).toEqual({
     "profiles.ensure": [[[alice, self], "foreground"]],
   });
 });
@@ -2177,6 +2542,8 @@ it("controls an idle Claude session without sending a message, and rejects reset
   const agent = { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent;
   try {
     await f.deliver({ type: "mention", event: root });
+    // The start reads the agent's recent notes first.
+    await flush(10);
     const process = f.claudes()[0];
     if (!process) throw new Error("Expected Claude process");
     await vi.waitFor(() => expect(process.prompts).toHaveLength(1));
@@ -2207,6 +2574,7 @@ it("controls an idle Claude session without sending a message, and rejects reset
         ],
       }),
     });
+    await flush(10);
     expect(f.claudes()).toHaveLength(2);
     expect(f.claudes()[1]?.options.args).not.toContain("--resume");
   } finally {
@@ -2275,6 +2643,8 @@ it("keeps an accepted Claude handoff past its deadline while compaction runs", a
   let finishCompaction: (() => void) | undefined;
   try {
     await f.deliver({ type: "mention", event: root });
+    // The start reads the agent's recent notes first.
+    await flush(10);
     const process = f.claudes()[0];
     if (!process) throw new Error("Expected Claude process");
     await vi.waitFor(() => expect(process.prompts).toHaveLength(1));

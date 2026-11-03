@@ -31,7 +31,7 @@ import { safeMessageUrl } from "../relay/message-content";
 import type { RelaySession } from "../relay/session";
 import type { ThreadView } from "../relay/threads";
 import { compareMessages } from "../relay/message-order";
-import { useRowProfiles } from "../relay/react";
+import { useProfileGeneration, useRowProfiles } from "../relay/react";
 import { rowProfileIds } from "../relay/membership";
 import { useKnownAgentPubkeys } from "../agents/use-known";
 import { MessageComposer } from "./MessageComposer";
@@ -606,13 +606,16 @@ function ReviewComments({
         ?.scrollIntoView?.({ block: "nearest" });
   }, [selectedComment]);
   const authors = [...new Set(replies.flatMap(rowProfileIds))].sort().join(":");
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (authors)
       void session.profiles
         .ensure(authors.split(":"), "background")
         .catch(() => {});
-  }, [session.profiles, authors]);
-  // Comment links stay inert: no host tab opener reaches them behind the review.
+  }, [session.profiles, authors, profileGeneration]);
+  // Comment links stay inert: no host tab opener reaches them behind the review,
+  // so mentions render as static names.
   return (
     <LinkThreadTabContext value={undefined}>
       <section

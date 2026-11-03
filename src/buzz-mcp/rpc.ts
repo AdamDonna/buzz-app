@@ -59,8 +59,18 @@ export async function respond(
     case "tools/call":
       try {
         const name = String(params.name);
-        const args = (params.arguments ?? {}) as Record<string, unknown>;
-        const reply = await callSessionTool(client, context, name, args, added);
+        const args = params.arguments === undefined ? {} : params.arguments;
+        // Anything but an object would reach a tool as no arguments, and act
+        // on its defaults, such as the current channel.
+        if (typeof args !== "object" || args === null || Array.isArray(args))
+          throw new Error("arguments must be an object.");
+        const reply = await callSessionTool(
+          client,
+          context,
+          name,
+          args as Record<string, unknown>,
+          added,
+        );
         return result({ content: content(reply) });
       } catch (error) {
         return result({

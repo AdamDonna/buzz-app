@@ -92,46 +92,97 @@ it("publishes empty scoped pulses on the live socket without durable outbox admi
   }
 });
 
-it.each(["conversation", "access", "disconnect", "cache", "dispose"])(
-  "drops a pulse whose signing crosses %s retirement",
-  async (transition) => {
-    const h = sender(),
-      controller = new AbortController();
-    let release!: () => void, started!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const signing = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    h.sign.mockImplementationOnce(async (template) => {
-      started();
-      await gate;
-      return signed(h.viewer, template);
-    });
-    const pending = h.owner.session.typing.send(
+it("keeps incoming activity readable for a guest without publishing their typing", async () => {
+  const h = sender();
+  try {
+    h.live.receive([
+      signed(h.relay, {
+        kind: 39002,
+        created_at: 1700000001,
+        content: "",
+        tags: [
+          ["d", "dm"],
+          ["p", h.viewer.pubkey, "", "guest"],
+        ],
+      }),
+    ]);
+    await h.owner.session.typing.send(
       "dm",
       undefined,
-      controller.signal,
+      new AbortController().signal,
     );
-    try {
-      await signing;
-      if (transition === "conversation") controller.abort();
-      else if (transition === "access")
-        h.live.receive([roster(h.relay, "dm", [], 1_800_000_000)]);
-      else if (transition === "disconnect") {
-        h.live.state({ status: "retrying", routes: [] });
-        h.live.state({ status: "connected", routes: [] });
-      } else if (transition === "cache") await h.owner.clearCache();
-      else h.owner.dispose();
-    } finally {
-      release();
-    }
-    await pending;
+    expect(h.sign).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
+    h.live.receive([
+      signed(keypair(), {
+        kind: 20002,
+        created_at: Math.floor(Date.now() / 1000),
+        content: "",
+        tags: [["h", "dm"]],
+      }),
+    ]);
+    expect(h.owner.session.typing.snapshot()).toHaveLength(1);
+  } finally {
     h.owner.dispose();
-  },
-);
+  }
+});
+
+it.each([
+  "conversation",
+  "access",
+  "demotion",
+  "disconnect",
+  "cache",
+  "dispose",
+])("drops a pulse whose signing crosses %s retirement", async (transition) => {
+  const h = sender(),
+    controller = new AbortController();
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const signing = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  h.sign.mockImplementationOnce(async (template) => {
+    started();
+    await gate;
+    return signed(h.viewer, template);
+  });
+  const pending = h.owner.session.typing.send(
+    "dm",
+    undefined,
+    controller.signal,
+  );
+  try {
+    await signing;
+    if (transition === "conversation") controller.abort();
+    else if (transition === "demotion")
+      h.live.receive([
+        signed(h.relay, {
+          kind: 39002,
+          created_at: 1700000001,
+          content: "",
+          tags: [
+            ["d", "dm"],
+            ["p", h.viewer.pubkey, "", "guest"],
+          ],
+        }),
+      ]);
+    else if (transition === "access")
+      h.live.receive([roster(h.relay, "dm", [], 1_800_000_000)]);
+    else if (transition === "disconnect") {
+      h.live.state({ status: "retrying", routes: [] });
+      h.live.state({ status: "connected", routes: [] });
+    } else if (transition === "cache") await h.owner.clearCache();
+    else h.owner.dispose();
+  } finally {
+    release();
+  }
+  await pending;
+  expect(h.publish).not.toHaveBeenCalled();
+  h.owner.dispose();
+});
 
 it("rejects a signer that changes the requested typing scope", async () => {
   const h = sender();

@@ -45,12 +45,12 @@ test("candidate version embeds the updater only when both values are set, never 
     assert.deepEqual(
       JSON.parse(readFileSync(join(directory, "candidate.json"))),
       {
-        version: "0.0.0-preview.42.2",
+        version: "0.7.0-preview.42.2",
         bundle: { createUpdaterArtifacts: false },
         ...(plugins && { plugins }),
       },
     );
-    assert.equal(readFileSync(output, "utf8"), "VERSION=0.0.0-preview.42.2\n");
+    assert.equal(readFileSync(output, "utf8"), "VERSION=0.7.0-preview.42.2\n");
   }
 });
 

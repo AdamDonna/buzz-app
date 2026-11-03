@@ -1,3 +1,4 @@
+import { useProfileGeneration } from "../relay/react";
 import { useEffect, useSyncExternalStore } from "react";
 import { knownAgentPubkeys } from "../agents/known";
 import type { ComposerSession } from "../messages/composer-session";
@@ -20,6 +21,21 @@ export function soloHasPeople(
       !agents.has(key) &&
       !!profiles.get(key) &&
       !profiles.get(key)?.isAgent,
+  );
+}
+
+/** Whether every member besides the viewer is a known agent. Stricter than
+ * `!soloHasPeople`: a member whose profile hasn't loaded is not known to be an
+ * agent, so it counts as a person until it is, and a roster that hasn't
+ * loaded (absent, or empty before discovery fills it) is not known at all. */
+export function soloAgentsOnly(
+  members: readonly string[] | undefined,
+  viewer: string | undefined,
+  agents: ReadonlySet<string>,
+): boolean {
+  return (
+    !!members?.length &&
+    members.every((key) => key === viewer || agents.has(key))
   );
 }
 
@@ -50,6 +66,16 @@ export function useSoloHasPeople(
   channelId: string,
   enabled: boolean,
 ): boolean {
+  return useSoloMembers(session, channelId, enabled).withPeople;
+}
+
+/** Live Solo membership: whether people are in the chat, and whether every
+ * member is a known agent (no unloaded profile left to doubt). */
+export function useSoloMembers(
+  session: ComposerSession,
+  channelId: string,
+  enabled: boolean,
+): { withPeople: boolean; agentsOnly: boolean } {
   const list = useSyncExternalStore(
     enabled ? session.channels.subscribeList : noSubscription,
     enabled ? session.channels.list : noList,
@@ -70,21 +96,20 @@ export function useSoloHasPeople(
   )?.members;
   // An agent is recognized from its profile, so load members' profiles.
   const memberKeys = members?.join(",") ?? "";
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (!enabled || !memberKeys) return;
     void session.profiles
       .ensure(memberKeys.split(","), "background")
       .catch(() => {});
-  }, [enabled, memberKeys, session]);
-  return (
-    enabled &&
-    soloHasPeople(
-      members,
-      session.viewer,
-      profiles,
-      knownAgentPubkeys(profiles, library),
-    )
-  );
+  }, [enabled, memberKeys, session, profileGeneration]);
+  const agents = knownAgentPubkeys(profiles, library);
+  return {
+    withPeople:
+      enabled && soloHasPeople(members, session.viewer, profiles, agents),
+    agentsOnly: !enabled || soloAgentsOnly(members, session.viewer, agents),
+  };
 }
 
 const noSubscription = () => () => {};

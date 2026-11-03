@@ -4,6 +4,7 @@ import { SectionHeading } from "./primitives";
 import { useId, useState, type ReactNode } from "react";
 import { Accordion } from "../../../../src/shared/design-system/ui/Accordion";
 import { Button } from "../../../../src/shared/design-system/ui/Button";
+import { Avatar } from "../../../../src/shared/design-system/ui/Avatar";
 import { Checkbox } from "../../../../src/shared/design-system/ui/Checkbox";
 import { NavigationItem } from "../../../../src/shared/design-system/ui/NavigationItem";
 import { NavigationSection } from "../../../../src/shared/design-system/ui/NavigationSection";
@@ -23,6 +24,7 @@ function Example({
   code,
   description,
   title,
+  artwork,
   intro,
   action = "Save",
   informational = false,
@@ -36,6 +38,7 @@ function Example({
   code: string;
   description: string;
   title: string;
+  artwork?: ReactNode;
   intro?: string;
   action?: string;
   informational?: boolean;
@@ -66,7 +69,7 @@ const id = useId();
 <Dialog
   open={open}
   onOpenChange={setOpen}
-  title=${JSON.stringify(title)}${size ? `\n  size="${size}"` : ""}${height ? `\n  height="${height}"` : ""}${bodyLayout ? `\n  bodyLayout="${bodyLayout}"` : ""}${chromeSpacing ? `\n  chromeSpacing="${chromeSpacing}"` : ""}${intro ? `\n  description=${JSON.stringify(intro)}` : ""}
+  title=${JSON.stringify(title)}${artwork ? '\n  artwork={<Avatar size="large" alt="" fallback="A" />}' : ""}${size ? `\n  size="${size}"` : ""}${height ? `\n  height="${height}"` : ""}${bodyLayout ? `\n  bodyLayout="${bodyLayout}"` : ""}${chromeSpacing ? `\n  chromeSpacing="${chromeSpacing}"` : ""}${intro ? `\n  description=${JSON.stringify(intro)}` : ""}
   actions={${
     informational
       ? '<Button variant="prominent" onClick={() => setOpen(false)}>Done</Button>'
@@ -87,6 +90,7 @@ ${informational ? "" : `  <form id={id} className="space-y-section-gap" onSubmit
         open={open}
         onOpenChange={setOpen}
         title={title}
+        artwork={artwork}
         {...(size ? { size } : {})}
         {...(height ? { height } : {})}
         {...(bodyLayout ? { bodyLayout } : {})}
@@ -229,6 +233,18 @@ function NavigationExample() {
 export function DialogSpecimens() {
   return (
     <div className="component-specimen-stack">
+      <Example
+        label="Illustrated introduction"
+        description="Artwork above a centered title and description; shared Close stays at the top right."
+        title="Add an agent to another community"
+        artwork={<Avatar size="large" alt="" fallback="A" />}
+        size="compact"
+        informational
+        intro="The agent stays in its other communities too."
+        code=""
+      >
+        {null}
+      </Example>
       <ScrollToEdgeExample />
       <NavigationExample />
       <Example

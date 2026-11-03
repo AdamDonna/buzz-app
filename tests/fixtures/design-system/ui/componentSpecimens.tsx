@@ -29,7 +29,11 @@ import {
   ComboboxExamples,
 } from "./FormSpecimens";
 import { ToastSpecimens } from "./ToastSpecimens";
-import { ButtonSpecimen, IconButtonSpecimen } from "./ButtonSpecimens";
+import {
+  ButtonSpecimen,
+  IconButtonSpecimen,
+  SplitButtonSpecimen,
+} from "./ButtonSpecimens";
 import { AlertDialog } from "../../../../src/shared/design-system/ui/AlertDialog";
 import { DialogSpecimens } from "./DialogSpecimens";
 import { Tooltip } from "../../../../src/shared/design-system/ui/Tooltip";
@@ -80,7 +84,10 @@ import { TypingDots } from "../../../../src/shared/design-system/ui/TypingDots";
 import { InlineChip } from "../../../../src/shared/design-system/ui/InlineChip";
 import { Button } from "../../../../src/shared/design-system/ui/Button";
 import { IconButton } from "../../../../src/shared/design-system/ui/IconButton";
-import { NavigationItem } from "../../../../src/shared/design-system/ui/NavigationItem";
+import {
+  NavigationCard,
+  NavigationItem,
+} from "../../../../src/shared/design-system/ui/NavigationItem";
 import { NavigationSection } from "../../../../src/shared/design-system/ui/NavigationSection";
 import {
   PanelHeader,
@@ -299,7 +306,7 @@ function AvatarStackSpecimen() {
         shape="control"
         aria-label="Small agent activity"
       >
-        <AvatarStack items={items.slice(1, 2)} size="mini" />
+        <AvatarStack items={items.slice(1, 3)} size="mini" />
         <TypingDots size="small" />
       </Button>
       <Button
@@ -320,6 +327,7 @@ function AvatarStackSpecimen() {
           max={5}
         />
       </Button>
+      <AvatarStack items={items} size="hero-large" max={5} animateEntrance />
     </div>
   );
 }
@@ -707,6 +715,9 @@ function FullPageSurfaceSpecimen() {
 function PanelSpecimen() {
   return (
     <div className="component-specimen-stack">
+      <Panel as="div" shape="card" aria-label="Account card surface">
+        <div className="p-8">Standalone account card</div>
+      </Panel>
       <Panel as="div" shape="capsule" aria-label="Capsule surface">
         <div className="p-2">Shell control group</div>
       </Panel>
@@ -808,6 +819,14 @@ function TabsSpecimen() {
       <Tabs
         label="Segmented filters"
         variant="segmented"
+        value={panelDestination}
+        onValueChange={setPanelDestination}
+        items={DESTINATIONS}
+      />
+      <Tabs
+        label="Small segmented filters"
+        variant="segmented"
+        size="sm"
         value={panelDestination}
         onValueChange={setPanelDestination}
         items={DESTINATIONS}
@@ -1260,6 +1279,7 @@ function SidebarNavigationSpecimen() {
 function NavigationItemSpecimen() {
   const [selected, setSelected] = useState("buzz-design");
   const [selectedPill, setSelectedPill] = useState("Notes");
+  const [dropTarget, setDropTarget] = useState(false);
   return (
     <div className="component-specimen-stack">
       {/* Interactive: clicking moves `selected`, so the selected fill and the
@@ -1296,6 +1316,82 @@ function NavigationItemSpecimen() {
             selected={selected === "desktop-new"}
             onClick={() => setSelected("desktop-new")}
           />
+        </div>
+      </SpecimenGroup>
+      <SpecimenGroup
+        label="Card — multiline destination and independent detail action"
+        code={`<NavigationCard tone="tonal" footer={<Button size="sm">View details</Button>}>
+  <NavigationItem label="A destination with supporting text" multiline selected />
+</NavigationCard>`}
+      >
+        <div className="component-navigation-section-demo">
+          <NavigationCard
+            tone="tonal"
+            footer={<Button size="sm">View details</Button>}
+          >
+            <NavigationItem
+              label={
+                <>
+                  Session interaction model
+                  <br />
+                  <span className="text-body-sm text-metadata">
+                    Waiting for your review
+                  </span>
+                </>
+              }
+              multiline
+              selected={selected === "card"}
+              onClick={() => setSelected("card")}
+            />
+          </NavigationCard>
+        </div>
+      </SpecimenGroup>
+      <SpecimenGroup
+        label="Nested cards — hover takes priority over selected shading"
+        code={`<SidebarNavigation>
+<NavigationCard tone="inset" body={<NavigationCard tone="tonal">…</NavigationCard>}>
+  <NavigationItem label="Project Lead" />
+</NavigationCard>
+</SidebarNavigation>`}
+      >
+        <Button
+          size="sm"
+          aria-pressed={dropTarget}
+          onClick={() => setDropTarget(!dropTarget)}
+        >
+          Toggle drop destination
+        </Button>
+        <div className="component-navigation-section-demo">
+          <SidebarNavigation>
+            <NavigationCard
+              tone="inset"
+              data-drop-target={dropTarget || undefined}
+              body={
+                <>
+                  <NavigationCard tone="tonal">
+                    <NavigationItem
+                      label="Member task"
+                      selected={selected === "member"}
+                      onClick={() => setSelected("member")}
+                    />
+                  </NavigationCard>
+                  <NavigationCard tone="tonal">
+                    <NavigationItem
+                      label="Sibling task"
+                      selected={selected === "sibling"}
+                      onClick={() => setSelected("sibling")}
+                    />
+                  </NavigationCard>
+                </>
+              }
+            >
+              <NavigationItem
+                label="Project Lead"
+                selected={selected === "lead"}
+                onClick={() => setSelected("lead")}
+              />
+            </NavigationCard>
+          </SidebarNavigation>
         </div>
       </SpecimenGroup>
       <SpecimenGroup
@@ -1608,6 +1704,35 @@ function InlineChipSpecimen() {
       </SpecimenGroup>
 
       <SpecimenGroup
+        label="Resolving mention"
+        code={`<p className="text-body text-primary">
+  Ask{" "}
+  <InlineChip
+    address={{ kind: "agent", id: "pending-1" }}
+    face={{ label: "Example", loading: true, resolved: false }}
+    interactive={false}
+  />{" "}
+  while the recipient is still being decided.
+</p>`}
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-body text-primary">
+            Ask{" "}
+            <InlineChip
+              address={{ kind: "agent", id: "pending-1" }}
+              face={{ label: "Example", loading: true, resolved: false }}
+              interactive={false}
+            />{" "}
+            while the recipient is still being decided.
+          </p>
+          <p className="max-w-md text-body-sm text-tertiary">
+            The spinner sits in the sigil&apos;s box, so the chip does not move
+            when it settles into a recipient or back into text.
+          </p>
+        </div>
+      </SpecimenGroup>
+
+      <SpecimenGroup
         label="Long label truncates"
         code={`<div className="flex flex-wrap items-center gap-4">
   <InlineChip address={CHIP_LONG} />
@@ -1887,6 +2012,24 @@ function RadioGroupSpecimen() {
   return (
     <>
       <SpecimenGroup
+        label="Compact choices"
+        code={`<Field label="Status">
+  <RadioGroup size="sm" defaultValue="any">
+    <Radio size="sm" value="any" label="Any status" />
+    <Radio size="sm" value="enabled" label="Enabled" />
+    <Radio size="sm" value="disabled" label="Disabled" disabled />
+  </RadioGroup>
+</Field>`}
+      >
+        <Field label="Status">
+          <RadioGroup size="sm" defaultValue="any">
+            <Radio size="sm" value="any" label="Any status" />
+            <Radio size="sm" value="enabled" label="Enabled" />
+            <Radio size="sm" value="disabled" label="Disabled" disabled />
+          </RadioGroup>
+        </Field>
+      </SpecimenGroup>
+      <SpecimenGroup
         label="Text-only tiles"
         code={`<Field label="Delivery" nativeLabel={false}>
   <RadioGroup defaultValue="all">
@@ -2034,6 +2177,13 @@ function LoadingRegionSpecimen() {
       <LoadingRegion pending={pending} label="Refreshing…">
         <Input aria-label="Existing name" defaultValue="Saved name" />
       </LoadingRegion>
+      <LoadingRegion
+        pending={pending}
+        label="Refreshing quiet name…"
+        statusVisibility="screen-reader"
+      >
+        <Input aria-label="Quiet name" defaultValue="Saved name" />
+      </LoadingRegion>
     </SpecimenFrame>
   );
 }
@@ -2100,11 +2250,17 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
     <SpecimenFrame
       code={`<Checkbox label="Include a summary" />
 <Checkbox label="Some selected" indeterminate />
-<Checkbox label="Unavailable" disabled />`}
+<Checkbox label="Unavailable" disabled />
+<Checkbox size="sm" label="Compact choice" />
+<Checkbox size="sm" label="Compact mixed" indeterminate />
+<Checkbox size="sm" label="Compact unavailable" disabled />`}
     >
       <Checkbox label="Include a summary" />
       <Checkbox label="Some selected" indeterminate />
       <Checkbox label="Unavailable" disabled />
+      <Checkbox size="sm" label="Compact choice" />
+      <Checkbox size="sm" label="Compact mixed" indeterminate />
+      <Checkbox size="sm" label="Compact unavailable" disabled />
     </SpecimenFrame>
   ),
   "swap-workspace": PanelSwapPlaygrounds,
@@ -2112,6 +2268,7 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
   workspace: BentoSpecimen,
   button: ButtonSpecimen,
   "icon-button": IconButtonSpecimen,
+  "split-button": SplitButtonSpecimen,
   avatar: AvatarSpecimen,
   "avatar-stack": AvatarStackSpecimen,
   "shimmer-text": ShimmerTextSpecimen,

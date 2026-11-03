@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Spawn } from "./goose";
 import { fakeSpawn } from "./goose-testing";
-import { GooseSetup, keyLabel } from "./setup";
+import { GooseSetup, keyLabel, modelFilter } from "./setup";
 
 const ANTHROPIC = {
   providerId: "anthropic",
@@ -98,6 +98,100 @@ describe("GooseSetup", () => {
     expect(fake.geese.every((goose) => goose.killed)).toBe(true);
     await goose.providers();
     expect(fake.geese).toHaveLength(1);
+  });
+
+  it.each([
+    ["providers", "_goose/unstable/providers/list"],
+    ["defaults", "_goose/unstable/defaults/read"],
+    ["models", "_goose/unstable/providers/supported-models/list"],
+  ])(
+    "gives up on a %s lookup goose never answers, and reads again next time",
+    async (_, method) => {
+      vi.useFakeTimers();
+      try {
+        const silent = [method];
+        const { fake, setup: goose } = setup({ silent, supported: ["qwen3"] });
+        const read = () =>
+          method.includes("supported")
+            ? goose.models("ollama")
+            : goose.providers();
+        const stuck = read();
+        const failed = expect(stuck).rejects.toThrow(
+          `goose did not answer ${method}`,
+        );
+        await vi.advanceTimersByTimeAsync(60_000);
+        await failed;
+        expect(fake.geese.every((goose) => goose.killed)).toBe(true);
+        silent.length = 0;
+        const again = read();
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(again).resolves.toBeDefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["session/new", "session/set_config_option"])(
+    "gives up on a %s level lookup goose never answers, and reads again next time",
+    async (method) => {
+      vi.useFakeTimers();
+      try {
+        const silent = [method];
+        const { fake, setup: goose } = setup({
+          silent,
+          thinking: { "claude-haiku-5-5": { current: "off", levels: ["off"] } },
+        });
+        const read = () =>
+          goose.efforts({ provider: "anthropic", model: "claude-haiku-5-5" });
+        const failed = expect(read()).rejects.toThrow();
+        await vi.advanceTimersByTimeAsync(60_000);
+        await failed;
+        expect(fake.geese[0]?.killed).toBe(true);
+        silent.length = 0;
+        const again = read();
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(again).resolves.toEqual({
+          current: "off",
+          levels: ["off"],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps the levels it read when goose never answers their session's delete, and reads others next time", async () => {
+    vi.useFakeTimers();
+    try {
+      const silent = ["session/delete"];
+      const { fake, setup: goose } = setup({
+        silent,
+        thinking: {
+          "claude-haiku-5-5": { current: "off", levels: ["off"] },
+          "claude-opus-5-5": { current: "high", levels: ["high"] },
+        },
+      });
+      const stuck = goose.efforts({
+        provider: "anthropic",
+        model: "claude-haiku-5-5",
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(stuck).resolves.toEqual({ current: "off", levels: ["off"] });
+      expect(fake.geese[0]?.killed).toBe(true);
+      silent.length = 0;
+      const again = goose.efforts({
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(again).resolves.toEqual({
+        current: "high",
+        levels: ["high"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves a provider that signs in to goose", async () => {
@@ -209,12 +303,12 @@ describe("GooseSetup", () => {
           ? {
               ...entry,
               configured: true,
-              models: [{ id: "auto-labeler-builderbot-gpt-6-luna" }],
+              models: [{ id: "ticket-triage-gpt-6-luna" }],
             }
           : entry,
       ),
       supported: [
-        "auto-labeler-builderbot-gpt-6-luna",
+        "ticket-triage-gpt-6-luna",
         "databricks-gpt-6-1-sol",
         "kgoose-gpt-6-luna",
         "databricks-gpt-6-luna",
@@ -226,6 +320,64 @@ describe("GooseSetup", () => {
       { id: "databricks-gpt-6-luna", label: "databricks-gpt-6-luna" },
       { id: "goose-gpt-5-5", label: "goose-gpt-5-5" },
     ]);
+  });
+
+  it("lists only the Databricks models goose's model filter allows", async () => {
+    const v2 = {
+      providerId: "databricks_v2",
+      providerName: "Databricks AI Gateway",
+      configured: true,
+      visibleInSetup: true,
+    };
+    const supported = [
+      "databricks-gpt-5-5",
+      "goose-gpt-5-5",
+      "system.ai.gpt-6-1-sol",
+      "acme_models.goose.goose-gpt-6-1-sol",
+    ];
+    const { fake, setup: goose } = setup({
+      providers: [
+        v2,
+        {
+          providerId: "ollama",
+          providerName: "Ollama",
+          configured: true,
+          visibleInSetup: true,
+        },
+      ],
+      supported,
+      modelFilter: "goose-*, acme_models.goose.*",
+    });
+    expect((await goose.models("databricks_v2")).map(({ id }) => id)).toEqual([
+      "goose-gpt-5-5",
+      "acme_models.goose.goose-gpt-6-1-sol",
+    ]);
+    // A filtered-out model an agent runs on stays its model.
+    await expect(
+      goose.picks({
+        provider: "databricks_v2",
+        model: "system.ai.gpt-6-1-sol",
+      }),
+    ).resolves.toMatchObject({
+      current: "system.ai.gpt-6-1-sol",
+      models: [
+        { id: "system.ai.gpt-6-1-sol" },
+        { id: "goose-gpt-5-5" },
+        { id: "acme_models.goose.goose-gpt-6-1-sol" },
+      ],
+    });
+    expect((await goose.models("ollama")).map(({ id }) => id)).toEqual(
+      supported,
+    );
+    const reads = fake.geese
+      .flatMap((process) => process.received)
+      .filter((request) => request.method === "_goose/unstable/config/read");
+    expect(reads.map((request) => request.params)).toEqual([
+      { key: "DATABRICKS_MODEL_FILTER", isSecret: false },
+    ]);
+
+    const empty = setup({ providers: [v2], supported, modelFilter: "none-*" });
+    expect(await empty.setup.models("databricks_v2")).toEqual([]);
   });
 
   it("discovers Databricks V2 models despite a populated catalog and refreshes on check", async () => {
@@ -504,6 +656,30 @@ describe("GooseSetup", () => {
       ok: false,
       message: expect.stringContaining("goose-acp is missing"),
     });
+  });
+});
+
+describe("modelFilter", () => {
+  it("lists every model without patterns", () => {
+    for (const value of [null, undefined, "", "  ", " , "])
+      expect(modelFilter(value)("anything")).toBe(true);
+  });
+
+  it("matches whole IDs case-sensitively with * and ?", () => {
+    const listed = modelFilter("goose-gpt-?-5,system.ai.*");
+    expect(listed("goose-gpt-5-5")).toBe(true);
+    expect(listed("goose-gpt-55-5")).toBe(false);
+    expect(listed("system.ai.claude-opus")).toBe(true);
+    expect(listed("System.ai.claude-opus")).toBe(false);
+    expect(listed("x-goose-gpt-5-5")).toBe(false);
+    expect(listed("goose-gpt-5-5-x")).toBe(false);
+  });
+
+  it("treats every other character literally", () => {
+    const listed = modelFilter("a.b(c)+[d]|e");
+    expect(listed("a.b(c)+[d]|e")).toBe(true);
+    expect(listed("aXb(c)+[d]|e")).toBe(false);
+    expect(listed("e")).toBe(false);
   });
 });
 

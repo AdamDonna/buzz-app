@@ -4,7 +4,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Agent } from "../../../features/agents/service";
-import { ActivityPanel, type AgentActivity } from "./Activity";
+import type { RelayData } from "../../../features/relay/service";
+import {
+  ActivityPanel,
+  createActivityTab,
+  type AgentActivity,
+} from "./Activity";
 
 afterEach(cleanup);
 
@@ -120,10 +125,6 @@ it("shows this agent's published turns, leaving the feed's lease to the plugin",
 it.each([
   [undefined, "Activity shows once Buzz is connected."],
   [{ status: "unavailable" }, "Activity isn't available here."],
-  [
-    { status: "disabled" },
-    "Turn on Agent Activity in Settings → Plugins to see activity.",
-  ],
   [{ status: "connecting" }, "Connecting to the live feed…"],
 ] as const)("explains a feed that can't show turns yet (%o)", (state, text) => {
   const activity = state && fakeActivity(state as Partial<Snapshot>).activity;
@@ -134,31 +135,35 @@ it.each([
   ).not.toBeInTheDocument();
 });
 
-it("opens on the conversation it came from and can show every conversation", async () => {
+it("links to Manage plugins while Agent Activity is off", async () => {
+  const user = userEvent.setup();
+  const openSettings = vi.fn();
+  const { activity } = fakeActivity({ status: "disabled" });
+  const connection = { status: "ready", session: { agentActivity: activity } };
+  const relay = {
+    snapshot: () => connection,
+    subscribe: () => () => {},
+  } as unknown as RelayData;
+  const Tab = createActivityTab(relay, openSettings);
+  render(<Tab agent={agent} save={vi.fn()} />);
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Turn on Agent Activity in Manage plugins to see activity.",
+  );
+  await user.click(screen.getByRole("button", { name: "Manage plugins" }));
+  expect(openSettings).toHaveBeenCalledExactlyOnceWith("plugins");
+});
+
+it("shows every conversation's turns, wherever it was opened from", () => {
   const { activity } = fakeActivity({
     records: [
       record("t1", "In the thread"),
       record("t2", "In beta", pubkey, "beta"),
     ] as unknown as Snapshot["records"],
   });
-  render(
-    <ActivityPanel
-      agent={agent}
-      activity={activity}
-      conversation={{ channelId: "alpha", rootId: root }}
-    />,
-  );
+  render(<ActivityPanel agent={agent} activity={activity} />);
   expect(screen.getByText("In the thread")).toBeInTheDocument();
-  expect(screen.queryByText("In beta")).not.toBeInTheDocument();
-  const user = userEvent.setup();
-  await user.click(
-    screen.getByRole("button", { name: "Show all conversations" }),
-  );
   expect(screen.getByText("In beta")).toBeInTheDocument();
-  await user.click(
-    screen.getByRole("button", { name: "Show this conversation" }),
-  );
-  expect(screen.queryByText("In beta")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
 });
 
 it("says when older activity was dropped", () => {

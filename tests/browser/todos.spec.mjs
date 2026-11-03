@@ -98,13 +98,17 @@ test("opt-in Todos saves ordinary Canvas and disabling leaves it editable", asyn
   await expect(nested).toBeVisible();
   const first = drawer.getByRole("checkbox", { name: "First", exact: true });
   const build = drawer.getByRole("checkbox", { name: "Build", exact: true });
-  const positions = await Promise.all([
-    first.boundingBox(),
-    build.boundingBox(),
-    nested.boundingBox(),
-  ]);
-  expect(positions[1].x).toBeGreaterThan(positions[0].x);
-  expect(positions[2].x).toBeGreaterThan(positions[1].x);
+  // The drawer can still be moving. Compare indentation in one layout sample.
+  const positions = await page.evaluate(
+    (elements) => elements.map((element) => element.getBoundingClientRect().x),
+    [
+      await first.elementHandle(),
+      await build.elementHandle(),
+      await nested.elementHandle(),
+    ],
+  );
+  expect(positions[1]).toBeGreaterThan(positions[0]);
+  expect(positions[2]).toBeGreaterThan(positions[1]);
   await expect(drawer.getByText("First / Build", { exact: true })).toHaveCount(
     0,
   );

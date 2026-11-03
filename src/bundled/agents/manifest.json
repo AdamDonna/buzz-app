@@ -6,5 +6,16 @@
   "discovery": {
     "category": "agents",
     "tags": ["Core", "Essentials", "coding-agents"]
+  },
+  "host": {
+    "mcp": true,
+    "files": true,
+    "processes": [
+      {
+        "id": "attention-command",
+        "program": "bash",
+        "args": ["-c", "exec \"$@\"", "attention"]
+      }
+    ]
   }
 }

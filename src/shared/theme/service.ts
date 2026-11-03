@@ -67,6 +67,7 @@ export function createAppearance(
     contrastError: null,
   };
   let disposed = false;
+  let paletteGuard = 0;
   const listeners = new Set<() => void>();
   const apply = () => {
     if (!host) return;
@@ -77,24 +78,21 @@ export function createAppearance(
         root.dataset.accent !== state.accent ||
         root.dataset.colorLevel !==
           (state.contrast === "low" ? "touch" : state.contrast));
-    const transitionGuard = changingPalette
-      ? host.document.createElement("style")
-      : undefined;
-    if (transitionGuard) {
-      transitionGuard.textContent =
-        "*,*::before,*::after{transition:none !important}";
-      host.document.head.append(transitionGuard);
-    }
+    // A stylesheet removal rebuilds WebKit's style resolver; an attribute only restyles.
+    const guard = changingPalette ? ++paletteGuard : undefined;
+    if (guard) root.dataset.paletteChanging = "";
     root.dataset.colorMode = state.mode;
     root.dataset.accent = state.accent;
     // Preserve the existing soft-bubble selector for Chillin’.
     root.dataset.colorLevel =
       state.contrast === "low" ? "touch" : state.contrast;
-    if (transitionGuard) {
+    if (guard) {
       // Commit the new palette before restoring interactive transitions.
       void root.offsetHeight;
       host.requestAnimationFrame(() =>
-        host.requestAnimationFrame(() => transitionGuard.remove()),
+        host.requestAnimationFrame(() => {
+          if (guard === paletteGuard) delete root.dataset.paletteChanging;
+        }),
       );
     }
     root.style.setProperty("--buzz-text-scale", String(state.fontScale));

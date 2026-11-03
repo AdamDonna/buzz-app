@@ -55,8 +55,12 @@
   background: var(--scrollbar-thumb-quiet);
   background-clip: padding-box;
 }
-/* Keep the final message clear of floating typing/activity indicators.
-   The spacer scrolls away with history instead of shortening its viewport. */
+/* Keep the final message clear of floating typing/activity indicators and
+   the join preview lane. The spacer scrolls away with history instead of
+   shortening its viewport. Threads end with it too, not bottom padding: WebKit
+   drops block-end padding from the scroll range for one layout when a covered
+   workspace tab is shown again (content-visibility), which pulls a thread read
+   at its end up by it. */
 .timelineEnd {
   height: calc(var(--space-8) + var(--channel-preview-inset, 0px));
 }
@@ -234,7 +238,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1);
+  gap: 0;
   margin: var(--space-1h) 0 0;
 }
 .reactions[data-populated],
@@ -243,10 +247,14 @@
   align-self: flex-start;
   width: fit-content;
   max-width: 100%;
+  padding-inline: var(--space-1);
+  border-radius: calc(var(--size-control-sm) / 2);
+  /* The strip follows the lightness of whatever it sits on, like a chip. */
+  background: var(--reaction-surface, var(--affordance-reaction));
 }
-.message[data-own] > .messageBody {
-  --reaction-surface: var(--surface-message-own);
-  --reaction-ink: var(--text-message-own);
+/* The add control's circle meets the strip's rounded end. */
+.reactions[data-populated]:has(> .inlineReactionTool:not(:empty):last-child) {
+  padding-inline-end: 0;
 }
 .reactions:empty {
   margin-top: 0;
@@ -269,33 +277,22 @@
   display: inline-flex;
   max-width: 100%;
 }
-.reactionItem,
-.inlineReactionTool,
-.reactionFallback > span:not([role]) {
-  border-radius: var(--radius-capsule);
-  background: var(--affordance-backdrop-hover);
-}
-.reactionItem button {
-  min-width: var(--size-control-sm);
-  min-height: calc(var(--size-control-sm) - var(--space-1));
-}
-.reactionLabel {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-half);
-  padding-inline: var(--space-1);
-  color: var(--reaction-ink, var(--text-standard));
-}
-.reactionCount {
-  @apply text-caption;
-  font-variant-numeric: tabular-nums;
-}
 .reactionGlyph {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   max-width: var(--size-control-sm);
   pointer-events: none;
+}
+.reactionGlyph[data-grouped] {
+  max-width: none;
+  gap: var(--space-1);
+}
+.reactionCount {
+  @apply text-caption;
+}
+.reactionItem [data-reaction] {
+  color: var(--reaction-ink, var(--text-standard));
 }
 @media (hover: hover) and (pointer: fine) and (
     prefers-reduced-motion: no-preference
@@ -379,6 +376,13 @@
 }
 .reactionPreviewNames {
   @apply text-caption text-standard;
+  display: grid;
+  max-width: 100%;
+}
+.reactionPreviewPerson {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @media (prefers-reduced-motion: reduce) {
   .reactionPreview.reactionPreview {
@@ -421,13 +425,14 @@
   }
 }
 .inlineReactionTool {
-  /* Keep the filled pill and icon stable while neighboring emoji animate. */
+  /* Keep the add control stable while neighboring emoji animate. */
   transform: translateZ(0);
   transform-style: preserve-3d;
   display: inline-flex;
   align-items: center;
-  width: calc(var(--size-control-sm) + var(--space-2));
-  height: calc(var(--size-control-sm) - var(--space-1));
+  width: var(--size-control-sm);
+  height: var(--size-control-sm);
+  border-radius: var(--radius-capsule);
 }
 .inlineReactionTool:empty {
   display: none;
@@ -447,7 +452,8 @@
 }
 .inlineReactionTool
   [data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  background: var(--affordance-backdrop-hover);
+  /* The strip's own overlay again, laid on top of it. */
+  background: var(--reaction-surface, var(--affordance-reaction));
   color: var(--reaction-ink, var(--text-standard));
 }
 .attachment {
@@ -602,7 +608,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   align-self: stretch;
   position: relative;
   border: 1px solid var(--border-standard);
-  background: var(--surface-panel);
+  background: var(--surface-composer);
   /* Match the send control plus its inset, measured from the outer border. */
   border-radius: calc(var(--radius-icon-button) + var(--space-1h) + 1px);
   box-shadow: var(--shadow-xs);
@@ -838,12 +844,9 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   padding: 0 var(--space-4);
   /* The original starts space-4 below the header, less its .message padding. */
   padding-top: calc(var(--space-4) - var(--space-3) - var(--space-half));
-  /* Include the join preview lane while keeping the approved message inset. */
-  --history-bottom-inset: calc(
-    var(--space-8) +
-    var(--channel-preview-inset, 0px)
-  );
-  padding-bottom: var(--history-bottom-inset);
+  /* The end spacer below replaces bottom padding, so the jump button's sticky
+     offset has no padding to cross. */
+  --history-bottom-inset: 0px;
   /* ThreadPanel owns every layout-shift correction here (resize, older-page and
      exact-target anchors). Browser scroll anchoring would correct the same shift
      first, and the exact-target anchor would then apply it a second time. */
@@ -910,12 +913,44 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   margin: 0;
   padding: 0;
 }
+/* A thread notice keeps its recovery aligned beneath its text. */
+.threadNotice {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: var(--text-subtle);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  letter-spacing: var(--text-body-sm--letter-spacing);
+}
 .threadHistoryControls {
   flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
+}
+/* Where the thread lives, above its history; the thread tab stays its title. */
+.threadParent {
+  flex: none;
+  margin: 0;
+  /* The thread history's inset, so the name sits over its original message. */
+  padding: var(--space-2) var(--space-4) 0;
+  color: var(--text-subtle);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  letter-spacing: var(--text-caption--letter-spacing);
+  overflow-wrap: anywhere;
+}
+/* The pane cannot reflow the name as a whole control, so its label wraps. */
+.threadParent > button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: start;
 }
 .threadNote {
   color: var(--text-subtle);
@@ -1680,6 +1715,13 @@ html[data-keyboard-navigation] .text pre code:focus-visible {
   scrollbar-width: thin;
   white-space: nowrap;
 }
+/* Measured overflow chooses the scrollbar in style; see MessageMarkdown. */
+.text table[data-overflow="true"] {
+  overflow-x: scroll;
+}
+.text table[data-overflow="false"] {
+  overflow-x: hidden;
+}
 .text :where(th, td) {
   border: 0;
   border-right: 1px solid var(--border-standard);
@@ -1723,6 +1765,38 @@ html[data-keyboard-navigation] .text pre code:focus-visible {
   font-style: italic;
 }
 
+/* Metadata after the body's last line; on its own line after a closing block
+   or plugin card, or after attachments when no body is drawn. A large-emoji
+   paragraph is itself `.text` and keeps its marker inline. */
+.edited {
+  color: var(--message-metadata, var(--text-metadata));
+  font-size: var(--text-caption);
+  letter-spacing: var(--text-caption--letter-spacing);
+}
+/* A plugin card's marker sits in its bubble, above the reactions. */
+.messagePayload > .edited,
+.messageBubble > .edited {
+  display: block;
+  margin-top: var(--space-1);
+}
+.audienceLine > .edited {
+  flex: none;
+  margin-inline-end: auto;
+}
+.text:not(p) > .edited {
+  display: block;
+}
+.text:not(p) > :has(+ .edited:last-child) {
+  margin-bottom: var(--space-1);
+}
+.message[data-viewer-message] .messagePayload > .edited {
+  text-align: end;
+}
+/* The edit marker follows a short preview and stays visible beside a long one. */
+.audiencePreview:has(+ .edited) {
+  flex: 0 1 auto;
+}
+
 .mention {
   display: inline;
   padding: 0 var(--space-half);
@@ -1743,6 +1817,7 @@ html[data-keyboard-navigation] .text pre code:focus-visible {
 }
 
 .membership {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2001,8 +2076,39 @@ html[data-keyboard-input] .quickReactionGlyph {
 .replyBranchSummary > button > [class~="buzz-button-label"] {
   flex-wrap: wrap;
 }
+/* Replies indent from both edges, so a reply on either side reads as nested. */
 .replyBranchPanel {
-  padding-inline-start: var(--reply-indent);
+  position: relative;
+  padding-inline: var(--reply-indent);
+}
+/* A wide hit area centred on the thread line folds the branch. */
+.replyBranchCollapse {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(var(--reply-spine-offset) - var(--space-2));
+  inline-size: calc(2 * var(--space-2));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  cursor: pointer;
+}
+.replyBranchCollapse::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(50% - 1px);
+  inline-size: 2px;
+  border-radius: var(--radius-control);
+  background: transparent;
+}
+.replyBranchCollapse:hover::before,
+html[data-keyboard-navigation] .replyBranchCollapse:focus-visible::before {
+  background: var(--border-message-thread);
+}
+html[data-keyboard-navigation] .replyBranchCollapse:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
 }
 .replyItem {
   position: relative;
@@ -2011,17 +2117,46 @@ html[data-keyboard-input] .quickReactionGlyph {
   content: "";
   position: absolute;
   inset-inline-start: calc(var(--reply-spine-offset) - var(--reply-indent));
-  inset-block-start: 0;
+  /* Browsers without anchor positioning assume the avatar ends the row. */
+  inset-block: 0 calc(var(--space-half) + var(--size-control-sm) / 2);
   inline-size: calc(
     var(--reply-indent) -
     var(--reply-spine-offset) -
     var(--space-1)
   );
-  block-size: calc(var(--space-1) + var(--size-control-sm) / 2);
   border-inline-start: 1px solid var(--border-message-thread);
   border-block-end: 1px solid var(--border-message-thread);
   border-end-start-radius: var(--radius-control);
   pointer-events: none;
+}
+/* Each reply's own avatar anchors its hook, so the hook lands on the avatar
+   whatever renders around it: reactions, delivery notices, or an open
+   agents disclosure. */
+.replyItem {
+  anchor-scope: --reply-avatar;
+}
+:where(.replyItem) .messageAvatar,
+:where(.replyItem .audienceLine) > .audienceAvatar:first-child {
+  anchor-name: --reply-avatar;
+}
+@supports (anchor-name: --reply-avatar) {
+  .replyBranchPanel > ol > .replyItem::before {
+    inset-block-end: anchor(
+      --reply-avatar center,
+      calc(var(--space-half) + var(--size-control-sm) / 2)
+    );
+    inset-inline-end: calc(anchor(--reply-avatar start, 100%) + var(--space-1));
+    inline-size: auto;
+  }
+}
+/* Stacked bubbles share the last one's avatar, so only that row hooks in.
+   Match the row's own marker, not rows nested inside an agents disclosure. */
+.replyBranchPanel
+  > ol
+  > .replyItem:has(
+    > .replyBranch > .replyBranchMessage > [data-message-id] > [data-stack-next]
+  )::before {
+  content: none;
 }
 .replyBranchPanel > ol > .replyItem:not(:last-child)::after {
   content: "";
@@ -2133,6 +2268,95 @@ html[data-keyboard-input] .quickReactionGlyph {
   border-inline-start: 1px solid var(--border-message-thread);
   pointer-events: none;
 }
+/* A branch started by the viewer sits on the right, so its spine, hooks
+   and summary mirror to stay beside the avatar that started it. */
+.replyBranch:has(
+  > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+) > .replyBranchSummary {
+  display: flex;
+  justify-content: flex-end;
+  margin-inline: 0 calc(var(--size-control-sm) + var(--space-2));
+}
+.replyBranch[data-open="true"]:has(
+    > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+  )
+  > .replyBranchMessage::after {
+  inset-inline: auto var(--reply-spine-offset);
+  border-inline-start: 0;
+  border-inline-end: 1px solid var(--border-message-thread);
+}
+.replyBranch:has(
+    > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+  )
+  > .replyBranchPanel
+  > .replyBranchCollapse {
+  inset-inline: auto calc(var(--reply-spine-offset) - var(--space-2));
+}
+.replyBranch:has(
+    > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+  )
+  > .replyBranchPanel
+  > ol
+  > .replyItem::before {
+  inset-inline: auto calc(var(--reply-spine-offset) - var(--reply-indent));
+  border-inline-start: 0;
+  border-inline-end: 1px solid var(--border-message-thread);
+  border-end-start-radius: 0;
+  border-end-end-radius: var(--radius-control);
+}
+@supports (anchor-name: --reply-avatar) {
+  .replyBranch:has(
+      > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+    )
+    > .replyBranchPanel
+    > ol
+    > .replyItem::before {
+    inset-inline-start: calc(anchor(--reply-avatar end, 100%) + var(--space-1));
+  }
+}
+.replyBranch:has(
+    > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+  )
+  > .replyBranchPanel
+  > ol
+  > .replyItem:not(:last-child)::after {
+  inset-inline: auto calc(var(--reply-spine-offset) - var(--reply-indent));
+  border-inline-start: 0;
+  border-inline-end: 1px solid var(--border-message-thread);
+}
+
+/* A reply on the other side of the branch has its avatar out of reach, so the
+   line runs straight past the whole reply instead of hooking toward an empty
+   edge. */
+.replyBranch:not(
+    :has(> .replyBranchMessage > [data-message-id] > [data-viewer-message])
+  )
+  > .replyBranchPanel
+  > ol
+  > .replyItem:has(
+    > .replyBranch
+      > .replyBranchMessage
+      > [data-message-id]
+      > [data-viewer-message]
+  )::before,
+.replyBranch:has(
+    > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+  )
+  > .replyBranchPanel
+  > ol
+  > .replyItem:not(
+    :has(
+      > .replyBranch
+        > .replyBranchMessage
+        > [data-message-id]
+        > [data-viewer-message]
+    )
+  )::before {
+  inset-block-end: 0;
+  border-block-end: 0;
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
 
 /* Bound visual indentation without limiting reply ancestry. */
 .replyBranch[data-depth="6"] {
@@ -2178,6 +2402,13 @@ html[data-keyboard-input] .quickReactionGlyph {
     --reply-indent: 0px;
     --reply-spine-offset: calc(0px - var(--space-3));
     --reply-spine-start: 0px;
+  }
+  /* The end padding is a step narrower, so a right-side spine keeps the same
+     inset from the edge as a left-side one. */
+  .replyBranch[data-depth="0"]:has(
+    > .replyBranchMessage > [data-message-id] > [data-viewer-message]
+  ) {
+    --reply-spine-offset: calc(0px - var(--space-2));
   }
 }
 
@@ -2717,7 +2948,8 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
     var(--text-message) *
     var(--text-message--line-height) /
     2 +
-    var(--space-2)
+    var(--space-2) +
+    var(--space-half)
   );
   --message-inner-radius: max(
     0px,
@@ -2735,19 +2967,25 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   color: var(--text-standard);
   overflow-wrap: anywhere;
 }
-/* Own bubbles retain their toolbar hover treatment; received bubbles stay
-   on the same quiet surface as their reaction strip. */
 @media (hover: hover) and (pointer: fine) {
-  .message[data-own][data-actions-revealed]
+  /* An arrival cue replaces hover on its bubble rather than stacking on it. */
+  .message[data-actions-revealed]:not(.messageHighlight)
     > .messageBody
     > .messageContent
-    .messageBubble:not([data-emoji-only])::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: var(--affordance-backdrop-hover);
-    pointer-events: none;
+    .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+      :has(> .text > table:only-child),
+      :has(> .text > table:first-child + .edited:last-child)
+    ) {
+    background: var(--surface-message-hover);
+  }
+  .message[data-own][data-actions-revealed]:not(.messageHighlight)
+    > .messageBody
+    > .messageContent
+    .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+      :has(> .text > table:only-child),
+      :has(> .text > table:first-child + .edited:last-child)
+    ) {
+    background: var(--surface-message-own-hover);
   }
 }
 .message[data-layout="continuation"] .messageBubble {
@@ -2774,21 +3012,16 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   width: 100%;
 }
 
+/* Keep sent and received avatars close to their message in every layout. */
 .messageAvatar {
   user-select: none;
   position: absolute;
   bottom: 0;
-  right: calc(100% + var(--space-3));
-  display: flex;
-}
-.message:not([data-layout="timeline"]) .messageAvatar {
   right: calc(100% + var(--space-2));
+  display: flex;
 }
 .message[data-viewer-message] .messageAvatar {
   right: auto;
-  left: calc(100% + var(--space-3));
-}
-.message[data-viewer-message]:not([data-layout="timeline"]) .messageAvatar {
   left: calc(100% + var(--space-2));
 }
 .messageBubble > :is(.text, .plainText) {
@@ -2805,7 +3038,14 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 .messageBubble .text [data-mention-kind] {
   font-weight: var(--type-weight-medium);
   padding-inline: var(--space-1h);
-  border-radius: calc(var(--radius-chip) / 2);
+}
+/* Align the leading sigil with prose; its capsule paints into the gutter.
+   The renderer marks actual paragraph starts, not merely first elements. */
+.messageBubble
+  > .text
+  > p[data-leading-mention]
+  > [data-mention-kind]:first-child {
+  margin-inline-start: calc(-1 * var(--space-1h));
 }
 .messageBubble .text :is(pre, .codeBlock, table) {
   border-radius: var(--message-inner-radius);
@@ -2813,10 +3053,14 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   color: var(--text-standard);
   /* Neutral inset surfaces keep their own link palette inside colored bubbles. */
   --message-link: var(--text-link);
-  /* Neutral insets drop own-bubble mention pairing back to the shared role. */
+  /* Neutral insets drop own-bubble mention and state icon pairing back to the
+     shared roles. */
   --mention-fill: initial;
   --mention-hover: initial;
   --mention-text: initial;
+  --message-icon-subtle: initial;
+  --message-icon-success: initial;
+  --message-icon-categorical-purple: initial;
 }
 .messageContent {
   position: relative;
@@ -2857,6 +3101,15 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   --mention-fill: var(--affordance-mention-own);
   --mention-hover: var(--affordance-mention-own-hover);
   --mention-text: var(--text-mention-own);
+  /* Only reactions on your bubble take its ink and overlay. Reactions outside
+     it, under an emoji-only message, or under a table-only one, keep the panel's. */
+  --reaction-surface: var(--affordance-reaction-own);
+  --reaction-ink: var(--text-message-own);
+  /* State icons inside the bubble take their -own pair: the link ink at Buzzin’. */
+  --message-icon-subtle: var(--icon-subtle-own);
+  --message-metadata: var(--text-metadata-own);
+  --message-icon-success: var(--icon-success-own);
+  --message-icon-categorical-purple: var(--icon-categorical-purple-own);
 }
 /* Neutral content and unboxed renderers keep selection paired with their surface. */
 .messageBubble[data-emoji-only],
@@ -2870,6 +3123,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   background: transparent;
   color: var(--text-standard);
   --message-link: var(--text-link);
+  --message-metadata: initial;
 }
 
 .messageBubble[data-own] .text blockquote {
@@ -2892,10 +3146,14 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   background: var(--surface-panel);
   color: var(--text-standard);
   --message-link: var(--text-link);
-  /* Neutral insets drop own-bubble mention pairing back to the shared role. */
+  /* Neutral insets drop own-bubble mention and state icon pairing back to the
+     shared roles. */
   --mention-fill: initial;
   --mention-hover: initial;
   --mention-text: initial;
+  --message-icon-subtle: initial;
+  --message-icon-success: initial;
+  --message-icon-categorical-purple: initial;
 }
 
 .threadAvatar:nth-child(1) {
@@ -2933,11 +3191,16 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 }
 .message .messageBubble > .reactions {
   margin: var(--space-2) 0 0;
-  margin-inline-start: calc(-1 * var(--space-1));
-  /* Short prose still leaves room for a counted reaction and its add pill. */
-  min-inline-size: calc(3 * var(--size-control-sm));
-  max-width: 100%;
+  margin-inline-start: calc(-1 * var(--space-2));
+  /* Short prose still leaves room for a reaction and its add control. The add
+     control ends the strip with no end padding, so only the start padding counts. */
+  min-inline-size: calc(3 * var(--size-control-sm) + var(--space-1));
+  max-width: calc(100% + 2 * var(--space-2));
   border: 0;
+}
+.messageBubble:has(> .reactions:is([data-populated], .reactionFallback)) {
+  border-end-start-radius: calc(var(--size-control-sm) / 2 + var(--space-2));
+  border-end-end-radius: calc(var(--size-control-sm) / 2 + var(--space-2));
 }
 .message
   .messageBubble
@@ -3088,6 +3351,7 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   outline-offset: -2px;
 }
 .audienceEntry {
+  position: relative;
   display: flex;
   align-items: flex-start;
   border-radius: var(--radius-control);
@@ -3208,12 +3472,24 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   }
 }
 
-/* Returning from a thread only paints its already-visible origin. The wash
-   extends into the feed's inset without changing the row's layout box. */
-.returnHighlight {
+/* Arriving at a message, by link, search or returning from its thread,
+   briefly marks it. A filled bubble takes a see-through layer, chosen like its
+   chips, so they stay readable on top. A row without one (membership lines,
+   emoji, attachments, tables, diffs) is washed instead; the wash extends into
+   the feed's inset without changing the row's layout box. */
+.messageHighlight {
   isolation: isolate;
 }
-.returnHighlight::after {
+.messageHighlight:not(
+  :has(
+    > .messageBody
+      > .messageContent
+      .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+        :has(> .text > table:only-child),
+        :has(> .text > table:first-child + .edited:last-child)
+      )
+  )
+)::after {
   content: "";
   position: absolute;
   inset-block: 0;
@@ -3222,12 +3498,37 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   border-radius: var(--radius-row);
   background: var(--surface-message-highlight);
   pointer-events: none;
-  animation: return-message-highlight calc(var(--duration-settle) * 5) ease-out
-    both;
+  animation: message-highlight calc(var(--duration-settle) * 10) ease-out both;
 }
-@keyframes return-message-highlight {
+.messageHighlight > .messageBody > .messageContent .messageBubble {
+  isolation: isolate;
+}
+.messageHighlight
+  > .messageBody
+  > .messageContent
+  .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+    :has(> .text > table:only-child),
+    :has(> .text > table:first-child + .edited:last-child)
+  )::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--affordance-message-highlight);
+  pointer-events: none;
+  animation: message-highlight calc(var(--duration-settle) * 10) ease-out both;
+}
+.messageHighlight
+  > .messageBody
+  > .messageContent
+  .messageBubble[data-own]::after {
+  background: var(--affordance-message-own-highlight);
+}
+/* Held about a second so it reads as intentional, then a slow fade. */
+@keyframes message-highlight {
   0%,
-  35% {
+  45% {
     opacity: 1;
   }
   100% {
@@ -3235,8 +3536,32 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .returnHighlight::after {
+  .messageHighlight::after,
+  .messageHighlight .messageBubble::after {
     animation-timing-function: steps(1, end);
+  }
+}
+
+/* A keyboard-selected message holds the same wash steady, ringed with the
+   focus colour, without changing the row's layout box. */
+html[data-keyboard-navigation] .message:focus-visible {
+  outline: none;
+  isolation: isolate;
+}
+html[data-keyboard-navigation] .message:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(-1 * var(--space-2));
+  z-index: -1;
+  border-radius: var(--radius-row);
+  background: var(--surface-message-highlight);
+  box-shadow: inset 0 0 0 2px var(--border-focus);
+  pointer-events: none;
+}
+@media (forced-colors: active) {
+  html[data-keyboard-navigation] .message:focus-visible {
+    outline: 2px solid Highlight;
   }
 }
 
@@ -3298,15 +3623,27 @@ html[data-keyboard-navigation]
 
 /* A standalone renderer already owns its surface. Mixed prose keeps its bubble. */
 .messageBubble[data-diff-only],
-.messageBubble:has(> .text > table:only-child) {
+.messageBubble:has(> .text > table:only-child),
+.messageBubble:has(> .text > table:first-child + .edited:last-child) {
   padding: 0;
   background: transparent;
   color: var(--text-standard);
   --message-link: var(--text-link);
+  /* A table's reactions stay in the bubble, which is now see-through, so they
+     sit on the panel and drop your bubble's pairing. */
+  --reaction-surface: initial;
+  --reaction-ink: initial;
+  /* An edited marker there sits on the panel too. */
+  --message-metadata: initial;
 }
-.messageBubble[data-diff-only]::after,
-.messageBubble:has(> .text > table:only-child)::after {
-  display: none;
+/* Unboxed renderers have no inner gutter for the reaction strip to outdent. */
+.message .messageBubble[data-diff-only] > .reactions,
+.message .messageBubble:has(> .text > table:only-child) > .reactions,
+.message
+  .messageBubble:has(> .text > table:first-child + .edited:last-child)
+  > .reactions {
+  margin-inline-start: 0;
+  max-width: 100%;
 }
 .workflowAttribution {
   display: inline-flex;

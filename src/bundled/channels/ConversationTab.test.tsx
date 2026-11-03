@@ -138,11 +138,13 @@ it.each(["thread", "conversation"] as const)(
         { id: "beta", name: "Beta" },
       ],
     };
-    // Only management consumes this session; the independent child views above
-    // are stubbed, so the fixture supplies just its list and outbox boundary.
+    // Only management consumes this session; independent child views above are
+    // stubbed. These writable tabs have static eligibility/profile evidence.
     const session = {
       outbox: owner.outbox,
       channels: { list: () => channels, subscribeList: () => () => {} },
+      profiles: { subscribe: () => () => {} },
+      messages: { canRetry: () => true },
     } as unknown as RelaySession;
     render(
       <ConversationTab

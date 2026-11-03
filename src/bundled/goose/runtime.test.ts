@@ -8,6 +8,7 @@ import type { Host } from "../../features/host/service";
 import type { EventData, RelayEvent } from "../../features/relay/events";
 import type { RelayData } from "../../features/relay/service";
 import { fakeSpawn, flush } from "./goose-testing";
+import { AcpSession } from "../../features/agent-harness/acp/session";
 import { AgentSessions } from "./sessions";
 import {
   DEFAULT_CONFIG,
@@ -73,10 +74,12 @@ function setup(
       signal: AbortSignal,
       slug?: string,
     ) => Promise<Memories>;
+    thinking?: NonNullable<Parameters<typeof fakeSpawn>[0]>["thinking"];
   }> = {},
 ) {
   const fake = fakeSpawn({
     hold: options.hold ?? false,
+    ...(options.thinking ? { thinking: options.thinking } : {}),
     ...(options.reply ? { reply: options.reply } : {}),
   });
   const readFile = vi.fn<NonNullable<Host["readFile"]>>();
@@ -309,6 +312,28 @@ describe("GooseRuntime", () => {
     expect(process?.cancelled).toEqual([process?.turns[0]?.sessionId]);
   });
 
+  it("posts nothing goose wrote without `send`", async () => {
+    // Text the agent writes outside `send` is narration, not a reply.
+    for (const reply of ["I've replied to Will.", "Plain answer"]) {
+      const { deliver, published, runtime } = setup({ reply });
+      let activity: Promise<unknown> = Promise.resolve();
+      await deliver(message("1", "@Gander hi"), {
+        workingUntil: (done: Promise<unknown>) => {
+          activity = done;
+        },
+      });
+      expect(await activity, reply).toMatchObject({ ok: true, text: reply });
+      // The turn's report step ends by notifying, after any post it makes.
+      await new Promise<void>((resolve) => {
+        const stop = runtime.subscribe(() => {
+          stop();
+          resolve();
+        });
+      });
+      expect(published, reply).toEqual([]);
+    }
+  });
+
   it("tells a subscriber when a new conversation's first turn starts working", async () => {
     const { deliver, goose, runtime } = setup({ hold: true });
     // As a view does: each notification reads the snapshot again.
@@ -337,7 +362,6 @@ describe("GooseRuntime", () => {
     const { deliver, goose, published } = setup({
       scope: "channel",
       hold: true,
-      reply: "Forgot to send",
     });
     await deliver(reply("3", one));
     await flush(100);
@@ -346,17 +370,14 @@ describe("GooseRuntime", () => {
     const process = goose();
     expect(process?.turns).toHaveLength(1);
     expect(process?.turns[0]?.steered).toHaveLength(1);
-    process?.turns[0]?.finish();
+    process?.exit(1, "crashed\n");
     await flush(100);
-    expect(published).toEqual([
-      {
-        kind: 9,
-        content: "Forgot to send",
-        tags: [
-          ["h", channel],
-          ["e", two.id, "", "reply"],
-        ],
-      },
+    expect(published.map((event) => event.tags)).toEqual([
+      [
+        ["h", channel],
+        ["e", two.id, "", "reply"],
+        ["p", alice],
+      ],
     ]);
   });
 
@@ -371,24 +392,6 @@ describe("GooseRuntime", () => {
     );
     expect(core).toHaveBeenCalledWith(self);
     expect(memoryOpen).not.toHaveBeenCalled();
-  });
-
-  it("posts goose's own text in the thread, or at a Solo chat's top level", async () => {
-    const plain = setup({ reply: "Plain answer" });
-    await plain.deliver(message("1", "@Gander hi"));
-    await flush(100);
-    expect(plain.published.map((event) => event.tags)).toEqual([
-      [
-        ["h", channel],
-        ["e", "1".repeat(64), "", "reply"],
-      ],
-    ]);
-    const solo = setup({ reply: "Plain answer", solo: new Set([channel]) });
-    await solo.deliver(message("1", "@Gander hi"));
-    await flush(100);
-    expect(solo.published.map((event) => event.tags)).toEqual([
-      [["h", channel]],
-    ]);
   });
 
   it("leaves a Solo chat's session for goose to name, and offers that name", async () => {
@@ -541,6 +544,50 @@ describe("GooseRuntime", () => {
     running(self);
     expect(runtime.sessions(other)).toEqual([]);
     expect(runtime.conversations(self)).toHaveLength(1);
+  });
+
+  it("refuses a synced level the selected model lacks before its prompt, unless a pick names one", async () => {
+    const { deliver, runtime, agent, fake, published } = setup({
+      thinking: { o3: { current: "off", levels: ["off"] } },
+    });
+    const config = {
+      ...DEFAULT_CONFIG,
+      provider: "openai",
+      model: "o3",
+      effort: "high",
+    };
+    const refused =
+      "This agent's synced effort \"high\" isn't offered by goose's o3. Change it in Settings.";
+    await deliver(message("1", "@Gander think"), {
+      config,
+      synced: { effort: "high" },
+    });
+    await flush(100);
+    expect(fake.geese[0]?.turns).toEqual([]);
+    expect(published.at(-1)?.content).toContain(refused);
+    // A watch or timer is checked the same way.
+    await expect(
+      runtime.runOnce({
+        delivery: {
+          agent,
+          channelId: channel,
+          config,
+          synced: { effort: "high" },
+        },
+        key: "timer/daily",
+        signal: new AbortController().signal,
+        prompt: async () => "Post the summary.",
+      } as unknown as Parameters<GooseRuntime["runOnce"]>[0]),
+    ).resolves.toEqual({ ok: false, error: refused, undelivered: true });
+    expect(fake.geese[0]?.turns).toEqual([]);
+    // The owner's pick runs on its own level.
+    await deliver(message("2", "@Gander think"), {
+      config,
+      synced: { effort: "high" },
+      effort: "off",
+    });
+    await flush(100);
+    expect(fake.geese[0]?.turns.map((turn) => turn.text)).toHaveLength(1);
   });
 
   it("keeps goose while another agent runs, and stops it with the last", async () => {
@@ -1018,6 +1065,31 @@ it("keeps the notes of a turn goose never started for the next, ahead of newer o
   } as unknown as Partial<Delivery>);
   await flush(100);
   expect(pending[channel]).toEqual(["(I interrupted your reply)", "(newer)"]);
+});
+
+it("gives a turn refused before its prompt its notes back, and the next turn sends them", async () => {
+  const f = setup();
+  const pending: Record<string, string[]> = { [channel]: ["(plugin note)"] };
+  const notes = vi.fn((at: string) => (pending[at] ?? []).splice(0));
+  const restoreNotes = vi.fn((at: string, kept: readonly string[]) => {
+    pending[at] = [...kept, ...(pending[at] ?? [])];
+  });
+  const agent = { ...f.agent, notes, restoreNotes };
+  // Its model can't be selected, so goose never sees the first prompt.
+  vi.spyOn(
+    AcpSession.prototype as unknown as { select: () => Promise<void> },
+    "select",
+  ).mockRejectedValueOnce(new Error("no such model"));
+  await f.deliver(message("1", "@Gander go on"), {
+    agent,
+  } as unknown as Partial<Delivery>);
+  await flush(100);
+  expect(pending[channel]).toEqual(["(plugin note)"]);
+  await f.deliver(message("2", "@Gander again"), {
+    agent,
+  } as unknown as Partial<Delivery>);
+  await flush(100);
+  expect(f.goose()?.turns.at(-1)?.text).toContain("(plugin note)");
 });
 
 it("hands a Solo chat's Canvas to each turn, and a shared channel's to none", async () => {

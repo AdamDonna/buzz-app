@@ -60,8 +60,8 @@ function copyFor(action: ChannelLifecycleAction, noun: LifecycleNoun) {
   };
 }
 
-// Enter confirms reversible actions; irreversible ones focus Cancel, which
-// stays neutral so it never competes with a red confirm.
+// Reversible actions retain their prominent treatment. Archive still starts
+// on Cancel, so an accidental Enter cannot archive a channel for everyone.
 const reversible = new Set<ChannelLifecycleAction>([
   "archive",
   "unarchive",
@@ -79,6 +79,8 @@ export function ChannelLifecycleDialog({
   onSubmit,
   failed,
   finalFocus,
+  confirmed = false,
+  undo,
 }: {
   channelId: string;
   channelName: string;
@@ -90,6 +92,10 @@ export function ChannelLifecycleDialog({
   onSubmit?(): void;
   finalFocus?: DialogProps["finalFocus"];
   failed?(title: string, message: string): void;
+  /** Already chosen without a dialog, as Undo is: run it on mount. */
+  confirmed?: boolean;
+  /** Offered from an immediate archive's result toast. */
+  undo?(): void;
 }) {
   const callbacks = useRef({ completed, failed });
   useLayoutEffect(() => {
@@ -108,6 +114,25 @@ export function ChannelLifecycleDialog({
       operation.current?.abort();
     };
   }, []);
+  // Archiving a chat is undoable from its result toast, so it skips
+  // confirmation; channels archive for everyone and still confirm. Undo was
+  // chosen from that toast, so it runs at once too.
+  // Deferring the start lets a development StrictMode remount cancel it.
+  const immediate = confirmed || (action === "archive" && noun === "chat");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: start once per mounted archive request.
+  useEffect(() => {
+    if (!immediate) return;
+    const timer = setTimeout(() => void submit());
+    return () => clearTimeout(timer);
+  }, []);
+  // Without a confirmation to dismiss, a fast archive needs no progress
+  // feedback: the result toast follows. Announce only a slow write.
+  const [slow, setSlow] = useState(!immediate);
+  useEffect(() => {
+    if (!immediate || !busy) return;
+    const timer = setTimeout(() => setSlow(true), 1000);
+    return () => clearTimeout(timer);
+  }, [immediate, busy]);
   const submit = async () => {
     if (operation.current || error) return;
     const controller = new AbortController();
@@ -118,7 +143,13 @@ export function ChannelLifecycleDialog({
     try {
       await lifecycle.run(action, channelId, controller.signal);
       if (!controller.signal.aborted) {
-        notify(`${copy.done}: ${channelName}`, "success");
+        notify(
+          `${copy.done}: ${channelName}`,
+          "success",
+          immediate && action === "archive" && undo
+            ? { label: "Undo", onClick: undo, timeout: 3000 }
+            : undefined,
+        );
         callbacks.current.completed();
       }
     } catch (error) {
@@ -137,7 +168,7 @@ export function ChannelLifecycleDialog({
   // runs and the caller's duplicate gate remains held until the result settles.
   return (
     <>
-      {(busy || error) && (
+      {((busy && slow) || error) && (
         <ToastNotice
           title={busy ? copy.pending : `${copy.title} failed`}
           description={busy ? channelName : error}
@@ -147,9 +178,9 @@ export function ChannelLifecycleDialog({
       )}
       <Dialog
         size="compact"
-        open={!busy && !error}
+        open={!immediate && !busy && !error}
         dismissOnOutsideClick
-        initialFocus={confirms ? confirm : cancel}
+        initialFocus={confirms && action !== "archive" ? confirm : cancel}
         // Cancellation remains sidebar-owned; submission returns to the trigger.
         finalFocus={busy || error ? finalFocus : false}
         onOpenChange={(open) => {

@@ -1,11 +1,12 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { chmod, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bytesToHex } from "nostr-tools/utils";
 import { keypair, signed } from "../features/relay/testing";
-import { nodeClient } from "./node";
+import { nodeClient, relayAuthority, relayAuthorityLookup } from "./node";
+import { callTool, memoryVersion } from "./tools";
 
 const agent = keypair();
 const owner = keypair();
@@ -86,6 +87,35 @@ it("reads back its memory and rejects a tampered entry", async () => {
   const entry = stored[0] as { created_at: number };
   stored.push({ ...entry, created_at: entry.created_at + 1 });
   await expect(buzz.memories()).rejects.toThrow(/invalidly signed/);
+});
+
+it("deletes a memory entry and recreates it after its tombstone", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(1_800_000_000_000);
+    const buzz = client();
+    // An entry dated ahead of this clock, as a writer with a fast clock leaves.
+    await buzz.remember("mem/notes", "keep this", 1_800_000_100);
+    await expect(
+      callTool(buzz, {}, "mem_rm", {
+        slug: "notes",
+        expected: await memoryVersion("keep this"),
+      }),
+    ).resolves.toBe("deleted mem/notes");
+    expect(await buzz.memories()).toEqual({
+      entries: [],
+      deleted: [{ slug: "mem/notes", createdAt: 1_800_000_102 }],
+      partial: false,
+    });
+    // In the same second, the new entry must still outrank the tombstone.
+    await callTool(buzz, {}, "mem_set", { slug: "notes", text: "again" });
+    expect(stored).toHaveLength(3);
+    await expect(
+      callTool(buzz, {}, "mem_get", { slug: "notes" }),
+    ).resolves.toBe(`version: ${await memoryVersion("again")}\n\nagain`);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("saves only its community's media, signed for a get, and shows images", async () => {
@@ -213,4 +243,69 @@ it("searches profile names, signed, and reports a community without the search",
   await expect(client().searchProfiles?.("wes", 100)).rejects.toThrow(
     "500 broken",
   );
+});
+
+describe("relayAuthority", () => {
+  const key = "a".repeat(64);
+  const relay = (answer: () => Promise<Response>) => {
+    const fetch = vi.fn(answer);
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+
+  it("asks the relay's own origin for its NIP-11 key, sending no credentials", async () => {
+    const fetch = relay(async () => Response.json({ self: key, pubkey: "b" }));
+    expect(await relayAuthority("wss://relay.test/")).toBe(key);
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://relay.test");
+    expect(init.redirect).toBe("error");
+    expect(init.headers).toEqual({ Accept: "application/nostr+json" });
+  });
+
+  it.each([
+    ["no key", async () => Response.json({ name: "relay" })],
+    [
+      "only the operator-contact pubkey",
+      async () => Response.json({ pubkey: key }),
+    ],
+    ["a malformed key", async () => Response.json({ self: "A".repeat(64) })],
+    ["a non-object", async () => Response.json(null)],
+    ["a failed answer", async () => new Response("no", { status: 503 })],
+    ["unreadable JSON", async () => new Response("<html>")],
+    [
+      "a refused redirect",
+      async () => {
+        throw new TypeError("fetch failed: redirect mode is set to error");
+      },
+    ],
+  ])("learns nothing from %s", async (_, answer) => {
+    relay(answer);
+    expect(await relayAuthority("wss://relay.test")).toBeUndefined();
+  });
+
+  it("asks again after a failed lookup and keeps the key it learns", async () => {
+    const fetch = relay(async () => new Response("no", { status: 503 }));
+    const lookup = relayAuthorityLookup("wss://relay.test");
+    expect(await lookup()).toBeUndefined();
+    fetch.mockImplementation(async () => Response.json({ self: key }));
+    expect(await lookup()).toBe(key);
+    expect(await lookup()).toBe(key);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a learned key when an overlapping lookup fails later", async () => {
+    let fail = (_: Response) => {};
+    const fetch = relay(async () => Response.json({ self: key }));
+    fetch.mockImplementationOnce(async () => Response.json({ self: key }));
+    fetch.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (fail = resolve)),
+    );
+    const lookup = relayAuthorityLookup("wss://relay.test");
+    const [learned, overlapping] = [lookup(), lookup()];
+    expect(await learned).toBe(key);
+    fail(new Response("no", { status: 503 }));
+    expect(await overlapping).toBe(key);
+    expect(await lookup()).toBe(key);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 });

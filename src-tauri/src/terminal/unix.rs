@@ -54,7 +54,7 @@ fn executable(path: &str) -> bool {
     unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
 }
 
-pub(super) fn resolve_shell(candidate: Option<&str>) -> String {
+pub(crate) fn resolve_shell(candidate: Option<&str>) -> String {
     candidate
         .filter(|shell| executable(shell))
         .map(str::to_owned)

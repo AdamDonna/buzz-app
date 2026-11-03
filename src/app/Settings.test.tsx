@@ -21,8 +21,10 @@ import {
   type SettingsCards,
 } from "../features/settings/service";
 import type { ClientSnapshot } from "../features/communities/service";
+import type { DecisionsService } from "../features/decisions/service";
 import type { RelayData } from "../features/relay/service";
 import type { Contribution } from "../plugins/contributions";
+import { createPluginInstallRequests } from "../plugins/installer";
 
 afterEach(cleanup);
 vi.mock("../bundled/icons", () => ({
@@ -1198,6 +1200,42 @@ it("shows administration only within a selected community", () => {
   expect(screen.queryByText("Membership body")).toBeNull();
 });
 
+it("opens Manage plugins from the Decisions API hint", async () => {
+  const user = userEvent.setup();
+  const { cards } = registry([]);
+  const providers: never[] = [];
+  const decisions = {
+    backend: () => undefined,
+    providers: () => providers,
+    subscribe: () => () => {},
+    setBackend: vi.fn(),
+  } as unknown as DecisionsService;
+  const onSection = vi.fn();
+  const view = (section: string) => (
+    <Settings
+      {...host}
+      cards={cards}
+      decisions={decisions}
+      navigation={
+        {
+          target: { version: 1, kind: "settings", section },
+          complete: () => true,
+        } as never
+      }
+      onSection={onSection}
+    />
+  );
+  const { rerender } = render(view("decisions"));
+  const section = await screen.findByRole("region", { name: "Decisions API" });
+  await user.click(
+    within(section).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("plugins");
+  // The link is hidden with its section, so focus moves into the one it opened.
+  rerender(view("plugins"));
+  expect(screen.getByRole("region", { name: "Manage plugins" })).toHaveFocus();
+});
+
 it("gives contributed cards their own community sections and retires removed cards", async () => {
   const { cards, set } = registry([
     card("hosted", "Hosted communities", "Communities"),
@@ -1994,7 +2032,15 @@ it("keeps identity independent of community profile and clears revealed keys on 
         {...host}
         cards={cards}
         identity={
-          { exportKey } as unknown as Parameters<typeof Settings>[0]["identity"]
+          {
+            exportKey,
+            // No backup status: the row stays hidden.
+            backup: {
+              subscribe: () => () => {},
+              snapshot: () => undefined,
+              ready: () => new Promise(() => {}),
+            },
+          } as unknown as Parameters<typeof Settings>[0]["identity"]
         }
       />
     </ToastProvider>,
@@ -2179,4 +2225,311 @@ it("allows Add to install while an independent folder check is pending, includin
   await waitFor(() =>
     expect(installImport).toHaveBeenCalledExactlyOnceWith("add", "dist"),
   );
+});
+
+const pinned = "0123456789abcdef0123456789abcdef01234567";
+const managedPolicy = (...states: ("missing" | "current" | "outdated")[]) => ({
+  status: "ready" as const,
+  path: "/data/managed-plugins.json",
+  source: "Example Org",
+  problems: [],
+  plugins: states.map((state, index) => ({
+    id:
+      index === 0 && state !== "missing"
+        ? "example.external"
+        : `example.managed${index}`,
+    repository: "https://example.com/plugins",
+    reference: "v1",
+    commit: pinned,
+    path: "dist",
+    state,
+  })),
+});
+
+it("recommends managed plugins in Settings and points to them from navigation", async () => {
+  const git = vi.fn(async () => ({
+    token: "managed",
+    source: "https://example.com/plugins",
+    commit: pinned,
+    warnings: [],
+    candidates: [
+      {
+        path: "dist",
+        revision: "new",
+        manifest: {
+          id: "example.managed0",
+          name: "Managed",
+          apiVersion: 1 as const,
+        },
+      },
+    ],
+  }));
+  const fixture = reviewPluginFixture({
+    communities: {
+      ...host.communities,
+      relay: { snapshot: () => ({ status: "connecting" }) },
+    } as never,
+  });
+  Object.assign(fixture.manager, {
+    imports: { git, discard: vi.fn(async () => {}) },
+    installImport: vi.fn(async () => true),
+  });
+  Object.assign(fixture.snapshot.configuration, {
+    managed: managedPolicy("missing"),
+  });
+  act(fixture.publish);
+  expect(
+    screen.getByRole("button", { name: /Manage plugins/ }),
+  ).toHaveTextContent("1 recommended plugin");
+  const group = screen.getByRole("region", {
+    name: "Recommended by Example Org",
+  });
+  fireEvent.click(
+    within(group).getByRole("button", {
+      name: "Review and install example.managed0",
+    }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review plugin access",
+  });
+  await within(dialog).findByRole("button", { name: "Install plugin" });
+  expect(git).toHaveBeenCalledWith(
+    "https://example.com/plugins",
+    "v1",
+    undefined,
+    pinned,
+  );
+});
+
+it("marks installed managed plugins and keeps the badge only for pending work", () => {
+  const fixture = reviewPluginFixture();
+  Object.assign(fixture.snapshot.configuration, {
+    managed: managedPolicy("current"),
+  });
+  act(fixture.publish);
+  expect(
+    screen.getByRole("button", { name: /Manage plugins/ }),
+  ).not.toHaveTextContent("recommended");
+  expect(screen.queryByRole("region", { name: /Recommended by/ })).toBeNull();
+  const row = screen.getByRole("button", {
+    name: "View Zebra external details",
+  });
+  expect(row).toHaveAccessibleDescription(/Managed by Example Org/);
+  fireEvent.click(row);
+  expect(
+    within(
+      screen.getByRole("complementary", { name: "Zebra external details" }),
+    ).getByText("Managed by Example Org"),
+  ).toBeVisible();
+});
+
+it("offers Review update for a managed plugin whose pinned commit changed", () => {
+  const fixture = reviewPluginFixture();
+  Object.assign(fixture.manager, {
+    imports: { git: vi.fn(), discard: vi.fn() },
+  });
+  Object.assign(fixture.snapshot.configuration, {
+    managed: managedPolicy("outdated"),
+  });
+  act(fixture.publish);
+  expect(
+    screen.getByRole("button", { name: /Manage plugins/ }),
+  ).toHaveTextContent("1 recommended plugin");
+  expect(
+    screen.getByRole("button", { name: "Review update example.external" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "View Zebra external details" }),
+  ).toHaveAccessibleDescription(/Managed by Example Org/);
+});
+
+it("hides managed recommendations where plugins cannot be imported", () => {
+  const fixture = reviewPluginFixture();
+  Object.assign(fixture.snapshot.configuration, {
+    managed: managedPolicy("missing"),
+  });
+  act(fixture.publish);
+  expect(screen.queryByRole("region", { name: /Recommended by/ })).toBeNull();
+});
+
+it("routes a managed plugin's updates through the managed review instead of the reference tip", async () => {
+  const manifest = {
+    id: "example.external",
+    name: "Zebra external",
+    apiVersion: 1 as const,
+  };
+  const git = vi.fn(async () => ({
+    token: "pinned",
+    source: "https://example.com/plugins",
+    commit: pinned,
+    warnings: [],
+    candidates: [{ path: "dist", revision: "pinned-revision", manifest }],
+  }));
+  const checkGit = vi.fn(async () => {
+    throw new Error("the reference tip must not be checked");
+  });
+  const fixture = reviewPluginFixture({
+    communities: {
+      ...host.communities,
+      relay: { snapshot: () => ({ status: "connecting" }) },
+    } as never,
+  });
+  const external = fixture.snapshot.configuration.catalog.plugins[1];
+  Object.assign(external as object, {
+    updateSource: {
+      repository: "https://example.com/plugins",
+      reference: "v1",
+      path: "dist",
+    },
+  });
+  Object.assign(fixture.manager, {
+    imports: { git, checkGit, discard: vi.fn(async () => {}) },
+    installImport: vi.fn(async () => true),
+  });
+  Object.assign(fixture.snapshot.configuration, {
+    managed: managedPolicy("outdated"),
+  });
+  act(fixture.publish);
+  fireEvent.click(
+    screen.getByRole("button", { name: "View Zebra external details" }),
+  );
+  const details = screen.getByRole("complementary", {
+    name: "Zebra external details",
+  });
+  expect(
+    within(details).getByText(/Example Org recommends a different version/),
+  ).toBeVisible();
+  expect(
+    within(details).queryByRole("button", {
+      name: /Check for updates|^Update/,
+    }),
+  ).toBeNull();
+  fireEvent.click(
+    within(details).getByRole("button", { name: "Review update" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Update Zebra external",
+  });
+  await within(dialog).findByRole("button", { name: "Update" });
+  expect(git).toHaveBeenCalledWith(
+    "https://example.com/plugins",
+    "v1",
+    undefined,
+    pinned,
+  );
+  expect(checkGit).not.toHaveBeenCalled();
+});
+
+function installRequestFixture(imports: object | undefined) {
+  const { cards } = registry([]);
+  const snapshot = {
+    configuration: {
+      status: "ready",
+      externalPluginsPaused: false,
+      catalog: { profile: "test", location: "test", plugins: [] },
+    },
+    activation: {},
+    busy: false,
+    error: null,
+    refreshError: null,
+  };
+  const plugins = {
+    imports,
+    subscribe: () => () => {},
+    snapshot: () => snapshot,
+    change: vi.fn(async () => true),
+    dismissError: vi.fn(),
+  } as unknown as Parameters<typeof Settings>[0]["plugins"];
+  const requests = createPluginInstallRequests();
+  return { cards, plugins, requests };
+}
+const market = { id: "example.market", name: "Market" };
+
+const requestedSource = {
+  repository: "https://example.com/plugins.git",
+  reference: "v1",
+};
+
+it("opens a requested plugin source in Plugins and cancels it when Settings closes", async () => {
+  const { cards, plugins, requests } = installRequestFixture({
+    git: vi.fn(),
+    discard: vi.fn(async () => {}),
+  });
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+  const outcome = requests.request(requestedSource, market);
+  const dialog = await screen.findByRole("dialog", { name: "Add a plugin" });
+  expect(within(dialog).getByLabelText("Git or GitHub repository")).toHaveValue(
+    "https://example.com/plugins.git",
+  );
+  expect(dialog).toHaveTextContent("Opened from Market (example.market).");
+  view.unmount();
+  await expect(outcome).resolves.toBe("cancelled");
+  expect(requests.snapshot()).toBeUndefined();
+});
+
+it("cancels a request nobody claimed when Settings closes", async () => {
+  const { cards, plugins, requests } = installRequestFixture(undefined);
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  const outcome = requests.request(requestedSource, market);
+  expect(requests.snapshot()).toBeDefined();
+  view.unmount();
+  await expect(outcome).resolves.toBe("cancelled");
+});
+
+it("refuses a plugin request while the add dialog is open", async () => {
+  const { cards, plugins, requests } = installRequestFixture({
+    git: vi.fn(),
+    discard: vi.fn(async () => {}),
+  });
+  render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+  await screen.findByRole("dialog", { name: "Add a plugin" });
+  await expect(requests.request(requestedSource, market)).resolves.toBe(
+    "unavailable",
+  );
+});
+
+it("leaves a confirmed install's request to the install when Settings closes", async () => {
+  const { cards, plugins, requests } = installRequestFixture(undefined);
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  const outcome = requests.request(requestedSource, market);
+  const id = requests.snapshot()?.id ?? 0;
+  expect(requests.claim(id)).toBe(true);
+  const unconfirm = requests.confirm(id);
+  view.unmount();
+  await Promise.resolve();
+  expect(requests.snapshot()?.id).toBe(id);
+  requests.settle(id, "installed");
+  unconfirm();
+  await expect(outcome).resolves.toBe("installed");
 });

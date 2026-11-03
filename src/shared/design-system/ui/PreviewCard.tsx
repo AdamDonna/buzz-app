@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { behindActiveOverlay, observeOverlays } from "../overlayLayer";
+import { hoverOpenTiming } from "./hoverIntent";
 
 export type PreviewCardProps = {
   /** The one interactive element that anchors and reveals this preview. */
@@ -21,7 +22,8 @@ export type PreviewCardProps = {
   align?: BasePreviewCard.Positioner.Props["align"];
   /** Optional content anchor when the trigger owns a wider hit area. */
   anchor?: BasePreviewCard.Positioner.Props["anchor"];
-  delay?: number;
+  /** A preview in the same group is already open: move to this one at once. */
+  warm?: boolean;
   className?: string;
   id?: string;
   "aria-label"?: string;
@@ -63,7 +65,7 @@ export function PreviewCard({
   side = "bottom",
   align = "start",
   anchor,
-  delay,
+  warm = false,
   className,
   id,
   link,
@@ -237,8 +239,8 @@ export function PreviewCard({
     >
       <BasePreviewCard.Trigger
         render={trigger}
-        delay={delay ?? (actionRef ? 0 : 250)}
-        closeDelay={150}
+        {...hoverOpenTiming.preview}
+        {...(warm && { delay: 0 })}
         ref={rememberTrigger}
         onMouseEnter={() => {
           heldLeave.current = false;

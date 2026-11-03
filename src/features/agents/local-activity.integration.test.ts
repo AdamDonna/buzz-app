@@ -95,6 +95,7 @@ it("carries a verified mention through host handover into all three scopes witho
     publishProfile: vi.fn(async () => {}),
     claim: vi.fn(async () => true),
     release: vi.fn(async () => {}),
+    keepAwake: vi.fn(async () => {}),
   };
   const service = new AgentsService(
     ctx,

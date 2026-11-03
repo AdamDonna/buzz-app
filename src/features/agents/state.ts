@@ -12,6 +12,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CONFIG_STORAGE_KEY } from "./agent-config";
 import { CATCH_UP_KEY, CATCH_UP_PREFIX } from "./catch-up";
 import { INTERRUPTED_PREFIX } from "./interrupted";
+import { SYNCED_TEAMS_KEY } from "./team-config";
 import {
   localStore,
   type AgentStore,
@@ -40,6 +41,8 @@ export function isAgentKey(key: string) {
     key.startsWith("buzz.codex.sessions.") ||
     // The relay-synced copies of agent settings that starts use.
     key === CONFIG_STORAGE_KEY ||
+    // The synced team rosters that starts use.
+    key === SYNCED_TEAMS_KEY ||
     // The device-wide defaults that blank agent settings inherit.
     key === "buzz.claude-code.provider-defaults.v1" ||
     key === "buzz.codex.provider-defaults.v1" ||

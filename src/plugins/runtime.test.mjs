@@ -90,6 +90,7 @@ test("pages wait for dependencies and completion of async activation", async () 
     await settle();
     assert.equal(starts, 0);
     assert.equal(h.states["example.page"].status, "starting");
+    assert.equal(h.root.pluginStatus.settled(), false);
     assert.deepEqual(h.pages.snapshot(), []);
     h.root.provide("connection", {});
     await started.promise;
@@ -98,9 +99,29 @@ test("pages wait for dependencies and completion of async activation", async () 
     release.resolve();
     await h.wait((s) => s["example.page"]?.status === "active");
     assert.equal(h.pages.snapshot()[0].key, "example.page/main");
+    assert.equal(h.root.pluginStatus.settled(), true);
   } finally {
     release.resolve();
     await h.dispose();
+  }
+});
+
+test("startup is not over while the plugin settings are being read", async () => {
+  let configuring = true;
+  const root = new Context();
+  const runtime = new PluginRuntime(
+    root,
+    async () => ({ apply() {} }),
+    undefined,
+    () => configuring,
+  );
+  try {
+    assert.equal(root.pluginStatus.settled(), false);
+    configuring = false;
+    assert.equal(root.pluginStatus.settled(), true);
+  } finally {
+    await runtime.dispose();
+    await root.fiber.dispose();
   }
 });
 

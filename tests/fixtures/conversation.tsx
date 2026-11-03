@@ -1,6 +1,7 @@
 import { ToastProvider } from "../../src/shared/design-system/ui/Toast";
 // Automated boundary proof only. No live broker, persistent messages or real keys.
 import { Context } from "@deepseek-ai/cordis";
+import { emptySync } from "../../src/features/communities/known-communities";
 import {
   StrictMode,
   useState,
@@ -16,6 +17,7 @@ import { ConversationService } from "../../src/features/conversation/service";
 import { ShortcutsService } from "../../src/features/shortcuts/service";
 import { SettingsCardsService } from "../../src/features/settings/service";
 import { bundledPlugins } from "../../src/bundled";
+import { conversationFeatures } from "../../src/app/conversation-features";
 import { createRelaySession } from "../../src/features/relay/session";
 import { PublishRejected } from "../../src/features/relay/outbox";
 import {
@@ -267,6 +269,7 @@ const probe = {
 };
 const plugins = createPluginManager(ctx, {
   bundled: [...bundledPlugins, probe],
+  builtIn: conversationFeatures,
   storage,
 });
 provideNavigation(ctx);
@@ -289,6 +292,17 @@ conversation.tools.subscribe(() => {
   }
 });
 ctx.provide("relay", relay);
+ctx.provide("communityReader", {
+  subscribe: () => () => {},
+  snapshot: () => ({
+    status: "unavailable",
+    relayAvailable: false,
+    profile: { name: "", picture: "" },
+    memberships: [],
+    selected: null,
+    sync: emptySync(),
+  }),
+});
 // Channels needs Agents for its members/templates; this fixture has no agents.
 const noAgents = { status: "unavailable", agents: [], running: [], teams: [] };
 ctx.provide("agents", {

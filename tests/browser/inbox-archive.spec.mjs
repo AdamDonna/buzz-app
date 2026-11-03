@@ -195,6 +195,9 @@ test("Inbox archive survives reload and reopens Threads before fresh Mentions", 
   await expect(rows).toHaveCount(1);
   await rows.getByRole("button", { name: /^Open / }).click();
   await expect(sideTabs(inbox)).toHaveCount(1);
+  // Opening an unread row saves read state; row buttons are disabled and the
+  // shortcut is deregistered until that save settles.
+  await expect(rows.getByRole("button", { name: /^Open / })).toBeEnabled();
   await archiveShortcut(page);
   await expect(rows).toHaveCount(0);
   // With nothing left, its tab closes and focus returns to the list.
@@ -494,6 +497,8 @@ test("archiving the open conversation advances its tab, then closes it", async (
   const root = detail.locator(`[data-message-id="${app.inboxWindow.root.id}"]`);
   await expect(root).toBeVisible();
   await expect(sideTabs(inbox)).toHaveCount(1);
+  // Row buttons are disabled while the opened row's read-state save is pending.
+  await expect(thread.getByRole("button", { name: /^Open / })).toBeEnabled();
   await archiveShortcut(page);
   await expect(rows).toHaveCount(1);
   // The remaining conversation replaces the archived one's tab and is selected.
@@ -503,6 +508,8 @@ test("archiving the open conversation advances its tab, then closes it", async (
     detail.locator(`[data-message-id="${request.id}"]`),
   ).toBeInViewport();
   await expect(next).toHaveAttribute("data-selected", "true");
+  // Advancing reads the successor, so its save must settle before the chord.
+  await expect(next.getByRole("button", { name: /^Open / })).toBeEnabled();
   await archiveShortcut(page);
   await expect(rows).toHaveCount(0);
   await expect(detail).toHaveCount(0);

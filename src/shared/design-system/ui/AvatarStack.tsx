@@ -1,3 +1,4 @@
+import { motion, useReducedMotion, type HTMLMotionProps } from "motion/react";
 import { Avatar } from "./Avatar";
 import styles from "./AvatarStack.module.css";
 
@@ -13,12 +14,16 @@ export function AvatarStack({
   items,
   size = "compact",
   max = 3,
+  animateEntrance = false,
 }: {
   items: readonly StackAvatar[];
-  size?: "compact" | "small" | "mini" | "hero";
+  size?: "compact" | "small" | "mini" | "hero" | "hero-large";
   /** How many avatars show before the overflow count. */
   max?: number;
+  /** Playful hero entry, matching the huddle avatar spring. */
+  animateEntrance?: boolean;
 }) {
+  const Item = animateEntrance ? EntranceItem : "span";
   if (!items.length) return null;
   return (
     <span
@@ -28,7 +33,7 @@ export function AvatarStack({
       data-size={size}
     >
       {items.slice(0, max).map((item, index) => (
-        <span
+        <Item
           key={item.id}
           className={styles.item}
           // Each overlaps the one before it.
@@ -50,10 +55,10 @@ export function AvatarStack({
             shape={item.shape}
             size="fill"
           />
-        </span>
+        </Item>
       ))}
       {items.length > max &&
-        (size === "hero" ? (
+        (size === "hero" || size === "hero-large" ? (
           // A hero count is one more stack item, shaped like the avatars.
           <span
             className={styles.item}
@@ -71,5 +76,25 @@ export function AvatarStack({
           <span className={styles.count}>+{items.length - max}</span>
         ))}
     </span>
+  );
+}
+
+/** Only opted-in stacks pay for Motion's component and animation lifecycle. */
+function EntranceItem(props: HTMLMotionProps<"span">) {
+  const reduced = useReducedMotion();
+  return (
+    <motion.span
+      {...props}
+      initial={reduced ? false : { scale: 0.9, rotate: -10 }}
+      animate={{ scale: 1, rotate: 0 }}
+      transition={
+        reduced
+          ? { duration: 0 }
+          : {
+              scale: { type: "spring", stiffness: 380, damping: 16 },
+              rotate: { type: "spring", stiffness: 380, damping: 20 },
+            }
+      }
+    />
   );
 }

@@ -53,7 +53,7 @@ export function PageTabs({
 }) {
   const tabState = useChannelTabState(session, undefined, `page:${id}`);
   const list = useChannelList(session.channels);
-  const { channels } = useChannelLabels(
+  const { channels, profiles } = useChannelLabels(
     // As in Channels, a Huddle room's tabs show the unavailable placeholder.
     list.channels.filter(
       (channel) => !channel.huddle && !channel.metadataPending,
@@ -78,6 +78,7 @@ export function PageTabs({
     current: undefined,
     scope,
     channels,
+    profiles,
     extensions,
     leadingIds: [],
     continuingVisit: continuing.current,
@@ -283,6 +284,7 @@ export function PageTabs({
     ref?: typeof secondary.splitTrigger,
   ) => (
     <IconButton
+      hint="familiar"
       ref={ref}
       data-tab-pane-toggle=""
       size="toolbar"
@@ -310,7 +312,11 @@ export function PageTabs({
           };
         }}
       >
-        <div ref={split.ref} style={split.style} className={styles.board}>
+        <div
+          ref={split.ref}
+          style={split.style}
+          className={`${styles.board} ${panelStyles.splitMotion}`}
+        >
           <div
             ref={fallbackFocus}
             tabIndex={-1}

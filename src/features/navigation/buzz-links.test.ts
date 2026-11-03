@@ -185,3 +185,157 @@ it.each(["//", "/extra", "/%2F", "/./", "/extra/..", "/%2e/"])(
     ).toBeNull();
   },
 );
+
+const pluginRepository = "ssh://git@github.com/example/plugin.git";
+const pluginLink = `buzz://plugin-install?repository=${encodeURIComponent(pluginRepository)}&ref=release%2Fstable`;
+it("opens Git plugin links in Settings without a community or account", () => {
+  const target = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    pluginImport: { repository: pluginRepository, reference: "release/stable" },
+  };
+  expect(buzzLinkKind(pluginLink)).toBe("buzz");
+  expect(buzzLinkTarget(pluginLink, scope)).toEqual(target);
+  expect(deepLinkStep(pluginLink, { selected: null })).toEqual({
+    open: target,
+  });
+  expect(
+    buzzLinkTarget(
+      pluginLink.replace("plugin-install?", "plugin-install/?"),
+      scope,
+    ),
+  ).toEqual(target);
+  expect(
+    buzzLinkTarget(`${pluginLink}&enable=true&enable=false`, scope),
+  ).toEqual(target);
+});
+it.each([
+  "buzz://plugin-install",
+  `${pluginLink}&ref=other`,
+  `${pluginLink}&repository=https://example.com/plugin`,
+  pluginLink.replace("plugin-install?", "plugin-install/other?"),
+  pluginLink.replace("plugin-install?", "plugin-install/other/../?"),
+  ...[
+    "file:///tmp/plugin",
+    "http://example.com/plugin",
+    "https://user:secret@example.com/plugin",
+    "https://example.com/plugin?token=secret",
+    "https://example.com/plugin#fragment",
+  ].map(
+    (repository) =>
+      `buzz://plugin-install?repository=${encodeURIComponent(repository)}`,
+  ),
+])("rejects invalid or ambiguous plugin import links: %s", (href) => {
+  expect(parseBuzzLink(href)).toBeNull();
+  expect(deepLinkStep(href, clientForPluginLink)).toEqual({
+    fail: "invalid-target",
+  });
+});
+const clientForPluginLink = {
+  selected: scope.communityOrigin,
+  viewer: scope.viewer,
+};
+
+it.each([
+  ["git@github.com:org/repo.git", "ssh://git@github.com/org/repo.git"],
+  ["github.com/org/repo", "https://github.com/org/repo"],
+  ["org/repo", "https://github.com/org/repo"],
+])(
+  "normalizes a Settings repository address in a plugin link: %s",
+  (input, repository) => {
+    const href = `buzz://plugin-install?repository=${encodeURIComponent(input)}`;
+    const target = {
+      version: 1,
+      kind: "settings",
+      section: "plugins",
+      pluginImport: { repository, reference: "" },
+    };
+    expect(buzzLinkTarget(href, scope)).toEqual(target);
+    expect(deepLinkStep(href, { selected: null })).toEqual({ open: target });
+  },
+);
+
+const plugin = "buzz://plugin?id=com.example.catalog";
+it("parses plugin page links into a plugin target bound to the receiving community", () => {
+  expect(parseBuzzLink(plugin)).toEqual({
+    format: "plugin",
+    pluginId: "com.example.catalog",
+  });
+  expect(buzzLinkKind(plugin)).toBe("buzz");
+  expect(buzzLinkTarget(plugin, scope)).toEqual({
+    version: 1,
+    kind: "plugin",
+    pluginId: "com.example.catalog",
+    scope,
+  });
+  const full = `${plugin}&page=detail&route.slug=hello%20world&route.tab=notes`;
+  expect(parseBuzzLink(full)).toEqual({
+    format: "plugin",
+    pluginId: "com.example.catalog",
+    pageId: "detail",
+    params: { slug: "hello world", tab: "notes" },
+  });
+  expect(buzzLinkTarget(full, scope)).toEqual({
+    version: 1,
+    kind: "plugin",
+    pluginId: "com.example.catalog",
+    pageId: "detail",
+    params: { slug: "hello world", tab: "notes" },
+    scope,
+  });
+});
+it("treats a plugin link that only overflows once scoped as unopenable", () => {
+  const params = (last: number) =>
+    [...Array(7)].map((_, i) => `&route.p${i}=${"a".repeat(1024)}`).join("") +
+    `&route.last=${"a".repeat(last)}`;
+  let last = 1024;
+  while (!buzzLinkTarget(plugin + params(last), scope)) last -= 1;
+  const link = plugin + params(last);
+  expect(buzzLinkTarget(link, scope)).not.toBeNull();
+  const wide = {
+    ...scope,
+    communityOrigin: `https://${"c".repeat(200)}.example`,
+  };
+  expect(() => buzzLinkTarget(link, wide)).not.toThrow();
+  expect(buzzLinkTarget(link, wide)).toBeNull();
+});
+
+it("ignores unknown plugin link parameters and accepts the Windows root slash", () => {
+  const expected = { format: "plugin", pluginId: "com.example.catalog" };
+  expect(parseBuzzLink(`${plugin}&foo=1&foo=2&route=x`)).toEqual(expected);
+  expect(parseBuzzLink(plugin.replace("plugin?", "plugin/?"))).toEqual(
+    expected,
+  );
+  expect(parseBuzzLink(plugin.replace("buzz:", "BUZZ:"))).toEqual(expected);
+});
+it.each([
+  "buzz://plugin",
+  "buzz://plugin?page=detail",
+  "buzz://plugin?id=",
+  `${plugin}&id=other`,
+  `${plugin}&page=`,
+  `${plugin}&page=a&page=b`,
+  `${plugin}&route.slug=a&route.slug=b`,
+  `${plugin}&route.=a`,
+  `${plugin}&route.bad%20key=a`,
+  `${plugin}&route.slug=${"x".repeat(1025)}`,
+  `${plugin}&${Array.from({ length: 17 }, (_, i) => `route.k${i}=v`).join("&")}`,
+  "buzz://plugin?id=Com.Example",
+  "buzz://plugin?id=.hidden",
+  "buzz://plugin?id=has%20space",
+  "buzz://plugin?id=a/b",
+  `buzz://plugin?id=${"a".repeat(129)}`,
+  `${plugin}&page=Detail`,
+  `${plugin}#fragment`,
+  `${plugin}&route.__proto__=x`,
+  "buzz://plugin:443?id=com.example.catalog",
+  "buzz://user@plugin?id=com.example.catalog",
+  "buzz://plugin/extra?id=com.example.catalog",
+  "buzz://plugin//?id=com.example.catalog",
+  "buzz://plugin/./?id=com.example.catalog",
+  "buzz://plugins?id=com.example.catalog",
+])("rejects a malformed plugin link: %s", (href) => {
+  expect(parseBuzzLink(href), href).toBeNull();
+  expect(buzzLinkTarget(href, scope)).toBeNull();
+});

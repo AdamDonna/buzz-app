@@ -13,7 +13,7 @@ import { stubAvatarBrowserApis } from "../agents/avatar-testing";
 import { writeView } from "../../shared/view-state";
 import { conversationTarget, soloDraftTarget } from "./routes";
 import type { Contribution } from "../../plugins/contributions";
-import type { ChatIcon } from "../conversation/service";
+import type { ChatIcon, ChatMenu } from "../conversation/service";
 
 import {
   fixture,
@@ -304,4 +304,28 @@ it("describes a Solo row as Shared only when its Shared mark renders", () => {
   expect(screen.getByRole("button", { name: /^Planning/ })).not.toHaveAttribute(
     "aria-describedby",
   );
+});
+
+it("shows plugin actions in the primary sidebar right-click menu", async () => {
+  const { MenuItem } = await import("../../shared/design-system/ui/Menu");
+  const menus: Contribution<ChatMenu>[] = [
+    {
+      id: "test-menu",
+      key: "test/menu",
+      pluginId: "test",
+      revision: "1",
+      component: ({ channelId }) =>
+        channelId === id ? <MenuItem>Unlink pull request</MenuItem> : null,
+    },
+  ];
+  fixture(true, false, undefined, undefined, 0, undefined, {
+    snapshot: () => menus,
+    subscribe: () => () => {},
+  });
+  fireEvent.keyDown(screen.getByRole("button", { name: /^Planning/ }), {
+    key: "ContextMenu",
+  });
+  expect(
+    await screen.findByRole("menuitem", { name: "Unlink pull request" }),
+  ).toBeVisible();
 });

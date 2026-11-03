@@ -9,11 +9,7 @@ import type {
   WorkflowCapability,
   WorkflowDefinition,
 } from "../../features/workflows/types";
-import {
-  HashIcon,
-  PlayIcon,
-  TrashIcon,
-} from "../../shared/design-system/icons";
+import { PlayIcon, TrashIcon } from "../../shared/design-system/icons";
 import { MenuIcon, MenuItem } from "../../shared/design-system/ui/Menu";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -25,6 +21,10 @@ import { saveAwaitsReadback } from "./WorkflowLanding";
 import { exactSaveReadback } from "./editor-model";
 import { DEFAULT_FORM_STATE, formStateToYaml } from "./workflowFormTypes";
 import { useWorkflowView } from "./useWorkflowView";
+import {
+  type ChannelLabel,
+  channelIcon,
+} from "../../features/channels/channel-icon";
 
 type Draft = {
   editorKey: number;
@@ -50,7 +50,7 @@ function draftFor(next: WorkflowDefinition | "new", editorKey: number): Draft {
 export function WorkflowChannel({
   capability,
   channelId,
-  channelName,
+  channel,
   initialSelection,
   viewer,
   onDraftRiskChange,
@@ -60,7 +60,7 @@ export function WorkflowChannel({
 }: {
   capability: WorkflowCapability;
   channelId: string;
-  channelName: string;
+  channel: ChannelLabel;
   initialSelection: WorkflowDefinition | "new";
   viewer: string;
   onDraftRiskChange?: (atRisk: boolean) => void;
@@ -305,8 +305,9 @@ export function WorkflowChannel({
           ? "Draft retained. Review the error below before continuing."
           : undefined;
   if (!snapshot) return <p role="status">Reading configurations…</p>;
+  const ChannelIcon = channelIcon(channel);
   return (
-    <section aria-label={`Workflows in ${channelName}`}>
+    <section aria-label={`Workflows in ${channel.name}`}>
       {snapshot.status === "loading" && !snapshot.data.items.length && (
         <p role="status">Reading configurations…</p>
       )}
@@ -349,8 +350,8 @@ export function WorkflowChannel({
             onCancel={() => select("close")}
             scope={
               <span className="workflow-channel-label text-label">
-                <HashIcon size={18} aria-hidden="true" />
-                {channelName}
+                <ChannelIcon size={18} aria-hidden="true" />
+                {channel.name}
               </span>
             }
             run={

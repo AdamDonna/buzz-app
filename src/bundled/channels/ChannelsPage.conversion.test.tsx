@@ -1,3 +1,5 @@
+import { createNavigationController } from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
@@ -167,6 +169,8 @@ function fixture() {
       },
     },
     signal: visit.signal,
+    position: () => undefined,
+    savePosition() {},
     forSession: () => navigation,
     complete: () => true,
     resolve: () => true,
@@ -175,6 +179,9 @@ function fixture() {
     <StrictMode>
       <ToastProvider>
         <ChannelsPage
+          navigator={
+            createNavigationController(createMemoryHistory()).navigation
+          }
           relay={relay}
           panels={{
             ...contribution,

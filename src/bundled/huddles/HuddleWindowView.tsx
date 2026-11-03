@@ -171,6 +171,7 @@ function HuddleWindowContent({ view, act, error }: WindowProps) {
             />
             <div className={styles.windowControls}>
               <IconButton
+                hint="familiar"
                 size="large"
                 variant="glass"
                 shape="round"
@@ -193,6 +194,7 @@ function HuddleWindowContent({ view, act, error }: WindowProps) {
                 icon={<ChatCircleIcon />}
               />
               <IconButton
+                hint="familiar"
                 size="large"
                 variant="glass"
                 shape="round"

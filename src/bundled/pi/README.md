@@ -51,10 +51,10 @@ npm install --package-lock-only --ignore-scripts --omit-lockfile-registry-resolv
 - Pi packages load only from a local folder, and only their `pi.durable`
   parts, when the host starts. See [`EXTENSIONS.md`](EXTENSIONS.md).
 - Runs left unfinished when the app quit continue at the next turn. A
-  mention's run posts its answer or failure but shows no steps; its thread's
-  session controls interrupt it. An unaddressed watch's or timer's run is
-  ended, and so is a plugin wake's unless a run that continues shares its
-  conversation.
+  mention's run posts only what the agent sends, plus a report if it fails,
+  and shows no steps; its thread's session controls interrupt it. An
+  unaddressed watch's or timer's run is ended, and so is a plugin wake's
+  unless a run that continues shares its conversation.
 - When the app quits or the host stops during a Buzz tool call, Pi tells the
   model the call may have run, so a `send` it makes again may be posted
   twice. A Stop or Interrupt ends the run instead.

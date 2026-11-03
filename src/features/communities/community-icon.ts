@@ -1,7 +1,9 @@
 import { registerBrokerCommunity } from "../relay/transport";
 import { nativeIdentityEnabled } from "../identity/service";
 import { nativeRelayInfo } from "../relay/native";
-import { publishedCommunityName } from "./names";
+import { communityName, publishedCommunityName } from "./names";
+import { communityDestination } from "./destination";
+import type { Membership } from "./service";
 
 /** Keep untrusted relay metadata out of executable URL schemes and huge data URLs. */
 export function communityIcon(value: unknown): string | undefined {
@@ -72,5 +74,23 @@ export async function fetchCommunityPresentation(
       "name" in info ? info.name : undefined,
     ),
     publishedIcon: communityIcon("icon" in info ? info.icon : undefined),
+  };
+}
+
+/** Resolve display-only metadata without acquiring a community session. */
+export function communityPresentation(
+  origin: string,
+  memberships: readonly Membership[] = [],
+) {
+  const destination = communityDestination(origin);
+  const membership = memberships.find(
+    (item) => communityDestination(item.id).url === destination.url,
+  );
+  return {
+    id: destination.url,
+    name: membership ? communityName(membership) : destination.name,
+    src: membership
+      ? communityIcon(membership.publishedIcon ?? membership.icon)
+      : undefined,
   };
 }

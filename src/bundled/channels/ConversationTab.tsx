@@ -18,6 +18,7 @@ import { MessageManagementStatus } from "../../features/messages/MessageManageme
 import { useMessageOpening } from "../../features/messages/use-message-opening";
 import { usePendingRequest } from "../../features/messages/use-pending-request";
 import type { MessageLinkOrigin } from "../../features/messages/MessageRow";
+import type { ThreadPanelProps } from "../../features/messages/ThreadPanel";
 import { ChannelBody } from "./ChannelBody";
 import { SoloColumn } from "../../features/solo/SoloPresentation";
 import type { ConversationTab as Tab } from "./useChannelTabState";
@@ -45,6 +46,8 @@ type ConversationTabProps = {
   onRetryNavigation?: (() => void) | undefined;
   onResolvedRoot?: ((rootId: string) => void) | undefined;
   onDifferentThread?: ((requested: string, kept: string) => void) | undefined;
+  /** Where a thread shown here lives, when it can open there. */
+  parent?: ThreadPanelProps["parent"];
 };
 /** Each secondary conversation retains its own editing and media-review scope. */
 export function ConversationTab({
@@ -65,6 +68,7 @@ export function ConversationTab({
   onRetryNavigation,
   onResolvedRoot,
   onDifferentThread,
+  parent,
 }: ConversationTabProps) {
   // A saved reply intent belongs to the previous visit, not this restoration;
   // a renamed or merged copy of the tab carries the same request.
@@ -164,6 +168,7 @@ export function ConversationTab({
             revealSelected={threadReveal !== undefined}
             revealRequest={threadReveal}
             close={close}
+            parent={parent}
           />
         ) : target && inTimeline === false ? (
           <ConversationThread
@@ -174,6 +179,7 @@ export function ConversationTab({
             revealSelected
             revealRequest={revealRequest}
             close={close}
+            parent={parent}
           />
         ) : (
           <SoloColumn enabled={soloConversation}>

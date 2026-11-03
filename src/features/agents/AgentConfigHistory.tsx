@@ -1,11 +1,9 @@
-// Dormant (plan §1.2): no screen mounts this until config sync (PR C) ships.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelayEvent } from "../relay/events";
 import { Button } from "../../shared/design-system/ui/Button";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import {
   artifactOp,
-  type Delivery,
   type Expected,
   type SnapshotRead,
 } from "./agent-config-artifacts";
@@ -47,21 +45,33 @@ const message = (error: unknown) =>
 const unconfirmed = (detail: string) =>
   `Couldn't confirm the revert was saved (${detail}). It may still arrive; check the history before trying again.`;
 
+/** What a revert's send came to: accepted, definitely not saved, or maybe. */
+export type RevertOutcome =
+  | Readonly<{ status: "accepted" }>
+  | Readonly<{ status: "refused" | "uncertain"; message: string }>;
+
 export function AgentConfigHistory({
   expected,
   head,
+  version,
   read,
   settings,
   onRevert,
+  title = "History",
 }: {
   expected: Expected;
   /** The current head from the config store; revert builds on it. */
   head: RelayEvent | undefined;
+  /** Changes whenever history changes without a new head, as when an older
+   * revision is redacted; history then reloads. */
+  version?: number;
   read: SnapshotRead;
   /** Required to validate, and so to revert, `buzz.agent.settings`. */
   settings?: SettingsCheck;
   /** Signs and sends the revert; resolves to what the relay said. */
-  onRevert(template: ReturnType<typeof revertTemplate>): Promise<Delivery>;
+  onRevert(template: ReturnType<typeof revertTemplate>): Promise<RevertOutcome>;
+  /** Names the section, as which side of the config it shows. */
+  title?: string;
 }) {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [loading, setLoading] = useState(false);
@@ -89,7 +99,7 @@ export function AgentConfigHistory({
     setLoading(false);
   }, [read, expected.channel, expected.d]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: A new head reloads history from the newest page.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A new head or a history change reloads history from the newest page.
   useEffect(() => {
     setHistory(emptyHistory);
     live.current = emptyHistory;
@@ -98,7 +108,7 @@ export function AgentConfigHistory({
       signal.current?.abort();
       signal.current = undefined;
     };
-  }, [more, head?.id]);
+  }, [more, head?.id, version]);
 
   /** A refusal or an invalid snapshot is definite: nothing changed. A send
    * that fails without a refusal may still have been saved. */
@@ -207,8 +217,8 @@ export function AgentConfigHistory({
 
   const all = segments(history);
   return (
-    <section className={styles.history} aria-label="History">
-      <InlineHeader title="History" />
+    <section className={styles.history} aria-label={title}>
+      <InlineHeader title={title} />
       {!history.revisions.length && !history.failed && (
         <p className="text-body-sm">
           {loading ? "Loading history…" : "No revisions returned."}
@@ -251,23 +261,19 @@ export function AgentConfigHistory({
                     {open === event.id ? "Hide changes" : "Show changes"}
                   </Button>
                 )}
-                {!deleted &&
-                  !invalid &&
-                  !current &&
-                  head &&
-                  artifactOp(head) !== "delete" && (
-                    <Button
-                      size="sm"
-                      variant="subtle"
-                      loading={reverting === event.id}
-                      disabled={
-                        reverting !== undefined && reverting !== event.id
-                      }
-                      onClick={() => revert(event)}
-                    >
-                      Revert to this
-                    </Button>
-                  )}
+                {!deleted && !invalid && !current && head && (
+                  <Button
+                    size="sm"
+                    variant="subtle"
+                    loading={reverting === event.id}
+                    disabled={reverting !== undefined && reverting !== event.id}
+                    onClick={() => revert(event)}
+                  >
+                    {artifactOp(head) === "delete"
+                      ? "Restore this"
+                      : "Revert to this"}
+                  </Button>
+                )}
                 {failure?.id === event.id && (
                   <p className={`text-body-sm ${styles.failure}`} role="alert">
                     {failure.text}

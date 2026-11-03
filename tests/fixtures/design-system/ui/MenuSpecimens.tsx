@@ -766,9 +766,7 @@ export function PopoverSpecimen() {
         description="Hover or click for a richer list. Moving into the popup keeps it open; each row remains a single action."
         code={`<PopoverRoot>
   <PopoverTrigger
-    openOnHover
-    delay={250}
-    closeDelay={150}
+    openOnHover="preview"
     render={<Button>Recent activity</Button>}
   />
   <PopoverPopup aria-label="Recent activity" padding="list" size="wide">
@@ -819,9 +817,7 @@ export function PopoverSpecimen() {
       >
         <PopoverRoot>
           <PopoverTrigger
-            openOnHover
-            delay={250}
-            closeDelay={150}
+            openOnHover="preview"
             render={<Button>Recent activity</Button>}
           />
           <PopoverPopup aria-label="Recent activity" padding="list" size="wide">

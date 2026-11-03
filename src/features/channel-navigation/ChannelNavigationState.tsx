@@ -78,8 +78,12 @@ type State = {
         focusFallback?: HTMLElement | undefined;
         origin?: AbortSignal | undefined;
         callbacks?: LifecycleCallbacks | undefined;
+        /** Chosen from an Undo toast: runs without confirmation. */
+        confirmed?: true;
       }
     | undefined;
+  /** Undos chosen while another lifecycle action held the gate, oldest first. */
+  queuedUndos: readonly ChannelSummary[];
 };
 type ActivityThread = {
   channelId: string;
@@ -117,6 +121,8 @@ type Handoff = State & {
   ): void;
   beginLifecycle(): void;
   closeLifecycle(): void;
+  /** Unarchives through the same gate as every lifecycle action. */
+  undoArchive(channel: ChannelSummary): void;
 };
 const ChannelNavigationContext = createContext<Handoff | undefined>(undefined);
 export const useChannelNavigation = () => useContext(ChannelNavigationContext);
@@ -174,6 +180,25 @@ export function ChannelNavigationProvider({
       previous.preparingDm ? { ...previous, preparingDm: undefined } : previous,
     );
   }, [update]);
+  // The relay runs one lifecycle action per session, so an Undo waits for the
+  // action holding the gate instead of colliding with it.
+  const queuedUndo = !state.lifecycleDialog ? state.queuedUndos[0] : undefined;
+  useLayoutEffect(() => {
+    if (!queuedUndo) return;
+    update((previous) =>
+      previous.lifecycleDialog || previous.queuedUndos[0] !== queuedUndo
+        ? previous
+        : {
+            ...previous,
+            queuedUndos: previous.queuedUndos.slice(1),
+            lifecycleDialog: {
+              channel: queuedUndo,
+              action: "unarchive",
+              confirmed: true,
+            },
+          },
+    );
+  }, [queuedUndo, update]);
   const lifecycleOrigin = state.lifecycleDialog?.origin;
   useLayoutEffect(() => {
     if (!lifecycleOrigin) return;
@@ -257,6 +282,26 @@ export function ChannelNavigationProvider({
       closeLifecycle() {
         update((previous) => ({ ...previous, lifecycleDialog: undefined }));
       },
+      undoArchive(channel) {
+        update((previous) =>
+          previous.lifecycleDialog
+            ? {
+                ...previous,
+                queuedUndos: [
+                  ...previous.queuedUndos.filter(({ id }) => id !== channel.id),
+                  channel,
+                ],
+              }
+            : {
+                ...previous,
+                lifecycleDialog: {
+                  channel,
+                  action: "unarchive",
+                  confirmed: true,
+                },
+              },
+        );
+      },
       clearPreparingDm,
     }),
     [
@@ -269,6 +314,7 @@ export function ChannelNavigationProvider({
       clearPreparingDm,
     ],
   );
+  const archived = state.lifecycleDialog?.channel;
   return (
     <ChannelNavigationContext value={value}>
       {children}
@@ -313,6 +359,11 @@ export function ChannelNavigationProvider({
             channelName={state.lifecycleDialog.channel.name}
             noun={lifecycleNoun(state.lifecycleDialog.channel)}
             action={state.lifecycleDialog.action}
+            confirmed={state.lifecycleDialog.confirmed ?? false}
+            undo={() => {
+              // The toast outlives this dialog: Undo restores the channel it archived.
+              if (archived) value.undoArchive(archived);
+            }}
             lifecycle={connection.session.channelLifecycle}
             onSubmit={value.beginLifecycle}
             // Submission closes asynchronously; use the same captured origin
@@ -359,5 +410,6 @@ function restore(session: RelaySession, scope: string): State {
     scope,
     preparingDm: undefined,
     lifecycleDialog: undefined,
+    queuedUndos: [],
   };
 }

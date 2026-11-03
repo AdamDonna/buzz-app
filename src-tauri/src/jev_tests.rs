@@ -69,3 +69,21 @@ async fn an_unreadable_keychain_is_an_error_and_is_read_again() {
     assert!(host.configured().await.unwrap());
     assert_eq!(*store.reads.lock().unwrap(), 2);
 }
+
+#[test]
+fn clearing_deletes_the_previous_item_first_and_stops_at_a_failure() {
+    let mut deleted = Vec::new();
+    clear_with(|service| {
+        deleted.push(service.to_owned());
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    assert_eq!(deleted, [PREVIOUS_KEY_SERVICE, KEY_SERVICE]);
+    deleted.clear();
+    assert!(clear_with(|service| {
+        deleted.push(service.to_owned());
+        Err(())
+    })
+    .is_err());
+    assert_eq!(deleted, [PREVIOUS_KEY_SERVICE]);
+}

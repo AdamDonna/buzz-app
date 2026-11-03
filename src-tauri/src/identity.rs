@@ -10,7 +10,7 @@ use nostr::{
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, String>;
@@ -36,7 +36,9 @@ fn decrypt_with_conversation(
 }
 
 // No Debug/Serialize: only deliberate export may return the secret to the main UI.
-struct Key(Zeroizing<[u8; 32]>);
+/// The secret, and its public key derived once: socket frames and HTTP
+/// requests read it.
+struct Key(Zeroizing<[u8; 32]>, OnceLock<String>);
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -119,7 +121,7 @@ impl Key {
         if values.next().is_some() {
             return Err(INVALID.into());
         }
-        let key = Self(bytes);
+        let key = Self::new(bytes);
         key.viewer()?;
         Ok(key)
     }
@@ -127,20 +129,26 @@ impl Key {
         loop {
             let mut bytes = Zeroizing::new([0; 32]);
             getrandom::fill(bytes.as_mut()).map_err(|_| "Could not create an identity")?;
-            let key = Self(bytes);
+            let key = Self::new(bytes);
             if key.viewer().is_ok() {
                 return Ok(key);
             }
         }
     }
+    fn new(secret: Zeroizing<[u8; 32]>) -> Self {
+        Self(secret, OnceLock::new())
+    }
     fn viewer(&self) -> Result<String> {
+        if let Some(public) = self.1.get() {
+            return Ok(public.clone());
+        }
         let mut key = SecretKey::from_byte_array(*self.0).map_err(|_| INVALID)?;
         let public = PublicKey::from_secret_key(&Secp256k1::signing_only(), &key)
             .x_only_public_key()
             .0
             .to_string();
         key.non_secure_erase();
-        Ok(public)
+        Ok(self.1.get_or_init(|| public).clone())
     }
     fn nsec(&self) -> Result<String> {
         bech32::encode::<Bech32>(Hrp::parse("nsec").map_err(|_| INVALID)?, self.0.as_ref())
@@ -155,11 +163,17 @@ trait Store: Send + Sync {
     fn legacy(&self) -> Result<Zeroizing<String>>;
     /// Only Sign out may call this, from the next launch; an absent item is success.
     fn delete(&self) -> Result<()>;
+    /// The key saved under its service from before 1.0, which reads copy.
+    fn previous(&self) -> Result<Option<Zeroizing<Vec<u8>>>>;
+    /// Sign out removes the key under both services; an absent item is success.
+    fn delete_previous(&self) -> Result<()>;
 }
 struct OsStore;
 #[cfg(not(test))]
-fn read_saved() -> Result<Option<Zeroizing<Vec<u8>>>> {
-    match credentials::read_human() {
+fn read_saved(
+    read: fn() -> std::result::Result<Zeroizing<Vec<u8>>, credentials::Error>,
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    match read() {
         Ok(value) => Ok(Some(value)),
         Err(credentials::Error::Absent) => Ok(None),
         Err(credentials::Error::Denied) => Err("Secure storage access was denied. Allow access and retry; no identity was created.".into()),
@@ -191,7 +205,10 @@ mod platform {
     }
     impl Store for OsStore {
         fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
-            read_saved()
+            read_saved(credentials::read_human)
+        }
+        fn previous(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
+            read_saved(credentials::read_previous_human)
         }
         fn legacy(&self) -> Result<Zeroizing<String>> {
             read_legacy()
@@ -207,17 +224,27 @@ mod platform {
                 .map_err(error)
         }
         fn delete(&self) -> Result<()> {
-            match SecKeychain::default()
-                .map_err(error)?
-                .find_generic_password(credentials::HUMAN_SERVICE, credentials::HUMAN_ACCOUNT)
-            {
-                Ok((_, item)) => {
-                    item.delete();
-                    Ok(())
-                }
-                Err(e) if e.code() == -25300 => Ok(()),
-                Err(e) => Err(error(e)),
+            delete(credentials::HUMAN_SERVICE)
+        }
+        fn delete_previous(&self) -> Result<()> {
+            delete(credentials::PREVIOUS_HUMAN_SERVICE)
+        }
+    }
+    // Under the lock reads copy under, confirmed gone.
+    fn delete(service: &str) -> Result<()> {
+        match credentials::delete(service, credentials::HUMAN_ACCOUNT) {
+            Ok(()) | Err(credentials::Error::Absent) => Ok(()),
+            Err(credentials::Error::Busy) => {
+                Err("Another Buzz app is accessing secure storage. Retry shortly.".into())
             }
+            Err(credentials::Error::Denied) => Err(
+                "Keychain access was denied. Allow access and open Buzz again to finish signing out."
+                    .into(),
+            ),
+            Err(_) => Err(
+                "Your identity could not be accessed in Keychain. Retry without changing keys."
+                    .into(),
+            ),
         }
     }
 }
@@ -236,7 +263,10 @@ mod keyring_platform {
     }
     impl Store for OsStore {
         fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
-            read_saved()
+            read_saved(credentials::read_human)
+        }
+        fn previous(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
+            read_saved(credentials::read_previous_human)
         }
         fn legacy(&self) -> Result<Zeroizing<String>> {
             read_legacy()
@@ -250,10 +280,16 @@ mod keyring_platform {
             .map_err(error)
         }
         fn delete(&self) -> Result<()> {
-            match credentials::delete(credentials::HUMAN_SERVICE, credentials::HUMAN_ACCOUNT) {
-                Ok(()) | Err(Error::Absent) => Ok(()),
-                Err(e) => Err(error(e)),
-            }
+            delete(credentials::HUMAN_SERVICE)
+        }
+        fn delete_previous(&self) -> Result<()> {
+            delete(credentials::PREVIOUS_HUMAN_SERVICE)
+        }
+    }
+    fn delete(service: &str) -> Result<()> {
+        match credentials::delete(service, credentials::HUMAN_ACCOUNT) {
+            Ok(()) | Err(Error::Absent) => Ok(()),
+            Err(e) => Err(error(e)),
         }
     }
 }
@@ -275,19 +311,31 @@ impl Store for OsStore {
     fn delete(&self) -> Result<()> {
         Err("Secure identity storage is not available on this platform yet".into())
     }
+    fn previous(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        Err("Secure identity storage is not available on this platform yet".into())
+    }
+    fn delete_previous(&self) -> Result<()> {
+        Err("Secure identity storage is not available on this platform yet".into())
+    }
 }
 
-/// Delete the saved human key and confirm a fresh read finds nothing.
+/// Delete the saved human key under both services and confirm fresh reads find
+/// nothing. The previous item goes first: reads copy it while the current one is absent.
 fn remove_key(store: &dyn Store) -> Result<()> {
+    store.delete_previous()?;
     store.delete()?;
-    match store.read()? {
-        None => Ok(()),
-        Some(_) => Err("Your key is still saved in secure storage".into()),
+    match (store.read()?, store.previous()?) {
+        (None, None) => Ok(()),
+        _ => Err("Your key is still saved in secure storage".into()),
     }
 }
 /// Sign out's next-launch step; never reachable from the webview.
 pub(crate) fn remove_saved_key() -> Result<()> {
     remove_key(&OsStore)
+}
+/// Delete only the current key, after an older build signed out of the previous one.
+pub(crate) fn remove_current_key() -> Result<()> {
+    OsStore.delete()
 }
 
 #[derive(Default)]
@@ -358,7 +406,7 @@ impl Identity {
     }
     fn install_recovered(&mut self, secret: Zeroizing<[u8; 32]>, expected: &str) -> Result<String> {
         self.require_missing()?;
-        let key = Key(secret);
+        let key = Key::new(secret);
         let viewer = key.viewer()?;
         if viewer != expected {
             return Err("The recovered identity could not be verified".into());
@@ -490,6 +538,19 @@ fn validate_sidebar_payload(coordinate: &str, value: &serde_json::Value) -> Resu
             }
         }
 
+        "main-agent" => {
+            let agent = data.get("agent").ok_or_else(invalid)?;
+            if data.len() != 2
+                || !(agent.is_null()
+                    || agent.as_str().is_some_and(|v| {
+                        v.len() == 64
+                            && v.bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    }))
+            {
+                return Err(invalid());
+            }
+        }
         _ => return Err(invalid()),
     }
     if let Some(meta) = data.get("meta") {
@@ -640,7 +701,12 @@ fn project_sidebar_meta(coordinate: &str, meta: &serde_json::Value) -> serde_jso
 pub(crate) fn sidebar_coordinate(value: &str) -> bool {
     matches!(
         value,
-        "channel-sections" | "channel-stars" | "channel-mutes" | "channel-sort" | "channel-filter"
+        "channel-sections"
+            | "channel-stars"
+            | "channel-mutes"
+            | "channel-sort"
+            | "channel-filter"
+            | "main-agent"
     )
 }
 
@@ -679,19 +745,33 @@ pub struct IdentityHost(Arc<Mutex<Identity>>);
 impl IdentityHost {
     #[cfg(test)]
     pub(crate) fn fixture() -> Self {
+        Self::fixture_in(State::Ready(Key::new(Zeroizing::new([1; 32]))))
+    }
+    /// No saved key, or a key that cannot be read (a signing-out host refuses every read).
+    #[cfg(test)]
+    pub(crate) fn fixture_without_key(readable: bool) -> Self {
+        Self::fixture_in(if readable {
+            State::Missing
+        } else {
+            State::Closed
+        })
+    }
+    #[cfg(test)]
+    fn fixture_in(state: State) -> Self {
         Self(Arc::new(Mutex::new(Identity {
-            state: State::Ready(Key(Zeroizing::new([1; 32]))),
+            state,
             store: Box::new(OsStore),
         })))
     }
 
+    /// The saved key's public key, or `None` when secure storage confirms none.
+    pub(crate) async fn saved_viewer(&self) -> Result<Option<String>> {
+        with_identity(self.clone(), Identity::restore).await
+    }
     pub(crate) async fn viewer(&self) -> Result<String> {
-        with_identity(self.clone(), |identity| {
-            identity
-                .restore()?
-                .ok_or_else(|| "Set up your identity first".into())
-        })
-        .await
+        self.saved_viewer()
+            .await?
+            .ok_or_else(|| "Set up your identity first".into())
     }
 
     pub(crate) async fn require_missing(&self) -> Result<()> {

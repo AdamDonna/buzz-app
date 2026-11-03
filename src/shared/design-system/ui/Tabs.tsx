@@ -13,6 +13,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentPropsWithRef,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -106,6 +107,7 @@ export function Tabs<Value extends string>({
   onReselect,
   trailingAction,
   variant = "chrome",
+  size = "md",
   showSelection = true,
   previewValue,
   arrivalValue,
@@ -131,6 +133,8 @@ export function Tabs<Value extends string>({
   onReselect?: (value: Value) => void;
   trailingAction?: ReactNode;
   variant?: TabsVariant;
+  /** Segmented filter track size; other variants retain their own geometry. */
+  size?: "sm" | "md";
   /** Hide the visual selection for a single-view header; tab semantics remain. */
   showSelection?: boolean;
   /** Incoming tab being previewed before a workspace drop is committed. */
@@ -147,7 +151,21 @@ export function Tabs<Value extends string>({
     <>
       <BaseTabs.List ref={list} className="buzz-tabs-list" aria-label={label}>
         {showSelection && variant !== "navigation" && (
-          <BaseTabs.Indicator className="buzz-tabs-indicator" />
+          <BaseTabs.Indicator
+            className="buzz-tabs-indicator"
+            render={
+              variant === "segmented" || iconOnly
+                ? (props, state) => (
+                    <SegmentedIndicator
+                      {...props}
+                      value={value}
+                      left={state.activeTabPosition?.left}
+                      width={state.activeTabSize?.width}
+                    />
+                  )
+                : undefined
+            }
+          />
         )}
         {items.map((item) => (
           <TabMenu
@@ -279,6 +297,7 @@ export function Tabs<Value extends string>({
       data-buzz-ui=""
       className={renderPanel ? "buzz-tab-panels" : "buzz-tabs"}
       data-variant={variant}
+      data-size={size}
       data-selection-hidden={!showSelection || undefined}
       value={value}
       onValueChange={(nextValue) => onValueChange(nextValue as Value)}
@@ -287,6 +306,7 @@ export function Tabs<Value extends string>({
         <div
           className="buzz-tabs"
           data-variant={variant}
+          data-size={size}
           data-selection-hidden={!showSelection || undefined}
         >
           {strip}
@@ -305,6 +325,32 @@ export function Tabs<Value extends string>({
           </BaseTabs.Panel>
         ))}
     </BaseTabs.Root>
+  );
+}
+
+/** Base UI re-renders this on measurements as well as selection changes. */
+function SegmentedIndicator({
+  value,
+  left,
+  width,
+  ...props
+}: ComponentPropsWithRef<"span"> & {
+  value: string | null;
+  left: number | undefined;
+  width: number | undefined;
+}) {
+  const [layout, setLayout] = useState({ value, left, width, animate: false });
+  if (
+    layout.value !== value ||
+    layout.left !== left ||
+    layout.width !== width
+  ) {
+    // Keep the travelling selection, but apply geometry-only changes at once,
+    // including window resizing, text scaling and resizing during a slide.
+    setLayout({ value, left, width, animate: layout.value !== value });
+  }
+  return (
+    <span {...props} data-selection-change={layout.animate || undefined} />
   );
 }
 

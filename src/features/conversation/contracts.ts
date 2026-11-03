@@ -30,6 +30,23 @@ export type ComposerToolProps = Readonly<{
   /** Read-only: who the draft mentions, in draft order. The tool re-renders when
    * this changes; the array keeps its identity while only the prose changes. */
   recipients: readonly Readonly<{ pubkey: string; name: string }>[];
+  /** Solo, alone with agents: who hears the message. Inline mentions decide
+   * when there are any; otherwise the toolbar's agents stand in. `only`
+   * replaces those stand-ins with a non-empty list and `toggle` adds or
+   * removes one, never the last; they also follow each send. While inline
+   * mentions decide, `toggle` adds or removes that mention instead. Absent
+   * elsewhere, where mentions alone decide. */
+  audience?:
+    | Readonly<{
+        recipients: readonly Readonly<{ pubkey: string; name: string }>[];
+        /** True while inline mentions in the text decide, so picks only change the stand-ins. */
+        named: boolean;
+        only(
+          recipients: readonly Readonly<{ pubkey: string; name: string }>[],
+        ): void;
+        toggle(recipient: Readonly<{ pubkey: string; name: string }>): void;
+      }>
+    | undefined;
   /** False after removal, destination change, read-only state or a rejected edit. */
   insertText(text: string): boolean;
   /** Atomically insert display text and explicit notification intent at the caret.
@@ -239,17 +256,47 @@ export type CompletionQuery = Readonly<{
   end: number;
   query: string;
 }>;
+/** A name the provider cannot decide on yet. The host may hold it as a chip
+ * with no recipient and ask `resolve` for the recipient the terminator would
+ * have selected once the provider's evidence is complete; null returns the
+ * name to prose. `resolve` is headless: the provider has unmounted by then. */
+export type CompletionPending = Readonly<{
+  name: string;
+  resolve(signal: AbortSignal): Promise<CompletionResolution>;
+}>;
+/** The recipient; null for prose; or, when only longer known names kept the
+ * name from selecting over the complete choice set, those names, each
+ * resolvable under the same rule. The host may extend the chip over the words
+ * typed after it when they complete one of them, and ask that one. */
+export type CompletionResolution =
+  | Readonly<{ pubkey: string; name: string }>
+  | Readonly<{ continued: readonly CompletionPending[] }>
+  | null;
 export type CompletionEdit =
-  | Readonly<{ text: string; mention?: never; mentions?: never }>
+  | Readonly<{
+      text: string;
+      mention?: never;
+      mentions?: never;
+      pending?: never;
+    }>
   | Readonly<{
       mention: Readonly<{ pubkey: string; name: string }>;
       text?: never;
       mentions?: never;
+      pending?: never;
     }>
   | Readonly<{
       mentions: readonly Readonly<{ pubkey: string; name: string }>[];
       text?: never;
       mention?: never;
+      pending?: never;
+    }>
+  /** Host-only: the terminator typed over an undecided name. Never a suggestion's edit. */
+  | Readonly<{
+      pending: CompletionPending;
+      text?: never;
+      mention?: never;
+      mentions?: never;
     }>;
 export type CompletionSuggestion = Readonly<{
   id: string;
@@ -267,6 +314,9 @@ export type CompletionResult = Readonly<{
   items: readonly CompletionSuggestion[];
   /** Provider-verified unique exact match across its uncapped candidate set. */
   spaceId?: string | undefined;
+  /** No `spaceId` yet only because evidence is still arriving; the terminator
+   * may hold the query as a pending mention instead of typing a literal. */
+  spacePending?: CompletionPending | undefined;
   status?: string;
   /** Optional explicit recovery. A new query or disposal revokes this action. */
   retry?: () => void;

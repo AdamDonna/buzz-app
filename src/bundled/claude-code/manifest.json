@@ -28,12 +28,18 @@
       },
       { "id": "workspace", "program": "pwd" },
       {
-        "id": "owners",
+        "id": "starts",
         "program": "grep",
         "args": [
           "-rHEo",
           "-m1",
           "--include=*.jsonl",
+          "-e",
+          "Session scope: [a-z ]+",
+          "-e",
+          "Channel: ([^\\\\]|\\\\[^n])*",
+          "-e",
+          "Thread root: [0-9a-f]{64}",
           "-e",
           "Agent: [0-9a-f]{64}(@[A-Za-z0-9._~%-]+)?"
         ]
@@ -42,11 +48,6 @@
         "id": "list",
         "program": "find",
         "args": [".", "-type", "f", "-name", "*.jsonl"]
-      },
-      {
-        "id": "find",
-        "program": "grep",
-        "args": ["-rlF", "--include=*.jsonl", "-e"]
       }
     ]
   }

@@ -64,7 +64,9 @@ export function ProfilePeek({
     // reach the avatar's leave handler. Observe only during this handoff.
     const track = (event: globalThis.PointerEvent) => {
       const rect = document.getElementById(triggerId)?.getBoundingClientRect();
-      if (rect)
+      // Once the pointer has left, a later return is a fresh visit, even when
+      // the hover opens only after the pointer rests back on the avatar.
+      if (rect && !pointerLeft.current)
         pointerLeft.current =
           event.clientX < rect.left ||
           event.clientX > rect.right ||

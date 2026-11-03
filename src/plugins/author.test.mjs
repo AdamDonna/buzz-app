@@ -32,12 +32,14 @@ test("generated author package in a path with spaces exposes shared message fact
     await writeFile(
       join(dir, "consumer.ts"),
       `
-import type { Context, DecisionResult, Host, PluginManifest, NamingPolicy, UnreadCapability, PageSidebarProps } from "@buzz/author";
+import { createElement } from "react";
+import type { Context, DecisionResult, Host, HostRequestOnceOptions, AddedTool, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
     commands: [{ id: "status", program: "example-cli", args: ["status"], maxOutputBytes: 65536 }],
     networkOrigins: ["https://api.example.com"],
+    managedFiles: true,
   },
 };
 const ExampleSidebar = ({ target, children }: PageSidebarProps) => {
@@ -69,6 +71,15 @@ export function apply(ctx: Context) {
   };
   ctx.identityNames.register(policy);
   const host: Host = ctx.host;
+  const upload: HostByteUpload = { url: "https://api.example.com/upload", field: "image", name: "image.png", contentType: "image/png" };
+  void host.uploadBytesOnce?.(new Uint8Array([1]), upload, { callId: crypto.randomUUID() });
+  const tool: AddedTool = { name: "example_image", description: "Read an image", inputSchema: {},
+    async call(client: BuzzClient) {
+      const media: Media = await client.media("abc.png");
+      return media.data ?? "No inline image";
+    },
+  };
+  ctx.agents.addTool(tool);
   void host.runCommand("status").then((output: string | null) => void output);
   void host.request({
     url: "https://api.example.com/graphql",
@@ -76,6 +87,28 @@ export function apply(ctx: Context) {
     headers: { Authorization: "Bearer sample" },
     body: "{}",
   }).then((response) => void response.status);
+  // Final synchronous eligibility is part of the optional protected method.
+  if (typeof host.requestOnce === "function") {
+    const options: HostRequestOnceOptions = {
+      callId: "12345678-1234-4234-8234-123456789abc",
+      isEligible: () => true,
+    };
+    void host.requestOnce({ url: "https://api.example.com/submit", method: "POST" }, options);
+    // @ts-expect-error Final caller eligibility must be synchronous.
+    const invalid: HostRequestOnceOptions = { callId: options.callId, isEligible: async () => true };
+    void invalid;
+  }
+  const bytes: HostByteRequest = { url: "https://api.example.com/bytes", maxBytes: 1024 };
+  void host.requestBytes?.(bytes).then((response: HostByteResponse) => {
+    const body: Uint8Array = response.body;
+    void host.saveBytes?.(body, { sha256: "0".repeat(64) }).then((saved: HostSavedBytes) => {
+      void [saved.path, saved.size, saved.sha256, saved.expiresAt];
+    });
+  });
+  // @ts-expect-error Byte GET has no caller headers.
+  host.requestBytes?.({ ...bytes, headers: {} });
+  // @ts-expect-error Managed save has no caller path.
+  host.saveBytes?.(new Uint8Array([1]), { sha256: "0".repeat(64), path: "/chosen" });
   ctx.pages.register({
     id: "main",
     title: "Example",
@@ -92,6 +125,25 @@ export function apply(ctx: Context) {
     // @ts-expect-error A page sidebar must be a React component.
     sidebar: 1,
   });
+  const section: SidebarSectionContribution = {
+    version: 1,
+    id: "work",
+    title: "Work",
+    icon: "W",
+    rows: {
+      snapshot: () => [{ id: "today", label: "Today" }],
+      subscribe: () => () => {},
+    },
+    select: () => ({ version: 1, kind: "home" }),
+    actions: [{ id: "new", label: "New", icon: createElement("span"), onSelect: () => {} }],
+  };
+  const sidebar: SidebarSections | undefined = ctx.reflect.get("sidebarSections");
+  sidebar?.register(section);
+  // @ts-expect-error Sidebar contribution versions are explicit.
+  sidebar?.register({ ...section, version: 2 });
+  // @ts-expect-error Row counts are numeric, not display text.
+  const badCount: SidebarSectionContribution = { ...section, rows: { snapshot: () => [{ id: "bad", label: "Bad", count: "two" }], subscribe: () => () => {} } };
+  void badCount;
   ctx.pages.register({
     id: "other",
     title: "Other",

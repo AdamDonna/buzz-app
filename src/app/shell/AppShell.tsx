@@ -4,9 +4,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type ReactNode,
   type Ref,
 } from "react";
+import { isApplePlatform } from "../../features/shortcuts/format";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { SidebarIcon, DotsThreeIcon } from "../../shared/design-system/icons";
 import { Panel } from "../../shared/design-system/ui/Panel";
@@ -15,14 +17,19 @@ import type { SettingsCards } from "../../features/settings/service";
 import type { RegisteredPage } from "../../features/pages/service";
 import type { AccountActionsService } from "../../features/account-actions/service";
 import type { Communities } from "../../features/communities/service";
+import type { FederatedIdentity } from "../../features/federated-identity/service";
+import { ResizableSidebar } from "../../features/channel-navigation/ResizableSidebar";
 import type { InviteLink } from "../../features/communities/invite-link";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { CommunityPicker } from "../../features/communities/CommunityPicker";
 import { ProfileButton } from "./ProfileButton";
+import { CommunityShortcuts } from "./CommunityShortcuts";
+import { MarkAllReadShortcut } from "./MarkAllReadShortcut";
 import type { Appearance } from "../../shared/theme/service";
 import { PageSearch, type SearchServices } from "./PageSearch";
 import { headerPageSelection, pagePlacement, orderPages } from "./presentation";
 import { PageNavigation } from "./PageNavigation";
+import { BestieNavigationProvider } from "./BestieNavigation";
 import type { NavigationOpenOptions } from "../../features/navigation/controller";
 import {
   PopoverRoot,
@@ -30,13 +37,25 @@ import {
   PopoverPopup,
 } from "../../shared/design-system/ui/Popover";
 import { PanelFrame } from "../../features/panels/PanelFrame";
+import { useRelayConnection } from "../../features/relay/react";
 import { macTitleBarDragHandlers } from "./title-bar";
 import { hasIntegratedWindowControls, WindowControls } from "./WindowControls";
 
 const macDesktop = isTauri() && /Mac/i.test(navigator.platform);
 const titleBarDragProps = macDesktop ? macTitleBarDragHandlers : {};
 
-export function AppShell({
+export function AppShell(props: ComponentProps<typeof AppShellContent>) {
+  return (
+    <BestieNavigationProvider
+      pages={props.pages}
+      relay={props.communities.relay}
+    >
+      <AppShellContent {...props} />
+    </BestieNavigationProvider>
+  );
+}
+
+function AppShellContent({
   pages,
   selected,
   navigationAttempt,
@@ -49,8 +68,10 @@ export function AppShell({
   invite,
   onInviteClose,
   settingsCards,
+  federatedIdentity,
   accountActions,
   appearance,
+  pluginRecommendations = 0,
   searchServices,
   navigationControls,
   onCommunitySelect,
@@ -58,6 +79,7 @@ export function AppShell({
   launchers,
   companion,
   creationAction,
+  creationInSidebar = true,
   children,
 }: {
   pages: readonly RegisteredPage[];
@@ -71,13 +93,16 @@ export function AppShell({
   workspace?: boolean;
   /** Centered modal frame below window chrome. */
   workspaceRef?: Ref<HTMLDivElement>;
-  sidebar?: (pages: ReactNode) => ReactNode;
+  sidebar?: (pages: ReactNode, creationAction: ReactNode) => ReactNode;
   communities: Communities;
   invite?: (InviteLink & { requestId: number }) | undefined;
   onInviteClose?: ((requestId: number) => void) | undefined;
   settingsCards?: SettingsCards | undefined;
+  federatedIdentity?: FederatedIdentity | undefined;
   accountActions: AccountActionsService;
   appearance: Appearance;
+  /** Managed plugin recommendations awaiting review, pointed out beside Plugins. */
+  pluginRecommendations?: number;
   searchServices?: SearchServices;
   navigationControls?: ReactNode;
   onCommunitySelect?: (id: string | null) => void;
@@ -85,10 +110,20 @@ export function AppShell({
   onOpenTarget?: (target: OpenTarget) => void;
   launchers?: ReactNode;
   companion?: ReactNode;
-  creationAction?: ReactNode;
+  creationAction?: (
+    open: boolean,
+    onOpenChange: (open: boolean) => void,
+    triggerContainer: HTMLElement | null,
+  ) => ReactNode;
+  creationInSidebar?: boolean;
   children: ReactNode;
 }) {
   const fillsWorkspace = workspace || selected === "settings";
+  const [creationContainer, setCreationContainer] =
+    useState<HTMLDivElement | null>(null);
+  const [creationOpen, setCreationOpen] = useState(false);
+  const connection = useRelayConnection(communities.relay);
+  const sidebarScope = connection.scope ?? "disconnected";
   const channelsNavigation = selected === "buzz.channels/channels";
   const [narrow, setNarrow] = useState(
     () => window.matchMedia("(max-width: 650px)").matches,
@@ -110,6 +145,27 @@ export function AppShell({
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationToggle = useRef<HTMLButtonElement>(null);
   const visibleSidebar = narrow ? navigationOpen : sidebarOpen;
+  useEffect(
+    () =>
+      searchServices?.shortcuts.registerHost({
+        id: "new",
+        title: "Open New menu",
+        binding: { key: "n", mod: true },
+        order: 75,
+        allowInEditable: true,
+        when: () =>
+          !!creationAction &&
+          !!creationContainer?.querySelector("button:not(:disabled)") &&
+          (isApplePlatform(navigator.platform) ||
+            !document.activeElement?.closest(".xterm")),
+        run: () => {
+          setSidebarOpen(true);
+          setNavigationOpen(true);
+          setCreationOpen(true);
+        },
+      }),
+    [searchServices, creationAction, creationContainer],
+  );
   const toggleLabel = narrow
     ? navigationOpen
       ? "Hide navigation"
@@ -138,8 +194,13 @@ export function AppShell({
         />
       </nav>
     ) : null;
-    return sidebar ? (
-      sidebar(pageNavigation)
+    const content = sidebar ? (
+      sidebar(
+        pageNavigation,
+        creationAction && creationInSidebar && (
+          <div ref={setCreationContainer} />
+        ),
+      )
     ) : (
       <div className="shell-sidebar-default">
         <Panel as="aside" aria-label="Page sidebar">
@@ -147,7 +208,25 @@ export function AppShell({
         </Panel>
       </div>
     );
-  }, [pages, selected, onSelect, sidebar]);
+    const selectedPageHasSidebar = pages.some(
+      (page) => page.key === selected && !!page.sidebar,
+    );
+    return selectedPageHasSidebar ? (
+      <ResizableSidebar scope={sidebarScope} className="shell-sidebar">
+        {content}
+      </ResizableSidebar>
+    ) : (
+      content
+    );
+  }, [
+    pages,
+    selected,
+    onSelect,
+    sidebar,
+    sidebarScope,
+    creationAction,
+    creationInSidebar,
+  ]);
   const headerPages = useMemo(
     () =>
       orderPages(
@@ -174,7 +253,6 @@ export function AppShell({
   const historyRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
-  const creationRef = useRef<HTMLDivElement>(null);
   const topbarRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLElement>(null);
   const overflowTrigger = useRef<HTMLButtonElement>(null);
@@ -200,11 +278,7 @@ export function AppShell({
         gap;
       const center =
         (topbarRef.current?.offsetWidth ?? 0) +
-        2 *
-          Math.max(
-            creationRef.current?.offsetWidth ?? 0,
-            searchRef.current?.offsetWidth ?? 0,
-          ) +
+        (searchRef.current?.offsetWidth ?? 0) +
         gap;
       const compact =
         narrow ||
@@ -227,7 +301,6 @@ export function AppShell({
       historyRef.current,
       actionsRef.current,
       topbarRef.current,
-      creationRef.current,
       searchRef.current,
       toolbarRef.current,
     ]) {
@@ -290,6 +363,7 @@ export function AppShell({
         >
           {(collapsibleSidebar || narrow) && (
             <IconButton
+              hint="familiar"
               ref={navigationToggle}
               data-shell-sidebar-toggle=""
               data-highlight-expanded="false"
@@ -307,12 +381,12 @@ export function AppShell({
             />
           )}
           {navigationControls}
+          {creationAction && !creationInSidebar && (
+            <div ref={setCreationContainer} />
+          )}
         </div>
-        <div className="shell-center-capsule shell-capsule chrome-navigation">
-          <div ref={creationRef} className="shell-create-action shell-capsule">
-            {creationAction}
-          </div>
-          <div className="shell-page-switcher">
+        <div className="shell-center-capsule shell-capsule">
+          <div className="shell-page-switcher chrome-navigation">
             {headerPages.length > 0 && (
               <PopoverRoot
                 open={overflowOpen && compactPages}
@@ -321,6 +395,7 @@ export function AppShell({
                 <PopoverTrigger
                   render={
                     <IconButton
+                      hint="familiar"
                       ref={overflowTrigger}
                       data-shell-pages-overflow=""
                       aria-label="More pages"
@@ -417,6 +492,7 @@ export function AppShell({
                 invite={invite}
                 onInviteClose={onInviteClose}
                 settingsCards={settingsCards}
+                federatedIdentity={federatedIdentity}
                 onSelect={onCommunitySelect}
                 onOpenTarget={onOpenTarget}
               />
@@ -425,6 +501,7 @@ export function AppShell({
                 accountActions={accountActions}
                 settingsSelected={selected === "settings"}
                 appearance={appearance}
+                pluginRecommendations={pluginRecommendations}
                 onSettings={(section) =>
                   onSelect("settings", section ? { section } : undefined)
                 }
@@ -459,9 +536,12 @@ export function AppShell({
                 onKeyDown={(event) => {
                   if (
                     event.key === "Escape" &&
+                    !event.shiftKey &&
                     navigationOpen &&
                     !event.defaultPrevented
                   ) {
+                    // Closing the drawer consumes Escape, so it marks nothing read.
+                    event.preventDefault();
                     setNavigationOpen(false);
                     navigationToggle.current?.focus();
                   }
@@ -509,6 +589,20 @@ export function AppShell({
           </div>
         </div>
       </div>
+      {creationAction?.(creationOpen, setCreationOpen, creationContainer)}
+      {searchServices && (
+        <>
+          <MarkAllReadShortcut
+            communities={communities}
+            shortcuts={searchServices.shortcuts}
+          />
+          <CommunityShortcuts
+            communities={communities}
+            shortcuts={searchServices.shortcuts}
+            onSelect={onCommunitySelect}
+          />
+        </>
+      )}
     </div>
   );
 }

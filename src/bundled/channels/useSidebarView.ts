@@ -1,8 +1,10 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { readView, subscribeView, writeView } from "../../shared/view-state";
+import { contributedSidebarSectionKey } from "./sidebar-sections";
 
 type SidebarView = {
   collapsed: string[];
+  contributionOrder: string[];
   scrollTop: number;
   /** The destination whose sidebar entry the saved position shows. */
   location?: string | undefined;
@@ -15,6 +17,14 @@ function restore(scope: string): SidebarView {
   return {
     collapsed: Array.isArray(saved.collapsed)
       ? saved.collapsed.filter((key): key is string => typeof key === "string")
+      : [],
+    contributionOrder: Array.isArray(saved.contributionOrder)
+      ? saved.contributionOrder
+          .filter((key): key is string => typeof key === "string")
+          // Earlier orders saved raw `<plugin>/<id>` keys; section keys are prefixed.
+          .map((key) =>
+            key.includes(":") ? key : contributedSidebarSectionKey(key),
+          )
       : [],
     scrollTop:
       typeof saved.scrollTop === "number" &&
@@ -94,15 +104,23 @@ export function useSidebarView(
   const intent = useRef(view);
   const list = useRef<HTMLElement>(null);
   const pending = useRef(true);
+  const latestLocation = useRef(location);
   useLayoutEffect(
     () =>
       subscribeView(scope, () => {
-        const collapsed = restore(scope).collapsed;
+        const saved = restore(scope);
         if (
-          JSON.stringify(collapsed) === JSON.stringify(intent.current.collapsed)
+          JSON.stringify(saved.collapsed) ===
+            JSON.stringify(intent.current.collapsed) &&
+          JSON.stringify(saved.contributionOrder) ===
+            JSON.stringify(intent.current.contributionOrder)
         )
           return;
-        intent.current = { ...intent.current, collapsed };
+        intent.current = {
+          ...intent.current,
+          collapsed: saved.collapsed,
+          contributionOrder: saved.contributionOrder,
+        };
         setView(intent.current);
       }),
     [scope],
@@ -150,14 +168,31 @@ export function useSidebarView(
   // resolves to a conversation) stays pending. It owns the saved position
   // only if the user scrolls there.
   useLayoutEffect(() => {
+    latestLocation.current = location;
     reveal.current = location === restored.current ? undefined : location;
   }, [location]);
   // The entry can render after navigation (roster startup, a new DM), so
   // retry after each commit until it exists. Runs after the restore above.
   const attempt = useRef(() => {});
+  const preparations = useRef(new Set<(location: string) => boolean>());
+  const beforeReveal = useCallback((prepare: (location: string) => boolean) => {
+    preparations.current.add(prepare);
+    return () => {
+      preparations.current.delete(prepare);
+    };
+  }, []);
+  // Only an explicit reveal of the current destination may reclaim the viewport.
+  const revealAgain = useCallback(() => {
+    if (latestLocation.current === undefined) return;
+    reveal.current = latestLocation.current;
+    attempt.current();
+  }, []);
+  const retryReveal = useCallback(() => attempt.current(), []);
   useLayoutEffect(() => {
     attempt.current = () => {
       if (!ready || !reveal.current || !list.current) return;
+      for (const prepare of preparations.current)
+        if (!prepare(reveal.current)) return;
       const top = revealCurrent(list.current);
       if (top === false) return;
       moved.current = scroll(list.current, top) ?? moved.current;
@@ -220,9 +255,20 @@ export function useSidebarView(
     },
     [update],
   );
+  const setContributionOrder = useCallback(
+    (contributionOrder: readonly string[]) => {
+      update({ ...intent.current, contributionOrder: [...contributionOrder] });
+    },
+    [update],
+  );
   return {
     list,
     collapsed: view.collapsed,
+    contributionOrder: view.contributionOrder,
+    setContributionOrder,
     toggle,
+    retryReveal,
+    revealAgain,
+    beforeReveal,
   };
 }

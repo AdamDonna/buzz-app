@@ -2,20 +2,37 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RelaySession } from "../relay/session";
 import { AgentsContext } from "../agents/react";
 import type { Agents } from "../agents/service";
 import { followUpQueue } from "./follow-up-queue";
 import { QueuedFollowUps } from "./QueuedFollowUps";
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 function fixture() {
+  const listeners = new Set<() => void>();
+  let state = "working";
   const session = {
     channels: { list: () => ({ channels: [{ id: "chat" }] }) },
     agentActivity: {
       activate: () => () => {},
-      subscribe: () => () => {},
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
       snapshot: () => ({
         status: "listening",
         turns: [],
@@ -24,7 +41,7 @@ function fixture() {
             agent: "agent",
             messageId: "old",
             channelId: "chat",
-            state: "working",
+            state,
           },
         ],
       }),
@@ -56,7 +73,15 @@ function fixture() {
       </AgentsContext.Provider>,
     );
   }
-  return { queue, add, mount };
+  return {
+    queue,
+    add,
+    mount,
+    finish() {
+      state = "done";
+      for (const listener of listeners) listener();
+    },
+  };
 }
 it("keeps queued Send focused when compaction finishes, then sends with Enter", async () => {
   const h = fixture();
@@ -153,4 +178,48 @@ it("preserves Send focus so consecutive Enter presses send both queued messages"
   await user.keyboard("{Enter}");
   expect(second).toHaveBeenCalledOnce();
   expect(screen.getByRole("textbox")).toHaveFocus();
+});
+
+it("toggles multiline requests while short requests remain non-expandable", async () => {
+  const h = fixture();
+  h.add("Short request");
+  h.add("First line\nSecond line");
+  h.mount();
+  const short = screen.getByRole("button", { name: "Short request" });
+  const long = screen.getByRole("button", { name: /First line\s+Second line/ });
+  expect(short).toHaveAttribute("tabindex", "-1");
+  await userEvent.click(short);
+  expect(short).not.toHaveAttribute("aria-expanded");
+  expect(long).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(long);
+  expect(long).toHaveAttribute("aria-expanded", "true");
+  await userEvent.click(long);
+  expect(long).toHaveAttribute("aria-expanded", "false");
+});
+
+it("restores preview focus after automatic release, then returns to the composer", async () => {
+  const h = fixture();
+  const first = h.add("First\nrequest");
+  h.add("Second\nrequest");
+  h.mount();
+  screen.getByRole("button", { name: /First\s+request/ }).focus();
+  await act(async () => h.finish());
+  expect(first).toHaveBeenCalledOnce();
+  expect(
+    screen.getByRole("button", { name: /Second\s+request/ }),
+  ).toHaveFocus();
+  const remaining = h.queue.snapshot()[0];
+  if (!remaining) throw new Error("Expected a remaining queued request");
+  act(() => h.queue.remove(remaining.id));
+  expect(screen.getByRole("textbox")).toHaveFocus();
+});
+
+it("does not steal external focus when a previously focused preview releases", async () => {
+  const h = fixture();
+  h.add("First\nrequest");
+  h.mount();
+  screen.getByRole("button", { name: /First\s+request/ }).focus();
+  screen.getByRole("button", { name: "Elsewhere" }).focus();
+  await act(async () => h.finish());
+  expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
 });

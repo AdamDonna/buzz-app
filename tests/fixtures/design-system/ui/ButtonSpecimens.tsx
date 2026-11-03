@@ -17,10 +17,16 @@ import {
   MenuTrigger,
   MenuPopup,
   MenuItem,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuGroup,
+  MenuGroupLabel,
 } from "../../../../src/shared/design-system/ui/Menu";
 import { SurfaceButton } from "../../../../src/shared/design-system/ui/SurfaceButton";
 import { Button } from "../../../../src/shared/design-system/ui/Button";
+import { ChoiceRow } from "../../../../src/shared/design-system/ui/ChoiceRow";
 import { IconButton } from "../../../../src/shared/design-system/ui/IconButton";
+import { SplitButton } from "../../../../src/shared/design-system/ui/SplitButton";
 
 const variants = [
   "prominent",
@@ -151,6 +157,37 @@ export function ButtonSpecimen() {
         <Button>Continue</Button>
       </ExamplePreview>
       <ButtonMatrix kind="text" />
+      <ExamplePreview code='<SplitButton menuLabel="Other add options" menu={<MenuItem>View only</MenuItem>}>Add</SplitButton>'>
+        <SplitButton
+          variant="prominent"
+          menuLabel="Other add options"
+          menu={
+            <MenuGroup>
+              <MenuGroupLabel>Add as</MenuGroupLabel>
+              <MenuItem>
+                <ChoiceRow
+                  label="Participant"
+                  description="Send messages, reply, and react."
+                />
+              </MenuItem>
+              <MenuItem>
+                <ChoiceRow
+                  label="View only"
+                  description="Read messages and threads."
+                />
+              </MenuItem>
+              <MenuItem>
+                <ChoiceRow
+                  label="Admin"
+                  description="Manage this channel and its members."
+                />
+              </MenuItem>
+            </MenuGroup>
+          }
+        >
+          Add
+        </SplitButton>
+      </ExamplePreview>
       <ExamplePreview
         className="bg-affordance-accent"
         code='<Button variant="glass">Message</Button>'
@@ -608,6 +645,21 @@ export function IconButtonSpecimen() {
         >
           <div className="component-specimen-row">
             <IconButton
+              variant="inset"
+              shape="round"
+              size="md"
+              aria-label="Inset action"
+              icon={<GearIcon aria-hidden="true" />}
+            />
+            <IconButton
+              variant="inset"
+              disabled
+              shape="round"
+              size="md"
+              aria-label="Disabled inset action"
+              icon={<GearIcon aria-hidden="true" />}
+            />
+            <IconButton
               variant="chrome"
               aria-label="Chrome settings"
               icon={<GearIcon aria-hidden="true" />}
@@ -643,6 +695,75 @@ export function IconButtonSpecimen() {
           />
         </ExamplePreview>
       </section>
+    </div>
+  );
+}
+
+const harnesses = ["Claude", "Codex", "Goose"] as const;
+
+export function SplitButtonSpecimen() {
+  const [choice, setChoice] = useState<string>(harnesses[0]);
+  const [loading, setLoading] = useState(false);
+  const menu = (
+    <MenuRadioGroup value={choice} onValueChange={setChoice}>
+      {harnesses.map((item) => (
+        <MenuRadioItem key={item} value={item} closeOnClick>
+          {item}
+        </MenuRadioItem>
+      ))}
+    </MenuRadioGroup>
+  );
+  const run = () => {
+    setLoading(true);
+    setTimeout(() => setLoading(false), 1200);
+  };
+  return (
+    <div className="component-specimen-stack">
+      <p className="text-body-sm text-subtle">
+        The label names the chosen option. Choosing in the menu changes it
+        without running the action.
+      </p>
+      <ExamplePreview
+        className="justify-center"
+        code={`<SplitButton
+  menuLabel="Choose agent type"
+  menu={<MenuRadioGroup value={choice} onValueChange={setChoice}>…</MenuRadioGroup>}
+  onClick={run}
+>
+  Import as {choice}
+</SplitButton>`}
+      >
+        {(["subtle", "outline", "prominent"] as const).map((variant) => (
+          <SplitButton
+            key={variant}
+            variant={variant}
+            size="sm"
+            menuLabel="Choose agent type"
+            menu={menu}
+            loading={loading}
+            onClick={run}
+          >
+            Import as {choice}
+          </SplitButton>
+        ))}
+      </ExamplePreview>
+      <ExamplePreview
+        label="Medium and disabled"
+        code={`<SplitButton menuLabel="Choose agent type" menu={menu}>Import as {choice}</SplitButton>
+<SplitButton variant="outline" menuLabel="Choose agent type" menu={menu} disabled>Import as {choice}</SplitButton>`}
+      >
+        <SplitButton menuLabel="Choose agent type" menu={menu} onClick={run}>
+          Import as {choice}
+        </SplitButton>
+        <SplitButton
+          variant="outline"
+          menuLabel="Choose agent type"
+          menu={menu}
+          disabled
+        >
+          Import as {choice}
+        </SplitButton>
+      </ExamplePreview>
     </div>
   );
 }

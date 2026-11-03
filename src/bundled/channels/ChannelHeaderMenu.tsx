@@ -7,11 +7,7 @@ import {
   useChannelMenuActions,
   useChannelNavigation,
 } from "../../features/channel-navigation/ChannelNavigationState";
-import {
-  DotsThreeIcon,
-  FileTextIcon,
-  InfoIcon,
-} from "../../shared/design-system/icons";
+import { DotsThreeIcon, InfoIcon } from "../../shared/design-system/icons";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
   MenuRoot,
@@ -32,7 +28,6 @@ export function ChannelHeaderMenu({
   origin: lifetime,
   trigger,
   openDetails,
-  openCanvas,
   menuPanels,
   openMenuPanel,
   finishConversion,
@@ -45,7 +40,6 @@ export function ChannelHeaderMenu({
   openDetails(): void;
   startChat?: ReactNode;
   finishConversion?: (() => void) | undefined;
-  openCanvas(trigger: HTMLButtonElement): void;
   menuPanels?: readonly RegisteredPanel[] | undefined;
   openMenuPanel?: ((panel: RegisteredPanel) => void) | undefined;
 }) {
@@ -97,18 +91,6 @@ export function ChannelHeaderMenu({
         </MenuIcon>
         View channel details
       </MenuItem>
-      {channel && !channel.readOnly && (
-        <MenuItem
-          onClick={() => {
-            if (trigger.current) openCanvas(trigger.current);
-          }}
-        >
-          <MenuIcon>
-            <FileTextIcon size={16} />
-          </MenuIcon>
-          View canvas
-        </MenuItem>
-      )}
       {menuPanels?.map((panel) => (
         <MenuItem key={panel.key} onClick={() => openMenuPanel?.(panel)}>
           <MenuIcon>
@@ -141,6 +123,7 @@ export function ChannelHeaderMenu({
       <MenuTrigger
         render={
           <IconButton
+            hint="familiar"
             ref={trigger}
             size="toolbar"
             aria-label="Channel actions"
@@ -153,7 +136,7 @@ export function ChannelHeaderMenu({
       {prepared &&
       channel &&
       handoff &&
-      !channel.readOnly &&
+      (!channel.readOnly || channel.viewerRole === "guest") &&
       !channel.cached &&
       !channel.archived ? (
         <ChannelLifecycleMenu

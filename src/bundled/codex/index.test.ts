@@ -279,4 +279,9 @@ it("preserves a compatible shared Codex model", () => {
       model: "gpt-shared",
     }),
   ).toBeUndefined();
+  const shared = type?.exportShared?.({ model: "gpt-shared" });
+  expect(shared).toEqual({ runtime: "codex", model: "gpt-shared" });
+  expect(type?.importShared?.(shared ?? { model: "" })).toMatchObject({
+    model: "gpt-shared",
+  });
 });

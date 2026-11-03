@@ -154,6 +154,31 @@ it("shows the command the model wrote, not the login shell running it", () => {
   expect(shellCommand("pnpm test")).toBe("pnpm test");
 });
 
+it("shows a reply posted in a subthread as the agent's message", () => {
+  const [mapped] = codexTurns(
+    [
+      turn({
+        items: [
+          {
+            type: "dynamicToolCall",
+            id: "d1",
+            namespace: "buzz",
+            tool: "reply_in_subthread",
+            arguments: { parent: root, text: "Nested" },
+            status: "completed",
+            contentItems: [{ type: "inputText", text: "sent" }],
+            success: true,
+          },
+        ],
+      }),
+    ],
+    conversation,
+  );
+  expect(mapped?.items).toEqual([
+    expect.objectContaining({ type: "message", text: "Nested", posted: true }),
+  ]);
+});
+
 it("keeps a send that failed or has not finished as a tool call", () => {
   const send = (id: string, patch: Record<string, unknown>) => ({
     type: "dynamicToolCall",
@@ -445,8 +470,8 @@ it("merges the threads other builds started, found by tag or by their earlier na
   expect(
     sent.filter((w) => w.method === "thread/list").map((w) => w.params),
   ).toEqual([
-    { searchTerm: tag, modelProviders: [], limit: 50 },
-    { searchTerm: title, modelProviders: [], limit: 50 },
+    { searchTerm: tag, modelProviders: [], limit: 50, useStateDbOnly: true },
+    { searchTerm: title, modelProviders: [], limit: 50, useStateDbOnly: true },
   ]);
   // With no saved thread, the newest one found for it is the conversation's.
   await expect(

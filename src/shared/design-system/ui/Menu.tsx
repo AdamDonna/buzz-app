@@ -2,6 +2,7 @@ import { ContextMenu as BaseContextMenu } from "@base-ui/react/context-menu";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { CheckIcon, CaretRightIcon } from "../icons/index";
 import { useFinalFocusUnlessMoved } from "./finalFocus";
+import { hoverOpenTiming, type HoverOpen } from "./hoverIntent";
 import {
   createContext,
   useContext,
@@ -21,7 +22,28 @@ export function MenuRoot<Payload>(props: BaseMenu.Root.Props<Payload>) {
   );
 }
 
-export const MenuTrigger = BaseMenu.Trigger;
+type MenuTriggerProps<Payload> = Omit<
+  BaseMenu.Trigger.Props<Payload>,
+  "openOnHover" | "delay" | "closeDelay"
+> & {
+  /** Opening on hover takes its timing from a DESIGN.md "Hover timing" bucket. */
+  openOnHover?: HoverOpen | false | undefined;
+};
+
+export function MenuTrigger<Payload>({
+  openOnHover,
+  ...props
+}: MenuTriggerProps<Payload>) {
+  return (
+    <BaseMenu.Trigger
+      {...props}
+      {...(openOnHover && {
+        openOnHover: true,
+        ...hoverOpenTiming[openOnHover],
+      })}
+    />
+  );
+}
 
 export function ContextMenuRoot({
   open,

@@ -340,6 +340,41 @@ it("only the owning selected tab earns dwell; inactive and restored content does
   vi.advanceTimersByTime(1);
   expect(movedLease?.observe).toHaveBeenCalledExactlyOnceWith(["visible"]);
 });
+it("a panel in a reading-thread workspace reads while focus is elsewhere in that workspace", () => {
+  const h = setup({ focus: "outside" });
+  const workspace = document.createElement("div");
+  const side = document.createElement("div");
+  side.setAttribute("data-panel-workspace", "");
+  const surface = h.element.closest("aside");
+  const unrelated = document.createElement("button");
+  expect(surface).not.toBeNull();
+  document.body.append(workspace, unrelated);
+  if (surface) side.append(surface);
+  workspace.append(side, h.outside);
+  h.retarget("thread-room");
+  h.outside.focus();
+  vi.advanceTimersByTime(300);
+  expect(h.reading).not.toHaveBeenCalled();
+  workspace.setAttribute("data-reading-thread", "");
+  h.retarget("thread-room-again");
+  h.outside.focus();
+  vi.advanceTimersByTime(299);
+  expect(h.leases.at(-1)?.observe).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  expect(h.dwelled()?.observe).toHaveBeenCalledExactlyOnceWith(["visible"]);
+  const count = h.reading.mock.calls.length;
+  unrelated.focus();
+  vi.advanceTimersByTime(300);
+  expect(h.reading).toHaveBeenCalledTimes(count);
+  // A thread in the main pane belongs to no side-pane selection: the same
+  // workspace focus does not read it.
+  side.setAttribute("data-main-workspace", "");
+  side.removeAttribute("data-panel-workspace");
+  h.retarget("thread-room-main");
+  h.outside.focus();
+  vi.advanceTimersByTime(300);
+  expect(h.reading).toHaveBeenCalledTimes(count);
+});
 it("focus moving from the list to its composer keeps reading; another surface's composer cancels it", () => {
   const h = setup();
   vi.advanceTimersByTime(100);
@@ -592,3 +627,26 @@ it("settled notification starts dwell without changed rows, focus or geometry", 
   vi.advanceTimersByTime(1);
   expect(h.leases[0]?.observe).toHaveBeenCalledExactlyOnceWith(["visible"]);
 });
+
+it.each(["transitionend", "animationend"])(
+  "%s on the containing panel resumes dwell after translated rows enter view",
+  (event) => {
+    const h = setup({ settled: false });
+    h.setRows([row("visible", 600, 700)]);
+    h.position.current = true;
+    readingPositioned(h.element);
+    vi.advanceTimersByTime(300);
+    expect(h.reading).not.toHaveBeenCalled();
+    // A transform changes viewport geometry without resizing or changing rows.
+    h.setRows([row("visible", 100, 200)]);
+    h.outside.dispatchEvent(new Event(event, { bubbles: true }));
+    vi.advanceTimersByTime(300);
+    expect(h.reading).not.toHaveBeenCalled();
+    h.element.parentElement?.dispatchEvent(new Event(event, { bubbles: true }));
+    vi.advanceTimersByTime(299);
+    expect(h.leases).toHaveLength(1);
+    expect(h.leases[0]?.observe).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(h.leases[0]?.observe).toHaveBeenCalledExactlyOnceWith(["visible"]);
+  },
+);

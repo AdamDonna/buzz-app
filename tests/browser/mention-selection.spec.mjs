@@ -194,6 +194,90 @@ for (const variant of variants) {
   });
 }
 
+// Only browser paint can prove nested fills remain visible on the real composer.
+test("composer code and recipient fills remain distinct in both themes", async ({
+  page,
+}) => {
+  const { input } = await compose(page, variants[0]);
+  await page
+    .getByRole("button", { name: "Toggle formatting", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await page.keyboard.type("sample");
+  await expect(input.locator("code")).toHaveText("sample");
+  await page
+    .getByRole("button", { name: "Close formatting", exact: true })
+    .click();
+  const composer = input.locator("xpath=ancestor::form");
+  await expect(composer.locator("[data-recipients]")).toBeVisible();
+  for (const mode of ["light", "dark"]) {
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+    }, mode);
+    await settleComposer(page, composer);
+    const points = await composer.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const code = el.querySelector("code").getBoundingClientRect();
+      const pill = el
+        .querySelector("[data-recipients]")
+        .getBoundingClientRect();
+      return {
+        clip: {
+          x: Math.floor(box.left),
+          y: Math.floor(box.top),
+          width: Math.ceil(box.right) - Math.floor(box.left),
+          height: Math.ceil(box.bottom) - Math.floor(box.top),
+        },
+        surface: { x: box.right - 10, y: box.top + box.height / 2 },
+        code: { x: code.left + 1, y: code.top + code.height / 2 },
+        pill: { x: pill.left + 1, y: pill.top + pill.height / 2 },
+      };
+    });
+    const colors = await samplePaint(page, points);
+    expect.soft(colors.code, `${mode} inline code`).not.toEqual(colors.surface);
+    expect
+      .soft(colors.pill, `${mode} recipient pill`)
+      .not.toEqual(colors.surface);
+    await page
+      .getByRole("button", { name: "Toggle formatting", exact: true })
+      .click();
+    const active = page.getByRole("button", { name: "Code", exact: true });
+    await expect(active).toHaveAttribute("aria-pressed", "true");
+    await page.mouse.move(0, 0);
+    await settleComposer(page, composer);
+    const surface = await composer.evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
+    );
+    await expect(active).not.toHaveCSS("background-color", surface);
+    const resting = await active.evaluate(
+      (el) => getComputedStyle(el).backgroundColor,
+    );
+    await active.hover();
+    await settleComposer(page, composer);
+    await expect(active).not.toHaveCSS("background-color", resting);
+    await page.mouse.move(0, 0);
+    await settleComposer(page, composer);
+    await expect(active).toHaveCSS("background-color", resting);
+    await page
+      .getByRole("button", { name: "Close formatting", exact: true })
+      .click();
+  }
+});
+
+async function settleComposer(page, composer) {
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await expect
+    .poll(() =>
+      composer.evaluate(
+        (el) =>
+          el
+            .getAnimations({ subtree: true })
+            .filter((a) => a.playState === "running" || a.pending).length,
+      ),
+    )
+    .toBe(0);
+}
+
 /** Painted colours inside the first mention, between two prose words, inside
  * the second mention, and in the trailing space. Sampled in CSS pixels at the
  * line's vertical centre, away from any glyph, so only highlight paint differs. */
@@ -236,6 +320,10 @@ async function paint(page, input) {
       space: centre(paragraph.lastChild, 0, 1),
     };
   });
+  return samplePaint(page, points);
+}
+
+async function samplePaint(page, points) {
   const png = await page.screenshot({ clip: points.clip, scale: "css" });
   return page.evaluate(
     async ({ base64, points }) => {
@@ -316,13 +404,23 @@ test("selection remains visible on outgoing bubbles and their neutral content", 
         while (getComputedStyle(parent).backgroundColor === "rgba(0, 0, 0, 0)")
           parent = parent.parentElement;
         const selection = getComputedStyle(el, "::selection");
-        const hex = (rgb) =>
-          "#" +
-          rgb
-            .match(/\d+/g)
-            .slice(0, 3)
-            .map((n) => Number(n).toString(16).padStart(2, "0"))
-            .join("");
+        // WebKit serializes mixed hover fills as color(srgb ...), not rgb().
+        // Let the browser resolve CSS colors before comparing the same ratios.
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d");
+        const hex = (color) => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          return (
+            "#" +
+            [...context.getImageData(0, 0, 1, 1).data]
+              .slice(0, 3)
+              .map((value) => value.toString(16).padStart(2, "0"))
+              .join("")
+          );
+        };
         return {
           surface: hex(getComputedStyle(parent).backgroundColor),
           fill: hex(selection.backgroundColor),

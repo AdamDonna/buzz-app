@@ -89,7 +89,7 @@ export function WorkflowCommunity({
   const deleting = useRef(false);
   const [deleteError, setDeleteError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState<readonly string[]>([]);
   const split = usePanelSplit(448, 320);
   const [detail, setDetail] = useState<{ key: string; name: string }>();
   const [detailTarget, setDetailTarget] = useState<HTMLElement | null>(null);
@@ -202,6 +202,7 @@ export function WorkflowCommunity({
               actions={
                 <>
                   <IconButton
+                    hint="familiar"
                     size="sm"
                     variant="ghost"
                     aria-label="New workflow"
@@ -212,6 +213,7 @@ export function WorkflowCommunity({
                     onClick={beginCreate}
                   />
                   <IconButton
+                    hint="familiar"
                     size="sm"
                     variant="ghost"
                     aria-label="Refresh workflows"
@@ -248,6 +250,7 @@ export function WorkflowCommunity({
               )}
               {eligible.length > 0 && (
                 <WorkflowLanding
+                  session={session}
                   capability={capability}
                   channels={eligible}
                   filter={filter}
@@ -314,7 +317,7 @@ export function WorkflowCommunity({
           }`}
           capability={capability}
           channelId={channel.id}
-          channelName={channel.name}
+          channel={channel}
           initialSelection={selectedDefinition}
           onSaveReadback={setSaveReadback}
           onDelete={deleteWorkflow}

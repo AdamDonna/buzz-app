@@ -141,7 +141,7 @@ function expectHostStopped() {
   for (const stream of streams) expect(stream.close).toHaveBeenCalledTimes(1);
   const added = vi.mocked(document.addEventListener).mock.calls;
   const removed = vi.mocked(document.removeEventListener).mock.calls;
-  expect(added).toHaveLength(10); // Host listeners plus capture-phase presence input.
+  expect(added).toHaveLength(11); // Host/presence listeners plus built-in emoji copy.
   expect(removed).toHaveLength(added.length);
   const capture = (options?: boolean | EventListenerOptions) =>
     typeof options === "boolean" ? options : !!options?.capture;
@@ -171,6 +171,41 @@ it("provides the host command service to plugins", async () => {
     commandId: "token",
   });
 });
+
+it.each([
+  JSON.stringify({
+    version: 3,
+    enabled: { "buzz.emoji": false, "buzz.mentions": false },
+  }),
+  "invalid saved plugin settings",
+])(
+  "keeps conversation features available independently of saved plugin settings: %s",
+  async (saved) => {
+    await services.dispose();
+    values.set("buzzodz.plugins.v1", saved);
+    services = createServices();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      services.conversation.tools.snapshot().map(({ key }) => key),
+    ).toEqual(["buzz.emoji/picker", "buzz.mentions/picker"]);
+    expect(
+      services.conversation.completions.snapshot().map(({ key }) => key),
+    ).toEqual(["buzz.emoji/typeahead", "buzz.mentions/typeahead"]);
+    expect(
+      services.conversation.inline.snapshot().map(({ key }) => key),
+    ).toEqual(["buzz.emoji/custom"]);
+    expect(services.settingsCards.has("buzz.emoji/custom-emoji")).toBe(true);
+    const tools = services.conversation.tools.snapshot();
+    await services.plugins.change("disable", "buzz.emoji");
+    await services.plugins.change("disable", "buzz.mentions");
+    expect(services.conversation.tools.snapshot()).toBe(tools);
+    await services.dispose();
+    expect(services.conversation.tools.snapshot()).toEqual([]);
+    expect(services.conversation.completions.snapshot()).toEqual([]);
+    expect(services.conversation.inline.snapshot()).toEqual([]);
+    expect(services.settingsCards.has("buzz.emoji/custom-emoji")).toBe(false);
+  },
+);
 
 it("disposes the real host services and plugins once", async () => {
   await openCommunities();

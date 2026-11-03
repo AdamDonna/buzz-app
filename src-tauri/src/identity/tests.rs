@@ -7,6 +7,8 @@ struct Memory {
     reads: Mutex<usize>,
     legacy: Mutex<Option<String>>,
     legacy_reads: Mutex<usize>,
+    previous: Mutex<Option<Vec<u8>>>,
+    deletes: Mutex<Vec<&'static str>>,
 }
 impl Store for Arc<Memory> {
     fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
@@ -40,7 +42,22 @@ impl Store for Arc<Memory> {
         if *self.write_denied.lock().unwrap() {
             return Err("delete denied".into());
         }
+        self.deletes.lock().unwrap().push("current");
         *self.saved.lock().unwrap() = None;
+        Ok(())
+    }
+    fn previous(&self) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        if *self.denied.lock().unwrap() {
+            return Err("denied".into());
+        }
+        Ok(self.previous.lock().unwrap().clone().map(Zeroizing::new))
+    }
+    fn delete_previous(&self) -> Result<()> {
+        if *self.write_denied.lock().unwrap() {
+            return Err("delete denied".into());
+        }
+        self.deletes.lock().unwrap().push("previous");
+        *self.previous.lock().unwrap() = None;
         Ok(())
     }
 }
@@ -51,7 +68,7 @@ fn identity(store: &Arc<Memory>) -> Identity {
     }
 }
 fn fixture() -> Key {
-    Key(Zeroizing::new([1; 32]))
+    Key::new(Zeroizing::new([1; 32]))
 }
 
 #[test]
@@ -72,7 +89,7 @@ fn imports_exact_key_then_restores_and_exports_without_repeated_reads() {
 #[test]
 fn legacy_import_adopts_only_a_valid_old_key_and_never_replaces_one() {
     let nsec = fixture().nsec().unwrap();
-    let other = Key(Zeroizing::new([2; 32])).nsec().unwrap();
+    let other = Key::new(Zeroizing::new([2; 32])).nsec().unwrap();
     // (saved, own store denied, legacy entry, imports, reads legacy)
     for (saved, denied, legacy, imports, reads_legacy) in [
         (None, false, Some(format!(" {nsec}\n")), true, true),
@@ -155,7 +172,7 @@ fn invalid_imports_do_not_create_keys_and_saved_identity_is_immutable() {
         "ab",
         &"ab".repeat(32),
         &bech32::encode::<Bech32>(Hrp::parse("npub").unwrap(), &[1; 32]).unwrap(),
-        &Key(Zeroizing::new([0; 32])).nsec().unwrap(),
+        &Key::new(Zeroizing::new([0; 32])).nsec().unwrap(),
     ] {
         assert!(owner.save(Some(text)).is_err());
         assert!(store.saved.lock().unwrap().is_none());
@@ -175,7 +192,7 @@ async fn authorize_agent_signs_for_agent_and_rejects_invalid_requests() {
     use secp256k1::{schnorr::Signature, Secp256k1, XOnlyPublicKey};
     let host = IdentityHost::fixture();
     let owner = host.viewer().await.unwrap();
-    let agent = Key(Zeroizing::new([2; 32])).viewer().unwrap();
+    let agent = Key::new(Zeroizing::new([2; 32])).viewer().unwrap();
     let tag = host
         .authorize_agent(owner.clone(), agent.clone())
         .await
@@ -213,7 +230,7 @@ fn remote_agent_authorization_reaches_signer_through_production_ipc() {
         .build()
         .unwrap();
     let owner = fixture().viewer().unwrap();
-    let agent = Key(Zeroizing::new([2; 32])).viewer().unwrap();
+    let agent = Key::new(Zeroizing::new([2; 32])).viewer().unwrap();
     let response = get_ipc_response(
         &view,
         tauri::webview::InvokeRequest {
@@ -261,9 +278,9 @@ fn development_and_release_items_are_separate() {
     assert_eq!(
         credentials::HUMAN_SERVICE,
         if cfg!(debug_assertions) {
-            "dev.local.buzz.foundation.identity.debug"
+            "xyz.block.buzz.desktop.identity.debug"
         } else {
-            "dev.local.buzz.foundation.identity"
+            "xyz.block.buzz.desktop.identity"
         }
     );
     assert_eq!(credentials::HUMAN_ACCOUNT, "human");
@@ -528,11 +545,27 @@ fn remove_key_deletes_then_confirms_absence() {
     assert!(store.saved.lock().unwrap().is_some());
 }
 
+#[test]
+fn remove_key_also_deletes_the_key_under_its_previous_service() {
+    let store = Arc::new(Memory::default());
+    identity(&store).save(None).unwrap();
+    *store.previous.lock().unwrap() = store.saved.lock().unwrap().clone();
+    remove_key(&store).unwrap();
+    assert!(store.saved.lock().unwrap().is_none());
+    assert!(store.previous.lock().unwrap().is_none());
+    // The previous key first: reads copy it while the current one is absent.
+    assert_eq!(*store.deletes.lock().unwrap(), ["previous", "current"]);
+    // Only a previous key left is still a key to remove.
+    *store.previous.lock().unwrap() = Some(b"previous".to_vec());
+    remove_key(&store).unwrap();
+    assert!(store.previous.lock().unwrap().is_none());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn closing_refuses_every_key_operation_including_a_sign_started_before_it() {
     let host = IdentityHost::fixture();
     let owner = host.viewer().await.unwrap();
-    let agent = Key(Zeroizing::new([2; 32])).viewer().unwrap();
+    let agent = Key::new(Zeroizing::new([2; 32])).viewer().unwrap();
     let template = || {
         serde_json::from_value(serde_json::json!({
             "kind": 1, "content": "", "tags": [], "created_at": 0
@@ -697,4 +730,43 @@ pub(crate) fn write_denied_fixture() -> (IdentityHost, impl Fn()) {
     *store.write_denied.lock().unwrap() = true;
     let host = IdentityHost(Arc::new(Mutex::new(identity(&store))));
     (host, move || *store.write_denied.lock().unwrap() = false)
+}
+
+#[tokio::test]
+async fn main_agent_signer_admits_one_agent_or_a_cleared_choice() {
+    use serde_json::json;
+    let host = super::IdentityHost::fixture();
+    let payload = json!({"version": 1, "agent": "ab".repeat(32)});
+    let event = host
+        .sign_sidebar("main-agent".into(), payload.clone(), 100)
+        .await
+        .unwrap();
+    host.admit_sidebar(event.clone()).await.unwrap();
+    assert_eq!(
+        host.decode_sidebar(vec![event]).await.unwrap()["main-agent"],
+        payload
+    );
+    let payload = json!({"version": 1, "agent": null});
+    let event = host
+        .sign_sidebar("main-agent".into(), payload.clone(), 101)
+        .await
+        .unwrap();
+    host.admit_sidebar(event.clone()).await.unwrap();
+    assert_eq!(
+        host.decode_sidebar(vec![event]).await.unwrap()["main-agent"],
+        payload
+    );
+    for invalid in [
+        json!({"version": 1}),
+        json!({"version": 2, "agent": "ab".repeat(32)}),
+        json!({"version": 1, "agent": "AB".repeat(32)}),
+        json!({"version": 1, "agent": "ab".repeat(31)}),
+        json!({"version": 1, "agent": 7}),
+        json!({"version": 1, "agent": "ab".repeat(32), "extra": true}),
+    ] {
+        assert!(host
+            .sign_sidebar("main-agent".into(), invalid, 100)
+            .await
+            .is_err());
+    }
 }

@@ -410,6 +410,60 @@ index 7b5b5505db070d3741519245a5f804b42b20e323..c50d7ad8730fe3fb903ad4e8316e0c88
      triggerElementRef,
      externalTree: floatingTreeRoot,
      isClosing: () => store.select('transitionStatus') === 'ending',
+diff --git a/preview-card/trigger/PreviewCardTrigger.js b/preview-card/trigger/PreviewCardTrigger.js
+index d22e1c4c6e275fd64df21514403d4c1d9e52214d..39b14241dc2c3561b8b91d890b1f3c27b3636c65 100644
+--- a/preview-card/trigger/PreviewCardTrigger.js
++++ b/preview-card/trigger/PreviewCardTrigger.js
+@@ -60,17 +60,18 @@ const PreviewCardTrigger = exports.PreviewCardTrigger = (0, _fastHooks.fastCompo
+     mouseOnly: true,
+     move: false,
+     handleClose: (0, _floatingUiReact.safePolygon)(),
++    // Open once the pointer rests on the trigger, as Tooltip does; movement restarts it.
++    restMs: delayWithDefault,
+     delay: () => ({
+-      open: delayWithDefault,
+       close: closeDelayWithDefault
+     }),
+     triggerElementRef,
+     isActiveTrigger: isTriggerActive,
+     isClosing: () => store.select('transitionStatus') === 'ending'
+   });
+-  const focusProps = (0, _floatingUiReact.useFocus)(floatingRootContext, {
+-    delay: delayWithDefault
+-  });
++  // Focus is a deliberate request: open at once, as Tooltip does. The delay
++  // is the pointer's rest time only.
++  const focusProps = (0, _floatingUiReact.useFocus)(floatingRootContext);
+   const state = {
+     open: isOpenedByThisTrigger
+   };
+diff --git a/preview-card/trigger/PreviewCardTrigger.mjs b/preview-card/trigger/PreviewCardTrigger.mjs
+index 2287f76c2a9c52f40af2f1176f7350b4f0c8d40b..d926b05704eff551df940968390332ec38ab2085 100644
+--- a/preview-card/trigger/PreviewCardTrigger.mjs
++++ b/preview-card/trigger/PreviewCardTrigger.mjs
+@@ -54,17 +54,18 @@ export const PreviewCardTrigger = fastComponentRef(function PreviewCardTrigger(c
+     mouseOnly: true,
+     move: false,
+     handleClose: safePolygon(),
++    // Open once the pointer rests on the trigger, as Tooltip does; movement restarts it.
++    restMs: delayWithDefault,
+     delay: () => ({
+-      open: delayWithDefault,
+       close: closeDelayWithDefault
+     }),
+     triggerElementRef,
+     isActiveTrigger: isTriggerActive,
+     isClosing: () => store.select('transitionStatus') === 'ending'
+   });
+-  const focusProps = useFocus(floatingRootContext, {
+-    delay: delayWithDefault
+-  });
++  // Focus is a deliberate request: open at once, as Tooltip does. The delay
++  // is the pointer's rest time only.
++  const focusProps = useFocus(floatingRootContext);
+   const state = {
+     open: isOpenedByThisTrigger
+   };
 diff --git a/floating-ui-react/hooks/useClick.js b/floating-ui-react/hooks/useClick.js
 --- a/floating-ui-react/hooks/useClick.js
 +++ b/floating-ui-react/hooks/useClick.js

@@ -10,6 +10,13 @@ use zeroize::Zeroizing;
 
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) const KEY_SERVICE: &str = if cfg!(debug_assertions) {
+    "xyz.block.buzz.desktop.jev-key.debug"
+} else {
+    "xyz.block.buzz.desktop.jev-key"
+};
+/// The service before 1.0. Reads copy a key found only there; clearing removes it too.
+#[cfg_attr(test, allow(dead_code))]
+const PREVIOUS_KEY_SERVICE: &str = if cfg!(debug_assertions) {
     "dev.local.buzz.foundation.jev-key.debug"
 } else {
     "dev.local.buzz.foundation.jev-key"
@@ -108,9 +115,20 @@ fn decode(bytes: Zeroizing<Vec<u8>>) -> Result<Option<Zeroizing<String>>, String
     Ok((!key.is_empty()).then(|| Zeroizing::new(key.to_owned())))
 }
 
+/// Delete the key under both services, the previous one first, stopping at a
+/// failure: reads copy it while the current one is absent, so deleting the
+/// current one first could let a read bring the key back.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
+fn clear_with<E>(delete: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+    [PREVIOUS_KEY_SERVICE, KEY_SERVICE]
+        .into_iter()
+        .try_for_each(delete)
+}
+
 #[cfg(all(target_os = "macos", not(test)))]
 mod platform {
     use super::*;
+    use buzz_credential_store as credentials;
     use security_framework::os::macos::keychain::SecKeychain;
     const NOT_FOUND: i32 = -25300;
     fn error(error: security_framework::base::Error) -> String {
@@ -120,18 +138,36 @@ mod platform {
         }
         .into()
     }
+    fn find(service: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+        // Only "item not found" means no key; a locked or refused Keychain
+        // is an error, so it neither hides nor removes a saved key.
+        match SecKeychain::default()
+            .map_err(error)?
+            .find_generic_password(service, KEY_ACCOUNT)
+        {
+            Ok((password, _)) => Ok(Some(Zeroizing::new(password.to_vec()))),
+            Err(e) if e.code() == NOT_FOUND => Ok(None),
+            Err(e) => Err(error(e)),
+        }
+    }
+    fn stored(error: credentials::Error) -> String {
+        match error {
+            credentials::Error::Denied => "Keychain access was denied. Allow access and retry",
+            credentials::Error::Busy => "Another Buzz app is using secure storage. Retry shortly",
+            _ => "The Keychain is unavailable",
+        }
+        .into()
+    }
     impl KeyStore for OsKeyStore {
         fn read(&self) -> Result<Option<Zeroizing<String>>, String> {
-            // Only "item not found" means no key; a locked or refused Keychain
-            // is an error, so it neither hides nor removes a saved key.
-            match SecKeychain::default()
-                .map_err(error)?
-                .find_generic_password(KEY_SERVICE, KEY_ACCOUNT)
-            {
-                Ok((password, _)) => decode(Zeroizing::new(password.to_vec())),
-                Err(e) if e.code() == NOT_FOUND => Ok(None),
-                Err(e) => Err(error(e)),
-            }
+            credentials::read_or_copy(
+                || find(KEY_SERVICE),
+                || {
+                    credentials::copy(PREVIOUS_KEY_SERVICE, KEY_SERVICE, KEY_ACCOUNT)
+                        .map_err(stored)
+                },
+            )?
+            .map_or(Ok(None), decode)
         }
         fn replace(&self, key: &str) -> Result<(), String> {
             // A saved item is updated in place, so a failed write leaves the
@@ -142,19 +178,11 @@ mod platform {
                 .map_err(error)
         }
         fn clear(&self) -> Result<(), String> {
-            match SecKeychain::default()
-                .map_err(error)?
-                .find_generic_password(KEY_SERVICE, KEY_ACCOUNT)
-            {
-                Ok((_, item)) => item.delete(),
-                Err(e) if e.code() == NOT_FOUND => return Ok(()),
-                Err(e) => return Err(error(e)),
-            }
-            // Deletion reports no error, so confirm it.
-            match self.read()? {
-                None => Ok(()),
-                Some(_) => Err("The key could not be removed from the Keychain".into()),
-            }
+            // Each delete confirms the item is gone.
+            clear_with(|service| match credentials::delete(service, KEY_ACCOUNT) {
+                Ok(()) | Err(credentials::Error::Absent) => Ok(()),
+                Err(error) => Err(stored(error)),
+            })
         }
     }
 }
@@ -174,20 +202,26 @@ mod platform {
     }
     impl KeyStore for OsKeyStore {
         fn read(&self) -> Result<Option<Zeroizing<String>>, String> {
-            match credentials::read(KEY_SERVICE, KEY_ACCOUNT) {
-                Ok(bytes) => decode(bytes),
+            let find = |service| match credentials::read(service, KEY_ACCOUNT) {
+                Ok(bytes) => Ok(Some(bytes)),
                 Err(Error::Absent) => Ok(None),
-                Err(e) => Err(error(e)),
-            }
+                Err(e) => Err(e),
+            };
+            credentials::read_or_copy(
+                || find(KEY_SERVICE),
+                || credentials::copy(PREVIOUS_KEY_SERVICE, KEY_SERVICE, KEY_ACCOUNT),
+            )
+            .map_err(error)?
+            .map_or(Ok(None), decode)
         }
         fn replace(&self, key: &str) -> Result<(), String> {
             credentials::replace(KEY_SERVICE, KEY_ACCOUNT, key.as_bytes()).map_err(error)
         }
         fn clear(&self) -> Result<(), String> {
-            match credentials::delete(KEY_SERVICE, KEY_ACCOUNT) {
+            clear_with(|service| match credentials::delete(service, KEY_ACCOUNT) {
                 Ok(()) | Err(Error::Absent) => Ok(()),
                 Err(e) => Err(error(e)),
-            }
+            })
         }
     }
 }

@@ -96,6 +96,21 @@ impl Keychain for Fake {
     ) -> std::result::Result<Zeroizing<Vec<u8>>, Failure> {
         self.get("saved", service, account)
     }
+    fn copy(
+        &self,
+        previous: &str,
+        service: &str,
+        account: &str,
+    ) -> std::result::Result<(), Failure> {
+        match self.get("saved", previous, account) {
+            Ok(bytes) => match self.add(service, account, &bytes) {
+                Ok(()) | Err(Failure::Occupied) => Ok(()),
+                Err(error) => Err(error),
+            },
+            Err(Failure::Absent) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
     fn add(&self, service: &str, account: &str, bytes: &[u8]) -> std::result::Result<(), Failure> {
         self.calls
             .lock()
@@ -279,20 +294,26 @@ fn destination_is_separate_exact_bound_create_only_and_verified() {
         .add(&id, &Secret::parse(KEY, PUB).unwrap())
         .unwrap_err()
         .contains("already exists"));
+    // An absent key is looked for under the service before 1.0 too, then
+    // read again.
     assert_eq!(
         *fake.calls.lock().unwrap(),
-        ["saved", "add", "saved", "add"].map(|op| (
-            op.into(),
-            "dev.local.buzz.foundation.agents".into(),
-            account.clone()
-        ))
+        [
+            ("saved", SERVICE),
+            ("saved", PREVIOUS_SERVICE),
+            ("saved", SERVICE),
+            ("add", SERVICE),
+            ("saved", SERVICE),
+            ("add", SERVICE)
+        ]
+        .map(|(op, service)| (op.into(), service.into(), account.clone()))
     );
     assert_eq!(fake.entries.lock().unwrap().len(), 1);
     *fake.failure.lock().unwrap() = Some(Failure::Denied);
     assert!(credentials.read(&id, PUB).is_err()); // denied != absent
     *fake.failure.lock().unwrap() = None;
     fake.put(
-        "dev.local.buzz.foundation.agents",
+        "xyz.block.buzz.desktop.agents",
         &account,
         b"0000000000000000000000000000000000000000000000000000000000000002".to_vec(),
     );
@@ -344,17 +365,23 @@ fn adoption_uses_production_adapter_and_reads_back_create_only_destination() {
             ("legacy".into(), "buzz-desktop-dev".into(), "secrets".into()),
             (
                 "saved".into(),
-                "dev.local.buzz.foundation.agents".into(),
+                "xyz.block.buzz.desktop.agents".into(),
+                account.clone()
+            ),
+            ("saved".into(), PREVIOUS_SERVICE.into(), account.clone()),
+            (
+                "saved".into(),
+                "xyz.block.buzz.desktop.agents".into(),
                 account.clone()
             ),
             (
                 "add".into(),
-                "dev.local.buzz.foundation.agents".into(),
+                "xyz.block.buzz.desktop.agents".into(),
                 account.clone()
             ),
             (
                 "saved".into(),
-                "dev.local.buzz.foundation.agents".into(),
+                "xyz.block.buzz.desktop.agents".into(),
                 account
             ),
         ]
@@ -585,4 +612,129 @@ fn adopt(old: &OldStores, store: &AppAgents, credentials: &PlatformCredentials) 
     )
     .unwrap();
     store.commit(prepared, &auth, credentials).unwrap();
+}
+
+#[test]
+fn reads_copy_a_key_saved_before_one_point_oh_and_deletes_remove_both_names() {
+    let (credentials, fake) = fixture();
+    let id = agent_id(PUB, "wss://relay.example");
+    let account = account(&id).unwrap();
+    fake.put(PREVIOUS_SERVICE, &account, KEY.as_bytes().to_vec());
+    assert_eq!(*credentials.read(&id, PUB).unwrap().unwrap().hex(), KEY);
+    let saved = |service: &str| {
+        fake.entries
+            .lock()
+            .unwrap()
+            .contains_key(&(service.into(), account.clone()))
+    };
+    // Copied, and kept for older builds.
+    assert!(saved(SERVICE) && saved(PREVIOUS_SERVICE));
+    fake.calls.lock().unwrap().clear();
+    credentials.delete(&id, PUB).unwrap();
+    assert_eq!(
+        *fake.calls.lock().unwrap(),
+        [("delete", PREVIOUS_SERVICE), ("delete", SERVICE)].map(|(op, service)| (
+            op.into(),
+            service.into(),
+            account.clone()
+        ))
+    );
+    assert!(credentials.read(&id, PUB).unwrap().is_none());
+    // A failed read under the previous service is never absence.
+    fake.put(PREVIOUS_SERVICE, &account, b"malformed".to_vec());
+    assert!(credentials.read(&id, PUB).is_err());
+}
+
+#[test]
+fn bundle_reads_copy_previous_entries_and_deletes_remove_every_copy() {
+    let fake = Arc::new(Fake::default());
+    let credentials = bundled(fake.clone());
+    let [bundled_id, individual_id, other_id] =
+        ["one", "two", "three"].map(|name| agent_id(PUB, &format!("wss://{name}.example")));
+    let previous = serde_json::to_vec(&json!({
+        account(&bundled_id).unwrap(): KEY,
+        account(&other_id).unwrap(): KEY,
+    }))
+    .unwrap();
+    fake.put(PREVIOUS_SERVICE, bundle::ACCOUNT, previous.clone());
+    fake.put(
+        PREVIOUS_SERVICE,
+        &account(&bundled_id).unwrap(),
+        KEY.as_bytes().to_vec(),
+    );
+    fake.put(
+        PREVIOUS_SERVICE,
+        &account(&individual_id).unwrap(),
+        KEY.as_bytes().to_vec(),
+    );
+    for id in [&bundled_id, &individual_id] {
+        assert_eq!(*credentials.read(id, PUB).unwrap().unwrap().hex(), KEY);
+    }
+    let current = fake.entries.lock().unwrap()[&(SERVICE.into(), bundle::ACCOUNT.into())].clone();
+    let current: BTreeMap<String, String> = serde_json::from_slice(&current).unwrap();
+    assert_eq!(
+        current
+            .into_keys()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [&bundled_id, &individual_id]
+            .map(|id| account(id).unwrap())
+            .into()
+    );
+    // The previous bundle and items stay for older builds.
+    assert_eq!(
+        fake.entries.lock().unwrap()[&(PREVIOUS_SERVICE.into(), bundle::ACCOUNT.into())],
+        previous
+    );
+
+    credentials.delete(&bundled_id, PUB).unwrap();
+    credentials.delete(&individual_id, PUB).unwrap();
+    for id in [&bundled_id, &individual_id] {
+        assert!(credentials.read(id, PUB).unwrap().is_none());
+        assert!(bundled(fake.clone()).read(id, PUB).unwrap().is_none());
+    }
+    let entries = fake.entries.lock().unwrap().clone();
+    let previous: BTreeMap<String, String> =
+        serde_json::from_slice(&entries[&(PREVIOUS_SERVICE.into(), bundle::ACCOUNT.into())])
+            .unwrap();
+    // Only what was deleted is gone; another agent's entry stays.
+    assert_eq!(
+        previous.keys().collect::<Vec<_>>(),
+        [&account(&other_id).unwrap()]
+    );
+    assert_eq!(
+        entries
+            .keys()
+            .filter(|(_, account)| account != bundle::ACCOUNT)
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn a_malformed_previous_bundle_fails_only_agents_it_could_hold() {
+    let fake = Arc::new(Fake::default());
+    let credentials = bundled(fake.clone());
+    let [saved, missing] =
+        ["one", "two"].map(|name| agent_id(PUB, &format!("wss://{name}.example")));
+    fake.put(SERVICE, &account(&saved).unwrap(), KEY.as_bytes().to_vec());
+    assert!(credentials.read(&saved, PUB).unwrap().is_some());
+    fake.put(PREVIOUS_SERVICE, bundle::ACCOUNT, b"malformed".to_vec());
+    assert!(credentials
+        .read(&missing, PUB)
+        .err()
+        .unwrap()
+        .contains("malformed"));
+    assert!(bundled(fake.clone()).read(&saved, PUB).unwrap().is_some());
+    assert!(credentials.read(&saved, PUB).unwrap().is_some());
+    // Deleting one fails closed and keeps every copy, rather than leaving the
+    // key in a bundle that can't be rewritten.
+    assert!(credentials
+        .delete(&saved, PUB)
+        .unwrap_err()
+        .contains("malformed"));
+    assert!(credentials.read(&saved, PUB).unwrap().is_some());
+    assert_eq!(
+        fake.entries.lock().unwrap()[&(PREVIOUS_SERVICE.into(), bundle::ACCOUNT.into())],
+        b"malformed"
+    );
 }

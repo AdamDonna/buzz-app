@@ -283,6 +283,19 @@ test.describe("settings empty collections", () => {
         await expect(search).toBeFocused();
         await expect(search).toHaveValue("");
         await page.evaluate(() => document.fonts.ready);
+        // Search shares the title/tab content inset rather than the border edge.
+        await expect
+          .poll(() =>
+            community.evaluate((root) => {
+              const section = root.closest("section");
+              const title = section.querySelector(".buzz-content-header-title");
+              const search = root.querySelector(".buzz-input-group");
+              if (!title || !search) return false;
+              const left = title.getBoundingClientRect().left;
+              return Math.abs(search.getBoundingClientRect().left - left) < 1;
+            }),
+          )
+          .toBe(true);
         await expect
           .poll(() =>
             community.evaluate(
@@ -414,7 +427,7 @@ test("hosted settings empty and setup cards fit without covering their actions",
       await chooseColorMode(page, mode === "light" ? "Light" : "Dark");
       for (const width of [1440, 800, 390]) {
         await page.setViewportSize({ width, height: 1000 });
-        await selectSettingsSection(page, "Builderlab hosting");
+        await selectSettingsSection(page, "Builderlab");
         const card = page.locator(".buzz-empty-state").filter({
           has: page.getByRole("heading", {
             name: signedIn

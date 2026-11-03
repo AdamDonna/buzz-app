@@ -474,6 +474,7 @@ export function fakeNative(identities: AgentIdentity[] = []) {
     ),
     claim: vi.fn(async (_: string) => true),
     release: vi.fn(async (_: string) => {}),
+    keepAwake: vi.fn(async (_: boolean) => {}),
   } satisfies AgentsNative;
   return native;
 }

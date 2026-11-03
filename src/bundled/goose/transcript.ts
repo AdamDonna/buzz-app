@@ -1,6 +1,7 @@
 // A conversation's goose sessions, read back through a short-lived `goose-acp`
 // and shown in the host's turn-transcript model. goose keeps the sessions in
 // its own database; nothing here writes or keeps them.
+import { isMessageTool } from "../../buzz-mcp/session-tools";
 import {
   promptMessage,
   promptSections,
@@ -205,7 +206,11 @@ export function gooseTurns(
         const name = str(value.name);
         const input = object(value.arguments) ?? {};
         const callId = str(block.id);
-        if (name === "buzz__send" && str(input.text).trim()) {
+        if (
+          name.startsWith("buzz__") &&
+          isMessageTool(name.slice("buzz__".length)) &&
+          str(input.text).trim()
+        ) {
           const message: TranscriptItem & { posted?: boolean } = {
             id: key,
             at,
@@ -466,7 +471,6 @@ export class GooseHistory {
       turns.sort((a, b) => a.startedAt - b.startedAt);
       return {
         turns: turns.slice(-TURN_LIMIT),
-        unknownThread: 0,
         more: turns.length > TURN_LIMIT,
       };
     });

@@ -10,6 +10,7 @@ import type {
   SessionUsage,
 } from "../../features/agents/service";
 import { loadPrices } from "./pricing";
+import { since } from "./stats";
 import { UsagePage } from "./UsagePage";
 
 vi.mock("./pricing", async (actual) => {
@@ -142,9 +143,9 @@ it("summarises the agents' spend and opens a costly session's thread", async () 
     ),
   ).toBeTruthy();
   expect(reads).toHaveLength(2);
-  // 30 days back, what Claude Code keeps by default.
-  expect(Date.now() - (reads[0]?.since ?? 0)).toBeGreaterThan(29 * 86_400_000);
-  expect(Date.now() - (reads[0]?.since ?? 0)).toBeLessThan(30 * 86_400_000);
+  // 30 days back, what Claude Code keeps by default: local midnight 29 days
+  // ago, which is not 29 × 24 h before now across a daylight-saving change.
+  expect(reads[0]?.since).toBe(since(Date.now()));
   const hero = screen.getByRole("region", { name: "Estimated cost" });
   expect(within(hero).getByText("$4.00")).toBeTruthy();
   // The daily figures are in a table for assistive technology.

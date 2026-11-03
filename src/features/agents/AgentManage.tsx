@@ -21,12 +21,16 @@ export const inSeveral = (agents: Agents, agent: Agent) =>
     .memberships(agent.pubkey)
     .some((membership) => membership.key !== agent.key && !membership.deleting);
 
+/** One field list for every surface explaining shared settings. */
+export const sharedAgentSettings =
+  "Name, type and settings, including instructions, model and workspace, are shared across communities.";
+
 /** What adding the same agent to another community shares and what it keeps
  * there, as every place that adds one says it. */
 export const sameAgent = (many = false) =>
   many
-    ? "Their names, types and settings, including their instructions, models and workspace folders, are shared, so a change to them applies in every community. Their pictures and what they pay attention to are their own in each. Memory is kept per community, so anything they saved here before comes back, and so do their conversations here."
-    : "Its name, type and settings, including its instructions, model and workspace folder, are shared, so a change to them applies in every community. Its picture and what it pays attention to are its own in each. Memory is kept per community, so anything it saved here before comes back, and so do its conversations here.";
+    ? `${sharedAgentSettings} A change to them applies in every community. Their pictures and what they pay attention to are their own in each. Memory is kept per community, so anything they saved here before comes back, and so do their conversations here.`
+    : `${sharedAgentSettings} A change to them applies in every community. Its picture and what it pays attention to are its own in each. Memory is kept per community, so anything it saved here before comes back, and so do its conversations here.`;
 
 /** Delete, after a confirmation that says what it does. One that cannot
  * finish keeps the dialog open with what is left; the agent stays listed.

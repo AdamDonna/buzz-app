@@ -5,6 +5,7 @@ import { StrictMode, useState, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { finalizeEvent } from "nostr-tools";
 import { Context } from "@deepseek-ai/cordis";
+import { emptySync } from "../../src/features/communities/known-communities";
 import { createPluginManager } from "../../src/plugins/manager";
 import { PagesService } from "../../src/features/pages/service";
 import { PanelsService } from "../../src/features/panels/service";
@@ -13,6 +14,7 @@ import { SettingsCardsService } from "../../src/features/settings/service";
 import { provideNavigation } from "../../src/features/navigation/service";
 import { ConversationService } from "../../src/features/conversation/service";
 import { bundledPlugins } from "../../src/bundled";
+import { conversationFeatures } from "../../src/app/conversation-features";
 import { bindNames } from "../../src/features/identity-names/service";
 import { createAgentDirectory } from "../../src/features/identity-names/testing";
 import { createRelaySession } from "../../src/features/relay/session";
@@ -306,12 +308,12 @@ const disabledCalls: {
 }[] = [];
 const plugins = createPluginManager(context, {
   bundled: [
-    ...bundledPlugins.filter(({ manifest }) =>
-      [
-        "buzz.emoji",
-        "buzz.mentions",
-        ...(channels ? ["buzz.channels", "buzz.links"] : []),
-      ].includes(manifest.id),
+    // This harness deliberately makes the real providers optional to exercise
+    // contribution removal and stale callbacks. The app always loads them.
+    ...conversationFeatures,
+    ...bundledPlugins.filter(
+      ({ manifest }) =>
+        channels && ["buzz.channels", "buzz.links"].includes(manifest.id),
     ),
     {
       manifest: {
@@ -368,6 +370,17 @@ if (channels) {
   provideNavigation(context);
   // Channels requires Agents for its page/settings, neither mounted here.
   context.provide("agents", {});
+  context.provide("communityReader", {
+    subscribe: () => () => {},
+    snapshot: () => ({
+      status: "unavailable",
+      relayAvailable: false,
+      profile: { name: "", picture: "" },
+      memberships: [],
+      selected: null,
+      sync: emptySync(),
+    }),
+  });
   // Only the composer is mounted; the Channels page never consumes this service.
   context.provide("relay", {
     snapshot: () => ({ session: namedSession }),

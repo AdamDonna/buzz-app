@@ -65,6 +65,10 @@ type DeliveryOptions = Readonly<{
   pick?: TurnPick;
   /** The thread whose history was supplied to a shared channel session. */
   contextRoot?: string;
+  /** Rejects a turn the current settings can't start, asked after every
+   * wait just before the prompt is sent. Not asked of a busy process, which
+   * steers on the settings it already runs. */
+  admit?: () => Promise<void>;
 }> &
   ActivityReceipt;
 
@@ -223,6 +227,7 @@ export class AgentSessions {
       fresh,
       pick = {},
       contextRoot,
+      admit,
       step,
       acknowledged,
       superseded,
@@ -256,6 +261,14 @@ export class AgentSessions {
         text = await refresh();
         steer = steerPrompt(text);
       }
+      // Last, after every wait: a new turn starts only on settings that still
+      // hold. A busy process steers on the settings it already runs.
+      if (admit && !live.process.busy)
+        try {
+          await admit();
+        } catch (error) {
+          return { ok: false, error: message(error), undelivered: true };
+        }
       if (current && !current()) return { ok: true, undelivered: true };
       if (this.disposed)
         return { ok: false, error: "Claude was stopped", undelivered: true };
@@ -303,6 +316,7 @@ export class AgentSessions {
         return this.deliver(key, retry, seen, {
           pick,
           ...(current ? { current } : {}),
+          ...(admit ? { admit } : {}),
           ...(refresh ? { refresh: () => refresh(true) } : {}),
           ...(contextRoot ? { contextRoot } : {}),
           ...activity,
@@ -633,7 +647,10 @@ export class Spare {
       return undefined;
     }
     const process = await next.process;
-    if (process?.running) return process;
+    // A spare that ran a turn, such as one another Claude session's message
+    // starts, fixed its system prompt then; Claude ignores the prompt
+    // `initialize` brings it later, so the agent would run without it.
+    if (process?.running && !process.started) return process;
     void process?.kill();
     return undefined;
   }

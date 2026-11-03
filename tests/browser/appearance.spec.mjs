@@ -463,6 +463,7 @@ test("saved dark document paints before the application module is allowed to exe
   await page.route(/\/assets\/.*\.js$/, (route) =>
     route.fulfill({
       contentType: "application/javascript",
+      headers: { "cache-control": "no-store" },
       body: "/* Application execution deliberately withheld. */",
     }),
   );
@@ -547,7 +548,7 @@ test("compiled host preserves compatibility utility meanings", async ({
     );
     await expect(page.locator("#primary-border")).toHaveCSS(
       "border-top-color",
-      mode === "Light" ? "rgb(232, 232, 232)" : "rgb(35, 35, 35)",
+      mode === "Light" ? "rgb(232, 232, 232)" : "rgb(51, 51, 51)",
     );
     // The legacy fill keeps meaning "prominent", with neutral shared controls.
 

@@ -526,8 +526,10 @@ test("real session page under StrictMode fences community changes, warns before 
   const editor = editorControls(page);
   const { button } = editor;
   const choose = async (name) => {
-    await page.getByRole("combobox", { name: "Channel", exact: true }).click();
-    await page.getByRole("option", { name, exact: true }).click();
+    await page.getByRole("button", { name: /^Channels(?::|$)/ }).click();
+    await page.getByRole("checkbox", { name, exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Channels" })).toHaveCount(0);
   };
   // The modal hides the fixture toolbar; call its closures directly.
   const fixture = (name) =>
@@ -565,14 +567,15 @@ test("real session page under StrictMode fences community changes, warns before 
   await button("Close editor").click();
   await leave.getByRole("button", { name: "Leave draft", exact: true }).click();
   await expect(editor.region).toHaveCount(0);
-  await page.getByRole("combobox", { name: "Channel", exact: true }).click();
+  await page.getByRole("button", { name: /^Channels(?::|$)/ }).click();
   await expect(
-    page.getByRole("option", { name: "First channel", exact: true }),
+    page.getByRole("checkbox", { name: "First channel", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("option", { name: "Second channel", exact: true }),
+    page.getByRole("checkbox", { name: "Second channel", exact: true }),
   ).toHaveCount(0);
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Channels" })).toHaveCount(0);
   await choose("First channel");
   await editor.open("Fixture A helper");
   await fixture("switchCommunity");
@@ -624,6 +627,43 @@ test("landing batches 129 channels into two workflow reads", async ({
   expect(errors.unexplained()).toEqual([]);
 });
 
+// Real keyboard focus and portal identity need the browser, beyond the DOM test.
+test("unrelated channel membership preserves the focused workflow detail", async ({
+  page,
+}) => {
+  await page.goto(url.replace("/fixture.html", "/session-fixture.html?writes"));
+  await expect(landingStatus(page)).toHaveText("");
+  await page.getByRole("button", { name: /^Open Fixture A helper:/ }).click();
+  const detail = page.getByRole("region", {
+    name: "Fixture A helper",
+    exact: true,
+  });
+  const original = await detail.elementHandle();
+  const run = detail.getByRole("button", { name: "Run now", exact: true });
+  await run.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(run).toBeFocused();
+  await page.evaluate(() =>
+    window.workflowSessionFixture.joinUnrelatedChannel(),
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.workflowSessionFixture.definitionChannelCount(),
+      ),
+    )
+    .toBe(3);
+  await expect(landingStatus(page)).toHaveText("");
+  expect(await original.evaluate((element) => element.isConnected)).toBe(true);
+  expect(
+    await detail.evaluate(
+      (element, previous) => element === previous,
+      original,
+    ),
+  ).toBe(true);
+  await expect(run).toBeFocused();
+});
+
 test("landing scan survives channel presentation churn without restarting", async ({
   page,
 }) => {
@@ -649,6 +689,11 @@ test("landing scan survives channel presentation churn without restarting", asyn
   await expect(open).toBeVisible();
   // Browser-only boundary: progressive empty results must not move either
   // actionable card under the pointer. Reads remain held until after metadata.
+  // Visibility can arrive during the group's entrance scale; capture its
+  // baseline only once that real animation has reached the resting geometry.
+  const group = page.locator(".workflow-list-transition").filter({ has: open });
+  await expect(group).toHaveCSS("opacity", "1");
+  await expect(group).toHaveCSS("transform", "none");
   const createBounds = await create.boundingBox();
   const openBounds = await open.boundingBox();
   try {
@@ -659,7 +704,7 @@ test("landing scan survives channel presentation churn without restarting", asyn
       );
       await expect(
         page.getByRole("heading", {
-          name: `#${index % 2 ? "Z-last" : "A-first"} channel ${index}`,
+          name: `${index % 2 ? "Z-last" : "A-first"} channel ${index}`,
           exact: true,
         }),
       ).toBeVisible();
@@ -842,6 +887,52 @@ test("restricted cards and read-only editors keep keyboard controls without disc
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(url.replace("/fixture.html", "/session-fixture.html"));
+  // Owner text needs real layout: jsdom cannot detect a zero-width label at
+  // narrow widths with enlarged text and fixed artwork/action siblings.
+  const ownerLabel = page.locator(".workflow-card-owner");
+  for (const theme of ["dark", "light"]) {
+    for (const fontSize of [20, 32]) {
+      await page.evaluate(
+        ({ theme, fontSize }) => {
+          document.documentElement.dataset.colorMode = theme;
+          document.documentElement.style.fontSize = `${fontSize}px`;
+        },
+        { theme, fontSize },
+      );
+      await expect(ownerLabel).toBeVisible();
+      await expect
+        .poll(() =>
+          ownerLabel.evaluate(
+            (node) =>
+              node.clientWidth > 0 && node.scrollWidth <= node.clientWidth,
+          ),
+        )
+        .toBe(true);
+      // A short owner identifier may wrap, but must not become a tall column
+      // of single characters when artwork and controls consume its width.
+      await expect
+        .poll(() =>
+          ownerLabel.evaluate((node) => {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            return new Set([...range.getClientRects()].map((rect) => rect.top))
+              .size;
+          }),
+        )
+        .toBeLessThanOrEqual(2);
+      await page
+        .getByRole("button", { name: "Actions for Fixture A helper" })
+        .click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(
+        page.getByRole("button", { name: "Actions for Fixture A helper" }),
+      ).toBeFocused();
+    }
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "";
+  });
   const tab =
     browserName === "webkit" && process.platform === "darwin"
       ? "Alt+Tab"
@@ -905,6 +996,8 @@ test("restricted cards and read-only editors keep keyboard controls without disc
       },
     });
   });
+  await page.getByRole("button", { name: "Owner: My workflows" }).click();
+  await page.getByRole("radio", { name: "All channel workflows" }).click();
   await editorControls(page).open("Message helper");
   const dialog = page.getByRole("dialog", { name: "Message helper" });
   await expect(dialog.getByText("Read-only", { exact: true })).toHaveCount(0);
@@ -1781,10 +1874,12 @@ test("real session reconnect retains unsaved YAML and an in-flight run request",
   const { yaml } = editor;
   // Scope notices to the modal: the page behind it is inert.
   const dialog = editorDialog(page);
-  await page.getByRole("combobox", { name: "Channel", exact: true }).click();
+  await page.getByRole("button", { name: /^Channels(?::|$)/ }).click();
   await page
-    .getByRole("option", { name: "First channel", exact: true })
+    .getByRole("checkbox", { name: "First channel", exact: true })
     .click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Channels" })).toHaveCount(0);
   await editor.open("Fixture A helper");
   await editor.tab("YAML").click();
   const original = await yaml.inputValue();
@@ -1836,10 +1931,12 @@ test("generic Outbox offers message retry but no workflow replay", async ({
 }) => {
   await page.goto(url.replace("/fixture.html", "/session-fixture.html?writes"));
   const button = (name) => page.getByRole("button", { name, exact: true });
-  await page.getByRole("combobox", { name: "Channel", exact: true }).click();
+  await page.getByRole("button", { name: /^Channels(?::|$)/ }).click();
   await page
-    .getByRole("option", { name: "First channel", exact: true })
+    .getByRole("checkbox", { name: "First channel", exact: true })
     .click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Channels" })).toHaveCount(0);
   await editorControls(page).open("Fixture A helper");
   await editorControls(page).run.click();
   await expect

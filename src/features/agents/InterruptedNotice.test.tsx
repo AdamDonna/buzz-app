@@ -20,7 +20,6 @@ function fake(names: readonly string[]) {
   let state: AgentsSnapshot = {
     status: "ready",
     classifier: "unavailable",
-    classifierKey: "missing",
     agents: [],
     running: [],
     interrupted: names.map((name) => ({ name }) as Agent),

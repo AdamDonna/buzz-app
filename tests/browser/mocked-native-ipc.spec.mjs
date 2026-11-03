@@ -9,6 +9,8 @@ import {
   getPublicKey,
   verifyEvent,
 } from "nostr-tools";
+import { hexToBytes } from "nostr-tools/utils";
+import { schnorr } from "@noble/curves/secp256k1.js";
 
 // Browser boundary: real page reload, localStorage admission and IndexedDB outbox
 // persistence through the packaged adapter. Failure matrices live in Vitest.
@@ -55,6 +57,10 @@ test("mocked native IPC admission and uncertain delivery survive page reload wit
         expect(payload.community).toBe(community);
         return finalizeEvent(payload.event, key);
       }
+      if (command === "relay_verify_signatures")
+        return payload.claims.map(({ id, pubkey, sig }) =>
+          schnorr.verify(hexToBytes(sig), hexToBytes(id), hexToBytes(pubkey)),
+        );
       expect(command).toBe("relay_http");
       expect(payload.community).toBe(community);
       const body = payload.body ? JSON.parse(payload.body) : undefined;
@@ -65,7 +71,11 @@ test("mocked native IPC admission and uncertain delivery survive page reload wit
         body: JSON.stringify(body),
       });
       if (payload.path === "/")
-        return response({ self: viewer, name: "Fixture community" });
+        return response({
+          self: viewer,
+          name: "Fixture community",
+          supported_nips: [1, 42, 43],
+        });
       if (payload.path === "/api/join-policy")
         return response({ policy: null });
       if (payload.path === "/api/invites/claim") {
@@ -101,7 +111,7 @@ test("mocked native IPC admission and uncertain delivery survive page reload wit
     await page.getByRole("button", { name: "Add a community" }).click();
     await page.getByLabel("Community URL").fill(community);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.getByLabel("Invite code (if required)").fill("v2.fixture");
+    await page.getByLabel("Invite code").fill("v2.fixture");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(page.getByRole("alert")).toHaveText("Claim receipt lost");
     await page.reload();

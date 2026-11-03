@@ -1,3 +1,4 @@
+import { useMediaReadRecovery } from "./use-media-read-recovery";
 import { useConversationPresentation } from "../conversation/ConversationPresentation";
 import { prepareReviewEntrance } from "./use-review-entrance";
 import { useMediaCorners } from "./use-media-corners";
@@ -129,6 +130,10 @@ export function MediaAttachment({
     attachment.kind === "video" ? source : undefined,
   );
   const videoSource = element.src;
+  const { recover: recoverMedia } = useMediaReadRecovery(
+    active ? videoSource : undefined,
+    () => setFailed(true),
+  );
 
   if (!source && !compact)
     return (
@@ -312,7 +317,9 @@ export function MediaAttachment({
           }
         }
       }}
-      onError={() => setFailed(true)}
+      onError={(event) => {
+        if (!recoverMedia(event.currentTarget)) setFailed(true);
+      }}
       onPause={() => setPlaying(false)}
       onPlay={() => {
         setStarted(true);

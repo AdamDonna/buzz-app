@@ -26,6 +26,8 @@ export function useSidebarPreferences(
     reorderSections: queries.reorderSections,
     dismissOrderError: queries.dismissOrderError,
     createAndAssign: queries.createAndAssign,
+    createSection: queries.createSection,
+    sectionCreationWritable: queries.sectionCreationWritable,
     retryMove: queries.retryMove,
     dismissMoveError: queries.dismissMoveError,
     starWritable: queries.starWritable,

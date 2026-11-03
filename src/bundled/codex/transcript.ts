@@ -1,5 +1,6 @@
 // A conversation's Codex thread, read back through app-server and shown in the
 // host's turn-transcript model. Codex owns the history; nothing here is saved.
+import { isMessageTool } from "../../buzz-mcp/session-tools";
 import {
   promptSections,
   type ToolItem,
@@ -159,7 +160,7 @@ function item(
       const args = (value.arguments ?? {}) as Json;
       if (
         value.namespace === "buzz" &&
-        value.tool === "send" &&
+        isMessageTool(value.tool) &&
         value.success === true &&
         str(args.text).trim()
       )
@@ -287,11 +288,17 @@ async function findThreads(rpc: AppServer, lookup: Lookup): Promise<Found[]> {
     [tag, false, (name: string) => name.endsWith(` · ${tag}`)],
     [title, true, (name: string) => name === title],
   ] as const) {
-    // Without it, Codex lists only its default provider's threads, which
-    // can leave out every thread the agent ran.
+    // Without `modelProviders`, Codex lists only its default provider's
+    // threads, which can leave out every thread the agent ran. Without
+    // `useStateDbOnly`, it reads every rollout file before matching names.
     const page = await rpc.request<{
       data: { id: string; name: string | null; updatedAt: number }[];
-    }>("thread/list", { searchTerm: term, modelProviders: [], limit: 50 });
+    }>("thread/list", {
+      searchTerm: term,
+      modelProviders: [],
+      limit: 50,
+      useStateDbOnly: true,
+    });
     for (const { id, name, updatedAt } of page.data)
       if (name && named(name) && !found.has(id))
         found.set(id, { id, updatedAt, legacy });
@@ -423,7 +430,6 @@ export async function readTranscript(
     all.sort((a, b) => a.startedAt - b.startedAt);
     return {
       turns: all.slice(-TURN_LIMIT),
-      unknownThread: 0,
       more: more || all.length > TURN_LIMIT,
       working,
     };

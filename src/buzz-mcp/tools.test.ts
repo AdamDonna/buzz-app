@@ -7,6 +7,19 @@ import { respond } from "./rpc";
 import { ATTENTION_TOOLS } from "./attention";
 import { createHash } from "node:crypto";
 import { callTool, memoryVersion, TOOLS } from "./tools";
+import { callSessionTool, sessionTools } from "./session-tools";
+import { SOLO_WORKER_TOOLS } from "./solo-worker";
+import { Context } from "@deepseek-ai/cordis";
+import { AgentProtectionService } from "../features/agent-protection/service";
+import type { Agent } from "../features/agents/service";
+
+function gate<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}
 
 const me = "c".repeat(64);
 const alice = "a".repeat(64);
@@ -119,6 +132,52 @@ function fake(
   return { client, published };
 }
 
+it.each([false, true])(
+  "serves product help through MCP without channel access or host I/O (protected: %s)",
+  async (protectedSession) => {
+    const protect = vi.fn<NonNullable<BuzzClient["protect"]>>(async () => {});
+    const client = new Proxy({} as BuzzClient, {
+      get(_target, property) {
+        // The shared session gate checks this optional hook before dispatch.
+        if (property === "protect")
+          return protectedSession ? protect : undefined;
+        throw new Error(`Help must not access the host: ${String(property)}`);
+      },
+    });
+    const list = await respond(client, {}, { id: 1, method: "tools/list" });
+    expect(list).toMatchObject({
+      result: {
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "buzz_help" }),
+        ]),
+      },
+    });
+    const reply = await respond(
+      client,
+      {},
+      {
+        id: 2,
+        method: "tools/call",
+        params: { name: "buzz_help", arguments: {} },
+      },
+    );
+    expect(reply).toMatchObject({
+      result: {
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("# Buzz quick guide"),
+          },
+        ],
+      },
+    });
+    expect(reply).not.toHaveProperty("result.isError");
+    expect(protect.mock.calls.map(([action]) => action.kind)).toEqual(
+      protectedSession ? ["tool", "tool-result"] : [],
+    );
+  },
+);
+
 const members = event({
   kind: 39002,
   tags: [
@@ -143,6 +202,185 @@ const community = [
     ],
   }),
 ];
+
+it.each([
+  ["send", { audience: "everyone" }, "text"],
+  ["reply_in_subthread", { audience: "everyone", parent: root }, "text"],
+  ["mem_set", { slug: "captured" }, "text"],
+  ["notes_set", { name: "captured", title: "Captured" }, "text"],
+  ["canvas_set", {}, "content"],
+] as const)(
+  "reviews and writes the same captured file text for %s",
+  async (name, input, field) => {
+    const { client, published } = fake(
+      [
+        ...community,
+        event({
+          kind: 39000,
+          tags: [
+            ["d", "chan"],
+            ["t", "stream"],
+          ],
+        }),
+      ],
+      { keep: true },
+    );
+    let source = "reviewed text";
+    client.read = vi.fn(async () => new TextEncoder().encode(source));
+    const entered = gate<void>();
+    const approval = gate<void>();
+    client.protect = vi.fn(async (action) => {
+      if (action.kind !== "tool") return;
+      entered.resolve(undefined);
+      await approval.promise;
+    });
+    const args: Record<string, unknown> = {
+      ...input,
+      path: " body.md ",
+      [field]: "ignored",
+    };
+    const result = callSessionTool(
+      client,
+      { channel: "chan", root },
+      name,
+      args,
+    );
+    try {
+      await entered.promise;
+      expect(client.protect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "tool",
+          content: { title: name, arguments: { ...input, [field]: source } },
+        }),
+      );
+      expect(published).toEqual([]);
+      expect(client.upload).not.toHaveBeenCalled();
+      expect(client.remember).not.toHaveBeenCalled();
+      source = "changed after review";
+      args.path = "changed.md";
+      args[field] = "changed caller text";
+      approval.resolve(undefined);
+      await result;
+      expect(client.read).toHaveBeenCalledExactlyOnceWith("body.md");
+      if (name === "mem_set")
+        expect(client.remember).toHaveBeenCalledExactlyOnceWith(
+          "mem/captured",
+          "reviewed text",
+          0,
+        );
+      else
+        expect(published.map((event) => event.content)).toEqual([
+          "reviewed text",
+        ]);
+    } finally {
+      approval.resolve(undefined);
+      await result.catch(() => undefined);
+    }
+  },
+);
+
+it.each(["read", "review"])(
+  "does not write when file-backed %s fails",
+  async (failure) => {
+    const { client, published } = fake(community);
+    client.protect = vi.fn(async () => {
+      if (failure === "review") throw new Error("denied");
+    });
+    if (failure === "read")
+      client.read = vi.fn(async () => {
+        throw new Error("unreadable");
+      });
+    await expect(
+      callSessionTool(client, { channel: "chan" }, "send", {
+        audience: "everyone",
+        path: "body.md",
+      }),
+    ).rejects.toThrow(failure === "read" ? "unreadable" : "denied");
+    expect(published).toEqual([]);
+    expect(client.upload).not.toHaveBeenCalled();
+    expect(client.remember).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["send", "reply_in_subthread"])(
+  "refuses protected %s attachments before reads or side effects",
+  async (name) => {
+    const { client, published } = fake(community);
+    client.protect = vi.fn(async () => {});
+    await expect(
+      callSessionTool(client, { channel: "chan", root }, name, {
+        audience: "everyone",
+        parent: root,
+        text: "hello",
+        path: "body.md",
+        files: ["shot.png"],
+      }),
+    ).rejects.toThrow("Protected attachment uploads are not supported");
+    expect(client.read).not.toHaveBeenCalled();
+    expect(client.protect).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        kind: "tool-result",
+        content: {
+          error: expect.stringContaining(
+            "Protected attachment uploads are not supported",
+          ),
+        },
+      }),
+    );
+    expect(client.upload).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
+  },
+);
+
+it("refuses an oversized captured file before review or publication", async () => {
+  const { client, published } = fake(community);
+  const ctx = new Context();
+  const agent = {
+    owner: alice,
+    pubkey: me,
+    name: "Worker",
+    type: "test/worker",
+    relay: "wss://relay.example",
+    protection: { provider: "security.test", policy: {} },
+  } as Agent;
+  const service = new AgentProtectionService(
+    ctx,
+    () => ({ owner: alice, agents: [agent] }),
+    {
+      read: async () => ({ revision: 0, defaults: null }),
+      save: async () => {},
+      update: async () => {},
+    },
+  );
+  const check = vi.fn(async () => true);
+  ctx
+    .extend({ pluginOwner: { id: "security.test", revision: "one" } })
+    .agentProtection.register({
+      processProtection: { readOnlyPaths: [], hiddenPaths: [] },
+      check,
+    });
+  const protection = service.bind(agent);
+  if (!protection) throw new Error("Expected protected handle");
+  client.protect = (action) =>
+    protection.check(action, new AbortController().signal);
+  client.read = vi.fn(async () =>
+    new TextEncoder().encode("x".repeat(256 * 1024)),
+  );
+  try {
+    await expect(
+      callSessionTool(client, { channel: "chan" }, "send", {
+        audience: "everyone",
+        path: "large.md",
+      }),
+    ).rejects.toThrow("too large");
+    expect(client.read).toHaveBeenCalledExactlyOnceWith("large.md");
+    expect(check).not.toHaveBeenCalled();
+    expect(client.upload).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
+  } finally {
+    await ctx.fiber.dispose();
+  }
+});
 
 it("replies in the current thread and notifies the members it names", async () => {
   const { client, published } = fake(community);
@@ -249,6 +487,60 @@ it("posts at the channel's top level when given a channel", async () => {
   expect(published[0]?.tags).toEqual([["h", "other"]]);
 });
 
+it("tags the community emoji a message or edit uses, as the composer does", async () => {
+  const stamp = "https://relay/media/stamp.png";
+  const emojiSet = (pubkey: string, created_at: number, entries: string[][]) =>
+    event({
+      id: `${created_at}`.padStart(64, "d"),
+      pubkey,
+      created_at,
+      kind: 30030,
+      tags: [
+        ["d", "buzz:custom-emoji"],
+        ...entries.map((e) => ["emoji", ...e]),
+      ],
+    });
+  const { client, published } = fake([
+    ...community,
+    // Alice's newer set replaces her older one, so its :gone: is not used.
+    emojiSet(alice, 10, [["gone", "https://relay/media/gone.png"]]),
+    emojiSet(alice, 20, [["pray-for-stamp", stamp]]),
+    emojiSet(bob, 15, [["wave", "https://relay/media/wave.png"]]),
+  ]);
+  await callTool(client, { channel: "chan" }, "send", {
+    audience: "everyone",
+    channel: "chan",
+    text: ":Pray-For-Stamp: :gone: :unknown: https://x.test/:wave: :pray-for-stamp:",
+  });
+  await callTool(client, { channel: "chan" }, "edit", {
+    id: root,
+    text: "now :wave:",
+  });
+  expect(published.map((p) => p.tags)).toEqual([
+    [
+      ["h", "chan"],
+      ["emoji", "pray-for-stamp", stamp],
+    ],
+    [
+      ["h", "chan"],
+      ["e", root],
+      ["emoji", "wave", "https://relay/media/wave.png"],
+    ],
+  ]);
+});
+
+it("reads no emoji sets for a message without a shortcode", async () => {
+  const { client } = fake(community);
+  await callTool(client, { channel: "chan" }, "send", {
+    audience: "everyone",
+    channel: "chan",
+    text: "at 10:30 see https://x.test/a:b:c",
+  });
+  expect(client.query).not.toHaveBeenCalledWith([
+    expect.objectContaining({ kinds: [30030] }),
+  ]);
+});
+
 it("keeps a top-level chat out of threads, wherever a reply would resolve", async () => {
   const elsewhere = "3".repeat(64);
   const { client, published } = fake([
@@ -270,6 +562,14 @@ it("keeps a top-level chat out of threads, wherever a reply would resolve", asyn
         ...args,
       }),
     ).rejects.toThrow(refused);
+  for (const parent of [root, nested])
+    await expect(
+      callTool(client, context, "reply_in_subthread", {
+        audience: "everyone",
+        text: "hi",
+        parent,
+      }),
+    ).rejects.toThrow("This chat stays at the top level: use send instead.");
   expect(published).toEqual([]);
   await callTool(client, context, "send", { audience: "everyone", text: "hi" });
   await callTool(client, context, "send", {
@@ -619,6 +919,46 @@ it("replaces memory only at the version it was shown, newer than the entry it re
   );
 });
 
+it("deletes memory only at the version it was shown, and never core", async () => {
+  const { client } = fake();
+  await expect(
+    callTool(client, {}, "mem_rm", { slug: "notes", expected: "0".repeat(16) }),
+  ).rejects.toThrow(
+    "mem/notes changed since version 0000000000000000. Read it again with mem_get before you delete it.",
+  );
+  await expect(
+    callTool(client, {}, "mem_rm", { slug: "core", expected: "0".repeat(16) }),
+  ).rejects.toThrow("core cannot be deleted; replace it with mem_set.");
+  await expect(
+    callTool(client, {}, "mem_rm", { slug: "notes" }),
+  ).rejects.toThrow("expected is required.");
+  expect(client.remember).not.toHaveBeenCalled();
+  await expect(
+    callTool(client, {}, "mem_rm", {
+      slug: "notes",
+      expected: await memoryVersion("old"),
+    }),
+  ).resolves.toBe("deleted mem/notes");
+  // A tombstone, dated after the entry it deletes.
+  expect(client.remember).toHaveBeenCalledWith("mem/notes", null, 50);
+  vi.mocked(client.memories).mockResolvedValue({ entries: [], partial: true });
+  await expect(
+    callTool(client, {}, "mem_rm", { slug: "gone", expected: "0".repeat(16) }),
+  ).rejects.toThrow("Memory mem/gone could not be read; try again.");
+  vi.mocked(client.memories).mockResolvedValue({ entries: [], partial: false });
+  await expect(
+    callTool(client, {}, "mem_rm", { slug: "gone", expected: "0".repeat(16) }),
+  ).rejects.toThrow("No memory mem/gone.");
+  // Recreating a deleted entry is dated after its tombstone.
+  vi.mocked(client.memories).mockResolvedValue({
+    entries: [],
+    deleted: [{ slug: "mem/gone", createdAt: 70 }],
+    partial: false,
+  });
+  await callTool(client, {}, "mem_set", { slug: "gone", text: "back" });
+  expect(client.remember).toHaveBeenLastCalledWith("mem/gone", "back", 70);
+});
+
 it("refuses to overwrite core that another session changed since this one read it", async () => {
   const { client } = fake();
   let core = "I am Gander.";
@@ -832,8 +1172,10 @@ it("lists its tools before it can call them", async () => {
       method: "tools/list",
     },
   )) as { result: { tools: unknown[] } };
-  // Every app session lists the same tools: the Buzz and attention tools.
-  expect(list.result.tools).toHaveLength(TOOLS.length + ATTENTION_TOOLS.length);
+  // Every app session lists the same tools: the Buzz, attention and Solo worker tools.
+  expect(list.result.tools).toHaveLength(
+    TOOLS.length + ATTENTION_TOOLS.length + SOLO_WORKER_TOOLS.length,
+  );
   await expect(
     respond(
       undefined,
@@ -931,7 +1273,13 @@ function relay(refused: Readonly<Record<string, string>> = {}) {
   client.publish = vi.fn(async (template: Template) => {
     const id = template.tags.find((t) => t[0] === "h")?.[1] ?? "";
     const target = template.tags.find((t) => t[0] === "p")?.[1] ?? "";
-    if (refused[target]) throw new Error(refused[target]);
+    // Like the relay, any refused member keeps a whole create out.
+    const refusal = (
+      template.kind === 9007
+        ? template.tags.flatMap(([key, value]) => (key === "p" ? [value] : []))
+        : [target]
+    ).find((key) => key && refused[key]);
+    if (refusal) throw new Error(refused[refusal]);
     published.push(template);
     const { kind } = template;
     if (kind === 9007) {
@@ -940,6 +1288,11 @@ function relay(refused: Readonly<Record<string, string>> = {}) {
       const value = (key: string) =>
         template.tags.find((t) => t[0] === key)?.[1];
       const type = ["t", value("channel_type") ?? "stream"];
+      // Labels follow the type; `p` members join in the create.
+      const labels = template.tags.filter((t) => t[0] === "t");
+      const members = template.tags.flatMap(([key, value]) =>
+        key === "p" && value ? [["p", value, "", "member"]] : [],
+      );
       state.push(
         event({
           kind: 39000,
@@ -947,18 +1300,27 @@ function relay(refused: Readonly<Record<string, string>> = {}) {
             ["d", id],
             ["name", value("name") ?? ""],
             type,
+            ...labels,
             ...(value("visibility") === "private" ? [["private"]] : []),
           ],
         }),
         event({
           kind: 39002,
-          tags: [["d", id], type, ["p", me, "", "owner"]],
+          tags: [["d", id], type, ["p", me, "", "owner"], ...members],
         }),
       );
     }
     if (kind === 9000 || kind === 9021) {
       const key = kind === 9021 ? me : target;
-      const role = template.tags.find((t) => t[0] === "role")?.[1] ?? "member";
+      // Like the relay, with no role asked for a member keeps theirs and a
+      // new one gets the channel's join_role.
+      const tags = (kind: number) =>
+        state.find((e) => e.kind === kind && e.tags[0]?.[1] === id)?.tags ?? [];
+      const role =
+        template.tags.find((t) => t[0] === "role")?.[1] ??
+        tags(39002).find((t) => t[0] === "p" && t[1] === key)?.[3] ??
+        tags(39000).find((t) => t[0] === "join_role")?.[1] ??
+        "member";
       put(39002, id, (tags) => [...without(tags, key), ["p", key, "", role]]);
     }
     if (kind === 9001 || kind === 9022)
@@ -995,10 +1357,10 @@ it("lists channels it can join as well as its own", async () => {
       tags: [["d", "other"], ["name", "lobby"], ["t", "forum"], ["private"]],
     }),
   );
-  await expect(callTool(client, {}, "channels", { all: true })).resolves.toBe(
-    `${room} plans\nother lobby (forum, private, not joined)`,
-  );
-  await expect(callTool(client, {}, "channels", {})).resolves.toBe(
+  await expect(
+    callTool(client, {}, "channel_list", { all: true }),
+  ).resolves.toBe(`${room} plans\nother lobby (forum, private, not joined)`);
+  await expect(callTool(client, {}, "channel_list", {})).resolves.toBe(
     `${room} plans`,
   );
 });
@@ -1028,22 +1390,24 @@ it("lists only the channel types asked for", async () => {
       tags: [["d", "other"], ["name", "lobby"], ["t", "forum"], ["private"]],
     }),
   );
-  await expect(callTool(client, {}, "channels", {})).resolves.toBe(
+  await expect(callTool(client, {}, "channel_list", {})).resolves.toBe(
     `${room} plans\n${forum} ideas (forum)`,
   );
   await expect(
-    callTool(client, {}, "channels", { types: ["forum"] }),
+    callTool(client, {}, "channel_list", { types: ["forum"] }),
   ).resolves.toBe(`${forum} ideas (forum)`);
   await expect(
-    callTool(client, {}, "channels", { types: ["stream"], all: true }),
+    callTool(client, {}, "channel_list", { types: ["stream"], all: true }),
   ).resolves.toBe(`${room} plans`);
   await expect(
-    callTool(client, {}, "channels", { types: ["forum"], all: true }),
+    callTool(client, {}, "channel_list", { types: ["forum"], all: true }),
   ).resolves.toBe(
     `${forum} ideas (forum)\nother lobby (forum, private, not joined)`,
   );
   for (const types of [[], ["channel"], "forum", [7]])
-    await expect(callTool(client, {}, "channels", { types })).rejects.toThrow(
+    await expect(
+      callTool(client, {}, "channel_list", { types }),
+    ).rejects.toThrow(
       "types must list some of stream, forum, dm, workflow, system.",
     );
 });
@@ -1055,13 +1419,13 @@ it("keeps a roster signed before NIP-CL joined when listing by type", async () =
   const old = state[roster] as BuzzEvent;
   state[roster] = { ...old, tags: old.tags.filter((t) => t[0] !== "t") };
   await expect(
-    callTool(client, {}, "channels", { types: ["stream"] }),
+    callTool(client, {}, "channel_list", { types: ["stream"] }),
   ).resolves.toBe(`${room} plans`);
   await expect(
-    callTool(client, {}, "channels", { types: ["stream"], all: true }),
+    callTool(client, {}, "channel_list", { types: ["stream"], all: true }),
   ).resolves.toBe(`${room} plans`);
   await expect(
-    callTool(client, {}, "channels", { types: ["forum"], all: true }),
+    callTool(client, {}, "channel_list", { types: ["forum"], all: true }),
   ).resolves.toBe("No channels.");
 });
 
@@ -1091,17 +1455,17 @@ it("lists system channels only when asked, as the relay serves them", async () =
       ],
     }),
   );
-  await expect(callTool(client, {}, "channels", {})).resolves.toBe(
-    `${room} plans`,
-  );
-  await expect(callTool(client, {}, "channels", { all: true })).resolves.toBe(
+  await expect(callTool(client, {}, "channel_list", {})).resolves.toBe(
     `${room} plans`,
   );
   await expect(
-    callTool(client, {}, "channels", { types: ["system"] }),
+    callTool(client, {}, "channel_list", { all: true }),
+  ).resolves.toBe(`${room} plans`);
+  await expect(
+    callTool(client, {}, "channel_list", { types: ["system"] }),
   ).resolves.toBe(`${system} config (system, private)`);
   await expect(
-    callTool(client, {}, "channels", { types: ["system"], all: true }),
+    callTool(client, {}, "channel_list", { types: ["system"], all: true }),
   ).resolves.toBe(
     `${system} config (system, private)\n${lobby} ops (system, not joined)`,
   );
@@ -1109,8 +1473,7 @@ it("lists system channels only when asked, as the relay serves them", async () =
 
 it("creates a system channel", async () => {
   const { client, published } = relay();
-  const answer = await callTool(client, {}, "channel", {
-    action: "create",
+  const answer = await callTool(client, {}, "channel_create", {
     name: "config",
     visibility: "private",
     type: "system",
@@ -1130,22 +1493,178 @@ it("creates a system channel", async () => {
   ]);
   expect(answer).toBe(`created ${id}`);
   await expect(
-    callTool(client, {}, "channels", { types: ["system"] }),
+    callTool(client, {}, "channel_list", { types: ["system"] }),
   ).resolves.toBe(`${id} config (system, private)`);
-  await expect(callTool(client, {}, "channels", {})).resolves.toBe(
+  await expect(callTool(client, {}, "channel_list", {})).resolves.toBe(
     `${room} plans`,
   );
   await expect(
-    callTool(client, {}, "channels", { types: ["stream", "system"] }),
+    callTool(client, {}, "channel_list", { types: ["stream", "system"] }),
   ).resolves.toBe(`${room} plans\n${id} config (system, private)`);
   await expect(
-    callTool(client, {}, "channel", {
-      action: "create",
+    callTool(client, {}, "channel_create", {
       name: "config",
       visibility: "private",
       type: "dm",
     }),
   ).rejects.toThrow("type must be stream, forum or system.");
+});
+
+it("creates a Solo chat with its members in the create, as Buzz does", async () => {
+  const { client, published } = relay();
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "triage",
+    visibility: "private",
+    solo: true,
+    members: [alice, npubEncode(bob), alice, me],
+  });
+  const id = published[0]?.tags[0]?.[1] as string;
+  expect(published).toEqual([
+    {
+      kind: 9007,
+      content: "",
+      tags: [
+        ["h", id],
+        ["name", "triage"],
+        ["visibility", "private"],
+        ["channel_type", "stream"],
+        ["t", "buzz.solo"],
+        ["t", "buzz.session.named"],
+        ["p", alice],
+        ["p", bob],
+      ],
+    },
+  ]);
+  expect(answer).toBe(
+    `created ${id}\nadded ${alice} Alice Smith\nadded ${bob}`,
+  );
+  await expect(
+    callTool(client, {}, "channel_get", { channel: id }),
+  ).resolves.toBe(`${id} triage (stream, solo, private)\nyou: owner`);
+  await expect(
+    callTool(client, {}, "member_list", { channel: id }),
+  ).resolves.toBe(`${me}  (owner)\n${alice} Alice Smith\n${bob} `);
+  // An ordinary private channel is not Solo.
+  await callTool(client, {}, "channel_create", {
+    name: "ops",
+    visibility: "private",
+  });
+  const plain = published[1]?.tags[0]?.[1] as string;
+  expect(published[1]?.tags.some(([key]) => key === "t" || key === "p")).toBe(
+    false,
+  );
+  await expect(
+    callTool(client, {}, "channel_get", { channel: plain }),
+  ).resolves.toBe(`${plain} ops (stream, private)\nyou: owner`);
+});
+
+it("refuses Solo arguments that do not fit, before publishing", async () => {
+  const { client, published } = relay();
+  const create = (args: Record<string, unknown>) =>
+    callTool(client, {}, "channel_create", {
+      name: "x",
+      visibility: "private",
+      ...args,
+    });
+  const shape = "A Solo chat is a private stream without about or template.";
+  await expect(create({ solo: true, visibility: "open" })).rejects.toThrow(
+    shape,
+  );
+  await expect(create({ solo: true, type: "forum" })).rejects.toThrow(shape);
+  await expect(create({ solo: true, about: "notes" })).rejects.toThrow(shape);
+  await expect(create({ solo: true, template: "Triage" })).rejects.toThrow(
+    shape,
+  );
+  for (const members of [[alice], ["alice"], alice])
+    await expect(create({ members })).rejects.toThrow(
+      "members is for Solo chats.",
+    );
+  await expect(create({ solo: true, members: ["alice"] })).rejects.toThrow(
+    "Not a pubkey: alice",
+  );
+  await expect(create({ solo: true, members: alice })).rejects.toThrow(
+    "members must be a list of pubkeys.",
+  );
+  await expect(create({ solo: "true" })).rejects.toThrow(
+    "solo must be true or false.",
+  );
+  const many = Array.from({ length: 33 }, (_, n) =>
+    n.toString(16).padStart(64, "0"),
+  );
+  await expect(create({ solo: true, members: many })).rejects.toThrow(
+    "A Solo chat starts with at most 32 members.",
+  );
+  expect(published).toEqual([]);
+});
+
+it("starts a Solo chat with the relay's maximum of 32 members", async () => {
+  const { client, published } = relay();
+  const members = Array.from({ length: 32 }, (_, n) =>
+    (n + 1).toString(16).padStart(64, "0"),
+  );
+  await callTool(client, {}, "channel_create", {
+    name: "x",
+    visibility: "private",
+    solo: true,
+    members: [...members, me],
+  });
+  expect(
+    published[0]?.tags.filter(([key]) => key === "p").map(([, key]) => key),
+  ).toEqual(members);
+});
+
+it("creates no Solo chat when a member refuses, and says what it cannot confirm", async () => {
+  const { client, published, state } = relay({
+    [alice]: "blocked: this agent only joins its owner's channels",
+  });
+  await expect(
+    callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [bob, alice],
+    }),
+  ).rejects.toThrow("blocked: this agent only joins its owner's channels");
+  expect(published).toEqual([]);
+  expect(state.filter((e) => e.kind === 39000)).toHaveLength(1);
+
+  vi.useFakeTimers();
+  try {
+    // A relay without channel labels drops them and keeps the channel.
+    const publish = client.publish;
+    client.publish = vi.fn(async (template: Template) =>
+      publish({
+        ...template,
+        tags: template.tags.filter(([key]) => key !== "t"),
+      }),
+    );
+    let answer = callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [bob],
+    });
+    await vi.runAllTimersAsync();
+    let id = published.at(-1)?.tags[0]?.[1] as string;
+    await expect(answer).resolves.toBe(
+      `created ${id}\nThe community did not keep the Solo label, so it is an ordinary private channel.\nadded ${bob}`,
+    );
+    // A create the community never shows leaves its members unconfirmed.
+    client.query = vi.fn(async () => []);
+    answer = callTool(client, {}, "channel_create", {
+      name: "triage",
+      visibility: "private",
+      solo: true,
+      members: [bob],
+    });
+    await vi.runAllTimersAsync();
+    id = published.at(-1)?.tags[0]?.[1] as string;
+    await expect(answer).resolves.toBe(
+      `The community accepted channel ${id} but does not show it yet; its members are not confirmed.`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("finds a channel past the relay's first page, by name and then by ID", async () => {
@@ -1175,28 +1694,31 @@ it("finds a channel past the relay's first page, by name and then by ID", async 
   for (let n = 1; n <= 500; n++) channel(n, `busy-${n}`, 1000 + n);
   const fixers = channel(501, "fixers", 10);
   const row = `${fixers} fixers (private)`;
-  await expect(callTool(client, {}, "channels", { q: "fixers" })).resolves.toBe(
-    row,
-  );
   await expect(
-    callTool(client, {}, "channels", { all: true, q: "FIXERS" }),
+    callTool(client, {}, "channel_list", { q: "fixers" }),
   ).resolves.toBe(row);
   await expect(
-    callTool(client, {}, "channel", { channel: fixers }),
+    callTool(client, {}, "channel_list", { all: true, q: "FIXERS" }),
+  ).resolves.toBe(row);
+  await expect(
+    callTool(client, {}, "channel_get", { channel: fixers }),
   ).resolves.toBe(`${fixers} fixers (private)\nyou: bot`);
   await expect(
-    callTool(client, {}, "canvas", { channel: fixers }),
+    callTool(client, {}, "canvas_get", { channel: fixers }),
   ).resolves.toBe("No canvas.");
   const unseen =
-    "No channel fixers that you can see (it may not be visible yet). If you supplied a name, channels with q finds its ID.";
+    "No channel fixers that you can see (it may not be visible yet). If you supplied a name, channel_list with q finds its ID.";
   await expect(
-    callTool(client, {}, "channel", { channel: "fixers" }),
+    callTool(client, {}, "channel_get", { channel: "fixers" }),
   ).rejects.toThrow(unseen);
   await expect(
-    callTool(client, {}, "canvas", { channel: "fixers" }),
+    callTool(client, {}, "canvas_get", { channel: "fixers" }),
   ).rejects.toThrow(unseen);
   await expect(
-    callTool(client, {}, "canvas", { channel: "fixers", text: "# Plan" }),
+    callTool(client, {}, "canvas_set", {
+      channel: "fixers",
+      content: "# Plan",
+    }),
   ).rejects.toThrow(unseen);
   expect(published).toEqual([]);
 });
@@ -1256,7 +1778,7 @@ it.each([9_999, 10_000, 10_001])(
   "searches %i metadata events without an oversized reply or hard failure",
   async (count) => {
     const { client } = channelListing(count, false);
-    const answer = (await callTool(client, {}, "channels", {
+    const answer = (await callTool(client, {}, "channel_list", {
       all: true,
       q: "NEEDLE",
     })) as string;
@@ -1282,7 +1804,7 @@ it.each([9_999, 10_000, 10_001])(
         ],
       }),
     );
-    const answer = (await callTool(client, {}, "channels", {
+    const answer = (await callTool(client, {}, "channel_list", {
       q: "needle",
     })) as string;
     expect(answer).toContain("room-0 needle");
@@ -1297,7 +1819,7 @@ it("does not claim non-membership when the membership scan is partial", async ()
   const { client, metadata } = channelListing(10_001, true);
   metadata.splice(0, 10_000);
   await expect(
-    callTool(client, {}, "channels", { all: true }),
+    callTool(client, {}, "channel_list", { all: true }),
   ).resolves.toContain(
     "room-10000 needle (membership unknown)\nPartial channel list",
   );
@@ -1306,7 +1828,7 @@ it("does not claim non-membership when the membership scan is partial", async ()
 it("reports a partial search even when no channel matched before the scan limit", async () => {
   const { client } = channelListing(10_001, false);
   await expect(
-    callTool(client, {}, "channels", { all: true, q: "missing" }),
+    callTool(client, {}, "channel_list", { all: true, q: "missing" }),
   ).resolves.toBe(
     "Partial channel list: scan or output limit reached. Narrow with q or use a known channel ID.",
   );
@@ -1320,7 +1842,7 @@ it("keeps transport failures as errors instead of treating them as partial scans
     return query(filters);
   });
   await expect(
-    callTool(client, {}, "channels", { all: true, q: "needle" }),
+    callTool(client, {}, "channel_list", { all: true, q: "needle" }),
   ).rejects.toThrow("relay unavailable");
 });
 
@@ -1334,7 +1856,7 @@ it.each([500, 501])(
       {
         id: 1,
         method: "tools/call",
-        params: { name: "channels", arguments: { all: true } },
+        params: { name: "channel_list", arguments: { all: true } },
       },
     );
     if (!("result" in reply)) throw new Error("Expected an MCP result");
@@ -1365,7 +1887,7 @@ it.each(["x", "界", "😀", '"\\\n'])(
       {
         id: 1,
         method: "tools/call",
-        params: { name: "channels", arguments: { all: true, q: unit } },
+        params: { name: "channel_list", arguments: { all: true, q: unit } },
       },
     );
     if (!("result" in reply)) throw new Error("Expected an MCP result");
@@ -1415,7 +1937,7 @@ it.each([-1, 0, 1])(
       {
         id: 1,
         method: "tools/call",
-        params: { name: "channels", arguments: { all: true } },
+        params: { name: "channel_list", arguments: { all: true } },
       },
     );
     if (!("result" in reply)) throw new Error("Expected an MCP result");
@@ -1432,7 +1954,7 @@ it.each([-1, 0, 1])(
 it("reads an existing canvas without querying channel metadata", async () => {
   const { client } = fake([event({ kind: 40100, content: "# Existing" })]);
   await expect(
-    callTool(client, { channel: "chan" }, "canvas", {}),
+    callTool(client, { channel: "chan" }, "canvas_get", {}),
   ).resolves.toBe("# Existing");
   expect(client.query).toHaveBeenCalledExactlyOnceWith([
     { kinds: [40100], "#h": ["chan"], limit: 1 },
@@ -1451,8 +1973,8 @@ it("waits past the existing canvas timestamp before publishing", async () => {
       expect(Date.now()).toBe(101_000);
       return publish(template);
     });
-    const write = callTool(client, { channel: "chan" }, "canvas", {
-      text: "new",
+    const write = callTool(client, { channel: "chan" }, "canvas_set", {
+      content: "new",
     });
     await vi.advanceTimersByTimeAsync(499);
     expect(published).toEqual([]);
@@ -1482,8 +2004,8 @@ it("keeps waiting when the timer fires a moment early", async () => {
       expect(Date.now()).toBe(101_000);
       return publish(template);
     });
-    const write = callTool(client, { channel: "chan" }, "canvas", {
-      text: "new",
+    const write = callTool(client, { channel: "chan" }, "canvas_set", {
+      content: "new",
     });
     await vi.advanceTimersByTimeAsync(500);
     early.mockRestore();
@@ -1499,13 +2021,319 @@ it("publishes the first canvas only after finding visible channel metadata", asy
     event({ kind: 39000, tags: [["d", "chan"]] }),
   ]);
   await expect(
-    callTool(client, { channel: "chan" }, "canvas", { text: "first" }),
+    callTool(client, { channel: "chan" }, "canvas_set", { content: "first" }),
   ).resolves.toBe("saved");
   expect(client.query).toHaveBeenNthCalledWith(2, [
     { kinds: [39000], "#d": ["chan"], limit: 1 },
   ]);
   expect(published).toEqual([
     { kind: 40100, content: "first", tags: [["h", "chan"]] },
+  ]);
+});
+
+it("lists canvas revisions newest first, a page at a time", async () => {
+  const rows = Array.from({ length: 26 }, (_, i) =>
+    event({
+      kind: 40100,
+      id: `${i}`.padStart(64, "0"),
+      created_at: 100 + i,
+      content: `# Plan ${i}\nbody`,
+    }),
+  );
+  const { client } = fake(rows);
+  const page = await callTool(
+    client,
+    { channel: "chan" },
+    "canvas_history",
+    {},
+  );
+  const lines = (page as string).split("\n");
+  expect(lines).toHaveLength(28);
+  expect(lines[0]).toBe(`version: ${rows[25]?.id}`);
+  expect(lines[2]).toBe(
+    `${rows[25]?.id} 1970-01-01T00:02Z ${alice} 14B # Plan 25`,
+  );
+  expect(lines[27]).toBe(
+    `Older revisions may remain; continue with ${JSON.stringify({ channel: "chan", before: 101, before_id: rows[1]?.id })}`,
+  );
+  await expect(
+    callTool(client, {}, "canvas_history", {
+      channel: "chan",
+      before: 101,
+      before_id: rows[1]?.id,
+    }),
+  ).resolves.toBe(`${rows[0]?.id} 1970-01-01T00:01Z ${alice} 13B # Plan 0`);
+  await expect(
+    callTool(client, {}, "canvas_history", {
+      channel: "chan",
+      before_id: root,
+    }),
+  ).rejects.toThrow("before_id needs before");
+  await expect(
+    callTool(client, {}, "canvas_history", { channel: "chan", before: 1e12 }),
+  ).rejects.toThrow("Unix seconds");
+  // Only the first page is read from the writer.
+  const filters = (client.query as ReturnType<typeof vi.fn>).mock.calls.map(
+    ([[filter]]) => filter,
+  );
+  expect(filters[0]).toEqual({
+    kinds: [40100],
+    "#h": ["chan"],
+    limit: 25,
+    consistency: "strong",
+  });
+  expect(filters[1]).not.toHaveProperty("consistency");
+});
+
+it("pages canvas revisions that share a timestamp without gaps", async () => {
+  const rows = Array.from({ length: 30 }, (_, i) =>
+    event({
+      kind: 40100,
+      id: `${i}`.padStart(64, "0"),
+      created_at: 100,
+      content: `${i}`,
+    }),
+  );
+  const { client } = fake(rows);
+  const first = (await callTool(client, {}, "canvas_history", {
+    channel: "chan",
+  })) as string;
+  const cursor = JSON.parse(first.split("continue with ")[1] ?? "");
+  const second = (await callTool(
+    client,
+    {},
+    "canvas_history",
+    cursor,
+  )) as string;
+  const ids = [...first.split("\n").slice(2, 27), ...second.split("\n")].map(
+    (line) => line.split(" ")[0],
+  );
+  expect(ids).toEqual(rows.map((row) => row.id));
+});
+
+it("restores a canvas revision guarded by the head it read", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const old = event({ kind: 40100, id: root, content: "# Old" });
+    const head = event({ kind: 40100, id: nested, created_at: 200 });
+    const { client, published } = fake([old, head], { keep: true });
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: nested,
+      }),
+    ).resolves.toBe(`restored ${root} as ${"1".padStart(64, "e")}`);
+    expect(published).toEqual([
+      {
+        kind: 40100,
+        content: "# Old",
+        tags: [
+          ["h", "chan"],
+          ["expected-revision", nested],
+        ],
+      },
+    ]);
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_get", {}),
+    ).resolves.toBe("# Old");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("refuses to restore what is not a revision of this canvas", async () => {
+  const { client, published } = fake([
+    event({ kind: 9, id: root }),
+    event({ kind: 40100, id: nested, tags: [["h", "other"]] }),
+  ]);
+  for (const id of [root, nested, "f".repeat(64)])
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_restore", {
+        id,
+        expected: root,
+      }),
+    ).rejects.toThrow(`No canvas revision ${id} in chan`);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_restore", {
+      id: "x",
+      expected: root,
+    }),
+  ).rejects.toThrow("64-character");
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_restore", { id: root }),
+  ).rejects.toThrow("expected");
+  expect(published).toEqual([]);
+});
+
+it("refuses to restore over a canvas saved since the agent read it", async () => {
+  const old = event({ kind: 40100, id: root, content: "# Old" });
+  const seen = event({ kind: 40100, id: nested, created_at: 200 });
+  const { client, published } = fake([old, seen]);
+  await callTool(client, { channel: "chan" }, "canvas_history", {});
+  // A collaborator saves after the agent read the history.
+  (client.query as ReturnType<typeof vi.fn>).mockImplementation(
+    async ([filter]: readonly { ids?: string[] }[]) =>
+      filter?.ids
+        ? [old]
+        : [event({ kind: 40100, id: "c".repeat(64), created_at: 300 })],
+  );
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_restore", {
+      id: root,
+      expected: nested,
+    }),
+  ).rejects.toThrow(`The canvas changed since version ${nested}`);
+  expect(published).toEqual([]);
+});
+
+it("restores only revisions within the canvas size limit", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const head = event({ kind: 40100, id: nested, created_at: 200 });
+    for (const [content, ok] of [
+      ["", true],
+      ["x".repeat(24 * 1024), true],
+      ["x".repeat(24 * 1024 + 1), false],
+    ] as const) {
+      const old = event({ kind: 40100, id: root, content });
+      const { client, published } = fake([old, head], { keep: true });
+      const restore = callTool(client, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: nested,
+      });
+      if (ok) await expect(restore).resolves.toMatch(/^restored /);
+      else await expect(restore).rejects.toThrow("over the canvas limit");
+      expect(published).toHaveLength(ok ? 1 : 0);
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("annotates the canvas history and restore tools", () => {
+  const find = (name: string) => TOOLS.find((item) => item.name === name);
+  expect(find("canvas_history")?.annotations).toEqual({ readOnlyHint: true });
+  expect(find("canvas_restore")?.annotations).toEqual({
+    readOnlyHint: false,
+    destructiveHint: true,
+  });
+});
+
+it("reports a restore that another canvas write overtook", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const old = event({ kind: 40100, id: root, content: "# Old" });
+    const later = event({ kind: 40100, id: nested, created_at: 999 });
+    const { client } = fake([old]);
+    const publish = client.publish;
+    client.publish = vi.fn(async (template) => {
+      const signed = await publish(template);
+      (client.query as ReturnType<typeof vi.fn>).mockResolvedValue([later]);
+      return signed;
+    });
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: root,
+      }),
+    ).resolves.toBe("That revision is already the canvas.");
+    const { client: other } = fake([
+      old,
+      event({ kind: 40100, id: "d".repeat(64), created_at: 200 }),
+    ]);
+    const otherPublish = other.publish;
+    other.publish = vi.fn(async (template) => {
+      const signed = await otherPublish(template);
+      (other.query as ReturnType<typeof vi.fn>).mockResolvedValue([later]);
+      return signed;
+    });
+    await expect(
+      callTool(other, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: "d".repeat(64),
+      }),
+    ).rejects.toThrow(
+      `conflict: the restore was received, but another canvas (${nested})`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reports an accepted restore whose read-back fails", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const old = event({ kind: 40100, id: root, content: "# Old" });
+    const head = event({ kind: 40100, id: nested, created_at: 200 });
+    const { client } = fake([old, head]);
+    const publish = client.publish;
+    let saved = "";
+    client.publish = vi.fn(async (template) => {
+      const signed = await publish(template);
+      saved = signed.id;
+      (client.query as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("socket closed"),
+      );
+      return signed;
+    });
+    const restore = callTool(client, { channel: "chan" }, "canvas_restore", {
+      id: root,
+      expected: nested,
+    });
+    await expect(restore).rejects.toThrow(/^restored /);
+    await expect(restore).rejects.toThrow(
+      `restored ${root} as ${saved}, but the canvas could not be read back to confirm it is current: socket closed`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reads and replaces the canvas of a named channel or the current one", async () => {
+  const { client, published } = fake([
+    event({ kind: 40100, content: "# Existing" }),
+  ]);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_get", {}),
+  ).resolves.toBe("# Existing");
+  await expect(
+    callTool(client, {}, "canvas_get", { channel: "chan" }),
+  ).resolves.toBe("# Existing");
+  await expect(callTool(client, {}, "canvas_get", {})).rejects.toThrow(
+    "channel is required here.",
+  );
+  await expect(
+    callTool(client, {}, "canvas_set", { content: "x" }),
+  ).rejects.toThrow("channel is required here.");
+  await expect(
+    callTool(client, {}, "canvas_set", { path: "plan.md" }),
+  ).rejects.toThrow("channel is required here.");
+  expect(client.read).not.toHaveBeenCalled();
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", {}),
+  ).rejects.toThrow("Give content or path.");
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", { text: "old name" }),
+  ).rejects.toThrow("Give content or path.");
+  expect(() => callTool(client, { channel: "chan" }, "canvas", {})).toThrow(
+    "No tool canvas",
+  );
+  expect(published).toEqual([]);
+
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", { path: "plan.md" }),
+  ).resolves.toBe("saved");
+  expect(client.read).toHaveBeenCalledWith("plan.md");
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", { content: "" }),
+  ).resolves.toBe("saved");
+  expect(published).toEqual([
+    { kind: 40100, content: "# plan.md", tags: [["h", "chan"]] },
+    { kind: 40100, content: "", tags: [["h", "chan"]] },
   ]);
 });
 
@@ -1516,8 +2344,7 @@ it("creates a channel from its owner's template, reporting each agent it could n
   client.templates = vi.fn(async () => [
     { name: "Launch", canvas: "# Plan", agents: [alice, bob, me] },
   ]);
-  const answer = await callTool(client, {}, "channel", {
-    action: "create",
+  const answer = await callTool(client, {}, "channel_create", {
     name: "#launch ",
     visibility: "private",
     template: "launch",
@@ -1571,8 +2398,7 @@ it("adds no template agents when it cannot start the Canvas", async () => {
   client.templates = vi.fn(async () => [
     { name: "Launch", canvas: "# Plan", agents: [alice] },
   ]);
-  const answer = await callTool(client, {}, "channel", {
-    action: "create",
+  const answer = await callTool(client, {}, "channel_create", {
     name: "launch",
     visibility: "private",
     template: "Launch",
@@ -1587,8 +2413,7 @@ it("adds no template agents when it cannot start the Canvas", async () => {
 it("creates nothing from a template it cannot name exactly", async () => {
   const { client, published } = relay();
   const create = (template: string) =>
-    callTool(client, {}, "channel", {
-      action: "create",
+    callTool(client, {}, "channel_create", {
       name: "x",
       visibility: "open",
       template,
@@ -1611,31 +2436,48 @@ it("creates nothing from a template it cannot name exactly", async () => {
 
 it("refuses channel arguments that do not fit, before publishing", async () => {
   const { client, published } = relay();
-  const channel = (args: Record<string, unknown>) =>
-    callTool(client, { channel: room }, "channel", args);
-  await expect(channel({ action: "toString" })).rejects.toThrow(
-    "action must be one of",
-  );
-  await expect(channel({ action: "join", name: "x" })).rejects.toThrow(
-    "name cannot be used with join.",
-  );
+  const channel = (name: string, args: Record<string, unknown>) =>
+    callTool(client, { channel: room }, name, args);
   await expect(
-    channel({ action: "create", channel: room, name: "x", visibility: "open" }),
-  ).rejects.toThrow("leave out channel");
-  await expect(channel({ action: "create", name: "x" })).rejects.toThrow(
+    channel("channel_delete", { channel_id: "other" }),
+  ).rejects.toThrow("channel_id cannot be used with channel_delete.");
+  await expect(
+    channel("channel_create", { name: "x", visibility: "open", topic: "t" }),
+  ).rejects.toThrow("topic cannot be used with channel_create.");
+  await expect(channel("channel_create", { name: "x" })).rejects.toThrow(
     "visibility must be open or private.",
   );
   await expect(
-    channel({ action: "create", name: "#", visibility: "open" }),
+    channel("channel_create", { name: "#", visibility: "open" }),
   ).rejects.toThrow("Enter a channel name");
   await expect(
-    channel({ action: "create", name: "x", visibility: "open", ttl: 1.5 }),
+    channel("channel_create", { name: "x", visibility: "open", ttl: 1.5 }),
   ).rejects.toThrow("ttl must be a whole number of seconds.");
-  await expect(channel({ action: "update" })).rejects.toThrow(
-    "Give name, about, visibility, ttl, topic or purpose.",
+  await expect(
+    channel("channel_create", {
+      name: "x",
+      visibility: "open",
+      join_role: "admin",
+    }),
+  ).rejects.toThrow("join_role must be member or guest.");
+  await expect(
+    channel("channel_create", {
+      name: "x",
+      visibility: "private",
+      join_role: "guest",
+    }),
+  ).rejects.toThrow("join_role guest is for open channels.");
+  await expect(
+    channel("channel_update", { visibility: "private", join_role: "guest" }),
+  ).rejects.toThrow("join_role guest is for open channels.");
+  await expect(channel("channel_update", {})).rejects.toThrow(
+    "Give name, about, visibility, ttl, join_role, topic or purpose.",
   );
   await expect(
-    callTool(client, { channel: "chan" }, "channel", { action: "leave" }),
+    channel("channel_update", { join_role: "owner" }),
+  ).rejects.toThrow("join_role must be member or guest.");
+  await expect(
+    callTool(client, { channel: "chan" }, "channel_leave", {}),
   ).rejects.toThrow("Invalid channel ID");
   expect(published).toEqual([]);
 });
@@ -1643,12 +2485,11 @@ it("refuses channel arguments that do not fit, before publishing", async () => {
 it("shows a channel's details and changes them as the channel shows", async () => {
   const { client, published } = relay();
   const context = { channel: room };
-  await expect(callTool(client, context, "channel", {})).resolves.toBe(
+  await expect(callTool(client, context, "channel_get", {})).resolves.toBe(
     `${room} plans (stream, open)\nabout: roadmap\nyou: owner`,
   );
   await expect(
-    callTool(client, context, "channel", {
-      action: "update",
+    callTool(client, context, "channel_update", {
       name: "launch",
       about: "",
       visibility: "private",
@@ -1662,14 +2503,159 @@ it("shows a channel's details and changes them as the channel shows", async () =
     ["visibility", "private"],
     ["ttl", "3600"],
   ]);
-  await expect(callTool(client, context, "channel", {})).resolves.toBe(
+  await expect(callTool(client, context, "channel_get", {})).resolves.toBe(
     `${room} launch (stream, private, archives after 3600s idle)\nyou: owner`,
   );
   await expect(
-    callTool(client, { channel: "gone" }, "channel", {}),
+    callTool(client, { channel: "gone" }, "channel_get", {}),
   ).rejects.toThrow(
     "No channel gone that you can see (it may not be visible yet).",
   );
+});
+
+it("makes a channel an announce channel and back", async () => {
+  const { client, published } = relay();
+  const context = { channel: room };
+  await expect(
+    callTool(client, context, "channel_update", { join_role: "guest" }),
+  ).resolves.toBe(`updated ${room}`);
+  await expect(callTool(client, context, "channel_get", {})).resolves.toBe(
+    `${room} plans (stream, open, join as guest)\nabout: roadmap\nyou: owner`,
+  );
+  await expect(
+    callTool(client, context, "channel_update", { join_role: "member" }),
+  ).resolves.toBe(`updated ${room}`);
+  expect(published.map((template) => template.tags)).toEqual([
+    [
+      ["h", room],
+      ["join_role", "guest"],
+    ],
+    [
+      ["h", room],
+      ["join_role", "member"],
+    ],
+  ]);
+});
+
+it("creates an announce channel after adding its template's agents", async () => {
+  const { client, published, state } = relay();
+  client.templates = vi.fn(async () => [
+    { name: "Team", canvas: "", agents: [alice] },
+  ]);
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "team",
+    visibility: "open",
+    join_role: "guest",
+    template: "Team",
+  });
+  const id = published[0]?.tags[0]?.[1] as string;
+  // Set last: an agent added with no role would otherwise join as a guest.
+  expect(published.map((template) => [template.kind, template.tags])).toEqual([
+    [
+      9007,
+      [
+        ["h", id],
+        ["name", "team"],
+        ["visibility", "open"],
+        ["channel_type", "stream"],
+      ],
+    ],
+    [
+      9000,
+      [
+        ["h", id],
+        ["p", alice],
+      ],
+    ],
+    [
+      9002,
+      [
+        ["h", id],
+        ["join_role", "guest"],
+      ],
+    ],
+  ]);
+  expect(answer).toBe(
+    [
+      `created ${id}`,
+      `added ${alice} Alice Smith`,
+      "new people join as guests",
+    ].join("\n"),
+  );
+  await expect(
+    callTool(client, { channel: id }, "channel_get", {}),
+  ).resolves.toBe(`${id} team (stream, open, join as guest)\nyou: owner`);
+  const roster = () =>
+    state.find((e) => e.kind === 39002 && e.tags[0]?.[1] === id)?.tags;
+  expect(roster()).toContainEqual(["p", alice, "", "member"]);
+  // Now anyone added with no role is a guest, and the answer says so.
+  await expect(
+    callTool(client, { channel: id }, "member_add", { pubkeys: [bob] }),
+  ).resolves.toBe(`added ${bob} as guest`);
+  expect(roster()).toContainEqual(["p", bob, "", "guest"]);
+});
+
+it("sets join_role when the template's Canvas is refused, and says when it cannot", async () => {
+  const { client, published } = relay();
+  const publish = client.publish;
+  client.publish = vi.fn(async (template: Template) => {
+    if (template.kind === 40100) throw new Error("canvas refused");
+    return publish(template);
+  });
+  client.templates = vi.fn(async () => [
+    { name: "Team", canvas: "# Plan", agents: [alice] },
+  ]);
+  const create = () =>
+    callTool(client, {}, "channel_create", {
+      name: "team",
+      visibility: "open",
+      join_role: "guest",
+      template: "Team",
+    });
+  let answer = await create();
+  let id = published[0]?.tags[0]?.[1] as string;
+  expect(published.map((template) => template.kind)).toEqual([9007, 9002]);
+  expect(answer).toBe(
+    `created ${id}\nCanvas not started, so no agents were added: canvas refused\nnew people join as guests`,
+  );
+  const query = client.query;
+  client.query = vi.fn(async (filters: readonly Filter[]) => {
+    if (filters.some((f) => (f.kinds as number[]).includes(39000)))
+      throw new Error("kind 39000 unavailable");
+    return query(filters);
+  });
+  answer = await create();
+  id = published.at(-1)?.tags[0]?.[1] as string;
+  expect(published.at(-1)?.kind).toBe(9007);
+  expect(answer).toBe(
+    `The community accepted channel ${id} but its state could not be read back: kind 39000 unavailable; the template was not applied; join_role was not set.`,
+  );
+});
+
+it("reports a new channel whose join_role was refused", async () => {
+  const { client, published } = relay();
+  const publish = client.publish;
+  client.publish = vi.fn(async (template: Template) => {
+    if (template.kind === 9002) throw new Error("restricted: admins only");
+    return publish(template);
+  });
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "news",
+    visibility: "open",
+    join_role: "guest",
+  });
+  const id = published[0]?.tags[0]?.[1] as string;
+  expect(published.map((template) => template.kind)).toEqual([9007]);
+  expect(answer).toBe(
+    `created ${id}\njoin_role not set: restricted: admins only`,
+  );
+  // member is the default, so it needs no second event.
+  await callTool(client, {}, "channel_create", {
+    name: "chat",
+    visibility: "open",
+    join_role: "member",
+  });
+  expect(published.map((template) => template.kind)).toEqual([9007, 9007]);
 });
 
 it("leaves, joins, archives, unarchives and deletes a channel", async () => {
@@ -1683,7 +2669,7 @@ it("leaves, joins, archives, unarchives and deletes a channel", async () => {
     ["delete", "deleted"],
   ])
     await expect(
-      callTool(client, context, "channel", { action }),
+      callTool(client, context, `channel_${action}`, {}),
     ).resolves.toBe(`${done} ${room}`);
   expect(published.map((template) => template.kind)).toEqual([
     9022, 9021, 9002, 9002, 9008,
@@ -1698,9 +2684,7 @@ it("reports a change the community accepted but does not show", async () => {
   vi.useFakeTimers();
   try {
     const { client } = fake([]);
-    const answer = callTool(client, { channel: room }, "channel", {
-      action: "archive",
-    });
+    const answer = callTool(client, { channel: room }, "channel_archive", {});
     await vi.runAllTimersAsync();
     await expect(answer).resolves.toBe(
       "The community accepted archive but does not show it yet.",
@@ -1713,10 +2697,12 @@ it("reports a change the community accepted but does not show", async () => {
 
 it("adds members with a role and removes others, reporting each", async () => {
   const { client, published } = relay({ [nested]: "restricted: not an admin" });
-  const answer = await callTool(client, { channel: room }, "members", {
-    add: [bob, nested],
-    remove: [alice],
+  const added = await callTool(client, { channel: room }, "member_add", {
+    pubkeys: [bob, nested],
     role: "admin",
+  });
+  const removed = await callTool(client, { channel: room }, "member_remove", {
+    pubkeys: [alice],
   });
   expect(published).toEqual([
     {
@@ -1737,51 +2723,108 @@ it("adds members with a role and removes others, reporting each", async () => {
       ],
     },
   ]);
-  expect(answer).toBe(
+  expect(added).toBe(
     [
       `added ${bob} as admin`,
       `not added ${nested}: restricted: not an admin`,
-      `removed ${alice} Alice Smith`,
     ].join("\n"),
   );
+  expect(removed).toBe(`removed ${alice} Alice Smith`);
   await expect(
-    callTool(client, { channel: room }, "members", { add: [nested] }),
+    callTool(client, { channel: room }, "member_add", { pubkeys: [nested] }),
   ).rejects.toThrow(`not added ${nested}: restricted: not an admin`);
 });
 
 it("changes each member once, however their key is written", async () => {
   const { client, published } = relay();
-  const answer = await callTool(client, { channel: room }, "members", {
-    add: [bob, bob.toUpperCase()],
-    remove: [alice, alice.toUpperCase()],
-  });
+  expect(
+    await callTool(client, { channel: room }, "member_add", {
+      pubkeys: [bob, bob.toUpperCase()],
+    }),
+  ).toBe(`added ${bob}`);
+  expect(
+    await callTool(client, { channel: room }, "member_remove", {
+      pubkeys: [alice, alice.toUpperCase()],
+    }),
+  ).toBe(`removed ${alice} Alice Smith`);
   expect(published.map((template) => template.kind)).toEqual([9000, 9001]);
-  expect(answer).toBe(`added ${bob}\nremoved ${alice} Alice Smith`);
 });
 
 it("refuses member changes that do not fit, before publishing", async () => {
   const { client, published } = relay();
-  const members = (args: Record<string, unknown>) =>
-    callTool(client, { channel: room }, "members", args);
-  await expect(members({ add: [me] })).rejects.toThrow(
-    "For yourself, use channel with action join or leave.",
+  const call = (name: string, args: Record<string, unknown>) =>
+    callTool(client, { channel: room }, name, args);
+  await expect(call("member_add", { pubkeys: [me] })).rejects.toThrow(
+    "For yourself, use channel_join or channel_leave.",
   );
-  await expect(members({ add: [bob], remove: [bob] })).rejects.toThrow(
-    "Add or remove someone, not both.",
+  await expect(call("member_remove", { pubkeys: [me] })).rejects.toThrow(
+    "For yourself, use channel_join or channel_leave.",
   );
-  await expect(members({ add: ["Bob"] })).rejects.toThrow("Not a pubkey: Bob");
-  await expect(members({ add: [bob], role: "root" })).rejects.toThrow(
-    "role must be one of owner, admin, member, guest, bot.",
+  await expect(call("member_add", { pubkeys: ["Bob"] })).rejects.toThrow(
+    "Not a pubkey: Bob",
   );
-  await expect(members({ remove: [alice], role: "admin" })).rejects.toThrow(
-    "role is for the members you add.",
+  await expect(call("member_add", { pubkeys: [] })).rejects.toThrow(
+    "pubkeys is required.",
   );
+  await expect(
+    call("member_add", { pubkeys: [bob], role: "root" }),
+  ).rejects.toThrow("role must be one of owner, admin, member, guest, bot.");
+  await expect(
+    call("member_remove", { pubkeys: [alice], role: "admin" }),
+  ).rejects.toThrow("role cannot be used with member_remove.");
+  await expect(
+    call("member_add", {
+      pubkeys: Array.from({ length: 51 }, (_, i) =>
+        i.toString(16).padStart(64, "0"),
+      ),
+    }),
+  ).rejects.toThrow("Change at most 50 members at a time.");
   expect(published).toEqual([]);
+});
+
+it("lists a channel's members a page at a time, naming only that page", async () => {
+  const roster = Array.from({ length: 5 }, (_, i) =>
+    i.toString(16).padStart(64, "d"),
+  );
+  const { client } = fake([
+    event({
+      kind: 39002,
+      tags: [
+        ["d", room],
+        ...roster.map((key, i) => ["p", key, "", i === 1 ? "admin" : "member"]),
+      ],
+    }),
+    ...roster.map((key, i) => profile(key, `Person ${i}`)),
+  ]);
+  const list = (args: Record<string, unknown>) =>
+    callTool(client, { channel: room }, "member_list", args);
+  expect(await list({ limit: 2 })).toBe(
+    [
+      `${roster[0]} Person 0`,
+      `${roster[1]} Person 1 (admin)`,
+      `3 more; continue with ${JSON.stringify({ channel: room, limit: 2, offset: 2 })}`,
+    ].join("\n"),
+  );
+  expect(client.query).toHaveBeenLastCalledWith([
+    { kinds: [0], authors: roster.slice(0, 2), limit: 2 },
+  ]);
+  expect(await list({ limit: 2, offset: 4 })).toBe(`${roster[4]} Person 4`);
+  expect(await list({ offset: 5 })).toBe("No members.");
+  // The default page holds the whole roster.
+  expect(await list({})).toBe(
+    roster
+      .map((key, i) => `${key} Person ${i}${i === 1 ? " (admin)" : ""}`)
+      .join("\n"),
+  );
+  for (const offset of [-1, 1.5, "2"])
+    await expect(list({ offset })).rejects.toThrow(
+      "offset must be a whole number, 0 or more.",
+    );
 });
 
 it("defaults to the current channel only when channel is left out", async () => {
   const { client, published } = relay();
-  const call = (name: string, args: Record<string, unknown>) =>
+  const call = (name: string, args: unknown) =>
     respond(
       client,
       { channel: room },
@@ -1793,27 +2836,31 @@ it("defaults to the current channel only when channel is left out", async () => 
       },
     );
   for (const [name, args, message] of [
+    ["channel_delete", { channel: 123 }, "channel must be a channel ID."],
+    ["channel_delete", { channel: "   " }, "channel must be a channel ID."],
+    ...[null, [], true, 42, ""].map(
+      (args) =>
+        ["channel_delete", args, "arguments must be an object."] as const,
+    ),
     [
-      "channel",
-      { action: "delete", channel: 123 },
+      "member_remove",
+      { channel: null, pubkeys: [alice] },
       "channel must be a channel ID.",
     ],
     [
-      "channel",
-      { action: "delete", channel: "   " },
-      "channel must be a channel ID.",
+      "member_remove",
+      { pubkeys: [alice, 123] },
+      "pubkeys must be a list of pubkeys.",
     ],
-    ["channel", { action: 5 }, "action must be one of"],
+    ["member_add", { pubkeys: alice }, "pubkeys must be a list of pubkeys."],
     [
-      "members",
-      { channel: null, remove: [alice] },
-      "channel must be a channel ID.",
+      "member_list",
+      { channel_id: room },
+      "channel_id cannot be used with member_list.",
     ],
-    ["members", { remove: [alice, 123] }, "remove must be a list of pubkeys."],
-    ["members", { add: alice }, "add must be a list of pubkeys."],
     [
-      "channel",
-      { action: "create", name: "x", visibility: "open", about: 5 },
+      "channel_create",
+      { name: "x", visibility: "open", about: 5 },
       "about must be text.",
     ],
   ] as const)
@@ -1843,8 +2890,7 @@ it("keeps what it changed when a read after the change fails", async () => {
     { name: "Launch", canvas: "", agents: [bob] },
   ]);
   const create = () =>
-    callTool(client, {}, "channel", {
-      action: "create",
+    callTool(client, {}, "channel_create", {
       name: "launch",
       visibility: "open",
       template: "Launch",
@@ -1869,13 +2915,12 @@ it("keeps what it changed when a read after the change fails", async () => {
     `The community accepted channel ${id} but its state could not be read back: kind 39000 unavailable; the template was not applied.`,
   );
   await expect(
-    callTool(client, { channel: room }, "channel", { action: "archive" }),
+    callTool(client, { channel: room }, "channel_archive", {}),
   ).resolves.toBe(
     "The community accepted archive but its state could not be read back: kind 39000 unavailable.",
   );
   await expect(
-    callTool(client, { channel: room }, "channel", {
-      action: "update",
+    callTool(client, { channel: room }, "channel_update", {
       topic: "x",
     }),
   ).rejects.toThrow("kind 39000 unavailable");
@@ -2055,6 +3100,20 @@ it("reads users by id without the name search", async () => {
     `${bob} Bob`,
   );
   expect(client.searchProfiles).not.toHaveBeenCalled();
+});
+
+it("refuses ids with q, and more than 100 ids", async () => {
+  const { client } = fake(community);
+  await expect(
+    callTool(client, {}, "users", { ids: [bob], q: "alice" }),
+  ).rejects.toThrow("Give ids or q, not both.");
+  const ids = Array.from({ length: 101 }, (_, i) =>
+    i.toString(16).padStart(64, "0"),
+  );
+  await expect(callTool(client, {}, "users", { ids })).rejects.toThrow(
+    "Give at most 100 ids.",
+  );
+  expect(client.query).not.toHaveBeenCalled();
 });
 
 const note = (
@@ -2425,10 +3484,10 @@ const repo = (
     id: d.padEnd(64, "0"),
     tags: [["d", d], ...channels.map((c) => ["buzz-channel", c]), ...extra],
   });
-const git = (client: BuzzClient) => {
+const git = (client: BuzzClient, header = "Authorization: Nostr abc") => {
   const gitAuth = vi.fn(async (owner: string, name: string) => ({
     url: `https://relay/git/${owner}/${name}.git`,
-    header: "Authorization: Nostr abc",
+    header,
   }));
   client.gitAuth = gitAuth;
   return gitAuth;
@@ -2467,9 +3526,22 @@ it("gives the channel's repository and a Git header signed for it", async () => 
   expect(answer).toBe(
     [
       `hive: ${url}`,
-      "For the next 60 seconds, pass this header to each git command (call again for a new one; never save it):",
+      "For the next 60 seconds, pass these headers to each git command (call again for a new one; never save it):",
       `git -c http.${url}.extraHeader='Authorization: Nostr abc' clone ${url}`,
     ].join("\n"),
+  );
+});
+
+it("passes each Git header line, sign-in evidence included", async () => {
+  const { client } = fake([
+    hive({ [bob]: "admin" }),
+    repo(bob, "hive", ["chan"]),
+  ]);
+  git(client, "Authorization: Nostr abc\nNostr-Federated-Identity: Bearer xyz");
+  const answer = await callTool(client, { channel: "chan" }, "repo", {});
+  const url = `https://relay/git/${bob}/hive.git`;
+  expect(answer).toContain(
+    `git -c http.${url}.extraHeader='Authorization: Nostr abc' -c http.${url}.extraHeader='Nostr-Federated-Identity: Bearer xyz' clone ${url}`,
   );
 });
 
@@ -2809,4 +3881,258 @@ it("validates change drafts and passes only the proposed fields", async () => {
     agent: "Child",
     instructions: "",
   });
+});
+
+it("nests a reply under a message inside a thread, naming the root and the parent", async () => {
+  const { client, published } = fake([
+    ...community,
+    event({ id: root, tags: [["h", "other"]] }),
+  ]);
+  // The parent's channel wins over where the agent is working.
+  await callTool(client, { channel: "elsewhere" }, "reply_in_subthread", {
+    audience: "everyone",
+    parent: nested,
+    text: "@Bob take this one",
+    files: ["shot.png"],
+  });
+  expect(published[0]?.tags.slice(0, 4)).toEqual([
+    ["h", "chan"],
+    ["e", root, "", "root"],
+    ["e", nested, "", "reply"],
+    ["p", bob],
+  ]);
+  expect(published[0]?.tags[4]?.[0]).toBe("imeta");
+});
+
+it.each(["everyone", "agents"])(
+  "replies under a thread's root as send does, for audience %s",
+  async (audience) => {
+    const { client, published } = fake(community);
+    const context = { channel: "chan", root };
+    await callTool(client, context, "reply_in_subthread", {
+      parent: root,
+      audience,
+      text: "@Alice Smith hi",
+    });
+    await callTool(client, context, "send", {
+      audience,
+      text: "@Alice Smith hi",
+    });
+    expect(published[0]).toEqual(published[1]);
+    expect(published[0]?.tags).toEqual([
+      ["h", "chan"],
+      ["e", root, "", "reply"],
+      ["p", alice],
+      ...(audience === "agents" ? [["audience", "agents"]] : []),
+    ]);
+  },
+);
+
+it("tags a nested reply for agents only", async () => {
+  const { client, published } = fake(community);
+  await callTool(client, { channel: "chan", root }, "reply_in_subthread", {
+    parent: nested,
+    audience: "agents",
+    text: "a",
+  });
+  expect(published[0]?.tags).toEqual([
+    ["h", "chan"],
+    ["e", root, "", "root"],
+    ["e", nested, "", "reply"],
+    ["audience", "agents"],
+  ]);
+});
+
+it.each([undefined, "humans"])(
+  "refuses a nested reply whose audience is %s, publishing nothing",
+  async (audience) => {
+    const { client, published } = fake(community);
+    await expect(
+      callTool(client, { channel: "chan", root }, "reply_in_subthread", {
+        parent: nested,
+        audience,
+        text: "hi",
+      }),
+    ).rejects.toThrow("audience must be everyone or agents.");
+    expect(published).toEqual([]);
+  },
+);
+
+it("keeps nested replies out of a top-level chat and to channel members", async () => {
+  const { client, published } = fake(community);
+  await expect(
+    callTool(
+      client,
+      { channel: "chan", topLevel: true },
+      "reply_in_subthread",
+      { parent: nested, audience: "everyone", text: "hi" },
+    ),
+  ).rejects.toThrow("This chat stays at the top level");
+  await expect(
+    callTool(client, { channel: "chan", root }, "reply_in_subthread", {
+      audience: "everyone",
+      parent: nested,
+      text: "hi @Carol",
+    }),
+  ).rejects.toThrow("No single channel member is @carol");
+  expect(published).toEqual([]);
+});
+
+it("starts a thread under a top-level message that is not the current root", async () => {
+  const other = event({ id: "5".repeat(64), tags: [["h", "chan"]] });
+  const { client, published } = fake([...community, other]);
+  await callTool(client, { channel: "chan", root }, "reply_in_subthread", {
+    audience: "everyone",
+    parent: other.id,
+    text: "a",
+  });
+  expect(published[0]?.tags).toEqual([
+    ["h", "chan"],
+    ["e", other.id, "", "reply"],
+  ]);
+});
+
+it("nests under parents as the relay reads their root, whatever the markers or case", async () => {
+  const remarked = event({
+    id: "3".repeat(64),
+    tags: [
+      ["h", "chan"],
+      ["e", alice, "", "root"],
+      ["e", root, "", "root"],
+      ["e", nested, "", "reply"],
+    ],
+  });
+  const uppercase = event({
+    id: "4".repeat(64),
+    tags: [
+      ["h", "chan"],
+      ["e", root.replace(/1/g, "A"), "", "reply"],
+    ],
+  });
+  const { client, published } = fake([...community, remarked, uppercase]);
+  const context = { channel: "chan", root };
+  await callTool(client, context, "reply_in_subthread", {
+    audience: "everyone",
+    parent: remarked.id,
+    text: "a",
+  });
+  await callTool(client, context, "reply_in_subthread", {
+    audience: "everyone",
+    parent: uppercase.id,
+    text: "b",
+  });
+  expect(published.map((sent) => sent.tags.slice(1))).toEqual([
+    [
+      ["e", root, "", "root"],
+      ["e", remarked.id, "", "reply"],
+    ],
+    [
+      ["e", root.replace(/1/g, "a"), "", "root"],
+      ["e", uppercase.id, "", "reply"],
+    ],
+  ]);
+});
+
+it("finds an uppercase parent and writes its id in lowercase", async () => {
+  const lettered = "ab".repeat(32);
+  const child = "cd".repeat(32);
+  const { client, published } = fake([
+    ...community,
+    event({ id: lettered }),
+    event({
+      id: child,
+      tags: [
+        ["h", "chan"],
+        ["e", lettered, "", "reply"],
+      ],
+    }),
+  ]);
+  const context = { channel: "chan", root: lettered };
+  await callTool(client, context, "reply_in_subthread", {
+    audience: "everyone",
+    parent: child.toUpperCase(),
+    text: "a",
+  });
+  await callTool(client, context, "reply_in_subthread", {
+    audience: "everyone",
+    parent: lettered.toUpperCase(),
+    text: "b",
+  });
+  expect(published.map((sent) => sent.tags)).toEqual([
+    [
+      ["h", "chan"],
+      ["e", lettered, "", "root"],
+      ["e", child, "", "reply"],
+    ],
+    [
+      ["h", "chan"],
+      ["e", lettered, "", "reply"],
+    ],
+  ]);
+});
+
+it("refuses a parent it cannot find, publishing nothing", async () => {
+  const { client, published } = fake(community);
+  await expect(
+    callTool(client, { channel: "chan", root }, "reply_in_subthread", {
+      audience: "everyone",
+      parent: "9".repeat(64),
+      text: "hi",
+    }),
+  ).rejects.toThrow(`No message ${"9".repeat(64)}.`);
+  expect(published).toEqual([]);
+});
+
+it("needs the message to reply under", async () => {
+  const { client, published } = fake(community);
+  await expect(
+    callTool(client, { channel: "chan", root }, "reply_in_subthread", {
+      audience: "everyone",
+      text: "hi",
+    }),
+  ).rejects.toThrow("parent is required");
+  expect(published).toEqual([]);
+});
+
+it("deletes only the given message, one target per deletion", async () => {
+  const mine = event({ id: root, pubkey: me, created_at: 100 });
+  const copy = event({
+    id: nested,
+    pubkey: me,
+    created_at: 101,
+    tags: [
+      ["h", "chan"],
+      ["buzz:copy-of", root],
+    ],
+  });
+  const { client, published } = fake([mine, copy]);
+  expect(
+    await callTool(client, { channel: "chan" }, "delete", { id: nested }),
+  ).toContain("deleted");
+  expect(published).toEqual([
+    {
+      kind: 5,
+      content: "",
+      tags: [
+        ["h", "chan"],
+        ["e", nested],
+        ["k", "9"],
+      ],
+    },
+  ]);
+});
+
+it("marks delete as destructive, also as a session lists it", () => {
+  for (const tools of [TOOLS, sessionTools()])
+    expect(tools.find((tool) => tool.name === "delete")).toMatchObject({
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    });
+});
+
+it("refuses to delete another author's message", async () => {
+  const { client, published } = fake([event({ id: root, pubkey: alice })]);
+  await expect(
+    callTool(client, { channel: "chan" }, "delete", { id: root }),
+  ).rejects.toThrow("Only your own messages can be deleted.");
+  expect(published).toEqual([]);
 });

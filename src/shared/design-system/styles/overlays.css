@@ -169,6 +169,25 @@
     justify-content: space-between;
     gap: var(--space-4);
   }
+  .buzz-dialog-header[data-artwork] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .buzz-dialog-header[data-artwork] > .buzz-dialog-heading {
+    grid-area: 1 / 1;
+    text-align: center;
+  }
+  .buzz-dialog-header[data-artwork] > .buzz-dialog-header-actions {
+    grid-area: 1 / 1;
+    justify-self: end;
+    align-self: start;
+  }
+  .buzz-dialog-artwork {
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+    margin-bottom: var(--space-4);
+  }
   .buzz-dialog-header > h2,
   .buzz-dialog-heading > h2 {
     margin: 0;
@@ -297,6 +316,12 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+  }
+  /* Stable lists need a usable control before the whole dialog scrolls. */
+  :is(.buzz-dialog, .buzz-dialog-step)[data-body-layout="flex"]:where(
+    [data-height^="stable"]:not([data-size="expanded"])
+  ) > .buzz-dialog-body {
+    min-height: calc(2 * var(--dialog-padding) + var(--size-control));
   }
   /* Without footer actions, the popup already supplies the bottom gutter. */
   :is(.buzz-dialog, .buzz-dialog-step)[data-body-layout="flex"]
@@ -635,40 +660,6 @@ html[data-keyboard-navigation]
   .buzz-dialog-bar-material {
     display: none;
   }
-  .buzz-dialog-bar-material > span {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    mask-image: linear-gradient(to bottom, black, transparent);
-  }
-  .buzz-dialog-bar-material > span:nth-child(1) {
-    backdrop-filter: blur(2px);
-  }
-  .buzz-dialog-bar-material > span:nth-child(2) {
-    backdrop-filter: blur(4px);
-    mask-image: linear-gradient(to bottom, black 30%, transparent 85%);
-  }
-  .buzz-dialog-bar-material > span:nth-child(3) {
-    backdrop-filter: blur(8px);
-    background: linear-gradient(
-      to bottom,
-      var(--surface-popover) 25%,
-      transparent
-    );
-    mask-image: linear-gradient(to bottom, black 40%, transparent 75%);
-  }
-  .buzz-dialog-actions > .buzz-dialog-bar-material {
-    transform: scaleY(-1);
-  }
-  @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
-    .buzz-dialog-bar-material {
-      background: var(--surface-popover);
-    }
-    .buzz-dialog-bar-material > span {
-      display: none;
-    }
-  }
-
   /* Ordinary form dialogs scroll beneath their full-height sticky chrome.
      Stable-height dialogs keep their expanding body so actions stay put. */
   .buzz-dialog:not([data-stepped]):not(

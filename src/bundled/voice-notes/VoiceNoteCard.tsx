@@ -1,3 +1,4 @@
+import { useMediaReadRecovery } from "../../features/messages/use-media-read-recovery";
 import { useMediaElementSource } from "../../features/messages/use-media-element-source";
 import { MediaDownloadAction } from "../../features/messages/MediaDownloadAction";
 import { AttachmentDownloadContext } from "../../features/messages/AttachmentDownloadContext";
@@ -80,6 +81,18 @@ function Player({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [rate, setRate] = useState(1);
+  const { recover: recoverMedia, cancel: cancelMedia } = useMediaReadRecovery(
+    active ? source : undefined,
+    () => {
+      setError(true);
+      setLoading(false);
+      setPlaying(false);
+    },
+    () => {
+      setError(false);
+      setLoading(false);
+    },
+  );
   const peaks = waveform?.length
     ? waveformPeaks(Float32Array.from(waveform.slice(0, 100)), count)
     : Array.from({ length: count }, () => 0);
@@ -139,11 +152,13 @@ function Player({
     if (!element || !source) return;
     const operation = ++attempt.current;
     if (loading || !element.paused) {
+      cancelMedia();
       element.pause();
       setLoading(false);
       return;
     }
     claimAudio(element, () => {
+      cancelMedia();
       attempt.current++;
       element.pause();
       setLoading(false);
@@ -155,7 +170,7 @@ function Player({
       await element.play();
       if (attempt.current === operation) setLoading(false);
     } catch {
-      if (attempt.current === operation) {
+      if (attempt.current === operation && !recoverMedia(element)) {
         setLoading(false);
         releaseAudio(element);
         setError(true);
@@ -319,6 +334,7 @@ function Player({
           paintProgress(0, duration);
         }}
         onError={(event) => {
+          if (recoverMedia(event.currentTarget)) return;
           setMetadataReady(false);
           releaseAudio(event.currentTarget);
           attempt.current++;

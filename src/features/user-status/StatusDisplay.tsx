@@ -26,13 +26,21 @@ export function StatusDisplay({
       <span className={styles.status} data-size={size}>
         {size === "caption" ? (
           <StatusTicker key={label} text={label}>
-            <StatusEmoji value={status.emoji} session={session} />
+            <StatusEmoji
+              value={status.emoji}
+              url={status.emojiUrl}
+              session={session}
+            />
             {status.emoji && status.text && " "}
             {status.text}
           </StatusTicker>
         ) : (
           <>
-            <StatusEmoji value={status.emoji} session={session} />
+            <StatusEmoji
+              value={status.emoji}
+              url={status.emojiUrl}
+              session={session}
+            />
             {status.emoji && status.text && " "}
             <span className={styles.text}>{status.text}</span>
           </>
@@ -43,7 +51,11 @@ export function StatusDisplay({
     <Tooltip
       content={
         <span className={styles.tooltipContent}>
-          <StatusEmoji value={status.emoji} session={session} />
+          <StatusEmoji
+            value={status.emoji}
+            url={status.emojiUrl}
+            session={session}
+          />
           {status.text && <span>{status.text}</span>}
         </span>
       }
@@ -57,7 +69,9 @@ export function StatusDisplay({
       >
         <StatusEmoji
           decorative
-          value={status.emoji || "💬"}
+          value={status.emoji}
+          url={status.emojiUrl}
+          fallback="💬"
           session={session}
         />
       </span>

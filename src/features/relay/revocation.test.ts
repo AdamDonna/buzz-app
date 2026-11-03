@@ -4,6 +4,7 @@ import type { ChannelStoreOptions } from "./store";
 import { createRelaySession } from "./session";
 import type { RelayEvent } from "./events";
 import {
+  type Key,
   bounds,
   flush,
   keypair,
@@ -17,7 +18,8 @@ import {
 
 const relay = keypair(),
   viewer = keypair(),
-  alice = keypair();
+  alice = keypair(),
+  bob = keypair();
 const owners: ReturnType<typeof createRelaySession>[] = [];
 afterEach(() => {
   for (const owner of owners.splice(0)) owner.dispose();
@@ -270,7 +272,7 @@ it.each([false, true])(
   },
 );
 
-it("purges retained reference-only evidence and signed profiles with a denied parent", () => {
+it("purges retained reference-only evidence with a denied parent but keeps global profiles", () => {
   const h = setup();
   const secret = message(alice, "a", "private", 10);
   const edit = signed(alice, {
@@ -278,14 +280,16 @@ it("purges retained reference-only evidence and signed profiles with a denied pa
     content: "private edit",
     tags: [["e", secret.id]],
   });
-  h.emit([secret, edit, profile(alice, { name: "Private identity" })]);
+  const name = profile(alice, { name: "Alice" });
+  h.emit([secret, edit, name]);
   const view = h.session.observe([{ kinds: [0, 40003], limit: 20 }]);
   expect(view.snapshot().events).toHaveLength(2);
   h.emit([roster(relay, "a", [], 11)]);
-  expect(view.snapshot().events).toEqual([]);
-  expect(h.session.profiles.snapshot().size).toBe(0);
+  // Any community member can read any profile, so a lost channel leaves it.
+  expect(view.snapshot().events.map((e) => e.id)).toEqual([name.id]);
+  expect(h.session.profiles.snapshot().get(alice.pubkey)?.name).toBe("Alice");
   h.emit([edit]);
-  expect(view.snapshot().events).toEqual([]);
+  expect(view.snapshot().events.map((e) => e.id)).toEqual([name.id]);
 });
 
 it("regrants from a fresh discovery read, never from replayed membership after complete omission", async () => {
@@ -500,6 +504,162 @@ it("late persisted heads/profiles cannot repopulate after revoke and regrant", a
   expect(h.session.observe(filters).snapshot().events).toEqual([]);
   expect(disk.retain).toHaveBeenCalledWith([]);
   expect(disk.clear).not.toHaveBeenCalled();
+});
+
+/** Opens `channelId` with one message from `author` and loads their profile. */
+async function openNamed(
+  h: ReturnType<typeof setup>,
+  channelId: string,
+  author: Key,
+) {
+  h.session.channels.ensure(channelId);
+  h.next().respond([
+    message(author, channelId, "hello", 10),
+    bounds(relay, channelId, "head", { has_more: false, next_cursor: null }),
+  ]);
+  await vi.waitFor(() => expect(h.pending).toHaveLength(1));
+  h.next().respond([profile(author, { name: channelId })]);
+  await vi.waitFor(() =>
+    expect(h.session.profiles.snapshot().get(author.pubkey)?.name).toBe(
+      channelId,
+    ),
+  );
+}
+
+it("keeps names and reads nothing more after another channel's roster revokes access", async () => {
+  const h = setup();
+  h.emit(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey], 10)));
+  await openNamed(h, "b", alice);
+  h.emit([roster(relay, "a", [], 11)]);
+  expect(h.session.profiles.snapshot().get(alice.pubkey)?.name).toBe("b");
+  await flush();
+  expect(h.pending).toEqual([]);
+});
+
+it("finishes a profile read that was in flight when another channel's access ends", async () => {
+  const h = setup();
+  h.emit(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey], 10)));
+  h.session.channels.ensure("b");
+  h.next().respond([
+    message(alice, "b", "hello", 10),
+    bounds(relay, "b", "head", { has_more: false, next_cursor: null }),
+  ]);
+  await vi.waitFor(() => expect(h.pending).toHaveLength(1));
+  const read = h.next();
+  expect(read.filters).toEqual([
+    { kinds: [0], authors: [alice.pubkey], limit: 500 },
+  ]);
+  h.emit([roster(relay, "a", [], 11)]);
+  // A profile read does not depend on channel access, so the revoke spares it.
+  expect(read.signal?.aborted).toBe(false);
+  read.respond([profile(alice, { name: "Alice" })]);
+  await vi.waitFor(() =>
+    expect(h.session.profiles.snapshot().get(alice.pubkey)?.name).toBe("Alice"),
+  );
+});
+
+it("a denied channel list keeps names and finishes a profile read in flight", async () => {
+  const h = setup();
+  h.emit(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey], 10)));
+  const name = profile(alice, { name: "Alice" });
+  h.emit([name]);
+  const view = h.session.observe([{ kinds: [0], limit: 20 }]);
+  expect(view.snapshot().events.map((e) => e.id)).toEqual([name.id]);
+  const read = h.session.read([
+    { kinds: [0], authors: [bob.pubkey], limit: 1 },
+  ]);
+  const held = h.pending.find((r) => r.filters[0]?.authors?.[0] === bob.pubkey);
+  assert(held);
+  h.session.channels.refreshList?.();
+  const list = h.pending.find((r) => r !== held && !r.filters[0]?.authors);
+  assert(list);
+  list.fail(new Error("Relay read failed (403)"));
+  await vi.waitFor(() =>
+    expect(h.session.channels.list().status).toBe("error"),
+  );
+  // Profiles do not depend on channels, so even a denied list leaves them.
+  expect(held.signal?.aborted).toBe(false);
+  const bobName = profile(bob, { name: "Bob" });
+  held.respond([bobName]);
+  expect((await read).map((e) => e.id)).toEqual([bobName.id]);
+  const names = h.session.profiles.snapshot();
+  expect(names.get(alice.pubkey)?.name).toBe("Alice");
+  expect(names.get(bob.pubkey)?.name).toBe("Bob");
+  expect(view.snapshot().events.map((e) => e.id)).toContain(name.id);
+});
+
+it("keeps a profile with a stray h tag when that channel's access ends", async () => {
+  const h = setup();
+  h.emit(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey], 10)));
+  // The relay stores kind 0 globally and ignores the tag, so any member reads it.
+  const tagged = signed(bob, {
+    kind: 0,
+    content: JSON.stringify({ name: "Bob" }),
+    created_at: 1_700_000_000,
+    tags: [["h", "a"]],
+  });
+  h.emit([tagged]);
+  const view = h.session.observe([{ kinds: [0], limit: 20 }]);
+  expect(view.snapshot().events.map((e) => e.id)).toEqual([tagged.id]);
+  h.emit([roster(relay, "a", [], 11)]);
+  expect(view.snapshot().events.map((e) => e.id)).toEqual([tagged.id]);
+  const read = h.session.read([
+    { kinds: [0], authors: [bob.pubkey], limit: 1 },
+  ]);
+  h.next().respond([tagged]);
+  expect((await read).map((e) => e.id)).toEqual([tagged.id]);
+  expect(h.session.profiles.snapshot().get(bob.pubkey)?.name).toBe("Bob");
+});
+
+it("a full cache clear still fences a profile read whose response already arrived", async () => {
+  const h = setup();
+  const read = h.session
+    .readPage([{ kinds: [0], authors: [alice.pubkey], limit: 1 }])
+    .catch((error: unknown) => error);
+  const held = h.pending.find(
+    (r) => r.filters[0]?.authors?.[0] === alice.pubkey,
+  );
+  assert(held);
+  // Clear after the transport answered but before the public read settles.
+  let clearing: Promise<void> | undefined;
+  const stop = h.session.profiles.subscribe(() => {
+    if (!clearing && h.session.profiles.snapshot().has(alice.pubkey))
+      clearing = h.clearCache();
+  });
+  held.respond([profile(alice, { name: "Alice" })]);
+  expect(await read).toHaveProperty("name", "AbortError");
+  stop();
+  assert(clearing);
+  await clearing;
+  expect(h.session.profiles.snapshot().size).toBe(0);
+});
+
+it("a denied channel read keeps names", async () => {
+  const h = setup();
+  h.emit(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey], 10)));
+  await openNamed(h, "b", alice);
+  h.session.channels.ensure("a");
+  h.next().fail(new Error("Relay read failed (403)"));
+  await vi.waitFor(() =>
+    expect(h.session.channels.window("a").status).toBe("error"),
+  );
+  expect(h.session.profiles.snapshot().get(alice.pubkey)?.name).toBe("b");
+  await flush();
+  expect(h.pending).toEqual([]);
+});
+
+it("keeps a name learned only in the revoked channel but purges that channel's content", async () => {
+  const h = setup();
+  h.emit(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey], 10)));
+  await openNamed(h, "b", bob);
+  await openNamed(h, "a", alice);
+  h.emit([roster(relay, "a", [], 13)]);
+  expect(h.session.channels.window("a").rows).toEqual([]);
+  // Profiles are global relay events: losing "a" does not make Alice's private.
+  expect(h.session.profiles.snapshot().get(alice.pubkey)?.name).toBe("a");
+  expect(h.session.profiles.snapshot().get(bob.pubkey)?.name).toBe("b");
+  await flush();
+  expect(h.pending).toEqual([]);
 });
 
 it("an ambiguous multi-channel read failure does not revoke unrelated evidence", async () => {

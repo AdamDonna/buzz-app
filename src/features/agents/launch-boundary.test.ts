@@ -227,7 +227,6 @@ async function setup<Config>(
     undefined,
     activity,
     undefined,
-    undefined,
     attempts,
   );
   disposals.push(() => ctx.fiber.dispose());
@@ -306,16 +305,27 @@ const postRunCoreRefresh = (request: Request) =>
   request.memory?.agent === agentKey.pubkey &&
   request.memory.slug === "core";
 
-/** Apart from the post-run core refresh, the recorded requests are exactly
- * one conversation read for each of `conversations`, in order: an extra, a
- * wider or a different read fails. */
+/** A Claude Code start's read of one of the agent's recent notes, by slug
+ * (`recentNotesSection`). */
+const recentNotesRead = (request: Request) =>
+  request.memory?.agent === agentKey.pubkey &&
+  /^mem\/notes\/\d{4}-\d{2}-\d{2}$/.test(request.memory.slug ?? "");
+
+/** Apart from the post-run core refresh, and with `notes` a start's recent
+ * notes reads, the recorded requests are exactly one conversation read for
+ * each of `conversations`, in order: an extra, a wider or a different read
+ * fails. */
 function expectOnlyAllowed(
   f: Fixture,
   conversations: readonly RelayEvent[] = [],
+  notes = false,
 ) {
   expect(
     f.requests
-      .filter((request) => !postRunCoreRefresh(request))
+      .filter(
+        (request) =>
+          !postRunCoreRefresh(request) && !(notes && recentNotesRead(request)),
+      )
       .map((request) => request.filters),
   ).toEqual(conversations.map(conversationRead));
 }
@@ -356,7 +366,7 @@ async function expectCounterSeesSync(f: Fixture) {
   });
 }
 
-it("starts Claude sessions from the synced copies, with no relay request online or offline", async () => {
+it("starts Claude sessions from the synced copies, with no relay request but recent notes online or offline", async () => {
   const claude = fakeClaude();
   const host = { spawn: claude.spawn, request: vi.fn() } as unknown as Host;
   const { revisions, seeded } = heads("buzz/claude-code", {
@@ -390,7 +400,7 @@ it("starts Claude sessions from the synced copies, with no relay request online 
   expect(first?.options.cwd).toBe("/this/device");
   expect(JSON.stringify(first?.received)).not.toContain("LOCAL INSTRUCTIONS");
   expect(f.deliveries[0]?.revisions).toEqual(revisions);
-  expectOnlyAllowed(f);
+  expectOnlyAllowed(f, [], true);
 
   // The relay goes away; the next conversation starts from the same copies.
   f.transport.offline = true;
@@ -401,7 +411,7 @@ it("starts Claude sessions from the synced copies, with no relay request online 
     "LOCAL INSTRUCTIONS",
   );
   expect(f.deliveries[1]?.revisions).toEqual(revisions);
-  expectOnlyAllowed(f);
+  expectOnlyAllowed(f, [], true);
   await expectCounterSeesSync(f);
 });
 
@@ -624,3 +634,91 @@ it("refuses to start from deleted synced settings once: no launch, the reason on
   expect(goose.geese).toEqual([]);
   expectOnlyAllowed(f);
 });
+
+it.each([
+  {
+    name: "Claude",
+    start: async (effort: string) => {
+      const claude = fakeClaude();
+      const host = { spawn: claude.spawn, request: vi.fn() } as unknown as Host;
+      const { seeded } = heads("buzz/claude-code", {
+        model: "haiku",
+        effort,
+        scope: "thread",
+      });
+      const f = await setup(
+        "claude-code",
+        (_relay, reads, core) =>
+          claudeRun(new ClaudeRuntime(host, reads, core, memoryStorage())),
+        { ...GOOSE_LOCAL, model: "haiku", effort: "low" },
+        seeded,
+        synced(),
+      );
+      return {
+        f,
+        prompted: () =>
+          claude.processes.reduce((sum, item) => sum + item.prompts.length, 0),
+      };
+    },
+  },
+  {
+    name: "Codex",
+    start: async (effort: string) => {
+      const codex = fakeCodex();
+      const { seeded } = heads("buzz/codex", {
+        model: "synced-model",
+        effort,
+        scope: "thread",
+      });
+      const f = await setup(
+        "codex",
+        (_relay, reads, core) =>
+          codexRun(new CodexRuntime(codex.spawn, reads, core, memoryStorage())),
+        { ...GOOSE_LOCAL, model: "local-model", effort: "low" },
+        seeded,
+        synced(),
+      );
+      return {
+        f,
+        prompted: () =>
+          codex.sent.filter((wire) => wire.method === "turn/start").length,
+      };
+    },
+  },
+  {
+    name: "goose",
+    start: async (effort: string) => {
+      const { goose, host } = gooseHost();
+      const { seeded } = heads("buzz/goose", {
+        model: "synced-model",
+        provider: "synced-provider",
+        effort,
+        scope: "thread",
+      });
+      const f = await setup(
+        "goose",
+        (relay, _reads, core) => gooseRun(new GooseRuntime(host, relay, core)),
+        { ...GOOSE_LOCAL },
+        seeded,
+        synced(),
+      );
+      return {
+        f,
+        prompted: () =>
+          goose.geese.reduce((sum, item) => sum + item.turns.length, 0),
+      };
+    },
+  },
+])(
+  "refuses $name a synced effort its model lacks, with the reason on the mention",
+  async ({ start }) => {
+    const { f, prompted } = await start("max");
+    const sent = f.mention();
+    const work = () =>
+      f.activity.reader.work().find((item) => item.messageId === sent.id);
+    await vi.waitFor(() => expect(work()?.state).toBe("error"));
+    expect(work()?.error).toContain('synced effort "max"');
+    expect(f.deliveries[0]?.synced).toMatchObject({ effort: "max" });
+    expect(prompted()).toBe(0);
+  },
+);

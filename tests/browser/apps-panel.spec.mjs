@@ -35,6 +35,11 @@ test("Apps keeps its last native URL after Cordis rerenders and pool eviction", 
   await expect
     .poll(() => page.evaluate(() => window.appsPanelCalls.attached.length))
     .toBe(1);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.appsPanelCalls.attached[0]?.authenticated),
+    )
+    .toBe(true);
   await address().fill(current);
   await address().press("Enter");
   // This observed address comes from a completed native status poll.

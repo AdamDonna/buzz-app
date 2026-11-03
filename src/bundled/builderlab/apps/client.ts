@@ -3,13 +3,19 @@
 // session goes as `Authorization: BBIdentity <session>`, and the gateway
 // exchanges it for the control plane's own token.
 import type { Host, HostResponse } from "../../../features/host/service";
-import type { OAuthSession } from "../oauth/session";
+import type { BuilderlabSession } from "../session";
 
 /** The Apps protocol `bl` speaks, which the control plane checks. */
 const PROTOCOL = "0.2.0";
 export type RuntimeProfile = "static" | "fetch-js";
+/** Who can open an app besides the communities it is shared with. */
+export type Audience = "workspace" | "only_you";
+const VISIBILITY: Record<Audience, string> = {
+  workspace: "organization",
+  only_you: "restricted",
+};
 export const SIGN_IN =
-  "Ask your owner to sign in at Settings → Plugins → Builderlab agents, then try again.";
+  "Ask your owner to sign in at Settings → Plugins → Builderlab, then try again.";
 
 type Json = Record<string, unknown>;
 const object = (value: unknown): Json =>
@@ -23,11 +29,13 @@ export type AppsClient = ReturnType<typeof createAppsClient>;
 
 export function createAppsClient(
   host: Host,
-  session: OAuthSession,
+  session: BuilderlabSession,
   base: string,
+  transport?: Pick<Host, "request" | "upload">,
 ) {
+  const http = transport ?? host;
   // One client belongs to one tool operation, including all its HTTP steps.
-  let owner: ReturnType<OAuthSession["credential"]> | undefined;
+  let owner: ReturnType<BuilderlabSession["credential"]> | undefined;
   const credential = () => {
     if (session.snapshot().status !== "signed-in")
       throw new Error(`Builderlab is not signed in. ${SIGN_IN}`);
@@ -35,6 +43,9 @@ export function createAppsClient(
     if (owner && current !== owner)
       throw new Error("Builderlab sign-in changed. Start a new Apps request.");
     owner = current;
+    if (transport) return "";
+    if (!("value" in current) || typeof current.value !== "string")
+      throw new Error(SIGN_IN);
     return current.value;
   };
   const headers = (secret: string) => ({
@@ -66,21 +77,23 @@ export function createAppsClient(
       // Never hand the session on, even if a server echoed it.
       throw new Error(
         `${what} failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}`.replaceAll(
-          secret,
+          secret || "\u0000",
           "[redacted]",
         ),
       );
     }
-    return JSON.parse(JSON.stringify(body).replaceAll(secret, "[redacted]"));
+    return JSON.parse(
+      JSON.stringify(body).replaceAll(secret || "\u0000", "[redacted]"),
+    );
   };
   const call = async (
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     what: string,
     body?: Json,
   ): Promise<Json> => {
     const secret = credential();
-    const response = await host.request({
+    const response = await http.request({
       url: `${base}${path}`,
       method,
       headers: {
@@ -184,7 +197,7 @@ export function createAppsClient(
           error instanceof Error ? error.message : "Request failed";
         throw new Error(
           `Create stopped during ${step} for app_id=${id}: ${detail}. The reservation may already exist; inspect or resume this exact app before creating a replacement.`.replaceAll(
-            secret,
+            secret || "\u0000",
             "[redacted]",
           ),
         );
@@ -192,9 +205,9 @@ export function createAppsClient(
     },
     /** Uploads `artifact` as the app's next version. */
     async deploy(id: string, artifact: string) {
-      if (!host.upload) throw new Error("Deploying needs the Buzz desktop app");
+      if (!http.upload) throw new Error("Deploying needs the Buzz desktop app");
       const secret = credential();
-      const response = await host.upload({
+      const response = await http.upload({
         url: `${base}${app(id, "deploy")}`,
         headers: headers(secret),
         file: {
@@ -219,22 +232,62 @@ export function createAppsClient(
         `${app(id, "ready")}?${new URLSearchParams({ version_id: version, ...(deployment ? { deployment_id: deployment } : {}), ...(rollout ? { rollout_id: rollout } : {}) })}`,
         "Checking readiness",
       ),
-    /** Lets a Builderlab workspace's members view the app, as `bl apps share
-     * grant` does. */
-    async share(id: string, workspace: string) {
-      const access = await call("GET", app(id, "access"), "Reading access");
-      if (access.visibility !== "restricted")
+    /** Switches who can open the app, as `bl apps visibility` does. Viewers
+     * and community grants are kept. */
+    async visibility(id: string, audience: Audience) {
+      const visibility = VISIBILITY[audience];
+      const updated = await call(
+        "PUT",
+        app(id, "visibility"),
+        "Changing visibility",
+        {
+          visibility,
+        },
+      );
+      if (updated.app_id !== id || updated.visibility !== visibility)
         throw new Error(
-          `Sharing with a workspace needs restricted visibility; this app is ${String(access.visibility)}`,
+          `Apps Platform reported ${String(updated.app_id)} as ${String(updated.visibility)}, not ${id} as ${visibility}. Ask your owner to check who can open it in Share & manage before retrying`,
         );
-      const lifecycle = text(access.lifecycle_id);
-      const revision = access.workspace_grant_revision;
-      if (!lifecycle || typeof revision !== "number")
-        throw new Error("This app has no active sharing to change");
+      return updated;
+    },
+    /** Shares the app with a Buzz community or stops sharing it, as `bl apps
+     * community` does, at the grant revision it just read. */
+    async community(id: string, community: string, action: "grant" | "revoke") {
+      const path = app(
+        id,
+        `sharing/communities/${encodeURIComponent(community)}`,
+      );
+      const unprepared = new Error(
+        "This app isn't set up for sharing yet. Deploy it with apps_deploy, then try again.",
+      );
+      // Compose answers this read with 409 only when the app has no sharing
+      // lifecycle yet. Reservation sets one, and a deploy sets it on older apps.
+      const current = await call(
+        "GET",
+        path,
+        "Reading community sharing",
+      ).catch((error: unknown) => {
+        throw error instanceof Error && error.message.includes("(HTTP 409)")
+          ? unprepared
+          : error;
+      });
+      const lifecycle = text(current.lifecycle_id);
+      const revision = current.community_grant_revision;
+      if (
+        !lifecycle ||
+        typeof revision !== "number" ||
+        !Number.isInteger(revision) ||
+        revision < 0
+      )
+        throw new Error(
+          "Apps Platform returned no valid sharing revision for this app; nothing was changed",
+        );
       return call(
-        "POST",
-        app(id, `sharing/workspaces/${encodeURIComponent(workspace)}`),
-        "Sharing",
+        action === "grant" ? "POST" : "DELETE",
+        path,
+        action === "grant"
+          ? "Sharing with the community"
+          : "Revoking the community",
         { lifecycle_id: lifecycle, expected_revision: revision },
       );
     },

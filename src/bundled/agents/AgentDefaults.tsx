@@ -13,8 +13,17 @@ import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { ProviderDialog } from "./ProviderDialog";
+import type { PageNavigation } from "../../features/navigation/service";
 
-export function AgentDefaults({ agents }: { agents: Agents }) {
+export function AgentDefaults({
+  agents,
+  navigation,
+  onProvider,
+}: {
+  agents: Agents;
+  navigation?: PageNavigation | undefined;
+  onProvider?: ((provider?: string) => void) | undefined;
+}) {
   const types = useSyncExternalStore(
     agents.subscribe,
     agents.types,
@@ -55,7 +64,12 @@ export function AgentDefaults({ agents }: { agents: Agents }) {
               key={contributionKey(type)}
               fallback={fallback}
             >
-              <ProviderDefaults type={type} provider={type.provider} />
+              <ProviderDefaults
+                type={type}
+                provider={type.provider}
+                navigation={navigation}
+                onProvider={onProvider}
+              />
             </ContributionBoundary>
           );
         })}
@@ -67,16 +81,30 @@ export function AgentDefaults({ agents }: { agents: Agents }) {
 function ProviderDefaults({
   type,
   provider,
+  navigation,
+  onProvider,
 }: {
   type: RegisteredAgentType;
   provider: NonNullable<RegisteredAgentType["provider"]>;
+  navigation?: PageNavigation | undefined;
+  onProvider?: ((provider?: string) => void) | undefined;
 }) {
   const state = useSyncExternalStore(
     provider.subscribe,
     provider.snapshot,
     provider.snapshot,
   );
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const routed = navigation?.target.kind === "settings" && !!onProvider;
+  const open = routed
+    ? navigation.target.kind === "settings" &&
+      navigation.target.provider === type.key
+    : localOpen;
+  const setOpen = (open: boolean) => {
+    if (!routed) setLocalOpen(open);
+    else if (!navigation.signal.aborted)
+      onProvider(open ? type.key : undefined);
+  };
   const trigger = useRef<HTMLButtonElement>(null);
   const checking = state.readiness === "checking";
   // A recheck must not unmount the focused inline defaults control.

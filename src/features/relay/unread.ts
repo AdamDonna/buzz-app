@@ -18,6 +18,7 @@ import type {
 } from "./read-state";
 import type { ReadJournal } from "./read-state-storage";
 import { markMessage } from "./read-state-retention";
+import { LIVE_RESUME_LAG } from "./live";
 import type { Priority, RelayReader } from "./reader";
 import { foldMessages, deletionApplies, messageAuthor } from "./fold";
 import { eventMs } from "./message-order";
@@ -84,7 +85,8 @@ export type ReadingHandle = Readonly<{
   ): void;
   /** Only message IDs actually visible to the active consumer; no caller timestamps. */
   observe(messageIds: readonly string[]): Promise<void>;
-  /** Bottom dwell through verified evidence; channel catch-up excludes attention. */
+  /** Bottom dwell through verified evidence; channel catch-up reads the
+   * timeline's mentions and broadcasts by message, never other replies. */
   catchUp(messageId: string, rootId?: string): Promise<void>;
   dispose(): void;
 }>;
@@ -144,6 +146,13 @@ export interface UnreadCapability {
   clearUnreadLocal(target: ReadTarget): Promise<ReadMutationResult>;
   readonly syncedManualUnread: false;
 }
+/** How far before the newest event a batch already returned a repair reads
+ * again (seconds): the relay accepts a created_at up to 900s from its clock, so
+ * an event stored after that read can be older than the newest one it returned. */
+const REPAIR_OVERLAP = LIVE_RESUME_LAG;
+/** Rows one repair read asks for per batch. A read that returns this many may
+ * have been cut off, and says nothing about what lay beyond the cut. */
+const REPAIR_LIMIT = 500;
 /** Rendered message order: effective ms, then event id. */
 const order = (a: RelayEvent, b: RelayEvent) =>
   eventMs(a) - eventMs(b) || a.id.localeCompare(b.id);
@@ -225,10 +234,25 @@ export function createUnread({
   let requested = false;
   let repairAgain = false;
   let freshness: UnreadSnapshot["freshness"] = "unknown";
+  /** A repair failed, the evidence overflowed or the stream dropped, and no
+   * repair has completed since. Live traffic marks evidence observed again
+   * but does not pay this. */
+  let owing = false;
   let error: string | undefined;
   let refresh: Promise<void> | undefined;
   const lifetime = new AbortController();
   const events = new Map<string, RelayEvent>();
+  // Per repair batch (its channel IDs): the newest created_at a complete read of
+  // it returned. `events` only grows until a reset below, so a later repair needs
+  // just what is newer; every path that empties or shrinks `events` clears this,
+  // and the next repair of every batch reads unbounded again. A repair whose
+  // read spans a reset (`resets` moved) must not answer for the cleared evidence.
+  const repaired = new Map<string, number>();
+  let resets = 0;
+  function forget() {
+    repaired.clear();
+    resets++;
+  }
   const known = new Set<string>();
   const listeners = new Map<string, Set<() => void>>();
   const snapshots = new Map<string, UnreadSnapshot>();
@@ -276,14 +300,24 @@ export function createUnread({
   }
 
   let bytes = 0;
+  // Per member list: a large channel would otherwise be scanned for the
+  // viewer on every event.
+  const viewerIn = new WeakMap<readonly string[], boolean>();
+  const member = (members: readonly string[] | undefined) => {
+    if (!members) return false;
+    let found = viewerIn.get(members);
+    if (found === undefined) {
+      found = members.includes(viewer);
+      if (Object.isFrozen(members)) viewerIn.set(members, found);
+    }
+    return found;
+  };
   const allowed = (id: string) =>
     channels
       .list()
       .channels.some(
         (channel) =>
-          channel.id === id &&
-          !channel.cached &&
-          channel.members?.includes(viewer),
+          channel.id === id && !channel.cached && member(channel.members),
       );
   const keyFor = (target: ReadTarget) =>
     `${target.channelId}:${targetKey(target)}`;
@@ -801,6 +835,14 @@ export function createUnread({
     a.freshness === b.freshness &&
     a.manual === b.manual &&
     a.error === b.error;
+  // Folds read profiles only through agent owners. Keep the answers they got:
+  // a profile change that leaves them all alone cannot change a projection.
+  const ownersRead = new Map<string, string | undefined>();
+  const agentOwner = (pubkey: string) => {
+    const owner = profiles?.owner?.(pubkey);
+    ownersRead.set(pubkey, owner);
+    return owner;
+  };
   function computeActivity(channelId: string): ThreadActivitySnapshot {
     if (!allowed(channelId) || !known.has(channelId))
       return Object.freeze({
@@ -829,7 +871,7 @@ export function createUnread({
         foldMessages(channelId, "", [...events.values()], {
           includeReplies: true,
           signingAuthority,
-          agentOwner: profiles?.owner,
+          agentOwner: profiles?.owner && agentOwner,
         }).map((message) => [message.id, message.content]),
       );
       const preview = presented.get(event.id) ?? event.content;
@@ -973,7 +1015,7 @@ export function createUnread({
         const rows = foldMessages(channel.id, "", [...events.values()], {
           includeReplies: true,
           signingAuthority,
-          agentOwner: profiles?.owner,
+          agentOwner: profiles?.owner && agentOwner,
         });
         const content = new Map(rows.map((row) => [row.id, row.content]));
         // A session's top-level row shows its newest message from someone
@@ -1182,7 +1224,13 @@ export function createUnread({
         notify(listener);
   }
   const stopRead = reads.subscribe(publish);
-  const stopProfiles = profiles?.subscribe(() => publish());
+  const stopProfiles = profiles?.subscribe(() => {
+    const owner = profiles.owner;
+    if (!owner || [...ownersRead].every(([key, value]) => owner(key) === value))
+      return;
+    ownersRead.clear();
+    publish();
+  });
   /** A choice changes relevance in every projection and held live alert. */
   function followsChanged(channelIds?: ReadonlySet<string>) {
     publish(channelIds);
@@ -1195,6 +1243,7 @@ export function createUnread({
   function purge() {
     // A revoke/regrant must not revive a transaction accepted under the old access epoch.
     epoch++;
+    forget();
     for (const channelId of channelReadGenerations.keys())
       if (!allowed(channelId)) channelReadGenerations.delete(channelId);
     for (const [key, lookup] of lookups)
@@ -1596,17 +1645,22 @@ export function createUnread({
     repairAgain = false;
     inboxLoading = true;
     const generation = epoch;
+    const reset = resets;
+    const current = () => !closed && generation === epoch && reset === resets;
     refresh = (async () => {
       await reads.ensure();
-      if (closed || generation !== epoch) return;
+      if (!current()) return;
       const ids = channels
         .list()
         .channels.filter(
           (channel) => !channel.cached && channel.members?.includes(viewer),
         )
-        .map((channel) => channel.id);
+        .map((channel) => channel.id)
+        // Batches key their marks, so they must not move when a channel is renamed.
+        .sort();
       if (!ids.length) {
         freshness = "observed";
+        owing = false;
         error = undefined;
         return;
       }
@@ -1616,6 +1670,10 @@ export function createUnread({
         // Each bounded batch owns its queue-inclusive deadline after marker sync;
         // optional profiles must not block the initial user-visible observation.
         for (let offset = 0; offset < ids.length; offset += 128) {
+          const batch = ids.slice(offset, offset + 128);
+          const key = batch.join(",");
+          const mark = repaired.get(key);
+          const asked = Math.floor(Date.now() / 1000);
           const signal = AbortSignal.any([
             lifetime.signal,
             AbortSignal.timeout(10000),
@@ -1624,23 +1682,46 @@ export function createUnread({
             [
               {
                 kinds: [9, 40002, 40008],
-                "#h": ids.slice(offset, offset + 128),
+                "#h": batch,
                 include_aux: true,
-                limit: 500,
+                limit: REPAIR_LIMIT,
+                ...(mark === undefined
+                  ? {}
+                  : { since: Math.max(0, mark - REPAIR_OVERLAP) }),
               },
             ],
             { signal, priority },
           );
-          if (closed || generation !== epoch) return;
-          if (!accept(result) || closed || generation !== epoch) return;
+          // An overflow or refresh while this read was out discarded what the
+          // mark stands for: an overflow waits for refresh, a refresh reads again.
+          if (!current()) return;
+          // Accepting notifies subscribers, and one may refresh from there.
+          if (!accept(result) || !current()) return;
+          // The mark is anchored on what the relay returned, not the clock: a
+          // skewed clock or a future-dated event cannot move the window past
+          // unseen history. Only a read that returned fewer than its limit saw
+          // everything in its window, so only it installs or advances the mark;
+          // the earlier mark was itself such a read, so coverage chains. A read
+          // that filled its limit may have cut off older rows (a deletion would
+          // later free a slot for one), so it drops the mark and the next repair
+          // reads unbounded. An empty read sets nothing either.
+          const newest = Math.max(
+            0,
+            ...result.map((event) => event.created_at),
+          );
+          if (result.length >= REPAIR_LIMIT) repaired.delete(key);
+          else if (newest)
+            repaired.set(key, Math.max(mark ?? 0, Math.min(newest, asked)));
         }
         freshness = "observed";
+        owing = false;
         error = undefined;
         publish();
         void findHomes(generation);
       } catch (cause) {
-        if (closed || generation !== epoch) return;
+        if (!current()) return;
         freshness = "stale";
+        owing = true;
         error =
           cause instanceof Error ? cause.message : "Unread observation failed";
         publish();
@@ -1781,10 +1862,12 @@ export function createUnread({
       const size = new TextEncoder().encode(JSON.stringify(event)).byteLength;
       if (events.size >= 4096 || bytes + size > 8 * 1024 * 1024) {
         events.clear();
+        forget();
         known.clear();
         bytes = 0;
         error = "Unread observation capacity reached; refresh available";
         freshness = "stale";
+        owing = true;
         publish();
         return false;
       }
@@ -1954,7 +2037,12 @@ export function createUnread({
     },
     ensure: () => refresh ?? (requested ? Promise.resolve() : repair()),
     refresh: async () => {
+      // An explicit refresh re-observes everything. The reset fences a running
+      // repair, which the refresh waits out rather than joins.
+      forget();
+      const running = refresh;
       await reads.refresh("foreground");
+      await running?.catch(() => undefined);
       await repair();
     },
     revision: reads.revision,
@@ -2118,7 +2206,7 @@ export function createUnread({
             requireMessage(target, id) === event &&
             (!rootId || manual(`thread:${rootId}`, journal) <= manualRevision);
           // Reaching the live bottom of a channel ends a manual unread on the
-          // channel. Unseen mentions, replies and marked messages stay unread.
+          // channel. Unseen replies and marked messages stay unread.
           const endManual = !rootId && !!reads.localUnread(channelId);
           // A broader mark already covering the cut makes this one redundant.
           if (
@@ -2130,15 +2218,60 @@ export function createUnread({
           ) {
             if (endManual)
               await reads.clearLocalUnread(channelId, [channelId], current);
-            return;
-          }
-          await reads.read(
-            key,
-            cut,
-            current,
-            endManual,
-            endManual ? [channelId] : undefined,
-          );
+          } else
+            await reads.read(
+              key,
+              cut,
+              current,
+              endManual,
+              endManual ? [channelId] : undefined,
+            );
+          if (rootId) return;
+          // The timeline above the bottom also shows mentions and broadcasts,
+          // which `activity:` never reads: it is a timestamp, so it would also
+          // read attention that arrives later with an older timestamp. Mark
+          // the retained ones through the bottom row individually instead,
+          // at most the newest 128, as one observation reads, so a backlog
+          // cannot crowd older marks out of the synced budget.
+          const state = reads.state();
+          const shown = rows
+            .filter(
+              (entry) =>
+                entry.event.created_at <= event.created_at &&
+                (!threadReference(entry.event) || entry.broadcast) &&
+                priority(entry, false) &&
+                !forcedMessages.get(channelId)?.has(entry.event.id) &&
+                !reads.localUnread(`msg:${entry.event.id}`) &&
+                !overrideActive(
+                  state.overrides[`msg:${entry.event.id}`],
+                  effectiveFrontier(
+                    state,
+                    `msg:${entry.event.id}`,
+                    channelId,
+                    entry.rootId,
+                  ),
+                ) &&
+                isUnread(entry, state, false),
+            )
+            .sort((a, b) => order(b.event, a.event))
+            .slice(0, 128);
+          if (shown.length)
+            await reads.readMessages(
+              shown.map((entry) => ({
+                key: `msg:${entry.event.id}`,
+                timestamp: entry.event.created_at,
+                channelId,
+                ...(entry.rootId ? { rootId: entry.rootId } : {}),
+              })),
+              undefined,
+              (journal) =>
+                current(journal) &&
+                shown.every(
+                  (entry) =>
+                    events.get(entry.event.id) === entry.event &&
+                    !manual(`msg:${entry.event.id}`, journal),
+                ),
+            );
         },
         async observe(ids: readonly string[]) {
           if (!valid() || ids.length > 128) return;
@@ -2438,13 +2571,21 @@ export function createUnread({
     },
     accept,
     purge,
-    reconnect() {
-      if (requested) void reads.refresh().then(() => repair("background"));
+    /** `covered`: the membership route's replay was continuous, so read state
+     * resumes from it instead of reading its snapshot again. */
+    /** A repair is still owed: evidence (see `owing`) or read-state markers. */
+    owed: () => requested && (owing || reads.owed()),
+    reconnect(covered = false) {
+      if (requested)
+        void (covered ? reads.resume() : reads.refresh()).then(() =>
+          repair("background"),
+        );
     },
     stale() {
       epoch++;
       channelReadGenerations.clear();
       freshness = "stale";
+      owing = true;
       reads.stale();
       publish();
     },
@@ -2455,6 +2596,7 @@ export function createUnread({
       repairAgain = false;
       indexed = false;
       events.clear();
+      forget();
       known.clear();
       forcedMessages.clear();
       entered.clear();

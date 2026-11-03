@@ -281,6 +281,38 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
     (element) => element.getBoundingClientRect().width,
   );
   expect(wideSize).toBeGreaterThan(220);
+  const resizeHandle = page.getByRole("separator", {
+    name: "Resize sidebar",
+  });
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "260");
+  await page.screenshot({
+    path: test.info().outputPath("page-sidebar-before-resize.png"),
+  });
+  const handleBounds = await resizeHandle.boundingBox();
+  if (!handleBounds) throw new Error("Page sidebar resize handle has no box");
+  const handleX = handleBounds.x + handleBounds.width / 2;
+  const handleY = handleBounds.y + handleBounds.height / 2;
+  await page.mouse.move(handleX, handleY);
+  await page.mouse.down();
+  await page.mouse.move(handleX + 80, handleY, { steps: 8 });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      resizeHandle.evaluate(
+        (element) =>
+          element.previousElementSibling.getBoundingClientRect().width,
+      ),
+    )
+    .toBe(340);
+  await expect
+    .poll(() =>
+      sidebar.evaluate((element) => element.getBoundingClientRect().width),
+    )
+    .toBe(340);
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "340");
+  await page.screenshot({
+    path: test.info().outputPath("page-sidebar-after-resize.png"),
+  });
 
   await page.evaluate(() => {
     document.documentElement.style.fontSize = "200%";
@@ -528,16 +560,15 @@ test("header pages remain reachable without overlap through scale and resize", a
         header.querySelector(selector).getBoundingClientRect();
       return {
         left: rect(".shell-history").right,
-        center: rect(".shell-topbar-pages").toJSON(),
-        create: rect(".shell-create-action").toJSON(),
+        center: rect(".shell-center-capsule").toJSON(),
+        pages: rect(".shell-topbar-pages").toJSON(),
         search: rect(".shell-search-action").toJSON(),
         right: rect(".shell-actions").left,
         width: header.clientWidth,
       };
     });
-    expect(geometry.create.x).toBeGreaterThan(geometry.left);
-    expect(geometry.create.right).toBeLessThanOrEqual(geometry.center.x);
-    expect(geometry.center.right).toBeLessThanOrEqual(geometry.search.x);
+    expect(geometry.center.x).toBeGreaterThan(geometry.left);
+    expect(geometry.pages.right).toBeLessThanOrEqual(geometry.search.x);
     expect(geometry.search.right).toBeLessThan(geometry.right);
     expect(
       Math.abs(

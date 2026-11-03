@@ -79,6 +79,10 @@ export const apply: PluginModule["apply"] = (ctx) => {
             provider: source.provider ?? "",
           }
         : undefined,
+    exportShared: (saved) => {
+      const { provider, model } = config(saved);
+      return { runtime: "goose", ...(provider && { provider }), model };
+    },
     Create,
     CreateModel,
     provider: {

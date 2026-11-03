@@ -37,9 +37,15 @@ const reveal = (element: HTMLElement | null) => {
 };
 
 /** Use each registered provider's icon in creation and library cards. */
-export function TypeIcon({ type }: { type: RegisteredAgentType | undefined }) {
+export function TypeIcon({
+  type,
+  size = 16,
+}: {
+  type: RegisteredAgentType | undefined;
+  size?: number;
+}) {
   const Icon = type?.icon ?? RobotIcon;
-  return <Icon size={16} aria-hidden="true" />;
+  return <Icon size={size} aria-hidden="true" />;
 }
 
 const startingConfig = (type: RegisteredAgentType | undefined) => {
@@ -278,12 +284,14 @@ export function AgentCreateDialog({
                     variant="compact"
                     align="end"
                     value={type?.key ?? ""}
+                    leading={<TypeIcon type={type} size={20} />}
                     disabled={pending || types.length < 2}
                     groups={[
                       {
                         label: "",
                         options: types.map((item) => ({
                           value: item.key,
+                          leading: <TypeIcon type={item} size={20} />,
                           label: item.remote
                             ? `${item.title} (hosted)`
                             : item.title,

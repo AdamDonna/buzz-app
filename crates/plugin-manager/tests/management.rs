@@ -996,8 +996,6 @@ fn bundled_plugins_have_independent_flags_and_all_ids_are_reserved() {
         "buzz.terminal",
         "buzz.inbox",
         "buzz.repos",
-        "buzz.emoji",
-        "buzz.mentions",
         "buzz.voice-notes",
         "buzz.links",
     ] {
@@ -1057,6 +1055,20 @@ fn bundled_plugins_have_independent_flags_and_all_ids_are_reserved() {
         )
         .unwrap();
         assert!(manager.install(&source).is_err());
+    }
+    for id in ["buzz.emoji", "buzz.mentions"] {
+        fs::write(
+            source.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "id": id, "name": "Reserved feature", "apiVersion": 1
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            install_error(&manager, &source),
+            "Cannot replace a bundled plugin"
+        );
     }
     drop(root);
 }
@@ -1172,4 +1184,98 @@ fn bundled_defaults_preserve_saved_choices_and_only_channels_is_required() {
             .unwrap()
             .enabled
     );
+}
+
+#[test]
+fn built_in_conversation_features_are_absent_even_with_old_disabled_flags() {
+    let (root, manager, _source) = fixture();
+    fs::create_dir_all(manager.storage_root()).unwrap();
+    fs::write(
+        manager.storage_root().join("registry.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 2,
+            "bundledEnabled": true,
+            "bundledOverrides": { "buzz.emoji": false, "buzz.mentions": false },
+            "installed": {}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let reopened = Manager::open(Some(root.path().to_path_buf()), "test", false).unwrap();
+    let catalog = reopened.catalog().unwrap();
+    for id in ["buzz.emoji", "buzz.mentions"] {
+        assert!(!catalog
+            .plugins
+            .iter()
+            .any(|plugin| plugin.manifest.id == id));
+        for action in ["enable", "disable", "remove", "rollback"] {
+            assert_eq!(
+                reopened.change(action, id).err().as_deref(),
+                Some("Built-in conversation features cannot be managed as plugins"),
+            );
+        }
+        assert_eq!(
+            reopened.reload(id).err().as_deref(),
+            Some("Bundled plugins cannot be reloaded from disk"),
+        );
+        assert_eq!(
+            reopened.reload_live(id).err().as_deref(),
+            Some("Bundled plugins cannot be reloaded from disk"),
+        );
+    }
+}
+
+#[test]
+fn registry_cannot_restore_plugins_with_built_in_conversation_ids() {
+    for id in ["buzz.emoji", "buzz.mentions"] {
+        let (_root, manager, source) = fixture();
+        manager.install(&source).unwrap();
+        let path = manager.storage_root().join("registry.json");
+        let mut registry: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let installed = registry["installed"].as_object_mut().unwrap();
+        let mut plugin = installed.remove("example.page").unwrap();
+        plugin["manifest"]["id"] = serde_json::json!(id);
+        installed.insert(id.into(), plugin);
+        fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+        assert_eq!(
+            manager.catalog().err().as_deref(),
+            Some("Invalid installed plugin identity"),
+        );
+    }
+}
+
+#[test]
+fn managed_policy_lives_beside_profiles_and_never_installs() {
+    use buzzodz_plugins::managed::{Managed, ManagedState};
+    let home = tempfile::tempdir().unwrap();
+    let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+    let catalog = manager.catalog().unwrap();
+    assert!(manager.managed(&catalog).is_absent());
+    fs::write(
+        home.path().join("managed-plugins.json"),
+        r#"{"version":1,"source":"Example Org","plugins":[
+            {"id":"example.managed","repository":"https://example.com/plugins","reference":"v1","commit":"0123456789abcdef0123456789abcdef01234567"},
+            {"id":"broken"}
+        ]}"#,
+    )
+    .unwrap();
+    let Managed::Ready {
+        source,
+        plugins,
+        problems,
+        ..
+    } = manager.managed(&catalog)
+    else {
+        panic!("expected a usable policy");
+    };
+    assert_eq!(source, "Example Org");
+    assert_eq!(plugins.len(), 1);
+    assert_eq!(plugins[0].state, ManagedState::Missing);
+    assert_eq!(problems.len(), 1);
+    let after = manager.catalog().unwrap();
+    assert!(!after
+        .plugins
+        .iter()
+        .any(|plugin| plugin.manifest.id == "example.managed"));
 }

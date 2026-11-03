@@ -33,12 +33,14 @@ const types = [
             { id: "high", label: "High" },
           ],
         },
+        { id: "alternate", label: "Alternate model", efforts: [] },
       ],
     }),
   },
 ];
 // The catalog is immutable; these are the only service reads the control uses.
 const agents = {
+  find: (key: string) => snapshot.agents.find((agent) => agent.pubkey === key),
   subscribe: () => () => {},
   snapshot: () => snapshot,
   types: () => types,
@@ -66,6 +68,8 @@ function Fixture() {
             media={media}
             value={picks}
             disabled={false}
+            startsThread={false}
+            place={{ channelId: "fixture" }}
             onChange={setPicks}
             onResolved={ignoreResolved}
           />

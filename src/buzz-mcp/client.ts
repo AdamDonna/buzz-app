@@ -1,3 +1,4 @@
+import type { ProtectionAction } from "../features/agent-protection/service";
 // What the Buzz tools need from whoever holds the agent's key: the app's native
 // custody in Buzz Desktop, or a key in the environment of a standalone server.
 // The tools never see the key itself.
@@ -49,6 +50,8 @@ export type ChannelTemplate = Readonly<{
  * limit, a deadline or the relay's rate limit. */
 export type Memories = Readonly<{
   entries: readonly Memory[];
+  /** Deleted entries' tombstones, which a write recreating one must follow. */
+  deleted?: readonly Readonly<{ slug: string; createdAt: number }>[];
   partial: boolean;
 }>;
 
@@ -75,6 +78,7 @@ export type Memory = Readonly<{
 }>;
 
 export interface BuzzClient {
+  protect?(action: ProtectionAction): Promise<void>;
   readonly pubkey: string;
   /** The agent's membership key in this client's community: its pubkey in
    * its home community, which is the only one a standalone client has. */
@@ -130,8 +134,9 @@ export interface BuzzClient {
   read(path: string): Promise<Uint8Array>;
   /** The agent's memory entries, decrypted; only entry `slug` when given. */
   memories(slug?: string): Promise<Memories>;
-  /** Writes entry `slug`, newer than the one it replaces (`after`, or 0). */
-  remember(slug: string, body: string, after: number): Promise<void>;
+  /** Writes entry `slug`, newer than the one it replaces (`after`, or 0);
+   * a `null` body deletes it. */
+  remember(slug: string, body: string | null, after: number): Promise<void>;
   /** The owner's channel templates, where the host has them. */
   templates?(): Promise<readonly ChannelTemplate[]>;
   /** The agent's attention, where its host keeps one. Without it the

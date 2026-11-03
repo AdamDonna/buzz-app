@@ -59,6 +59,10 @@
   position: relative;
   cursor: pointer;
 }
+/* A staged GIF has no viewer; its thumbnail is not a control. */
+span.preview {
+  cursor: default;
+}
 .preview::after {
   content: "";
   position: absolute;

@@ -55,12 +55,7 @@ import {
 } from "../claude-code/prompt";
 import { ownerCanvas, readProject } from "../../features/agent-harness/project";
 import type { ServeMcp, ToolServer } from "./goose";
-import {
-  AgentSessions,
-  localSessions,
-  ServerPool,
-  SharedProcess,
-} from "./sessions";
+import { AgentSessions, localSessions, SharedProcess } from "./sessions";
 
 export type Config = Readonly<{
   /** A model the provider offers; empty uses the provider's default, or the
@@ -139,8 +134,6 @@ type Entry = {
 
 export class GooseRuntime {
   private readonly agents = new Map<string, Entry>();
-  /** The MCP servers every agent's sessions share. */
-  private readonly pool = new ServerPool();
   /** The goose every agent's sessions open in. */
   private readonly goose = new SharedProcess(
     {
@@ -302,6 +295,7 @@ export class GooseRuntime {
     team,
     model,
     effort,
+    synced,
     workingUntil,
     current,
     wakeText,
@@ -467,6 +461,10 @@ export class GooseRuntime {
             ...(!deferred && !wait ? { signal } : {}),
             ...(model ? { model } : {}),
             ...(effort ? { effort } : {}),
+            // A pick runs on its own level; a synced one is checked.
+            ...(synced?.effort && !model && !effort
+              ? { kept: synced.effort }
+              : {}),
             activityScope: topLevel
               ? channel
               : (threadReference(event)?.rootId ?? event.id),
@@ -504,13 +502,10 @@ export class GooseRuntime {
           .then((result) => {
             if (result.undelivered)
               agent.restoreNotes?.(channel, notes, noteRoot);
-            // Of the messages one turn answered, only one has its error or text.
+            // Of the messages one turn answered, only one has its error. An
+            // answer goose wrote without `send` stays in local activity.
             if (result.error !== undefined)
               return this.report(agent, channel, event, result.error, topLevel);
-            // An answer goose wrote without `send` is posted for it, so the
-            // thread is not left waiting.
-            if (result.text)
-              return this.post(agent, channel, event, result.text, topLevel);
           })
           .catch((error) => console.warn("goose turn failed", error))
           .finally(() => this.notify());
@@ -549,6 +544,7 @@ export class GooseRuntime {
         signal,
         title: sessionTitle(entry.name, key),
         current: delivery.current,
+        ...(delivery.synced?.effort ? { kept: delivery.synced.effort } : {}),
       },
     );
     this.notify();
@@ -765,7 +761,6 @@ export class GooseRuntime {
       resolveDirectory: (path) => this.desktop.resolveDirectory(path),
       tools,
       process: this.goose,
-      pool: this.pool,
       store: localSessions(this.storage, agent),
       onChange: () => this.notify(),
       // Read as each turn starts, so a change needs no restart.

@@ -1,5 +1,7 @@
+import { BuilderlabLogoIcon } from "../../../shared/design-system/icons";
 import { createActivityTab } from "./Activity";
 import { createSettingsTab } from "./Instructions";
+import { createProfileActions, createSignInFooter } from "./SignInFooter";
 import { creationConfig, createCreationFields, EMPTY_CREATION } from "./Create";
 import type { AgentType } from "../../../features/agents/service";
 import type { RelayData } from "../../../features/relay/service";
@@ -9,7 +11,7 @@ import {
   type RegistrationIntent,
 } from "../agents/registration";
 import { oauthTarget } from "../oauth/browser";
-import type { OAuthSession } from "../oauth/session";
+import type { BuilderlabSession } from "../session";
 
 const PREFIX = "buzz.builderlab.adapter-identity.v1:";
 type Identity = {
@@ -22,8 +24,10 @@ type Identity = {
 /** Bridge Agents' lifecycle and provider settings to Beekeeper. */
 export function builderlabType(
   client: AgentClient,
-  session: OAuthSession,
+  session: BuilderlabSession,
   relay: RelayData,
+  openIdentity?: () => void,
+  openSettings?: (section: string) => void,
 ): AgentType {
   const scope = () => ({
     target: oauthTarget(),
@@ -87,39 +91,50 @@ export function builderlabType(
         ?.supportedReasoningEfforts.includes(draft.reasoningEffort)
     )
       throw new Error(
-        "Choose a model and reasoning effort offered in the model catalog.",
+        "Choose a model and thinking level offered in the model catalog.",
       );
     return draft;
   }
   return {
     id: "builderlab",
     title: "Builderlab",
+    icon: BuilderlabLogoIcon,
     description: "Sign in to Builderlab when creating an agent.",
     defaults: () => ({ config: { ...EMPTY_CREATION } }),
     Create: createCreationFields(client, session),
+    PanelFooter: createSignInFooter(session),
+    ProfileActions: createProfileActions(session),
     tabs: [
       {
         id: "settings",
         title: "Settings",
         role: "settings",
         splitSettings: true,
-        component: createSettingsTab(client, session),
+        component: createSettingsTab(client, session, openIdentity),
       },
       {
         id: "activity",
         title: "Activity",
         role: "activity",
-        component: createActivityTab(relay),
+        component: createActivityTab(relay, openSettings),
       },
     ],
     remote: {
-      async provision({ name, config, signal }) {
+      async provision({ name, picture, config, signal }) {
         await validateCreation(config, signal);
-        return client.register(name, signal, ({ pubkey, id }, intent) =>
-          remember(pubkey, id, intent),
+        const agent = await client.register(
+          name,
+          signal,
+          ({ pubkey, id }, intent) => remember(pubkey, id, intent),
+          picture,
         );
+        return {
+          pubkey: agent.pubkey,
+          ...(agent.picture ? { picture: agent.picture } : {}),
+        };
       },
       async activate({ pubkey, auth, community, config, signal }) {
+        await session.ensureSignedIn(signal);
         const saved = identity(pubkey);
         const draft =
           config === undefined
@@ -131,11 +146,9 @@ export function builderlabType(
         await client.activate(pubkey, auth, community, signal);
         if (draft) await client.configure(pubkey, draft, signal);
       },
-      async profile() {
-        // TODO: publish name and picture changes through Beekeeper.
-        throw new Error(
-          "Builderlab agent profile updates are not supported yet.",
-        );
+      async profile({ signal, ...profile }) {
+        await session.ensureSignedIn(signal);
+        await client.updateProfile(profile, signal);
       },
       async interrupt({ pubkey, signal, ...place }) {
         // A stop is urgent: it never waits on an interactive sign-in.

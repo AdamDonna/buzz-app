@@ -1,3 +1,5 @@
+import { useSoloNavigation } from "../channel-navigation/solo-navigation-react";
+import { prepareSoloMove } from "../channel-navigation/solo-navigation";
 import { useEffect, useState } from "react";
 import type { RelaySession } from "../relay/session";
 import {
@@ -13,6 +15,7 @@ import {
   MenuRoot,
   MenuTrigger,
 } from "../../shared/design-system/ui/Menu";
+import styles from "./WorkspaceControl.module.css";
 
 export function WorkspaceControl({
   session,
@@ -27,6 +30,7 @@ export function WorkspaceControl({
   channelId?: string | undefined;
   disabled?: boolean;
 }) {
+  const regions = useSoloNavigation(session);
   const [snapshot, setSnapshot] = useState(() =>
     session.soloPreferences.snapshot(),
   );
@@ -49,6 +53,11 @@ export function WorkspaceControl({
       return;
     }
     if (!channelId) return;
+    const blocked = prepareSoloMove(session, channelId);
+    if (blocked) {
+      setError(blocked);
+      return;
+    }
     setBusy(true);
     void session.soloPreferences
       .assign(channelId, next || undefined)
@@ -58,8 +67,9 @@ export function WorkspaceControl({
       .finally(() => setBusy(false));
   };
   const name = project ? `Workspace: ${project.name}` : "Add workspace";
+  if (channelId && regions.excluded.has(channelId)) return null;
   return (
-    <span>
+    <span className={styles.control}>
       <MenuRoot>
         <MenuTrigger
           disabled={
@@ -74,13 +84,14 @@ export function WorkspaceControl({
               variant="ghost"
               size="sm"
               shape={project ? "capsule" : "icon"}
+              style={{ maxWidth: "100%" }}
               aria-label={name}
               title={name}
             >
               <Cube3dSphereIcon size={16} aria-hidden="true" />
               {project && (
                 <>
-                  <span>{project.name}</span>
+                  <span className={styles.name}>{project.name}</span>
                   <CaretDownIcon
                     size={12}
                     className="buzz-dropdown-chevron"

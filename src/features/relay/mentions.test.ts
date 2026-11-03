@@ -173,7 +173,7 @@ it("typed names create no recipient tags; unconfirmed or forged membership canno
   );
   await h.members(undefined, 1700000000, namesake);
   expect(() => h.session.messages.send("c", "@Honey", [honey.pubkey])).toThrow(
-    "Join the conversation before posting",
+    "You don’t have write access to this conversation.",
   );
   expect(h.sign).not.toHaveBeenCalled();
   expect(h.publish).not.toHaveBeenCalled();
@@ -368,16 +368,46 @@ it.each([false, true])(
       "anthropic/claude-sonnet-5-5",
     ]);
     expect(() => post({ [namesake.pubkey]: { effort: "high" } })).toThrow(
-      /mentioned agent/,
+      /addressed agent/,
     );
     expect(() => post({ [honey.pubkey]: { effort: "High Effort" } })).toThrow(
-      /mentioned agent/,
+      /addressed agent/,
     );
     expect(() => post({ [honey.pubkey]: { model: "two words" } })).toThrow(
-      /mentioned agent/,
+      /addressed agent/,
     );
   },
 );
+
+it("asks a one-to-one DM's other member for a model and effort without a mention", async () => {
+  const h = setup();
+  const read = h.session.read([
+    { kinds: [39002, 39000], "#d": ["c"], limit: 10 },
+  ]);
+  let pending = h.next();
+  while (!pending.filters.some((filter) => filter.kinds?.includes(39002))) {
+    pending.respond([]);
+    await flush();
+    pending = h.next();
+  }
+  pending.respond([
+    roster(relay, "c", [viewer.pubkey, honey.pubkey]),
+    metadata(relay, "c", "Honey", 1700000000, [["t", "dm"], ["private"]]),
+  ]);
+  await read;
+  h.session.messages.send("c", "think hard", [], [], undefined, [], {
+    [honey.pubkey]: { effort: "high" },
+  });
+  await flush();
+  const tags = h.publish.mock.calls[0]?.[0]?.tags;
+  expect(tags).toContainEqual(["effort", honey.pubkey, "high"]);
+  expect(tags).not.toContainEqual(["p", honey.pubkey]);
+  expect(() =>
+    h.session.messages.send("c", "think hard", [], [], undefined, [], {
+      [namesake.pubkey]: { effort: "high" },
+    }),
+  ).toThrow(/addressed agent/);
+});
 
 it.each(mentionConformance.tags.write)(
   "conforms to the portable mention tag writing contract: $name",

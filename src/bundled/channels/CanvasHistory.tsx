@@ -14,6 +14,7 @@ import type {
 import { CANVAS_BYTES } from "../../features/channel-templates/model";
 import type { RelayEvent } from "../../features/relay/events";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
+import { useProfileGeneration } from "../../features/relay/react";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -33,6 +34,7 @@ export function CanvasHistory({
   dirty,
   refreshHead,
   restore,
+  readOnly = false,
 }: {
   canvas: ChannelCanvas;
   channelId: string;
@@ -41,6 +43,7 @@ export function CanvasHistory({
   busy: boolean;
   loaded: boolean;
   dirty: boolean;
+  readOnly?: boolean;
   refreshHead(): Promise<void>;
   restore(revision: RelayEvent): Promise<void>;
 }) {
@@ -79,9 +82,17 @@ export function CanvasHistory({
     selection.snapshot,
   );
   const labels = publicKeyLabels(ids);
+  // History stays mounted read-only after the channel is lost. Its loaded
+  // authors may be known only from that channel, so a purge while it is
+  // read-only must not read them back.
+  const purges = useProfileGeneration(queries);
+  const writableGeneration = useRef(purges);
+  if (!readOnly) writableGeneration.current = purges;
+  const profileGeneration = writableGeneration.current;
   useEffect(() => {
+    void profileGeneration;
     void queries.ensure(ids, "background").catch(() => {});
-  }, [queries, ids]);
+  }, [queries, ids, profileGeneration]);
   const load = useCallback(
     async (cursor?: CanvasHistoryCursor) => {
       const current = ++generation.current;
@@ -131,7 +142,7 @@ export function CanvasHistory({
     selected &&
     new TextEncoder().encode(selected.content).length > CANVAS_BYTES;
   const apply = async () => {
-    if (!selected) return;
+    if (!selected || readOnly) return;
     const current = ++generation.current;
     attempted.current = true;
     try {
@@ -252,6 +263,7 @@ export function CanvasHistory({
               ref={restoreButton}
               variant="prominent"
               disabled={
+                readOnly ||
                 !loaded ||
                 busy ||
                 loading ||
@@ -294,6 +306,7 @@ export function CanvasHistory({
             <Button
               variant="prominent"
               loading={busy}
+              disabled={readOnly}
               onClick={() => void apply()}
             >
               Restore version

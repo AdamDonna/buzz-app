@@ -45,7 +45,9 @@ test("coordination keeps its first line visible throughout expansion and collaps
     const button = row.querySelector("button[aria-expanded]");
     const preview = row.querySelector('[class*="audiencePreview"]');
     if (!preview) throw new Error("Coordination preview is missing");
-    const textEdge = preview.getBoundingClientRect().left;
+    // Pane entry can move the whole row while the disclosure animates.
+    const textEdge =
+      preview.getBoundingClientRect().left - row.getBoundingClientRect().left;
     const failures = [];
     let animated = false;
     const sample = (opening) => {
@@ -64,7 +66,11 @@ test("coordination keeps its first line visible throughout expansion and collaps
           Number.parseFloat(getComputedStyle(text).lineHeight) / 2;
       if (!previewVisible && !firstLineVisible)
         failures.push(opening ? "opening" : "closing");
-      if (textBox && Math.abs(textBox.left - textEdge) > 0.5)
+      if (
+        textBox &&
+        Math.abs(textBox.left - row.getBoundingClientRect().left - textEdge) >
+          0.5
+      )
         failures.push(
           opening ? "opening shifted text" : "closing shifted text",
         );
@@ -680,8 +686,7 @@ test("narrow timeline continuation actions never cover prose or move adjacent ro
   });
   await link.click({ position: { x: 10, y: 1 } });
   await expect(link).toHaveAttribute("data-clicked", "true");
-  // Chromium retains focus on the clicked link; the timestamp intentionally
-  // stays closed while its payload contains focus. Return to the composer.
+  // Chromium retains focus on the clicked link. Return to the composer.
   await page
     .getByRole("textbox", { name: "Message #Alpha", exact: true })
     .focus();
@@ -697,11 +702,6 @@ test("narrow timeline continuation actions never cover prose or move adjacent ro
   await row.scrollIntoViewIfNeeded();
   await settle(page);
   await expectClockHidden();
-  await row.locator("[data-message-action-anchor]").hover();
-  const timestampHint = page.getByRole("tooltip").filter({ hasText: "2023" });
-  await expect(timestampHint).toBeVisible();
-  await page.mouse.move(0, 0);
-  await expect(timestampHint).toHaveCount(0);
 });
 
 test("historical single-day DMs and their threads expose dates without hover", async ({

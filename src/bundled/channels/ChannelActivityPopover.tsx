@@ -302,9 +302,7 @@ export function ChannelActivityPopover({
       <PopoverTrigger
         render={trigger}
         data-popup-preview={preview ? "" : undefined}
-        openOnHover={hasActivity}
-        delay={250}
-        closeDelay={150}
+        openOnHover={hasActivity && "preview"}
         onPointerDown={(event) => {
           triggerPointerType.current = event.pointerType;
         }}

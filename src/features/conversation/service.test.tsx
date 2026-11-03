@@ -367,3 +367,20 @@ it("owns accessories through disable, replacement and failed activation", async 
   );
   expect(broken.service.accessories.snapshot()).toHaveLength(0);
 });
+
+it("retires plugin chat menu contributions when their plugin is disabled", async () => {
+  const h = harness({
+    inject: ["conversation"],
+    apply(ctx) {
+      ctx.conversation.registerChatMenu(Component);
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() =>
+    expect(h.service.chatMenus.snapshot()).toHaveLength(1),
+  );
+  h.runtime.reconcile([]);
+  await vi.waitFor(() =>
+    expect(h.service.chatMenus.snapshot()).toHaveLength(0),
+  );
+});

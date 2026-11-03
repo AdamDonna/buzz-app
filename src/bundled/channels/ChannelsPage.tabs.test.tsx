@@ -1,3 +1,5 @@
+import { createNavigationController } from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import closeRequest from "../../../src-tauri/src/close-request.js?raw";
@@ -208,6 +210,8 @@ async function page(
           threadRootId: root.id,
         },
         signal: new AbortController().signal,
+        position: () => undefined,
+        savePosition() {},
         forSession() {
           return this;
         },
@@ -220,7 +224,10 @@ async function page(
       <ChannelsPage
         relay={relay}
         panels={panels}
-        navigator={navigator}
+        navigator={
+          navigator ??
+          createNavigationController(createMemoryHistory()).navigation
+        }
         navigation={navigation}
       />
     </ToastProvider>,
@@ -440,6 +447,25 @@ it("solo composer retains side-tab cycling and close focus", async () => {
   expect(closeTabs("buzz:close-active-tab")).toBe(true);
   expect(notes).not.toBeInTheDocument();
   expect(thread).toHaveFocus();
+});
+
+it("leaves Shift+Escape (Mark all as read) to a side thread, closing it on Escape", async () => {
+  const h = await page();
+  const tabs = renderHook(() => useChannelTabState(h.session, "alpha"));
+  const root = "c".repeat(64);
+  act(() =>
+    tabs.result.current.openThreadTab("alpha", root, root, undefined, "side"),
+  );
+  const thread = await screen.findByRole("tab", { name: "Thread · Alpha" });
+  expect(thread).toHaveAttribute("aria-selected", "true");
+  const content = document.querySelector(
+    `[id="${thread.getAttribute("aria-controls")}"] *`,
+  );
+  if (!content) throw new Error("The side thread has no content");
+  fireEvent.keyDown(content, { key: "Escape", shiftKey: true });
+  expect(thread).toBeInTheDocument();
+  fireEvent.keyDown(content, { key: "Escape" });
+  expect(thread).not.toBeInTheDocument();
 });
 
 it.each(["stream", "solo"] as const)(

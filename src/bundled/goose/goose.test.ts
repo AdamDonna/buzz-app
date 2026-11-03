@@ -6,6 +6,7 @@ import {
   type ToolServer,
 } from "./goose";
 import { fakeSpawn, flush } from "./goose-testing";
+import { createLocalAgentActivity } from "../../features/agents/local-activity";
 
 const ok: ToolServer = async (_conversation, message) => ({
   jsonrpc: "2.0",
@@ -83,6 +84,20 @@ describe("GooseProcess", () => {
       GOOSE_PROVIDER: null,
       GOOSE_MODEL: null,
     });
+  });
+
+  it("points goose's Databricks provider at a packaged workspace", async () => {
+    expect((await start()).process.options.env).not.toHaveProperty(
+      "DATABRICKS_HOST",
+    );
+    vi.stubEnv("VITE_BUZZ_DATABRICKS_HOST", "https://workspace.example/");
+    try {
+      expect((await start()).process.options.env).toMatchObject({
+        DATABRICKS_HOST: "https://workspace.example/",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("refuses a goose that cannot serve the Buzz tools", async () => {
@@ -213,25 +228,28 @@ describe("GooseProcess", () => {
     });
   });
 
-  it("counts the work done when a final send succeeds", async () => {
-    const { open, process } = await start();
-    process.hold = true;
-    const session = await open();
-    const settled = session.send("hello");
-    await flush();
-    await process.mcp(session.id, "tools/call", {
-      name: "send",
-      arguments: { content: "hi", final: true },
-    });
-    await expect(settled).resolves.toEqual({ ok: true });
-    expect(session.busy).toBe(false);
-    expect(session.working).toBe(true);
-    session.interrupt();
-    await flush();
-    expect(process.cancelled).toEqual([session.id]);
-    await session.idle();
-    expect(session.working).toBe(false);
-  });
+  it.each(["send", "reply_in_subthread"])(
+    "counts the work done when a final %s succeeds",
+    async (name) => {
+      const { open, process } = await start();
+      process.hold = true;
+      const session = await open();
+      const settled = session.send("hello");
+      await flush();
+      await process.mcp(session.id, "tools/call", {
+        name,
+        arguments: { content: "hi", final: true },
+      });
+      await expect(settled).resolves.toEqual({ ok: true });
+      expect(session.busy).toBe(false);
+      expect(session.working).toBe(true);
+      session.interrupt();
+      await flush();
+      expect(process.cancelled).toEqual([session.id]);
+      await session.idle();
+      expect(session.working).toBe(false);
+    },
+  );
 
   it("steers a message that arrives mid-turn into it", async () => {
     const { open, process } = await start();
@@ -335,6 +353,338 @@ describe("GooseProcess", () => {
       "session-1 thinking_effort=high",
     ]);
     expect(session.effort).toBe("high");
+  });
+
+  it("refuses a synced level the selected model lacks, after a switch that kept it too", async () => {
+    const fake = fakeSpawn({
+      thinking: {
+        o3: { current: "medium", levels: ["low", "medium", "high"] },
+        "gpt-4.1": { current: "off", levels: ["off"] },
+      },
+    });
+    const goose = await GooseProcess.start(fake.spawn, {
+      cwd: "/work",
+      serve: fake.serve,
+    });
+    const [process] = fake.geese;
+    let model = "o3";
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+      choice: () => ({ provider: "openai", model, effort: "high" }),
+    });
+    await expect(
+      session.send("one", {}, undefined, undefined, "high"),
+    ).resolves.toEqual({ ok: true });
+    // goose keeps the level across the switch, so it is never set again.
+    model = "gpt-4.1";
+    await expect(
+      session.send("two", {}, undefined, undefined, "high"),
+    ).resolves.toEqual({
+      ok: false,
+      error:
+        "This agent's synced effort \"high\" isn't offered by goose's gpt-4.1. Change it in Settings.",
+      undelivered: true,
+    });
+    expect(process?.turns.map((turn) => turn.text)).toEqual(["one"]);
+    expect(process?.configured).toEqual([
+      "session-1 model=o3",
+      "session-1 thinking_effort=high",
+      "session-1 model=gpt-4.1",
+    ]);
+  });
+
+  it("refuses a synced level when goose lists none for the model", async () => {
+    const { open, process } = await start();
+    const session = await open({
+      choice: () => ({ provider: "openai", model: "o3", effort: "high" }),
+    });
+    await expect(
+      session.send("one", {}, undefined, undefined, "high"),
+    ).resolves.toMatchObject({ ok: false });
+    expect(process.turns).toEqual([]);
+  });
+
+  it("fails only a queued request refused before its prompt, giving its activity back", async () => {
+    const fake = fakeSpawn({
+      hold: true,
+      thinking: {
+        o3: { current: "medium", levels: ["low", "medium", "high"] },
+        "gpt-4.1": { current: "off", levels: ["off"] },
+      },
+    });
+    const goose = await GooseProcess.start(fake.spawn, {
+      cwd: "/work",
+      serve: fake.serve,
+    });
+    const [process] = fake.geese;
+    if (!process) throw new Error("goose did not start");
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+      choice: () => ({ provider: "openai", model: "o3", effort: "high" }),
+    });
+    const receipt = () => ({
+      step: vi.fn(),
+      acknowledged: vi.fn(),
+      superseded: vi.fn(),
+    });
+    const running = receipt();
+    const first = session.send("one", running, undefined, undefined, "high");
+    await flush();
+    const shell = {
+      sessionUpdate: "tool_call",
+      toolCallId: "t",
+      title: "shell · ls",
+      rawInput: { command: "ls" },
+    };
+    process.update(session.id, shell);
+    await flush();
+    // Another model waits as the next turn; the running one keeps its Stop.
+    const refused = receipt();
+    const second = session.send("two", refused, "gpt-4.1", undefined, "high");
+    await flush();
+    expect(running.superseded).not.toHaveBeenCalled();
+    process.turns[0]?.finish();
+    await expect(second).resolves.toEqual({
+      ok: false,
+      error:
+        "This agent's synced effort \"high\" isn't offered by goose's gpt-4.1. Change it in Settings.",
+      undelivered: true,
+    });
+    expect(running.superseded).not.toHaveBeenCalled();
+    // The first request is back in charge of the scope, with its step shown once.
+    await expect(first).resolves.toEqual({ ok: true });
+    expect(running.step).toHaveBeenCalledTimes(1);
+    // A plain turn after it never inherits the refusal.
+    const third = session.send("three");
+    await flush();
+    process.turns[1]?.finish();
+    await expect(third).resolves.toEqual({ ok: true });
+    expect(process.turns.map((turn) => turn.text)).toEqual(["one", "three"]);
+  });
+
+  it("shows the error of a request given back its activity when its own turn fails", async () => {
+    const fake = fakeSpawn({
+      hold: true,
+      thinking: {
+        o3: { current: "medium", levels: ["low", "medium", "high"] },
+        "gpt-4.1": { current: "off", levels: ["off"] },
+      },
+    });
+    const goose = await GooseProcess.start(fake.spawn, {
+      cwd: "/work",
+      serve: fake.serve,
+    });
+    const [process] = fake.geese;
+    if (!process) throw new Error("goose did not start");
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+      choice: () => ({ provider: "openai", model: "o3", effort: "high" }),
+    });
+    const receipt = () => ({
+      step: vi.fn(),
+      acknowledged: vi.fn(),
+      superseded: vi.fn(),
+    });
+    const running = receipt();
+    const first = session.send("one", running, undefined, undefined, "high");
+    await flush();
+    const second = session.send("two", receipt(), "gpt-4.1", undefined, "high");
+    await flush();
+    process.turns[0]?.finish("refusal");
+    await expect(second).resolves.toMatchObject({ ok: false });
+    await expect(first).resolves.toEqual({
+      ok: false,
+      error: "goose refused the request",
+    });
+    expect(running.superseded).not.toHaveBeenCalled();
+  });
+
+  it("keeps Stop for a running request while a later one waits, and a refused request off another scope", async () => {
+    const fake = fakeSpawn({
+      hold: true,
+      thinking: {
+        o3: { current: "medium", levels: ["low", "medium", "high"] },
+        "gpt-4.1": { current: "off", levels: ["off"] },
+      },
+    });
+    const goose = await GooseProcess.start(fake.spawn, {
+      cwd: "/work",
+      serve: fake.serve,
+    });
+    const [process] = fake.geese;
+    if (!process) throw new Error("goose did not start");
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+      choice: () => ({ provider: "openai", model: "o3", effort: "high" }),
+    });
+    const receipt = (activityScope: string) => ({
+      activityScope,
+      step: vi.fn(),
+      acknowledged: vi.fn(),
+      superseded: vi.fn(),
+    });
+    const running = receipt("a");
+    const first = session.send("one", running, undefined, undefined, "high");
+    await flush();
+    const refused = receipt("b");
+    const second = session.send("two", refused, "gpt-4.1", undefined, "high");
+    const later = receipt("a");
+    const third = session.send("three", later, "o3", undefined, "high");
+    await flush();
+    expect(running.superseded).not.toHaveBeenCalled();
+    process.turns[0]?.finish();
+    await expect(second).resolves.toMatchObject({ ok: false });
+    await vi.waitFor(() =>
+      expect(process.turns.map((turn) => turn.text)).toEqual(["one", "three"]),
+    );
+    // The refusal in scope b leaves scope a with the later request.
+    expect(running.superseded).toHaveBeenCalledTimes(1);
+    expect(later.superseded).not.toHaveBeenCalled();
+    process.update(session.id, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t",
+      title: "shell · ls",
+      rawInput: { command: "ls" },
+    });
+    await flush();
+    expect(later.step).toHaveBeenCalledTimes(1);
+    expect(refused.step).not.toHaveBeenCalled();
+    // Stop still reaches the running turn.
+    session.interrupt();
+    await expect(third).resolves.toEqual({ ok: true, stopped: true });
+    await expect(first).resolves.toEqual({ ok: true, stopped: true });
+  });
+
+  it("gives a refused request's activity back with Stop, its next step, and its later error", async () => {
+    const fake = fakeSpawn({
+      hold: true,
+      thinking: {
+        o3: { current: "medium", levels: ["low", "medium", "high"] },
+        "gpt-4.1": { current: "off", levels: ["off"] },
+      },
+    });
+    const goose = await GooseProcess.start(fake.spawn, {
+      cwd: "/work",
+      serve: fake.serve,
+    });
+    const [process] = fake.geese;
+    if (!process) throw new Error("goose did not start");
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      tools: ok,
+      choice: () => ({ provider: "openai", model: "o3", effort: "high" }),
+    });
+    const local = createLocalAgentActivity();
+    const row = (messageId: string) =>
+      local.reader.work().find((work) => work.messageId === messageId);
+    /** A request shown in the app's real activity, as the runner wires it. */
+    const request = (
+      messageId: string,
+      model?: string,
+      activityScope = "a",
+    ) => {
+      const work = local.begin({
+        scope: activityScope,
+        agent: "g",
+        channelId: "c",
+        messageId,
+        threadRootId: messageId,
+      });
+      work.interruptible(async () => session.interrupt());
+      const done = session.send(
+        messageId,
+        {
+          activityScope,
+          step: work.step,
+          acknowledged: work.started,
+          superseded: work.supersede,
+        },
+        model,
+        undefined,
+        "high",
+      );
+      void done.then(work.finish);
+      return done;
+    };
+    const thought = () =>
+      process.update(session.id, {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "…" },
+      });
+    const first = request("A");
+    await flush();
+    thought();
+    await flush();
+    expect(row("A")).toMatchObject({
+      state: "working",
+      step: { tool: "Thinking" },
+    });
+    // B waits for another model and takes the scope's steps meanwhile.
+    void request("B", "gpt-4.1");
+    await flush();
+    process.update(session.id, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t",
+      title: "shell · ls",
+      rawInput: { command: "ls" },
+    });
+    await flush();
+    expect(row("B")?.step).toEqual({ tool: "shell", target: "ls" });
+    // A's turn ends; B is refused before its prompt and A is given back.
+    process.turns[0]?.finish();
+    await vi.waitFor(() => expect(row("B")?.state).toBe("error"));
+    expect(row("A")).toMatchObject({ state: "done" });
+    await first;
+
+    // A restored request that later fails shows its error, never superseded.
+    const second = request("C");
+    await flush();
+    void request("D", "gpt-4.1");
+    await flush();
+    process.turns[1]?.finish("refusal");
+    await second;
+    await vi.waitFor(() =>
+      expect(row("C")).toMatchObject({
+        state: "error",
+        error: "goose refused the request",
+      }),
+    );
+
+    // E is given back while the burst runs on with G from another scope:
+    // its next Thinking step shows again, its Stop works, and once stopped
+    // it never revives.
+    const third = request("E");
+    await flush();
+    thought();
+    await flush();
+    void request("F", "gpt-4.1");
+    const fourth = request("G", "o3", "b");
+    await flush();
+    process.turns[2]?.finish();
+    await vi.waitFor(() => expect(row("F")?.state).toBe("error"));
+    await vi.waitFor(() => expect(process.turns).toHaveLength(4));
+    expect(row("E")).toMatchObject({ state: "working", stoppable: true });
+    // The same Thinking step as before F was queued shows again.
+    thought();
+    await flush();
+    expect(row("E")?.step).toEqual({ tool: "Thinking" });
+    expect(row("G")?.step).toEqual({ tool: "Thinking" });
+    await local.reader.interrupt?.({ scope: "a", agent: "g", messageId: "E" });
+    await expect(third).resolves.toMatchObject({ stopped: true });
+    await fourth;
+    expect(row("E")?.state).toBe("stopped");
+    thought();
+    await flush();
+    expect(row("E")?.state).toBe("stopped");
   });
 
   it("names a session with its title", async () => {
@@ -448,24 +798,27 @@ describe("GooseProcess", () => {
     });
   });
 
-  it("ends work that acted in Buzz without its closing text", async () => {
-    const { open, process } = await start();
-    process.hold = true;
-    const session = await open();
-    const settled = session.send("hello");
-    await flush();
-    await process.mcp(session.id, "tools/call", {
-      name: "send",
-      arguments: { content: "hi" },
-    });
-    process.update(session.id, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "Sent it." },
-    });
-    await flush();
-    process.turns[0]?.finish();
-    await expect(settled).resolves.toEqual({ ok: true });
-  });
+  it.each(["send", "reply_in_subthread"])(
+    "ends work that acted in Buzz with %s without its closing text",
+    async (name) => {
+      const { open, process } = await start();
+      process.hold = true;
+      const session = await open();
+      const settled = session.send("hello");
+      await flush();
+      await process.mcp(session.id, "tools/call", {
+        name,
+        arguments: { content: "hi" },
+      });
+      process.update(session.id, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Sent it." },
+      });
+      await flush();
+      process.turns[0]?.finish();
+      await expect(settled).resolves.toEqual({ ok: true });
+    },
+  );
 
   it("ends work that only read or failed to send with what goose wrote", async () => {
     const failed: ToolServer = async (conversation, message) =>
@@ -725,6 +1078,31 @@ describe("GooseProcess", () => {
       process.received.filter((message) => message.method === "session/prompt"),
     ).toEqual([]);
     expect(session.busy).toBe(false);
+  });
+
+  it("never sends a turn whose session closed while its provider switch was going", async () => {
+    const { goose, process, release, waiting } = await slow(
+      "session/set_config_option",
+    );
+    const session = await goose.open({
+      cwd: "/work",
+      systemPrompt: "",
+      choice: () => ({ provider: "openai", model: "gpt-4.1" }),
+    });
+    const settled = session.send("one");
+    await flush();
+    expect(waiting()).toBe(1);
+    const closing = goose.close(session);
+    await expect(settled).resolves.toEqual({
+      ok: false,
+      error: "The session was closed",
+    });
+    release();
+    await closing;
+    await flush();
+    expect(
+      process.received.filter((message) => message.method === "session/prompt"),
+    ).toEqual([]);
   });
 
   it("does not run a message again whose steer failed after the owner stopped the turn", async () => {

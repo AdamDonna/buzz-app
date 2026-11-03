@@ -63,7 +63,6 @@ function harness(value: ChannelSummary | undefined = channel) {
     session,
     trigger: createRef<HTMLButtonElement>(),
     openDetails: vi.fn(),
-    openCanvas: vi.fn(),
   };
   const mount = (
     publish?: (surface: ChannelMenuSurface) => React.ReactNode[],
@@ -91,12 +90,7 @@ it("loads only on demand, uses the non-compact shared menu, and opens details wi
   await screen.findByRole("menuitem", { name: "Delete channel" });
   expect(
     screen.getAllByRole("menuitem").map((item) => item.textContent),
-  ).toEqual([
-    "View channel details",
-    "View canvas",
-    "Archive channel",
-    "Delete channel",
-  ]);
+  ).toEqual(["View channel details", "Archive channel", "Delete channel"]);
   expect(h.load).not.toHaveBeenCalled();
   expect(h.run).not.toHaveBeenCalled();
   expect(h.save).not.toHaveBeenCalled();
@@ -140,12 +134,6 @@ it("supports keyboard dismissal, outside clicks, and Canvas with the stable head
   await waitFor(() =>
     expect(screen.queryByRole("menu")).not.toBeInTheDocument(),
   );
-  trigger.focus();
-  await user.keyboard("{ArrowDown}");
-  await user.click(
-    await screen.findByRole("menuitem", { name: "View canvas" }),
-  );
-  expect(h.props.openCanvas).toHaveBeenCalledWith(trigger);
 });
 it("does not expose details editing or recovery from the header", async () => {
   const h = harness();
@@ -186,6 +174,27 @@ it.each([{ readOnly: true as const }, { cached: true as const }])(
     ).not.toBeInTheDocument();
   },
 );
+it("keeps Leave available for a joined guest without offering channel administration", async () => {
+  const h = harness({ ...channel, readOnly: true, viewerRole: "guest" });
+  h.lifecycleLoad.mockResolvedValue({
+    channelId: "alpha",
+    channelType: "stream",
+    canArchive: false,
+    canDelete: false,
+    canLeave: true,
+    canHide: false,
+  });
+  h.mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Channel actions" }));
+  expect(
+    await screen.findByRole("menuitem", { name: "Leave channel" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("menuitem", { name: "Archive channel" }),
+  ).not.toBeInTheDocument();
+  expect(h.run).not.toHaveBeenCalled();
+});
 it("does not offer lifecycle actions for archived channels", async () => {
   const h = harness({ ...channel, archived: true });
   h.lifecycleLoad.mockResolvedValue({

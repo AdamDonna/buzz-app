@@ -277,6 +277,7 @@ export function WorkflowForm({
         <div className="workflow-inspector-actions">
           {selectedStep && (
             <IconButton
+              hint="familiar"
               aria-label={`Remove step ${stepIndex + 1}`}
               title="Remove step"
               icon={<TrashIcon size={16} aria-hidden="true" />}

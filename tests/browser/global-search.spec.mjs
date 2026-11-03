@@ -365,6 +365,99 @@ test.describe("public search destination", () => {
     await composer.pressSequentially("Joined");
     await expect(composer).toHaveText("Joined");
   });
+
+  // A rejected Join grows the preview notice, and the thread's end spacer
+  // grows with it. A reader at the end of the thread must stay at the end.
+  test("a rejected Join keeps a thread reader at its end, clear of the notice", async ({
+    page,
+    app,
+  }) => {
+    await page.addInitScript(() => {
+      window.revealedRows = [];
+      document.addEventListener(
+        "reading-positioned",
+        () =>
+          window.revealedRows.push(document.activeElement?.dataset.messageId),
+        true,
+      );
+    });
+    // A short viewport makes the two-message thread scroll.
+    await page.setViewportSize({ width: 1100, height: 360 });
+    await page.goto(app.origin);
+    await expect(page.locator("[data-message-id]").first()).toBeVisible();
+    await button(page, "Search Buzz").click();
+    await page
+      .getByRole("combobox", { name: "Search Buzz" })
+      .fill("crew-search");
+    await page
+      .getByRole("option", { name: /crew-search exact public reply/ })
+      .click();
+    const threadPanel = page.getByRole("complementary", {
+      name: "Thread",
+      exact: true,
+    });
+    const history = threadPanel.getByRole("region", {
+      name: "Thread messages",
+      exact: true,
+    });
+    const notice = threadPanel.getByRole("region", {
+      name: "Channel preview",
+      exact: true,
+    });
+    const last = history.locator(`[data-message-id="${app.searchTarget.id}"]`);
+    // The exact reveal completes a frame after it focuses the reply. Scroll
+    // after it: a later completion would rightly take over the position.
+    await expect
+      .poll(() => page.evaluate(() => window.revealedRows))
+      .toContain(app.searchTarget.id);
+    await expect
+      .poll(() => history.evaluate((el) => el.scrollHeight > el.clientHeight))
+      .toBe(true);
+    // The reveal can leave the reply at the end without following it. Scroll
+    // away and back as a reader does, so the thread follows its end.
+    await history.hover();
+    await page.mouse.wheel(0, -2000);
+    await expect.poll(() => history.evaluate((el) => el.scrollTop)).toBe(0);
+    await page.mouse.wheel(0, 2000);
+    const fromEnd = () =>
+      history.evaluate(
+        (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+      );
+    await expect.poll(fromEnd).toBeLessThan(1);
+    const height = () =>
+      notice.evaluate((el) => el.getBoundingClientRect().height);
+    const before = await height();
+    await page.route(
+      "**/api/relay/**/channel-lifecycle-publish",
+      async (route) => {
+        const event = route.request().postDataJSON();
+        expect(event.kind).toBe(9021);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            accepted: false,
+            event_id: event.id,
+            message: "Joining this channel is not allowed",
+          }),
+        });
+      },
+      { times: 1 },
+    );
+    await threadPanel
+      .getByRole("button", { name: "Join", exact: true })
+      .click();
+    await expect(notice.getByRole("alert")).toContainText(
+      "Joining this channel is not allowed",
+    );
+    expect(await height()).toBeGreaterThan(before);
+    await expect.poll(fromEnd).toBeLessThan(1);
+    const [row, overlay] = await Promise.all([
+      last.boundingBox(),
+      notice.boundingBox(),
+    ]);
+    expect(row.y + row.height).toBeLessThanOrEqual(overlay.y - 20);
+  });
 });
 
 test("keyboard selection follows its page while matching conversations arrive", async ({
@@ -511,11 +604,15 @@ test.describe("message search operators", () => {
     app,
   }) => {
     await page.goto(app.origin);
+    // The same unproven ordering mitigation for the WebKit lost-fill failure
+    // as the public search destination test above.
+    await expect(page.locator("[data-message-id]").first()).toBeVisible();
     await button(page, "Search Buzz").click();
     const input = page.getByRole("combobox", { name: "Search Buzz" });
-    await input.fill(
-      `crew-search in:${app.openChannelId} from:${app.searchTarget.pubkey} after:2023-11-14 before:2023-11-15`,
-    );
+    const query = `crew-search in:${app.openChannelId} from:${app.searchTarget.pubkey} after:2023-11-14 before:2023-11-15`;
+    await input.fill(query);
+    // Attribute a missing result to the typed query or to the search.
+    await expect(input).toHaveValue(query);
     await expect(
       page
         .locator("[data-search-result]")

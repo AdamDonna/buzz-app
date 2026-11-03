@@ -265,7 +265,9 @@ async function resumable(
   return undefined;
 }
 
-function delivered(
+/** Settles once the outbox reports the relay accepted `id`, or rejects with
+ * its refusal. */
+export function delivered(
   outbox: LocalEvents,
   id: string,
   signal: AbortSignal,

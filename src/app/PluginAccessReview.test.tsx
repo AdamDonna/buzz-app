@@ -9,6 +9,8 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
+import { AgentsContext } from "../features/agents/react";
+import type { Agents } from "../features/agents/service";
 import type { PluginManifest } from "../plugins/api";
 import { PluginAccessReview } from "./PluginAccessReview";
 
@@ -73,4 +75,112 @@ it("keeps unchanged native file access in the unchanged view", () => {
     />,
   );
   expect(screen.getByRole("button", { name: /Read your files/ })).toBeVisible();
+});
+
+it("discloses hook access as a new permission for each harness", () => {
+  render(
+    <PluginAccessReview
+      manifest={{
+        id: "policy",
+        name: "Policy",
+        apiVersion: 1,
+        host: { agentHooks: ["buzz.pi/pi"] },
+      }}
+      previousManifest={{ id: "policy", name: "Policy", apiVersion: 1 }}
+    />,
+  );
+  expect(
+    within(
+      screen.getByRole("region", { name: "Added declarations" }),
+    ).getByRole("button", { name: /Observe and influence buzz.pi\/pi/ }),
+  ).toBeVisible();
+});
+
+it("shows a registered harness title while keeping its exact key in details", async () => {
+  const types = [{ key: "third/custom", title: "Custom Agent" }];
+  const agents = {
+    subscribe: () => () => {},
+    types: () => types,
+  } as unknown as Agents;
+  render(
+    <AgentsContext value={agents}>
+      <PluginAccessReview
+        manifest={{
+          id: "policy",
+          name: "Policy",
+          apiVersion: 1,
+          host: { agentHooks: ["third/custom"] },
+        }}
+      />
+    </AgentsContext>,
+  );
+  const trigger = screen.getByRole("button", {
+    name: /Observe and influence Custom Agent/,
+  });
+  expect(trigger).not.toHaveTextContent("third/custom");
+  fireEvent.click(trigger);
+  await waitFor(() => expect(screen.getByText("third/custom")).toBeVisible());
+});
+
+const managed = (managedFiles: boolean): PluginManifest => ({
+  ...manifest(false),
+  host: { managedFiles },
+});
+it("discloses managed save limits and retention without implying file-reading authority", async () => {
+  render(<PluginAccessReview manifest={managed(true)} />);
+  expect(screen.queryByRole("button", { name: /Read your files/ })).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: /Save temporary plugin files/ }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByText(/Shared storage is limited to 64 MiB and 16 files/),
+    ).toBeVisible(),
+  );
+  expect(
+    screen.getByText(
+      /This does not grant file reading or arbitrary-path writes/,
+    ),
+  ).toBeVisible();
+});
+it.each([
+  [false, true, "Added"],
+  [true, false, "Removed"],
+] as const)(
+  "compares managed save access from %s to %s",
+  (before, after, change) => {
+    render(
+      <PluginAccessReview
+        manifest={managed(after)}
+        previousManifest={managed(before)}
+      />,
+    );
+    expect(
+      within(
+        screen.getByRole("region", { name: `${change} declarations` }),
+      ).getByRole("button", { name: /Save temporary plugin files/ }),
+    ).toBeVisible();
+  },
+);
+it("uses the existing unchanged disclosure for managed saves", () => {
+  const { rerender } = render(
+    <PluginAccessReview
+      manifest={managed(true)}
+      previousManifest={managed(true)}
+    />,
+  );
+  expect(screen.getByText("No declared access changes")).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /Save temporary plugin files/ }),
+  ).toBeNull();
+  rerender(
+    <PluginAccessReview
+      manifest={managed(true)}
+      previousManifest={managed(true)}
+      unchangedOnly
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: /Save temporary plugin files/ }),
+  ).toBeVisible();
 });

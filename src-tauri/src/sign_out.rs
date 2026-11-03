@@ -46,7 +46,14 @@ pub(crate) const AGENT_OWNERSHIP: &str = "dev.local.buzz.agent-ownership";
 /// Their keys live in the keychain. Anything else in these folders (hosting
 /// locks, saved logins, logs, run folders, and whatever is added later) is wiped.
 const KEPT: Kept = &[
-    (AGENTS, &["identities.json", buzz_agent_controller::JOINED]),
+    (
+        AGENTS,
+        &[
+            "identities.json",
+            buzz_agent_controller::JOINED,
+            "protection.json",
+        ],
+    ),
     (migrate_agents::LEGACY, &["identities.json"]),
     (OLD_AGENTS, &["agents.json", "defaults.json"]),
 ];
@@ -123,13 +130,10 @@ impl Paths {
         others.retain(|path| *path != app_data);
         others.dedup();
         Some(Self {
-            marker: data.join(marker_name(
-                identifier,
-                buzz_credential_store::HUMAN_SERVICE,
-            )),
-            finished: data.join(finished_name(buzz_credential_store::HUMAN_SERVICE)),
+            marker: data.join(marker_name(identifier, buzz_credential_store::HUMAN_STORE)),
+            finished: data.join(finished_name(buzz_credential_store::HUMAN_STORE)),
             lock: data.join(LOCK),
-            key_lock: data.join(key_lock_name(buzz_credential_store::HUMAN_SERVICE)),
+            key_lock: data.join(key_lock_name(buzz_credential_store::HUMAN_STORE)),
             ownership: data.join(AGENT_OWNERSHIP),
             app_data,
             backups: crate::nsec_backup_choice::root()?,
@@ -407,6 +411,78 @@ pub(crate) fn boot(
         seen: finished(&paths.finished).map_err(failed)?,
         started: AtomicBool::new(false),
     })
+}
+
+/// Builds from before 1.0 sign out by deleting the human key under its previous
+/// service only, so the copy reads made under the current one outlives it. A
+/// record beside the finished one keeps the count this function last saw: when
+/// a sign-out finished since, the current key goes too. Runs after `boot`,
+/// before any identity read; on failure it records nothing and Buzz exits.
+/// Copies launching together share the key lock, so each decides holding the
+/// record's own lock alone: one that waited sees the count another recorded,
+/// and never deletes a key saved since.
+pub(crate) fn forget_signed_out_key(
+    instance: &Instance,
+    remove_current_key: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    // std can't sync a folder on Windows.
+    reconcile_sign_outs(instance, remove_current_key, |folder| {
+        if cfg!(unix) {
+            File::open(folder)?.sync_all()
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[allow(clippy::incompatible_msrv)] // `File` locking; see `Instance`.
+fn reconcile_sign_outs(
+    instance: &Instance,
+    remove_current_key: impl FnOnce() -> Result<(), String>,
+    sync_folder: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    use std::io::Write;
+    let failed = |error: String| {
+        eprintln!("buzz: sign out did not finish: {error}");
+        FAILED.to_owned()
+    };
+    let name = format!(".{}.sign-outs-seen", buzz_credential_store::HUMAN_STORE);
+    let [path, lock, staged] = ["", ".lock", ".staged"]
+        .map(|suffix| instance.finished.with_file_name(format!("{name}{suffix}")));
+    let io = |error: std::io::Error| failed(format!("{}: {error}", path.display()));
+    // A separate lock file, never replaced, so a waiter holds the same one.
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .map_err(io)?;
+    lock.lock().map_err(io)?;
+    // Absent, empty or unreadable as a count: start counting from now.
+    let recorded = match fs::read(&path) {
+        Ok(bytes) => std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok()),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(io(error)),
+    };
+    if recorded.is_some_and(|recorded| recorded < instance.seen) {
+        remove_current_key().map_err(failed)?;
+    }
+    if recorded != Some(instance.seen) {
+        // Replaced whole, so an interrupted write leaves the old count.
+        File::create(&staged)
+            .and_then(|mut file| {
+                file.write_all(instance.seen.to_string().as_bytes())?;
+                file.sync_all()
+            })
+            .and_then(|()| fs::rename(&staged, &path))
+            .map_err(io)?;
+    }
+    // Durable before any key is saved, as a lost rename would replay this
+    // deletion on a newer key. Synced on every launch: a count read back may
+    // be one whose sync failed.
+    path.parent().map_or(Ok(()), sync_folder).map_err(io)
 }
 
 /// An erase deletes storage agents use, so it waits until no supervisor holds an
@@ -815,6 +891,8 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
     // Close the signer and any pairing that already holds a copy of the key.
     let close = || {
         backup.close();
+        app.state::<crate::federated_identity::FederatedIdentity>()
+            .close();
         identity.close();
         pairing.close();
     };
@@ -822,7 +900,7 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
         exit_fenced(app.clone())
     })
     .await?;
-    app.request_restart();
+    crate::relaunch::request(&app);
     Ok(())
 }
 

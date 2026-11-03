@@ -109,7 +109,7 @@ export function createCommunities(
   const membershipVersions = new Map<string, number>();
   const listeners = new Set<() => void>();
   const relayListeners = new Set<() => void>();
-  const sessions = new Map<string, RelayData>();
+  const sessions = new Map<string, ReturnType<typeof provideRelay>>();
   // Each session owns a scope so leaving can dispose exactly that one.
   const sessionScopes = new Map<string, Context>();
   const scopes: Context[] = [];
@@ -448,6 +448,11 @@ export function createCommunities(
   return {
     presence: presenceActivity,
     relay,
+    /** Federated sign-in changed: every joined community retries what the old
+     * session refused, not only the selected one. */
+    reauthorize() {
+      for (const session of sessions.values()) session.reauthorize();
+    },
     snapshot: () => state,
     subscribe(fn: () => void) {
       listeners.add(fn);

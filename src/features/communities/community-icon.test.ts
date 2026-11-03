@@ -1,5 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { communityIcon, fetchCommunityPresentation } from "./community-icon";
+import {
+  communityIcon,
+  communityPresentation,
+  fetchCommunityPresentation,
+} from "./community-icon";
 
 it("accepts bounded image URLs and rejects executable or malformed relay metadata", () => {
   expect(communityIcon("https://images.example/icon.png")).toBe(
@@ -70,4 +74,29 @@ it("registers before NIP-11 discovery without opening a session", async () => {
     "POST /api/relay/register",
     "GET /api/relay/https%3A%2F%2Frelay.example/icon-info",
   ]);
+});
+
+it("resolves canonical community presentation with local names and safe published icons", () => {
+  expect(
+    communityPresentation("wss://RELAY.example:443/", [
+      { id: "https://other.example", name: "Other" },
+      {
+        id: "https://relay.example",
+        name: "Saved",
+        publishedName: "Published",
+        localName: "Local",
+        icon: "https://images.example/old.png",
+        publishedIcon: "https://images.example/current.png",
+      },
+    ]),
+  ).toEqual({
+    id: "https://relay.example",
+    name: "Local",
+    src: "https://images.example/current.png",
+  });
+  expect(communityPresentation("wss://relay.example")).toEqual({
+    id: "https://relay.example",
+    name: "relay.example",
+    src: undefined,
+  });
 });

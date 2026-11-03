@@ -6,6 +6,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { PREVIEW_REST_MS } from "../../shared/design-system/ui/hoverIntent";
 import { afterEach, expect, it, vi } from "vitest";
 import { MessageLink } from "./MessageLink";
 import type { ChannelList, ChannelReference } from "../relay/contracts";
@@ -121,7 +122,8 @@ it("names an open channel and shows its hover card", async () => {
   expect(authored?.textContent).toBe("#authored");
   expect(raw?.textContent).toBe("#crew-open");
   fireEvent.mouseEnter(raw as HTMLElement);
-  await act(() => vi.advanceTimersByTimeAsync(250));
+  fireEvent.mouseMove(raw as HTMLElement);
+  await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
   const card = screen.getByLabelText("Channel preview");
   expect(card.textContent).toContain("crew-open");
   expect(card.textContent).toContain("Public channel · Archived · Not joined");
@@ -137,7 +139,8 @@ it("says Joined from membership, with the member count", async () => {
   render(link(t.session, "mine", null));
   t.answer("mine", { ...crew, archived: false, joined: true, members: 3 });
   fireEvent.mouseEnter(screen.getByRole("link"));
-  await act(() => vi.advanceTimersByTimeAsync(250));
+  fireEvent.mouseMove(screen.getByRole("link"));
+  await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
   expect(screen.getByLabelText("Channel preview").textContent).toContain(
     "Public channel · Joined · 3 members",
   );
@@ -199,14 +202,14 @@ it("keeps a link focused while its name resolves, then opens its card", async ()
   await act(async () => {});
   const focused = screen.getByRole("link");
   act(() => focused.focus());
-  await act(() => vi.advanceTimersByTimeAsync(250));
+  await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
   expect(screen.queryByLabelText("Channel preview")).toBeNull();
   t.answer("open", crew);
   // The same node, still focused, now named. (The open card is a link too.)
   expect(screen.getAllByRole("link")[0]).toBe(focused);
   expect(document.activeElement).toBe(focused);
   expect(focused.textContent).toBe("#crew-open");
-  await act(() => vi.advanceTimersByTimeAsync(250));
+  await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
   expect(screen.getByLabelText("Channel preview").textContent).toContain(
     "crew-open",
   );

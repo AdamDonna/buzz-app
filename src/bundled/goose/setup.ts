@@ -7,7 +7,12 @@ import type {
   AgentProviderSnapshot,
   Models,
 } from "../../features/agents/service";
-import { GooseProcess, type Choice, type GooseHost } from "./goose";
+import {
+  GooseProcess,
+  REQUEST_TIMEOUT_MS,
+  type Choice,
+  type GooseHost,
+} from "./goose";
 
 export type ConfigKey = Readonly<{
   name: string;
@@ -81,6 +86,28 @@ type Entry = {
 const PREFIXES: Readonly<Record<string, readonly string[]>> = {
   databricks: ["databricks-", "goose-"],
 };
+
+const MODEL_FILTER = "DATABRICKS_MODEL_FILTER";
+
+/** Which Databricks models are listed, from goose's `DATABRICKS_MODEL_FILTER`
+ * (its environment, else its config): comma-separated patterns, each matched
+ * against a whole model ID, case-sensitively, with `*` for any characters and
+ * `?` for one. A model matching any pattern is listed; without patterns every
+ * model is. It only hides models: Databricks still decides access. */
+export function modelFilter(value: unknown): (id: string) => boolean {
+  const patterns = String(value ?? "")
+    .split(",")
+    .map((pattern) => pattern.trim())
+    .filter(Boolean);
+  if (!patterns.length) return () => true;
+  const glob = (pattern: string) =>
+    pattern
+      .replace(/[\\^$.+()[\]{}|/]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
+  const matcher = new RegExp(`^(?:${patterns.map(glob).join("|")})$`, "s");
+  return (id) => matcher.test(id);
+}
 
 const TEST_PROMPT = "Reply with exactly: OK";
 const TEST_TIMEOUT_MS = 60_000;
@@ -254,8 +281,12 @@ export class GooseSetup {
   providers(): Promise<Providers> {
     this.listing ??= this.with(async (goose) => {
       const [{ entries }, defaults] = (await Promise.all([
-        goose.request("_goose/unstable/providers/list", { providerIds: [] }),
-        goose.request("_goose/unstable/defaults/read", {}),
+        goose.request(
+          "_goose/unstable/providers/list",
+          { providerIds: [] },
+          REQUEST_TIMEOUT_MS,
+        ),
+        goose.request("_goose/unstable/defaults/read", {}, REQUEST_TIMEOUT_MS),
       ])) as [
         { entries: Entry[] },
         { providerId?: string | null; modelId?: string | null },
@@ -305,11 +336,27 @@ export class GooseSetup {
     let models = this.live.get(id);
     if (!models) {
       models = this.with(async (goose) => {
-        const { models } = (await goose.request(
-          "_goose/unstable/providers/supported-models/list",
-          { providerId: id },
-        )) as { models: string[] };
-        return models.map((model) => ({ id: model, label: model }));
+        const [{ models }, filter] = (await Promise.all([
+          goose.request(
+            "_goose/unstable/providers/supported-models/list",
+            { providerId: id },
+            REQUEST_TIMEOUT_MS,
+          ),
+          id.startsWith("databricks")
+            ? goose.request(
+                "_goose/unstable/config/read",
+                {
+                  key: MODEL_FILTER,
+                  isSecret: false,
+                },
+                REQUEST_TIMEOUT_MS,
+              )
+            : undefined,
+        ])) as [{ models: string[] }, { value?: unknown } | undefined];
+        const listed = modelFilter(filter?.value);
+        return models
+          .filter(listed)
+          .map((model) => ({ id: model, label: model }));
       });
       models.catch(() => this.live.delete(id));
       this.live.set(id, models);
@@ -345,21 +392,29 @@ export class GooseSetup {
       .sort((a, b) => Number(Boolean(a)) - Number(Boolean(b)));
     if (wanted.length) {
       const read = this.with(async (goose, cwd) => {
-        const opened = (await goose.request("session/new", {
-          cwd,
-          mcpServers: [],
-          _meta: { enabledExtensions: [], ...(provider ? { provider } : {}) },
-        })) as ConfigOptions & { sessionId: string };
+        const opened = (await goose.request(
+          "session/new",
+          {
+            cwd,
+            mcpServers: [],
+            _meta: { enabledExtensions: [], ...(provider ? { provider } : {}) },
+          },
+          REQUEST_TIMEOUT_MS,
+        )) as ConfigOptions & { sessionId: string };
         try {
           const found = new Map<string, Efforts | Error>();
           for (const model of wanted) {
             try {
               const { configOptions = [] } = model
-                ? ((await goose.request("session/set_config_option", {
-                    sessionId: opened.sessionId,
-                    configId: "model",
-                    value: model,
-                  })) as ConfigOptions)
+                ? ((await goose.request(
+                    "session/set_config_option",
+                    {
+                      sessionId: opened.sessionId,
+                      configId: "model",
+                      value: model,
+                    },
+                    REQUEST_TIMEOUT_MS,
+                  )) as ConfigOptions)
                 : opened;
               const option = configOptions.find(
                 (item) => item.category === "thought_level",
@@ -380,7 +435,11 @@ export class GooseSetup {
         } finally {
           // goose keeps every session; this one is not worth keeping.
           await goose
-            .request("session/delete", { sessionId: opened.sessionId })
+            .request(
+              "session/delete",
+              { sessionId: opened.sessionId },
+              REQUEST_TIMEOUT_MS,
+            )
             .catch(() => undefined);
         }
       });

@@ -68,6 +68,7 @@ export function VoiceNoteRecorder({
     <fieldset className={styles.recorder}>
       <legend className="sr-only">{label ?? "Recording voice note"}</legend>
       <IconButton
+        hint="familiar"
         ref={discard}
         type="button"
         variant="subtle"

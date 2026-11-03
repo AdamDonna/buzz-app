@@ -10,19 +10,13 @@ import type {
 import { limited, withRevision } from "../../features/agents/session-usage";
 import type { Host } from "../../features/host/service";
 import type { Spawn } from "./claude";
+import { readProject } from "./history";
 import { workspaceProject } from "./transcript";
 
 type Json = Record<string, unknown>;
 /** Files read at once, by every agent's read together: the app refuses more
  * than 16 native reads at a time. */
 const READERS = 8;
-/** Minutes a changed-files listing looks back past the previous one, as
- * `find -mmin` counts whole minutes. */
-const LIST_SLACK_MINUTES = 2;
-/** Files one search names, under the app's 256 process arguments. */
-const SEARCH_FILES = 200;
-/** Searches run at once, across every project. */
-const SEARCHES = 8;
 
 const object = (value: unknown): Json | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -89,7 +83,7 @@ const COUNTS = {
  * request once, keyed by its message and request ids when it has them:
  * Claude Code repeats a streamed response's usage on every content block's
  * line. */
-type Digest = Readonly<{
+export type Digest = Readonly<{
   start?: ReturnType<typeof buzzStart>;
   title?: string;
   unreadable: number;
@@ -246,159 +240,6 @@ export type UsageHost = Readonly<{
 }>;
 
 const reader = limited(READERS);
-const searching = limited(SEARCHES);
-
-/** One Claude Code project directory as the app's earlier reads left it. */
-type Project = {
-  /** When the latest listing of its files started; a file changed after it
-   * is read again. */
-  listedAt: number;
-  /** The listing under way, which reads made meanwhile share. */
-  listing?: Promise<void> | undefined;
-  /** Every file the latest listing found. */
-  paths: ReadonlySet<string>;
-  /** Each session's subagent transcripts, by path. */
-  subagents: ReadonlyMap<string, readonly string[]>;
-  /** The agent each session file's first prompt names. */
-  owners: Map<string, string>;
-  /** Session files searched that name none, searched again once changed. */
-  unowned: Set<string>;
-  /** Each file's digest by path, undefined when it is gone. */
-  digests: Map<string, Promise<Digest | undefined>>;
-};
-/** Per host, so a plugin that reloads starts over. */
-const cache = new WeakMap<Spawn, Map<string, Project>>();
-
-/** The lines a process prints, failing on any exit but those in `ok`. */
-async function output(
-  spawn: Spawn,
-  id: string,
-  project: string,
-  args: readonly string[],
-  ok: readonly number[],
-) {
-  let text = "";
-  let errors = "";
-  const process = await spawn(id, {
-    args: [...args],
-    cwd: `~/.claude/projects/${project}`,
-    onStdout: (data) => {
-      text += data;
-    },
-    onStderr: (data) => {
-      errors += data;
-    },
-  });
-  const code = await process.exited;
-  if (code === null || !ok.includes(code))
-    throw new Error(
-      `Couldn’t read the Claude Code history: ${errors.trim() || `exit ${code}`}`,
-    );
-  return text
-    .split("\n")
-    .map((line) => line.trim().replace(/^\.\//, ""))
-    .filter(Boolean);
-}
-
-/** The project's `.jsonl` files, subagents' included, changed in the last
- * `minutes` when given. */
-const list = (spawn: Spawn, project: string, minutes?: number) =>
-  output(
-    spawn,
-    "list",
-    project,
-    minutes === undefined ? [] : ["-mmin", `-${minutes}`],
-    [0],
-  );
-
-/** Records the agent each of the session files at `paths`, none with an agent
- * yet, names first, one search for every agent: the search stops at a file's
- * first prompt. */
-async function search(
-  spawn: Spawn,
-  project: string,
-  state: Project,
-  paths: readonly string[],
-) {
-  // No match exits 1.
-  const found = await output(spawn, "owners", project, paths, [0, 1]);
-  for (const line of found) {
-    const match =
-      /^([^/]+\.jsonl):Agent: ([0-9a-f]{64}(?:@[A-Za-z0-9._~%-]{1,512})?)$/.exec(
-        line,
-      );
-    // The first is the opening context's; a later one on its line is quoted.
-    if (match?.[1] && match[2] && !state.owners.has(match[1]))
-      state.owners.set(match[1], match[2]);
-  }
-  for (const name of paths)
-    if (state.owners.has(name)) state.unowned.delete(name);
-    else state.unowned.add(name);
-}
-
-/** Brings `state` up to date with the project's files: the digests of files
- * changed, gone or new since its last listing are dropped, and new session
- * files are searched for the agent they belong to. */
-async function refresh(spawn: Spawn, project: string, state: Project) {
-  const startedAt = Date.now();
-  // After a clock set back, file ages say nothing about the last listing:
-  // everything is read and searched again.
-  const fresh = !state.listedAt || startedAt < state.listedAt;
-  if (fresh) {
-    state.digests.clear();
-    state.unowned.clear();
-  }
-  const [all, changed] = await Promise.all([
-    list(spawn, project),
-    fresh
-      ? []
-      : list(
-          spawn,
-          project,
-          Math.ceil((startedAt - state.listedAt) / 60_000) + LIST_SLACK_MINUTES,
-        ),
-  ]);
-  const paths = new Set(all);
-  const recent = new Set(changed);
-  // A digest holds while its file is listed, unchanged, both times.
-  for (const path of state.digests.keys())
-    if (recent.has(path) || !paths.has(path) || !state.paths.has(path))
-      state.digests.delete(path);
-  const subagents = new Map<string, string[]>();
-  for (const path of paths) {
-    const match = /^([\w-]+)\/subagents\/[^/]+\.jsonl$/.exec(path);
-    if (match?.[1])
-      subagents.set(match[1], [...(subagents.get(match[1]) ?? []), path]);
-  }
-  const sessions = [...paths].filter((path) => /^[^/]+\.jsonl$/.test(path));
-  for (const name of [...state.owners.keys(), ...state.unowned])
-    if (!paths.has(name)) {
-      state.owners.delete(name);
-      state.unowned.delete(name);
-    }
-  // A file still being written may not have its first prompt yet.
-  const unsearched = sessions.filter(
-    (name) =>
-      !state.owners.has(name) && (!state.unowned.has(name) || recent.has(name)),
-  );
-  // In parallel: one search takes a core, and the first reads every file.
-  const size = Math.max(
-    1,
-    Math.min(SEARCH_FILES, Math.ceil(unsearched.length / SEARCHES)),
-  );
-  const batches = Array.from(
-    { length: Math.ceil(unsearched.length / size) },
-    (_, index) => unsearched.slice(index * size, (index + 1) * size),
-  );
-  await Promise.all(
-    batches.map((batch) =>
-      searching(() => search(spawn, project, state, batch)),
-    ),
-  );
-  state.paths = paths;
-  state.subagents = subagents;
-  state.listedAt = startedAt;
-}
 
 /** The agent's Buzz sessions in its workspace's Claude Code history, active
  * since `since`. `saved` are the session ids this app saved for it. */
@@ -413,30 +254,12 @@ export async function readUsage(
   const { spawn } = host;
   const project = await workspaceProject(spawn, workspace, signal);
   if (!project) return [];
-  const projects = cache.get(spawn) ?? new Map<string, Project>();
-  cache.set(spawn, projects);
-  let state = projects.get(project);
-  if (!state) {
-    state = {
-      listedAt: 0,
-      paths: new Set(),
-      subagents: new Map(),
-      owners: new Map(),
-      unowned: new Set(),
-      digests: new Map(),
-    };
-    projects.set(project, state);
-  }
-  const current = state;
-  // Agents read together share one listing; files changed while it ran are
-  // listed next time.
-  current.listing ??= refresh(spawn, project, current).finally(() => {
-    current.listing = undefined;
-  });
-  await current.listing;
+  const current = await readProject(spawn, project);
   signal.throwIfAborted();
-  const named = [...current.owners]
-    .filter(([, owner]) => owner === agent)
+  // A session it could not search may be the agent's: fail, not undercount.
+  if (current.incomplete) throw current.incomplete;
+  const named = [...current.starts]
+    .filter(([, start]) => start.agent === agent)
     .map(([name]) => name);
   const savedNames = new Set(
     saved.filter((id) => /^[\w-]+$/.test(id)).map((id) => `${id}.jsonl`),

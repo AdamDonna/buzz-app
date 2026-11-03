@@ -3,6 +3,7 @@ import { finalizeEvent, getPublicKey, type EventTemplate } from "nostr-tools";
 import { createChannelDetails } from "./channel-details";
 import {
   channelVisibility,
+  channelJoinRole,
   canonicalDetailsName,
   detailsSettings,
   detailsTemplate,
@@ -106,6 +107,134 @@ function harness(role = "owner", labels = false) {
     },
   };
 }
+it.each([undefined, "member"] as const)(
+  "changes admission defaults from %s without changing the signed roster, and requires matching readback",
+  async (initialRole) => {
+    const h = harness();
+    const withRole = (role: string) =>
+      h.record(39000, [...h.metadata().tags.slice(1), ["join_role", role]]);
+    if (initialRole) h.set([withRole(initialRole), ...h.events().slice(1)]);
+    const originalRoster = h.entry(2);
+    const base = await h.owner.capability.load(id);
+    expect(base.joinRole).toBe(initialRole ?? "member");
+    const next = { ...base, joinRole: "guest" as const };
+    // A relay OK that ignores the new tag must not report success.
+    h.publish.mockImplementationOnce(async () => {});
+    await expect(h.owner.capability.save(base, next)).rejects.toThrow(
+      "may have been saved",
+    );
+    expect(h.sign.mock.calls[0]?.[0].tags).toContainEqual([
+      "join_role",
+      "guest",
+    ]);
+    expect(
+      h.sign.mock.calls[0]?.[0].tags.some(
+        ([key]) => key === "p" || key === "role",
+      ),
+    ).toBe(false);
+    h.set([withRole("guest"), ...h.events().slice(1)]);
+    await h.owner.capability.check(id);
+    expect(h.entry(2)).toBe(originalRoster);
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(h.owner.capability.snapshot(id)).toBeUndefined();
+  },
+);
+
+it.each(["member", "guest"] as const)(
+  "publishes public visibility and the %s admission choice together and verifies both",
+  async (joinRole) => {
+    const h = harness();
+    const initialRole = joinRole === "member" ? "guest" : "member";
+    const metadata = (visibility: string, role: string) =>
+      h.record(39000, [
+        ...h.metadata("original", "Old description", visibility).tags.slice(1),
+        ["join_role", role],
+      ]);
+    h.set([metadata("private", initialRole), ...h.events().slice(1)]);
+    const roster = h.entry(2);
+    const base = await h.owner.capability.load(id);
+    const next = { ...base, visibility: "public" as const, joinRole };
+    // A readback confirming visibility alone cannot confirm this combined intent.
+    h.publish.mockImplementationOnce(async () => {
+      h.set([metadata("public", initialRole), ...h.events().slice(1)]);
+    });
+    await expect(h.owner.capability.save(base, next)).rejects.toThrow(
+      "may have been saved",
+    );
+    expect(h.sign).toHaveBeenCalledOnce();
+    expect(h.sign.mock.calls[0]?.[0].tags).toEqual([
+      ["h", id],
+      ["name", base.name],
+      ["about", base.description],
+      ["visibility", "open"],
+      ["join_role", joinRole],
+    ]);
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(h.owner.capability.snapshot(id)).toEqual({
+      draft: next,
+      status: "unconfirmed",
+    });
+    h.set([metadata("public", joinRole), ...h.events().slice(1)]);
+    await h.owner.capability.check(id);
+    expect(h.owner.capability.snapshot(id)).toBeUndefined();
+    expect(h.entry(2)).toBe(roster);
+    expect(h.publish).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([undefined, "member", "guest"])(
+  "only sends a changed admission role (base %s)",
+  (joinRole) => {
+    const base = { ...draft, joinRole } as typeof draft & {
+      joinRole?: "member" | "guest";
+    };
+    expect(
+      detailsTemplate(id, base, base).tags.some(([key]) => key === "join_role"),
+    ).toBe(false);
+    for (const role of ["member", "guest"] as const) {
+      const event = detailsTemplate(id, { ...base, joinRole: role }, base);
+      expect(() => validateDetailsTemplate(event)).not.toThrow();
+      expect(event.tags.filter(([key]) => key === "join_role")).toEqual(
+        role === joinRole ? [] : [["join_role", role]],
+      );
+    }
+  },
+);
+
+it("rejects malformed or elevated admission defaults at the host boundary", () => {
+  const event = detailsTemplate(id, draft, draft);
+  for (const tags of [
+    [["join_role", "owner"]],
+    [["join_role", "admin"]],
+    [["join_role", "bot"]],
+    [["join_role", ""]],
+    [["join_role"]],
+    [["join_role", "guest", "extra"]],
+    [
+      ["join_role", "member"],
+      ["join_role", "guest"],
+    ],
+    [
+      ["join_role", "guest"],
+      ["ttl", "60"],
+    ],
+  ]) {
+    expect(() =>
+      validateDetailsTemplate({ ...event, tags: [...event.tags, ...tags] }),
+    ).toThrow();
+  }
+  const h = harness();
+  expect(channelJoinRole(h.record(39000, []))).toBe("member");
+  for (const tags of [
+    [["join_role", "owner"]],
+    [
+      ["join_role", "member"],
+      ["join_role", "guest"],
+    ],
+  ])
+    expect(channelJoinRole(h.record(39000, tags))).toBe("guest");
+});
+
 it("saves only after two fresh authority checks and projects confirmed readback", async () => {
   const h = harness();
   const base = await h.owner.capability.load(id);
@@ -168,6 +297,59 @@ it("revoked authority while signing prevents publication", async () => {
     "permission",
   );
   expect(h.publish).not.toHaveBeenCalled();
+});
+it("publishes no edit once the caller's guard turns false during signing", async () => {
+  const h = harness();
+  const base = await h.owner.capability.load(id);
+  let eligible = true;
+  const active = vi.fn(() => eligible);
+  h.sign.mockImplementationOnce(async (event) => {
+    eligible = false;
+    return finalizeEvent(structuredClone(event), key);
+  });
+  const error = await h.owner.capability
+    .save(base, draft, undefined, active)
+    .catch((error: unknown) => error);
+  expect(error).toMatchObject({ name: "AbortError" });
+  expect(active).toHaveBeenCalled();
+  expect(h.publish).not.toHaveBeenCalled();
+  // Nothing reached the relay, so no unconfirmed attempt blocks a later eligible save.
+  expect(h.owner.capability.snapshot(id)).toBeUndefined();
+  await h.owner.capability.save(base, draft);
+  expect(h.publish).toHaveBeenCalledOnce();
+});
+it("checks the guard only after the final re-authorization read settles", async () => {
+  const h = harness();
+  const base = await h.owner.capability.load(id);
+  let eligible = true;
+  const active = vi.fn(() => eligible);
+  const started = deferred<void>(),
+    gate = deferred<void>();
+  h.sign.mockImplementationOnce(async (event) => {
+    h.read.mockImplementationOnce(async () => {
+      started.resolve();
+      await gate.promise;
+      return h.events();
+    });
+    return finalizeEvent(structuredClone(event), key);
+  });
+  const saving = h.owner.capability
+    .save(base, draft, undefined, active)
+    .catch((error: unknown) => error);
+  try {
+    await started.promise;
+    expect(active).not.toHaveBeenCalled();
+    eligible = false;
+  } finally {
+    gate.resolve();
+  }
+  expect(await saving).toMatchObject({ name: "AbortError" });
+  expect(active).toHaveBeenCalledOnce();
+  expect(h.publish).not.toHaveBeenCalled();
+  eligible = true;
+  await h.owner.capability.save(base, draft, undefined, active);
+  expect(h.publish).toHaveBeenCalledOnce();
+  expect(h.owner.capability.snapshot(id)).toBeUndefined();
 });
 it("stale edit bases fail before signing", async () => {
   const h = harness();
@@ -362,6 +544,35 @@ it("retains edits on rejection but locks unknown outcomes until read-only confir
   expect(h.owner.capability.snapshot(id)).toBeUndefined();
   expect(h.publish).toHaveBeenCalledTimes(2);
 });
+it.each([
+  ["initial read", "Could not verify current channel access"],
+  ["signing", "Could not sign the channel change"],
+  ["final read", "Could not recheck channel access after signing"],
+] as const)(
+  "identifies a failed %s without publishing or retrying",
+  async (phase, context) => {
+    const h = harness();
+    const base = await h.owner.capability.load(id);
+    // Native IPC can reject with a plain string; read adapters use Error.
+    const failure =
+      phase === "signing"
+        ? "Relay request failed (503)"
+        : new Error("Relay request failed (503)");
+    if (phase === "signing") h.sign.mockRejectedValueOnce(failure);
+    else {
+      if (phase === "final read") h.read.mockResolvedValueOnce(h.events());
+      h.read.mockRejectedValueOnce(failure);
+    }
+    await expect(h.owner.capability.save(base, draft)).rejects.toMatchObject({
+      message: `${context}: Relay request failed (503)`,
+      cause: failure,
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.sign).toHaveBeenCalledTimes(phase === "initial read" ? 0 : 1);
+    expect(h.read).toHaveBeenCalledTimes(phase === "final read" ? 3 : 2);
+    expect(h.owner.capability.snapshot(id)).toBeUndefined();
+  },
+);
 it("receipt alone is not success and repeated Save cannot publish twice", async () => {
   const h = harness();
   const base = await h.owner.capability.load(id);
@@ -892,4 +1103,57 @@ it("refuses chosen-name label overflow before signing and retains the existing l
   ).rejects.toThrow("at most 8");
   expect(h.sign).not.toHaveBeenCalled();
   expect((await h.owner.capability.load(id)).labels).toEqual(labels);
+});
+
+it.each([false, true])(
+  "keeps region labels during label replacement, including rename=%s",
+  async (rename) => {
+    const h = harness("owner", true);
+    const region = "buzz.region:example:work";
+    h.set([
+      h.metadata("Original", "", "private", "stream", [SOLO_LABEL, region]),
+      ...h.events().slice(1),
+    ]);
+    const base = await h.owner.capability.load(id);
+    const name = rename ? "Renamed" : "Original";
+    const expected = [
+      SOLO_LABEL,
+      "new-label",
+      region,
+      ...(rename ? [SOLO_NAMED_LABEL] : []),
+    ];
+    h.publish.mockImplementationOnce(async () =>
+      h.set([
+        h.metadata(name, "", "private", "stream", expected),
+        ...h.events().slice(1),
+      ]),
+    );
+    await h.owner.capability.save(base, {
+      ...base,
+      name,
+      labels: [SOLO_LABEL, "new-label"],
+    });
+    expect(
+      h.sign.mock.calls[0]?.[0].tags.filter(([tag]) => tag === "t"),
+    ).toEqual(expected.map((label) => ["t", label]));
+    expect((await h.owner.capability.load(id)).labels).toEqual(expected);
+  },
+);
+
+it("keeps a region label when an editor replaces the label set with empty", async () => {
+  const h = harness("owner", true);
+  const region = "buzz.region:example:work";
+  h.set([
+    h.metadata("Original", "", "private", "stream", [SOLO_LABEL, region]),
+    ...h.events().slice(1),
+  ]);
+  const base = await h.owner.capability.load(id);
+  h.publish.mockImplementationOnce(async () =>
+    h.set([
+      h.metadata("Original", "", "private", "stream", [region]),
+      ...h.events().slice(1),
+    ]),
+  );
+  await h.owner.capability.save(base, { ...base, labels: [] });
+  expect((await h.owner.capability.load(id)).labels).toEqual([region]);
 });

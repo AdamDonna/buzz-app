@@ -1,8 +1,14 @@
+import { createAppearance } from "../../src/shared/theme/service";
+import { ClaudeLogoIcon } from "../../src/shared/design-system/icons";
 import { agentAvatars } from "../../src/features/agents/avatar-packs";
 import { createRoot } from "react-dom/client";
+import { useId, useState } from "react";
+import { AgentSaveButton } from "../../src/features/agents/AgentSaveButton";
 import { CreationReview } from "../../src/bundled/agents/CreationReview";
 import { UpdateReview } from "../../src/bundled/agents/UpdateReview";
 import { AgentsPage } from "../../src/bundled/agents/AgentsPage";
+import { AgentDetails } from "../../src/bundled/agents/AgentDetails";
+import { createAgentMemories } from "../../src/features/agents/memory";
 import type {
   Agent,
   Agents,
@@ -10,6 +16,7 @@ import type {
   AgentCreationRequest,
   AgentUpdateRequest,
   NewAgent,
+  AgentViewProps,
 } from "../../src/features/agents/service";
 import type { RelayData } from "../../src/features/relay/service";
 import { AgentInstructions } from "../../src/features/agents/AgentInstructions";
@@ -17,9 +24,49 @@ import { CreateModelChoices } from "../../src/features/agents/CreateModelChoices
 import { ModelPicker } from "../../src/features/agents/ModelPicker";
 import "../../src/shared/styles/globals.css";
 
+const harness = new URLSearchParams(location.search).get("harness");
+const importing = new URLSearchParams(location.search).has("import");
+const teamImport = new URLSearchParams(location.search).has("teamImport");
+if (importing || teamImport) createAppearance();
+const importTargets: { pubkey: string; type: string }[] = [];
+Object.assign(window, { importTargets });
+
 const inheritedModel = new URLSearchParams(location.search).get(
   "inheritedModel",
 );
+const saveFooter = new URLSearchParams(location.search).has("saveFooter");
+const instructions = new URLSearchParams(location.search).get("instructions");
+const memoryLabel = new URLSearchParams(location.search).get("memoryLabel");
+
+function Settings({ agent, save }: AgentViewProps<{ instructions?: string }>) {
+  const form = useId();
+  const saved = agent.config.instructions ?? "";
+  const [draft, setDraft] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  return (
+    <form
+      id={form}
+      className="grid gap-4"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setSaving(true);
+        try {
+          await save({ instructions: draft });
+        } finally {
+          setSaving(false);
+        }
+      }}
+    >
+      <p>
+        {"These settings apply when the agent starts its next turn. ".repeat(
+          40,
+        )}
+      </p>
+      <AgentInstructions value={draft} onChange={setDraft} />
+      <AgentSaveButton form={form} saving={saving} disabled={draft === saved} />
+    </form>
+  );
+}
 
 const type: RegisteredAgentType = {
   key: "fixture/agent",
@@ -29,6 +76,18 @@ const type: RegisteredAgentType = {
   title: "Fixture",
   description: "Fixture agent",
   defaults: () => ({ config: {} }),
+  ...(saveFooter
+    ? {
+        tabs: [
+          {
+            id: "settings",
+            title: "Settings",
+            role: "settings" as const,
+            component: Settings,
+          },
+        ],
+      }
+    : {}),
   adopt: ({ instructions }, config) => ({
     ...(config as object),
     instructions,
@@ -72,7 +131,16 @@ const type: RegisteredAgentType = {
 const snapshot = {
   status: "ready" as const,
   running: [] as Agent[],
-  teams: [],
+  teams: teamImport
+    ? [
+        {
+          id: "team",
+          name: "Research",
+          instructions: "Help.",
+          members: ["4".repeat(64), "5".repeat(64)],
+        },
+      ]
+    : [],
   agents: ["Ada", "Bo", "Cy"].map(
     (name, index) =>
       ({
@@ -82,7 +150,7 @@ const snapshot = {
         type: type.key,
         name,
         picture: agentAvatars[index]?.url,
-        config: {},
+        config: instructions === null ? {} : { instructions },
         relay: "",
         place: "here",
         skipped: {},
@@ -92,15 +160,63 @@ const snapshot = {
       }) as Agent,
   ),
 };
+const joining = [4, 5].map(
+  (n) =>
+    ({
+      ...snapshot.agents[0],
+      key: String(n).repeat(64),
+      pubkey: String(n).repeat(64),
+      name: `Member ${n}`,
+      relay: `wss://community-${n}.example`,
+    }) as Agent,
+);
+const joined: string[] = [];
+Object.assign(window, { joined });
 const other: RegisteredAgentType = {
   ...type,
   key: "fixture/other",
   id: "other",
   title: "Other",
 };
+const hosted: RegisteredAgentType = {
+  ...type,
+  key: "fixture/hosted",
+  id: "hosted",
+  title: "Builderlab",
+  remote: {
+    provision: async () => {
+      throw new Error("Unexpected remote provision");
+    },
+    activate: async () => {
+      throw new Error("Unexpected remote activation");
+    },
+    profile: async () => {
+      throw new Error("Unexpected remote profile write");
+    },
+    remove: async () => {
+      throw new Error("Unexpected remote removal");
+    },
+  },
+};
+if (harness === "hosted") {
+  snapshot.agents = snapshot.agents.map((agent) => ({
+    ...agent,
+    place: "hosted",
+    type: hosted.key,
+  }));
+}
 const reviewing = new URLSearchParams(location.search).has("review");
 const changing = new URLSearchParams(location.search).has("change");
-const types = changing ? [type, other] : [type];
+const types = harness
+  ? [type, other, hosted]
+  : importing
+    ? [
+        { ...type, title: "Alternative" },
+        { ...other, title: "Claude Code", icon: ClaudeLogoIcon },
+      ]
+    : changing
+      ? [type, other]
+      : [type];
 if (changing) snapshot.running = snapshot.agents;
 let updates: readonly AgentUpdateRequest[] = changing
   ? [
@@ -179,22 +295,117 @@ const agents = {
   types: () => types,
   find: (pubkey: string) =>
     snapshot.agents.find((agent) => agent.pubkey === pubkey),
-  memberships: () => [],
-  joinable: () => [],
+  memberships: (pubkey: string) =>
+    saveFooter
+      ? [
+          { key: pubkey, origin: "https://current.example", connected: true },
+          {
+            key: `${pubkey}@other.example`,
+            origin: "https://other.example",
+            connected: false,
+          },
+        ]
+      : [],
+  configHistory: () => undefined,
+  addedTabs: () => [],
+  registerTab: () => {},
+  controlAttention: () => {},
+  joinable: () => (teamImport ? joining : []),
+  join: async (key: string) => {
+    joined.push(key);
+    return { agent: joining.find((agent) => agent.key === key), notes: [] };
+  },
+  portable: async () => ({
+    agents: importing
+      ? [1, 2].map((n) => ({
+          source: "installed" as const,
+          pubkey: String(n).repeat(64),
+          name: `Legacy ${n}`,
+          relay: "",
+        }))
+      : [],
+    teams: [],
+    here: [],
+    warnings: [],
+  }),
+  port: async (input: { pubkey: string; type: string }) => {
+    importTargets.push(input);
+    return { agent: snapshot.agents[0], notes: [] };
+  },
   relay: () => undefined,
-  save: async () => {},
+  save: async (key: string, change: { config?: unknown }) => {
+    if (!saveFooter) return;
+    snapshot.agents = snapshot.agents.map((agent) =>
+      agent.key === key
+        ? { ...agent, config: change.config ?? agent.config }
+        : agent,
+    );
+    for (const listener of listeners) listener();
+  },
   classifier: () => "unavailable",
 } as unknown as Agents;
-const disconnected = { status: "disconnected", generation: 0 };
+const disconnected = {
+  status: "disconnected",
+  generation: 0,
+  ...(teamImport
+    ? {
+        viewer: "owner",
+        origin: "https://current.example",
+        scope: "current:owner",
+      }
+    : {}),
+};
 const relay = {
   snapshot: () => disconnected,
   subscribe: () => () => {},
 } as unknown as RelayData;
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");
+const memoryOwner =
+  memoryLabel === null
+    ? undefined
+    : createAgentMemories(
+        async () => ({
+          entries: [
+            {
+              slug: "core",
+              body: "Keep replies concise.",
+              eventId: "b".repeat(64),
+              createdAt: 1_700_000_000,
+            },
+            {
+              slug: memoryLabel,
+              body: `# Saved detail\n\n${"A long body remains readable. ".repeat(30)}`,
+              eventId: "c".repeat(64),
+              createdAt: 1_700_000_000,
+            },
+          ],
+          partial: false,
+        }),
+        "f".repeat(64),
+        () => true,
+      );
+const memoryAgent = snapshot.agents[0];
+if (memoryOwner && !memoryAgent) throw new Error("Missing memory agent");
 createRoot(root).render(
-  <div className="h-screen">
-    <AgentsPage agents={agents} relay={relay} />
+  <div
+    className="h-screen"
+    style={memoryOwner ? { maxWidth: "28rem" } : undefined}
+  >
+    {memoryOwner && memoryAgent ? (
+      <AgentDetails
+        agents={agents}
+        agent={{ ...memoryAgent, relay: "wss://current.example" }}
+        type={type}
+        types={types}
+        channels={[]}
+        memories={memoryOwner.capability}
+        onRemoved={() => {}}
+        messageAction={() => null}
+      />
+    ) : (
+      <AgentsPage agents={agents} relay={relay} />
+    )}
     {reviewing && <CreationReview agents={agents} />}
     {changing && <UpdateReview agents={agents} />}
   </div>,

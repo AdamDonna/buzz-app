@@ -11,6 +11,7 @@ import "@fontsource-variable/inter/wght-italic.css";
 import "@fontsource/jetbrains-mono/400.css";
 import { useKeyboardFocusVisibility } from "./shared/design-system/useKeyboardFocusVisibility";
 import { useRejectUnclaimedDrops } from "./features/messages/use-file-drop";
+import { TooltipProvider } from "./shared/design-system/ui/Tooltip";
 
 const container = document.getElementById("root");
 
@@ -26,7 +27,11 @@ void loadAgentStorage().finally(() => {
   function HostApp() {
     useKeyboardFocusVisibility();
     useRejectUnclaimedDrops();
-    return <App services={services} />;
+    return (
+      <TooltipProvider>
+        <App services={services} />
+      </TooltipProvider>
+    );
   }
   root.render(
     <StrictMode>

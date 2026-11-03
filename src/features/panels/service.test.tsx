@@ -8,6 +8,7 @@ import { SettingsCardsService } from "../settings/service";
 import { ShortcutsService } from "../shortcuts/service";
 import { provideRelay } from "../relay/service";
 import { provideNavigation } from "../navigation/service";
+import { emptySync } from "../communities/known-communities";
 import * as channelsPlugin from "../../bundled/channels";
 import * as githubPlugin from "../../bundled/github";
 import { flush } from "../relay/testing";
@@ -33,11 +34,23 @@ it("independently unloads panels without removing the page or shared data", asyn
   new SettingsCardsService(root);
   // Channels owns the New conversation and Archive chat shortcuts.
   new ShortcutsService(root);
-  // Channels adds teams of agents from the members dialog; GitHub adds a tool.
+  // Channels adds agent teams; GitHub registers tools and an Attention source.
   root.provide("agents", {
     subscribe: () => () => {},
     snapshot: () => undefined,
     addTool: () => {},
+    addAttentionSource: () => {},
+  });
+  root.provide("communityReader", {
+    subscribe: () => () => {},
+    snapshot: () => ({
+      status: "unavailable",
+      relayAvailable: false,
+      profile: { name: "", picture: "" },
+      memberships: [],
+      selected: null,
+      sync: emptySync(),
+    }),
   });
   // GitHub reads through gh where the host can run it; here it cannot.
   root.provide("host", {});
@@ -51,18 +64,30 @@ it("independently unloads panels without removing the page or shared data", asyn
     expect(panels.resolve("https://github.com/block/buzz/pull/23")?.title).toBe(
       "GitHub",
     );
+    expect(
+      panels.resolve("https://github.com/block/buzz/pull/23")?.deferUntilShown,
+    ).toBe(true);
+    const channelPanels = panels
+      .snapshot()
+      .filter((panel) => panel.pluginId === "channels");
+    expect(channelPanels.length).toBeGreaterThan(0);
     const queries = relay.snapshot().session;
     runtime.reconcile(desired(["channels"]));
     await flush();
-    expect(panels.snapshot()).toHaveLength(0);
+    expect(panels.snapshot()).toEqual(channelPanels);
     expect(pages.snapshot()).toHaveLength(1);
     expect(relay.snapshot().session).toBe(queries);
     runtime.reconcile(desired(["channels", "github"]));
     await flush();
-    expect(panels.snapshot()).toHaveLength(1);
+    expect(
+      panels.resolve("https://github.com/block/buzz/pull/23"),
+    ).toBeDefined();
     runtime.reconcile(desired(["github"]));
     await flush();
     expect(pages.snapshot()).toHaveLength(0);
+    expect(
+      panels.snapshot().some((panel) => panel.pluginId === "channels"),
+    ).toBe(false);
     expect(
       panels.resolve("https://github.com/block/buzz/pull/23"),
     ).toBeDefined();
@@ -242,6 +267,11 @@ it("validates and freezes launcher metadata without changing target resolution",
       expect(() => ctx.panels.register({ ...base, order } as never)).toThrow(
         "order",
       );
+    }
+    for (const deferUntilShown of [null, "true", 1, {}]) {
+      expect(() =>
+        ctx.panels.register({ ...base, deferUntilShown } as never),
+      ).toThrow("deferUntilShown");
     }
     for (const channelMenu of [
       null,

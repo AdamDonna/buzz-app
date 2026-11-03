@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createRelaySession } from "./session";
+import { createSidebarPreferencesStore } from "./sidebar-preferences-store";
 import { flush, keypair, scriptedTransport } from "./testing";
 import type {
   SidebarAssignmentMutator,
@@ -19,6 +20,32 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+it.each([
+  { groupsOnly: false, failure: "Section creation is unavailable" },
+  { groupsOnly: true, failure: "Workspaces are unavailable" },
+])(
+  "keeps creation errors specific to the groupsOnly=$groupsOnly surface",
+  async ({ groupsOnly, failure }) => {
+    const store = createSidebarPreferencesStore({
+      read: async () => ({
+        sections: [],
+        assignments: {},
+        starred: [],
+        muted: [],
+      }),
+      available: true,
+      groupsOnly,
+    });
+    try {
+      await expect(
+        store.queries.createSection({ id: "new", name: "New" }),
+      ).rejects.toThrow(failure);
+    } finally {
+      store.dispose();
+    }
+  },
+);
 
 const data: SidebarPreferences = {
   sections: [{ id: "work", name: "Work", order: 0 }],
@@ -47,8 +74,10 @@ function setup(
             write ??
             (async ({ channelId, sectionId }) => {
               const assignments = { ...data.assignments };
-              if (sectionId) assignments[channelId] = sectionId;
-              else delete assignments[channelId];
+              if (channelId !== undefined) {
+                if (sectionId) assignments[channelId] = sectionId;
+                else delete assignments[channelId];
+              }
               return { sections: data.sections, assignments };
             }),
           writeSidebarStar:

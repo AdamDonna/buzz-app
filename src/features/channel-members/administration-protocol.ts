@@ -14,7 +14,8 @@ export type EditableMemberRole = (typeof editableMemberRoles)[number];
 export type MemberRole = EditableMemberRole | "owner" | "bot" | "unknown";
 export type MemberChange = Readonly<{
   pubkey: string;
-  expectedRole: MemberRole;
+  /** `none` is reserved for system setup; `absent` is an explicit role addition. */
+  expectedRole: MemberRole | "none" | "absent";
   role: EditableMemberRole | "remove";
 }>;
 export type MemberAuthority = Readonly<{
@@ -22,6 +23,8 @@ export type MemberAuthority = Readonly<{
   canManage: boolean;
   canRemove: boolean;
   canRemoveOwnedAgent: boolean;
+  /** A NIP-CL system channel, where administration may also add members. */
+  system: boolean;
 }>;
 const PUBKEY = /^[0-9a-f]{64}$/;
 
@@ -99,6 +102,7 @@ export function memberAuthority(
     canRemove: activeChannel && elevated.has(viewer),
     canRemoveOwnedAgent:
       activeChannel && !solo && !!roles[viewer] && roles[viewer] !== "unknown",
+    system: type === "system",
   });
 }
 
@@ -140,11 +144,33 @@ export function authorizeMemberChange(
   change: MemberChange,
   owner?: string,
 ) {
+  if (change.expectedRole === "none") {
+    // This sentinel is reserved for the system-channel setup path.
+    if (
+      !state.system ||
+      !state.canManage ||
+      change.pubkey === viewer ||
+      change.pubkey in state.roles ||
+      change.role === "remove" ||
+      !editableMemberRoles.includes(change.role)
+    )
+      throw new Error(
+        "Membership or permissions changed. Refresh members and roles before trying again.",
+      );
+    return;
+  }
   if (
-    !(change.role === "remove"
-      ? canRemoveMember(state, viewer, change.pubkey, owner)
-      : canManageMember(state, viewer, change.pubkey)) ||
-    state.roles[change.pubkey] !== change.expectedRole ||
+    !(change.expectedRole === "absent"
+      ? change.role !== "remove" &&
+        state.canManage &&
+        PUBKEY.test(change.pubkey) &&
+        change.pubkey !== viewer &&
+        !(change.pubkey in state.roles)
+      : change.role === "remove"
+        ? canRemoveMember(state, viewer, change.pubkey, owner)
+        : canManageMember(state, viewer, change.pubkey)) ||
+    (change.expectedRole !== "absent" &&
+      state.roles[change.pubkey] !== change.expectedRole) ||
     (change.role !== "remove" &&
       (change.expectedRole === change.role ||
         !editableMemberRoles.includes(change.role)))

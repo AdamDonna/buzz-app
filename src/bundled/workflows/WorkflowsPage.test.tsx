@@ -14,6 +14,13 @@ import userEvent from "@testing-library/user-event";
 import { formStateToYaml, yamlToFormState } from "./workflowFormTypes";
 import type { ChannelList } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
+import { formatPublicKey } from "../../shared/identity/public-key";
+import { createProfileDirectory } from "../../features/relay/profile-directory";
+import { keypair, profile, signed } from "../../features/relay/testing";
+import type { RelayEvent } from "../../features/relay/events";
+import { createAgentLibrary } from "../../features/agents/library";
+import { bindNames } from "../../features/identity-names/service";
+import { agentDirectory } from "../../features/identity-names/testing";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { WorkflowCommunity } from "./WorkflowsPage";
 import {
@@ -32,7 +39,12 @@ vi.stubGlobal(
 );
 afterEach(cleanup);
 
-function mount(initialYaml = fixtureYaml, owner = fixtureViewer, save = true) {
+function mount(
+  initialYaml = fixtureYaml,
+  owner = fixtureViewer,
+  save = true,
+  identity: Partial<Pick<RelaySession, "profiles" | "names">> = {},
+) {
   const fixture = createWorkflowFixture();
   fixture.definitions.update({
     status: "ready",
@@ -47,6 +59,8 @@ function mount(initialYaml = fixtureYaml, owner = fixtureViewer, save = true) {
   };
   const listeners = new Set<() => void>();
   const session = {
+    profiles: createProfileDirectory({ read: async () => [] }).queries,
+    ...identity,
     workflows: save
       ? fixture.capability
       : {
@@ -79,6 +93,211 @@ function mount(initialYaml = fixtureYaml, owner = fixtureViewer, save = true) {
 function detailPane() {
   return within(screen.getByRole("region", { name: "Workflow details" }));
 }
+
+it("shows the owner's identity in the row and detail and follows profile updates", async () => {
+  const owner = keypair();
+  let releaseRead: (events: readonly RelayEvent[]) => void = () => {};
+  const pendingRead = new Promise<readonly RelayEvent[]>((resolve) => {
+    releaseRead = resolve;
+  });
+  const read = vi.fn(() => pendingRead);
+  const profiles = createProfileDirectory({ read });
+  const library = createAgentLibrary(undefined);
+  let alias: string | undefined;
+  let renamed = () => {};
+  const names = bindNames(
+    { profiles: profiles.queries, agentLibrary: library.queries },
+    {
+      snapshot: () => [
+        {
+          id: "owner-alias",
+          activate: () => undefined,
+          scope: () => (key: string) =>
+            key === owner.pubkey && alias ? { name: alias } : undefined,
+          subscribe(listener: () => void) {
+            renamed = listener;
+            return () => {};
+          },
+        },
+      ],
+      subscribe: () => () => {},
+    },
+  );
+  try {
+    mount(fixtureYaml, owner.pubkey, true, {
+      profiles: profiles.queries,
+      names,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Owner: My workflows" }),
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: "All channel workflows" }),
+    );
+    await waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(
+        screen.getByText(`Owner: ${formatPublicKey(owner.pubkey)}`),
+      ).toBeVisible(),
+    );
+    await act(async () => releaseRead([profile(owner, { name: "Salman" })]));
+    expect(screen.getByText("Owner: Salman")).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    );
+    expect(detailPane().getByText("Owner: Salman")).toBeVisible();
+    act(() =>
+      profiles.accept([
+        profile(owner, { name: "Updated name" }, 1_700_000_001),
+      ]),
+    );
+    expect(detailPane().getByText("Owner: Updated name")).toBeVisible();
+    expect(screen.queryByText("Owner: Salman")).toBeNull();
+    act(() => {
+      alias = "Local owner alias";
+      renamed();
+    });
+    expect(screen.getAllByText("Owner: Local owner alias")).toHaveLength(2);
+    expect(screen.queryByText("Owner: Updated name")).toBeNull();
+  } finally {
+    await act(async () => releaseRead([]));
+    cleanup();
+    names.dispose();
+    library.dispose();
+    profiles.dispose();
+  }
+});
+
+it.each(["{}", "malformed JSON"])(
+  "uses an abbreviated public key for a nameless profile: %s",
+  async (content) => {
+    const owner = keypair();
+    const namesake = keypair();
+    const profiles = createProfileDirectory({
+      read: async () => [signed(owner, { kind: 0, content, tags: [] })],
+    });
+    profiles.accept([profile(namesake, { name: owner.pubkey.slice(0, 10) })]);
+    const library = createAgentLibrary(undefined);
+    const names = bindNames(
+      { profiles: profiles.queries, agentLibrary: library.queries },
+      {
+        snapshot: () => [agentDirectory],
+        subscribe: () => () => {},
+      },
+    );
+    try {
+      const fixture = mount(fixtureYaml, owner.pubkey, true, {
+        profiles: profiles.queries,
+        names,
+      });
+      act(() =>
+        fixture.setChannels({
+          status: "ready",
+          channels: [
+            {
+              id: fixtureChannel,
+              name: "Fixture channel",
+              members: [owner.pubkey, namesake.pubkey],
+            },
+          ],
+        }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Owner: My workflows" }),
+      );
+      fireEvent.click(
+        screen.getByRole("radio", { name: "All channel workflows" }),
+      );
+      await waitFor(() =>
+        expect(
+          profiles.queries.snapshot().get(owner.pubkey)?.nameIsFallback,
+        ).toBe(true),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByText(`Owner: ${formatPublicKey(owner.pubkey)}`),
+        ).toBeVisible(),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Open Message helper:/ }),
+      );
+      expect(
+        detailPane().getByText(`Owner: ${formatPublicKey(owner.pubkey)}`),
+      ).toBeVisible();
+      expect(
+        screen.queryByText(`Owner: ${owner.pubkey.slice(0, 10)}`),
+      ).toBeNull();
+    } finally {
+      cleanup();
+      names.dispose();
+      library.dispose();
+      profiles.dispose();
+    }
+  },
+);
+
+it("hydrates distinct displayed workflow owners in one batched profile query", async () => {
+  const owners = [keypair(), keypair(), keypair()] as const;
+  const read = vi.fn(async () =>
+    owners.map((owner, index) => profile(owner, { name: `Owner ${index}` })),
+  );
+  const profiles = createProfileDirectory({ read });
+  try {
+    const fixture = mount(fixtureYaml, owners[0].pubkey, true, {
+      profiles: profiles.queries,
+    });
+    act(() =>
+      fixture.definitions.update({
+        status: "ready",
+        data: {
+          partial: false,
+          items: [...owners, owners[0]].map((owner, index) => ({
+            ...fixtureDefinition,
+            id: `${index}`,
+            owner: owner.pubkey,
+          })),
+        },
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Owner: My workflows" }),
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: "All channel workflows" }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText(/^Owner: Owner \d$/)).toHaveLength(4),
+    );
+    expect(read).toHaveBeenCalledOnce();
+  } finally {
+    cleanup();
+    profiles.dispose();
+  }
+});
+
+it("lengthens fallback key suffixes when visible owners share one", async () => {
+  // Both npubs end in "caj" but differ at the fourth-to-last character.
+  const owners = ["a".repeat(64), `${"b".repeat(60)}d92e`] as const;
+  const fixture = mount(fixtureYaml, owners[0]);
+  act(() =>
+    fixture.definitions.update({
+      status: "ready",
+      data: {
+        partial: false,
+        items: owners.map((owner, index) => ({
+          ...fixtureDefinition,
+          id: `${index}`,
+          owner,
+        })),
+      },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Owner: My workflows" }));
+  fireEvent.click(screen.getByRole("radio", { name: "All channel workflows" }));
+  expect(await screen.findByText("Owner: npub…rcaj")).toBeVisible();
+  expect(screen.getByText("Owner: npub…vcaj")).toBeVisible();
+  expect(screen.queryByText("Owner: npub…caj")).toBeNull();
+});
 
 it("delivers a late webhook secret on the landing page after confirmed navigation", async () => {
   const fixture = mount();
@@ -144,6 +363,10 @@ it("labels landing controls as configuration and retains the runtime caveat in d
 it("explains another author's disabled controls from the landing through the read-only dialog", async () => {
   const user = userEvent.setup();
   const fixture = mount(fixtureYaml, "22".repeat(32));
+  await user.click(screen.getByRole("button", { name: "Owner: My workflows" }));
+  await user.click(
+    screen.getByRole("radio", { name: "All channel workflows" }),
+  );
   const toggle = await screen.findByRole("switch", {
     name: "Enabled in configuration: Message helper",
   });
@@ -242,7 +465,7 @@ it("describes unavailable host saving without a disclosure", async () => {
 it("does not show unreadable YAML as an enabled configuration", async () => {
   const fixture = mount("name: [");
   const restriction = await screen.findByText("Unreadable configuration");
-  expect(restriction).toBeVisible();
+  await waitFor(() => expect(restriction).toBeVisible());
   expect(restriction.closest("details")).toBeNull();
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   expect(fixture.calls.save).toBe(0);
@@ -734,7 +957,7 @@ it("resumes a paused read from the deletion toast and never republishes", async 
     });
   try {
     await userEvent.click(
-      screen.getByRole("button", { name: "Check saved configuration" }),
+      await screen.findByRole("button", { name: "Check saved configuration" }),
     );
     expect(reads).toHaveBeenCalledOnce();
     expect(
@@ -811,6 +1034,7 @@ it("does not add a channel-loading banner above retained workflow cards", async 
     channels: [{ id: fixtureChannel, name: "Fixture channel" }],
   };
   const session = {
+    profiles: createProfileDirectory({ read: async () => [] }).queries,
     workflows: fixture.capability,
     channels: {
       list: () => list,
@@ -823,9 +1047,11 @@ it("does not add a channel-loading banner above retained workflow cards", async 
       <WorkflowCommunity session={session} viewer={fixtureViewer} />
     </ToastProvider>,
   );
-  expect(
-    await screen.findByRole("button", { name: /^Open Message helper:/ }),
-  ).toBeVisible();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toBeVisible(),
+  );
   expect(screen.queryByText("Reading channels…")).toBeNull();
 });
 
@@ -862,31 +1088,35 @@ it.each([{ huddle: true as const }, { metadataPending: true as const }])(
   },
 );
 
-it("opens a selected card in the side pane and drops a stale channel filter", async () => {
-  const fixture = createWorkflowFixture();
+function channelFilteredPage() {
+  const fixture = mount();
   const other = { id: "other-channel", name: "Other channel" };
-  let list: ChannelList = {
-    status: "ready",
-    channels: [{ id: fixtureChannel, name: "Fixture channel" }, other],
-  };
-  const listeners = new Set<() => void>();
-  const session = {
-    workflows: fixture.capability,
-    channels: {
-      list: () => list,
-      ensureList() {},
-      subscribeList: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-  } as unknown as RelaySession;
-  render(
-    <ToastProvider>
-      <WorkflowCommunity session={session} viewer={fixtureViewer} />
-    </ToastProvider>,
+  act(() =>
+    fixture.setChannels({
+      status: "ready",
+      channels: [{ id: fixtureChannel, name: "Fixture channel" }, other],
+    }),
   );
   const user = userEvent.setup();
+  const openChannels = async () => {
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }).focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("dialog", { name: "Channels" });
+  };
+  const otherDefinition = {
+    ...fixtureDefinition,
+    channelId: other.id,
+    yaml: fixtureYaml.replace("Message helper", "Other helper"),
+  };
+  return { fixture, user, openChannels, otherDefinition };
+}
+
+it("opens a selected card in the side pane and closes its tab", async () => {
+  const { user } = channelFilteredPage();
+  expect(
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }).closest("header"),
+  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Filters" })).toBeNull();
   const open = await screen.findByRole("button", {
     name: /^Open Message helper:/,
   });
@@ -904,81 +1134,195 @@ it("opens a selected card in the side pane and drops a stale channel filter", as
     detailPane().getByRole("button", { name: "Close Message helper tab" }),
   );
   expect(screen.queryByRole("region", { name: "Workflow details" })).toBeNull();
-  await user.click(screen.getByRole("combobox", { name: "Channel" }));
+});
+
+it("combines channel selections and resets them while closing filtered details", async () => {
+  const { fixture, user, openChannels, otherDefinition } =
+    channelFilteredPage();
+  await openChannels();
   expect(
-    await screen.findByRole("option", { name: "Fixture channel" }),
+    await screen.findByRole("checkbox", { name: "Fixture channel" }),
   ).toBeVisible();
-  expect(screen.queryByRole("option", { name: "Other channel" })).toBeNull();
+  expect(screen.queryByRole("checkbox", { name: "Other channel" })).toBeNull();
   await user.keyboard("{Escape}");
-  const otherDefinition = {
-    ...fixtureDefinition,
-    channelId: other.id,
-    yaml: fixtureYaml.replace("Message helper", "Other helper"),
-  };
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
   act(() =>
     fixture.definitions.update({
       status: "ready",
       data: { partial: false, items: [fixtureDefinition, otherDefinition] },
     }),
   );
-  await user.click(screen.getByRole("combobox", { name: "Channel" }));
+  await openChannels();
   await user.click(
-    await screen.findByRole("option", { name: "Other channel" }),
+    await screen.findByRole("checkbox", { name: "Other channel" }),
   );
-  expect(
-    await screen.findByRole("button", { name: /^Open Other helper:/ }),
-  ).toBeVisible();
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /^Open Other helper:/ }),
+    ).toBeVisible(),
+  );
   expect(
     screen.queryByRole("button", { name: /^Open Message helper:/ }),
   ).toBeNull();
+  await openChannels();
+  expect(
+    screen.getByRole("checkbox", { name: "Other channel" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await user.click(screen.getByRole("checkbox", { name: "Fixture channel" }));
+  // Multi-selection keeps the menu open and includes both channels.
+  expect(
+    screen.getByRole("checkbox", { name: "Fixture channel" }),
+  ).toHaveAttribute("aria-checked", "true");
+  expect(
+    screen.getByRole("checkbox", { name: "Other channel" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
+  expect(
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+  ).toHaveTextContent("2 channels");
+  expect(
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+  ).toHaveAccessibleName("Channels: 2 channels");
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toBeVisible(),
+  );
+  await user.click(
+    screen.getByRole("button", { name: /^Open Message helper:/ }),
+  );
+  expect(
+    screen.getByRole("region", { name: "Workflow details" }),
+  ).toBeVisible();
+  await openChannels();
+  await user.click(screen.getByRole("checkbox", { name: "Fixture channel" }));
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
+  expect(screen.queryByRole("region", { name: "Workflow details" })).toBeNull();
+  expect(
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+  ).toHaveFocus();
+  expect(
+    screen.queryByRole("button", { name: /^Open Message helper:/ }),
+  ).toBeNull();
+  await openChannels();
+  await user.click(screen.getByRole("checkbox", { name: "Other channel" }));
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
+  expect(
+    screen.queryByRole("button", { name: "Clear channels filter" }),
+  ).toBeNull();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toBeVisible(),
+  );
+  expect(
+    screen.getByRole("button", { name: "Owner: My workflows" }),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Clear all" })).toBeVisible();
+  await openChannels();
+  await user.click(screen.getByRole("checkbox", { name: "Fixture channel" }));
+  await user.click(screen.getByRole("checkbox", { name: "Other channel" }));
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
+  await openChannels();
+  await user.click(screen.getByRole("button", { name: "Clear all" }));
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
+  expect(
+    screen.queryByRole("button", { name: "Clear channels filter" }),
+  ).toBeNull();
+});
+
+it("drops stale channel filters after readback and membership changes", async () => {
+  const { fixture, user, openChannels, otherDefinition } =
+    channelFilteredPage();
+  act(() =>
+    fixture.definitions.update({
+      status: "ready",
+      data: { partial: false, items: [fixtureDefinition, otherDefinition] },
+    }),
+  );
+  await openChannels();
+  await user.click(screen.getByRole("checkbox", { name: "Other channel" }));
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
   act(() =>
     fixture.definitions.update({
       status: "loading",
       data: { partial: false, items: [] },
     }),
   );
-  expect(screen.getByRole("combobox", { name: "Channel" })).toHaveTextContent(
-    "Other channel",
-  );
+  expect(
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+  ).toHaveAccessibleDescription("Other channel");
   act(() =>
     fixture.definitions.update({
       status: "ready",
       data: { partial: false, items: [fixtureDefinition] },
     }),
   );
-  expect(screen.getByRole("combobox", { name: "Channel" })).toHaveTextContent(
-    "All workflows",
-  );
-  await user.click(screen.getByRole("combobox", { name: "Channel" }));
-  await screen.findByRole("option", { name: "Fixture channel" });
-  expect(screen.queryByRole("option", { name: "Other channel" })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Clear channels filter" }),
+  ).toBeNull();
+  await openChannels();
+  await screen.findByRole("checkbox", { name: "Fixture channel" });
+  expect(screen.queryByRole("checkbox", { name: "Other channel" })).toBeNull();
   await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
+  );
   act(() =>
     fixture.definitions.update({
       status: "ready",
       data: { partial: false, items: [fixtureDefinition, otherDefinition] },
     }),
   );
-  await user.click(screen.getByRole("combobox", { name: "Channel" }));
+  await openChannels();
   await user.click(
-    await screen.findByRole("option", { name: "Other channel" }),
+    await screen.findByRole("checkbox", { name: "Other channel" }),
   );
-  expect(screen.getByRole("combobox", { name: "Channel" })).toHaveTextContent(
-    "Other channel",
-  );
-  act(() => {
-    list = {
-      ...list,
-      channels: [{ id: fixtureChannel, name: "Fixture channel" }],
-    };
-    for (const listener of listeners) listener();
-  });
-  expect(screen.getByRole("combobox", { name: "Channel" })).toHaveTextContent(
-    "All workflows",
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Channels" })).toBeNull(),
   );
   expect(
-    await screen.findByRole("button", { name: /^Open Message helper:/ }),
-  ).toBeVisible();
+    screen.getByRole("button", { name: /^Channels(?::|$)/ }),
+  ).toHaveAccessibleDescription("Other channel");
+  act(() => {
+    fixture.setChannels({
+      status: "ready",
+      channels: [{ id: fixtureChannel, name: "Fixture channel" }],
+    });
+  });
+  expect(
+    screen.queryByRole("button", { name: "Clear channels filter" }),
+  ).toBeNull();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    ).toBeVisible(),
+  );
 });
 
 it("closes the side pane when the final channel leaves", async () => {
@@ -989,6 +1333,7 @@ it("closes the side pane when the final channel leaves", async () => {
   };
   const listeners = new Set<() => void>();
   const session = {
+    profiles: createProfileDirectory({ read: async () => [] }).queries,
     workflows: fixture.capability,
     channels: {
       list: () => list,
@@ -1056,6 +1401,7 @@ function renderSinglePage() {
       <WorkflowCommunity
         session={
           {
+            profiles: createProfileDirectory({ read: async () => [] }).queries,
             workflows: fixture.capability,
             channels: {
               list: () => list,

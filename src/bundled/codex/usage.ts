@@ -187,10 +187,12 @@ async function list(rpc: AppServer, params: Json) {
     const page: { data: Thread[]; nextCursor: string | null } =
       await rpc.request("thread/list", {
         ...params,
-        // Without it, Codex lists only its default provider's threads, which
-        // can leave out every thread the agent ran.
+        // Without `modelProviders`, Codex lists only its default provider's
+        // threads, which can leave out every thread the agent ran. Without
+        // `useStateDbOnly`, it reads every rollout file before filtering.
         modelProviders: [],
         limit: 50,
+        useStateDbOnly: true,
         ...(cursor ? { cursor } : {}),
       });
     found.push(...page.data);

@@ -18,7 +18,11 @@ function harness(artifactSync: boolean) {
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   const sinks: ArtifactSyncSink[] = [];
   const closes = vi.fn();
-  let incoming!: (events: readonly RelayEvent[]) => void;
+  const update = vi.fn();
+  let incoming!: (
+    events: readonly RelayEvent[],
+    provenance?: { phase: "live" | "replay"; sourceChannels: string[] },
+  ) => void;
   const owner = createRelaySession({
     ...wire.transport,
     scope: "https://one.example",
@@ -27,7 +31,7 @@ function harness(artifactSync: boolean) {
       incoming = callbacks.receive;
       callbacks.state({ status: "connected", routes: [] });
       return {
-        update() {},
+        update,
         retry() {},
         dispose() {},
         syncArtifacts(_filter, sink) {
@@ -42,7 +46,11 @@ function harness(artifactSync: boolean) {
     owner,
     sinks,
     closes,
-    emit: (events: readonly RelayEvent[]) => incoming(events),
+    update,
+    emit: (
+      events: readonly RelayEvent[],
+      provenance?: { phase: "live" | "replay"; sourceChannels: string[] },
+    ) => incoming(events, provenance),
   };
 }
 const head = (d: string) =>
@@ -61,6 +69,95 @@ it("reports unsupported when the relay does not advertise sync", () => {
   expect(view.snapshot().status).toBe("unsupported");
   expect(sinks).toHaveLength(0);
 });
+
+it("keeps a followed system channel live and hands on only its revisions, replayed ones too", async () => {
+  const h = harness(false);
+  h.emit([
+    signed(relay, {
+      kind: 39002,
+      content: "",
+      created_at: 10,
+      tags: [
+        ["d", C1],
+        ["t", "system"],
+        ["p", viewer.pubkey],
+      ],
+    }),
+  ]);
+  const followed = (joined: unknown) =>
+    Array.isArray(joined) && joined.includes(C1);
+  expect(h.update.mock.calls.some(([, joined]) => followed(joined))).toBe(
+    false,
+  );
+  const listener = vi.fn();
+  const stop = h.owner.session.artifacts.follow([C1], listener);
+  expect(followed(h.update.mock.lastCall?.[1])).toBe(true);
+  const revision = head("a");
+  h.emit(
+    [
+      revision,
+      signed(viewer, { kind: 9, content: "hi", tags: [["h", C1]] }),
+      signed(viewer, {
+        kind: 45010,
+        content: "",
+        tags: [
+          ["d", "b"],
+          ["h", "22222222-2222-4222-8222-222222222222"],
+        ],
+      }),
+    ],
+    { phase: "live", sourceChannels: [C1] },
+  );
+  await vi.waitFor(() => expect(listener).toHaveBeenCalledWith([revision]));
+  // One saved while the route came up arrives in its replay.
+  const replayed = head("c");
+  h.emit([replayed], { phase: "replay", sourceChannels: [C1] });
+  await vi.waitFor(() => expect(listener).toHaveBeenCalledWith([replayed]));
+  // Its relay-signed archive too, so its config stops being used.
+  const archive = signed(relay, {
+    kind: 39000,
+    content: "",
+    created_at: 11,
+    tags: [
+      ["d", C1],
+      ["t", "system"],
+      ["archived", "true"],
+    ],
+  });
+  h.emit([archive], { phase: "live", sourceChannels: [C1] });
+  await vi.waitFor(() => expect(listener).toHaveBeenCalledWith([archive]));
+  stop();
+  expect(followed(h.update.mock.lastCall?.[1])).toBe(false);
+});
+
+it.each(["live", "replay"] as const)(
+  "tells a follow which channels a %s removal took away, never a superseded one",
+  async (phase) => {
+    const h = harness(false);
+    const members = (pubkeys: string[], at: number) =>
+      signed(relay, {
+        kind: 39002,
+        content: "",
+        created_at: at,
+        tags: [["d", C1], ["t", "system"], ...pubkeys.map((p) => ["p", p])],
+      });
+    h.emit([members([viewer.pubkey], 10)]);
+    const listener = vi.fn();
+    const revoked = vi.fn();
+    const stop = h.owner.session.artifacts.follow([C1], listener, revoked);
+    // A delayed roster the session already superseded takes nothing away.
+    h.emit([members([], 9)], { phase, sourceChannels: [C1] });
+    await Promise.resolve();
+    expect(revoked).not.toHaveBeenCalled();
+    // The removal is fenced from the follow's events, yet still heard.
+    h.emit([members([], 11)], { phase, sourceChannels: [C1] });
+    await vi.waitFor(() => expect(revoked).toHaveBeenCalledWith([C1]));
+    expect(listener).not.toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ created_at: 11 })]),
+    );
+    stop();
+  },
+);
 
 it("opens on live traffic and ends every view at session teardown", () => {
   const { owner, sinks, closes } = harness(true);

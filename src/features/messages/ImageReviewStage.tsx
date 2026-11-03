@@ -387,6 +387,7 @@ export function ImageReviewStage({
         </div>
         {canCopyImage && (
           <IconButton
+            hint="familiar"
             size="sm"
             type="button"
             aria-label="Copy image"

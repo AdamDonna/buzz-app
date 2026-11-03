@@ -114,7 +114,6 @@ test("PR media plays under the packaged media policy in a narrow GitHub panel", 
     name: "GitHub",
     exact: true,
   });
-  await panel.getByRole("button", { name: "Description", exact: true }).click();
   await expect(
     panel.getByRole("heading", { name: "Before", exact: true }),
   ).toBeVisible();
@@ -223,7 +222,6 @@ test("PR media plays under the packaged media policy in a narrow GitHub panel", 
       .scrollIntoViewIfNeeded();
     const overflow = await panel.evaluate((element) =>
       [...element.querySelectorAll("video, table, img")]
-        // Expanded descriptions retain hidden summary thumbnails in the DOM.
         // Only rendered media have bounds to compare with the panel.
         .filter((media) => media.getClientRects().length > 0)
         .map((media) => {

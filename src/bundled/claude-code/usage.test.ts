@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import {
   appendFileSync,
   mkdirSync,
@@ -12,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { HostProcessOptions } from "../../features/host/service";
-import manifest from "./manifest.json";
+import { manifestProcesses } from "./claude-testing";
 import { readUsage, sessionUsage } from "./usage";
 
 const agent = "a".repeat(64);
@@ -511,21 +510,19 @@ it("starts no more subagent reads once the read is stopped", async () => {
   expect(started).toBeLessThan(13);
 });
 
-/** Runs the manifest's processes for real, `~` being `home`; the workspace
- * resolves to /Users/me/.buzz. */
 it("fails rather than undercount when a search fails partway", async () => {
   const spawn = async (id: string, options: HostProcessOptions = {}) => {
     if (id === "workspace") options.onStdout?.("/Users/me/.buzz\n");
     if (id === "list") options.onStdout?.("./s.jsonl\n");
-    if (id === "owners") {
-      options.onStdout?.(`./s.jsonl:Agent: ${agent}\n`);
+    if (id === "starts") {
+      options.onStdout?.(`./s.jsonl:Channel: dm\n./s.jsonl:Agent: ${agent}\n`);
       options.onStderr?.("grep: ./t.jsonl: Permission denied\n");
     }
     return {
       write: async () => undefined,
       end: async () => undefined,
       kill: async () => undefined,
-      exited: Promise.resolve(id === "owners" ? 2 : 0),
+      exited: Promise.resolve(id === "starts" ? 2 : 0),
     };
   };
   await expect(
@@ -544,7 +541,7 @@ it("fails rather than undercount when a search fails partway", async () => {
  * `reads` collects the paths read within the project. */
 function desktop(home: string, reads: string[] = []) {
   return {
-    spawn: processes(home),
+    spawn: manifestProcesses(home),
     readFile: async (path: string) => {
       reads.push(path.replace(/^~\/\.claude\/projects\/[^/]+\//, ""));
       try {
@@ -556,38 +553,5 @@ function desktop(home: string, reads: string[] = []) {
         throw error;
       }
     },
-  };
-}
-
-function processes(home: string) {
-  return async (id: string, options: HostProcessOptions = {}) => {
-    const declared = manifest.host.processes.find(
-      (process) => process.id === id,
-    );
-    if (!declared) throw new Error(`undeclared process ${id}`);
-    if (id === "workspace") options.onStdout?.("/Users/me/.buzz\n");
-    const exited =
-      id === "workspace"
-        ? Promise.resolve(0)
-        : new Promise<number>((resolve) => {
-            const child = execFile(
-              declared.program,
-              [...(declared.args ?? []), ...(options.args ?? [])],
-              { cwd: options.cwd?.replace(/^~/, home), maxBuffer: 1 << 26 },
-              (error) => resolve(error ? Number(error.code) || 1 : 0),
-            );
-            child.stdout?.on("data", (data) =>
-              options.onStdout?.(String(data)),
-            );
-            child.stderr?.on("data", (data) =>
-              options.onStderr?.(String(data)),
-            );
-          });
-    return {
-      write: async () => undefined,
-      end: async () => undefined,
-      kill: async () => undefined,
-      exited,
-    };
   };
 }

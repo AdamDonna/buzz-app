@@ -8,6 +8,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
@@ -858,8 +859,10 @@ it("sends the selected image filename with its authenticated native download sou
     source,
     name: "photo.png",
   });
-  expect(await screen.findByRole("status")).toHaveTextContent(
-    "Saved to Downloads",
+  // The live region is always mounted and already reads "Downloading…", so an
+  // existence query resolves before the mocked download settles.
+  await waitFor(() =>
+    expect(screen.getByRole("status")).toHaveTextContent("Saved to Downloads"),
   );
 });
 

@@ -209,10 +209,14 @@ test("message activity opens a grouped preview and the agent's profile without l
   await expect(requestRow.locator('[data-reaction="✅"]')).toBeVisible();
   const eyes = requestRow.locator('[data-reaction="👀"]');
   await expect(eyes).toHaveCount(1);
-  await expect(eyes).toContainText("2");
-  await expect(eyes).toHaveAccessibleName(
-    `👀: Agent 1, ${getPublicKey(human).slice(0, 10)}`,
+  await expect(eyes).toHaveAccessibleName("👀: 2 people");
+  await eyes.hover();
+  const reactionPreview = page.locator(
+    '.buzz-preview-card[role="tooltip"][data-open]',
   );
+  await expect(reactionPreview).toContainText("Agent 1");
+  await expect(reactionPreview).toContainText(getPublicKey(human).slice(0, 10));
+  await page.mouse.move(0, 0);
   await expect(requestRow.locator('[data-reaction="💬"]')).toBeVisible();
   const typingTags = [
     ["h", "alpha"],

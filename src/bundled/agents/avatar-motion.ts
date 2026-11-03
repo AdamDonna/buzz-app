@@ -97,7 +97,6 @@ export function createDockMagnifier() {
 export function swapAvatarArtwork(
   source: HTMLElement,
   target: HTMLElement,
-  incoming: string,
   outgoing: string,
 ) {
   const from = source.getBoundingClientRect();
@@ -105,9 +104,9 @@ export function swapAvatarArtwork(
   const animations: Animation[] = [];
   const images: HTMLImageElement[] = [];
   const sourceVisibility = source.style.visibility;
-  const targetVisibility = target.style.visibility;
+  const targetZIndex = target.style.zIndex;
+  target.style.zIndex = "2147483647";
   source.style.visibility = "hidden";
-  target.style.visibility = "hidden";
   let finished = false;
   const cleanup = () => {
     if (finished) return;
@@ -119,29 +118,35 @@ export function swapAvatarArtwork(
       image.remove();
     });
     source.style.visibility = sourceVisibility;
-    target.style.visibility = targetVisibility;
+    target.style.zIndex = targetZIndex;
   };
-  for (const [url, start, end] of [
-    [incoming, from, to],
-    [outgoing, to, from],
+  for (const [arriving, start, end] of [
+    [true, from, to],
+    [false, to, from],
   ] as const) {
-    const image = document.createElement("img");
-    image.src = url;
-    image.alt = "";
-    image.setAttribute("aria-hidden", "true");
-    Object.assign(image.style, {
-      position: "fixed",
-      left: "0",
-      top: "0",
-      width: `${start.width}px`,
-      height: `${start.height}px`,
-      objectFit: "contain",
-      pointerEvents: "none",
-      zIndex: "2147483647",
-      transformOrigin: "center",
-    });
-    document.body.append(image);
-    images.push(image);
+    // Fly the real incoming view: its video loads and starts during the swap,
+    // with no poster-to-video replacement when the animation lands.
+    const image = arriving ? target : document.createElement("img");
+    if (image instanceof HTMLImageElement) {
+      image.src = outgoing;
+      image.alt = "";
+    }
+    if (!arriving) {
+      image.setAttribute("aria-hidden", "true");
+      Object.assign(image.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: `${start.width}px`,
+        height: `${start.height}px`,
+        objectFit: "contain",
+        pointerEvents: "none",
+        zIndex: "2147483647",
+        transformOrigin: "center",
+      });
+      document.body.append(image);
+      images.push(image as HTMLImageElement);
+    }
     const dx = end.x + end.width / 2 - start.x - start.width / 2;
     const dy = end.y + end.height / 2 - start.y - start.height / 2;
     const length = Math.max(1, Math.hypot(dx, dy));
@@ -151,8 +156,11 @@ export function swapAvatarArtwork(
       const bend = Math.sin(t * Math.PI) * arc;
       const x = start.x + dx * t - (dy / length) * bend;
       const y = start.y + dy * t + (dx / length) * bend;
+      const size = start.width + (end.width - start.width) * t;
       return {
-        transform: `translate(${x}px, ${y}px) scale(${1 + (end.width / start.width - 1) * t})`,
+        transform: arriving
+          ? `translate(${x + start.width / 2 - to.x - to.width / 2}px, ${y + start.height / 2 - to.y - to.height / 2}px) scale(${size / to.width})`
+          : `translate(${x}px, ${y}px) scale(${size / start.width})`,
       };
     });
     animations.push(

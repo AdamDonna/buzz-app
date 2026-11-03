@@ -36,15 +36,19 @@ import {
 import { parseBuzzLink, isBuzzLink } from "../navigation/buzz-links";
 import {
   LinkChannelPrivateContext,
+  LinkDescriptionContext,
+  LinkInteractiveContext,
   LinkLabelContext,
   LinkContentContext,
   LinkThreadTabContext,
 } from "./LinkLabelContext";
 import { BuzzLinkPreview, ChannelLinkPreview } from "./BuzzLinkPreview";
 import { useChannelReference } from "./channel-reference";
+import { useLinkedMessageByline } from "./linked-message";
 import { messageViewKey } from "../messages/view-key";
 import { soloChatLinkName } from "../solo/labels";
 import styles from "./LinkPreview.module.css";
+import { writeClipboardText } from "../../shared/clipboard";
 
 const empty: readonly Contribution<LinkRenderer>[] = [];
 const snapshot = () => empty;
@@ -91,6 +95,7 @@ export function MessageLink({
   const renderer = resolveLink(url, renderers);
   const [unavailable, setUnavailable] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [description, setDescription] = useState<string>();
   if (!active && previewOpen) setPreviewOpen(false);
   const trigger = useRef<HTMLAnchorElement>(null);
   const internal = isBuzzLink(url);
@@ -148,8 +153,17 @@ export function MessageLink({
   // The authored label is message text, so it stays; the lock marks it. A raw
   // destination has no name to show.
   const shown = withheld && label === undefined ? "Private channel" : children;
+  // A raw message destination names its author once read; a draft never reads.
+  const byline = useLinkedMessageByline(
+    interactive && label === undefined && children === undefined
+      ? host
+      : undefined,
+    destination?.channelId,
+    destination?.messageId,
+  );
   const display =
     label ??
+    byline ??
     directoryLabel ??
     (named ? `#${named.name}` : withheld ? "Private channel" : undefined);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -176,7 +190,7 @@ export function MessageLink({
     setCopying(true);
     setNotice(undefined);
     try {
-      await navigator.clipboard.writeText(url);
+      await writeClipboardText(url);
       setNotice({ text: "Link copied", error: false });
     } catch {
       setNotice({
@@ -274,7 +288,7 @@ export function MessageLink({
         aria-description={
           chatChip && withheld
             ? "Chat unavailable. You don’t have access, or it no longer exists."
-            : undefined
+            : description
         }
         data-link-label={label ?? ""}
         data-solo-link={chatChip ? "" : undefined}
@@ -448,7 +462,15 @@ export function MessageLink({
       value={channelPrivate || withheld || !!named?.private}
     >
       <LinkLabelContext value={display}>
-        <LinkContentContext value={shown}>{result}</LinkContentContext>
+        <LinkContentContext value={shown}>
+          <LinkInteractiveContext value={interactive}>
+            <LinkDescriptionContext
+              value={interactive ? setDescription : undefined}
+            >
+              {result}
+            </LinkDescriptionContext>
+          </LinkInteractiveContext>
+        </LinkContentContext>
       </LinkLabelContext>
     </LinkChannelPrivateContext>
   );

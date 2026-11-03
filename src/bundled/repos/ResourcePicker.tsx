@@ -21,6 +21,7 @@ import {
   type RepositoryHome,
 } from "../../features/repos/destinations";
 import { entityDtag, entityHex, entityHref } from "../../features/repos/routes";
+import { useReauthorizedRetry } from "../../features/relay/RecoveryNotice";
 import "../../shared/design-system/styles/scrollbars.css";
 import styles from "./ResourcePicker.module.css";
 
@@ -67,8 +68,16 @@ export function ResourcePicker({
   const pending = home.status === "loading";
   const visibleHome = home.status === "loading" ? home.cached : home;
   const repositories = home.status === "home" ? home.repositories : undefined;
+  // Lists refused while signed out read again once sign-in lands.
+  const homeRefused = useReauthorizedRetry(session.recovery, () =>
+    setAttempt((n) => n + 1),
+  );
+  const itemsRefused = useReauthorizedRetry(session.recovery, () =>
+    setOpening((n) => n + 1),
+  );
   useEffect(() => {
     const controller = new AbortController();
+    const failed = homeRefused.begin();
     setHome({
       status: "loading",
       cached:
@@ -78,17 +87,20 @@ export function ResourcePicker({
       (result) => {
         if (!controller.signal.aborted) setHome(result);
       },
-      () => {
-        if (!controller.signal.aborted) setHome({ status: "error" });
+      (error) => {
+        if (controller.signal.aborted) return;
+        setHome({ status: "error" });
+        failed(error);
       },
     );
     return () => controller.abort();
-  }, [session, channelId, attempt]);
+  }, [session, channelId, attempt, homeRefused]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: each opening and retry rereads.
   useEffect(() => {
     if (!open || !repositories) return;
     const controller = new AbortController();
     setItems({ status: "loading" });
+    const failed = itemsRefused.begin();
     Promise.all(
       repositories.flatMap((repository) =>
         (["issue", "pr"] as const).map(async (type) => {
@@ -139,8 +151,10 @@ export function ResourcePicker({
           ].sort((a, b) => b.createdAt - a.createdAt),
         });
       },
-      () => {
-        if (!controller.signal.aborted) setItems({ status: "error" });
+      (error) => {
+        if (controller.signal.aborted) return;
+        setItems({ status: "error" });
+        failed(error);
       },
     );
     return () => controller.abort();

@@ -83,6 +83,7 @@
 .transcript > [data-inline] {
   margin-block-end: 0;
 }
+.section > [data-inline],
 .transcript > [data-inline] {
   align-items: center;
 }
