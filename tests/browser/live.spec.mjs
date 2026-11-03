@@ -271,7 +271,7 @@ test("post-reconnect finite catch-up after a cut replay keeps paged history, cur
   ).toBeInViewport();
 });
 
-test("a reconnect whose replay was continuous keeps paged history, cursor and reading position without a head read", async ({
+test("a reconnect near startup repairs an under-limit replay and keeps paged history, cursor and reading position", async ({
   page,
   app,
 }) => {
@@ -285,6 +285,9 @@ test("a reconnect whose replay was continuous keeps paged history, cursor and re
     false,
   );
   app.relay.replayNext("primary", "alpha", [missed]);
+  // The session's startup floor truncates the full backdate allowance, so
+  // even this under-limit replay needs a repair read.
+  await expect.poll(() => heads(app, "alpha").length).toBeGreaterThan(calls);
   await expect(
     history(page).locator(`[data-message-id="${missed.id}"]`),
   ).toBeAttached();
@@ -300,8 +303,6 @@ test("a reconnect whose replay was continuous keeps paged history, cursor and re
   await expect(
     history(page).locator(`[data-message-id="${after.id}"]`),
   ).toBeInViewport();
-  // The replay closed the gap: no catch-up head read repaired it.
-  expect(heads(app, "alpha")).toHaveLength(calls);
 });
 
 test("automatic recovery restores an empty paused roster without restarting healthy global subscriptions", async ({
