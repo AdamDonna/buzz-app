@@ -1,3 +1,4 @@
+import { LIVE_CANVAS_BYTES } from "../features/channel-templates/model";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { npubEncode } from "nostr-tools/nip19";
 import { bytesToHex } from "nostr-tools/utils";
@@ -2199,8 +2200,8 @@ it("restores only revisions within the canvas size limit", async () => {
     const head = event({ kind: 40100, id: nested, created_at: 200 });
     for (const [content, ok] of [
       ["", true],
-      ["x".repeat(24 * 1024), true],
-      ["x".repeat(24 * 1024 + 1), false],
+      ["x".repeat(LIVE_CANVAS_BYTES), true],
+      ["x".repeat(LIVE_CANVAS_BYTES + 1), false],
     ] as const) {
       const old = event({ kind: 40100, id: root, content });
       const { client, published } = fake([old, head], { keep: true });

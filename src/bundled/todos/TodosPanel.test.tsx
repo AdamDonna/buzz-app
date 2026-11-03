@@ -1,4 +1,5 @@
 import { CanvasConflictError } from "../../features/channel-templates/canvas-conflict";
+import { LIVE_CANVAS_LIMIT } from "../../features/channel-templates/model";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
@@ -929,14 +930,16 @@ it("updates the assigned avatar from live profiles through the session media own
 
 it("preserves actionable save failure details", async () => {
   const f = fixture();
-  f.canvas.save.mockRejectedValueOnce(new Error("Keep Canvas below 24 KiB"));
+  f.canvas.save.mockRejectedValueOnce(
+    new Error(`Keep Canvas below ${LIVE_CANVAS_LIMIT}`),
+  );
   render(<TodosPanel {...f.props} />);
   await screen.findByRole("checkbox", { name: "First" });
   await userEvent
     .setup()
     .click(screen.getByRole("checkbox", { name: "First" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Keep Canvas below 24 KiB",
+    `Keep Canvas below ${LIVE_CANVAS_LIMIT}`,
   );
 });
 

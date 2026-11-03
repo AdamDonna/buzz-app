@@ -826,7 +826,8 @@ its text when the save finishes. If the loaded Canvas was written in the current
 a single cancellable wait respects its timestamp ordering; there is no background
 retry loop. Failures and recovered drafts expose Retry rather than silently publishing
 on reopen. Save uses the existing session Canvas/outbox contract, including its
-24 KiB limit, fresh membership check, writer-backed Canvas head/editor-confirmation
+256 KiB content limit (the complete signed event must also fit the relay's
+512 KiB frame), fresh membership check, writer-backed Canvas head/editor-confirmation
 reads and exact signed-event recovery. Canvas reads default to strong consistency
 for editor/Todos bases and setup preconditions. Setup delivery and its separate
 exact-ID confirmation both use writer-backed reads; unknown seed outcomes are
@@ -886,7 +887,7 @@ which may automatically replay the exact signed event with its original
 `expected-revision`. It never creates a fresh event or substitutes a newer
 precondition to retry. If confirmation ultimately fails or remains uncertain,
 the dialog retains drafts and shows the error without starting another restore.
-Empty revisions can be restored; revisions exceeding the existing 24 KiB save
+Empty revisions can be restored; revisions exceeding the 256 KiB live Canvas
 limit remain previewable but cannot be restored here. No new delivery owner is
 introduced.
 

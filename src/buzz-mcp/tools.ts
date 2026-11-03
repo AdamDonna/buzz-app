@@ -27,7 +27,7 @@ import {
   referencedEmoji,
 } from "../features/relay/emoji";
 import { newer } from "../features/relay/events";
-import { CANVAS_BYTES } from "../features/channel-templates/model";
+import { LIVE_CANVAS_BYTES } from "../features/channel-templates/model";
 import { threadReference } from "../features/relay/thread-reference";
 import { parseBuzzLink } from "../features/navigation/buzz-links";
 import { soloChannelMetadata } from "../features/relay/discovery";
@@ -331,11 +331,15 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool("notes_rm", "Delete your note.", { name: str }, ["name"]),
   tool("canvas_get", "Read a channel's canvas.", { channel: str }),
-  tool("canvas_set", "Replace a channel's canvas.", {
-    channel: str,
-    content: str,
-    path: str,
-  }),
+  tool(
+    "canvas_set",
+    `Replace a channel's canvas (at most ${LIVE_CANVAS_BYTES / 1024} KiB).`,
+    {
+      channel: str,
+      content: str,
+      path: str,
+    },
+  ),
   tool(
     "canvas_history",
     "A channel's canvas revisions, newest first: each one's id, time, author, size and first line. The first page starts with the canvas's version.",
@@ -1323,9 +1327,9 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       throw new Error(
         `No canvas revision ${id} in ${channel}; canvas_history lists them.`,
       );
-    if (new TextEncoder().encode(revision.content).length > CANVAS_BYTES)
+    if (new TextEncoder().encode(revision.content).length > LIVE_CANVAS_BYTES)
       throw new Error(
-        `Revision ${id} is over the canvas limit of ${CANVAS_BYTES} bytes, so it cannot be restored.`,
+        `Revision ${id} is over the canvas limit of ${LIVE_CANVAS_BYTES} bytes, so it cannot be restored.`,
       );
     const current = await head();
     // Guard the version the agent saw, never one that replaced it since.

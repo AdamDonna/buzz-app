@@ -12,7 +12,10 @@ import type {
   CanvasHistoryPage,
   ChannelCanvas,
 } from "../../features/channel-templates/capability";
-import { CANVAS_BYTES } from "../../features/channel-templates/model";
+import {
+  LIVE_CANVAS_BYTES,
+  LIVE_CANVAS_LIMIT,
+} from "../../features/channel-templates/model";
 import type { RelayEvent } from "../../features/relay/events";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import { useProfileGeneration } from "../../features/relay/react";
@@ -169,7 +172,7 @@ export function CanvasHistory({
   );
   const tooLarge =
     selected &&
-    new TextEncoder().encode(selected.content).length > CANVAS_BYTES;
+    new TextEncoder().encode(selected.content).length > LIVE_CANVAS_BYTES;
   const apply = async () => {
     if (!selected || readOnly) return;
     const current = ++generation.current;
@@ -314,8 +317,8 @@ export function CanvasHistory({
           {!selected.content && <p>This version is empty.</p>}
           {tooLarge && (
             <p>
-              This version exceeds the 24 KiB Canvas limit and cannot be
-              restored here.
+              This version exceeds the {LIVE_CANVAS_LIMIT} Canvas limit and
+              cannot be restored here.
             </p>
           )}
           <div className={styles.actions}>

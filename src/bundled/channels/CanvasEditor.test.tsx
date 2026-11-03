@@ -21,6 +21,10 @@ import {
 } from "../../shared/view-state";
 import { CanvasEditor } from "./CanvasEditor";
 import type { ChannelCanvas } from "../../features/channel-templates/capability";
+import {
+  LIVE_CANVAS_BYTES,
+  LIVE_CANVAS_LIMIT,
+} from "../../features/channel-templates/model";
 
 // Canvas opens on View; these tests exercise Edit and History.
 function openEdit() {
@@ -1175,7 +1179,11 @@ it("restores empty revisions but refuses current and oversized revisions", async
       revisions: [
         head,
         { ...old, content: "" },
-        { ...old, id: "f".repeat(64), content: "x".repeat(24577) },
+        {
+          ...old,
+          id: "f".repeat(64),
+          content: "x".repeat(LIVE_CANVAS_BYTES + 1),
+        },
       ],
       next: undefined,
     });
@@ -1195,7 +1203,9 @@ it("restores empty revisions but refuses current and oversized revisions", async
   expect(
     screen.getByRole("button", { name: "Restore this version" }),
   ).toBeDisabled();
-  expect(screen.getByText(/exceeds the 24 KiB/)).toBeInTheDocument();
+  expect(
+    screen.getByText(`exceeds the ${LIVE_CANVAS_LIMIT}`, { exact: false }),
+  ).toBeInTheDocument();
   await user.click(radios[1] as HTMLElement);
   expect(screen.getByText("This version is empty.")).toBeInTheDocument();
   await user.click(

@@ -8,7 +8,8 @@ import {
   isDefinitiveCanvasConflict,
 } from "./canvas-conflict";
 import {
-  CANVAS_BYTES,
+  LIVE_CANVAS_BYTES,
+  LIVE_CANVAS_LIMIT,
   coordinate,
   KIT_TAG,
   ME_KIT_TAG,
@@ -395,8 +396,8 @@ export function createChannelKit({
       signal.throwIfAborted();
       if (!outbox?.supports(40100) || !canWrite(channel))
         throw new Error("Canvas writing is unavailable in this channel");
-      if (new TextEncoder().encode(content).length > CANVAS_BYTES)
-        throw new Error("Keep Canvas below 24 KiB");
+      if (new TextEncoder().encode(content).length > LIVE_CANVAS_BYTES)
+        throw new Error(`Keep Canvas below ${LIVE_CANVAS_LIMIT}`);
       await ready;
       signal.throwIfAborted();
       const head = await canvas.read(channel);
