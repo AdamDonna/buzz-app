@@ -888,6 +888,79 @@ mod tests {
         .unwrap_err()
         .ends_with(": duplicate"));
     }
+    /// Seats the agent `owner` holds in a community that would accept any dial,
+    /// with `viewer` on the call: the refusal, and whether anything was dialed.
+    async fn seated(owner: &str, viewer: Option<&str>) -> (String, bool) {
+        use buzz_agent_controller::{AppAgent, Secret};
+        let community = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = community.local_addr().unwrap();
+        let key = Secret::generate().unwrap();
+        let agent: AppAgent = serde_json::from_value(json!({
+            "pubkey": key.pubkey(), "relay": format!("wss://{address}"), "owner": owner,
+            "auth": r#"["auth","owner","conditions","sig"]"#, "type": "p/t", "name": "Ada"
+        }))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let agents = crate::app_agents::AppAgentHost::holding(
+            dir.path().join("identities.json"),
+            &agent,
+            key,
+        );
+        let host = IdentityHost::fixture();
+        let call = Call {
+            id: uuid::Uuid::new_v4().to_string(),
+            community: format!("https://{address}/"),
+            viewer: match viewer {
+                Some(viewer) => viewer.into(),
+                None => host.viewer().await.unwrap(),
+            },
+            parent: uuid::Uuid::new_v4().to_string(),
+            room: Some(uuid::Uuid::new_v4().to_string()),
+            agent: Some(agent.pubkey.clone()),
+        };
+        validate(&call).unwrap();
+        let (_stop, stop) = watch::channel(false);
+        let (_pcm, pcm) = mpsc::channel(1);
+        let updates = Channel::new(|_| panic!("a refused seat reports nothing"));
+        let touched = Arc::new(AtomicU64::new(lease_time()));
+        let seat = (&agents, agent.pubkey.as_str());
+        let seating = seat_agent(&host, seat, &call, &updates, stop, pcm, touched);
+        tokio::select! {
+            biased;
+            _ = community.accept() => ("dialed".into(), true),
+            refused = tokio::time::timeout(Duration::from_secs(5), seating) => {
+                (refused.expect("the seat was never refused").unwrap_err(), false)
+            }
+        }
+    }
+    #[tokio::test]
+    async fn an_agent_is_dialed_in_only_by_its_signed_in_owner() {
+        let viewer = IdentityHost::fixture().viewer().await.unwrap();
+        // Control: the detector sees the dial an owner's seat makes.
+        assert_eq!(seated(&viewer, None).await, ("dialed".into(), true));
+    }
+    #[tokio::test]
+    async fn another_accounts_agent_is_refused_before_any_dial() {
+        // The person on the call is the one signed in; the agent is another's.
+        assert_eq!(
+            seated(&"b".repeat(64), None).await,
+            (
+                "Only its owner can bring an agent into a Huddle".into(),
+                false
+            )
+        );
+    }
+    #[tokio::test]
+    async fn a_changed_identity_is_refused_before_any_dial() {
+        // The agent is the call's viewer's, but someone else is signed in now.
+        let other = "c".repeat(64);
+        assert_ne!(IdentityHost::fixture().viewer().await.unwrap(), other);
+        assert_eq!(
+            seated(&other, Some(&other)).await,
+            ("Your identity changed. Reopen Huddles.".into(), false)
+        );
+    }
+
     #[test]
     fn destination_rejects_paths_credentials_and_noncanonical_ids() {
         let mut call = Call {

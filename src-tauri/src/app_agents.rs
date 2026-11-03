@@ -105,6 +105,20 @@ impl AppAgentHost {
             protection_upgrade: Arc::default(),
         }
     }
+    /// A host whose only saved identity is `agent`, its key already read, so
+    /// no test reaches a credential store.
+    #[cfg(test)]
+    pub(crate) fn holding(path: PathBuf, agent: &AppAgent, key: Secret) -> Self {
+        std::fs::write(&path, serde_json::to_vec(&[agent]).unwrap()).unwrap();
+        let host = Self::new(
+            Ok(path),
+            Err("unused".into()),
+            true,
+            AgentTokens::unconfigured(),
+        );
+        host.keys().insert(agent.pubkey.clone(), Arc::new(key));
+        host
+    }
     /// The saved identities, for readers outside Agents such as the inventory.
     pub(crate) fn agents(&self) -> Result<AppAgents, String> {
         self.agents.clone()
