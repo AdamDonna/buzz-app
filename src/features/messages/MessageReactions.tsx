@@ -1,6 +1,7 @@
 import { useConversationPresentation } from "../conversation/ConversationPresentation";
 import {
   type CSSProperties,
+  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -164,6 +165,124 @@ function ReactionGlyph({
   );
 }
 
+/** Mounted by PreviewCard's portal: closed pills do not observe the full roster. */
+function ReactionPreviewContent({
+  reaction,
+  authorIds,
+  session,
+  profiles,
+  name,
+  previewTilt,
+  peopleList,
+  overflowing,
+  onOverflow,
+}: {
+  reaction: MessageReaction;
+  authorIds: string[];
+  session: RelaySession;
+  profiles: ReadonlyMap<string, Profile> | undefined;
+  name: string;
+  previewTilt: string;
+  peopleList: RefObject<HTMLElement | null>;
+  overflowing: boolean;
+  onOverflow(overflowing: boolean): void;
+}) {
+  const previewAuthors = useMemo(() => {
+    return session.viewer && authorIds.includes(session.viewer)
+      ? [session.viewer, ...authorIds.filter((id) => id !== session.viewer)]
+      : authorIds;
+  }, [authorIds, session.viewer]);
+  const reactorProfiles = useMemo(
+    () => selectProfiles(session.profiles, previewAuthors),
+    [session.profiles, previewAuthors],
+  );
+  const loadedReactors = useSyncExternalStore(
+    reactorProfiles.subscribe,
+    reactorProfiles.snapshot,
+    reactorProfiles.snapshot,
+  );
+  const users = previewAuthors.map((authorId) =>
+    authorId === session.viewer
+      ? "You"
+      : (loadedReactors.get(authorId)?.name ??
+        profiles?.get(authorId)?.name ??
+        authorId.slice(0, 10)),
+  );
+  // Opening enriches a small first page, never pointer transit across a pill.
+  useEffect(() => {
+    void session.profiles
+      .ensure(previewAuthors.slice(0, 32), "background")
+      .catch(() => {});
+  }, [session.profiles, previewAuthors]);
+  const observePeople = useCallback(
+    (element: HTMLElement | null) => {
+      peopleList.current = element;
+      if (!element) return;
+      const measure = () => {
+        onOverflow(element.scrollHeight > element.clientHeight);
+      };
+      measure();
+      const resize =
+        typeof ResizeObserver === "undefined"
+          ? undefined
+          : new ResizeObserver(measure);
+      resize?.observe(element);
+      if (element.firstElementChild) resize?.observe(element.firstElementChild);
+      const visible =
+        typeof IntersectionObserver === "undefined"
+          ? undefined
+          : new IntersectionObserver(
+              (entries) => {
+                const ids = entries
+                  .filter((entry) => entry.isIntersecting)
+                  .map((entry) => (entry.target as HTMLElement).dataset.author)
+                  .filter((id): id is string => !!id);
+                for (let start = 0; start < ids.length; start += 32)
+                  void session.profiles
+                    .ensure(ids.slice(start, start + 32), "background")
+                    .catch(() => {});
+              },
+              { root: element },
+            );
+      for (let index = 0; index < previewAuthors.length; index++) {
+        const person = element.firstElementChild?.children.item(index);
+        if (person) visible?.observe(person);
+      }
+      return () => {
+        resize?.disconnect();
+        visible?.disconnect();
+      };
+    },
+    [session.profiles, previewAuthors, peopleList, onOverflow],
+  );
+  return (
+    <div className={styles.reactionPreviewContent}>
+      <span
+        className={styles.reactionPreviewEmoji}
+        style={{ "--reaction-preview-tilt": previewTilt } as CSSProperties}
+      >
+        <ReactionGlyph reaction={reaction} session={session} />
+      </span>
+      <section
+        ref={observePeople}
+        className={styles.reactionPreviewNames}
+        aria-label="Everyone who reacted"
+        tabIndex={overflowing ? 0 : undefined}
+      >
+        <div>
+          {previewAuthors.map((authorId, index) => (
+            <span key={authorId} data-author={authorId}>
+              {index > 0 ? ", " : ""}
+              {users[index]}
+            </span>
+          ))}
+        </div>
+      </section>
+      <span className={styles.reactionPreviewName}>{name}</span>
+    </div>
+  );
+}
+
 function ReactionEmoji({
   reaction,
   authorIds,
@@ -202,77 +321,23 @@ function ReactionEmoji({
   const peopleList = useRef<HTMLElement>(null);
   const [overflowing, setOverflowing] = useState(false);
   const shown = previewOpen && !previewDismissed && !unavailable;
-  const previewAuthors = useMemo(() => {
-    return session.viewer && authorIds.includes(session.viewer)
-      ? [session.viewer, ...authorIds.filter((id) => id !== session.viewer)]
-      : authorIds;
-  }, [authorIds, session.viewer]);
-  const reactorProfiles = useMemo(
-    () => selectProfiles(session.profiles, previewAuthors),
-    [session.profiles, previewAuthors],
-  );
-  const loadedReactors = useSyncExternalStore(
-    reactorProfiles.subscribe,
-    reactorProfiles.snapshot,
-    reactorProfiles.snapshot,
-  );
   const grouped = authorIds.length > 1;
-  const own = !!session.viewer && authorIds.includes(session.viewer);
-  const users = previewAuthors.map((authorId) =>
+  const labelProfiles = useMemo(
+    () => selectProfiles(session.profiles, grouped ? [] : authorIds),
+    [session.profiles, grouped, authorIds],
+  );
+  const loadedLabel = useSyncExternalStore(
+    grouped ? noSubscribe : labelProfiles.subscribe,
+    labelProfiles.snapshot,
+    labelProfiles.snapshot,
+  );
+  const authorId = authorIds[0] ?? "";
+  const user =
     authorId === session.viewer
       ? "You"
-      : (loadedReactors.get(authorId)?.name ??
+      : (loadedLabel.get(authorId)?.name ??
         profiles?.get(authorId)?.name ??
-        authorId.slice(0, 10)),
-  );
-  const user = users.join(", ");
-  // Opening enriches a small first page, never pointer transit across a pill.
-  useEffect(() => {
-    if (shown)
-      void session.profiles
-        .ensure(previewAuthors.slice(0, 32), "background")
-        .catch(() => {});
-  }, [shown, session.profiles, previewAuthors]);
-  const observePeople = useCallback(
-    (element: HTMLElement | null) => {
-      peopleList.current = element;
-      if (!element || !shown) return;
-      const measure = () =>
-        setOverflowing(element.scrollHeight > element.clientHeight);
-      measure();
-      const resize =
-        typeof ResizeObserver === "undefined"
-          ? undefined
-          : new ResizeObserver(measure);
-      resize?.observe(element);
-      if (element.firstElementChild) resize?.observe(element.firstElementChild);
-      const visible =
-        typeof IntersectionObserver === "undefined"
-          ? undefined
-          : new IntersectionObserver(
-              (entries) => {
-                const ids = entries
-                  .filter((entry) => entry.isIntersecting)
-                  .map((entry) => (entry.target as HTMLElement).dataset.author)
-                  .filter((id): id is string => !!id);
-                for (let start = 0; start < ids.length; start += 32)
-                  void session.profiles
-                    .ensure(ids.slice(start, start + 32), "background")
-                    .catch(() => {});
-              },
-              { root: element },
-            );
-      for (let index = 0; index < previewAuthors.length; index++) {
-        const person = element.firstElementChild?.children.item(index);
-        if (person) visible?.observe(person);
-      }
-      return () => {
-        resize?.disconnect();
-        visible?.disconnect();
-      };
-    },
-    [shown, session.profiles, previewAuthors],
-  );
+        authorId.slice(0, 10));
   const revealName = () => {
     if (reaction.emoji) return;
     void import("./reaction-name").then(({ reactionName }) =>
@@ -280,7 +345,7 @@ function ReactionEmoji({
     );
   };
   return (
-    <span className={styles.reactionItem}>
+    <span className={`${styles.reactionItem} buzz-compact-controls`}>
       <PreviewCard
         side="top"
         align="center"
@@ -326,7 +391,7 @@ function ReactionEmoji({
               setPreviewDismissed(true);
               onPreviewChange(false);
               const losesFocus =
-                own &&
+                mine &&
                 authorIds.length === 1 &&
                 event.currentTarget === document.activeElement;
               if (toggle(reaction.content, reaction.emoji) && losesFocus)
@@ -347,30 +412,17 @@ function ReactionEmoji({
           </Button>
         }
       >
-        <div className={styles.reactionPreviewContent}>
-          <span
-            className={styles.reactionPreviewEmoji}
-            style={{ "--reaction-preview-tilt": previewTilt } as CSSProperties}
-          >
-            <ReactionGlyph reaction={reaction} session={session} />
-          </span>
-          <section
-            ref={observePeople}
-            className={styles.reactionPreviewNames}
-            aria-label="Everyone who reacted"
-            tabIndex={overflowing ? 0 : undefined}
-          >
-            <div>
-              {previewAuthors.map((authorId, index) => (
-                <span key={authorId} data-author={authorId}>
-                  {index > 0 ? ", " : ""}
-                  {users[index]}
-                </span>
-              ))}
-            </div>
-          </section>
-          <span className={styles.reactionPreviewName}>{name}</span>
-        </div>
+        <ReactionPreviewContent
+          reaction={reaction}
+          authorIds={authorIds}
+          session={session}
+          profiles={profiles}
+          name={name}
+          previewTilt={previewTilt}
+          peopleList={peopleList}
+          overflowing={overflowing}
+          onOverflow={setOverflowing}
+        />
       </PreviewCard>
     </span>
   );
@@ -483,7 +535,7 @@ export function MessageReactions(
         row.audience !== "agents" &&
         !props.disabled && (
           <span
-            className={styles.inlineReactionTool}
+            className={`${styles.inlineReactionTool} buzz-compact-controls`}
             data-message-reactions
             data-testid="inline-add-reaction"
           >

@@ -195,9 +195,9 @@ test("reaction emojis and hit areas grow together without clipping", async ({
     );
     await expect
       .poll(async () => (await pill.boundingBox()).width)
-      .toBeGreaterThanOrEqual(32 * scale);
-    await expect(pill).toHaveCSS("height", `${32 * scale}px`);
-    await expect(addReaction).toHaveCSS("height", `${32 * scale}px`);
+      .toBeGreaterThanOrEqual(26 * scale);
+    await expect(pill).toHaveCSS("height", `${26 * scale}px`);
+    await expect(addReaction).toHaveCSS("height", `${26 * scale}px`);
     await expect(glyph).toHaveCSS("font-size", `${12 * scale}px`);
     await expect(glyph).toHaveCSS("height", `${16 * scale}px`);
     const bounds = await pill.evaluate((el) => {
@@ -225,27 +225,109 @@ test("reaction emojis and hit areas grow together without clipping", async ({
   await expect(pill).toHaveCSS("text-decoration-line", "none");
   await expect
     .poll(() =>
-      pill.locator("[data-reaction-glyph]").evaluate((el) => {
+      glyph.evaluate((el) => {
         const matrix = new DOMMatrix(getComputedStyle(el).transform);
         const angle = (Math.atan2(matrix.b, matrix.a) * 180) / Math.PI;
         return {
           scale: Number(Math.hypot(matrix.a, matrix.b).toFixed(2)),
-          inRange: angle >= -10 && angle <= 10,
+          inRange: angle >= -8.01 && angle <= 8.01,
         };
       }),
     )
-    .toEqual({ scale: 1.1, inRange: true });
+    .toEqual({ scale: 1.5, inRange: true });
   expect(await pill.boundingBox()).toEqual(hitArea);
   await page.mouse.move(0, 0);
-  await expect(pill.locator("[data-reaction-glyph]")).toHaveCSS(
-    "transform",
-    "none",
-  );
+  await expect(glyph).toHaveCSS("transform", "none");
+  await page.keyboard.press("Tab");
   await pill.focus();
-  await expect(pill.locator("[data-reaction-glyph]")).toHaveCSS(
-    "transform",
-    "none",
-  );
+  await expect(glyph).toHaveCSS("transform", "none");
+  await page.mouse.click(0, 0);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await pill.hover();
+  await expect(glyph).toHaveCSS("transform", "none");
+});
+
+// Browser-only: hover transforms paint the emoji, without moving its count or hit area.
+test("counted reaction hover leaves the count and capsule stationary", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/emoji.html?reactions&grouped=8");
+  const pill = page.getByRole("button", { name: "👍: 8 people" });
+  const count = pill.getByText("8", { exact: true });
+  await expect(count).toBeVisible();
+  const capsuleBounds = await pill.boundingBox();
+  const countBounds = await count.boundingBox();
+  const emoji = pill.locator("[data-reaction-glyph] > span").first();
+  await pill.hover();
+  await expect
+    .poll(() =>
+      emoji.evaluate((el) => {
+        const matrix = new DOMMatrix(getComputedStyle(el).transform);
+        return Number(Math.hypot(matrix.a, matrix.b).toFixed(2));
+      }),
+    )
+    .toBe(1.5);
+  expect(await count.boundingBox()).toEqual(countBounds);
+  expect(await pill.boundingBox()).toEqual(capsuleBounds);
+});
+
+// Browser-only: real intersection within the scrollport must fetch missing later names.
+test("scrolling a reaction preview loads previously uncached names", async ({
+  page,
+}) => {
+  let releaseLast;
+  const lastGate = new Promise((resolve) => {
+    releaseLast = resolve;
+  });
+  let lastRequested = false;
+  await page.route("**/fixture-reactor-profiles?*", async (route) => {
+    const names = new URL(route.request().url()).searchParams
+      .get("names")
+      .split(",");
+    if (names.includes("Teammate 150")) {
+      lastRequested = true;
+      await lastGate;
+    }
+    await route.fulfill({ body: "ok" });
+  });
+  try {
+    await page.goto(
+      "/tests/fixtures/emoji.html?reactions&grouped=150&cold-profiles",
+    );
+    await page.getByRole("button", { name: "👍: 150 people" }).focus();
+    const people = page.getByRole("region", { name: "Everyone who reacted" });
+    await expect(people).toContainText("Teammate 1");
+    const last = people.locator("[data-author]").last();
+    await expect(last).toHaveText(/, [a-f0-9]{10}$/);
+    // Wait for initial intersection delivery before asserting no offscreen read.
+    expect(
+      await last.evaluate(
+        (el) =>
+          new Promise((resolve) => {
+            const observer = new IntersectionObserver(
+              ([entry]) => {
+                observer.disconnect();
+                resolve(entry.isIntersecting);
+              },
+              { root: el.closest("section") },
+            );
+            observer.observe(el);
+          }),
+      ),
+    ).toBe(false);
+    expect(lastRequested).toBe(false);
+    await people.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect.poll(() => lastRequested).toBe(true);
+    await expect(last).toHaveText(/, [a-f0-9]{10}$/);
+    releaseLast();
+    await expect(last).toHaveText(", Teammate 150");
+    await page.keyboard.press("Escape");
+    await expect(people).toHaveCount(0);
+  } finally {
+    releaseLast();
+  }
 });
 
 test("reaction bubbles wrap, preview, toggle, and add from the inline control", async ({
@@ -279,10 +361,10 @@ test("reaction bubbles wrap, preview, toggle, and add from the inline control", 
     "font-size",
     "12px",
   );
-  await expect(custom).toHaveCSS("height", "32px");
+  await expect(custom).toHaveCSS("height", "26px");
   const plus = row.getByRole("button", { name: "Add reaction" });
-  await expect(plus).toHaveCSS("width", "32px");
-  await expect(plus).toHaveCSS("height", "32px");
+  await expect(plus).toHaveCSS("width", "26px");
+  await expect(plus).toHaveCSS("height", "26px");
   await message.screenshot({ path: testInfo.outputPath("reaction-row.png") });
 
   await custom.hover();
@@ -570,7 +652,7 @@ test("long native reactions and unavailable shortcode artwork stay inside the hi
         truncated: glyph.scrollWidth > glyph.clientWidth,
       };
     });
-    expect(bounds.glyphWidth).toBeLessThanOrEqual(32);
+    expect(bounds.glyphWidth).toBeLessThanOrEqual(26);
     expect(bounds.truncated).toBe(true);
     expect(bounds.glyphLeft).toBeGreaterThanOrEqual(bounds.chipLeft);
     expect(bounds.glyphRight).toBeLessThanOrEqual(bounds.chipRight);
@@ -618,25 +700,27 @@ test.describe("reaction control rendering", () => {
       .toBe(false);
     const bounds = await plus.boundingBox();
     const original = await plus.screenshot();
-    await emoji.locator("[data-reaction-glyph]").evaluate((el) => {
-      el.addEventListener(
-        "transitionrun",
-        () => {
-          for (const animation of el.getAnimations()) {
-            animation.pause();
-            animation.currentTime =
-              Number(animation.effect.getTiming().duration) / 2;
-          }
-        },
-        { once: true },
-      );
-    });
+    await emoji
+      .locator("[data-reaction-glyph] > :first-child")
+      .evaluate((el) => {
+        el.addEventListener(
+          "transitionrun",
+          () => {
+            for (const animation of el.getAnimations()) {
+              animation.pause();
+              animation.currentTime =
+                Number(animation.effect.getTiming().duration) / 2;
+            }
+          },
+          { once: true },
+        );
+      });
     try {
       await emoji.hover();
       await expect
         .poll(() =>
           emoji
-            .locator("[data-reaction-glyph]")
+            .locator("[data-reaction-glyph] > :first-child")
             .evaluate((el) =>
               el
                 .getAnimations()
@@ -647,15 +731,16 @@ test.describe("reaction control rendering", () => {
       expect(await plus.boundingBox()).toEqual(bounds);
       expect((await plus.screenshot()).equals(original)).toBe(true);
     } finally {
-      await emoji.locator("[data-reaction-glyph]").evaluate((el) => {
-        for (const animation of el.getAnimations()) animation.finish();
-      });
+      await emoji
+        .locator("[data-reaction-glyph] > :first-child")
+        .evaluate((el) => {
+          for (const animation of el.getAnimations()) animation.finish();
+        });
     }
     await row.hover({ position: rest });
-    await expect(emoji.locator("[data-reaction-glyph]")).toHaveCSS(
-      "transform",
-      "none",
-    );
+    await expect(
+      emoji.locator("[data-reaction-glyph] > :first-child"),
+    ).toHaveCSS("transform", "none");
     expect(await plus.boundingBox()).toEqual(bounds);
     expect((await plus.screenshot()).equals(original)).toBe(true);
     await plus.hover();
@@ -671,11 +756,18 @@ test("short reactor lists do not add a keyboard stop", async ({ page }) => {
   await page.goto("/tests/fixtures/emoji.html?reactions&grouped=8");
   const group = page.getByRole("button", { name: "👍: 8 people" });
   await group.focus();
-  const preview = page.getByRole("tooltip");
+  const preview = page.getByRole("tooltip").filter({
+    has: page.getByRole("region", { name: "Everyone who reacted" }),
+  });
   await expect(preview).toBeVisible();
   const people = preview.getByRole("region", { name: "Everyone who reacted" });
   await expect(people).not.toHaveAttribute("tabindex", "0");
   await page.keyboard.press("Tab");
-  await expect(people).not.toBeFocused();
-  await expect(group).not.toBeFocused();
+  await expect(
+    page
+      .getByTestId("reaction-row")
+      .filter({ has: group })
+      .getByRole("button", { name: "Add reaction", exact: true }),
+  ).toBeFocused();
+  await expect(preview).toHaveCount(0);
 });

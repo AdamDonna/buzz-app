@@ -249,6 +249,9 @@
   width: fit-content;
   max-width: 100%;
 }
+.reactions[data-populated] {
+  padding: var(--space-half);
+}
 .reactions:empty {
   margin-top: 0;
 }
@@ -297,19 +300,33 @@
 @media (hover: hover) and (pointer: fine) and (
     prefers-reduced-motion: no-preference
   ) {
-  .reactionGlyph {
-    transition: transform var(--duration-fast) var(--easing-enter);
+  .reactionGlyph > :not(.reactionCount) {
+    transform-origin: 50% 70%;
+    transition: transform var(--duration-settle) var(--easing-settle);
   }
-  .reactionItem
+  html:not([data-keyboard-navigation])
+    .reactionItem
     button:enabled:not([aria-disabled="true"]):hover
-    .reactionGlyph {
-    transform: rotate(var(--reaction-tilt, 0deg)) scale(1.1);
+    .reactionGlyph
+    > :not(.reactionCount) {
+    transform: translateY(calc(-1 * var(--space-half)))
+      rotate(clamp(-8deg, var(--reaction-tilt, -6deg), 8deg)) scale(1.5);
+    transition-duration: var(--duration-state);
+    transition-timing-function: var(--easing-enter);
+  }
+  html:not([data-keyboard-navigation])
+    .reactionItem
+    button:enabled:not([aria-disabled="true"]):hover:active
+    .reactionGlyph
+    > :not(.reactionCount) {
+    transform: scale(0.96);
+    transition-duration: var(--duration-fast);
   }
 }
 .reactionNativeEmoji {
   display: inline-block;
   min-width: 0.75rem;
-  max-width: var(--size-control-sm);
+  max-width: var(--compact-control-size, var(--size-control-sm));
   font-size: var(--text-caption);
   line-height: 1;
   text-align: center;
@@ -325,7 +342,7 @@
 .reactionFallbackEmoji {
   display: inline-block;
   min-width: 0;
-  max-width: var(--size-control-sm);
+  max-width: var(--compact-control-size, var(--size-control-sm));
   font-size: var(--text-caption);
   line-height: 1;
   overflow: hidden;
@@ -430,8 +447,6 @@
   transform-style: preserve-3d;
   display: inline-flex;
   align-items: center;
-  width: var(--size-control-sm);
-  height: var(--size-control-sm);
   border-radius: var(--radius-capsule);
 }
 .inlineReactionTool:empty {
@@ -443,10 +458,8 @@
   opacity: 0.65;
 }
 .inlineReactionTool [data-icon-variant] {
-  width: 100%;
-  height: 100%;
   border: 1px solid transparent;
-  border-radius: inherit;
+  border-radius: var(--radius-capsule);
   background: transparent;
   color: var(--reaction-ink, var(--text-secondary));
 }
