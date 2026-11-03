@@ -82,7 +82,8 @@ type Request = {
   current?: () => boolean;
   /** The agent's community and owner, as `origin:viewer`. */
   scope: string;
-  event?: EventData;
+  /** Publish/activity root; unlike toolRoot, retained in DMs. */
+  replyRoot?: string;
   agent: AgentHandle;
   settings: Config;
   conversation: Conversation;
@@ -116,6 +117,7 @@ type Request = {
    * one that fails or is cancelled before then leaves them for the next. */
   notes?: readonly string[];
 };
+type TextRequest = Request & { event: EventData; adopted?: never };
 /** `at` is when the binding last took in a message or ended a turn; bindings
  * saved before it existed have none. `tools` is the `addedKey` of the
  * thread's tools, absent when plugins added none. */
@@ -743,6 +745,8 @@ export class CodexRuntime {
       signal.removeEventListener("abort", onAbort);
       abort.abort();
       off();
+      // Stop media, await the surviving typed turn, then unsubscribe.
+      // New text waits on closing, installed as lane.tail below.
       const tail = lane.tail;
       const opened = media;
       const stopped = opened?.close();
@@ -760,7 +764,6 @@ export class CodexRuntime {
         if (!lane.active && !lane.queued && entry.lanes.get(key) === lane)
           entry.lanes.delete(key);
       })();
-      // New text requests wait for the retained subscription to be released.
       lane.tail = closing;
       return closing;
     };
@@ -816,12 +819,11 @@ export class CodexRuntime {
             // execute installs the normal Request synchronously, before the next RPC tool call.
             const previous = lane.tail;
             const delegated = this.execute(
-              { ...request },
+              { ...request, adopted: p.turn.id },
               "",
               key,
               lane,
               entry,
-              p.turn.id,
             );
             lane.tail = Promise.all([previous, delegated]).then(() => {});
           }
@@ -904,8 +906,8 @@ export class CodexRuntime {
     const settings = this.resolveConfig(delivery.config);
     const channel = await reads.channel(channelId);
     const solo = await reads.soloChat(agent.owner, channelId, delivery.signal);
-    const topLevel =
-      solo || isHuddleRoom(channel?.about) || wake?.topLevel === true;
+    const huddle = isHuddleRoom(channel?.about);
+    const topLevel = solo || huddle || wake?.topLevel === true;
     if (wake && !wakeLands(wake, topLevel)) return delivery.ignored?.();
     // Only a Solo chat's Canvas is handed over.
     const canvas = reads.canvas?.bind(reads);
@@ -930,10 +932,11 @@ export class CodexRuntime {
     delivery.workingUntil(replied);
     // Codex makes one more model call after a final send before its turn
     // ends; the agent is done working on this request once it has replied.
-    const request: Request & { event: EventData } = {
+    const request: TextRequest = {
       scope: reads.scope,
       ...(wake ? { current: delivery.current } : {}),
       event,
+      ...(!topLevel ? { replyRoot: rootOf(event) } : {}),
       ...(wake ? { wake } : {}),
       ...(delivery.wakeText ? { wakeText: delivery.wakeText } : {}),
       agent,
@@ -947,9 +950,7 @@ export class CodexRuntime {
         name: channel?.name ?? channelId,
         ...(root ? { root } : {}),
         ...(topLevel ? { topLevel } : {}),
-        ...(topLevel && !solo && !isHuddleRoom(channel?.about)
-          ? { threadReplies: true }
-          : {}),
+        ...(topLevel && !solo && !huddle ? { threadReplies: true } : {}),
       },
       team: delivery.team ?? "",
       ...(project ? { project: `${project}\n` } : {}),
@@ -1267,12 +1268,7 @@ export class CodexRuntime {
    * and a top-level chat is one scope. */
   private acknowledgeActivity(active: Active, request: Request) {
     if (!request.step) return;
-    // Voice requests are top-level; the event guard only satisfies narrowing.
-    const scope = request.conversation.topLevel
-      ? request.conversation.channelId
-      : request.event
-        ? rootOf(request.event)
-        : request.conversation.channelId;
+    const scope = request.replyRoot ?? request.conversation.channelId;
     const prior = active.activity.get(scope);
     if (prior === request) return;
     prior?.superseded?.();
@@ -1325,7 +1321,7 @@ export class CodexRuntime {
   }
 
   private start(
-    request: Request & { event: EventData },
+    request: TextRequest,
     text: string,
     key: string,
     lane: Lane,
@@ -1363,9 +1359,8 @@ export class CodexRuntime {
       });
     return job;
   }
-  private async history(request: Request, signal: AbortSignal) {
+  private async history(request: TextRequest, signal: AbortSignal) {
     signal.throwIfAborted();
-    if (!request.event) return "";
     const reads = this.reads(request.agent.key);
     if (reads?.scope !== request.scope)
       throw new Error("The community changed");
@@ -1384,15 +1379,14 @@ export class CodexRuntime {
   // Tags the owner even when a sibling asked: tagging the sibling would wake
   // it, and two agents failing alike would wake each other without end.
   private publish(request: Request, content: string) {
-    // Voice requests are top-level; the event guard only satisfies narrowing.
     return request.agent.publish({
       kind: 9,
       content,
       tags: [
         ["h", request.conversation.channelId],
-        ...(request.conversation.topLevel || !request.event
-          ? []
-          : [["e", rootOf(request.event), "", "reply"]]),
+        ...(request.replyRoot !== undefined
+          ? [["e", request.replyRoot, "", "reply"]]
+          : []),
         ["p", request.agent.owner],
       ],
     });
@@ -1823,13 +1817,13 @@ export class CodexRuntime {
   }
 
   private async execute(
-    request: Request,
+    request: TextRequest | (Request & { adopted: string }),
     text: string,
     key: string,
     lane: Lane,
     entry: Entry,
-    adopted?: string,
   ) {
+    const { adopted } = request;
     let ready!: () => void;
     let notReady!: (error: unknown) => void;
     let release!: () => void;
@@ -1904,10 +1898,9 @@ export class CodexRuntime {
       active.effort = effort;
       // The seat owns its retained bridge; individual turns must not close it.
       hookBridge = lane.voice ? undefined : bridge;
-      if (adopted) {
+      if (request.adopted !== undefined) {
         ready();
       } else {
-        if (!request.event) throw new Error("Text turn requires an event");
         const [context, memory] = await Promise.all([
           this.history(request, signal),
           this.core(request.agent.key, signal),
