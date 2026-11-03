@@ -22,7 +22,30 @@ test("main conversation replies inline and keeps the existing thread summary", a
     exact: true,
   });
   await channel.fill("Keep my channel draft");
+  const settleComposer = async () => {
+    // Stable polling can fall between WebKit animation frames. Wait for the
+    // actual transition, then let ResizeObserver and the next paint finish.
+    await page.locator("form").evaluate(async (element) => {
+      do {
+        // Collapsing content can cancel an animation when it unmounts.
+        await Promise.allSettled(
+          element
+            .getAnimations({ subtree: true })
+            .map((animation) => animation.finished),
+        );
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+      } while (
+        element
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === "running")
+      );
+    });
+    await settle(page);
+  };
   const chooseReply = async () => {
+    await settleComposer();
     await hoverMessage(row);
     await row
       .getByRole("button", { name: "Reply in thread", exact: true })
@@ -74,19 +97,7 @@ test("main conversation replies inline and keeps the existing thread summary", a
     await expect(
       form.getByText("Reply in thread", { exact: true }),
     ).toBeVisible();
-    // Stable polling can fall between WebKit animation frames. Wait for the
-    // actual transition, then let ResizeObserver and the next paint finish.
-    await form.evaluate(async (element) => {
-      await Promise.all(
-        element
-          .getAnimations({ subtree: true })
-          .map((animation) => animation.finished),
-      );
-      await new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      );
-    });
-    await settle(page);
+    await settleComposer();
   } finally {
     frames = await page.evaluate(() => {
       window.replySampling = false;
