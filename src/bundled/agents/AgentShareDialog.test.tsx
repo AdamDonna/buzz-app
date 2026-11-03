@@ -230,10 +230,15 @@ function community() {
       },
     ),
   };
+  const profiles = new Map();
   return {
     session: {
       read,
       outbox,
+      profiles: {
+        snapshot: () => profiles,
+        subscribe: () => () => {},
+      },
       viewer: owner,
       // Each test's community is its own.
       scope: `https://relay${++communities}.example ${owner}`,

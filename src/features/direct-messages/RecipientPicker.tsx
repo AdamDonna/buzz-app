@@ -19,7 +19,7 @@ import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { Button } from "../../shared/design-system/ui/Button";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { XIcon } from "../../shared/design-system/icons/index";
-import { usePeople, type Recipient } from "./usePeople";
+import { usePeople, recipientNames, type Recipient } from "./usePeople";
 import { peopleRelationships } from "../profiles/relationships";
 import { useChipRemoval } from "./useChipRemoval";
 import styles from "./NewMessage.module.css";
@@ -118,7 +118,8 @@ export function RecipientPicker({
     );
     const namesOf = (person: Recipient) => {
       const own = agentName.get(person.pubkey);
-      return own && own !== person.name ? [person.name, own] : [person.name];
+      const names = recipientNames(person, session.names);
+      return own ? [...names, own] : names;
     };
     const byAgentName = query.trim()
       ? agents.identities.flatMap((agent): Recipient[] => {
@@ -220,6 +221,7 @@ export function RecipientPicker({
     usage,
     selected,
     excludedPubkeys,
+    session.names,
   ]);
   const discriminator = (person: Recipient) => identities.get(person.pubkey);
   const label = (person: Recipient) =>

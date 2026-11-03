@@ -525,6 +525,62 @@ it("orders typed matches by exact name, earlier choice, relationship, then usage
   );
 });
 
+it("finds a directory recipient by username when the display name differs", async () => {
+  const t = setup();
+  const andrea = {
+    pubkey: "a".repeat(64),
+    name: "Andrea Guevara",
+    username: "andreaguevara",
+  };
+  t.directMessages.people.mockImplementation(async (query) => ({
+    people: query ? [andrea] : [],
+    hasMore: !query,
+  }));
+  t.mount();
+  await waitFor(() => expect(recipient()).toBeEnabled());
+  await t.user.type(recipient(), "andreaguevara");
+  await t.user.click(await screen.findByRole("option", { name: andrea.name }));
+  await t.user.type(screen.getByRole("textbox"), "Hello Andrea");
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  expect(t.directMessages.open).toHaveBeenCalledWith(
+    [andrea.pubkey],
+    expect.any(AbortSignal),
+  );
+});
+
+it("finds a cached profile by username or resolved identity name when the directory returns nothing", async () => {
+  const t = setup();
+  const andrea = {
+    pubkey: "a".repeat(64),
+    name: "Andrea Guevara",
+    username: "andreaguevara",
+  };
+  const cached = new Map([[andrea.pubkey, andrea]]);
+  Object.assign(t.session.profiles, { snapshot: () => cached });
+  Object.assign(t.session, {
+    names: {
+      snapshot: () => 0,
+      subscribe: () => () => {},
+      lookup: () => ({ name: "agverified", source: "public-profile" }),
+    },
+  });
+  t.directMessages.people.mockResolvedValue({ people: [], hasMore: false });
+  t.mount();
+  await waitFor(() => expect(t.directMessages.people).toHaveBeenCalled());
+  for (const query of ["andreaguevara", "agverified"]) {
+    await t.user.clear(recipient());
+    await t.user.type(recipient(), query);
+    expect(
+      await screen.findByRole("option", { name: andrea.name }),
+    ).toBeVisible();
+  }
+  await t.user.keyboard(" ");
+  expect(
+    screen.getByRole("button", { name: `Remove ${andrea.name}` }),
+  ).toBeVisible();
+});
+
 it("matches accented names the way the directory finds them", async () => {
   const t = setup();
   const jose = { pubkey: "a".repeat(64), name: "José" };

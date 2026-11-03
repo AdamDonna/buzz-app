@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { RelaySession } from "../relay/session";
+import type { IdentityNameView } from "../identity-names/service";
+import { useNamesRevision } from "../identity-names/react";
 import type { Profile } from "../relay/contracts";
 import { peopleOrder } from "../profiles/people-order";
 import { matchPerson } from "../search/person-match";
@@ -10,6 +19,14 @@ import {
 } from "../../shared/search-debounce";
 
 export type Recipient = Profile & { pubkey: string };
+
+export function recipientNames(person: Recipient, names?: IdentityNameView) {
+  return [
+    person.name,
+    person.username,
+    names?.lookup(person.pubkey)?.name,
+  ].filter((name): name is string => !!name);
+}
 
 type PeopleState = {
   session: RelaySession;
@@ -36,15 +53,26 @@ function empty(session: RelaySession, query: string): PeopleState {
     error: "",
   };
 }
-function matching(people: Recipient[], query: string) {
+function matching(
+  people: Recipient[],
+  query: string,
+  names?: IdentityNameView,
+) {
   const key = query.trim().toLowerCase();
   return people.filter(
     (person) =>
-      matchPerson(person.name, query) !== undefined ||
+      recipientNames(person, names).some(
+        (name) => matchPerson(name, query) !== undefined,
+      ) ||
       (/^[0-9a-f]{64}$/.test(key) && person.pubkey === key),
   );
 }
 export function usePeople(session: RelaySession, query: string) {
+  const profiles = useSyncExternalStore(
+    session.profiles.subscribe,
+    session.profiles.snapshot,
+  );
+  useNamesRevision(session.names, !!query.trim());
   const cache = useMemo(() => {
     const existing = directories.get(session);
     if (existing) return existing;
@@ -70,7 +98,7 @@ export function usePeople(session: RelaySession, query: string) {
     );
     return {
       ...(resumed ?? empty(session, query)),
-      people: matching([...known.values()], query).sort(peopleOrder(query)),
+      people: [...known.values()],
       loading: !complete && (resumed?.loading ?? true),
       hasMore: !complete && (resumed?.hasMore ?? true),
     };
@@ -109,10 +137,10 @@ export function usePeople(session: RelaySession, query: string) {
           visit,
           people: [
             ...new Map(
-              [
-                ...owned.people,
-                ...matching(result.people, query).sort(peopleOrder(query)),
-              ].map((person) => [person.pubkey, person]),
+              [...owned.people, ...result.people].map((person) => [
+                person.pubkey,
+                person,
+              ]),
             ).values(),
           ],
         };
@@ -189,8 +217,19 @@ export function usePeople(session: RelaySession, query: string) {
   const visible =
     state.session === session && state.query === query ? state : initial;
   const browsed = cache.get("");
+  // Keep raw directory rows so a later name/username can match them. As in
+  // global search, typed queries also include profiles already known here.
+  const known = new Map(
+    visible.people.map((person) => [person.pubkey, person]),
+  );
+  if (query.trim())
+    for (const [pubkey, profile] of profiles)
+      if (!known.has(pubkey) && (!profile.nameIsFallback || profile.username))
+        known.set(pubkey, { ...profile, pubkey });
   return {
-    people: visible.people,
+    people: matching([...known.values()], query, session.names).sort(
+      peopleOrder(query),
+    ),
     loading: visible.loading || (visible.hasMore && !visible.error),
     error: visible.error,
     hasMore: visible.hasMore,
