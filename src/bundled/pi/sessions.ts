@@ -199,14 +199,19 @@ export class PiSessions {
     const generation = this.generations.get(scope) ?? {};
     this.generations.set(scope, generation);
     if (!(await this.inspect(delivery.agent.key))) return false;
-    await this.changes.get(scope);
-    delivery.signal.throwIfAborted();
-    const session = await this.store.current(delivery.agent.key, place);
-    live();
-    if (this.generations.get(scope) !== generation)
-      throw new Error("Pi session was retired");
-    const opened = this.runtime(delivery.agent.key, session);
-    await opened.runtime.run(delivery);
+    const changing = this.changes.get(scope);
+    const run = async () => {
+      await changing;
+      delivery.signal.throwIfAborted();
+      const session = await this.store.current(delivery.agent.key, place);
+      live();
+      if (this.generations.get(scope) !== generation)
+        throw new Error("Pi session was retired");
+      const opened = this.runtime(delivery.agent.key, session);
+      await opened.runtime.run(delivery);
+    };
+    if (changing) delivery.workingUntil(run());
+    else await run();
     return true;
   }
   run(delivery: Delivery) {
@@ -226,20 +231,25 @@ export class PiSessions {
       return { ok: true };
     const session: PiSession = { key: crypto.randomUUID(), place: "", at: 0 };
     await this.store.save(turn.delivery.agent.key, session);
-    turn.signal.throwIfAborted();
-    live();
-    const opened = this.runtime(turn.delivery.agent.key, session);
-    const abort = () => opened.lifetime.abort(turn.signal.reason);
-    turn.signal.addEventListener("abort", abort, { once: true });
-    if (turn.signal.aborted) abort();
+    let opened: Open | undefined;
+    const abort = () => opened?.lifetime.abort(turn.signal.reason);
     try {
+      turn.signal.throwIfAborted();
+      live();
+      opened = this.runtime(turn.delivery.agent.key, session);
+      turn.signal.addEventListener("abort", abort, { once: true });
+      if (turn.signal.aborted) abort();
       return await opened.runtime.runOnce({
         ...turn,
         prompt: async () => text,
       });
     } finally {
       turn.signal.removeEventListener("abort", abort);
-      await this.close(opened);
+      try {
+        if (opened) await this.close(opened);
+      } finally {
+        await this.store.remove(turn.delivery.agent.key, session);
+      }
     }
   }
 
@@ -361,8 +371,11 @@ export class PiSessions {
     live();
     const usage = await Promise.all(
       this.store
-        .list(agent)
-        .filter((session) => session.conversation !== undefined)
+        .history(agent)
+        .filter(
+          (session) =>
+            session.conversation !== undefined && session.at >= since,
+        )
         .map(async (session) =>
           (
             await this.runtime(agent, session).runtime.usage(
