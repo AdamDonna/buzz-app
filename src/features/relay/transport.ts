@@ -1414,6 +1414,7 @@ export async function connectSignedTransport(
           undefined,
           undefined,
           undefined,
+          undefined,
           signer.verifySignatures,
         );
       } catch (error) {

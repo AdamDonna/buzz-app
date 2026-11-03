@@ -165,7 +165,7 @@ describe("native live verification", () => {
 
   it("batches a burst without JS signatures and delivers valid events before EOSE and CLOSED", async () => {
     const host = gate();
-    const h = setup(["a"], undefined, undefined, host.check);
+    const h = setup(["a"], undefined, undefined, undefined, host.check);
     const delivered: string[] = [];
     h.callbacks.receive.mockImplementation(([event], provenance) =>
       delivered.push(`${event?.content}:${provenance?.phase}`),
@@ -215,7 +215,7 @@ describe("native live verification", () => {
     "discards native results after %s",
     async (action) => {
       const host = gate();
-      const h = setup(["a"], undefined, undefined, host.check);
+      const h = setup(["a"], undefined, undefined, undefined, host.check);
       try {
         await h.first.auth();
         const route = channelRequest(h.first);
@@ -248,7 +248,7 @@ describe("native live verification", () => {
         nativeSignatureChecks({ claims }),
       )
       .mockRejectedValueOnce(new Error("host unavailable"));
-    const h = setup(["a"], undefined, undefined, check);
+    const h = setup(["a"], undefined, undefined, undefined, check);
     try {
       await h.first.auth();
       const route = channelRequest(h.first);
@@ -280,7 +280,7 @@ describe("native live verification", () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_700_000_000_000);
       const host = gate();
-      const h = setup(["a"], undefined, () => 0, host.check);
+      const h = setup(["a"], undefined, undefined, () => 0, host.check);
       try {
         await h.first.auth();
         for (const req of h.first.requests())

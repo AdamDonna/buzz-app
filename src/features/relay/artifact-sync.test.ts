@@ -281,6 +281,7 @@ describe("live socket sync wire", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       check,
     );
     const failed = { event: vi.fn(), eose: vi.fn(), closed: vi.fn() };
