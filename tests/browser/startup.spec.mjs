@@ -22,7 +22,7 @@ async function cached(page) {
   return page.evaluate(
     () =>
       new Promise((resolve, reject) => {
-        const request = indexedDB.open("buzz-channel-heads-v1", 2);
+        const request = indexedDB.open("buzz-channel-heads-v1");
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const db = request.result;
@@ -495,24 +495,33 @@ test.describe("populated device cache", () => {
     expect(input.discovery).toHaveLength(128);
     await page.evaluate(async (input) => {
       const db = await new Promise((resolve, reject) => {
-        const request = indexedDB.open("buzz-channel-heads-v1", 2);
+        const request = indexedDB.open("buzz-channel-heads-v1");
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
       await new Promise((resolve, reject) => {
-        const tx = db.transaction(["heads", "startup"], "readwrite");
+        const tx = db.transaction(
+          ["heads", "heads-budget", "startup"],
+          "readwrite",
+        );
         const request = tx.objectStore("startup").getAll();
         request.onsuccess = () => {
           const row = request.result[0];
           row.data.discovery.events = input.discovery;
           tx.objectStore("startup").put(row);
-          for (const head of input.heads)
+          for (const head of input.heads) {
+            const budget = {
+              key: `${row.key}:${head.channelId}`,
+              bytes: JSON.stringify(head).length,
+              savedAt: head.savedAt,
+            };
             tx.objectStore("heads").put({
               ...head,
               scope: row.key,
-              key: `${row.key}:${head.channelId}`,
-              bytes: JSON.stringify(head).length,
+              ...budget,
             });
+            tx.objectStore("heads-budget").put(budget);
+          }
         };
         tx.oncomplete = resolve;
         tx.onerror = () => reject(tx.error);
@@ -687,7 +696,7 @@ test.describe("pending startup navigation", () => {
     await page.evaluate(
       () =>
         new Promise((resolve, reject) => {
-          const request = indexedDB.open("buzz-channel-heads-v1", 2);
+          const request = indexedDB.open("buzz-channel-heads-v1");
           request.onerror = () => reject(request.error);
           request.onsuccess = () => {
             const db = request.result;
