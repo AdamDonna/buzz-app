@@ -575,6 +575,33 @@ it("shows the directory's first page while the rest loads", async () => {
   }
 });
 
+it("reads the directory again when access changes while its pages load", async () => {
+  let release = () => {};
+  const later = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const t = connected({ newer: 10, later, page: 10 });
+  try {
+    t.render();
+    await openSearch();
+    await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
+    await waitFor(() => expect(rows()).toHaveLength(10));
+    const reads = t.directoryReads();
+    // The held page's read is now stale; a fresh read replaces it, unasked.
+    t.revoke("guest-private");
+    await waitFor(() => expect(t.directoryReads()).toBeGreaterThan(reads));
+    release();
+    await waitFor(() =>
+      expect(screen.queryByText("Loading more channels…")).toBeNull(),
+    );
+    expect(rows()).toHaveLength(13);
+    expect(screen.queryByText("Couldn’t load channels.")).toBeNull();
+  } finally {
+    release();
+    await t.dispose();
+  }
+});
+
 it("puts joined matches first among equal matches after later pages land", async () => {
   let release = () => {};
   const later = new Promise<void>((resolve) => {

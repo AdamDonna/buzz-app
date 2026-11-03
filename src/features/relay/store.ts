@@ -2176,9 +2176,10 @@ export function createChannelStore(
   }
   /** Read the whole open-channel directory, for browsing. Shares the search
    * read; `openDirectory` then names its channels. Never resolves them. */
-  async function readDirectory(settings?: {
-    signal?: AbortSignal | undefined;
-  }): Promise<{ partial: boolean }> {
+  async function readDirectory(
+    settings?: { signal?: AbortSignal | undefined },
+    recover = true,
+  ): Promise<{ partial: boolean }> {
     if (disposed || !transport || !discovery || options.cachedOnly)
       throw new Error("Relay is unavailable");
     if (list.status !== "ready")
@@ -2187,19 +2188,34 @@ export function createChannelStore(
     const signal = settings?.signal;
     signal?.throwIfAborted();
     const read = currentPublicDirectory(transport, generation).read;
-    const result = await (signal
-      ? Promise.race([
-          read,
-          new Promise<never>((_, reject) =>
-            signal.addEventListener("abort", () => reject(signal.reason), {
-              once: true,
-            }),
-          ),
-        ])
-      : read);
-    if (disposed || generation !== epoch)
-      throw new DOMException("Stale channel directory", "AbortError");
-    return result;
+    const stale = new DOMException("Stale channel directory", "AbortError");
+    try {
+      const result = await (signal
+        ? Promise.race([
+            read,
+            new Promise<never>((_, reject) =>
+              signal.addEventListener("abort", () => reject(signal.reason), {
+                once: true,
+              }),
+            ),
+          ])
+        : read);
+      if (disposed || generation !== epoch) throw stale;
+      return result;
+    } catch (error) {
+      // An access change since this read began voids whatever it settled
+      // with. One restarts it, as searchPublic does; further changes and
+      // network failures keep the caller's retry.
+      if (
+        recover &&
+        !disposed &&
+        !signal?.aborted &&
+        generation !== epoch &&
+        revokedEpoch === epoch
+      )
+        return readDirectory(settings, false);
+      throw error;
+    }
   }
   /** Recent member counts, by channel, for this epoch. */
   let memberCounts:
