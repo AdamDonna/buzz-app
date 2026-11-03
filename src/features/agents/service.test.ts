@@ -5283,6 +5283,63 @@ it.each([
   }
 });
 
+it("finds a blocked home's synced config by its canonical origin and refuses Delete", async () => {
+  const resolve = destinations.communityDestination;
+  const policy = destinations.parseRelayPolicy(
+    JSON.stringify({ pinned: "relay.example.test", allowlist: [] }),
+  );
+  const gate = vi
+    .spyOn(destinations, "communityDestination")
+    .mockImplementation((value) => resolve(value, undefined, policy));
+  const storage = memoryStorage();
+  // Saved under the canonical origin while the home was allowed.
+  const subject: Subject = {
+    owner: viewer,
+    community: "https://blocked.example",
+    subject: bot,
+    channel: "9b353519-f4fe-4757-aef4-bec6cc0ae54c",
+    type: "buzz.agent.instructions",
+  };
+  const store = new AgentConfigStore(storage);
+  const head = finalizeEvent(
+    {
+      kind: 45010,
+      created_at: 1,
+      content: JSON.stringify({ version: 1, text: "confirmed" }),
+      tags: [["op", "create"]],
+    },
+    generateSecretKey(),
+  ) as RelayEvent;
+  store.applyRead(subject, store.capture(subject), {
+    kind: "head",
+    event: head,
+  });
+  const fixture = await setup({
+    storage,
+    identities: [
+      {
+        pubkey: bot,
+        relay: "wss://blocked.example",
+        owner: viewer,
+        type: "example/echo",
+        name: "Home",
+        deleted: false,
+      },
+    ],
+  });
+  try {
+    await fixture.service.refresh();
+    expect(fixture.service.memberships(bot)[0]?.key).toBe(bot);
+    await expect(fixture.service.remove(bot)).rejects.toThrow(
+      "Home can't be deleted here: its home community's relay is not allowed by this build's relay policy.",
+    );
+    expect(fixture.native.beginDelete).not.toHaveBeenCalled();
+  } finally {
+    await fixture.ctx.fiber.dispose();
+    gate.mockRestore();
+  }
+});
+
 it("starts with the old shared records when a full store refuses their move", async () => {
   const storage = memoryStorage();
   const shared = JSON.stringify({
