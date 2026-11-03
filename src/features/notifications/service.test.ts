@@ -172,6 +172,18 @@ it("falls back after a native submission failure without replaying sound", async
   t.failures[0]?.(new Error("Duplicate failure"));
   expect(fallback).toHaveBeenCalledOnce();
 });
+it("preserves the submission sound decision when native delivery fails late", async () => {
+  const t = setup();
+  const fallback = vi.fn();
+  t.service.updatePreferences({ sound: false });
+  await t.submit("late-failure-muted", () => true, fallback);
+  await flush();
+  expect(t.platform.show).toHaveBeenCalledOnce();
+  t.service.updatePreferences({ sound: true });
+  t.failures[0]?.(new Error("Late native failure"));
+  expect(fallback).toHaveBeenCalledOnce();
+  expect(t.plays).toEqual([]);
+});
 it("an off/on transition during a permission probe cancels the old candidate", async () => {
   const t = setup();
   await flush();

@@ -56,6 +56,10 @@ type Candidate = {
   fallbackShown: boolean;
   soundPlayed: boolean;
 };
+type SoundingDecision = {
+  item: Candidate;
+  cancelled: boolean;
+};
 const categories = Object.freeze([
   { key: "mention", label: "Mentions" },
   { key: "direct", label: "Direct messages" },
@@ -84,10 +88,7 @@ export class NotificationsService extends Service implements Notifications {
   private readonly pending = new Set<Candidate>();
   // Outstanding audio decisions for submissions awaiting platform acceptance.
   // Revalidation cancels them stickily; cancellation never affects the banner.
-  private readonly sounding = new Set<{
-    item: Candidate;
-    cancelled: boolean;
-  }>();
+  private readonly sounding = new Set<SoundingDecision>();
   private readonly seen = new Map<string, number>();
   private closed = false;
   private readonly lifetime = new AbortController();
@@ -406,6 +407,7 @@ export class NotificationsService extends Service implements Notifications {
     item: Candidate,
     generation: number,
     activate: () => void,
+    soundAllowed = this.soundEnabled(item.category),
   ) {
     if (
       !item.fallback ||
@@ -417,7 +419,7 @@ export class NotificationsService extends Service implements Notifications {
       return;
     item.fallbackShown = true;
     item.fallback(activate);
-    if (!item.soundPlayed && this.soundEnabled(item.category)) {
+    if (!item.soundPlayed && soundAllowed) {
       item.soundPlayed = true;
       this.playSound(
         resolveCategorySound(this.state.preferences.sounds, item.category),
@@ -432,6 +434,7 @@ export class NotificationsService extends Service implements Notifications {
     if (item.eligible() === "wait") return;
     item.submitting = true;
     const generation = this.generation;
+    let decision: SoundingDecision | null | undefined;
     const activate = () => {
       if (this.closed || generation !== this.generation) return;
       // Opening may switch to an already joined community. Navigation owns
@@ -465,7 +468,7 @@ export class NotificationsService extends Service implements Notifications {
       // The item is out of `pending`, so register its audio decision for
       // sticky cancellation by `revalidate` while the submission is
       // outstanding. Sound off at submission means no decision at all.
-      const decision = this.soundEnabled(item.category)
+      decision = this.soundEnabled(item.category)
         ? { item, cancelled: false }
         : null;
       if (decision) this.sounding.add(decision);
@@ -481,9 +484,17 @@ export class NotificationsService extends Service implements Notifications {
             // Native failure can arrive before `show` resolves. Cancellation is
             // about this submission's audio decision, not whether its account
             // still owns visible error reporting.
+            const fallbackSoundAllowed = Boolean(
+              decision && !decision.cancelled,
+            );
             if (decision) decision.cancelled = true;
             if (!this.closed && generation === this.generation) {
-              this.presentFallback(item, generation, activate);
+              this.presentFallback(
+                item,
+                generation,
+                activate,
+                fallbackSoundAllowed,
+              );
               this.reportError(error);
             }
           },
@@ -512,7 +523,14 @@ export class NotificationsService extends Service implements Notifications {
       }
     } catch (error) {
       this.pending.delete(item);
-      this.presentFallback(item, generation, activate);
+      this.presentFallback(
+        item,
+        generation,
+        activate,
+        decision === undefined
+          ? this.soundEnabled(item.category)
+          : Boolean(decision && !decision.cancelled),
+      );
       this.reportError(error);
     } finally {
       item.submitting = false;
