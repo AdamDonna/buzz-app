@@ -1595,19 +1595,30 @@ export function createRelaySession(
   const mainAgent = (() => {
     const read = transport?.readMainAgent;
     const write = transport?.writeMainAgent;
+    const clear = transport?.clearMainAgent;
     const bounded = (ms: number) =>
       AbortSignal.any([lifetime.signal, AbortSignal.timeout(ms)]);
     // One change at a time, so the last choice is the one confirmed.
     let writes = Promise.resolve();
-    const queue = (change: () => Promise<void>) => {
+    const queue = <T>(change: () => Promise<T>) => {
       const next = writes.then(change);
-      writes = next.catch(() => {});
+      writes = next.then(
+        () => {},
+        () => {},
+      );
       return next;
     };
     return read && write
       ? Object.freeze({
           read: () => read(bounded(10_000)),
-          write: (agent: string) => queue(() => write(agent, bounded(20_000))),
+          write: (agent: string | null) =>
+            queue(() => write(agent, bounded(20_000))),
+          ...(clear
+            ? {
+                clear: (expected: string) =>
+                  queue(() => clear(expected, bounded(20_000))),
+              }
+            : {}),
         })
       : undefined;
   })();
