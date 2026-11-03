@@ -413,7 +413,7 @@ export type AgentHandle = Readonly<{
   /** Installed local types and owner-reviewed creation requests. */
   agentTypes?(): readonly Readonly<{ key: string; title: string }>[];
   createAgent?(
-    input: Readonly<{ type: string; name: string }>,
+    input: AgentCreationInput,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
   /** Owner-reviewed changes to one of the owner's agents here. */
   updateAgent?(
@@ -892,21 +892,28 @@ export type RetypePreview = Readonly<{
     outcome: "reset" | "dropped";
   }>[];
 }>;
-/** An unsaved creation request. Only the owner-facing review may approve it. */
-export type AgentCreationRequest = Readonly<{
-  id: string;
-  requester: string;
-  requesterName: string;
-  owner: string;
-  community: string;
+/** A requested agent; `picture` is an HTTPS image URL. */
+export type AgentCreationInput = Readonly<{
   type: string;
   name: string;
+  picture?: string;
 }>;
-/** Proposed changes; absent fields stay as they are. */
+/** An unsaved creation request. Only the owner-facing review may approve it. */
+export type AgentCreationRequest = AgentCreationInput &
+  Readonly<{
+    id: string;
+    requester: string;
+    requesterName: string;
+    owner: string;
+    community: string;
+  }>;
+/** Proposed changes; absent fields stay as they are. `picture` is an HTTPS
+ * image URL. */
 export type AgentUpdate = Readonly<{
   name?: string;
   type?: string;
   instructions?: string;
+  picture?: string;
 }>;
 /** `agent` is a pubkey or the exact name of one of the owner's agents here. */
 export type AgentUpdateInput = AgentUpdate & Readonly<{ agent: string }>;
@@ -1473,6 +1480,13 @@ const recordPicture = (value: unknown) => {
   const source = avatarSource(value);
   return source?.startsWith("https:") ? source : undefined;
 };
+/** A proposed picture as a record carries it; refuses any other. */
+const proposedPicture = (value: string | undefined) => {
+  if (value === undefined) return undefined;
+  const picture = recordPicture(value);
+  if (!picture) throw new Error("Propose an HTTPS image URL as the picture");
+  return picture;
+};
 /** The `wss://` URL of a community, as agents and their providers know it. */
 const wssOf = (origin: string) =>
   relayOrigin(origin).replace(/^https:/, "wss:");
@@ -1783,6 +1797,7 @@ export class AgentsService extends Service implements Agents {
         if (!kind) throw new Error("That agent type is not available");
         if (kind.remote)
           throw new Error("A hosted agent's key stays with its provider");
+        const picture = proposedPicture(input.picture);
         if (this.requests.length + this.updates.length >= 16)
           throw new Error("Review the pending agent requests first");
         const id = crypto.randomUUID();
@@ -1796,6 +1811,7 @@ export class AgentsService extends Service implements Agents {
             community: binding.origin,
             type: input.type,
             name: input.name.trim(),
+            ...(picture && { picture }),
           },
         ];
         this.notify();
@@ -1819,6 +1835,7 @@ export class AgentsService extends Service implements Agents {
         if (matches.length > 1)
           throw new Error("Several agents have that name; use its pubkey");
         const name = proposed.name?.trim();
+        const picture = proposedPicture(proposed.picture);
         const change: AgentUpdate = {
           ...(name !== undefined && name !== identity.name && { name }),
           ...(proposed.type !== undefined &&
@@ -1826,6 +1843,8 @@ export class AgentsService extends Service implements Agents {
           ...(proposed.instructions !== undefined && {
             instructions: proposed.instructions,
           }),
+          ...(picture !== undefined &&
+            picture !== identity.picture && { picture }),
         };
         if (Object.keys(change).length === 0)
           throw new Error("Propose at least one change");

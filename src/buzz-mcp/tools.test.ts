@@ -332,6 +332,28 @@ it.each(["send", "reply_in_subthread"])(
   },
 );
 
+it.each(["agent_create", "agent_update"])(
+  "refuses protected %s pictures before reads or uploads",
+  async (tool) => {
+    const { client } = fake([]);
+    client.protect = vi.fn(async () => {});
+    client.createAgent = vi.fn();
+    client.updateAgent = vi.fn();
+    await expect(
+      callSessionTool(client, {}, tool, {
+        agent: "Child",
+        type: "codex/codex",
+        name: "Kid",
+        picture: "me.png",
+      }),
+    ).rejects.toThrow("Protected picture uploads are not supported");
+    expect(client.read).not.toHaveBeenCalled();
+    expect(client.upload).not.toHaveBeenCalled();
+    expect(client.createAgent).not.toHaveBeenCalled();
+    expect(client.updateAgent).not.toHaveBeenCalled();
+  },
+);
+
 it("refuses an oversized captured file before review or publication", async () => {
   const { client, published } = fake(community);
   const ctx = new Context();
@@ -3867,6 +3889,42 @@ it("validates change drafts and passes only the proposed fields", async () => {
   expect(client.updateAgent).toHaveBeenLastCalledWith({
     agent: "Child",
     instructions: "",
+  });
+});
+
+it("uploads a proposed picture as the agent and drafts its URL", async () => {
+  const { client } = fake([]);
+  const saved = async () => ({ requestId: "draft", saved: false as const });
+  client.updateAgent = vi.fn(saved);
+  client.createAgent = vi.fn(saved);
+  for (const [name, args] of [
+    ["agent_update", { agent: "Child" }],
+    ["agent_create", { type: "codex/codex", name: "Child" }],
+  ] as const)
+    await expect(
+      callTool(client, {}, name, { ...args, picture: "notes.md" }),
+    ).rejects.toThrow("PNG, JPEG, GIF or WebP");
+  expect(client.upload).not.toHaveBeenCalled();
+  expect(client.updateAgent).not.toHaveBeenCalled();
+  expect(client.createAgent).not.toHaveBeenCalled();
+  await callTool(client, {}, "agent_update", {
+    agent: "Child",
+    picture: "/tmp/me.png",
+  });
+  await callTool(client, {}, "agent_create", {
+    type: "codex/codex",
+    name: "Kid",
+    picture: "kid.png",
+  });
+  expect(client.upload).toHaveBeenCalledWith(PNG, "image/png");
+  expect(client.updateAgent).toHaveBeenCalledWith({
+    agent: "Child",
+    picture: "https://relay/media/x.png",
+  });
+  expect(client.createAgent).toHaveBeenCalledWith({
+    type: "codex/codex",
+    name: "Kid",
+    picture: "https://relay/media/x.png",
   });
 });
 

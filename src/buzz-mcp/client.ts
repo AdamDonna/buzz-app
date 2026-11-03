@@ -86,7 +86,7 @@ export interface BuzzClient {
   /** Owner-reviewed creation requests, bound by the app to the caller's owner/community. */
   agentTypes?(): Promise<readonly Readonly<{ key: string; title: string }>[]>;
   createAgent?(
-    input: Readonly<{ type: string; name: string }>,
+    input: Readonly<{ type: string; name: string; picture?: string }>,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
   updateAgent?(
     input: Readonly<{
@@ -94,6 +94,7 @@ export interface BuzzClient {
       name?: string;
       type?: string;
       instructions?: string;
+      picture?: string;
     }>,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
   /** Wakes the agent in another of its conversations here, `from` this one. */
