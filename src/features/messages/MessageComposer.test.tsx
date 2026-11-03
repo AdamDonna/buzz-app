@@ -91,6 +91,7 @@ import { entityHref } from "../repos/routes";
 import type { Entity, RepositoryHome } from "../repos/destinations";
 import { HELPFUL_HINT_REST_MS } from "../../shared/design-system/ui/hoverIntent";
 import { composerTokenDraft } from "./composer-document";
+import { MentionPicker } from "../../bundled/mentions/MentionPicker";
 
 composerDOMFixture();
 
@@ -519,6 +520,40 @@ function mount(
     },
   };
 }
+
+it.each([
+  ["nexus.repository", "@"],
+  ["nexus.folder", "@"],
+  ["nexus.skill", "/"],
+] as const)("changes %s through its own %s chooser", (kind, prefix) => {
+  const token = {
+    kind,
+    id: "/Development/notes",
+    label: "@notes",
+    verified: false,
+    target: first.pubkey,
+  };
+  let controls!: import("../channel-navigation/solo-navigation-contract").TaskDraftTokenControls;
+  mount({
+    ownSoloConversation: true,
+    taskDraft: { region: "tasks" },
+    submission: {
+      draftKey: "task-folder-edit",
+      initialDraft: composerTokenDraft(token),
+      locked: false,
+      disabled: false,
+      submit: () => {},
+      header: (_draft, next) => {
+        controls = next;
+        return null;
+      },
+    },
+  });
+  act(() => {
+    expect(controls.changeToken(token.id)).toBe(true);
+  });
+  expect(screen.getByRole("textbox")).toHaveValue(`${prefix} `);
+});
 
 it.each(["locked", "inactive", "unmounted"])(
   "refuses captured task-draft token controls while %s",
@@ -11787,6 +11822,9 @@ async function taskComposerFixture(allowHistorical = false) {
   const eligible = new Set([first.pubkey, second.pubkey]);
   const historical = new Set([first.pubkey, second.pubkey]);
   let primary = first.pubkey;
+  const makePrimary = async (_channel: string, key: string) => {
+    primary = key;
+  };
   const source = await region.register({
     task: {
       prepare: async () => ({ ok: false, reason: "unused" }),
@@ -11804,9 +11842,7 @@ async function taskComposerFixture(allowHistorical = false) {
             }
           : {}),
         defaultRecipient: () => primary,
-        makePrimary: async (_channel, key) => {
-          primary = key;
-        },
+        makePrimary,
         maxRecipients: 1,
       },
     },
@@ -11856,13 +11892,86 @@ async function taskComposerFixture(allowHistorical = false) {
     },
   };
   h.retarget({ ownSoloConversation: true, requireMention: true, session });
-  return { h, session, region, source, eligible, addAgents, refreshMembership };
+  return {
+    h,
+    session,
+    region,
+    source,
+    eligible,
+    addAgents,
+    refreshMembership,
+    makePrimary,
+  };
 }
 
-it("task primary A survives explicit B; later Make primary B changes untagged routing without prefill", async () => {
-  const { h, addAgents } = await taskComposerFixture();
+it("shows the bound task's effective recipient in the existing mention toolbar", async () => {
+  const { h, eligible } = await taskComposerFixture();
+  const tools = [
+    {
+      id: "picker",
+      key: "mentions/picker",
+      order: -10,
+      pluginId: "mentions",
+      revision: "1",
+      title: "Mentions",
+      component: (props: ComposerToolProps) => (
+        <MentionPicker {...props} select={props.insertMention} />
+      ),
+    },
+  ];
+  h.retarget({
+    extensions: {
+      inline: { snapshot: () => [], subscribe: () => () => {} },
+      tools: { snapshot: () => tools, subscribe: () => () => {} },
+    },
+  });
+  const trigger = () =>
+    screen.getByRole("button", {
+      name: "Mention a member, current recipient Ada",
+    });
+  expect(trigger()).toHaveTextContent("Ada");
+  h.fill("Plain task message");
+  expect(h.input()).toHaveValue("Plain task message");
+  expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  await h.user.click(trigger());
+  await h.user.click(
+    screen.getByRole("button", { name: `Bea ${second.pubkey}` }),
+  );
+  expect(
+    screen.getByRole("button", {
+      name: "Mention a member, current recipient Bea",
+    }),
+  ).toHaveTextContent("Bea");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.[2]).toEqual([second.pubkey]);
+  expect(trigger()).toHaveTextContent("Ada");
+  eligible.delete(first.pubkey);
+  h.fill("Refuse a missing primary");
+  expect(
+    screen.queryByRole("button", { name: /current recipient/ }),
+  ).toBeNull();
+  expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  h.submit();
+  expect(
+    screen.getByText(
+      "A task participant is no longer eligible. Repair task membership before sending.",
+    ),
+  ).toHaveAttribute("role", "status");
+  expect(h.messages.send).toHaveBeenCalledOnce();
+});
+
+it("routes task messages without a recipient footer while preserving explicit and primary changes", async () => {
+  const { h, addAgents, makePrimary } = await taskComposerFixture();
   expect(h.input()).toHaveValue("");
-  expect(screen.getByRole("button", { name: "To Ada" })).toBeVisible();
+  expect(
+    screen.queryByRole("button", {
+      name: /^(To |Choose primary|This message)/,
+    }),
+  ).toBeNull();
   h.fill("Untagged A");
   h.submit();
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(1));
@@ -11873,8 +11982,10 @@ it("task primary A survives explicit B; later Make primary B changes untagged ro
   });
   await h.user.type(h.input(), "Explicit B");
   expect(
-    screen.getByRole("button", { name: "This message → Bea" }),
-  ).toBeVisible();
+    screen.queryByRole("button", {
+      name: /^(To |Choose primary|This message)/,
+    }),
+  ).toBeNull();
   h.submit();
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(2));
   expect(addAgents).toHaveBeenCalledWith(
@@ -11888,11 +11999,7 @@ it("task primary A survives explicit B; later Make primary B changes untagged ro
   h.submit();
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(3));
   expect(h.messages.send.mock.calls[2]?.[2]).toEqual([first.pubkey]);
-  await h.user.click(screen.getByRole("button", { name: "To Ada" }));
-  await h.user.click(
-    await screen.findByRole("menuitem", { name: "Make Bea primary" }),
-  );
-  expect(await screen.findByRole("button", { name: "To Bea" })).toBeVisible();
+  await act(() => makePrimary("channel", second.pubkey));
   h.fill("Now B");
   h.submit();
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(4));
@@ -11964,8 +12071,9 @@ it("projects stable structured explicit recipients to completion matchers and co
   expect(signal?.aborted).toBe(false);
 });
 
-it("keeps task repair visible with revoked historical A, then sends only to eligible primary B", async () => {
-  const { h, session, eligible, addAgents } = await taskComposerFixture(true);
+it("keeps task repair visible without a recipient footer, then sends only to eligible primary B", async () => {
+  const { h, session, eligible, addAgents, makePrimary } =
+    await taskComposerFixture(true);
   act(() => h.commands().insertMention({ ...second, name: "Bea" }));
   await h.user.type(h.input(), "Admit B");
   h.submit();
@@ -11973,12 +12081,13 @@ it("keeps task repair visible with revoked historical A, then sends only to elig
   eligible.delete(first.pubkey);
   h.retarget({ session });
   expect(screen.getByText("Task repair")).toBeVisible();
-  await h.user.click(screen.getByRole("button", { name: "Choose primary" }));
-  expect(screen.queryByRole("menuitem", { name: /Ada/ })).toBeNull();
-  await h.user.click(
-    await screen.findByRole("menuitem", { name: "Make Bea primary" }),
-  );
-  expect(await screen.findByRole("button", { name: "To Bea" })).toBeVisible();
+  expect(
+    screen.queryByRole("button", {
+      name: /^(To |Choose primary|This message)/,
+    }),
+  ).toBeNull();
+  await act(() => makePrimary("channel", second.pubkey));
+  h.retarget({ session });
   h.fill("Continue with B");
   h.submit();
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(2));
@@ -12043,6 +12152,40 @@ it("a task with a missing provider stays read-only and retains its draft", async
 });
 
 it.each([false, true])(
+  "forwards folder identity without changing recipients on send/reply=%s",
+  async (reply) => {
+    const { h } = await taskComposerFixture();
+    if (reply)
+      h.retarget({
+        threadRootId: "1".repeat(64),
+        replyParentId: "2".repeat(64),
+      });
+    h.fill("Use ");
+    const folder = {
+      kind: "nexus.folder" as const,
+      id: "/Development/notes",
+      label: "@notes",
+      executionHost: "82e43596-21a8-43c2-afb3-a9d8f2b4bf85",
+    };
+    act(() => {
+      expect(h.input().insertToken(folder, { start: 4, end: 4 })).toBe(true);
+    });
+    h.submit();
+    if (reply) {
+      await waitFor(() => expect(h.messages.reply).toHaveBeenCalledOnce());
+      expect(h.messages.reply.mock.calls[0]?.[3]).toEqual([first.pubkey]);
+      expect(h.messages.reply.mock.calls[0]?.[8]).toEqual([folder]);
+      expect(h.messages.reply.mock.calls[0]?.[2]).toBe("Use &#64;notes ");
+    } else {
+      await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+      expect(h.messages.send.mock.calls[0]?.[2]).toEqual([first.pubkey]);
+      expect(h.messages.send.mock.calls[0]?.[7]).toEqual([folder]);
+      expect(h.messages.send.mock.calls[0]?.[1]).toBe("Use &#64;notes ");
+    }
+  },
+);
+
+it.each([false, true])(
   "task token identity reaches the actual recipient on send/reply=%s and mismatched skills block admission",
   async (reply) => {
     const { h, refreshMembership, addAgents } = await taskComposerFixture();
@@ -12085,10 +12228,22 @@ it.each([false, true])(
       await waitFor(() => expect(h.messages.reply).toHaveBeenCalledOnce());
       expect(h.messages.reply.mock.calls[0]?.[3]).toEqual([second.pubkey]);
       expect(h.messages.reply.mock.calls[0]?.[8]).toEqual([token]);
+      expect(h.messages.reply.mock.calls[0]?.[2]).toContain(
+        "Use this skill /review",
+      );
+      expect(h.messages.reply.mock.calls[0]?.[2]).not.toContain(
+        "Task reference:",
+      );
     } else {
       await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
       expect(h.messages.send.mock.calls[0]?.[2]).toEqual([second.pubkey]);
       expect(h.messages.send.mock.calls[0]?.[7]).toEqual([token]);
+      expect(h.messages.send.mock.calls[0]?.[1]).toContain(
+        "Use this skill /review",
+      );
+      expect(h.messages.send.mock.calls[0]?.[1]).not.toContain(
+        "Task reference:",
+      );
     }
   },
 );
@@ -12097,7 +12252,7 @@ it.each([false, true])(
   "queued task follow-ups preserve captured primary/token identity (explicit=%s)",
   async (explicit) => {
     localStorage.setItem("buzz-follow-up-behavior.v1", "queue");
-    const { h, session, addAgents } = await taskComposerFixture();
+    const { h, session, addAgents, makePrimary } = await taskComposerFixture();
     await addAgents("channel", [second.pubkey], () => true);
     const listeners = new Set<() => void>();
     let activity = {
@@ -12151,11 +12306,7 @@ it.each([false, true])(
     await screen.findByRole("region", { name: "Queued follow-ups" });
     expect(h.messages.send).not.toHaveBeenCalled();
     // A primary update after queueing cannot retarget this captured request.
-    await h.user.click(screen.getByRole("button", { name: "To Ada" }));
-    await h.user.click(
-      await screen.findByRole("menuitem", { name: "Make Bea primary" }),
-    );
-    expect(await screen.findByRole("button", { name: "To Bea" })).toBeVisible();
+    await act(() => makePrimary("channel", second.pubkey));
     act(() => {
       activity = {
         ...activity,

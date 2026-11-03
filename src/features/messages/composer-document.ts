@@ -41,7 +41,7 @@ export const composerSchema = new Schema<
   | "strike"
 >({
   nodes: {
-    doc: { content: "block+" },
+    doc: { content: "block+", attrs: { projects: { default: null } } },
     paragraph: {
       group: "block",
       content: "inline*",
@@ -210,12 +210,19 @@ export function markdownRanges(text: string) {
   return { literal };
 }
 
-/** Seed a selected identity through the same semantic atom as editor insertion. */
+/** Seed a selected identity: project metadata, or an atom for other kinds. */
 export function composerTokenDraft(
   value: ComposerToken,
 ): MentionDraft | undefined {
   const token = composerToken(value);
   if (!token) return;
+  if (token.kind === "nexus.project")
+    return projectComposerDocument(
+      composerSchema.nodes.doc.create(
+        { projects: [token] },
+        composerSchema.nodes.paragraph.create(),
+      ),
+    ).draft;
   const paragraph = composerSchema.nodes.paragraph.create(null, [
     composerSchema.nodes.token.create({ source: token.label, semantic: token }),
     composerSchema.text(" "),
@@ -404,6 +411,11 @@ export function projectComposerDocument(doc: EditorNode) {
   const positions = new Array<number>(doc.content.size + 1).fill(0);
   const recipients: DraftRecipient[] = [];
   const semantic: NonNullable<MentionDraft["tokens"]>[number][] = [];
+  for (const value of doc.attrs.projects ?? []) {
+    const token = composerToken(value);
+    if (token?.kind === "nexus.project")
+      semantic.push({ token, start: 0, end: 0 });
+  }
   const pending: PendingMention[] = [];
   const carets: number[] = [];
   const blocks: { from: number; to: number; start: number; code: boolean }[] =
@@ -479,13 +491,15 @@ export function projectComposerDocument(doc: EditorNode) {
   for (let i = 1; i < positions.length; i++)
     positions[i] = Math.max(positions[i] ?? 0, positions[i - 1] ?? 0);
   positions[positions.length - 1] = text.length;
+  const content = doc.toJSON();
+  if (!doc.attrs.projects?.length) delete content.attrs;
   return {
     draft: {
       text,
       recipients,
       ...(semantic.length ? { tokens: semantic } : {}),
       ...(pending.length ? { pending } : {}),
-      document: { version: 1, content: doc.toJSON() },
+      document: { version: 1, content },
     } satisfies MentionDraft,
     positions,
     tokens,
@@ -555,7 +569,8 @@ export function readComposerSnapshot(value: unknown): EditorNode | undefined {
     return;
   const pending = [{ node: value.content, depth: 0 }];
   let count = 0,
-    length = 0;
+    length = 0,
+    legacyProject = false;
   while (pending.length) {
     const item = pending.pop();
     if (!item) break;
@@ -572,6 +587,20 @@ export function readComposerSnapshot(value: unknown): EditorNode | undefined {
     if (node.type === "text") {
       if (typeof node.text !== "string") return;
       length += node.text.length;
+    }
+    if (node.type === "doc" && node.attrs) {
+      if (typeof node.attrs !== "object") return;
+      const projects = "projects" in node.attrs ? node.attrs.projects : null;
+      if (
+        projects !== null &&
+        projects !== undefined &&
+        (!Array.isArray(projects) ||
+          projects.length > 32 ||
+          projects.some(
+            (value) => composerToken(value)?.kind !== "nexus.project",
+          ))
+      )
+        return;
     }
     if (node.type === "token") {
       if (
@@ -591,6 +620,7 @@ export function readComposerSnapshot(value: unknown): EditorNode | undefined {
           ("resource" in node.attrs && node.attrs.resource)
         )
           return;
+        if (token.kind === "nexus.project") legacyProject = true;
       }
     }
     if (length > 16000) return;
@@ -604,7 +634,35 @@ export function readComposerSnapshot(value: unknown): EditorNode | undefined {
     const doc = composerSchema.nodeFromJSON(value.content);
     if (doc.type !== composerSchema.nodes.doc) return;
     doc.check();
-    return doc;
+    if (!legacyProject) return doc;
+    // Older drafts held projects as visible atoms. Lift only those atoms into
+    // document metadata; the editor's prose and other identities stay intact.
+    const projects: ComposerToken[] = [...(doc.attrs.projects ?? [])];
+    const lift = (node: EditorNode): EditorNode | null => {
+      const token =
+        node.type.name === "token"
+          ? composerToken(node.attrs.semantic)
+          : undefined;
+      if (token?.kind === "nexus.project") {
+        projects.push(token);
+        return null;
+      }
+      return node.isLeaf
+        ? node
+        : node.copy(
+            Fragment.fromArray(
+              node.content.content
+                .map(lift)
+                .filter((child): child is EditorNode => !!child),
+            ),
+          );
+    };
+    const lifted = lift(doc);
+    if (!lifted || projects.length > 32) return;
+    return doc.type.create(
+      { ...doc.attrs, projects: projects.length ? projects : null },
+      lifted.content,
+    );
   } catch {
     return;
   }

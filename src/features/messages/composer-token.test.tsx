@@ -10,11 +10,12 @@ import { composerDOMFixture } from "./composer-testing";
 import { composerClipboard, buzzCopyDocument } from "./composer-clipboard";
 import {
   composerTokenDraft,
+  composerSchema,
   readComposerDocument,
   projectComposerDocument,
 } from "./composer-document";
 import { composerMarkdown } from "./composer-markdown";
-import { composerToken } from "./composer-token";
+import { composerToken, composerTokenName } from "./composer-token";
 import { mentionDraft, type MentionDraft } from "./mention-draft";
 
 composerDOMFixture();
@@ -34,6 +35,29 @@ const token: ComposerToken = {
   verified: false,
   extra: { preserve: true },
 };
+const folder: ComposerToken = {
+  kind: "nexus.folder",
+  id: "/Development/notes",
+  label: "@notes",
+  executionHost: "82e43596-21a8-43c2-afb3-a9d8f2b4bf85",
+};
+
+it("keeps folder references bounded and separate from recipients", () => {
+  expect(composerToken(folder)).toEqual(folder);
+  expect(composerTokenName(folder)).toBe("Folder @notes");
+  for (const invalid of [
+    { ...folder, id: "" },
+    { ...folder, id: "x".repeat(4097) },
+    { ...folder, id: "/path\u0000" },
+    { ...folder, label: " " },
+    { ...folder, label: "x".repeat(257) },
+    { ...folder, label: "@\u202enotes" },
+    { ...folder, extra: "界".repeat(3000) },
+    { ...folder, kind: "nexus.unknown" },
+  ])
+    expect(composerToken(invalid)).toBeUndefined();
+  expect(composerTokenDraft(folder)?.recipients).toEqual([]);
+});
 
 function mount(
   initial: MentionDraft | string = "Use @repo",
@@ -41,8 +65,10 @@ function mount(
 ) {
   const ref = createRef<ComposerInputElement>();
   let draft = mentionDraft(initial);
+  let update!: (next: MentionDraft) => void;
   function Editor() {
     const [value, setValue] = useState(draft);
+    update = setValue;
     return (
       <EditableInput
         ref={ref}
@@ -67,10 +93,20 @@ function mount(
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   });
-  return { input, view, draft: () => draft };
+  return {
+    input,
+    view,
+    draft: () => draft,
+    sync(next: MentionDraft) {
+      act(() => {
+        draft = next;
+        update(next);
+      });
+    },
+  };
 }
 
-it("restores a seeded project as an editable removable token, never a recipient", () => {
+it("restores selected project metadata without editor text or a chip, and removes it through existing controls", () => {
   const project = {
     kind: "nexus.project" as const,
     id: "opaque-project",
@@ -79,6 +115,8 @@ it("restores a seeded project as an editable removable token, never a recipient"
   const seeded = composerTokenDraft(project);
   expect(seeded).toBeDefined();
   const f = mount(mentionDraft(JSON.parse(JSON.stringify(seeded))));
+  expect(f.input).toHaveValue("");
+  expect(f.input.querySelector('[aria-label="Project Project"]')).toBeNull();
   expect(f.draft().tokens?.[0]?.token).toEqual(project);
   expect(f.draft().recipients).toEqual([]);
   act(() => f.input.insertText("Do work"));
@@ -86,8 +124,8 @@ it("restores a seeded project as an editable removable token, never a recipient"
   act(() => {
     const span = f.draft().tokens?.[0];
     if (!span) throw new Error("Missing seeded token");
-    f.input.setSelectionRange(span.start, span.end);
-    f.input.insertText("");
+    expect(span.start).toBe(span.end);
+    f.input.insertText("", undefined, span);
   });
   expect(f.draft().tokens).toBeUndefined();
   f.view.unmount();
@@ -96,61 +134,199 @@ it("restores a seeded project as an editable removable token, never a recipient"
   ).toBeUndefined();
 });
 
-it("keeps token identity through typing, persistence, deletion and undo without recipients", () => {
-  const f = mount();
+it("consumes a project query atomically while preserving prose, other identities, caret, undo and recovery", () => {
+  const project: ComposerToken = {
+    kind: "nexus.project",
+    id: "project-id",
+    label: "#Project",
+  };
+  const f = mount("Before #query after ");
   act(() => {
-    expect(f.input.insertToken(token, { start: 4, end: 9 })).toBe(true);
+    f.input.insertToken(token, {
+      start: f.input.value.length,
+      end: f.input.value.length,
+    });
+    f.input.insertText(
+      "",
+      { pubkey: "a".repeat(64), name: "Ada" },
+      { start: 0, end: 0 },
+    );
   });
+  const before = f.input.value;
+  const start = before.indexOf("#query");
+  act(() => {
+    expect(f.input.insertToken(project, { start, end: start + 6 })).toBe(true);
+  });
+  expect(f.input).toHaveValue(before.replace("#query", ""));
+  expect(f.input).toHaveFocus();
+  expect(f.input.selectionStart).toBe(start);
+  expect(f.draft().tokens?.map((span) => span.token)).toEqual([project, token]);
+  expect(f.draft().recipients.map((person) => person.pubkey)).toEqual([
+    "a".repeat(64),
+  ]);
+  expect(composerMarkdown(f.draft())).not.toContain(project.label);
+  act(() => f.input.undo(false));
+  expect(f.input).toHaveValue(before);
   expect(
-    f.input.querySelector('[aria-label="Repository @block/buzz-app"]'),
-  ).toBeInTheDocument();
-  expect(f.draft().recipients).toEqual([]);
-  expect(f.draft().tokens?.[0]?.token).toEqual(token);
-  act(() => {
-    f.input.insertText("now");
-  });
-  expect(composerMarkdown(f.draft())).toBe("Use  now");
-  const restored = mentionDraft(JSON.parse(JSON.stringify(f.draft())));
+    f.draft().tokens?.some((span) => span.token.kind === "nexus.project"),
+  ).toBe(false);
+  act(() => f.input.undo(true));
+  expect(f.input).toHaveValue(before.replace("#query", ""));
+  const saved = mentionDraft(JSON.parse(JSON.stringify(f.draft())));
   f.view.unmount();
-  const next = mount(restored);
-  expect(next.draft().tokens?.[0]?.token).toEqual(token);
+  const restored = mount(saved);
+  expect(restored.input).toHaveValue(before.replace("#query", ""));
+  expect(restored.draft().tokens?.map((span) => span.token)).toEqual([
+    project,
+    token,
+  ]);
+  const projectSpan = restored.draft().tokens?.[0];
+  if (!projectSpan) throw new Error("Missing selected project");
   act(() => {
-    next.input.setSelectionRange(4, 4 + token.label.length);
-    next.input.insertText("");
+    restored.input.setSelectionRange(2, 4);
+    expect(restored.input.insertText("#", undefined, projectSpan)).toBe(true);
   });
-  expect(next.draft().tokens).toBeUndefined();
-  act(() => {
-    next.input.undo(false);
-  });
-  expect(next.draft().tokens?.[0]?.token).toEqual(token);
-});
-
-it("copies only labels; pasting the label never creates semantic identity", () => {
-  const f = mount();
-  act(() => {
-    f.input.insertToken(token, { start: 4, end: 9 });
-  });
-  const copied = composerClipboard(
-    readComposerDocument(f.draft(), []),
-    document,
+  expect(restored.input.value).toBe(
+    `${before.slice(0, 2)}#${before.replace("#query", "").slice(2)}`,
   );
-  expect(copied.text).toBe("Use @block/buzz-app ");
-  expect(copied.html).not.toContain("github.com");
-  const pastedDocument = buzzCopyDocument(copied.html);
-  if (!pastedDocument) throw new Error("Missing copied document");
-  const pasted = mount(projectComposerDocument(pastedDocument).draft);
-  expect(pasted.draft().tokens).toBeUndefined();
-  expect(pasted.draft().recipients).toEqual([]);
+  expect(restored.draft().tokens?.map((span) => span.token)).toEqual([token]);
+  expect(restored.input.insertText("", undefined, projectSpan)).toBe(false);
 });
 
-it("rejects token insertion inside code and leaves the editor unchanged", () => {
-  const f = mount("`@repo`");
-  act(() => {
-    expect(f.input.insertToken(token, { start: 1, end: 6 })).toBe(false);
+it("lifts historical project chips on reopen without changing prose or repository identity", () => {
+  const project: ComposerToken = {
+    kind: "nexus.project",
+    id: "old-project",
+    label: "#Old",
+  };
+  const doc = composerSchema.nodes.doc.create(
+    null,
+    composerSchema.nodes.paragraph.create(null, [
+      composerSchema.text("Before "),
+      composerSchema.nodes.token.create({
+        source: project.label,
+        semantic: project,
+      }),
+      composerSchema.text(" after "),
+      composerSchema.nodes.token.create({
+        source: token.label,
+        semantic: token,
+      }),
+    ]),
+  );
+  const draft = mentionDraft({
+    text: `Before #Old after ${token.label}`,
+    recipients: [],
+    document: { version: 1, content: doc.toJSON() },
   });
-  expect(f.draft().text).toBe("`@repo`");
-  expect(f.draft().tokens).toBeUndefined();
+  const f = mount(draft);
+  expect(f.input).toHaveValue(`Before  after ${token.label}`);
+  expect(f.input.querySelector('[aria-label="Project #Old"]')).toBeNull();
+  expect(f.draft().tokens?.map((span) => span.token)).toEqual([project, token]);
+  expect(
+    mentionDraft(JSON.parse(JSON.stringify(f.draft()))).tokens?.map(
+      (span) => span.token,
+    ),
+  ).toEqual([project, token]);
 });
+
+it("retains project metadata through external sync and reset without putting it in the editor", () => {
+  const first: ComposerToken = {
+    kind: "nexus.project",
+    id: "first",
+    label: "First",
+  };
+  const second: ComposerToken = {
+    kind: "nexus.project",
+    id: "second",
+    label: "Second",
+  };
+  const seeded = composerTokenDraft(first),
+    next = composerTokenDraft(second);
+  if (!seeded || !next) throw new Error("Missing project seed");
+  const f = mount(seeded);
+  f.sync(next);
+  act(() => f.input.insertText("After sync"));
+  expect(f.draft().tokens?.map((span) => span.token)).toEqual([second]);
+  act(() => {
+    f.input.reset(seeded);
+    f.input.insertText("After reset");
+  });
+  expect(f.input).toHaveValue("After reset");
+  expect(
+    mentionDraft(JSON.parse(JSON.stringify(f.draft()))).tokens?.map(
+      (span) => span.token,
+    ),
+  ).toEqual([first]);
+});
+
+it.each([token, folder])(
+  "keeps $kind identity through typing, persistence, deletion and undo without recipients",
+  (token) => {
+    const f = mount();
+    act(() => {
+      expect(f.input.insertToken(token, { start: 4, end: 9 })).toBe(true);
+    });
+    expect(
+      f.input.querySelector(`[aria-label="${composerTokenName(token)}"]`),
+    ).toBeInTheDocument();
+    expect(f.draft().recipients).toEqual([]);
+    expect(f.draft().tokens?.[0]?.token).toEqual(token);
+    act(() => {
+      f.input.insertText("now");
+    });
+    expect(composerMarkdown(f.draft())).toBe(
+      `Use ${token.label.replace("@", "&#64;")} now`,
+    );
+    const restored = mentionDraft(JSON.parse(JSON.stringify(f.draft())));
+    f.view.unmount();
+    const next = mount(restored);
+    expect(next.draft().tokens?.[0]?.token).toEqual(token);
+    act(() => {
+      next.input.setSelectionRange(4, 4 + token.label.length);
+      next.input.insertText("");
+    });
+    expect(next.draft().tokens).toBeUndefined();
+    act(() => {
+      next.input.undo(false);
+    });
+    expect(next.draft().tokens?.[0]?.token).toEqual(token);
+  },
+);
+
+it.each([token, folder])(
+  "copies only $kind labels; pasting the label never creates semantic identity",
+  (token) => {
+    const f = mount();
+    act(() => {
+      f.input.insertToken(token, { start: 4, end: 9 });
+    });
+    const copied = composerClipboard(
+      readComposerDocument(f.draft(), []),
+      document,
+    );
+    expect(copied.text).toBe(`Use ${token.label} `);
+    expect(copied.html).not.toContain("github.com");
+    expect(copied.html).not.toContain(token.id);
+    const pastedDocument = buzzCopyDocument(copied.html);
+    if (!pastedDocument) throw new Error("Missing copied document");
+    const pasted = mount(projectComposerDocument(pastedDocument).draft);
+    expect(pasted.draft().tokens).toBeUndefined();
+    expect(pasted.draft().recipients).toEqual([]);
+  },
+);
+
+it.each([token, folder])(
+  "rejects $kind insertion inside code and leaves the editor unchanged",
+  (token) => {
+    const f = mount("`@repo`");
+    act(() => {
+      expect(f.input.insertToken(token, { start: 1, end: 6 })).toBe(false);
+    });
+    expect(f.draft().text).toBe("`@repo`");
+    expect(f.draft().tokens).toBeUndefined();
+  },
+);
 
 it("rejects typing beyond the persisted source limit without losing tokens or undo", () => {
   // The persistence bound is independent of a caller's publication limit.

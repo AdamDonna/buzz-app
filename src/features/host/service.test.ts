@@ -646,6 +646,39 @@ it("inspects paths with the calling plugin grant and preserves missing/dangling/
   expect(invoke).toHaveBeenCalledTimes(3);
 });
 
+it("lists directories as the calling desktop plugin and preserves native failures", async () => {
+  const { root, plugin } = pluginContext();
+  const children = [{ name: "not-git", path: "/source/not-git" }];
+  vi.mocked(invoke).mockResolvedValueOnce(children);
+  await expect(plugin.host.listDirectories?.("~/source")).resolves.toEqual(
+    children,
+  );
+  expect(invoke).toHaveBeenLastCalledWith("plugin_host_list_directories", {
+    id: "example.plugin",
+    revision: "abc",
+    path: "~/source",
+  });
+  for (const error of [
+    "Files are not declared",
+    "listing is larger than 1 MiB",
+    "Permission denied",
+  ]) {
+    vi.mocked(invoke).mockRejectedValueOnce(error);
+    await expect(plugin.host.listDirectories?.("/source")).rejects.toThrow(
+      error,
+    );
+  }
+  vi.mocked(isTauri).mockReturnValue(false);
+  await expect(plugin.host.listDirectories?.("/source")).rejects.toThrow(
+    /desktop plugin/,
+  );
+  vi.mocked(isTauri).mockReturnValue(true);
+  await expect(root.host.listDirectories?.("/source")).rejects.toThrow(
+    /desktop plugin/,
+  );
+  expect(invoke).toHaveBeenCalledTimes(4);
+});
+
 it("reads only the bound community/account repositories preference, defaults without creating, and rejects unreadable state", async () => {
   const { repositoriesKey } = await import("../communities/repositories");
   const { root, plugin } = pluginContext();

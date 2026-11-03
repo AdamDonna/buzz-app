@@ -4,8 +4,8 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentChoices } from "../agents/choices";
 import { createAgentLibrary } from "../agents/library";
-import type { RelaySession } from "../relay/session";
 import { readView } from "../../shared/view-state";
+import type { RelaySession } from "../relay/session";
 import {
   clearDefaultAgent,
   clearDeletedDefaultAgent,
@@ -21,6 +21,47 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
 });
+it.each([undefined, "a".repeat(64)])(
+  "narrows task defaults without saving a global choice or substituting a requested target (chosen=%s)",
+  (chosen) => {
+    const a = "a".repeat(64),
+      b = "b".repeat(64);
+    const choices = {
+      status: "ready",
+      complete: true,
+      selectable: [
+        { pubkey: a, name: "Global", managed: true },
+        { pubkey: b, name: "Task", managed: true },
+      ],
+      archives: { status: "ready", archived: [] },
+    };
+    const session = {
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe: () => () => {},
+        retain: () => () => {},
+        ensure: () => {},
+      },
+    } as unknown as RelaySession;
+    if (chosen) setDefaultAgent("task", chosen);
+    function Selection() {
+      const eligible = (key: string) => key === b;
+      const automatic = useDefaultAgent(session, "task", undefined, eligible);
+      const requested = useDefaultAgent(session, "task", a, eligible);
+      return (
+        <>
+          <output aria-label="automatic">{automatic?.name}</output>
+          <output aria-label="requested">{requested?.name}</output>
+        </>
+      );
+    }
+    render(<Selection />);
+    expect(screen.getByLabelText("automatic")).toHaveTextContent("Task");
+    expect(screen.getByLabelText("requested")).toBeEmptyDOMElement();
+    expect(readView("task", "solo:default-agent", null)).toBe(chosen ?? null);
+  },
+);
+
 it("choosing a default updates new-chat routing only in its account/community scope", () => {
   const choices = {
     status: "ready",

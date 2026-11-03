@@ -55,10 +55,11 @@ export function readTaskTokens(
   return checked(value);
 }
 
-/** Literal fallback for clients without token support. It is not a skill load,
- * a resolved repository, an extra mention, or an access grant. */
+/** Pre-inline wire form: compare existing signed recovery bytes only.
+ * New publications keep literal references in their authored positions. */
 export function taskTokenFallback(tokens: readonly ComposerToken[]) {
   return tokens
+    .filter((token) => token.kind !== "nexus.project")
     .map((token) => {
       const label = composerTokenName(token);
       const fence = "`".repeat(

@@ -33,7 +33,8 @@ export function composerToken(value: unknown): ComposerToken | undefined {
         !/^[0-9a-f]{64}$/.test(token.target)
       )
         return;
-    } else if (token.kind !== "nexus.project") return;
+    } else if (token.kind !== "nexus.project" && token.kind !== "nexus.folder")
+      return;
     const freeze = (item: object) => {
       for (const nested of Object.values(item))
         if (nested && typeof nested === "object") freeze(nested);
@@ -52,6 +53,8 @@ export function composerTokenName(token: ComposerToken) {
       ? "Project"
       : token.kind === "nexus.repository"
         ? "Repository"
-        : "Skill";
+        : token.kind === "nexus.folder"
+          ? "Folder"
+          : "Skill";
   return `${kind} ${token.label}`;
 }

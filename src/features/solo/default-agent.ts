@@ -340,11 +340,14 @@ export function useChosenAgent(scope: string) {
  * later. A requested agent, as when search opens a new chat with it, replaces
  * that choice: it is tagged once it can be, and no other agent stands in for
  * it.
+ * A task may narrow eligibility without changing the account/device choice.
+ * Requested targets still never receive a substitute.
  */
 export function useDefaultAgent(
   session: RelaySession,
   scope: string,
   requested?: string,
+  eligible?: (pubkey: string) => boolean,
 ): MentionRecipient | undefined {
   const adoption = useAdopted(session, scope);
   const chosen = useChosenAgent(scope);
@@ -360,15 +363,18 @@ export function useDefaultAgent(
   // tagged for a stale pick.
   const settled = adoption.read && (!session.mainAgent || read);
   const fallbackReady = !requested && adoption.read && read && choices.complete;
-  const picked = choices.selectable.find(
+  const selectable = eligible
+    ? choices.selectable.filter((choice) => eligible(choice.pubkey))
+    : choices.selectable;
+  const picked = selectable.find(
     (choice) => choice.pubkey === (requested ?? (settled ? chosen : undefined)),
   );
   const fallback =
     !picked && fallbackReady
-      ? (choices.selectable.find((choice) => choice.managed) ??
-        choices.selectable[0])
+      ? (selectable.find((choice) => choice.managed) ?? selectable[0])
       : undefined;
   const replaces =
+    !eligible &&
     !!fallback &&
     (chosen === undefined || choices.archives.archived.includes(chosen));
   useEffect(() => {

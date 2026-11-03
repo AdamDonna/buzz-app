@@ -17,6 +17,8 @@ const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// resolving the home it starts in.
 static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
 static DIRECTORIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+const MAX_DIRECTORY_ENTRIES: usize = 4096;
+const MAX_DIRECTORY_BYTES: usize = 1024 * 1024;
 
 async fn granted(
     manager: tauri::State<'_, PluginManager>,
@@ -165,6 +167,80 @@ fn inspect(path: &str) -> Result<PathInspection, String> {
         kind: Some(kind),
         canonical,
     })
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ChildDirectory {
+    name: String,
+    path: String,
+}
+
+/// Observes immediate real directories, without following child symlinks.
+fn directories(path: &str) -> Result<Vec<ChildDirectory>, String> {
+    let full = locate(path, None)?;
+    // Strip trailing separators/dots before lstat, which otherwise follows a
+    // symlink leaf. Preserve interior components, especially `link/..`.
+    let full = match (full.parent(), full.file_name()) {
+        (Some(parent), Some(name)) => parent.join(name),
+        _ => full,
+    };
+    let root = inspect(full.to_str().ok_or("Directory is not a UTF-8 path")?)?;
+    if root.kind != Some("dir") {
+        return Err(format!("{path} is not an existing directory"));
+    }
+    let root = PathBuf::from(root.canonical.ok_or("Directory has no canonical path")?);
+    let failed = |error| format!("Could not list {path}: {error}");
+    let mut children = Vec::new();
+    let mut bytes = 2; // JSON array brackets, plus each entry and comma below.
+    for (index, entry) in std::fs::read_dir(&root).map_err(failed)?.enumerate() {
+        if index >= MAX_DIRECTORY_ENTRIES {
+            return Err(format!("{path} has more than 4096 entries"));
+        }
+        let entry = entry.map_err(failed)?;
+        if !entry.file_type().map_err(failed)?.is_dir() {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| format!("{path} contains a non-UTF-8 directory name"))?;
+        let child = ChildDirectory {
+            path: root
+                .join(&name)
+                .into_os_string()
+                .into_string()
+                .map_err(|_| format!("{path} is not a UTF-8 path"))?,
+            name,
+        };
+        bytes += serde_json::to_vec(&child)
+            .map_err(|error| format!("Could not list {path}: {error}"))?
+            .len()
+            + usize::from(!children.is_empty());
+        if bytes > MAX_DIRECTORY_BYTES {
+            return Err(format!("{path} directory listing is larger than 1 MiB"));
+        }
+        children.push(child);
+    }
+    children.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(children)
+}
+
+/// Listing shares inspection's grant, timeout and blocking-work limit.
+#[tauri::command]
+pub(crate) async fn plugin_host_list_directories(
+    manager: tauri::State<'_, PluginManager>,
+    id: String,
+    revision: String,
+    path: String,
+) -> Result<Vec<ChildDirectory>, String> {
+    granted(manager, id, revision).await?;
+    let late = format!("Listing {path} took too long");
+    tokio::time::timeout(
+        READ_TIMEOUT,
+        bounded(&DIRECTORIES, move || directories(&path)),
+    )
+    .await
+    .map_err(|_| late)?
 }
 
 /// Inspection retains the blocking permit through OS work, including timeout.
@@ -719,6 +795,99 @@ fn save_managed_with_io(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_only_immediate_real_directories_in_name_order() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("z-source/nested")).unwrap();
+        std::fs::create_dir(root.path().join("a-not-git")).unwrap();
+        std::fs::write(root.path().join("file"), "not a directory").unwrap();
+        let listed = directories(root.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|row| row.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a-not-git", "z-source"]
+        );
+        for row in listed {
+            assert_eq!(
+                Path::new(&row.path).parent(),
+                Some(dunce::canonicalize(root.path()).unwrap().as_path())
+            );
+        }
+        let missing = root.path().join("absent");
+        assert!(directories(missing.to_str().unwrap()).is_err());
+        assert!(!missing.exists());
+        assert!(directories(root.path().join("file").to_str().unwrap()).is_err());
+        assert!(directories("relative").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn listing_excludes_symlinks_and_preserves_permission_errors() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("linked")).unwrap();
+        symlink(root.path().join("missing"), root.path().join("dangling")).unwrap();
+        assert!(directories(root.path().to_str().unwrap())
+            .unwrap()
+            .is_empty());
+        assert!(directories(root.path().join("linked").to_str().unwrap()).is_err());
+        assert!(directories(&format!("{}/linked/", root.path().display())).is_err());
+        assert!(directories(&format!("{}/linked/./", root.path().display())).is_err());
+        // `..` after a symlink belongs to its physical target, not its parent.
+        let nested = outside.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        symlink(&nested, root.path().join("through")).unwrap();
+        assert_eq!(
+            directories(&format!("{}/through/../", root.path().display())).unwrap()[0].name,
+            "nested"
+        );
+        if unsafe { libc::geteuid() } != 0 {
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+            let result = directories(root.path().to_str().unwrap());
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(result.is_err());
+        }
+    }
+
+    // macOS rejects invalid UTF-8 at creation; Linux permits these names.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listing_rejects_non_utf8_directory_names() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = tempfile::tempdir().unwrap();
+        let invalid = root.path().join(std::ffi::OsString::from_vec(vec![0xff]));
+        std::fs::create_dir(invalid).unwrap();
+        assert!(directories(root.path().to_str().unwrap())
+            .unwrap_err()
+            .contains("non-UTF-8"));
+    }
+
+    #[test]
+    fn listing_rejects_entry_and_serialized_output_overflow() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..MAX_DIRECTORY_ENTRIES {
+            std::fs::write(root.path().join(index.to_string()), "").unwrap();
+        }
+        assert!(directories(root.path().to_str().unwrap())
+            .unwrap()
+            .is_empty());
+        std::fs::write(root.path().join("overflow"), "").unwrap();
+        assert!(directories(root.path().to_str().unwrap())
+            .unwrap_err()
+            .contains("4096"));
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..3000 {
+            std::fs::create_dir(root.path().join(format!("{index:04}{}", "x".repeat(196))))
+                .unwrap();
+        }
+        assert!(directories(root.path().to_str().unwrap())
+            .unwrap_err()
+            .contains("1 MiB"));
+    }
 
     #[test]
     fn reads_files_by_absolute_or_relative_path() {

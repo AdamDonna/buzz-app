@@ -369,6 +369,7 @@ describe("serializeNode", () => {
     const item = (...content: object[]) => ({ type: "list_item", content });
     expect(copyDocument(query("[data-message-id]", body)).toJSON()).toEqual({
       type: "doc",
+      attrs: { projects: null },
       content: [
         {
           type: "bullet_list",
@@ -434,6 +435,7 @@ describe("serializeNode", () => {
     expect(each(paragraph)).toEqual(flavors);
     const parsed = {
       type: "doc",
+      attrs: { projects: null },
       content: [
         {
           type: "paragraph",
@@ -507,6 +509,7 @@ describe("serializeNode", () => {
     expect(each(paragraph)).toEqual(flavors);
     const parsed = {
       type: "doc",
+      attrs: { projects: null },
       content: [
         {
           type: "paragraph",
@@ -581,6 +584,7 @@ describe("serializeNode", () => {
     expect(serializeNode(message, "markdown")).toBe("text\n\n***");
     expect(copyDocument(message).toJSON()).toEqual({
       type: "doc",
+      attrs: { projects: null },
       content: [
         { type: "paragraph", content: [{ type: "text", text: "text" }] },
         { type: "paragraph" },

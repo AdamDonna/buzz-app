@@ -176,6 +176,13 @@ export interface Host {
   resolveDirectory?: (path: string) => Promise<string>;
   /** lstat + realpath without creating anything. Desktop only, requires host.files. */
   inspectPath?: (path: string) => Promise<HostPathInspection>;
+  /** Immediate real directories, sorted by name, with absolute paths. Desktop
+   * only, requires host.files. The root is absolute or ~/…, existing and not a
+   * symlink. No creation or symlink children. Rejects after 4096 scanned entries
+   * or a 1 MiB result; never returns a partial listing. */
+  listDirectories?: (
+    path: string,
+  ) => Promise<readonly Readonly<{ name: string; path: string }>[]>;
   /** Existing current community/account preference, or the host default. Never creates. */
   repositoriesFolder(): Promise<string>;
   request(input: HostRequest): Promise<HostResponse>;
@@ -530,6 +537,18 @@ export class HostService extends Service implements Host {
       revision: owner.revision,
       path,
     }).catch(rethrow);
+  }
+
+  async listDirectories(
+    path: string,
+  ): Promise<readonly Readonly<{ name: string; path: string }>[]> {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Files require an installed desktop plugin");
+    return invoke<readonly Readonly<{ name: string; path: string }>[]>(
+      "plugin_host_list_directories",
+      { id: owner.id, revision: owner.revision, path },
+    ).catch(rethrow);
   }
 
   async repositoriesFolder(): Promise<string> {

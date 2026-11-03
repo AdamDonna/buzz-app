@@ -754,6 +754,18 @@ export function EditableInput({
       focus = true,
     ) => {
       if (!editable() || composing.current || editor.composing) return false;
+      const rangedToken =
+        range && "token" in range ? composerToken(range.token) : undefined;
+      const projectEdit = rangedToken?.kind === "nexus.project";
+      if (projectEdit) {
+        if (
+          !(editor.state.doc.attrs.projects ?? []).some(
+            (value: unknown) => composerToken(value)?.id === rangedToken.id,
+          )
+        )
+          return false;
+        range = undefined;
+      }
       if (terminator) {
         const source = projection();
         if (
@@ -782,15 +794,24 @@ export function EditableInput({
       const from = range
         ? source.position(range.start)
         : editor.state.selection.from;
-      const to = range
-        ? source.position(range.end, -1)
-        : editor.state.selection.to;
+      const to = projectEdit
+        ? from
+        : range
+          ? source.position(range.end, -1)
+          : editor.state.selection.to;
       const $from = editor.state.doc.resolve(from);
       const marks = $from.parent.type
         .allowedMarks(editor.state.storedMarks ?? $from.marks())
         .filter((mark) => mark.type !== composerSchema.marks.recipient);
       text = text.replace(/\r\n?/g, "\n");
       const tr = closeHistory(editor.state.tr);
+      if (projectEdit)
+        tr.setDocAttribute(
+          "projects",
+          editor.state.doc.attrs.projects.filter(
+            (value: unknown) => composerToken(value)?.id !== rangedToken.id,
+          ),
+        );
       if (recipient) {
         const recipients: readonly MentionRecipient[] = Array.isArray(recipient)
           ? recipient
@@ -821,7 +842,7 @@ export function EditableInput({
         tr.replaceWith(from, to, composerSchema.text(text, marks));
       else tr.delete(from, to);
       tr.setSelection(
-        focus || !source.draft.text
+        (focus || !source.draft.text) && !(projectEdit && !text)
           ? Selection.near(tr.doc.resolve(tr.mapping.map(to, 1)), -1)
           : editor.state.selection.map(tr.doc, tr.mapping),
       );
@@ -995,17 +1016,21 @@ export function EditableInput({
         )
       )
         return false;
-      const tr = closeHistory(editor.state.tr).replaceWith(
-        from,
-        to,
-        Fragment.fromArray([
-          composerSchema.nodes.token.create({
-            source: token.label,
-            semantic: token,
-          }),
-          composerSchema.text(" "),
-        ]),
-      );
+      const tr = closeHistory(editor.state.tr);
+      if (token.kind === "nexus.project")
+        tr.delete(from, to).setDocAttribute("projects", [token]);
+      else
+        tr.replaceWith(
+          from,
+          to,
+          Fragment.fromArray([
+            composerSchema.nodes.token.create({
+              source: token.label,
+              semantic: token,
+            }),
+            composerSchema.text(" "),
+          ]),
+        );
       const next = projectComposerDocument(tr.doc).draft;
       if (
         (next.tokens?.length ?? 0) > 32 ||
@@ -2392,11 +2417,9 @@ export function EditableInput({
         } else
           editor.dispatch(
             closeHistory(
-              editor.state.tr.replaceWith(
-                0,
-                editor.state.doc.content.size,
-                doc.content,
-              ),
+              editor.state.tr
+                .setDocAttribute("projects", doc.attrs.projects)
+                .replaceWith(0, editor.state.doc.content.size, doc.content),
             ),
           );
         emitted.current = next;

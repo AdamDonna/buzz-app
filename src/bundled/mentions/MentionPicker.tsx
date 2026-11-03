@@ -16,7 +16,10 @@ import {
   CaretDownIcon,
   CheckIcon,
 } from "../../shared/design-system/icons/index";
-import { useEffect, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
+import { TaskRecipientContext } from "../../features/messages/selected-mention-context";
+import { useIdentityNames } from "../../features/identity-names/react";
+import { formatPublicKey } from "../../shared/identity/public-key";
 import { useTeamMentions } from "./use-team-mentions";
 import { useMentionChoices } from "./use-mention-choices";
 import type { ComposerSession } from "../../features/messages/composer-session";
@@ -80,13 +83,30 @@ export function MentionPicker({
     roster: draftRoster,
     choices: candidates,
   } = model;
+  const taskRecipient = useContext(TaskRecipientContext);
+  const recipient = taskRecipient?.pubkey;
+  const choosePrimary = taskRecipient?.selectPrimary;
+  const action = choosePrimary ? "Choose primary agent" : "Mention a member";
+  const name = useIdentityNames(session.names);
+  const choice = agents.selectable.find((item) => item.pubkey === recipient);
+  const recipientName = recipient
+    ? name(
+        recipient,
+        choice?.managedName ??
+          choice?.name ??
+          profiles.get(recipient)?.name ??
+          formatPublicKey(recipient) ??
+          "Agent",
+        [...agents.selectable.map((item) => item.pubkey), recipient],
+      )
+    : undefined;
   const teams = useTeamMentions(
     session,
     channelId,
     inviteAgents,
     search,
     model,
-    open && !disabled && !!selectTeam,
+    open && !disabled && !!selectTeam && !choosePrimary,
   );
   const parentAdmission = !!channel && channel.channelType !== "solo";
   const members =
@@ -116,24 +136,24 @@ export function MentionPicker({
     if (!model.canSelect(recipient.pubkey)) return;
     // Alone with agents: a pick adds or removes that agent, never the last,
     // and the menu stays open for more.
-    if (audience) {
+    if (audience && !choosePrimary) {
       audience.toggle(recipient);
       return;
     }
-    if (select(recipient)) {
+    if (choosePrimary ? choosePrimary(recipient.pubkey) : select(recipient)) {
       accepted.current = true;
       setOpen(false);
     }
   };
   const chooseTeam = (team: (typeof teams.choices)[number]) => {
-    if (audience) {
+    if (audience && !choosePrimary) {
       if (!team.canSelect() || !team.recipients.length) return;
       audience.only(team.recipients);
       accepted.current = true;
       setOpen(false);
       return;
     }
-    if (team.canSelect() && selectTeam?.(team.recipients)) {
+    if (!choosePrimary && team.canSelect() && selectTeam?.(team.recipients)) {
       accepted.current = true;
       setOpen(false);
     }
@@ -199,12 +219,41 @@ export function MentionPicker({
         ref={controls}
         disabled={disabled}
         className={styles.pickerControls}
-        aria-label="Mention controls"
+        aria-label={
+          choosePrimary ? "Primary agent controls" : "Mention controls"
+        }
       >
         <PopoverTrigger
           disabled={disabled}
           render={
-            audience && audience.recipients.length > 1 ? (
+            recipientName && recipient ? (
+              <Button
+                hint="familiar"
+                disabled={disabled}
+                variant="ghost"
+                size="sm"
+                ref={trigger}
+                type="button"
+                aria-label={`${action}, current recipient ${recipientName}`}
+                title={action}
+              >
+                <AtIcon size={20} aria-hidden="true" />
+                <span className="max-w-48 truncate">{recipientName}</span>
+                <Avatar
+                  alt=""
+                  fallback={recipientName}
+                  src={avatarMedia(
+                    profiles.get(recipient)?.picture ??
+                      model.directory.people.find(
+                        (person) => person.pubkey === recipient,
+                      )?.picture,
+                    session.media,
+                  )}
+                  size="compact"
+                  shape="squircle"
+                />
+              </Button>
+            ) : audience && audience.recipients.length > 1 ? (
               // Several agents: the composer shows them as removable
               // avatars, and this opens the menu.
               <IconButton
@@ -274,7 +323,7 @@ export function MentionPicker({
             overflow: "hidden",
             display: "flex",
           }}
-          aria-label="Mention a member or agent"
+          aria-label={choosePrimary ? action : "Mention a member or agent"}
           finalFocus={
             // The agent menu stays open across picks; closing it resumes
             // typing in the draft, unless focus went somewhere else. The
@@ -284,7 +333,7 @@ export function MentionPicker({
                   if (closedBy.current === "inside") focusDraft();
                   return false;
                 }
-              : !accepted.current
+              : !!choosePrimary || !accepted.current
           }
         >
           <div className={styles.mentionContent}>
@@ -292,11 +341,13 @@ export function MentionPicker({
               variant="capsule"
               inputRef={searchInput}
               label={
-                draftRoster
-                  ? "Search recipients"
-                  : inviteAgents
-                    ? "Search members and agents"
-                    : "Search community people and agents"
+                choosePrimary
+                  ? "Search agents"
+                  : draftRoster
+                    ? "Search recipients"
+                    : inviteAgents
+                      ? "Search members and agents"
+                      : "Search community people and agents"
               }
               value={search}
               onValueChange={setSearch}
@@ -504,7 +555,7 @@ export function MentionPicker({
               )}
               <p role="status" className="sr-only">
                 {highlightedLabel
-                  ? `${highlightedLabel}. Press Enter to ${audience ? "add or remove this agent" : "mention"}.`
+                  ? `${highlightedLabel}. Press Enter to ${choosePrimary ? "choose primary agent" : audience ? "add or remove this agent" : "mention"}.`
                   : ""}
               </p>
             </div>

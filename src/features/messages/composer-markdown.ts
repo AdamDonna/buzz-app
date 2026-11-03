@@ -46,21 +46,34 @@ strike.peek = () => "~";
 
 /** Plain portions are authored Markdown, not rich-editor literal text. Keeping
  * their source verbatim avoids normalizing formats this slice does not edit.
- * Marked content uses CommonMark/GFM delimiter escaping and flanking rules. */
-export function composerMarkdown(draft: MentionDraft): string {
+ * Marked content uses CommonMark/GFM delimiter escaping and flanking rules.
+ * Legacy projection omits references for signed recovery and title metadata. */
+export function composerMarkdown(
+  draft: MentionDraft,
+  taskReferences: "inline" | "legacy" = "inline",
+): string {
   const stripTokens = (node: EditorNode): EditorNode =>
-    node.isLeaf
-      ? node
-      : node.copy(
-          Fragment.fromArray(
-            node.content.content
-              .filter(
-                (child) =>
-                  !(child.type.name === "token" && child.attrs.semantic),
-              )
-              .map(stripTokens),
-          ),
-        );
+    node.type.name === "token" &&
+    node.attrs.semantic &&
+    taskReferences === "inline"
+      ? node.mark(composerSchema.marks.literal.create().addToSet(node.marks))
+      : node.isLeaf
+        ? node
+        : node.copy(
+            Fragment.fromArray(
+              node.content.content
+                .filter(
+                  (child) =>
+                    !(
+                      child.type.name === "token" &&
+                      child.attrs.semantic &&
+                      (taskReferences === "legacy" ||
+                        child.attrs.semantic.kind === "nexus.project")
+                    ),
+                )
+                .map(stripTokens),
+            ),
+          );
   const doc = stripTokens(readComposerDocument(draft, []));
   return [
     ...(draft.chatCards ?? []),

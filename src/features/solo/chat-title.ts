@@ -28,8 +28,8 @@ function chatTitle(
   const draft = stageChatCards(mentionDraft(value), []);
   // Match main’s caption-first title; cards remain the fallback for card-only sends.
   const text =
-    composerMarkdown({ ...draft, chatCards: [], gifs: [] }).trim() ||
-    composerMarkdown({ ...draft, gifs: [] });
+    composerMarkdown({ ...draft, chatCards: [], gifs: [] }, "legacy").trim() ||
+    composerMarkdown({ ...draft, gifs: [] }, "legacy");
   let start = 0;
   let draftStart = 0;
   for (const recipient of [...draft.recipients].sort(

@@ -1159,6 +1159,12 @@ absolute path without symbolic links, in the platform's ordinary form, and
 creates it if missing, as a process's `cwd` is. Both act with the user's full
 access; the import preview says so.
 
+`ctx.host.listDirectories(path)` observes an existing absolute or `~/…` folder.
+It returns immediate real directories as `{ name, path }`, sorted by name, with
+absolute paths under the canonical root. It excludes symlinks and files, never
+recurses or creates, and rejects a symlink root. It rejects errors, more than
+4096 scanned entries, or a JSON result over 1 MiB, without a partial result.
+
 Bundled host grants use the effective compiled manifest at revision `bundled` and
 require the plugin to be enabled in the native catalog. External grants require the
 enabled current artifact and its integrity checks; safe mode pauses external

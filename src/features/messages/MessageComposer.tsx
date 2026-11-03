@@ -20,7 +20,10 @@ import {
   useToastNotification,
 } from "../../shared/design-system/ui/Toast";
 import { writeClipboardText } from "../../shared/clipboard";
-import { SelectedMentionContext } from "./selected-mention-context";
+import {
+  SelectedMentionContext,
+  TaskRecipientContext,
+} from "./selected-mention-context";
 import { DraftMentionRoster } from "./draft-mention-roster";
 import {
   allowsOutsideMentions,
@@ -168,10 +171,9 @@ import {
   type TaskContext,
 } from "../solo/task-mode";
 import { soloNavigationFor } from "../channel-navigation/solo-navigation";
-import { TaskRecipientControl } from "../solo/TaskRecipientControl";
 import { taskHeaderUI } from "../solo/TaskHeaderTitle";
 import { identityLink } from "./composer-clipboard";
-import { taskTokenTags, taskTokenFallback } from "./task-tokens";
+import { taskTokenTags } from "./task-tokens";
 
 const noChannels: ReturnType<ComposerSession["channels"]["list"]> = {
   status: "idle",
@@ -287,7 +289,14 @@ function recoveryFor(session: ComposerSession) {
 export type MessageComposerProps = {
   /** Before a task channel exists, its region supplies the same admission policy. */
   taskDraft?:
-    | { region: string; policy?: ParticipantPolicy | undefined }
+    | {
+        region: string;
+        policy?: ParticipantPolicy | undefined;
+        recipient?: string | undefined;
+        selectPrimary?:
+          | ((pubkey: string, draft: MentionDraft) => boolean)
+          | undefined;
+      }
     | undefined;
   extensions?: ConversationExtensions | undefined;
   scope: string;
@@ -542,7 +551,6 @@ function Composer({
     taskNavigation?.subscribe ?? noSubscription,
     taskNavigation?.snapshot ?? (() => undefined),
   );
-  const [, refreshTaskState] = useState(0);
   let taskContext: TaskContext | undefined;
   let taskError: string | undefined;
   let taskPrimary: string | undefined;
@@ -1975,6 +1983,37 @@ function Composer({
       !!(taskDraft && submission) ||
       session.channels.list().channels.find((item) => item.id === channelId)
         ?.channelType === "solo");
+  const selectTaskPrimary = (pubkey: string) => {
+    if (
+      !taskDraft?.selectPrimary ||
+      editingDisabled ||
+      completion.composing.current ||
+      !currentAdmission() ||
+      !admits()(pubkey) ||
+      !outbox?.supports(9) ||
+      !input.current?.isConnected ||
+      input.current.disabled ||
+      input.current.readOnly
+    )
+      return false;
+    const before = valueRef.current;
+    const restore = input.current.checkpoint();
+    for (const chip of before.pending ?? [])
+      input.current.settlePendingMention(chip.id, null);
+    for (const key of new Set(before.recipients.map((item) => item.pubkey)))
+      if (key !== pubkey) input.current.removeRecipient(key);
+    if (!taskDraft.selectPrimary(pubkey, valueRef.current)) {
+      restore();
+      saveDraft(before);
+      return false;
+    }
+    for (const chip of before.pending ?? []) {
+      pendingMentions.current.get(chip.id)?.controller?.abort();
+      pendingMentions.current.delete(chip.id);
+    }
+    completion.invalidate();
+    return true;
+  };
   const editTaskToken = (id: string, replace: boolean) => {
     if (
       !taskDraft ||
@@ -1989,7 +2028,8 @@ function Composer({
       ? ""
       : span.token.kind === "nexus.project"
         ? "#"
-        : span.token.kind === "nexus.repository"
+        : span.token.kind === "nexus.repository" ||
+            span.token.kind === "nexus.folder"
           ? "@"
           : "/";
     completion.invalidate();
@@ -2237,7 +2277,7 @@ function Composer({
   // Alone in a Solo chat, a send addresses agents; with people it is a conversation.
   const needsRecipient = taskChannel
     ? !taskPrimary
-    : (requireMention || solo) && !withPeople;
+    : (requireMention || solo) && !withPeople && !(taskDraft && submission);
   const recipientHint = routing
     ? "Choose an agent to send"
     : submission
@@ -2641,11 +2681,7 @@ function Composer({
         setConflict(true);
         return;
       }
-      const prose = taskChannel
-        ? [composerMarkdown(captured), taskTokenFallback(taskTokens)]
-            .filter(Boolean)
-            .join("\n\n")
-        : composerMarkdown(captured);
+      const prose = composerMarkdown(captured);
       const content =
         threadRootId && mediaTimeSeconds !== undefined
           ? mediaTimeReply(mediaTimeSeconds, prose)
@@ -2975,16 +3011,6 @@ function Composer({
   const context = (
     <div className={styles.composerContext}>
       {taskError && <p role="status">{taskError}</p>}
-      {taskContext && !taskError && !editing.target && (
-        <TaskRecipientControl
-          session={session}
-          channelId={channelId}
-          context={taskContext}
-          explicit={value.recipients.map((item) => item.pubkey)}
-          disabled={disabled || !active}
-          onUpdated={() => refreshTaskState((revision) => revision + 1)}
-        />
-      )}
       {!cached && !submission && (
         <TypingIndicator
           clickOpensPanel={activityClickOpensPanel}
@@ -3034,7 +3060,20 @@ function Composer({
             }}
           />
         )}
-        {tools}
+        <TaskRecipientContext.Provider
+          value={{
+            pubkey: taskDraft
+              ? taskDraft.recipient
+              : taskChannel
+                ? (value.recipients[0]?.pubkey ?? taskPrimary)
+                : undefined,
+            selectPrimary: taskDraft?.selectPrimary
+              ? selectTaskPrimary
+              : undefined,
+          }}
+        >
+          {tools}
+        </TaskRecipientContext.Provider>
         {!routing && !!value.recipients.length && (
           <RecipientAvatars
             session={session}

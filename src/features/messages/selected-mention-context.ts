@@ -4,3 +4,11 @@ import type { MentionRecipient } from "./mention-draft";
 export const SelectedMentionContext = createContext<
   readonly MentionRecipient[]
 >([]);
+/** Host task toolbar state; separate from authored mention intent. */
+export const TaskRecipientContext = createContext<
+  | {
+      pubkey?: string | undefined;
+      selectPrimary?: ((pubkey: string) => boolean) | undefined;
+    }
+  | undefined
+>(undefined);

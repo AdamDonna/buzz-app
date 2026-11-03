@@ -274,6 +274,7 @@ export type ComposerToken = Readonly<
         alias?: string;
       }
     | { kind: "nexus.skill"; id: string; label: string; target: string }
+    | { kind: "nexus.folder"; id: string; label: string }
   ) & {
     readonly [key: string]:
       | import("../navigation/targets").JsonValue

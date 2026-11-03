@@ -25,6 +25,7 @@ it("copies plain text and unlinked tokens as text and round-trips clipboard HTML
   expect(copied.text).toBe(`before ${source} after`);
   expect(buzzCopyDocument(copied.html)?.toJSON()).toEqual({
     type: "doc",
+    attrs: { projects: null },
     content: [
       {
         type: "paragraph",
@@ -60,6 +61,7 @@ it("reads its own blocks and marks back as nodes, with anchors and breaks as tex
   );
   expect(buzzCopyDocument(copied.html)?.toJSON()).toEqual({
     type: "doc",
+    attrs: { projects: null },
     content: [
       {
         type: "paragraph",
@@ -106,6 +108,7 @@ it("keeps a spoiler a mark in its HTML and reads it back", () => {
   });
   expect(buzzCopyDocument(copied.html)?.toJSON()).toEqual({
     type: "doc",
+    attrs: { projects: null },
     content: [
       {
         type: "paragraph",
@@ -140,6 +143,7 @@ it("labels a linked spoiler without its delimiters", () => {
   // survive the anchor, as before.
   expect(buzzCopyDocument(copied.html)?.toJSON()).toEqual({
     type: "doc",
+    attrs: { projects: null },
     content: [
       {
         type: "paragraph",
@@ -156,6 +160,7 @@ it("reads crafted HTML whose anchors have no text as an empty paste, not an erro
     )?.toJSON(),
   ).toEqual({
     type: "doc",
+    attrs: { projects: null },
     content: [
       {
         type: "paragraph",
