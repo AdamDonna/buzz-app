@@ -26,12 +26,10 @@ export function metadataName(event: RelayEvent): string | undefined {
 
 const noMembers: readonly string[] = Object.freeze([]);
 
-/** A Solo chat: a private stream carrying the Solo label. Never access. */
+/** A Solo chat: a stream carrying the Solo label. Never access. */
 export function soloChannelMetadata(event: RelayEvent): boolean {
   return (
-    tag(event, "t") === "stream" &&
-    event.tags.some(([name]) => name === "private") &&
-    soloLabels(channelIdentity(event).labels)
+    tag(event, "t") === "stream" && soloLabels(channelIdentity(event).labels)
   );
 }
 

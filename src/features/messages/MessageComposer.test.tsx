@@ -1997,7 +1997,7 @@ it.each([false, true])(
     await waitFor(() =>
       expect(
         screen.getAllByRole("alert").map((node) => node.textContent),
-      ).toEqual([UPLOAD_FAILURES.metadata]),
+      ).toEqual([`metadata.txt: ${UPLOAD_FAILURES.metadata}`]),
     );
     expect(
       screen.getByText(`Upload failed: ${UPLOAD_FAILURES.metadata}`),
@@ -2005,10 +2005,10 @@ it.each([false, true])(
     expect(h.input()).toHaveValue(tagged ? "@Honey caption" : "caption");
     expect(h.publish).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "Retry metadata.txt" }),
-      { key: "Delete" },
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove metadata.txt" }),
     );
+    expect(h.input()).toHaveFocus();
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await waitFor(() =>
@@ -2664,22 +2664,22 @@ it("offers message preparation retry after a failed attachment send remounts", a
   );
 });
 
-it("keeps a remaining upload failure banner when removing one of two failed files", async () => {
+it("identifies failed filenames through retry and removal when service errors match", async () => {
   const h = await mountUploadComposer();
   attachByPaste(h.input(), attachmentFile("one.txt"));
   attachByPaste(h.input(), attachmentFile("two.txt"));
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
   await act(async () => {
-    h.uploadCalls[0]?.result.reject(new Error("first failed"));
+    h.uploadCalls[0]?.result.reject(new Error("HTTP 503"));
   });
   await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
   await act(async () => {
-    h.uploadCalls[1]?.result.reject(new Error("second failed"));
+    h.uploadCalls[1]?.result.reject(new Error("HTTP 503"));
   });
   await waitFor(() =>
     expect(
       screen.getAllByRole("alert").map((node) => node.textContent),
-    ).toEqual(["first failed", "second failed"]),
+    ).toEqual(["one.txt: HTTP 503", "two.txt: HTTP 503"]),
   );
   await userEvent.click(screen.getByRole("button", { name: "Retry one.txt" }));
   await waitFor(() => expect(h.uploadCalls).toHaveLength(3));
@@ -2689,13 +2689,12 @@ it("keeps a remaining upload failure banner when removing one of two failed file
   await waitFor(() =>
     expect(
       screen.getAllByRole("alert").map((node) => node.textContent),
-    ).toEqual(["first failed again", "second failed"]),
+    ).toEqual(["one.txt: first failed again", "two.txt: HTTP 503"]),
   );
-  fireEvent.keyDown(screen.getByRole("button", { name: "Retry one.txt" }), {
-    key: "Delete",
-  });
+  await userEvent.click(screen.getByRole("button", { name: "Remove one.txt" }));
+  expect(h.input()).toHaveFocus();
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
-    "second failed",
+    "two.txt: HTTP 503",
   ]);
   await waitFor(() =>
     expect(within(h.form()).queryByText("one.txt")).not.toBeInTheDocument(),
@@ -2723,7 +2722,7 @@ it("retains successful attachment uploads after a later file fails and retries o
   });
   await screen.findAllByRole("alert");
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
-    "relay down",
+    "retry.txt: relay down",
   ]);
   expect(screen.getByText("Upload failed: relay down")).toBeVisible();
   expect(h.input()).toHaveValue("caption");
@@ -5766,9 +5765,13 @@ it.each([false, true])(
   },
 );
 
-it.each(["send", "unmount", "disabled", "denied"])(
-  "waits for agent admission before saved Solo chat messages: %s",
-  async (outcome) => {
+it.each(
+  ["send", "unmount", "disabled", "denied"].flatMap((outcome) =>
+    ["private", "public"].map((visibility) => ({ outcome, visibility })),
+  ),
+)(
+  "waits for agent admission before saved $visibility Solo chat messages with a Guest default: $outcome",
+  async ({ outcome, visibility }) => {
     const view = mount();
     const list = {
       status: "ready",
@@ -5776,6 +5779,8 @@ it.each(["send", "unmount", "disabled", "denied"])(
         {
           id: "channel",
           channelType: "solo",
+          visibility,
+          joinRole: "guest",
           members: [] as string[],
         },
       ],
@@ -12925,4 +12930,73 @@ it("removing a pending chip abandons its resolution, and redo starts it again", 
     abandoned.resolve(null);
     restarted.resolve(null);
   }
+});
+
+describe("oversized paste feedback", () => {
+  const pasteText = (input: ComposerInputElement, text: string) => {
+    act(() => {
+      input.focus();
+      fireEvent.paste(input, {
+        clipboardData: {
+          items: [],
+          getData: (type: string) => (type === "text/plain" ? text : ""),
+        },
+      });
+    });
+  };
+
+  it("announces rejection, keeps the saved draft and clears feedback on recovery", () => {
+    const h = mount();
+    h.fill("Keep this draft.");
+    pasteText(h.input(), "x".repeat(16001));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paste would make your message too long. Shorten the text and try again.",
+    );
+    expect(h.input()).toHaveAccessibleDescription(
+      /This paste would make your message too long/,
+    );
+    expect(h.input()).toHaveValue("Keep this draft.");
+    expect(readView("scope", "draft:channel", null)).toMatchObject({
+      text: "Keep this draft.",
+    });
+    expect(h.messages.send).not.toHaveBeenCalled();
+    pasteText(h.input(), " OK");
+    expect(h.input()).toHaveValue("Keep this draft. OK");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(h.input()).not.toHaveAttribute("aria-describedby");
+    pasteText(h.input(), "x".repeat(16001));
+    h.retarget({ channelId: "other-channel" });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("offers a file only when the composer supports attachments", () => {
+    const h = mount();
+    h.retarget({ session: { ...h.session, attachments: { upload: vi.fn() } } });
+    pasteText(h.input(), "x".repeat(16001));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Shorten it or attach the text as a file.",
+    );
+  });
+
+  it("counts staged chat cards against the paste budget", () => {
+    const link = "[Session: PR 45 fixes](buzz://channel/session-id)";
+    writeView("scope", "draft:channel", {
+      text: "",
+      recipients: [],
+      chatCards: [link],
+    });
+    const h = mount();
+    const available = 16000 - link.length - 2;
+    pasteText(h.input(), "x".repeat(available + 1));
+    expect(h.input()).toHaveValue("");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paste would make your message too long.",
+    );
+    pasteText(h.input(), "x".repeat(available));
+    expect(h.input()).toHaveValue("x".repeat(available));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Chat attachments" }),
+    ).toBeVisible();
+  });
 });

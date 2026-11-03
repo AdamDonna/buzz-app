@@ -1266,7 +1266,9 @@ magic-byte sniffing must match that declaration. This signature check is not a
 full image decode or a guarantee that downstream image processing is safe.
 The full ASCII-escaped IPC metadata, including
 the authority envelope, is bounded to 16 KiB. The frontend reserves 512 bytes for
-that envelope. Unicode text values are preserved.
+that envelope: the total escaped-metadata cap of 16 KiB minus 512 bytes takes
+precedence over the per-field limits, so 16 fields of 8 KiB each are not possible.
+Unicode text values are preserved, but escaping can increase their metadata size.
 
 The deadline is fixed at 30 seconds. Responses use the existing bounded
 `HostResponse`: status, at most 64 headers totaling 16 KiB excluding `Set-Cookie`,
@@ -1285,9 +1287,14 @@ Repeated or conflicting native dispatch of the same upload envelope refuses,
 including after ambiguous failure, timeout, or a lost reply. This prevents
 same-envelope host/IPC resends, not durable exactly-once execution; use an upstream
 idempotency key when supported, and never mint a new callId to retry an unknown
-outcome. Missing raw IPC support rejects JSON/array fallback before consumption.
+outcome. Missing raw IPC support rejects JSON/array fallback before consumption
+of that fallback dispatch, but the original upload may already have run. Treat a
+"Protected upload body must be raw bytes; outcome may be unknown" refusal as an
+unknown outcome, never as proof that nothing was sent or permission to retry
+with a fresh callId.
 
-Plugin author types export `AddedTool`, `BuzzClient` and `Media` from
+Plugin author types export `AddedTool`, `AddedToolContext`, `AddedToolReply`,
+`BuzzClient` and `Media` from
 `@buzz/author`; an added tool can use its supplied `client.media(url)` to read
 community media. In the native client, optional base64 `Media.data` is present
 only for JPEG, PNG, GIF or WebP of at most 3,932,160 decoded bytes (3.75 MiB; up to

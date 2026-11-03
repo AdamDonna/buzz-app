@@ -169,4 +169,9 @@ export type {
 } from "../features/federated-identity/service";
 
 export type { AddedTool } from "../buzz-mcp/session-tools";
-export type { BuzzClient, Media } from "../buzz-mcp/client";
+export type {
+  BuzzClient,
+  Media,
+  Context as AddedToolContext,
+} from "../buzz-mcp/client";
+export type { Reply as AddedToolReply } from "../buzz-mcp/tools";
