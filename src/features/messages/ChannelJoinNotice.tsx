@@ -103,7 +103,7 @@ export function ChannelJoinNotice({
             ? `This ${place} is archived`
             : readOnly
               ? joinRole === "guest"
-                ? `This ${place} is read-only${canJoin ? ". Join to keep it in your sidebar." : ""}`
+                ? `This ${place} is read-only${canJoin ? ". Join to keep it in your sidebar and appear as a viewer." : ""}`
                 : "Read-only access"
               : canJoin
                 ? `Join ${place} to send messages`

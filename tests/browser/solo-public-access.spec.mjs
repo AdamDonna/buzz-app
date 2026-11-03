@@ -351,7 +351,7 @@ test.describe("visitor", () => {
       await expect(message).toBeVisible();
       await expect(
         page.getByText(
-          "This chat is read-only. Join to keep it in your sidebar.",
+          "This chat is read-only. Join to keep it in your sidebar and appear as a viewer.",
           { exact: true },
         ),
       ).toBeVisible();

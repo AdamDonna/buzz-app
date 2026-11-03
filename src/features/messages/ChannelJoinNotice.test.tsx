@@ -40,7 +40,7 @@ it.each([
     expect(
       screen.getByRole("region", { name: "Read-only channel" }),
     ).toHaveTextContent(
-      `This ${place} is read-only${guest ? "" : ". Join to keep it in your sidebar."}`,
+      `This ${place} is read-only${guest ? "" : ". Join to keep it in your sidebar and appear as a viewer."}`,
     );
     expect(!!screen.queryByRole("button", { name: "Join" })).toBe(!guest);
     expect(run).not.toHaveBeenCalled();
