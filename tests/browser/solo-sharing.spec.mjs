@@ -401,6 +401,11 @@ test.describe("View only channel share", () => {
         "--buzz-text-scale",
         String(scale),
       );
+      // The cached header has only Share. Live Chat actions shifts Share left;
+      // wait for that header before pointer hit-testing can straddle the change.
+      await expect(
+        page.getByRole("button", { name: "Chat actions", exact: true }),
+      ).toBeVisible();
       await trigger.click();
       await expect(search).toBeFocused();
       await search.fill("Alpha");

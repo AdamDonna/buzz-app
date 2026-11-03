@@ -1307,10 +1307,10 @@ it("lets the chat owner remove someone with access from the row menu", async () 
 });
 
 it("Back never walks history behind a pending Share, and the dialog still closes afterwards", async () => {
-  const t = fixture();
+  const t = fixture(true);
   await t.ready();
   t.addDestination(t.aria.pubkey);
-  t.failGrant(true);
+  t.failDetails(true);
   const user = userEvent.setup();
   t.mount();
   await user.click(screen.getByRole("button", { name: "Access" }));
@@ -1347,8 +1347,11 @@ it("Back never walks history behind a pending Share, and the dialog still closes
     expect(dialog).toBeInTheDocument();
     t.holdRoster(undefined);
     release();
+    await user.click(
+      await screen.findByRole("button", { name: "Share as View only" }),
+    );
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Chat invite refused",
+      "Settings refused",
     );
     await user.keyboard("{Escape}");
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
