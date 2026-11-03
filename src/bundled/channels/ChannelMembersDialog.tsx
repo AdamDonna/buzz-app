@@ -1272,7 +1272,12 @@ export function ChannelMembersDialog({
       ? [{ team, missing }]
       : [];
   });
-  const keys = publicKeyLabels([...members, ...candidates.keys()]);
+  // Suffix search scans the whole roster; redo it only when the keys change.
+  const keyList = [...members, ...candidates.keys()].join(":");
+  const keys = useMemo(
+    () => publicKeyLabels(keyList ? keyList.split(":") : []),
+    [keyList],
+  );
   // A naming plugin is optional: same-named rows still need a visible difference.
   const shownNames = new Map<string, number>();
   for (const name of [
