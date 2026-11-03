@@ -89,7 +89,11 @@ it("reports clipboard refusal without claiming success and allows retry", async 
   ).toBeVisible();
   expect(screen.getByRole("status")).toBeEmptyDOMElement();
   fireEvent.click(button);
-  expect(await screen.findByText("Community URL copied.")).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Community URL copied.",
+    ),
+  );
   expect(writeText).toHaveBeenCalledTimes(2);
 });
 
