@@ -1,3 +1,5 @@
+import { abortable } from "../../features/agent-harness/acp/agent-sessions";
+import { withRevision } from "../../features/agents/session-usage";
 import type { AgentExecution } from "../../features/agents/execution";
 import type {
   Agent,
@@ -24,6 +26,10 @@ type Open = {
   display: number;
   stop(): void;
   lifetime: AbortController;
+  allocated: boolean;
+  admissions: Set<() => void>;
+  retained: boolean;
+  readers: number;
 };
 
 /** Each remote session owns one PiRuntime. Local agents use the shared runtime. */
@@ -118,10 +124,13 @@ export class PiSessions {
     return known;
   }
 
-  private runtime(agent: string, session: PiSession): Open {
+  private runtime(agent: string, session: PiSession, retain = true): Open {
     if (this.disposed) throw new Error("Pi runtime is disposed");
     const held = this.opened.get(session.key);
-    if (held) return held;
+    if (held) {
+      held.retained ||= retain;
+      return held;
+    }
     const live = this.live(agent);
     const lifetimeSignal = new AbortController();
     const runtime = this.factory(
@@ -130,11 +139,18 @@ export class PiSessions {
         live();
         if (this.opened.get(session.key) !== opened)
           throw new Error("Pi session was retired");
-        const execution = await this.agents.execution(agent, {
-          key: session.key,
-          intent: opened.session.opened ? "existing" : "new",
-          signal: lifetimeSignal.signal,
-        });
+        let execution: AgentExecution | undefined;
+        try {
+          execution = await this.agents.execution(agent, {
+            key: session.key,
+            intent: opened.session.opened ? "existing" : "new",
+            signal: lifetimeSignal.signal,
+          });
+          opened.allocated = execution !== undefined;
+        } finally {
+          for (const stop of opened.admissions) stop();
+          opened.admissions.clear();
+        }
         if (!execution)
           throw new Error("The remote Pi execution is unavailable");
         if (
@@ -185,11 +201,29 @@ export class PiSessions {
       session,
       runtime,
       lifetime: lifetimeSignal,
+      allocated: false,
+      admissions: new Set(),
+      retained: retain,
+      readers: 0,
       display: this.display(session.key),
       stop: runtime.subscribe(() => this.notify()),
     };
     this.opened.set(session.key, opened);
     return opened;
+  }
+
+  private admit(opened: Open, signal: AbortSignal) {
+    if (opened.allocated) return;
+    const abort = () => {
+      if (!opened.allocated)
+        void this.close(opened).catch((error) =>
+          console.error(`Pi agent ${opened.agent} cleanup failed`, error),
+        );
+    };
+    const stop = () => signal.removeEventListener("abort", abort);
+    opened.admissions.add(stop);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
   }
 
   private async route(delivery: Delivery, place: string) {
@@ -208,6 +242,18 @@ export class PiSessions {
       if (this.generations.get(scope) !== generation)
         throw new Error("Pi session was retired");
       const opened = this.runtime(delivery.agent.key, session);
+      this.admit(opened, delivery.signal);
+      delivery.interruptible?.(async () => {
+        if (!opened.allocated) return this.close(opened);
+        const [channelId = place, root] = place.split("/");
+        const current = this.current.find((item) => item.key === agent);
+        if (!current) throw new Error("Pi session was retired");
+        await opened.runtime.session(
+          { ...current, config: delivery.config },
+          { channelId, ...(root ? { root } : {}) },
+          "interrupt",
+        );
+      });
       await opened.runtime.run(delivery);
     };
     if (changing) delivery.workingUntil(run());
@@ -255,7 +301,10 @@ export class PiSessions {
 
   private async close(opened: Open) {
     opened.lifetime.abort(new Error("Pi session was retired"));
-    this.opened.delete(opened.session.key);
+    if (this.opened.get(opened.session.key) === opened)
+      this.opened.delete(opened.session.key);
+    for (const stop of opened.admissions) stop();
+    opened.admissions.clear();
     opened.stop();
     this.notify();
     const retired = opened.runtime.retire(opened.agent);
@@ -294,6 +343,8 @@ export class PiSessions {
 
   async places(agent: string): Promise<Place[]> {
     if (!(await this.inspect(agent))) return this.local.places(agent);
+    await this.store.refresh(agent);
+    this.notify();
     return this.store
       .list(agent)
       .filter((session) => session.conversation !== undefined)
@@ -368,7 +419,10 @@ export class PiSessions {
     const live = this.live(agent);
     if (!(await this.inspect(agent)))
       return this.local.usage(agent, since, signal);
+    await this.store.refresh(agent);
     live();
+    signal.throwIfAborted();
+    this.notify();
     const usage = await Promise.all(
       this.store
         .history(agent)
@@ -377,14 +431,19 @@ export class PiSessions {
             session.conversation !== undefined && session.at >= since,
         )
         .map(async (session) => {
+          const opened = this.runtime(agent, session, false);
+          opened.readers++;
           try {
             return (
-              await this.runtime(agent, session).runtime.usage(
-                agent,
-                since,
+              await abortable(
+                opened.runtime.usage(agent, since, signal),
                 signal,
               )
-            ).map((usage) => ({ ...usage, id: `${session.key}/${usage.id}` }));
+            ).map((usage) => {
+              if (usage.id !== String(session.conversation))
+                throw new Error("Pi usage changed its saved conversation");
+              return { ...usage, id: `${session.key}/${usage.id}` };
+            });
           } catch (error) {
             signal.throwIfAborted();
             live();
@@ -397,9 +456,32 @@ export class PiSessions {
               const current = await this.store.read(agent, session.place);
               signal.throwIfAborted();
               live();
-              if (current && current.key !== session.key) return [];
+              if (current && current.key !== session.key) {
+                const [channelId = session.place, root] =
+                  session.place.split("/");
+                // An incomplete snapshot keeps the consumer's earlier totals.
+                return [
+                  await withRevision({
+                    id: `${session.key}/${session.conversation}`,
+                    channelId,
+                    ...(root ? { root } : {}),
+                    startedAt: session.at,
+                    lastAt: session.at,
+                    observations: [],
+                    gaps: ["The replaced Pi execution target is unavailable."],
+                  }),
+                ];
+              }
             }
             throw error;
+          } finally {
+            opened.readers--;
+            if (
+              !opened.retained &&
+              !opened.readers &&
+              this.opened.get(session.key) === opened
+            )
+              await this.close(opened);
           }
         }),
     );
@@ -464,11 +546,12 @@ export class PiSessions {
     if (session.conversation === undefined && !this.opened.has(session.key))
       return;
     live();
-    await this.runtime(agent.key, session).runtime.session(
-      agent,
-      place,
-      action,
-    );
+    const opened = this.runtime(agent.key, session);
+    if (action === "interrupt" && !opened.allocated) {
+      await this.close(opened);
+      return;
+    }
+    await opened.runtime.session(agent, place, action);
   }
   private controlKey(agent: Agent, place: SessionPlace) {
     return (agent.config as Config).scope === "channel" || !place.root
