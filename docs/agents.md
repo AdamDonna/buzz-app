@@ -89,11 +89,15 @@ idempotent `dispose`. Its process uses the
 sends its pinned host and packages through stdin. The adapter owns transport,
 provider authentication, file access limits, and cleanup on its host.
 
-Create a Pi agent with `agents.create`. Before its first runtime use, call
+Create a Pi agent with `agents.create`. To select its execution adapter, call
 `agents.bindExecution(agent.key, { id, config })` from the adapter plugin.
 The selection belongs to the agent's membership and names its execution
 provider. Optional `config` is adapter-owned JSON; it must contain no secrets.
 The selection is write-once. It does not name a fixed workstation or workspace.
+The existing runner requires native custody and idle turns, and retires the
+current harness before it saves this selection. Unconfigured agents use the
+existing local runtime and create no execution record. Admission reads saved
+state so a remote choice from another window cannot fall through to local work.
 
 The harness saves a unique session key before it calls
 `agents.execution(agent.key, { key, intent, signal })`. `intent` is `new` until

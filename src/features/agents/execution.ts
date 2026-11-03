@@ -64,10 +64,6 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   let stopped = false;
   const providers = createContributions<AgentExecutionProvider>(root);
   const bindingInFlight = new Set<AgentKey>();
-  const selecting = new Map<
-    AgentKey,
-    Promise<AgentExecutionBinding | undefined>
-  >();
   const opened = new Map<
     string,
     {
@@ -93,26 +89,9 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   };
   const inspect = async (agent: AgentKey) => {
     if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
-    return parse(await storage.read(PREFIX + agent));
-  };
-  const binding = async (agent: AgentKey) => {
-    if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
     if (bindingInFlight.has(agent))
       throw new Error("The execution binding is being saved");
-    const pending = selecting.get(agent);
-    if (pending) return pending;
-    const selected = storage.add(PREFIX + agent, LOCAL).then((text) => {
-      if (text === LOCAL) return;
-      const value = JSON.parse(text) as AgentExecutionBinding;
-      validate(value);
-      return Object.freeze(value);
-    });
-    selecting.set(agent, selected);
-    try {
-      return await selected;
-    } finally {
-      if (selecting.get(agent) === selected) selecting.delete(agent);
-    }
+    return parse(await storage.read(PREFIX + agent));
   };
   const providerFor = (binding: AgentExecutionBinding, harness: string) => {
     const provider = providers
@@ -151,7 +130,6 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   return {
     read,
     inspect,
-    binding,
     register(ctx: Context, provider: AgentExecutionProvider) {
       if (
         !ID.test(provider.id) ||
@@ -190,6 +168,8 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
         throw new Error("The execution binding is being saved");
       bindingInFlight.add(agent);
       try {
+        if ((await storage.read(PREFIX + agent)) === LOCAL)
+          await storage.set(PREFIX + agent, null);
         const saved = await storage.add(PREFIX + agent, text);
         if (saved !== text)
           throw new Error("The agent already has another execution binding");
@@ -239,7 +219,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       };
       const current = opened.get(key);
       if (current && !current.signal.aborted) return join(current);
-      const saved = await binding(agent);
+      const saved = await inspect(agent);
       if (stopped) throw new Error("Agent execution is stopped");
       session.signal?.throwIfAborted();
       if (!saved) return;
