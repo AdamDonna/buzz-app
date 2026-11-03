@@ -3,7 +3,7 @@
 // this beside the memberships in the one device record, so a membership change
 // and the intent to upload it are a single write. Destinations are keyed by the
 // account service's `wss://host[:port]` spelling (see `relayAddress`).
-import { relayAddress } from "./destination";
+import { configuredRelayPolicy, relayAddress } from "./destination";
 
 /** One intent awaiting upload: the latest word on its destination. A newer
  * intent replaces it outright, which is safe because the service's add and
@@ -103,13 +103,16 @@ export function acknowledge(state: SyncState, op: PendingOp): SyncState {
  * not uploaded again, so this device never undoes the other's removal. What
  * was known describes only the account it was merged for: another account's
  * list, or one merged before the account was recorded, starts from nothing
- * known, so it uploads every membership it lacks. */
+ * known, so it uploads every membership it lacks. A policy build's pin is
+ * seeded on every launch, not joined, so it is never uploaded from here. */
 export function mergeList(
   state: SyncState,
   memberships: ReadonlyArray<{ id: string }>,
   list: string[],
   account: string,
+  policy = configuredRelayPolicy,
 ): { state: SyncState; add: string[] } {
+  const pin = policy && relayAddress(policy.pinned);
   const before = state.account === account ? state.known : [];
   const known = [...new Set([...before, ...list])];
   const local = new Set(memberships.map((m) => relayAddress(m.id)));
@@ -119,7 +122,7 @@ export function mergeList(
   );
   let next: SyncState = { known, outbox: state.outbox, account };
   for (const url of local)
-    if (!known.includes(url) && !pending.has(url))
+    if (url !== pin && !known.includes(url) && !pending.has(url))
       next = enqueue(next, url, false);
   return { state: next, add };
 }

@@ -79,6 +79,8 @@ separate relays; there are no wildcards. Aliases resolve to an origin before
 policy checking.
 
 After identity restoration the pin is present in the saved community inventory.
+This seeded pin is never uploaded to the Builderlab account list, so it does not
+reach the account's other devices.
 A fresh identity starts there. An allowed saved selection or Personal space
 remains selected; a saved blocked selection falls back to the pin. Disallowed
 saved memberships are excluded before metadata reads, session acquisition and

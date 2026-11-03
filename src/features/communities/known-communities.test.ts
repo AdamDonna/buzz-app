@@ -7,6 +7,7 @@ import {
   parseSync,
   type SyncState,
 } from "./known-communities";
+import { parseRelayPolicy } from "./destination";
 
 const a = "wss://a.example";
 const b = "wss://b.example:8443";
@@ -205,4 +206,18 @@ it("reads old or malformed saved sync fields as empty and drops malformed entrie
     known: [a],
     outbox: [{ url: a, removed: false }],
   });
+});
+
+it("never uploads a policy build's seeded pin, and still uploads its other memberships", () => {
+  const policy = parseRelayPolicy(
+    JSON.stringify({ pinned: "a.example", allowlist: [] }),
+  );
+  const merged = mergeList(
+    emptySync(),
+    [{ id: "https://a.example" }, { id: "https://b.example:8443" }],
+    [],
+    "alice",
+    policy,
+  );
+  expect(merged.state.outbox).toEqual([{ url: b, removed: false }]);
 });
