@@ -884,7 +884,13 @@ replacement. Local expiry, cancellation, and sign-out fence stale work.
 
 FI records use the OS secure-store service
 `xyz.block.buzz.desktop.federated-session` (with `.debug` for Rust debug
-builds), keyed by profile and deployment fingerprint. Account indices and
+builds), keyed by profile and deployment fingerprint. On macOS one item per
+profile and deployment holds the session and every agent grant, so Keychain
+prompts once; Windows and Linux keep one item per record. Older macOS items
+move into it on read. This is a one-way development migration: close older
+Buzz copies, including other debug worktrees, before the first upgraded launch
+and use the upgraded build afterward. An older copy still running can write a
+grant the bundle no longer reads, which leaves that agent stopped. Release builds already run one instance. Account indices and
 revision-specific refusal markers contain no credential and live outside wiped
 Buzz data. Failed removal of a known record leaves refusal durable before any
 secure-store access, so that revision cannot restore until cleanup succeeds.
@@ -908,8 +914,9 @@ performs fresh NIP-42. Retirement fences protected reads and results.
 
 Each local agent enrolls using the signed-in owner's session and its own NIP-98
 proof. The native agent-token owner stores the resulting grant beside session
-records in the same OS secure-store service, under a separate key scoped to the
-profile, deployment, owner public key and agent public key. Neither grants nor
+records in the same OS secure-store service, keyed by profile, deployment, owner
+public key and agent public key: in the session's item on macOS, under a
+separate key elsewhere. Neither grants nor
 assertion headers cross IPC. Enrollment validates the returned owner and issuer;
 assertions are checked for the agent key, issuer, relay audience and lifetime.
 The relay remains responsible for signature and authorization verification.

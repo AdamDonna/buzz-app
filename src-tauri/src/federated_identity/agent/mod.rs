@@ -207,7 +207,8 @@ impl Admission {
 
 impl AgentTokens {
     pub(crate) fn new(identity: FederatedIdentity) -> Self {
-        Self::with_store(identity, Arc::new(SecureGrantStore))
+        let store = Arc::new(SecureGrantStore(identity.0.account.clone()));
+        Self::with_store(identity, store)
     }
     /// Tokens for a build without an organization: agents send no evidence.
     #[cfg(test)]
