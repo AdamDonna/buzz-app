@@ -243,3 +243,33 @@ it("rejects native execution when native state cannot be read", async () => {
     vi.unstubAllGlobals();
   }
 });
+
+it("scans saved entries beyond the startup copy after its pending writes", async () => {
+  const prefix = "buzz.pi.sessions.v1:agent:";
+  const native = files();
+  const storage = await loadAgentStorage(memoryStorage(), native);
+  native.saved.set(`${prefix}other-window`, "remote");
+  native.saved.set("another-prefix", "private");
+  expect(storage.get(`${prefix}other-window`)).toBeNull();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const save = native.set.getMockImplementation();
+  native.set.mockImplementationOnce(async (key, value) => {
+    await held;
+    await save?.(key, value);
+  });
+  const saving = storage.set(`${prefix}this-window`, "saved");
+  const scanning = storage.scan(prefix);
+  release();
+  await saving;
+  expect(await scanning).toEqual({
+    [`${prefix}other-window`]: "remote",
+    [`${prefix}this-window`]: "saved",
+  });
+  expect(storage.get(`${prefix}other-window`)).toBeNull();
+  expect(storage.keys()).not.toContain(`${prefix}other-window`);
+  native.load.mockRejectedValueOnce(new Error("Storage denied"));
+  await expect(storage.scan(prefix)).rejects.toThrow("Storage denied");
+});

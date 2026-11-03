@@ -76,6 +76,11 @@ export function executionStorage(fallback: AgentStore): AgentStore {
         "Native agent storage is unavailable. Restart Buzz before running agents.",
       );
     },
+    scan: async () => {
+      throw new Error(
+        "Native agent storage is unavailable. Restart Buzz before running agents.",
+      );
+    },
     add: async () => {
       throw new Error(
         "Native agent storage is unavailable. Restart Buzz before running agents.",
@@ -128,6 +133,12 @@ export async function loadAgentStorage(
       files.set,
       files.add,
       async (key) => (await files.load(key))[key] ?? null,
+      async (prefix) =>
+        Object.fromEntries(
+          Object.entries(await files.load()).filter(([key]) =>
+            key.startsWith(prefix),
+          ),
+        ),
     );
     const moved: string[] = [];
     for (let index = 0; index < local.length; index++) {
@@ -193,6 +204,7 @@ export function fileStore(
     return null;
   },
   read?: (key: string) => Promise<string | null>,
+  scan?: AgentStore["scan"],
 ): AgentStore {
   /** What each key's file holds, as far as this program saved it. */
   const durable = new Map(items);
@@ -238,6 +250,18 @@ export function fileStore(
     read: async (key: string) => {
       await pending.get(key);
       return read ? read(key) : (durable.get(key) ?? null);
+    },
+    scan: async (prefix: string) => {
+      await Promise.all(
+        [...pending]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([, saved]) => saved),
+      );
+      return scan
+        ? scan(prefix)
+        : Object.fromEntries(
+            [...durable].filter(([key]) => key.startsWith(prefix)),
+          );
     },
     set: async (key: string, value: string | null) => {
       if (value === null) items.delete(key);
