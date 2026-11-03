@@ -374,6 +374,10 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     page.getByRole("button", { name: "Close Canvas tab", exact: true }),
   ).toBeEnabled();
   await expect(
+    canvas.getByRole("article", { name: "Saved Canvas" }),
+  ).toBeVisible();
+  await canvas.getByRole("tab", { name: "Edit", exact: true }).click();
+  await expect(
     canvas.getByRole("textbox", { name: "Canvas Markdown", exact: true }),
   ).toBeEnabled();
   await expect(menu).toHaveCount(0);
@@ -539,6 +543,10 @@ test.describe("dialog origin retirement", () => {
       name: "Canvas Markdown",
       exact: true,
     });
+    const view = canvas.getByRole("article", { name: "Saved Canvas" });
+    const edit = canvas.getByRole("tab", { name: "Edit", exact: true });
+    await expect(view).toBeVisible();
+    await edit.click();
     await expect(editor).toBeEnabled();
     await editor.fill("Draft belongs to the original channel");
     const canvasReads = () =>
@@ -559,8 +567,10 @@ test.describe("dialog origin retirement", () => {
     await page
       .getByRole("menuitem", { name: "View canvas", exact: true })
       .click();
+    // A fresh Canvas opens on View and focuses it; Edit keeps the draft.
+    await expect(view).toBeFocused();
+    await edit.click();
     await expect(editor).toHaveValue("Draft belongs to the original channel");
-    await expect(editor).toBeFocused();
     await page
       .getByRole("button", { name: "Close Canvas tab", exact: true })
       .click();
