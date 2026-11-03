@@ -21,34 +21,39 @@ export class PiSessionStore {
   constructor(private readonly storage: AgentStore) {}
 
   async read(agent: string, place: string): Promise<PiSession | undefined> {
+    const observed = this.observed.get(agent)?.get(place);
     const key = await this.storage.read(pointer(agent, place));
     if (key === null) {
-      this.observe(agent, place, undefined);
+      if (this.observed.get(agent)?.get(place) === observed)
+        this.observe(agent, place, undefined);
       return;
     }
-    return this.load(agent, key, place);
+    return this.load(agent, key, place, observed);
   }
 
   async current(agent: string, place: string): Promise<PiSession> {
     const saved = await this.read(agent, place);
     if (saved) return saved;
+    const observed = this.observed.get(agent)?.get(place);
     const key = await this.storage.add(
       pointer(agent, place),
       crypto.randomUUID(),
     );
-    return this.load(agent, key, place);
+    return this.load(agent, key, place, observed);
   }
 
   private async load(
     agent: string,
     key: string,
     place: string,
+    observed: PiSession | undefined,
   ): Promise<PiSession> {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(key))
       throw new Error("Invalid Pi session key");
     const text = await this.storage.read(state(agent, key));
     const session = text ? this.parse(text, key, place) : { key, place, at: 0 };
-    this.observe(agent, place, session);
+    if (this.observed.get(agent)?.get(place) === observed)
+      this.observe(agent, place, session);
     return session;
   }
 
