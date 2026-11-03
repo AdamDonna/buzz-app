@@ -529,6 +529,16 @@ test("Canvas opens once beside Thread and retains its channel draft", async ({
   await expect(canvas).toHaveAttribute("aria-selected", "true");
   // Returning to an open Canvas tab keeps its selected Edit tab.
   await expect(text).toHaveValue("Channel-scoped draft");
+  // Pointer-returning to Canvas on Edit resumes the editor, not hidden View.
+  await text.evaluate((node) => node.setSelectionRange(2, 7));
+  await thread.click();
+  await expect(text).toBeHidden();
+  await canvas.click();
+  await expect(text).toBeFocused();
+  await expect(text).toHaveValue("Channel-scoped draft");
+  expect(
+    await text.evaluate((node) => [node.selectionStart, node.selectionEnd]),
+  ).toEqual([2, 7]);
   await workspace
     .getByRole("button", { name: "Close Canvas tab", exact: true })
     .click();

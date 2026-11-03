@@ -82,6 +82,7 @@ export function CanvasView({
   openLink,
   focusRef,
   retryRef,
+  active,
 }: {
   content: string | undefined;
   loaded: boolean;
@@ -92,6 +93,8 @@ export function CanvasView({
   openLink(url: string): boolean;
   focusRef: Ref<HTMLElement>;
   retryRef: Ref<HTMLButtonElement>;
+  /** Only the active tab offers the panel host a focus target. */
+  active: boolean;
 }) {
   return (
     <LoadingRegion
@@ -111,7 +114,7 @@ export function CanvasView({
       <article
         ref={focusRef}
         tabIndex={-1}
-        data-tab-focus
+        data-tab-focus={active || undefined}
         aria-label="Saved Canvas"
         className={styles.markdown}
       >

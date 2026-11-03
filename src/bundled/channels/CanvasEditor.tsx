@@ -342,6 +342,7 @@ export function CanvasEditor({
             openLink={openViewLink}
             focusRef={view}
             retryRef={viewRetry}
+            active={tab === "view"}
           />
         </div>
         <div
