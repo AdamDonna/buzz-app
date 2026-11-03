@@ -26,10 +26,9 @@ clients cannot verify that. Each receives only your peer's audio and speaks to
 everyone; other people or speakers near your microphone can still be heard.
 Voice work uses the same permissions as your text requests. Joining on another
 device does not seat an agent running here. Leaving closes its voice connection.
-If agent voice stops,
-the Huddle shows the reason; leave and rejoin to retry. Final voice transcripts
-appear in the room with speaker credit and do not mention anyone. Explicit agent
-watches on that room can still receive them.
+If agent voice stops, the Huddle shows the reason; leave and rejoin to retry.
+Final voice transcripts appear in the room with speaker credit and do not
+mention anyone. Explicit agent watches on that room can still receive them.
 
 ## Identity and getting connected
 

@@ -261,6 +261,24 @@ agent. Other agents’ explicit room watches see them as ordinary messages autho
 by the transcribing agent. The host aborts the signal, then awaits `close()` before
 releasing the seat reservation.
 
+Teardown keeps the seat reserved until all closing work settles; native bridge
+closure runs alongside harness closure, not after the surviving typed turn.
+
+```text
+seat.stop(): Abort the seat and stop its heartbeat once.
+  |
+  +-> abort: Stop audio callbacks and transcript publication immediately.
+  |
+  +-> harness close() (Codex: runtime.voice -> openVoice): Close media, await
+  |     the surviving typed turn, then unsubscribe; new text waits on closing.
+  |     |
+  |     +-> openVoice.close(): Stop WebRTC and Web Audio, then stop realtime.
+  |
+  +-> bridge.close(): Await native opening, then close its audio connection.
+  |
+  +-> reservation release: Await startup and both close paths before reseating.
+```
+
 ## Checks and tryout
 
 `src/features/huddle/*.test.ts` covers cancellation, scoped session replacement,
