@@ -403,7 +403,7 @@ export const ROLE_GROUPS: RoleGroup[] = [
         token: "--affordance-reaction",
         variable: "--affordance-reaction",
         pointsAt: "black 6% light / white 10% dark",
-        use: "Reaction strip on received bubbles and the panel; the add-reaction hover lays it again on top.",
+        use: "Reaction strip on received bubbles and the panel.",
         status: "core",
       },
       {

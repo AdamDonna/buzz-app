@@ -453,8 +453,8 @@
 }
 .inlineReactionTool
   [data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  /* The strip's own overlay again, laid on top of it. */
-  background: var(--reaction-surface, var(--affordance-reaction));
+  /* The strip already supplies the background; keep its opacity uniform. */
+  background: transparent;
   color: var(--reaction-ink, var(--text-standard));
 }
 .attachment {

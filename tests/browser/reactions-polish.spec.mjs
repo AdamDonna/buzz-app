@@ -169,6 +169,8 @@ test("reaction emojis and hit areas grow together without clipping", async ({
       .toBeGreaterThanOrEqual(32 * scale);
     await expect(pill).toHaveCSS("height", `${32 * scale}px`);
     await expect(addReaction).toHaveCSS("height", `${32 * scale}px`);
+    await addReaction.hover();
+    await expect(addReaction).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(glyph).toHaveCSS("font-size", `${12 * scale}px`);
     await expect(glyph).toHaveCSS("height", `${16 * scale}px`);
     const bounds = await pill.evaluate((el) => {
@@ -346,8 +348,10 @@ test("reaction bubbles wrap, preview, toggle, and add from the inline control", 
     "true",
   );
   await plus.focus();
+  await expect(plus).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await plus.press("Enter");
   await expect(picker).toBeVisible();
+  await expect(plus).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await picker.press("Escape");
   await expect(picker).toHaveCount(0);
   await expect(plus).toBeFocused();
