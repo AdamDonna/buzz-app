@@ -430,8 +430,9 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     await expect(key).toHaveText(npubs.viewer);
     if (pointerVisit !== "stationary") await page.mouse.move(0, 0);
     if (pointerVisit === "back") {
-      const rect = await avatar.boundingBox();
-      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      // Profile pushes the avatar aside. Hover waits for it to settle, so the
+      // pointer rests on the pushed avatar, not where Escape puts it back.
+      await avatar.hover();
       // Complete this hover while Profile is still open. Otherwise its timer
       // can fire after Escape and legitimately count as a fresh hover visit.
       await page.clock.runFor(300);
@@ -1271,7 +1272,32 @@ test("profile preview fits enlarged text and stops its status with reduced motio
   await expect(profileAction).toBeFocused();
   await expect(profileAction).toBeInViewport({ ratio: 1 });
   await profileAction.click();
-  await expect(
-    page.getByRole("complementary", { name: "Profile", exact: true }),
-  ).toBeVisible();
+  const panel = page.getByRole("complementary", {
+    name: "Profile",
+    exact: true,
+  });
+  await expect(panel).toBeVisible();
+  // At 390 px the hero column fits only the emoji. Widen it so the long status
+  // shows and ends in an ellipsis inside the hero.
+  await page.setViewportSize({ width: 600, height: 600 });
+  const status = panel.getByText("Working EST hours until Oct 23", {
+    exact: true,
+  });
+  const hero = panel
+    .getByRole("heading", { name: "Viewer", exact: true })
+    .locator("xpath=../..");
+  await expect(status).toBeVisible();
+  await expect
+    .poll(async () =>
+      status.evaluate(
+        (text, hero) => ({
+          inside:
+            text.getBoundingClientRect().right <=
+            hero.getBoundingClientRect().right,
+          truncated: text.scrollWidth > text.clientWidth,
+        }),
+        await hero.elementHandle(),
+      ),
+    )
+    .toEqual({ inside: true, truncated: true });
 });

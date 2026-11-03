@@ -1,12 +1,12 @@
 import { Button } from "../../shared/design-system/ui/Button";
 
 /**
- * Pause on a found community before any sign-in: the relay cannot sign the
- * user in, but Buzz still needs a key. Connect runs
- * the build portal's sign-in exactly as the landing's button does (the key it
- * creates is linked to that account and backed up there); the import brings a
- * key with no account to link it to. Either way setup ends on Join Community
- * for the found address.
+ * Pause on a found community that this build's Builderlab does not host (one
+ * it hosts signs in at once), before any sign-in: the relay cannot sign the
+ * user in, but Buzz still needs a key. Connect runs the build portal's sign-in
+ * exactly as the landing's button does (the key it creates is linked to that
+ * account and backed up there); the import brings a key with no account to
+ * link it to. Either way setup ends on Join Community for the found address.
  */
 export function ConnectChoice({
   host,

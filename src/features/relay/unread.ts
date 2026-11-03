@@ -842,6 +842,14 @@ export function createUnread({
     a.freshness === b.freshness &&
     a.manual === b.manual &&
     a.error === b.error;
+  // Folds read profiles only through agent owners. Keep the answers they got:
+  // a profile change that leaves them all alone cannot change a projection.
+  const ownersRead = new Map<string, string | undefined>();
+  const agentOwner = (pubkey: string) => {
+    const owner = profiles?.owner?.(pubkey);
+    ownersRead.set(pubkey, owner);
+    return owner;
+  };
   function computeActivity(channelId: string): ThreadActivitySnapshot {
     if (!allowed(channelId) || !known.has(channelId))
       return Object.freeze({
@@ -870,7 +878,7 @@ export function createUnread({
         foldMessages(channelId, "", [...events.values()], {
           includeReplies: true,
           signingAuthority,
-          agentOwner: profiles?.owner,
+          agentOwner: profiles?.owner && agentOwner,
         }).map((message) => [message.id, message.content]),
       );
       const preview = presented.get(event.id) ?? event.content;
@@ -1019,7 +1027,7 @@ export function createUnread({
         const rows = foldMessages(channel.id, "", [...events.values()], {
           includeReplies: true,
           signingAuthority,
-          agentOwner: profiles?.owner,
+          agentOwner: profiles?.owner && agentOwner,
         });
         const content = new Map(rows.map((row) => [row.id, row.content]));
         // A session's top-level row shows its newest message from someone
@@ -1232,7 +1240,13 @@ export function createUnread({
         notify(listener);
   }
   const stopRead = reads.subscribe(publish);
-  const stopProfiles = profiles?.subscribe(() => publish());
+  const stopProfiles = profiles?.subscribe(() => {
+    const owner = profiles.owner;
+    if (!owner || [...ownersRead].every(([key, value]) => owner(key) === value))
+      return;
+    ownersRead.clear();
+    publish();
+  });
   /** A choice changes relevance in every projection and held live alert. */
   function followsChanged(channelIds?: ReadonlySet<string>) {
     publish(channelIds);
@@ -2571,8 +2585,13 @@ export function createUnread({
     },
     accept,
     purge,
-    reconnect() {
-      if (requested) void reads.refresh().then(() => repair("background"));
+    /** `covered`: the membership route's replay was continuous, so read state
+     * resumes from it instead of reading its snapshot again. */
+    reconnect(covered = false) {
+      if (requested)
+        void (covered ? reads.resume() : reads.refresh()).then(() =>
+          repair("background"),
+        );
     },
     stale() {
       epoch++;
