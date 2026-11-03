@@ -17,6 +17,7 @@ export type HuddleSnapshot = Readonly<{
   room?: string;
   muted: boolean;
   participants: readonly string[];
+  listening?: readonly string[];
   error?: string;
 }>;
 type Attempt = {
@@ -413,6 +414,18 @@ export function createHuddles(
     );
   return {
     snapshot: () => snapshot,
+    voiceListening(id: string, key: string, active: boolean) {
+      if (snapshot.id !== id || (active && snapshot.phase !== "connected"))
+        return;
+      const listening = snapshot.listening ?? [];
+      if (listening.includes(key) === active) return;
+      update({
+        ...snapshot,
+        listening: active
+          ? [...listening, key]
+          : listening.filter((peer) => peer !== key),
+      });
+    },
     voiceError(error?: string) {
       const { error: _previous, ...rest } = snapshot;
       update(error ? { ...rest, error } : rest);

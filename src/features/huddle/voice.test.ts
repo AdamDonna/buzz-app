@@ -131,9 +131,14 @@ function setup() {
     types: () => types,
   } as unknown as Agents;
   const report = vi.fn();
+  const listening = vi.fn();
   const start = () => {
     const dispose = createHuddleVoices(
-      { snapshot: () => call, subscribe: h.subscribe },
+      {
+        snapshot: () => call,
+        subscribe: h.subscribe,
+        voiceListening: listening,
+      },
       agents,
       relay,
       bridge,
@@ -149,6 +154,7 @@ function setup() {
     seatArgs,
     callbacks,
     report,
+    listening,
     start,
     call: (patch: Partial<HuddleSnapshot>) => {
       call = { ...call, ...patch };
@@ -331,3 +337,36 @@ it("renews leases, closes on harness failure, and does not retry on roster noise
   expect(f.bridge.touch).toHaveBeenCalledTimes(3);
   expect(f.report).toHaveBeenCalledOnce();
 });
+
+it.each(["stop", "failure"])(
+  "clears listening before pending %s teardown",
+  async (reason) => {
+    const f = setup();
+    f.agents([agent("a")]);
+    const closed = deferred<void>();
+    const close = vi.fn(() => closed.promise);
+    const connection = { input: vi.fn(), close };
+    const opened = deferred<typeof connection>();
+    f.voice.mockImplementationOnce((seat) => {
+      f.seatArgs.set("a", seat);
+      return opened.promise;
+    });
+    f.start();
+    try {
+      await vi.waitFor(() => expect(f.voice).toHaveBeenCalledOnce());
+      expect(f.listening).not.toHaveBeenCalled();
+      opened.resolve({ input: vi.fn(), close });
+      await vi.waitFor(() =>
+        expect(f.listening).toHaveBeenLastCalledWith("human", "a", true),
+      );
+      if (reason === "stop") f.call({ phase: "idle" });
+      else required(f.seatArgs.get("a")).ended(new Error("disconnected"));
+      expect(f.listening).toHaveBeenLastCalledWith("human", "a", false);
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      expect(f.bridge.open).toHaveBeenCalledOnce();
+    } finally {
+      opened.resolve({ input: vi.fn(), close });
+      closed.resolve();
+    }
+  },
+);

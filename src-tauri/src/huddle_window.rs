@@ -131,6 +131,8 @@ struct Person {
     picture: Option<String>,
     own: bool,
     #[serde(default)]
+    listening: bool,
+    #[serde(default)]
     level: f32,
 }
 #[derive(Clone, Deserialize, Serialize)]

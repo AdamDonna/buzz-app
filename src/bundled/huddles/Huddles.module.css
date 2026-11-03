@@ -567,3 +567,14 @@ html[data-keyboard-input] :is(.selfBubble, .cloudBubble, .bubbleName) {
     grid-row: 2;
   }
 }
+
+.listening {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max(100%, 5rem);
+  text-align: center;
+  padding-top: var(--space-3);
+  pointer-events: none;
+}

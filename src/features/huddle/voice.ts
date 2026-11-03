@@ -19,7 +19,7 @@ type Seat = {
 /** The connected human call is the sole roster source on this desktop.
  * Membership is the room's signed roster; parent membership never seats an agent. */
 export function createHuddleVoices(
-  huddles: Pick<Huddles, "snapshot" | "subscribe">,
+  huddles: Pick<Huddles, "snapshot" | "subscribe" | "voiceListening">,
   agents: Pick<Agents, "snapshot" | "subscribe" | "types">,
   relay: RelayData,
   bridge: HuddleBridge,
@@ -67,6 +67,8 @@ export function createHuddleVoices(
           if (result.status === "rejected")
             report(`${agent.name}: ${String(result.reason)}`);
       });
+      // Publishing re-enters sync: closing must already guard stop().
+      huddles.voiceListening(call, agent.pubkey, false);
       return closing;
     }
     // Start in a microtask so the seat is recorded before callbacks can re-enter sync.
@@ -119,7 +121,10 @@ export function createHuddleVoices(
           },
         });
         if (abort.signal.aborted) await opened.close();
-        else connection = opened;
+        else {
+          connection = opened;
+          huddles.voiceListening(call, agent.pubkey, true);
+        }
       })
       .catch(fail);
     return { call, agent, voice, stop };

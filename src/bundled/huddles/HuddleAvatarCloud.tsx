@@ -362,7 +362,7 @@ function Bubble({
   stage: RefObject<HTMLElement | null>;
 }) {
   const level = muted ? 0 : Math.max(0, Math.min(1, person.level));
-  const label = `${person.name}${person.own ? (muted ? " (you, muted)" : " (you)") : ""}${level > 0 ? ", speaking" : ""}`;
+  const label = `${person.name}${person.own ? (muted ? " (you, muted)" : " (you)") : ""}${level > 0 ? ", speaking" : ""}${person.listening ? ", listening to you" : ""}`;
   return (
     <HuddleAvatarToss stage={stage}>
       <span
@@ -383,6 +383,14 @@ function Bubble({
           />
         </HuddleAvatarMotion>
         <NameBadge name={person.name} />
+        {person.listening && (
+          <span
+            className={`${styles.listening} text-caption text-secondary`}
+            aria-hidden="true"
+          >
+            listening to you
+          </span>
+        )}
       </span>
     </HuddleAvatarToss>
   );

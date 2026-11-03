@@ -27,6 +27,7 @@ function harness() {
   const listeners = new Set<() => void>();
   const call: Huddles = {
     voiceError() {},
+    voiceListening() {},
     snapshot: () => snapshot,
     subscribe(fn) {
       listeners.add(fn);
@@ -680,4 +681,36 @@ it("releases discussion subscriptions when reopening the companion fails", async
   } finally {
     await h.dispose();
   }
+});
+
+it("projects listening only for locally active seats in a connected call", async () => {
+  const h = harness();
+  h.profiles.set("remote", {
+    name: "Remote",
+    ...{ isAgent: true, ownerPubkey: "viewer" },
+  });
+  h.set({
+    ...h.call.snapshot(),
+    participants: ["local", "remote"],
+    listening: ["local"],
+  });
+  h.release();
+  await h.companion.open();
+  expect(
+    vi.mocked(h.bridge.open).mock.lastCall?.[0].participants,
+  ).toMatchObject([
+    { key: "local", listening: true },
+    { key: "remote", listening: false },
+  ]);
+  h.release();
+  h.set({ ...h.call.snapshot(), phase: "leaving" });
+  await vi.waitFor(() =>
+    expect(
+      vi.mocked(h.bridge.update).mock.lastCall?.[1]?.participants,
+    ).toMatchObject([
+      { key: "local", listening: false },
+      { key: "remote", listening: false },
+    ]),
+  );
+  await h.dispose();
 });

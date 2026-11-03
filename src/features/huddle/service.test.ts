@@ -453,3 +453,23 @@ it.each([
     await h.dispose();
   },
 );
+
+it("accepts listening state only for the current connected call", async () => {
+  const h = harness();
+  await h.service.join(destination, "room");
+  h.receive({ type: "connected", room: "room", participants: [] });
+  const id = h.service.snapshot().id;
+  if (!id) throw new Error("Missing call id");
+  h.service.voiceListening("stale", "agent", true);
+  expect(h.service.snapshot().listening).toBeUndefined();
+  h.service.voiceListening(id, "agent", true);
+  expect(h.service.snapshot().listening).toEqual(["agent"]);
+  h.service.voiceListening("stale", "agent", false);
+  expect(h.service.snapshot().listening).toEqual(["agent"]);
+  h.service.voiceListening(id, "agent", false);
+  expect(h.service.snapshot().listening).toEqual([]);
+  await h.service.leave();
+  h.service.voiceListening(id, "agent", true);
+  expect(h.service.snapshot().listening).toBeUndefined();
+  await h.service.dispose();
+});
