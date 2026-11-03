@@ -10,6 +10,7 @@ import {
   type VerifiedProfileSink,
 } from "./verified-profile";
 
+const tick = () => new Promise((resolve) => setTimeout(resolve));
 const relay = keypair();
 const alice = keypair();
 const bob = keypair();
@@ -316,6 +317,7 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
     const profile = directory.queries.snapshot().get(alice.pubkey);
     expect(profile?.name).toBe("Alice");
     expect(profile?.about).toBe("About Alice");
@@ -325,6 +327,7 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
       bob.pubkey.slice(0, 10),
     );
     sink.event(retract(20));
+    await tick(); // Verified changes publish on the next macrotask.
     expect(directory.queries.snapshot().get(alice.pubkey)?.name).toBe(
       "Self name",
     );
@@ -384,6 +387,7 @@ it("qualifies verified namesakes and shared usernames, but not a unique verified
     sink.event(verifiedAs(carol.pubkey, "Carol", "shared"));
     sink.event(verifiedAs(dave.pubkey, "Dave", "shared"));
     sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
     const name = (key: { pubkey: string }) =>
       directory.queries.snapshot().get(key.pubkey)?.name;
     expect(name(alice)).toBe(`Sam (${alice.pubkey.slice(0, 10)})`);
@@ -392,8 +396,46 @@ it("qualifies verified namesakes and shared usernames, but not a unique verified
     expect(name(dave)).toBe(`Dave (${dave.pubkey.slice(0, 10)})`);
     sink.event(retract(20, bob.pubkey));
     sink.event(retract(20, dave.pubkey));
+    await tick(); // Verified changes publish on the next macrotask.
     expect(name(alice)).toBe("Sam");
     expect(name(carol)).toBe("Carol");
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("coalesces a burst of verified changes into one directory notification", async () => {
+  const { createProfileDirectory } = await import("./profile-directory");
+  let sink: VerifiedProfileSink | undefined;
+  const directory = createProfileDirectory(
+    { read: async () => [] },
+    undefined,
+    undefined,
+    {
+      authority,
+      subscribe(_filter, next) {
+        sink = next;
+        return () => {};
+      },
+    },
+  );
+  try {
+    await directory.ensure([alice.pubkey, bob.pubkey]);
+    assert(sink);
+    const changed = vi.fn();
+    directory.queries.subscribe(changed);
+    sink.event(projection(10));
+    sink.event(projection(10, bob.pubkey));
+    sink.eose();
+    sink.event(projection(11)); // A live change in the same burst.
+    expect(changed).not.toHaveBeenCalled();
+    await tick();
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(
+      directory.queries.snapshot().get(alice.pubkey)?.verified,
+    ).toMatchObject({
+      verifiedAt: 11,
+    });
   } finally {
     directory.dispose();
   }
@@ -580,6 +622,7 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
     expect(owner.session.profiles.snapshot().get(alice.pubkey)?.name).toBe(
       "Alice",
     );
@@ -587,12 +630,14 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
       owner.session.profiles.snapshot().get(alice.pubkey)?.verified?.status,
     ).toBe("checked");
     live.state({ status: "connecting", routes: [] });
+    await tick(); // Verified changes publish on the next macrotask.
     expect(
       owner.session.profiles.snapshot().get(alice.pubkey)?.verified?.status,
     ).toBe("cached");
     live.state({ status: "connected", routes: [] });
     await Promise.resolve();
     expect(refresh).toHaveBeenCalledTimes(1);
+    await tick();
     expect(
       owner.session.profiles.snapshot().get(alice.pubkey)?.verified,
     ).toBeUndefined();
@@ -653,6 +698,7 @@ it("keeps a verified name and its live check when channel access ends", async ()
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
     expect(verified()).toMatchObject({
       displayName: "Alice",
       status: "checked",
@@ -789,6 +835,7 @@ it("keeps kind-0 enrichment retryable after a verified-only profile loads", asyn
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick();
     expect(directory.queries.snapshot().get(alice.pubkey)?.name).toBe("Alice");
     fail = false;
     await directory.ensure([alice.pubkey]);

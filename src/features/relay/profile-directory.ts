@@ -75,12 +75,21 @@ export function createProfileDirectory(
   let controller = new AbortController();
   let closed = false;
   let generation = 0;
+  // Verified heads arrive one relay frame at a time, and each publish refolds
+  // every profile. Coalesce them to one publish per macrotask so socket frames,
+  // input and paint run between refolds instead of behind a burst.
+  let verifiedFlush: ReturnType<typeof setTimeout> | undefined;
   const verified =
     verification &&
     createVerifiedProfileDirectory(
       verification.authority,
       verification.subscribe,
-      () => publish(),
+      () => {
+        verifiedFlush ??= setTimeout(() => {
+          verifiedFlush = undefined;
+          if (!closed) publish();
+        });
+      },
       verification.refresh,
     );
   function accept(incoming: readonly RelayEvent[]) {
@@ -336,6 +345,8 @@ export function createProfileDirectory(
       verified?.dispose();
       unsubscribeLocal?.();
       clear();
+      // After clear(): disposing the verified directory schedules a flush.
+      clearTimeout(verifiedFlush);
       listeners.clear();
     },
   };
