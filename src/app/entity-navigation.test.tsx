@@ -854,7 +854,7 @@ it("keeps a link read while a code-less link switches communities", async () => 
   );
 });
 
-it("lists active primary pages in their sidebar and header placements", async () => {
+it("lists active primary pages in the app dock", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -889,14 +889,8 @@ it("lists active primary pages in their sidebar and header placements", async ()
   services = createServices();
   const current = services;
   render(<App services={current} />);
-  const pages = await screen.findByRole("navigation", { name: "Pages" });
-  await waitFor(() =>
-    expect(
-      within(pages)
-        .getAllByRole("button")
-        .map((row) => row.textContent),
-    ).toEqual(["Inbox", "Bestie"]),
-  );
+  await screen.findByRole("tab", { name: "Inbox" });
+  expect(screen.getByRole("tab", { name: "Bestie" })).toBeInTheDocument();
 
   expect(
     screen.queryByRole("tab", { name: "Repository" }),
@@ -939,13 +933,8 @@ it("lists active primary pages in their sidebar and header placements", async ()
   );
 
   await act(() => current.plugins.change("disable", "buzz.agents"));
-  await waitFor(() =>
-    expect(
-      within(screen.getByRole("navigation", { name: "Pages" }))
-        .getAllByRole("button")
-        .map((row) => row.textContent),
-    ).toEqual(["Inbox", "Bestie"]),
-  );
+  expect(screen.getByRole("tab", { name: "Inbox" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Bestie" })).toBeInTheDocument();
 
   expect(screen.queryByRole("tab", { name: "Agents" })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Search Buzz" }));
@@ -1025,7 +1014,7 @@ it.each(
   "normalizes old $name links in the same visit and caller, retaining $scope scope",
   async ({ name, scope }) => {
     const current = legacyPageFixture();
-    await screen.findByRole("navigation", { name: "Pages" });
+    await screen.findByRole("tab", { name: "Inbox" });
     const pageId = name.toLowerCase();
 
     act(() => {
@@ -1101,7 +1090,7 @@ it("opens a community-scoped page from another community, but not after leaving 
     ],
     other,
   );
-  await screen.findByRole("navigation", { name: "Pages" });
+  await screen.findByRole("tab", { name: "Inbox" });
   let result!: ReturnType<typeof member.navigation.open>;
   act(() => {
     result = member.navigation.open(target);
@@ -1117,7 +1106,7 @@ it("opens a community-scoped page from another community, but not after leaving 
     [{ id: other, name: "Other community" }],
     other,
   );
-  await screen.findByRole("navigation", { name: "Pages" });
+  await screen.findByRole("tab", { name: "Inbox" });
   act(() => {
     result = left.navigation.open(target);
   });
@@ -1203,7 +1192,7 @@ it("cold Settings Close uses required Messages when Inbox is disabled", async ()
 
 it("Close returns to the immediately preceding failed destination, not an older retained workspace", async () => {
   const current = legacyPageFixture();
-  await screen.findByRole("navigation", { name: "Pages" });
+  await screen.findByRole("tab", { name: "Inbox" });
   await act(async () => {
     void current.navigation.open({
       version: 1,

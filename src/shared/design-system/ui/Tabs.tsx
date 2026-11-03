@@ -396,7 +396,7 @@ function SegmentedIndicator({
 }
 
 /** One shared menu composes host actions and tab naming with close actions. */
-function TabMenu({
+export function TabMenu({
   label,
   actions,
   onClose,
@@ -448,7 +448,9 @@ function TabMenu({
         const action = afterClose.current;
         afterClose.current = undefined;
         if (!action) return;
-        trigger.current?.querySelector<HTMLElement>('[role="tab"]')?.focus();
+        trigger.current
+          ?.querySelector<HTMLElement>('[role="tab"], button')
+          ?.focus();
         action();
       }}
     >
@@ -480,8 +482,9 @@ function TabMenu({
         finalFocus={() =>
           closingAll.current
             ? false
-            : (trigger.current?.querySelector<HTMLElement>('[role="tab"]') ??
-              false)
+            : (trigger.current?.querySelector<HTMLElement>(
+                '[role="tab"], button',
+              ) ?? false)
         }
       >
         {actions?.map((action) => (

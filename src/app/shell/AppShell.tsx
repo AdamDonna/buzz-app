@@ -125,6 +125,9 @@ function AppShellContent({
   const connection = useRelayConnection(communities.relay);
   const sidebarScope = connection.scope ?? "disconnected";
   const channelsNavigation = selected === "buzz.channels/channels";
+  const hasNavigation =
+    channelsNavigation ||
+    pages.some((page) => page.key === selected && !!page.sidebar);
   const [narrow, setNarrow] = useState(
     () => window.matchMedia("(max-width: 650px)").matches,
   );
@@ -145,7 +148,7 @@ function AppShellContent({
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationToggle = useRef<HTMLButtonElement>(null);
   const visibleSidebar =
-    channelsNavigation && (narrow ? navigationOpen : sidebarOpen);
+    hasNavigation && (narrow ? navigationOpen : sidebarOpen);
   const creationInNavigation =
     !!creationAction && creationInSidebar && visibleSidebar;
   useEffect(
@@ -364,7 +367,7 @@ function AppShellContent({
           data-tauri-drag-region={macDesktop ? undefined : true}
           {...titleBarDragProps}
         >
-          {channelsNavigation && (collapsibleSidebar || narrow) && (
+          {hasNavigation && (collapsibleSidebar || narrow) && (
             <IconButton
               hint="familiar"
               ref={navigationToggle}
@@ -561,7 +564,7 @@ function AppShellContent({
                 className="shell-content"
                 data-messages={channelsNavigation || undefined}
               >
-                {channelsNavigation && (
+                {hasNavigation && (
                   <div
                     id="shell-navigation"
                     className="shell-navigation"

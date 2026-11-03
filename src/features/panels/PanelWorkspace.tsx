@@ -14,7 +14,11 @@ import {
   BrowserIcon,
   TerminalWindowIcon,
 } from "../../shared/design-system/icons";
-import { Tabs, type TabAction } from "../../shared/design-system/ui/Tabs";
+import {
+  Tabs,
+  TabMenu,
+  type TabAction,
+} from "../../shared/design-system/ui/Tabs";
 import { PanelHeader } from "../../shared/design-system/ui/PanelHeader";
 import styles from "./Panels.module.css";
 import type { TabDragHost } from "./useTabDrag";
@@ -354,7 +358,20 @@ export function PanelWorkspace({
   const identityOnly = !!identity && tabs.length === 1 && !tabs[0]?.close;
   const heading = identity ? (
     <div data-workspace-identity="" className={styles.workspaceIdentity}>
-      {identity}
+      {identityOnly && tabMenu ? (
+        <TabMenu
+          label={tabs[0]?.label ?? label}
+          actions={undefined}
+          onClose={undefined}
+          onRename={undefined}
+          closeAll={tabMenu.closeAll}
+          closeOthers={undefined}
+        >
+          {identity}
+        </TabMenu>
+      ) : (
+        identity
+      )}
     </div>
   ) : undefined;
   return (

@@ -214,6 +214,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   conversation. The message column centers against the window when space allows;
   split panes center within their own pane. When hidden, the top-left **+** opens
   the same New menu. The resize divider becomes clearer as the pointer approaches.
+  Apps that contribute their own sidebar retain that app-specific content.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community

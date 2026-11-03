@@ -150,7 +150,6 @@ it.each([true, false])(
               title: "Beacon",
               component: () => null,
               primary,
-              sidebar: () => null,
             },
           ]}
           selected="example.plugin/main"

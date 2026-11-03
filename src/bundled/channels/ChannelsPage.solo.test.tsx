@@ -964,15 +964,12 @@ it("names the owner on the access controls of someone else's shared chat", async
   const f = fixture({ placed: false, ownedBy: person, people: [person] });
   f.mountWithSidebar();
   const user = userEvent.setup();
-  // The owner's avatar stands in for the people icon on both controls.
+  // The header names the owner; the sidebar mark retains the owner avatar.
   const header = await screen.findByRole("button", {
-    name: "Share access, Teammate’s chat",
+    name: "Manage members of Planning, Teammate’s chat",
   });
-  expect(header).toHaveTextContent("T");
-  await user.hover(header);
-  expect(await screen.findByRole("tooltip")).toHaveTextContent(
-    "Teammate’s chat",
-  );
+  expect(header).toHaveTextContent("Planning");
+  expect(header).toHaveAttribute("title", "Teammate’s chat");
   const mark = screen.getByRole("button", { name: "Teammate’s chat" });
   expect(mark).toHaveTextContent("T");
   await user.click(mark);
@@ -999,7 +996,7 @@ it.each([
 ])("names no owner on %s", async (_, options) => {
   fixture(options).mountWithSidebar();
   expect(
-    await screen.findByRole("button", { name: "Share access" }),
+    await screen.findByRole("button", { name: "Manage members of Planning" }),
   ).toBeInTheDocument();
   expect(screen.queryByText(/’s chat/)).toBeNull();
 });
@@ -1008,7 +1005,9 @@ it("marks an archived chat once and keeps only its lifecycle actions", async () 
   fixture({ archived: true }).mount();
   await screen.findByRole("button", { name: "Chat actions" });
   expect(screen.getAllByText("Archived")).toHaveLength(1);
-  expect(screen.queryByRole("button", { name: "Share access" })).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Manage members of Planning" }),
+  ).toBeNull();
   expect(
     await screen.findByRole("region", { name: "Archived chat" }),
   ).toHaveTextContent("This chat is archived");

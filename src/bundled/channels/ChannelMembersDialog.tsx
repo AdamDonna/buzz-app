@@ -443,8 +443,8 @@ export function ChannelMembersButton({
           avatars={
             <ChannelMemberAvatars session={session} channelId={channelId} />
           }
-          aria-label={`Manage members of ${conversationName}`}
-          title="Manage members"
+          aria-label={`Manage members of ${conversationName}${owner ? `, ${soloOwnerLabel(owner)}` : ""}`}
+          title={owner ? soloOwnerLabel(owner) : "Manage members"}
           aria-haspopup="dialog"
           aria-expanded={open}
           onClick={() => setOpen(true)}

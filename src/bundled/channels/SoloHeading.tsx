@@ -65,6 +65,7 @@ type SoloToolbarProps = {
 
 /** The header of a conversation shown with the Solo treatment. */
 export function SoloHeading(props: SoloToolbarProps) {
+  const owner = useSoloOwner(props.session, props.channel);
   return props.channel.archived ? (
     <SoloTitle channel={props.channel}>
       <SoloToolbar {...props} />
@@ -77,6 +78,7 @@ export function SoloHeading(props: SoloToolbarProps) {
             session={props.session}
             channelId={props.channel.id}
             conversationName={props.channel.name}
+            owner={owner}
             navigator={props.navigator}
             signal={props.signal}
           />
