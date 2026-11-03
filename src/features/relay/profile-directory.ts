@@ -177,7 +177,8 @@ export function createProfileDirectory(
         old?.nip05 === value.nip05 &&
         old?.isAgent === value.isAgent &&
         old?.ownerPubkey === value.ownerPubkey &&
-        JSON.stringify(old?.verified) === JSON.stringify(value.verified)
+        (old?.verified === value.verified ||
+          JSON.stringify(old?.verified) === JSON.stringify(value.verified))
       )
         next.set(id, old);
     }

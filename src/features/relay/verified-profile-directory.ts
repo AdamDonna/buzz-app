@@ -29,6 +29,16 @@ export function createVerifiedProfileDirectory(
   const checked = new Set<string>();
   type Batch = { stop(): void; subjects: readonly string[] };
   const batches = new Set<Batch>();
+  // Every profile publish projects every head: reuse the last projection of
+  // an unchanged event so publishes skip revalidation and compare by identity.
+  const projections = new WeakMap<
+    RelayEvent,
+    {
+      authority: VerifiedProfileAuthority;
+      checked: boolean;
+      profile: VerifiedProfile | undefined;
+    }
+  >();
   let authority = initialAuthority;
   let enabled = !!authority;
   let discoveryFresh = !!authority;
@@ -67,7 +77,13 @@ export function createVerifiedProfileDirectory(
           stopBatches();
           heads.clear();
         }
-        authority = next;
+        // An equal refresh keeps the current object, so unchanged heads keep
+        // their projections.
+        if (
+          authority?.pubkey !== next.pubkey ||
+          authority.multipleIssuers !== next.multipleIssuers
+        )
+          authority = next;
         enabled = true;
         schedule();
       }
@@ -84,6 +100,23 @@ export function createVerifiedProfileDirectory(
         changed();
       }
     }
+  }
+
+  function project(
+    event: RelayEvent,
+    currentAuthority: VerifiedProfileAuthority,
+    isChecked: boolean,
+  ) {
+    const memo = projections.get(event);
+    if (memo?.authority === currentAuthority && memo.checked === isChecked)
+      return memo.profile;
+    const profile = verifiedProfile(event, currentAuthority, isChecked);
+    projections.set(event, {
+      authority: currentAuthority,
+      checked: isChecked,
+      profile,
+    });
+    return profile;
   }
 
   /** Returns whether the head changed; the caller owns notification. */
@@ -242,7 +275,7 @@ export function createVerifiedProfileDirectory(
           const event = heads.peek(subject);
           const profile =
             event &&
-            verifiedProfile(
+            project(
               event,
               currentAuthority,
               discoveryFresh && checked.has(subject),

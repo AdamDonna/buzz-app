@@ -801,3 +801,46 @@ it("keeps kind-0 enrichment retryable after a verified-only profile loads", asyn
     directory.dispose();
   }
 });
+
+it("reuses an unchanged head's projection across snapshots", async () => {
+  const h = harness();
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const sink = h.subscriptions[0]?.sink;
+    assert(sink);
+    sink.event(projection());
+    sink.eose();
+    const checked = h.directory.snapshot().get(alice.pubkey);
+    expect(checked?.status).toBe("checked");
+    expect(h.directory.snapshot().get(alice.pubkey)).toBe(checked);
+    h.directory.connected(false);
+    const cached = h.directory.snapshot().get(alice.pubkey);
+    expect(cached?.status).toBe("cached");
+    expect(h.directory.snapshot().get(alice.pubkey)).toBe(cached);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("keeps an unchanged head's projection through an equal discovery refresh", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(async () => ({ ...authority }));
+  const h = harness(refresh);
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const sink = h.subscriptions[0]?.sink;
+    assert(sink);
+    sink.event(projection());
+    sink.eose();
+    const checked = h.directory.snapshot().get(alice.pubkey);
+    expect(checked?.status).toBe("checked");
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(h.directory.snapshot().get(alice.pubkey)).toBe(checked);
+  } finally {
+    h.directory.dispose();
+    vi.useRealTimers();
+  }
+});
