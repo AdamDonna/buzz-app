@@ -1404,7 +1404,7 @@ it.each([true, false])(
       startsThreads,
     });
     try {
-      expect(!!screen.queryByRole("button", { name: "Reply" })).toBe(
+      expect(!!screen.queryByRole("button", { name: "Reply in thread" })).toBe(
         startsThreads,
       );
       expect(
@@ -1428,7 +1428,7 @@ it.each([true, false])(
         screen.getByRole("button", { name: /^View thread: 23 replies/ }),
       );
       expect(thread).toHaveBeenCalledWith("root", "root");
-      expect(!!screen.queryByRole("button", { name: "Reply" })).toBe(
+      expect(!!screen.queryByRole("button", { name: "Reply in thread" })).toBe(
         startsThreads,
       );
     } finally {
@@ -2665,7 +2665,7 @@ it.each(["", "Please review this.\n\n"])(
       expect(open).toHaveBeenCalledWith("buzz://channel/session-id", {
         rootId: "root",
       });
-      fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+      fireEvent.click(screen.getByRole("button", { name: "Reply in thread" }));
       expect(reply).toHaveBeenCalledWith("root");
       fireEvent.click(screen.getByRole("button", { name: "React" }));
       expect(react).toHaveBeenCalledOnce();
@@ -2888,7 +2888,9 @@ it.each([false, true])(
       expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
       toggle.focus();
       fireEvent.keyDown(toggle, { key: "F10", shiftKey: true });
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Reply in thread" }),
+      );
       await waitFor(() =>
         expect(onReply).toHaveBeenCalledExactlyOnceWith(row.id),
       );

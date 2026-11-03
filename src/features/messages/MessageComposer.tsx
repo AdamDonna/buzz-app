@@ -1,3 +1,5 @@
+import { useReplyRoot } from "./useReplyRoot";
+import { ReplyContext } from "./ReplyContext";
 import { useChatLinkSharing } from "./useChatLinkSharing";
 import {
   draftGif,
@@ -285,7 +287,7 @@ export type MessageComposerProps = {
   activityClickOpensPanel?: boolean | undefined;
   trailingTool?: ReactNode;
   inviteAgents?: boolean | undefined;
-  onSend?: (id: string) => void;
+  onSend?: (id: string, threadRootId?: string) => void;
   /** Inbox may retire only after saving the replacement or confirming no draft remains. */
   onDraftSaved?: (() => void) | undefined;
   /** Before a focused form detaches, its host can hand focus to retained content. */
@@ -297,6 +299,8 @@ export type MessageComposerProps = {
     | undefined;
   canOpenLink?: ((target: string) => boolean) | undefined;
   threadRootId?: string;
+  /** Accept inline replies through the surrounding message interaction scope. */
+  inlineReplies?: boolean | undefined;
   /** The viewer's latest message in this thread, once the thread has loaded.
    * An empty thread composer starts with the agents it notified (see
    * seedMentions); other composers read their own channel window. */
@@ -439,6 +443,7 @@ function routedKey(agents: readonly MentionRecipient[]) {
 /** No text, mention, chat card or GIF: nothing the user has put in yet. */
 function untouchedDraft(draft: MentionDraft) {
   return (
+    !draft.replyRootId &&
     !draft.text &&
     !draft.recipients.length &&
     !draft.chatCards?.length &&
@@ -470,7 +475,8 @@ function Composer({
   editMessages,
   onOpenLink,
   canOpenLink,
-  threadRootId,
+  threadRootId: draftThreadRootId,
+  inlineReplies = false,
   threadSeed,
   replyParentId,
   replyContext,
@@ -514,13 +520,11 @@ function Composer({
   useLayoutEffect(() => {
     if (disabled || !active) sendAttempt.current?.abort();
   }, [disabled, active]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Retargeting invalidates an in-flight send, not the root-keyed draft.
-  useLayoutEffect(() => () => sendAttempt.current?.abort(), [replyParentId]);
   const inputId = useId();
   const draftKey =
     submission?.draftKey ??
-    (threadRootId
-      ? `draft:${channelId}:thread:${threadRootId}`
+    (draftThreadRootId
+      ? `draft:${channelId}:thread:${draftThreadRootId}`
       : `draft:${channelId}`);
   const [admitting, setAdmitting] = useState(false);
   const admission = useRef(false);
@@ -552,10 +556,6 @@ function Composer({
   const dmMembers = useListedChannel(listed, channelId, (channel) =>
     channel?.channelType === "dm" ? channel.members : undefined,
   );
-  // A DM or Solo chat is one conversation; elsewhere a top-level message
-  // starts a thread of its own.
-  const startsThread =
-    !threadRootId && !solo && channelType !== "dm" && channelType !== "solo";
   const host = fullSession(session);
   const agentChoices = inviteAgents || solo;
   const recoveryKey = `${scope}:${draftKey}`;
@@ -592,7 +592,7 @@ function Composer({
   // thread's message; the other composers read their channel window. The
   // seed is this mount's initial draft, not an editor reset: a StrictMode
   // remount between effects would undo one.
-  const seedsFromWindow = !submission && !threadRootId && !defaultMention;
+  const seedsFromWindow = !submission && !draftThreadRootId && !defaultMention;
   const windowSeed = () => {
     const window = session.channels.window?.(channelId);
     return window?.status === "ready" && session.viewer
@@ -633,6 +633,22 @@ function Composer({
       : { value: saved, applied, automatic: false };
   });
   const [value, updateDraft] = useState(initial.value);
+  const replyRootId = value.replyRootId;
+  const threadRootId = replyRootId ?? draftThreadRootId;
+  // A DM or Solo chat is one conversation; elsewhere a top-level message
+  // starts a thread of its own.
+  const startsThread =
+    !threadRootId && !solo && channelType !== "dm" && channelType !== "solo";
+  const replyRoot = useReplyRoot(host, channelId, replyRootId);
+  const replyUnavailable = !!replyRootId && !replyRoot.message;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Retargeting invalidates pending admission without replacing the editor.
+  useLayoutEffect(
+    () => () => sendAttempt.current?.abort(),
+    [replyParentId, replyRootId],
+  );
+  useLayoutEffect(() => {
+    if (replyUnavailable) sendAttempt.current?.abort();
+  }, [replyUnavailable]);
   // The seed applied, or settled by the user's edit, for this draft key and
   // message, and whether content the user put in has closed seeding, each
   // until the composer is shown again.
@@ -881,6 +897,10 @@ function Composer({
     next = stageChatCards(
       {
         ...next,
+        replyRootId:
+          "replyRootId" in next
+            ? next.replyRootId
+            : valueRef.current.replyRootId,
         ...((next.chatCards ?? valueRef.current.chatCards)
           ? {
               chatCards: next.chatCards ?? valueRef.current.chatCards ?? [],
@@ -1405,6 +1425,25 @@ function Composer({
       }
     };
   }, [editScope]);
+  const startReply = useEffectEvent((row: ChannelMessage) => {
+    if (!permitted.current || !inlineReplies || !host) return false;
+    if (editing.target) {
+      setError("Finish or cancel your current edit first.");
+      input.current?.focus();
+      return true;
+    }
+    saveDraft({ ...valueRef.current, replyRootId: row.threadRootId ?? row.id });
+    input.current?.focus();
+    return true;
+  });
+  useEffect(() => {
+    if (!editScope || !inlineReplies) return;
+    const reply = (row: ChannelMessage) => startReply(row);
+    editScope.reply = reply;
+    return () => {
+      if (editScope.reply === reply) editScope.reply = undefined;
+    };
+  }, [editScope, inlineReplies]);
   // DOM props are committed before child layout effects; closures can still
   // carry the preceding render's enabled state during that interval.
   const editable = () =>
@@ -2189,6 +2228,7 @@ function Composer({
     return recipients;
   }
   async function send() {
+    if (replyUnavailable) return;
     if (!permitted.current || voice.isCapturing()) return;
     if (editing.target) {
       if (editDisabled || editing.locked) return;
@@ -2616,7 +2656,8 @@ function Composer({
                 },
                 publish: () => publishNow(uploaded, host),
                 onSend: (id) => {
-                  if (live.current) onSend?.(id);
+                  if (live.current)
+                    onSend?.(id, ...(replyRootId ? [replyRootId] : []));
                 },
               },
               validated,
@@ -2639,7 +2680,8 @@ function Composer({
           capturedAttachments,
           async (uploaded) => {
             const sent = await publish(uploaded);
-            if (sent && live.current) onSend?.(sent);
+            if (sent && live.current)
+              onSend?.(sent, ...(replyRootId ? [replyRootId] : []));
           },
           (files, preparationError) => {
             // Only the original saved draft or the untouched follow-up can be
@@ -2651,6 +2693,7 @@ function Composer({
               try {
                 const draft = mentionDraft(JSON.parse(raw));
                 return (
+                  !draft.replyRootId &&
                   !draft.text.trim() &&
                   !draft.recipients.length &&
                   !composerMarkdown(draft).trim()
@@ -2662,7 +2705,8 @@ function Composer({
             if (
               live.current &&
               !cleared(JSON.stringify(valueRef.current)) &&
-              (valueRef.current.text !== next.text ||
+              (valueRef.current.replyRootId !== next.replyRootId ||
+                valueRef.current.text !== next.text ||
                 JSON.stringify(valueRef.current.recipients) !==
                   JSON.stringify(next.recipients) ||
                 JSON.stringify(valueRef.current.chatCards ?? []) !==
@@ -2683,6 +2727,7 @@ function Composer({
               !(
                 live.current &&
                 current === JSON.stringify(valueRef.current) &&
+                valueRef.current.replyRootId === next.replyRootId &&
                 valueRef.current.text === next.text &&
                 JSON.stringify(valueRef.current.recipients) ===
                   JSON.stringify(next.recipients) &&
@@ -2762,7 +2807,7 @@ function Composer({
       seedClosed.current = false;
       const latest = threadSeed ?? (seedsFromWindow ? windowSeed() : undefined);
       if (latest) seedApplied.current = seedKey(latest);
-      if (id) onSend?.(id);
+      if (id) onSend?.(id, ...(replyRootId ? [replyRootId] : []));
       finishDraft(pending);
     } catch (reason) {
       if (live.current && !attempt.signal.aborted)
@@ -2997,6 +3042,18 @@ function Composer({
                 icon={<XIcon size={16} aria-hidden="true" />}
               />
             </div>
+          ) : replyRootId && host ? (
+            <ReplyContext
+              session={host}
+              channelId={channelId}
+              message={replyRoot.message}
+              status={replyRoot.status}
+              onRetry={replyRoot.retry}
+              onCancel={() => {
+                saveDraft({ ...valueRef.current, replyRootId: undefined });
+                input.current?.focus();
+              }}
+            />
           ) : (
             replyContext
           )}
@@ -3311,6 +3368,7 @@ function Composer({
               }
               disabled={
                 disabled ||
+                replyUnavailable ||
                 untagged ||
                 (!editing.target && compacting) ||
                 (!editing.target && (!!accepted || conflict || sendPending)) ||

@@ -34,8 +34,10 @@ test("channel thread hands off to a stable video viewer", async ({
   const row = page
     .getByRole("region", { name: "Channel message history" })
     .locator(`[data-message-id="${event.id}"]`);
+  app.append("primary", "alpha", "Video comment", false, true, event.id);
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.threadSummary(event.id, [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const thread = page.getByRole("complementary", {
     name: "Thread",
     exact: true,

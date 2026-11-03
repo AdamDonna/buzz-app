@@ -942,7 +942,9 @@ test("existing DM previews inline and opens its exact thread", async ({
   await expect(author).toBeFocused();
   await expect(composer).toHaveText("Keep this draft");
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  await row
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   await expect(page.getByRole("textbox", { name: /reply/i })).toBeVisible();
   await expect(page.getByRole("region", { name: "New message" })).toHaveCount(
     0,

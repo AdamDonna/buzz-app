@@ -77,7 +77,9 @@ test("nested replies send, stay open, and reveal through links at readable panel
   });
   await editor.fill("Nested browser reply");
   await hoverMessage(parent);
-  await parent.getByRole("button", { name: "Reply", exact: true }).click();
+  await parent
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   await expect(editor).toHaveText("Nested browser reply");
   let rejected;
   await page.route("**/api/relay/**/publish", async (route) => {
@@ -147,7 +149,7 @@ test("nested replies send, stay open, and reveal through links at readable panel
     panel.getByRole("button", { name: "Cancel reply target" }),
   ).toHaveCount(0);
   await (await replyActions(nestedRow))
-    .getByRole("button", { name: "Reply", exact: true })
+    .getByRole("button", { name: "Reply in thread", exact: true })
     .click();
   await expect(editor).toBeFocused();
   // Main's Up-to-edit shares this composer; cancel must retain the nested target
@@ -197,7 +199,7 @@ test("nested replies send, stay open, and reveal through links at readable panel
     await expect.poll(() => grandchildRequested).toBe(true);
     await expect(
       (await replyActions(pending)).getByRole("button", {
-        name: "Reply",
+        name: "Reply in thread",
         exact: true,
       }),
     ).toBeDisabled();
@@ -255,7 +257,7 @@ test("nested replies send, stay open, and reveal through links at readable panel
   for (let depth = 0; depth < 6; depth++) {
     await editor.hover();
     await (await replyActions(deepest))
-      .getByRole("button", { name: "Reply", exact: true })
+      .getByRole("button", { name: "Reply in thread", exact: true })
       .click();
     await expect(editor).toBeFocused();
     const content = `Deep reply ${depth}`;
@@ -379,7 +381,7 @@ test("nested replies send, stay open, and reveal through links at readable panel
     panel.locator(`[data-message-id="${finalReply.id}"]`),
   );
   await expect(
-    finalActions.getByRole("button", { name: "Reply", exact: true }),
+    finalActions.getByRole("button", { name: "Reply in thread", exact: true }),
   ).toBeEnabled();
 });
 
@@ -660,7 +662,9 @@ test.describe("touch branch controls", () => {
     await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(menuTrigger).toBeFocused();
     await expect(actions).toBeVisible();
-    await actions.getByRole("button", { name: "Reply", exact: true }).tap();
+    await actions
+      .getByRole("button", { name: "Reply in thread", exact: true })
+      .tap();
     await expect(
       panel.getByRole("textbox", { name: "Reply to thread" }),
     ).toBeFocused();
@@ -968,7 +972,7 @@ for (const width of [1492, 1280, 1024, 700, 390])
         await page.mouse.move(body.x + 4, body.y + body.height / 2);
         await expect(actions).toHaveCSS("opacity", "1");
         const reply = actions.getByRole("button", {
-          name: "Reply",
+          name: "Reply in thread",
           exact: true,
         });
         const target = await reply.boundingBox();

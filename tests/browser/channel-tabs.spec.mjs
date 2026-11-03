@@ -246,11 +246,13 @@ test("content-opened tabs restore drafts without offering blank-tab creation", a
     .filter({ has: page.getByText("Beta draft", { exact: true }) });
   await hoverMessage(sent);
   await expect(
-    sent.getByRole("button", { name: "Reply", exact: true }),
+    sent.getByRole("button", { name: "Reply in thread", exact: true }),
   ).toHaveCount(0);
   const row = main.locator(`[data-message-id="${link.id}"]`);
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append("primary", "alpha", "Existing thread reply", false, true, link.id);
+  app.threadSummary(link.id, [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const reply = workspace.getByRole("textbox", {
     name: "Reply to thread",
     exact: true,
@@ -274,7 +276,7 @@ test("content-opened tabs restore drafts without offering blank-tab creation", a
   await expect(alphaComposer).toBeFocused();
   await workspace.getByRole("tab", { name: "Beta", exact: true }).click();
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   await expect(reply).toBeFocused();
   await expect(reply).toHaveText("Alpha reply draft");
   await workspace
@@ -498,7 +500,16 @@ test("Canvas opens once beside Thread and retains its channel draft", async ({
   const main = page.getByRole("article", { name: "Conversation", exact: true });
   const row = main.locator("[data-message-id]").first();
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append(
+    "primary",
+    "alpha",
+    "Existing thread reply",
+    false,
+    true,
+    await row.getAttribute("data-message-id"),
+  );
+  app.threadSummary(await row.getAttribute("data-message-id"), [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const workspace = page.locator("[data-panel-workspace]");
   const thread = workspace.locator(
     '[role="tab"][data-tab-value^="thread:alpha:"]',

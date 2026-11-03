@@ -58,7 +58,8 @@ test("an open image gallery follows host appearance while retaining its dark sta
     .getByRole("region", { name: "Channel message history" })
     .locator(`[data-message-id="${event.id}"]`);
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.threadSummary(event.id, [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const thread = page.getByRole("complementary", {
     name: "Thread",
     exact: true,

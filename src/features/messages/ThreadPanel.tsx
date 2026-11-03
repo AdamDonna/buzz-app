@@ -1,4 +1,5 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The thread region supports keyboard scrolling and Escape.
+import { ReplyContext } from "./ReplyContext";
 import { workflowLabel } from "../relay/workflow-attribution";
 import { usePanelTabHost } from "../panels/PanelWorkspace";
 import { MessageEditScope } from "./MessageEditScope";
@@ -9,8 +10,6 @@ import { replyTree } from "./reply-tree";
 import { useChannelIdentityNames } from "../identity-names/react";
 import { formatPublicKey } from "../../shared/identity/public-key";
 import { Button } from "../../shared/design-system/ui/Button";
-import { Avatar } from "../../shared/design-system/ui/Avatar";
-import { avatarMedia } from "../../shared/avatar-source";
 import { PanelHeader } from "../../shared/design-system/ui/PanelHeader";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -1822,38 +1821,14 @@ function ThreadMessages({
             (!!replyParent && !selectedParent)
           }
           replyContext={
-            replyParent && !selectedParent ? (
-              <div className={styles.replyContext}>
-                <span>Reply target is no longer available.</span>
-                <Button size="sm" onClick={focusReply}>
-                  Cancel reply target
-                </Button>
-              </div>
-            ) : (
-              selectedParent && (
-                <div className={styles.replyContext}>
-                  <Avatar
-                    src={avatarMedia(
-                      profiles.get(selectedParent.authorId)?.picture,
-                      session.media,
-                    )}
-                    alt=""
-                    fallback={senderName(selectedParent)}
-                    size="default"
-                  />
-                  <div>
-                    <span>Replying to {senderName(selectedParent)}</span>
-                    <p>{selectedParent.content}</p>
-                  </div>
-                  <IconButton
-                    size="sm"
-                    aria-label="Cancel reply target"
-                    onClick={focusReply}
-                    icon={<XIcon size={16} aria-hidden="true" />}
-                  />
-                </div>
-              )
-            )
+            replyParent ? (
+              <ReplyContext
+                session={session}
+                channelId={channelId}
+                message={selectedParent}
+                onCancel={focusReply}
+              />
+            ) : undefined
           }
           editMessages={rows}
           focusRequest={pendingReplyFocus ?? 0}

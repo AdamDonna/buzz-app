@@ -2083,8 +2083,8 @@ Inline search settings use the search variant of PreferenceRow with a gear icon 
 
 Proposed pending designer sign-off, as a narrow exception to the chat and
 conversation icon rule under Icons. Use `ChatCircleIcon` for a Solo chat in navigation, headers, tabs and chat cards.
-Use `MessageReplyIcon` (Tabler MessageReply) for thread tabs, thread links and
-Reply actions. Keep private Team channels' lock icon; privacy alone does not
+Use `MessageReplyIcon` (Tabler MessageReply) for thread tabs and thread links.
+Reply actions use `CornerDownLeftIcon` (Tabler CornerDownLeft), per designer choice. Keep private Team channels' lock icon; privacy alone does not
 replace a Solo chat's identity icon. Accessible chat cards end with a right
 chevron. Unavailable chat cards retain a lock and unavailable accessible text;
 unknown access does not earn a chevron. Display chat cards as **Chat:**, while

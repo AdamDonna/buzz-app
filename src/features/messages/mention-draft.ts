@@ -18,6 +18,8 @@ export type PendingMention = Readonly<{
   end: number;
 }>;
 export type MentionDraft = {
+  /** Inline reply destination, saved atomically with this channel draft. */
+  replyRootId?: string | undefined;
   text: string;
   /** Chat links staged above the editor; serialized with the caption. */
   chatCards?: readonly string[];
@@ -76,6 +78,10 @@ export function mentionDraft(value: unknown): MentionDraft {
     : record.sessionCards;
   return {
     text,
+    ...(typeof record.replyRootId === "string" &&
+    /^[0-9a-f]{64}$/.test(record.replyRootId)
+      ? { replyRootId: record.replyRootId }
+      : {}),
     ...(Array.isArray(cards) && cards.length
       ? {
           chatCards: cards

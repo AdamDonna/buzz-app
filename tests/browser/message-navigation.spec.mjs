@@ -1263,7 +1263,9 @@ test("opening another message in the same thread keeps the reply editor mounted"
     `[data-message-id="${app.exact.replies.at(-2).id}"]`,
   );
   await hoverMessage(replyRow);
-  await replyRow.getByRole("button", { name: "Reply", exact: true }).click();
+  await replyRow
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "Cancel reply target", exact: true }),
   ).toBeVisible();
@@ -1271,7 +1273,7 @@ test("opening another message in the same thread keeps the reply editor mounted"
   const replyTarget = page
     .locator("form")
     .filter({ has: composer })
-    .getByText(/^Replying to /)
+    .getByText("Reply in thread", { exact: true })
     .locator("..");
   const chosenTarget = await replyTarget.textContent();
   expect(chosenTarget).toBeTruthy();

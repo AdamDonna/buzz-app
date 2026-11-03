@@ -22,7 +22,9 @@ test("coordination keeps its first line visible throughout expansion and collaps
     `[data-channel-timeline] [data-message-id="${root.id}"]`,
   );
   await hoverMessage(original);
-  await original.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append("primary", "alpha", "Existing thread reply", false, true, root.id);
+  app.threadSummary(root.id, [], 1);
+  await original.getByRole("button", { name: /^View thread:/ }).click();
   const thread = page.getByRole("complementary", {
     name: "Thread",
     exact: true,
@@ -262,7 +264,16 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   ).toBeVisible();
   const copiedLink = await page.evaluate(() => window.copiedMessages.at(-1));
   expect(copiedLink).toBe(`buzz://message?channel=alpha&id=${event.id}`);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append(
+    "primary",
+    "alpha",
+    "Existing thread reply",
+    false,
+    true,
+    event.id,
+  );
+  app.threadSummary(event.id, [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const panel = page.getByRole("complementary", {
     name: "Thread",
     exact: true,
@@ -365,7 +376,9 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   expect(removed.tags).toContainEqual(["e", added.id]);
   expect(removed.pubkey).toBe(added.pubkey);
   await hoverMessage(root);
-  await root.getByRole("button", { name: "Reply", exact: true }).click();
+  await root
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   const replyBox = panel.getByRole("textbox", {
     name: "Reply to thread",
     exact: true,
@@ -373,11 +386,13 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   await expect(replyBox).toBeFocused();
   await replyBox.fill("Keep this reply draft");
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   await expect(replyBox).toBeFocused();
   await expect(replyBox).toHaveText("Keep this reply draft");
   await hoverMessage(root);
-  await root.getByRole("button", { name: "Reply", exact: true }).click();
+  await root
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   await expect(
     panel.getByRole("textbox", { name: "Reply to thread", exact: true }),
   ).toBeFocused();
@@ -387,11 +402,10 @@ test("message actions reveal, copy, restore focus and reply across responsive la
     )
     .click();
   await expect(
-    row.getByRole("button", { name: "Reply", exact: true }),
+    row.getByRole("button", { name: /^View thread:/ }),
   ).toBeFocused();
 
-  // A broadcast reply must open its owning thread for composition, not reveal
-  // the selected reply and steal focus back from the editor.
+  // A broadcast summary opens its owning thread; exact links below reveal the reply.
   const broadcast = app.histories
     .get("primary/alpha")
     .find((item) => item.content === "Broadcast reply");
@@ -403,9 +417,7 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   // final row geometry before placing the pointer over the next message.
   await expect(page.locator("[data-panel-dock][data-closing]")).toHaveCount(0);
   await hoverMessage(broadcastRow);
-  await broadcastRow
-    .getByRole("button", { name: "Reply", exact: true })
-    .click();
+  await broadcastRow.getByRole("button", { name: /^View thread:/ }).click();
   await expect(replyBox).toBeFocused();
   await page
     .locator(
@@ -499,7 +511,10 @@ test("copied Buzz links and the desktop alias reveal their destination from a co
   }
 });
 
-test("DM actions open the correct reply thread", async ({ page, app }) => {
+test("DM actions select the correct inline reply target", async ({
+  page,
+  app,
+}) => {
   await open(page, app);
   await page
     .getByRole("navigation", { name: "Subscribed channels" })
@@ -542,11 +557,11 @@ test("DM actions open the correct reply thread", async ({ page, app }) => {
     page.getByRole("menuitem", { name: "Copy message", exact: true }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  await row
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   await expect(
-    page
-      .getByRole("complementary", { name: "Thread", exact: true })
-      .locator(`[data-message-id="${event.id}"]`),
+    page.locator("form").getByText("DM menu check", { exact: true }),
   ).toBeVisible();
   const replyBox = page.getByRole("textbox", {
     name: "Reply to thread",
@@ -554,7 +569,9 @@ test("DM actions open the correct reply thread", async ({ page, app }) => {
   });
   await expect(replyBox).toBeFocused();
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  await row
+    .getByRole("button", { name: "Reply in thread", exact: true })
+    .click();
   await expect(replyBox).toBeFocused();
 });
 
@@ -729,7 +746,16 @@ test("historical single-day DMs and their threads expose dates without hover", a
   await expect(
     timeline.getByRole("button", { name: "Load older messages" }),
   ).toHaveCount(0);
-  const reply = row.getByRole("button", { name: "Reply", exact: true });
+  app.append(
+    "primary",
+    channel,
+    "Existing thread reply",
+    false,
+    true,
+    event.id,
+  );
+  app.threadSummary(event.id, [], 1, channel);
+  const reply = row.getByRole("button", { name: /^View thread:/ });
   // Start real keyboard navigation so the untouched row prepares its controls.
   await page.keyboard.press("Tab");
   await reply.focus();

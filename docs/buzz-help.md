@@ -61,6 +61,12 @@ the interface unless an available tool actually supports that action.
   to address a channel member. Typing a name alone does not guarantee a
   notification. Selecting someone outside the channel does not grant access;
   inviting them requires an explicit decision from someone with permission.
+- **Reply in thread** on a channel message shows its preview in the current
+  composer. Your draft and reply target return when you revisit the channel.
+  Selecting or canceling the target keeps your draft text. Sending
+  updates the message’s thread summary without opening a split panel; select
+  that summary to open the thread. If the reply target fails to load, retry it
+  from the preview; your text stays editable while Send waits for the target.
 - **Workspaces** group Solo chats and provide starting folders and instructions.
   Folders are optional unless **Work in a new worktree** is on. In that mode,
   add at least one project folder; the form shows a message beside Folders

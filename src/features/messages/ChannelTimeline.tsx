@@ -152,6 +152,7 @@ export type ChannelTimelineProps = {
   /** False: viewing rows marks nothing read; the owner decides what was read. */
   marksRead?: boolean | undefined;
   navigation?: PageNavigation | undefined;
+  onReply?: ((messageId: string) => void) | undefined;
   onOpenThread?(
     messageId: string,
     threadRootId: string,
@@ -196,6 +197,7 @@ function Timeline({
   marksRead = true,
   navigation,
   onOpenThread,
+  onReply,
   onOpenMediaReview,
   chatPresentation = false,
   startsThreads = true,
@@ -1341,6 +1343,7 @@ function Timeline({
                       onOpenLink={onOpenLink}
                       canOpenLink={canOpenLink}
                       onOpenThread={onOpenThread}
+                      onReply={onReply}
                       startsThreads={startsThreads}
                       {...(onOpenMediaReview ? { onOpenMediaReview } : {})}
                       retry={queries.outbox?.retry}

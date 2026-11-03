@@ -159,7 +159,16 @@ test("channel, thread and DM composers publish their own scope without publishin
     `[data-channel-timeline] [data-message-id="${dmRoot.id}"]`,
   );
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append(
+    "primary",
+    "dm-peer",
+    "Existing thread reply",
+    false,
+    true,
+    dmRoot.id,
+  );
+  app.threadSummary(dmRoot.id, [], 1, "dm-peer");
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   await type(
     page.getByRole("textbox", { name: "Reply to thread", exact: true }),
     "publication barrier",

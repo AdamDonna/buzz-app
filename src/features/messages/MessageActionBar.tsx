@@ -12,7 +12,7 @@ import {
 } from "react";
 import {
   HashArrowInIcon,
-  MessageReplyIcon,
+  CornerDownLeftIcon,
   CopyIcon,
   DotsThreeIcon,
   LinkIcon,
@@ -208,9 +208,9 @@ function MessageActionBarControls({
             }}
           >
             <MenuIcon>
-              <MessageReplyIcon />
+              <CornerDownLeftIcon />
             </MenuIcon>
-            Reply
+            Reply in thread
           </MenuItem>
         )}
         {children && (
@@ -302,13 +302,15 @@ function MessageActionBarControls({
             {onReply && (
               <IconButton
                 hint={replyDisabled ? "helpful" : "familiar"}
-                aria-label="Reply"
+                aria-label="Reply in thread"
                 title={
-                  replyDisabled ? "Reply unavailable for this message" : "Reply"
+                  replyDisabled
+                    ? "Reply unavailable for this message"
+                    : "Reply in thread"
                 }
                 size="sm"
                 disabled={replyDisabled}
-                icon={<MessageReplyIcon />}
+                icon={<CornerDownLeftIcon />}
                 onClick={(event) => {
                   event.currentTarget.focus();
                   onReply();

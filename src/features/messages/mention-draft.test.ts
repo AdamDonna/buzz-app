@@ -42,6 +42,17 @@ it("legacy prose and malformed persisted metadata never infer recipients", () =>
   }
 });
 
+it("restores only valid persisted inline reply destinations", () => {
+  const replyRootId = "c".repeat(64);
+  expect(
+    mentionDraft({ text: "Saved reply", recipients: [], replyRootId }),
+  ).toMatchObject({ text: "Saved reply", replyRootId });
+  for (const invalid of ["", "not-an-event", "c".repeat(63), 42])
+    expect(
+      mentionDraft({ text: "Draft", replyRootId: invalid }).replyRootId,
+    ).toBeUndefined();
+});
+
 it("followup drafts deduplicate exact keys, preserve namesakes, and enforce draft bounds", () => {
   expect(followupDraft([first, second, first])).toEqual({
     text: "@Honey @Honey ",

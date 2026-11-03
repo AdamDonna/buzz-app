@@ -10,6 +10,8 @@ import type { ChannelMessage } from "../relay/contracts";
 type EditHandler = (row: ChannelMessage) => void;
 type EditScopeValue = {
   current: EditHandler | undefined;
+  /** True when the mounted channel composer handled an inline reply. */
+  reply?: ((row: ChannelMessage) => boolean) | undefined;
   input: RefObject<HTMLElement | null>;
   focusTarget(): HTMLElement | null;
   exactRows?: (() => readonly ChannelMessage[]) | undefined;

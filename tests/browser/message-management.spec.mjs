@@ -126,7 +126,16 @@ test("manage a channel message, peer unread state, and its thread", async ({
   }
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append(
+    "primary",
+    "alpha",
+    "Existing thread reply",
+    false,
+    true,
+    event.id,
+  );
+  app.threadSummary(event.id, [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const thread = page.getByRole("complementary", {
     name: "Thread",
     exact: true,
@@ -210,7 +219,9 @@ test("deleting a thread reply returns focus to the surviving thread composer", a
   );
   await expect(channelRow).toBeVisible();
   await hoverMessage(channelRow);
-  await channelRow.getByRole("button", { name: "Reply", exact: true }).click();
+  app.append("primary", "alpha", "Existing thread reply", false, true, root.id);
+  app.threadSummary(root.id, [], 1);
+  await channelRow.getByRole("button", { name: /^View thread:/ }).click();
   const thread = page.getByRole("complementary", {
     name: "Thread",
     exact: true,
@@ -395,7 +406,8 @@ test("thread media preserves its tab and draft while modal Escape restores focus
     `[data-channel-timeline] [data-message-id="${root.id}"]`,
   );
   await hoverMessage(row);
-  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  app.threadSummary(root.id, [], 1);
+  await row.getByRole("button", { name: /^View thread:/ }).click();
   const thread = page.getByRole("complementary", {
     name: "Thread",
     exact: true,

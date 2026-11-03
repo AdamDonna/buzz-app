@@ -1,3 +1,4 @@
+import { useMessageEditScope } from "../messages/MessageEditScope";
 import {
   createContext,
   useCallback,
@@ -265,12 +266,25 @@ export function ConversationTimeline(
     ownSoloConversation: _,
     ...shared
   } = useConversation();
+  const editor = useMessageEditScope();
+  const onReply = useCallback(
+    (messageId: string) => {
+      const row = session.channels
+        .window(shared.channelId)
+        .rows.find((row) => row.id === messageId);
+      if (row && editor?.reply?.(row)) return;
+      const rootId = row?.threadRootId ?? messageId;
+      props.onOpenThread?.(rootId, rootId, "reply");
+    },
+    [editor, session.channels, shared.channelId, props.onOpenThread],
+  );
   // Solo agents answer at top level: show existing threads, start none.
   return (
     <ChannelTimeline
       queries={session}
       viewer={session.viewer}
       startsThreads={!soloConversation}
+      onReply={!soloConversation && props.onOpenThread ? onReply : undefined}
       {...shared}
       {...props}
     />
@@ -298,7 +312,9 @@ export function ConversationComposer(props: Own<MessageComposerProps>) {
         : {})}
       chatPresentation={shared.ownSoloConversation}
       requireMention={shared.soloConversation}
+      inlineReplies={!shared.soloConversation}
       {...props}
+      onSend={(id, rootId) => props.onSend?.(rootId ?? id, rootId)}
     />
   );
 }

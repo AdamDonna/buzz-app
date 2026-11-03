@@ -689,7 +689,10 @@ test("keyboard search covers a toolbar under the pointer and restores its action
     `[data-channel-timeline] [data-message-id="${event.id}"]`,
   );
   const actions = actionsFor(row);
-  const reply = actions.getByRole("button", { name: "Reply", exact: true });
+  const reply = actions.getByRole("button", {
+    name: "Reply in thread",
+    exact: true,
+  });
   const composer = page.getByRole("textbox", {
     name: "Message #Alpha",
     exact: true,
@@ -733,7 +736,10 @@ test("keyboard search covers a toolbar under the pointer and restores its action
   }
   await reply.click();
   await expect(
-    page.getByRole("complementary", { name: "Thread", exact: true }),
+    page.getByRole("textbox", { name: "Reply to thread", exact: true }),
+  ).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: "Cancel reply target", exact: true }),
   ).toBeVisible();
 });
 

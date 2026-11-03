@@ -376,7 +376,7 @@ it("renders coarse-pointer controls immediately and activates when pointer capab
 it("replies and exposes real sibling controls without placeholders", () => {
   const reply = vi.fn();
   render(<MessageActionBar onReply={reply} copyText={() => "Hello"} />);
-  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reply in thread" }));
   expect(reply).toHaveBeenCalledOnce();
   expect(
     screen.getByRole("button", { name: "Copy link" }).hasAttribute("disabled"),
@@ -500,7 +500,9 @@ it("prevents duplicate clipboard writes until the first settles", async () => {
     fireEvent.click(link);
     expect(write).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("button", { name: "Reply" }).hasAttribute("disabled"),
+      screen
+        .getByRole("button", { name: "Reply in thread" })
+        .hasAttribute("disabled"),
     ).toBe(true);
   } finally {
     finish();

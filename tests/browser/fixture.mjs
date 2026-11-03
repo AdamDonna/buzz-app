@@ -2675,11 +2675,11 @@ export const test = base.extend({
           relay.publish("primary", event);
         },
         // Relay-owned summary evidence, not a mutation of the client's row.
-        threadSummary(rootId, participants, replyCount) {
+        threadSummary(rootId, participants, replyCount, channel = "alpha") {
           const event = sign(
             39005,
             [
-              ["h", "alpha"],
+              ["h", channel],
               ["e", rootId],
               ["d", rootId],
             ],
@@ -2691,7 +2691,7 @@ export const test = base.extend({
           if (relay) relay.publish("primary", event);
           else
             for (const client of streams.get("primary") ?? [])
-              if (client.channels.includes("alpha"))
+              if (client.channels.includes(channel))
                 client.response.write(`data: ${JSON.stringify(event)}\n\n`);
           return event;
         },
