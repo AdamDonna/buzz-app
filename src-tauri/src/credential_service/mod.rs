@@ -234,6 +234,22 @@ impl CredentialService {
         }
     }
 
+    /// Whether `issued` is bound and still acts as its agent: neither revoked,
+    /// nor outlived by its agent's incarnation or its owner's retirements.
+    pub(crate) fn acts(&self, issued: &Issued) -> bool {
+        self.callers().get(&issued.key).is_some_and(|caller| {
+            !caller.revoked
+                && caller.agent.as_ref().is_some_and(|bound| {
+                    self.0.agents.caller_live(
+                        &bound.pubkey,
+                        &bound.relay,
+                        bound.incarnation,
+                        caller.retirements,
+                    )
+                })
+        })
+    }
+
     async fn listen(&self) -> Result<String, String> {
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .and_then(|listener| listener.set_nonblocking(true).map(|()| listener))

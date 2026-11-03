@@ -386,6 +386,11 @@ impl AppAgentHost {
         host.keys().insert(agent.pubkey.clone(), Arc::new(key));
         host
     }
+    /// Saves `agents` in place of the held ones and holds `key` too.
+    pub(crate) fn also_holding_for_test(&self, path: PathBuf, agents: &[&AppAgent], key: Secret) {
+        std::fs::write(path, serde_json::to_vec(agents).unwrap()).unwrap();
+        self.keys().insert(key.pubkey().into(), Arc::new(key));
+    }
     pub(crate) fn forget_row_for_test(&self, pubkey: &str, relay: &str) {
         self.tokens.forget_row(pubkey, relay).unwrap();
     }

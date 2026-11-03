@@ -8,11 +8,11 @@ const NOW: u64 = 1_800_000_000;
 
 pub(crate) struct Fixture {
     pub(crate) service: CredentialService,
-    host: AppAgentHost,
-    identity: FederatedIdentity,
+    pub(crate) host: AppAgentHost,
+    pub(crate) identity: FederatedIdentity,
     pub(crate) agent: AppAgent,
     key: Secret,
-    _dir: tempfile::TempDir,
+    pub(crate) _dir: tempfile::TempDir,
 }
 
 pub(crate) fn fixture() -> Fixture {

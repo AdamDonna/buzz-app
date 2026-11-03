@@ -902,8 +902,10 @@ A process the app launches for an agent can run the `buzz` CLI as that agent
 without its key. Native code serves block/buzz's local credential provider
 contract (`docs/local-credential-provider.md`) on `127.0.0.1` and puts the
 caller's endpoint and a fresh 256-bit token in the process's
-`BUZZ_CREDENTIAL_PROVIDER`. The token is held in memory as its SHA-256, never
-written to disk, logged or passed over IPC. The CLI builds each event and asks
+`BUZZ_CREDENTIAL_PROVIDER`. The service looks tokens up by their SHA-256, and
+no token is written to disk or logged. A host shared by several agents (Codex,
+Pi) also keeps each agent's raw token in memory, and the page passes it over
+Tauri IPC and the host's stdin to that agent's tools. The CLI builds each event and asks
 the service to sign it; keys, NIP-44 conversation keys and grants never leave
 native code.
 

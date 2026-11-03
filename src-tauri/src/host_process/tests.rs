@@ -769,3 +769,125 @@ async fn a_shared_hosts_tool_credential_is_its_agents_and_ends_with_it() {
     .await
     .expect("the token outlived its host");
 }
+
+/// A shared host serving `fixture`'s agent and a second one that keeps it
+/// alive, with the second agent's token issued first.
+#[cfg(unix)]
+async fn shared_host(
+    fixture: &crate::credential_service::tests::Fixture,
+) -> (HostProcesses, u64, String) {
+    use crate::credential_service::tests::RELAY;
+    let second = buzz_agent_controller::Secret::generate().unwrap();
+    let mut other = fixture.agent.clone();
+    other.pubkey = second.pubkey().into();
+    fixture.host.also_holding_for_test(
+        fixture._dir.path().join("identities.json"),
+        &[&fixture.agent, &other],
+        second,
+    );
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "sh",
+            command("sh", &["-c", "read line"]),
+            None,
+            channel,
+        )
+        .unwrap();
+    processes
+        .tool_credential(
+            &fixture.service,
+            "p",
+            handle,
+            other.pubkey.clone(),
+            RELAY.into(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    (processes, handle, other.pubkey)
+}
+
+#[cfg(unix)]
+fn env_token(env: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(env).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// A token outlived by its agent's removal and re-adding, or by a sign-out,
+/// is replaced while the host lives on; the old one stays revoked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_shared_host_replaces_a_token_its_agent_outlived() {
+    use crate::credential_service::tests::{ask, fixture, RELAY};
+    use hyper::StatusCode;
+    for sign_out in [false, true] {
+        let fixture = fixture();
+        let (processes, handle, other) = shared_host(&fixture).await;
+        let pubkey = fixture.agent.pubkey.clone();
+        let credential = || {
+            processes.tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+        };
+        let old = env_token(&credential().await.unwrap().unwrap());
+        let other_env = processes
+            .tool_credential(&fixture.service, "p", handle, other.clone(), RELAY.into())
+            .await
+            .unwrap()
+            .unwrap();
+        if sign_out {
+            fixture.identity.sign_out().await;
+        } else {
+            fixture.host.forget_row_for_test(&pubkey, RELAY);
+            fixture.host.reopen_row_for_test(&pubkey, RELAY);
+        }
+        let fresh = env_token(&credential().await.unwrap().unwrap());
+        assert_ne!(fresh, old, "sign_out={sign_out}");
+        let reply = ask(&fixture, &fresh, "get_public_key", &[]).await;
+        assert_eq!(reply.0, StatusCode::OK, "sign_out={sign_out}");
+        assert_eq!(reply.1["result"], pubkey.as_str());
+        assert_eq!(env_token(&credential().await.unwrap().unwrap()), fresh);
+        let reply = ask(&fixture, &old, "get_public_key", &[]).await;
+        assert_eq!(reply.0, StatusCode::UNAUTHORIZED, "sign_out={sign_out}");
+        // The other agent's token is untouched by a removal, and replaced
+        // after a sign-out like every other.
+        let other_again = processes
+            .tool_credential(&fixture.service, "p", handle, other.clone(), RELAY.into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(other_again == other_env, !sign_out, "sign_out={sign_out}");
+    }
+}
+
+/// Two calls replacing the same stale token at once settle on one fresh one.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_replacements_of_a_stale_token_keep_one() {
+    use crate::credential_service::tests::{ask, fixture, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let (processes, handle, _other) = shared_host(&fixture).await;
+    let pubkey = fixture.agent.pubkey.clone();
+    let credential =
+        || processes.tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into());
+    let old = env_token(&credential().await.unwrap().unwrap());
+    fixture.host.forget_row_for_test(&pubkey, RELAY);
+    fixture.host.reopen_row_for_test(&pubkey, RELAY);
+    let (first, second) = tokio::join!(credential(), credential());
+    let (first, second) = (
+        env_token(&first.unwrap().unwrap()),
+        env_token(&second.unwrap().unwrap()),
+    );
+    assert_eq!(first, second);
+    assert_ne!(first, old);
+    assert_eq!(
+        ask(&fixture, &first, "get_public_key", &[]).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(env_token(&credential().await.unwrap().unwrap()), first);
+}

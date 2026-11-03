@@ -615,16 +615,22 @@ impl HostProcesses {
         relay: String,
     ) -> Result<Option<String>, String> {
         let tools = self.owned(id, handle, |entry| entry.tools.clone())?;
-        let held = |tools: &ToolCredentials| -> Result<Option<String>, String> {
-            let held = tools.0.lock().unwrap_or_else(|poison| poison.into_inner());
-            let held = held.as_ref().ok_or("The process has exited")?;
-            Ok(held
-                .iter()
+        // This agent's token, if it still acts. One outlived by the agent's
+        // removal and re-adding, or by a sign-out, is dropped, which revokes it
+        // for good, so a fresh one is issued for the agent as it is now.
+        let current = |list: &mut Vec<ToolCredential>| {
+            list.retain(|tool| {
+                tool.pubkey != pubkey || tool.relay != relay || credentials.acts(&tool.issued)
+            });
+            list.iter()
                 .find(|tool| tool.pubkey == pubkey && tool.relay == relay)
-                .map(|tool| tool.env.to_string()))
+                .map(|tool| tool.env.to_string())
         };
-        if let Some(env) = held(&tools)? {
-            return Ok(Some(env));
+        {
+            let mut guard = tools.0.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(env) = current(guard.as_mut().ok_or("The process has exited")?) {
+                return Ok(Some(env));
+            }
         }
         let Some((issued, env)) = credentials.issue().await? else {
             return Ok(None);
@@ -639,12 +645,9 @@ impl HostProcesses {
             return Err("The process has exited".into());
         };
         // A concurrent call for the same agent won: keep one token.
-        if let Some(tool) = list
-            .iter()
-            .find(|tool| tool.pubkey == pubkey && tool.relay == relay)
-        {
+        if let Some(env) = current(list) {
             issued.revoke();
-            return Ok(Some(tool.env.to_string()));
+            return Ok(Some(env));
         }
         let value = env.to_string();
         list.push(ToolCredential {
