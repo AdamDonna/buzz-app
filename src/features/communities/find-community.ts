@@ -1,5 +1,6 @@
 import { nativeRelayRequest, relaySelf } from "../relay/native";
 import { communityIcon } from "./community-icon";
+import { assertRelayAllowed } from "./destination";
 import { joinPolicy, type JoinPolicy } from "./join-policy";
 
 /** Public relay metadata available before admission; no owner or member count. */
@@ -14,7 +15,11 @@ export type FoundCommunity = {
   policy: JoinPolicy | null;
 };
 
-export type FindFailure = "unreachable" | "not-buzz" | "no-community";
+export type FindFailure =
+  | "unreachable"
+  | "not-buzz"
+  | "no-community"
+  | "blocked";
 
 export class FindCommunityError extends Error {
   constructor(readonly failure: FindFailure) {
@@ -44,6 +49,12 @@ export async function findCommunity(
   request: RelayFetch,
   signal: AbortSignal,
 ): Promise<FoundCommunity> {
+  // Refused before any request, so it is never mistaken for a network failure.
+  try {
+    assertRelayAllowed(url);
+  } catch {
+    throw new FindCommunityError("blocked");
+  }
   // The native request bounds the wait (10 s connect, 30 s total); IPC cannot
   // end it sooner.
   const get = (path: string) =>

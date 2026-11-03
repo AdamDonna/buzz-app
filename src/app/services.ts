@@ -22,7 +22,10 @@ import {
   createRejectedLinks,
 } from "../features/navigation/deep-links";
 import { bindSearchUsage } from "../features/search/usage";
-import { communityDestination } from "../features/communities/destination";
+import {
+  communityDestination,
+  resolveCommunity,
+} from "../features/communities/destination";
 import { NotificationsService } from "../features/notifications/service";
 import {
   bindMessageNotifications,
@@ -163,7 +166,7 @@ export function createServices() {
     // With no code to claim, an existing membership just opens its community.
     open(invite: InviteLink, viewer: string) {
       const { memberships } = communities.snapshot();
-      const id = communityDestination(invite.community).id;
+      const id = resolveCommunity(invite.community).id;
       if (invite.code || !memberships.some((m) => m.id === id))
         return inviteIntent.open(invite, viewer);
       inviteIntent.clear();

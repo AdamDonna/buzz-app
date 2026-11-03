@@ -34,6 +34,10 @@ const FAILURES: Record<FindFailure, { message: string; retry: boolean }> = {
     message: "No community is set up at this address.",
     retry: false,
   },
+  blocked: {
+    message: "This relay is not allowed by this build’s relay policy.",
+    retry: false,
+  },
 };
 
 /**

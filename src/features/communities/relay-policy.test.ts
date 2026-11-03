@@ -104,10 +104,27 @@ it("starts a fresh identity on the pin, refuses blocked joins and leaving the pi
   );
   client.joined({ id: "wss://other.example:8443", name: "Other" }, profile);
   expect(client.snapshot().selected).toBe("https://other.example:8443");
-  const { parseInviteLink } = await import("./invite-link");
+});
+
+it("explains a blocked relay entered or opened from an invite instead of offering Retry", async () => {
+  vi.stubEnv("VITE_BUZZ_RELAY_POLICY", raw);
+  vi.resetModules();
+  const { parseInviteLink, parsePastedInvite } = await import("./invite-link");
+  const { findCommunity } = await import("./find-community");
+  const invite = { community: "https://evil.example", code: "" };
+  // Parsed, so the join dialog and lookup can say why they refuse.
   expect(
     parseInviteLink("buzz://connect?relay=wss%3A%2F%2Fevil.example"),
-  ).toBeNull();
+  ).toEqual(invite);
+  expect(parsePastedInvite("https://evil.example/invite/abc")).toEqual({
+    ...invite,
+    code: "abc",
+  });
+  const request = vi.fn();
+  await expect(
+    findCommunity(invite.community, request, new AbortController().signal),
+  ).rejects.toMatchObject({ failure: "blocked" });
+  expect(request).not.toHaveBeenCalled();
 });
 
 it("hides a saved blocked relay without connecting to it or erasing it", async () => {

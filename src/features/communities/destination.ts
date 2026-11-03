@@ -141,16 +141,23 @@ export function assertRelayRemovable(
     );
 }
 
+/** The community a saved ID or relay URL names, before the relay policy: a
+ * parse, never permission to connect. */
+export function resolveCommunity(value: string, aliases = configuredAliases) {
+  const legacy = Object.hasOwn(aliases, value) ? aliases[value] : undefined;
+  const url = legacy ?? relayOrigin(value);
+  const id = Object.keys(aliases).find((key) => aliases[key] === url) ?? url;
+  return { id, url, name: new URL(url).host };
+}
+
 export function communityDestination(
   value: string,
   aliases = configuredAliases,
   policy = configuredRelayPolicy,
 ) {
-  const legacy = Object.hasOwn(aliases, value) ? aliases[value] : undefined;
-  const url = legacy ?? relayOrigin(value);
-  assertRelayAllowed(url, policy);
-  const id = Object.keys(aliases).find((key) => aliases[key] === url) ?? url;
-  return { id, url, name: new URL(url).host };
+  const destination = resolveCommunity(value, aliases);
+  assertRelayAllowed(destination.url, policy);
+  return destination;
 }
 
 /** The account service's spelling of a destination: `wss://host[:port]` with a

@@ -1,4 +1,4 @@
-import { communityDestination } from "./destination";
+import { resolveCommunity } from "./destination";
 
 export type InviteLink = Readonly<{
   community: string;
@@ -27,8 +27,8 @@ export function parseInviteLink(input: string): InviteLink | null {
     const relay = url.searchParams.getAll("relay");
     if (relay.length !== 1 || !relay[0]) return null;
     // Unlike the reference's broad URL parser, the target transport is HTTPS-only.
-    // Delegate origin validation to the same gate used by the manual join dialog.
-    const community = communityDestination(relay[0]).url;
+    // The relay policy is left to the join dialog, which says why it refuses.
+    const community = resolveCommunity(relay[0]).url;
     if (form !== "join") return { community, code: "" };
     const codes = url.searchParams.getAll("code");
     const receipts = url.searchParams.getAll("policy_receipt");
@@ -63,14 +63,14 @@ export function parsePastedInvite(input: string): InviteLink | null {
         !url.search &&
         !url.hash &&
         code.length <= 256
-        ? { community: communityDestination(url.origin).url, code }
+        ? { community: resolveCommunity(url.origin).url, code }
         : null;
     }
   } catch {
     // Not a URL; a bare address still fails closed below.
   }
   try {
-    return { community: communityDestination(value).url, code: "" };
+    return { community: resolveCommunity(value).url, code: "" };
   } catch {
     return null;
   }
