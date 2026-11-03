@@ -40,6 +40,7 @@ const cards = [
 const primary = { id: "primary", name: "Primary" };
 const app = [
   "identity",
+  "security",
   "appearance",
   "notifications",
   "shortcuts",

@@ -62,6 +62,7 @@ import { bundledIcons } from "../bundled/icons";
 import type { Identity } from "../features/identity/service";
 import { ProfileSettings } from "./ProfileSettings";
 import { IdentitySettings } from "./IdentitySettings";
+import { SecuritySettings } from "./SecuritySettings";
 import type { FederatedIdentity } from "../features/federated-identity/service";
 import { CommunityLocalSettings } from "./CommunityLocalSettings";
 
@@ -1338,6 +1339,7 @@ export function Settings({
             federatedIdentity={federatedIdentity}
           />
         )}
+        {selected === "security" && <SecuritySettings />}
         {developerMode && (
           <div hidden={selected !== "developer"}>
             <DeveloperSettings relay={communities.relay} />
