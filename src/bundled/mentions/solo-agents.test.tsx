@@ -39,10 +39,8 @@ import type { Outbox } from "../../features/relay/outbox";
 import { MessageMarkdown } from "../../features/messages/MessageMarkdown";
 import { profileTarget } from "../../features/profiles/target";
 import { npubEncode } from "nostr-tools/nip19";
-import {
-  fetchMentionDirectoryPage,
-  MENTION_DIRECTORY_DELAY_MS,
-} from "./useMentionDirectory";
+import { fetchMentionDirectoryPage } from "./useMentionDirectory";
+import { SEARCH_DEBOUNCE_MS } from "../../shared/search-debounce";
 import {
   resolveSpaceMention,
   type SpaceMentionResolution,
@@ -50,7 +48,15 @@ import {
 import { MENTION_RESOLVE_TIMEOUT_MS } from "../../features/conversation/completion";
 import { createProfileDirectory } from "../../features/relay/profile-directory";
 import type { RelayEvent } from "../../features/relay/events";
-import { keypair, profile } from "../../features/relay/testing";
+import {
+  PROFILE_CACHE_BASE,
+  PROFILE_CACHE_MAX,
+} from "../../features/relay/budget";
+import {
+  keypair,
+  profile,
+  unsignedProfiles,
+} from "../../features/relay/testing";
 // jsdom lacks scrollIntoView; the search highlight keeps its row in view.
 beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -1600,7 +1606,7 @@ it("never expands Solo chat candidates from the community directory", async () =
     target: { value: "Out" },
   });
   // Past the directory delay, so a search would have started.
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS * 2));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS * 2));
   expect(people).not.toHaveBeenCalled();
   expect(
     screen.queryByRole("button", { name: /Outside/ }),
@@ -1738,7 +1744,7 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
   // The member is usable before the network search starts or settles.
   expect(labels()).toEqual(["Larkin"]);
   expect(last()?.status).toBe("Searching community…");
-  await act(() => vi.advanceTimersByTimeAsync(200));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(1);
   // A truncated page: a longer query cannot be read out of it, so it searches.
   await act(async () =>
@@ -1755,7 +1761,7 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
   );
   expect(labels()).toEqual(["Larry Outside"]);
   expect(last()?.status).toBe("Searching community…");
-  await act(() => vi.advanceTimersByTimeAsync(200));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
   const newer = { pubkey: "d".repeat(64), name: "Larry Newer" };
   await act(async () =>
@@ -1769,7 +1775,7 @@ it("shows local rows before the directory, appends outside rows, and reuses sett
   );
   expect(labels()).toEqual(["Larkin", "Lara", "Larry Outside"]);
   expect(last()?.status).toBe("Narrow your search to see more members.");
-  await act(() => vi.advanceTimersByTimeAsync(200));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
 });
 
@@ -2195,6 +2201,49 @@ type RelaySessionPeople = (
   query: string,
 ) => Promise<{ people: { pubkey: string; name: string }[]; hasMore: boolean }>;
 
+it("keeps already-read directory people at one character without searching", async () => {
+  vi.useFakeTimers();
+  const people = vi.fn<RelaySessionPeople>(async () => ({
+    people: [
+      { pubkey: "e".repeat(64), name: "Mark Outsider" },
+      { pubkey: "f".repeat(64), name: "Zed Outsider" },
+    ],
+    hasMore: false,
+  }));
+  const { last, complete } = directoryCompletion(people);
+  const view = render(complete(""));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  expect(people).toHaveBeenCalledExactlyOnceWith("", 1, expect.anything());
+  // One character is too short to search: the listing stays, filtered.
+  view.rerender(complete("m"));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  expect(people).toHaveBeenCalledTimes(1);
+  const labels = last()?.items.map((item) => item.label);
+  expect(labels).toContain("Mark Outsider");
+  expect(labels).not.toContain("Zed Outsider");
+  expect(last()?.status).not.toBe("Searching community…");
+  view.rerender(complete("ma"));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  expect(people).toHaveBeenLastCalledWith("ma", 1, expect.anything());
+});
+
+it("Space does not select a one-character name a truncated listing could continue", async () => {
+  vi.useFakeTimers();
+  const people = vi.fn<RelaySessionPeople>(async () => ({
+    people: [{ pubkey: "e".repeat(64), name: "Q" }],
+    hasMore: true,
+  }));
+  const { last, complete } = directoryCompletion(people);
+  const view = render(complete(""));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  view.rerender(complete("q"));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+  expect(last()?.items.map((item) => item.label)).toContain("Q");
+  // An unread page may hold "Q Smith", and no search for `q` ran.
+  expect(last()?.spaceId).toBeUndefined();
+  expect(people).toHaveBeenCalledTimes(1);
+});
+
 it("answers a longer query from the complete page already read for its prefix, with no read and no typing pause", async () => {
   vi.useFakeTimers();
   const people = vi.fn<RelaySessionPeople>(async () => ({
@@ -2206,7 +2255,7 @@ it("answers a longer query from the complete page already read for its prefix, w
   }));
   const { last, complete } = directoryCompletion(people);
   const view = render(complete("Mar"));
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(1);
   expect(last()?.items.map((item) => item.label)).toEqual([
     "Mark",
@@ -2218,7 +2267,7 @@ it("answers a longer query from the complete page already read for its prefix, w
   expect(last()?.items.map((item) => item.label)).toEqual(["Mary Jane"]);
   expect(last()?.status).toBeUndefined();
   expect(last()?.spacePending).toBeUndefined();
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(1);
   // Space decides over the derived page, as over the page itself.
   view.rerender(complete("Mary Jane"));
@@ -2235,12 +2284,12 @@ it("still searches a longer query when the page read for its prefix was truncate
   }));
   const { last, complete } = directoryCompletion(people);
   const view = render(complete("Mar"));
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(last()?.status).toBe("Narrow your search to see more members.");
   // A truncated page may have left a match out: it answers only its own query.
   view.rerender(complete("Mary J"));
   expect(last()?.status).toBe("Searching community…");
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
   expect(people).toHaveBeenLastCalledWith("Mary J", 1, expect.any(AbortSignal));
   expect(last()?.status).toBeUndefined();
@@ -2256,7 +2305,7 @@ it("does not answer a name search from the listing read for an empty query", asy
   const { last, complete } = directoryCompletion(people);
   // A pause on `@` lists the community; fewer than 15 profiles completes it.
   const view = render(complete(""));
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledExactlyOnceWith(
     "",
     1,
@@ -2266,7 +2315,7 @@ it("does not answer a name search from the listing read for an empty query", asy
   // member who joins or renames after it must still be found by name.
   view.rerender(complete("mi"));
   expect(last()?.status).toBe("Searching community…");
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
   expect(people).toHaveBeenLastCalledWith("mi", 1, expect.any(AbortSignal));
   expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]);
@@ -2274,7 +2323,7 @@ it("does not answer a name search from the listing read for an empty query", asy
   view.rerender(complete("mir"));
   expect(last()?.status).toBeUndefined();
   expect(last()?.items.map((item) => item.label)).toEqual(["Mira Everly"]);
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
 });
 
@@ -2329,11 +2378,11 @@ it("scopes a retry to its query: later queries derive from a cached prefix page 
   // The picker keeps one hook mounted across openings: one instance sees
   // every query of the session.
   const view = render(complete("mira e"));
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(last()?.status).toBe(failed);
   // Still offline: the retry fails too and Retry stays offered.
   act(() => last()?.retry?.());
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(2);
   expect(last()?.status).toBe(failed);
   // Other consumers of the session settle complete `lu` and `mira` pages and
@@ -2352,7 +2401,7 @@ it("scopes a retry to its query: later queries derive from a cached prefix page 
   view.rerender(complete("zedd"));
   expect(last()?.status).not.toBe("Searching community…");
   expect(last()?.items).toEqual([]);
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(5);
   // Back on `mira e`, the asked-for read is still owed: its failure and
   // Retry stand, and a second Retry reads `mira e` afresh rather than
@@ -2360,7 +2409,7 @@ it("scopes a retry to its query: later queries derive from a cached prefix page 
   view.rerender(complete("mira e"));
   expect(last()?.status).toBe(failed);
   act(() => last()?.retry?.());
-  await act(() => vi.advanceTimersByTimeAsync(MENTION_DIRECTORY_DELAY_MS));
+  await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
   expect(people).toHaveBeenCalledTimes(6);
   expect(people).toHaveBeenLastCalledWith("mira e", 1, expect.any(AbortSignal));
   expect(last()?.status).toBeUndefined();
@@ -3594,6 +3643,24 @@ it.each([
     }
   },
 );
+it("the resolver leaves a one-character outside name unread and unselected", async () => {
+  const h = spaceFixture("Member");
+  try {
+    await waitFor(() => expect(h.people).toHaveBeenCalledTimes(1));
+    const calls = h.people.mock.calls.length;
+    await expect(
+      resolveSpaceMention(
+        h.session,
+        { channelId: "parent", selected: [] },
+        "q",
+        new AbortController().signal,
+      ),
+    ).resolves.toBeNull();
+    expect(h.people).toHaveBeenCalledTimes(calls);
+  } finally {
+    h.dispose();
+  }
+});
 /** A resolution for assertions: the recipient, null, or the continuing names. */
 const outcomeOf = (outcome: SpaceMentionResolution | undefined) =>
   outcome && "continued" in outcome
@@ -3906,6 +3973,162 @@ it("Space keeps waiting after a member's profile read fails until a retry settle
     await act(async () => h.reads[1]?.resolve([]));
     await waitFor(() => expect(h.result()?.spaceId).toBe(h.member));
     expect(h.canSpace(h.member)).toBe(true);
+  } finally {
+    h.dispose();
+  }
+});
+
+function rosterFixture(
+  members: readonly string[],
+  second: readonly string[] = [],
+  answer: (authors: readonly string[]) => RelayEvent[] = () => [],
+) {
+  const h = setup();
+  const reads: { authors: readonly string[] }[] = [];
+  const directory = createProfileDirectory({
+    read: async (filters) => {
+      const authors = filters[0]?.authors ?? [];
+      reads.push({ authors });
+      return answer(authors);
+    },
+  });
+  const list = {
+    status: "ready" as const,
+    channels: [
+      { id: "parent", channelType: "stream" as const, members },
+      { id: "second", channelType: "stream" as const, members: second },
+    ],
+  };
+  const names = bindNames(
+    { profiles: directory.queries, agentLibrary: h.library.queries },
+    { snapshot: () => [createAgentDirectory()], subscribe: () => () => {} },
+  );
+  const session = {
+    ...h.session,
+    profiles: directory.queries,
+    names,
+    channels: { ...h.session.channels, list: () => list },
+    directMessages: {
+      ...h.session.directMessages,
+      people: () => new Promise<DirectoryPage>(() => {}),
+    },
+  } as unknown as RelaySession;
+  const mount = (channelId = "parent") =>
+    render(
+      <MentionCompletion
+        session={session}
+        scope="space-test"
+        channelId={channelId}
+        observation={{ revision: 1, text: "@jo", start: 3, end: 3 }}
+        query={{ start: 0, end: 3, query: "jo" }}
+        publish={vi.fn()}
+      />,
+    );
+  return {
+    reads,
+    directory,
+    mount,
+    requested: () => new Set(reads.flatMap((read) => read.authors)),
+    dispose() {
+      names.dispose();
+      directory.dispose();
+      h.library.dispose();
+    },
+  };
+}
+
+it("loads an open channel's whole roster when it reserves room past the base", async () => {
+  const roster = unsignedProfiles(1100).map((event) => event.pubkey);
+  const h = rosterFixture(roster);
+  const release = h.directory.queries.reserve?.(roster.length);
+  try {
+    const view = h.mount();
+    await waitFor(() => expect(h.requested().size).toBe(1100));
+    view.unmount();
+  } finally {
+    release?.();
+    h.dispose();
+  }
+});
+
+it("keeps the base cache for other names when a roster passes the cap", async () => {
+  const roster = unsignedProfiles(11_000, "M");
+  const byKey = new Map(roster.map((event) => [event.pubkey, event]));
+  const h = rosterFixture(
+    roster.map((event) => event.pubkey),
+    [],
+    (authors) => authors.flatMap((id) => byKey.get(id) ?? []),
+  );
+  const others = unsignedProfiles(PROFILE_CACHE_BASE, "O");
+  h.directory.accept(others);
+  const release = h.directory.queries.reserve?.(roster.length);
+  try {
+    expect(h.directory.queries.limit?.()).toBe(PROFILE_CACHE_MAX);
+    const view = h.mount();
+    await waitFor(() =>
+      expect(h.requested().size).toBe(PROFILE_CACHE_MAX - PROFILE_CACHE_BASE),
+    );
+    await waitFor(() =>
+      expect(h.directory.queries.snapshot().size).toBe(PROFILE_CACHE_MAX),
+    );
+    // The roster used only its reserved room: no other name was evicted.
+    expect(
+      others.every((event) => h.directory.queries.snapshot().has(event.pubkey)),
+    ).toBe(true);
+    view.unmount();
+  } finally {
+    release?.();
+    h.dispose();
+  }
+});
+
+it("loads a second large channel's whole roster after the first one's", async () => {
+  const first = unsignedProfiles(1500, "A").map((event) => event.pubkey);
+  const second = unsignedProfiles(1500, "B").map((event) => event.pubkey);
+  const h = rosterFixture(first, second);
+  let release = h.directory.queries.reserve?.(first.length);
+  try {
+    let view = h.mount();
+    await waitFor(() => expect(h.requested().size).toBe(1500));
+    view.unmount();
+    // Navigating swaps one equal reservation for the other: nothing shrinks
+    // or evicts, so only this roster's own requests may use its allowance.
+    release?.();
+    release = h.directory.queries.reserve?.(second.length);
+    view = h.mount("second");
+    await waitFor(() =>
+      expect(second.every((id) => h.requested().has(id))).toBe(true),
+    );
+    view.unmount();
+  } finally {
+    release?.();
+    h.dispose();
+  }
+});
+
+it("asks again for a member's name after the cache evicted it, but not for a known-unnamed one", async () => {
+  const member = keypair();
+  const ghost = keypair();
+  const h = rosterFixture([member.pubkey, ghost.pubkey]);
+  try {
+    h.directory.accept([profile(member, { name: "Jo" })]);
+    let view = h.mount();
+    // The read finds no profile for the ghost, so it is known unnamed.
+    await waitFor(() =>
+      expect(h.directory.queries.unnamed?.().has(ghost.pubkey)).toBe(true),
+    );
+    view.unmount();
+    expect(h.requested().has(member.pubkey)).toBe(false);
+    expect(h.reads).toHaveLength(1);
+    // Unrelated profiles push the member out of the 1,024-entry base.
+    h.directory.accept(unsignedProfiles(1024, "Other "));
+    expect(h.directory.queries.snapshot().has(member.pubkey)).toBe(false);
+    view = h.mount();
+    await waitFor(() => expect(h.requested().has(member.pubkey)).toBe(true));
+    view.unmount();
+    expect(
+      h.reads.filter((read) => read.authors.includes(ghost.pubkey)),
+    ).toHaveLength(1);
   } finally {
     h.dispose();
   }

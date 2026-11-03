@@ -243,6 +243,52 @@ remaining acceptance work and historical evidence.
 
 ## Starting contracts
 
+### Plugin installer
+
+A plugin, such as a catalog or marketplace page, may ask the host to review a plugin
+for installation. Read the optional `pluginInstaller` service with
+`ctx.reflect.get("pluginInstaller")` instead of adding it to required `inject`; the
+lookup returns `undefined` when an older host has not provided it.
+
+```ts
+type PluginInstaller = {
+  requestInstall(source: {
+    repository: string; // https://, ssh:// or scp-style git URL
+    reference: string; // branch or tag
+    path?: string; // relative folder inside the repository
+    commit?: string; // 40- or 64-hex; install exactly this commit
+  }): Promise<"installed" | "updated" | "cancelled" | "unavailable">;
+};
+```
+
+`requestInstall` never installs silently. It opens Settings → Plugins with the Git
+source prefilled and read-only, and the user still chooses **Find**, reviews the
+existing access review, and confirms. The promise resolves with what the user did:
+`installed`, `updated` (an installed plugin was replaced), or `cancelled` (the dialog
+was closed, including after reviewing a plugin that was already current). It resolves
+`unavailable` in the browser build, before plugin settings have loaded, when Settings
+cannot open, while another request waits or any plugin review dialog is open, or when
+the calling plugin has already been disabled or removed. It rejects for a source
+outside the accepted grammar or a caller that is not an installed plugin.
+
+The review shows "Opened from <plugin name> (<plugin id>)", taken from the calling
+plugin's own manifest. It is a hint for the user, not proof of who asked: the access
+review and the source shown are what the user approves. A request nobody claims in
+Settings expires as `cancelled` after a minute, and any request is cancelled when
+Settings closes, a `buzz://plugin-install` link replaces its review, or the requesting
+plugin is disabled or removed, unless the user has already confirmed the install. A plugin that updates itself is replaced during that
+install and still resolves `updated`.
+
+A request can install a new plugin, or update an installed plugin only from the same
+saved Git repository and folder. A plugin already installed from another source,
+including a local folder or an unknown one, is refused with a message naming both
+sources; remove it first to install it from the new one. Dismissing the review of a
+plugin already at the requested revision resolves `cancelled`, because nothing was
+installed. The folder source is hidden while a request is open. When `commit` is
+given, the native Git import refuses a reference whose tip is any other commit, so a
+branch that moves after a catalog review cannot install unreviewed code, and the
+review checks the fetched commit again before offering to install.
+
 ### Conversation sidebar sections
 
 A plugin may register a versioned `sidebarSections` contribution. Read it with
@@ -320,10 +366,14 @@ active registered types appear there; plugin activation remains owned by
 Settings → Plugins → Manage plugins. Provider defaults are versioned device preferences, not
 agent-record migrations; blank per-agent values inherit them.
 
-A plugin, bundled or installed, can add a tab to the settings of every agent
-running on this device, whatever its type, with
-`ctx.agents.registerTab({ id, title, component })`. The component receives
-`{ agent }`; it reads and saves through the plugin's own `ctx.agents`. The tab
+A plugin, bundled or installed, can add a tab to the settings of agents
+running on this device, whatever their type, with
+`ctx.agents.registerTab({ id, title, component, when, subscribe })`. The component receives
+`{ agent }`; it reads and saves through the plugin's own `ctx.agents`. An
+optional `when(agent)` limits the tab to the agents it returns true for, and an
+optional `subscribe(listener)` tells the host when `when` may answer
+differently, so the tab appears or goes without a reload. A `when` that throws
+hides only its own tab. The tab
 follows Activity and precedes History and Settings, in the agent's Build view and
 its profile panel, and is not offered for hosted or elsewhere agents. It is
 removed when the plugin is turned off or its scope ends. The bundled Agent
@@ -398,16 +448,20 @@ ctx.pages.register({
 A page may replace the conversation sidebar while selected. Its component receives
 the current read-only `OpenTarget` and, when present, shell-generated primary
 Pages navigation as `children`. It supplies only its sidebar contents within the
-existing sidebar slot. Wrap that content in the existing `shell-sidebar-default`
-layout role to receive the default sidebar width and shell sizing constraints
-(260px default width, 220px minimum, with the shell's available-width clamp). That
-role provides outer slot geometry and its divider; it does not provide an inner
-surface, frame, padding, or content layout. The contributor owns those details.
+existing sidebar slot. The host places the contribution and its unavailable
+fallback in the same resizable track as the conversation sidebar. Both use one
+saved width per community and viewer workspace, with a 260px default, 220px
+minimum, 520px maximum, and the shell's existing available-width clamp. The host
+owns the resize handle, keyboard controls, reset, and persistence; switching
+between Messages and a page sidebar preserves that shared width. Wrap the content
+in the existing `shell-sidebar-default` layout role so it fills the host track.
+That role does not provide an inner surface, frame, padding, or content layout;
+the contributor owns those details.
 External authors use this CSS role and their own markup; internal source components
 such as `SidebarFrame` are not part of the author SDK. The host owns the slot and
-collapse/drawer interaction. A page may manage its own width preference. Pages do
-not receive navigation completion authority or own routing. On wide layouts the
-shell keeps its generic Show/Hide sidebar toggle; on narrow layouts the existing
+collapse/drawer interaction. Pages do not manage a separate sidebar width
+preference, receive navigation completion authority, or own routing. On wide
+layouts the shell keeps its generic Show/Hide sidebar toggle; on narrow layouts the existing
 Show/Hide navigation drawer, focus handoff, Escape, inert, and ARIA behavior remain
 shell-owned. Pages without `sidebar` continue to
 use the conversation sidebar. The host isolates sidebar rendering with
@@ -1135,6 +1189,252 @@ for long operations such as Apps initialization. Archive uploads have a
 Existing bundled GitHub requests retain their first-party renderer fetch and CSP
 entry.
 
+`host.requestOnce?.(request, { callId })` is an explicit opt-in, desktop-only POST
+primitive for non-idempotent submissions on compatible hosts.
+Ordinary `request`, byte GET/save, archive uploads, processes and publication do not
+automatically opt in; there is no endpoint-specific URL or content logic. Check the method
+before starting work; missing native context also rejects without falling back to
+ordinary `request`. A compatible frontend **and** native release are required.
+
+For a final caller-policy check, first detect
+`typeof host.requestOnce === "function"`; synchronous eligibility is part of this
+optional method's contract. If absent, refuse work that depends on it; do not fall
+back to ordinary requests. The minimum compatible released version is not yet
+established; method availability does not prove native compatibility.
+
+Pass `isEligible: () => boolean` alongside `callId` (the exported
+`HostRequestOnceOptions` type). The host calls it synchronously after native
+context preparation and validation, immediately before protected invoke. Only
+literal `true` permits dispatch; false, throwing, nonboolean values and
+Promises/thenables refuse without dispatch, fallback, authority refresh or retry.
+It rechecks the calling fiber after the callback in case it disposed that scope,
+with no await between a successful check and invoke. The predicate is not sent
+to native. Omission preserves existing protected-request semantics.
+
+The caller owns this policy, including checking an elapsed monotonic deadline
+rather than relying on a timer task. This is a JavaScript pre-invoke boundary,
+not native approval, cancellation, or a deadline at network/server receipt. It
+cannot prevent or undo work already accepted by native or the server.
+
+Record a random canonical lowercase hyphenated UUID `callId` and the exact request
+before calling. The host adds a calling-fiber activation and native boot/page
+context. After current enabled-artifact, HTTPS, origin and request-limit checks,
+native consumes the authority before dispatching and disables client retries.
+Repeated native dispatch of that same envelope rejects as already consumed with
+unknown outcome; changed payload under the same authority rejects as a conflict.
+Neither returns cached success or sends again, including after failure or timeout.
+Never mint a fresh identity or refresh authority to retry an unknown submission.
+
+Native retains at most 1024 compact digest claims per page generation, with no
+rearming on completion, unload or grant change. Advancing the native page generation
+clears its claims; old boot/page envelopes are rejected before claim lookup and
+cannot use the freed capacity. Capacity/poison/generation exhaustion fails closed.
+Fiber disposal blocks new cooperative calls and suppresses late success, but cannot undo
+an admitted upstream request. An in-place fiber restart creates a fresh activation;
+old in-flight calls remain inactive. Restart must not be used to retry an unknown
+submission. This is **same-envelope host dispatch protection**,
+not durable exactly-once execution, server/proxy deduplication, spend approval,
+upstream cancellation, a malicious-plugin sandbox or deduplication of fresh authorities.
+Plugin persistence and non-resuming approval policy remain the caller's responsibility.
+In particular, this blocks same-envelope IPC-fallback resends only: fresh calls,
+proxy/server retries and work after a client disconnect remain outside its scope.
+When supported by the destination, send the recorded `callId` as its server
+idempotency key as well (for example in an `Idempotency-Key` header). Do not mint
+a new key to recover an unknown outcome.
+Actual WebView fallback/runtime acceptance is distinct from native fixture tests.
+
+### Protected in-memory multipart uploads
+
+Compatible desktop frontend/native pairs expose optional
+`host.uploadBytesOnce(bytes, {url, field, name, contentType, fields?}, {callId, isEligible?})`.
+Check `typeof host.uploadBytesOnce === "function"` before work requiring it; an
+absent method or incompatible native host must fail closed, with no renderer
+fetch, ordinary request/upload, process, file, or IPC fallback.
+
+This POST sends one nonempty in-memory `Uint8Array` of at most 16 MiB. The host
+copies bytes and metadata synchronously before awaiting native authority, and
+builds the multipart boundary and body in native code. It requires only the exact
+HTTPS origin in `host.networkOrigins`: neither `host.files` nor
+`host.managedFiles` is needed, and no path is accepted. URL credentials, caller
+headers, cookies, redirects, and HTTP client retries are not permitted. Text
+fields are optional (at most 16 string values, each at most 8 KiB in UTF-8).
+The filename and all form names must be 1–256 ASCII bytes containing only letters,
+digits, dots, underscores or hyphens, with no leading dot. A filename is a single
+name, never a path; separators, control characters and dotfiles are refused.
+`contentType` must be exactly `image/png`, `image/jpeg` or `image/webp`, and native
+magic-byte sniffing must match that declaration. This signature check is not a
+full image decode or a guarantee that downstream image processing is safe.
+The full ASCII-escaped IPC metadata, including
+the authority envelope, is bounded to 16 KiB. The frontend reserves 512 bytes for
+that envelope. Unicode text values are preserved.
+
+The deadline is fixed at 30 seconds. Responses use the existing bounded
+`HostResponse`: status, at most 64 headers totaling 16 KiB excluding `Set-Cookie`,
+and at most 16 MiB of UTF-8 body. This operation shares the existing app-wide byte
+work permit and bounded FIFO admission queue with byte GET/save. At most 16 callers
+wait; queue overflow refuses before consumption/dispatch. Waiting is charged to
+the same entry deadline, and multipart/body cloning starts only after admission.
+This is a work-admission bound, not a whole-process IPC or RSS memory bound.
+
+Upload authority uses the same boot/page, fiber activation, canonical UUID
+`callId`, final synchronous eligibility check, consumed-envelope storage and
+late-result suppression as `requestOnce`. Its operation kind is distinct from a
+text POST; use a separate recorded callId for each submission. The payload digest
+binds exact URL, form metadata and bytes, not a randomized multipart boundary.
+Repeated or conflicting native dispatch of the same upload envelope refuses,
+including after ambiguous failure, timeout, or a lost reply. This prevents
+same-envelope host/IPC resends, not durable exactly-once execution; use an upstream
+idempotency key when supported, and never mint a new callId to retry an unknown
+outcome. Missing raw IPC support rejects JSON/array fallback before consumption.
+
+Plugin author types export `AddedTool`, `BuzzClient` and `Media` from
+`@buzz/author`; an added tool can use its supplied `client.media(url)` to read
+community media. In the native client, optional base64 `Media.data` is present
+only for JPEG, PNG, GIF or WebP of at most 3,932,160 decoded bytes (3.75 MiB; up to
+5 MiB base64). Larger media can be saved by that API but omit `data`; the 16 MiB
+upload limit does not increase the inline-media limit. Consumers must handle
+missing data and validate their own media/type/size policy without assuming a
+file-read capability.
+
+### Bounded binary retrieval and temporary managed files
+
+Compatible desktop frontend/native pairs expose optional `host.requestBytes` and
+`host.saveBytes`. These are independent of POST dispatch protection: neither gets
+native call context, a call identity, a replay envelope or deduplication. Check
+method availability before starting work. An older native host can reject the
+unknown `managedFiles` manifest field at installation, before any plugin UI runs.
+The minimum released compatible host version is not yet established; an API
+version alone is not capability evidence. No ordinary-text, base64 or private IPC
+fallback is provided by these methods.
+
+```ts
+const response = await ctx.host.requestBytes?.({
+  url: "https://api.example.com/data",
+  maxBytes: 1024 * 1024,
+  timeoutMs: 30000,
+});
+// Check the HTTP status and keep the input immutable through hashing/save.
+// sha256 is the lowercase 64-hex digest of exactly the bytes being saved.
+const saved = response && await ctx.host.saveBytes?.(response.body, { sha256 });
+// saved: { path, size, sha256, expiresAt } — not an upload or publication receipt.
+```
+
+`requestBytes({url,maxBytes,timeoutMs?})` performs only GET, with no caller headers,
+body or cookies and no redirects. The destination must be an exact declared
+HTTPS origin of the current enabled plugin revision, checked again before handoff.
+`maxBytes` is a required integer from 1 through 16777216 (16 MiB); actual chunks
+are counted regardless of Content-Length. The deadline defaults to 30000 ms and
+can be 1–30000 ms. Empty bodies and non-2xx statuses are returned, not reclassified
+as successful operations. Existing ordinary GET client retry semantics remain;
+this is not an at-most-one GET promise or an application retry policy.
+
+The internal raw response is a four-byte big-endian metadata length, UTF-8 JSON
+`{status,headers}` of at most 20 KiB, then the body. At most 64 response headers
+and 16 KiB of header names/values are accepted, excluding Set-Cookie. The frontend
+requires ArrayBuffer before creating a view, validates framing/status/headers/body
+bounds and returns a Uint8Array view without another JS body clone. Numeric-array
+fallback replies are refused rather than converted to bytes. Tauri can redispatch
+a GET after custom-protocol fetch/decoding failure, so an unsupported reply can
+follow more than one native download.
+
+Declare `host: { managedFiles: true }` for pathless temporary saves. This grants
+neither file reading nor arbitrary-path writes. Existing `host.files` still means
+broad read/directory-resolution authority; it is not required by the saving plugin.
+`saveBytes(bytes,{sha256})` accepts nonempty Uint8Array data up to 16 MiB. Keep its
+buffer immutable through hashing and the awaited save. Native validates actual
+raw input length and recomputes the expected lowercase SHA256, failing closed on
+mismatch. No filename, destination, content type, expiry or reader grant is supplied
+by the caller. `expiresAt` is safe-integer Unix milliseconds from the host clock.
+
+Saves use one flat `plugin-artifacts` child of app-data storage, host expiry/UUID
+names and exclusive file creation. New names also include a digest of the owning
+plugin ID; no caller path/name is accepted. Unix uses 0700 root/0600 files with ownership
+and link checks; other desktop platforms rely on private app storage conventions.
+This is trusted same-user storage, not isolation from malicious plugins or other
+code with the user's access. A fixed cross-process try-lock covers expiry sweeping,
+actual regular-file accounting, capacity, write/hash/file sync, supported directory
+sync and final eligibility/cleanup. A busy lock refuses without a waiting queue.
+Unknown regular files, partial writes, zero-length leftovers and failed deletions
+count; unknown links/directories, unreadable accounting or bounded-scan overflow
+refuse. Only the verified fixed ownership file is excluded.
+
+The shared root permits at most 64 MiB and 16 artifact files. Any plugin can fill
+it; there is no per-plugin quota or fairness promise. A full root refuses before
+another file is created, without evicting unexpired files. Failures remove output
+best-effort; residue remains counted. There is no index, sidecar, recovery adoption,
+content deduplication or temporary-to-final file service.
+
+Optional `host.deleteManagedFile(path)` requires `host.managedFiles` and the current
+enabled plugin revision, not `host.files`. It accepts only a direct, host-generated
+file in this root whose owner digest matches the calling plugin ID, including
+files saved by its earlier revisions. It never follows links or deletes a different
+plugin's file. Legacy files without an owner digest cannot be deleted through this
+API and retain their expiry behavior. Deleting a missing file rejects.
+
+Deletion shares byte GET/save's bounded FIFO admission and single work permit,
+with a 30-second deadline including queue time. Saves and deletes in this app
+serialize before taking the storage lock; another process holding that lock can
+still refuse as busy. A queued timeout says the file was not deleted and does
+not dispatch filesystem work. After dispatch to the blocking worker, a timeout
+may have an unknown outcome; that worker retains admission until it completes.
+
+Await attachment sends before deleting their source. Deletion conservatively
+refuses app-wide while **any plugin's** `host.readFile` call or declared process
+named `read`/`read-protected` is admitted or running, regardless of its program,
+path or owner. One unrelated or stalled reader can therefore block every plugin's
+managed deletion until its actual work completes, even after an async timeout or
+kill request. A delete that wins before read admission makes that later read fail
+as missing; it does not reserve paths for future sends or other processes. Retry
+a known in-use refusal after the work completes, but never automatically retry an
+ambiguous deletion timeout.
+
+Expiry is host wall-clock save time plus 24 hours and a 30-second save window.
+Files survive normal plugin unload, disable/update and app restart. Expired files
+are swept only on a new save; there is no startup sweep/background deletion timer.
+They can remain after expiry until another save. Ordinary signout is not erasure;
+existing explicit app-data erase removes this root. Clock changes, user deletion,
+erase or disk loss can invalidate retention assumptions; do not treat the path as
+a durable archive or an unqualified availability guarantee.
+
+One process-local byte-work permit is shared by GET/save/managed deletion/uploadBytesOnce.
+A FIFO semaphore queues at most 16 waiting calls, rejects overflow, and charges
+queue time to each call's existing deadline (GET 1–30000 ms, save/delete/upload
+30 seconds). Expired/canceled waiters leave
+the queue without dispatch; raw saves do not clone their body until admitted.
+The one-admitted-operation/16 MiB work bound is unchanged, but waiting IPC input
+buffers still exist: this is not a whole-process memory bound. Blocking save work
+owns its permit and root lock through actual completion, even after the
+30-second async deadline. Timeout suppresses handoff and eventual cleanup is
+best-effort, not proof of rollback or completed deletion. Native checks current
+enabled revision/managedFiles at admission and immediately before result eligibility.
+Frontend Cordis uid/cleanup guards refuse stale admission and suppress late success,
+without POST context. They cannot cancel accepted work or close every final-check
+versus reply/disposal race.
+
+Save IPC uses top-level raw bytes and bounded plugin/revision/hash headers. JSON
+fallback refuses before copying/writing, but an original successful write followed
+by a lost reply can leave a quota-counted orphan. Manually repeated raw calls can
+save multiple files: there is no at-most-one-save guarantee. Never automatically
+resave, reconstruct or refresh an identity after unknown outcome. Unsupported raw
+transport does not authorize repeating upstream work. Tauri may allocate numeric
+arrays before these application guards; rejecting fallback does not undo that cost.
+
+The 16 MiB cap bounds individual admitted work, not RSS or pre-handler IPC buffers.
+A rough normal-path explicit-buffer model is 64–80 MiB (4–5 times the cap), with
+phase/GC-dependent overlap. Existing appClient attachment upload separately builds
+binary/base64 strings. Real native/WebView peak and fallback memory acceptance
+requires a separately authorized target run and explicit memory budget; offline
+fixtures do not establish that bound or prove raw transport works on every target.
+
+A returned path is not proof that any agent can read it. The existing app-owned
+reader is AgentsService → appClient.read → the agent-owning plugin's host.readFile;
+that reader owner must already hold `host.files`. Core send(files) reads actual
+bytes, then existing MIME/upload/publication and channel/thread/audience policies
+apply unchanged. The saving plugin does not directly invoke core send. Standalone
+node readers still reject paths outside their configured root: managed membership
+does not widen that namespace. Offline native-file and app-owned-reader fixtures
+are composition evidence, not a single native WebView delivery test.
+
 `host.upload` requires both `host.files` and the destination in `host.networkOrigins`.
 It sends a multipart archive to that origin and reads one absolute
 regular `.tar.gz` file under home, up to 100 MiB. This is local-file access in
@@ -1490,7 +1790,7 @@ patches over the display parsing budget retain escaped raw text. Unconsumed
 patch lines and unsupported binary payloads also fall back to the complete raw
 patch; metadata-only rename/mode/binary summaries retain rich presentation.
 Preview, file and raw scroll regions support native keyboard navigation. Diff
-messages are not editable, including through the composer's Up-arrow shortcut.
+messages are not editable, including through the selected-message Edit shortcut.
 Diff search remains deferred: the client accepts kind 40008 hits, but relays
 whose search index allowlist excludes that kind cannot return them. Metadata is
 untrusted presentation, not repository access authority. No sending, applying,
@@ -1762,7 +2062,7 @@ provider so a delayed name can appear without another editor event.
 Channels filters the session's joined channel roster locally, including private
 channels and joined channels restored from cache (the store marks those
 `readOnly` and `cached` until the relay reconfirms them), but excluding DMs,
-sessions, archived, hidden, unnamed and other read-only entries. After a 180 ms
+sessions, archived, hidden, unnamed and other read-only entries. After a 300 ms
 typing pause, a query also asks `searchPublic`, through the same
 `usePublicChannelSearch` hook as Command-K, for open channels the viewer has not
 joined; they are labeled "Not joined", and private results are never offered.
@@ -2025,6 +2325,49 @@ the original event to this same dispatcher through a private DOM handoff. Eligib
 app shortcuts (including live rebinds) win there; unhandled keys stay with xterm.
 No plugin shortcut API or preference access is added. Ordinary editors continue
 to handle keys before the window's bubbling dispatcher.
+
+Slack-style message keys are host bindings. In an empty composer, Up selects the
+newest message (by id, not tree order) of the timeline or thread sharing its edit scope (on macOS ⌘↑ keeps editing
+the latest own message directly; elsewhere use Up, then E); a selection is
+DOM focus on that message's box (`features/messages/message-selection.ts`), so
+the timeline's Virtua keeps the row mounted and assistive technology follows it.
+Membership notices and folded or collapsed rows are skipped. While a message
+itself is focused, Up/Down move between rendered messages, Down past the newest and
+Escape return to the composer (a handled Escape does not also close the thread),
+and Up at the oldest rendered row stays native so history can load. When the
+timeline is scrolled far enough that the newest message is unmounted, Up from the
+composer keeps its old edit-last behavior, Down at the last rendered row scrolls
+natively, and ⌘⇧\ does nothing rather than act on an older message. E edits a selected eligible own message through the scope's
+editor, R opens the row's reaction picker through the host-owned
+`[data-reaction-tool]` trigger, and ⌘⇧\ selects the newest message in the focused
+pane, even from another selected message, and does the same. T or → clicks the row's Reply action (open or answer its
+thread), U marks unread from it (`useMessageKeyActions` in `MessageManagement.tsx`,
+the menu's own call), and Delete or Backspace opens the menu's delete confirmation
+for your own message; agent-owner deletion stays in the menu because it needs
+ownership evidence a key cannot wait for. Remind me (M) has no key: plugin message
+actions have no binding in their contract. Single-letter bindings never run in
+editable targets. ⌘1–⌘9 select the community switcher's entries in its order
+(⌘1 is Personal space) and ⌘⇧] / ⌘⇧[ step through them, wrapping
+(`app/shell/CommunityShortcuts.tsx`); Ctrl+Tab stays Buzz's tab switching.
+⌘T opens Search Buzz as a default alias of ⌘K (Slack's switcher answers to
+both); a shortcut may ship several default chords, and Settings → Shortcuts lists each
+distinct one ("⌘K or ⌘T") while showing layout aliases of one physical key (⌘=
+and ⌘+) once, but a Settings rebind replaces them with one. Plain-Escape
+dismissals (thread, panels, drawer, plugin details) ignore Shift so ⇧Esc reaches
+Mark all as read. The message editor's own keys (`composerFormats` and `linkBindings` in
+`features/messages/composer-dom.ts`, plus undo, redo and new line) are listed
+read-only under Message formatting, which says once under its heading that they
+belong to the editor; the editor matches them before any shortcut,
+so rebinding a shortcut onto one warns. Slack's ⌘⇧C (code), ⌘⇧9 (quote), ⌘⌥⇧C
+(code block) and ⌘⇧U (link) are aliases of Buzz's chords. ⌘/ opens Settings →
+Shortcuts, which is built the first time it is shown rather than with every
+Settings open. ⌘⇧Y opens Set a status while the profile menu
+can (the message editor keeps it as Redo). Home is on the placeholder ⌘⇧O while
+⌘⇧A opens Inbox's unread view. Inbox's ⌘⇧A, ⌘⇧T, ⌘⇧M and ⌘⇧K are ordinary
+`buzz.inbox` plugin contributions, so they follow the plugin precedence above: a
+plugin whose namespaced ID sorts first and claims the same chord wins it while
+eligible. Settings → Shortcuts marks such rows "Also used by"; rebinding either one
+resolves it.
 
 Known limitations. Capture and matching both use the logical `KeyboardEvent.key`.
 On macOS an Option chord reports the composed character, so Option+K is stored

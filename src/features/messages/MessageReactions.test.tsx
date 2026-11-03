@@ -57,7 +57,21 @@ const registry = <T,>(
   subscribe: () => () => {},
 });
 const inline = registry<InlineRenderer>([]);
-const tools = registry<ComposerTool>([]);
+const tools = registry<ComposerTool>([
+  {
+    key: "picker",
+    pluginId: "picker",
+    revision: "one",
+    id: "picker",
+    title: "Picker",
+    component: () => null,
+    reactionComponent: ({ select, disabled }: ReactionToolProps) => (
+      <button type="button" disabled={disabled} onClick={() => select("👍")}>
+        Choose reaction
+      </button>
+    ),
+  },
+]);
 const root = message(other, "c", "Message", 1);
 const react = (key = viewer, time = 2) =>
   signed(key, {
@@ -120,14 +134,16 @@ function harness(
     return (
       row && (
         <>
-          <MessageReactionControls
-            row={audience ? { ...row, audience } : row}
-            session={owner.session}
-            scope="test"
-            disabled={disabled}
-            tools={pickerTools}
-            inline={inline}
-          />
+          <div data-testid="reaction-controls">
+            <MessageReactionControls
+              row={audience ? { ...row, audience } : row}
+              session={owner.session}
+              scope="test"
+              disabled={disabled}
+              tools={pickerTools}
+              inline={inline}
+            />
+          </div>
           <MessageReactions
             {...(onFocusedRemoval ? { onFocusedRemoval } : {})}
             row={audience ? { ...row, audience } : row}
@@ -150,8 +166,8 @@ it("shows one bubble per emoji, counts unique people, and removes all my duplica
   const h = harness([mine, duplicate, theirs]);
   render(<h.Controls />);
   expect(
-    screen.getAllByRole("button", { name: /React with|Remove/ }),
-  ).toHaveLength(3);
+    screen.queryAllByRole("button", { name: /React with|Remove/ }),
+  ).toHaveLength(0);
   expect(
     screen.getByTestId("reaction-row").querySelectorAll("[data-reaction]"),
   ).toHaveLength(1);
@@ -162,19 +178,15 @@ it("shows one bubble per emoji, counts unique people, and removes all my duplica
   expect(own.textContent).toBe("👍2");
   fireEvent.mouseEnter(own);
   fireEvent.mouseMove(own);
-  const preview = await screen.findByRole("dialog", {}, { timeout: 2500 });
+  const preview = await screen.findByRole("tooltip", {}, { timeout: 2500 });
   expect(preview.textContent).toContain("You");
   expect(preview.textContent).toContain(other.pubkey.slice(0, 10));
   fireEvent.click(own);
-  const operation = h.session.outbox?.snapshot()[0];
-  expect(operation?.event).toMatchObject({
-    kind: 5,
-    tags: expect.arrayContaining([
-      ["e", mine.id],
-      ["e", duplicate.id],
-    ]),
-  });
-  expect(operation?.event.tags).not.toContainEqual(["e", theirs.id]);
+  const deletions = h.session.outbox?.snapshot().map((item) => item.event);
+  expect(deletions?.every((event) => event.kind === 5)).toBe(true);
+  expect(
+    deletions?.map((event) => event.tags.filter(([name]) => name === "e")),
+  ).toEqual([[["e", mine.id]], [["e", duplicate.id]]]);
   expect(
     screen
       .getByRole("button", { name: `👍: ${other.pubkey.slice(0, 10)}` })
@@ -205,7 +217,7 @@ it("keeps one bubble and focus when the count crosses the former grouping thresh
   expect(group.textContent).toBe("👍9");
   expect(group.getAttribute("aria-pressed")).toBe("true");
   act(() => group.focus());
-  const preview = await screen.findByRole("dialog");
+  const preview = await screen.findByRole("tooltip");
   expect(preview.textContent).toContain("You");
   for (const person of others)
     expect(preview.textContent).toContain(person.pubkey.slice(0, 10));
@@ -228,23 +240,57 @@ it.each([3, 4, 5])("shows all %i reactors in the preview", async (count) => {
   act(() =>
     screen.getByRole("button", { name: `👍: ${count} people` }).focus(),
   );
-  const preview = await screen.findByRole("dialog");
+  const preview = await screen.findByRole("tooltip");
   for (const person of people)
     expect(preview.textContent).toContain(person.pubkey.slice(0, 10));
   expect(
     within(preview).getByRole("region", { name: "Everyone who reacted" })
       .tabIndex,
-  ).toBe(0);
+  ).toBe(-1);
 });
 
-it("keeps everyone visible without exceeding the profile directory budget", async () => {
+it("opening a large preview preserves unrelated cached profiles", async () => {
   const h = harness([react(other)]);
-  const row = h.session.channels.window("c").rows[0];
-  if (!row) throw new Error("Expected fixture message");
-  const authors = Array.from({ length: 1025 }, (_, index) =>
-    index.toString(16).padStart(10, "0").padEnd(64, "0"),
+  const unrelated = profile(other, { name: "Existing colleague" });
+  act(() =>
+    h.live.receive([
+      unrelated,
+      ...Array.from({ length: 63 }, (_, index) =>
+        profile(keypair(), { name: `Cached colleague ${index}` }),
+      ),
+    ]),
   );
-  const ensure = vi.fn(h.session.profiles.ensure);
+  const people = Array.from({ length: 1025 }, () => keypair());
+  const events = new Map(
+    people.map((person, index) => [
+      person.pubkey,
+      profile(person, { name: `Reactor ${index}` }),
+    ]),
+  );
+  const row = h.session.channels.window("c").rows[0];
+  const first = people[0],
+    last = people.at(-1);
+  if (!row || !first || !last) throw new Error("Missing fixture data");
+  const completed = new Set();
+  const settleReads = async () => {
+    await flush();
+    let pending = h.wire.pending.find((entry) => !completed.has(entry));
+    while (pending) {
+      completed.add(pending);
+      pending.respond(
+        pending.filters.flatMap((filter) =>
+          filter.kinds?.includes(0)
+            ? (filter.authors ?? []).flatMap((id) =>
+                events.get(id) ? [events.get(id) as RelayEvent] : [],
+              )
+            : [],
+        ),
+      );
+      await flush();
+      pending = h.wire.pending.find((entry) => !completed.has(entry));
+    }
+  };
+  await act(settleReads);
   render(
     <MessageReactions
       row={{
@@ -252,25 +298,34 @@ it("keeps everyone visible without exceeding the profile directory budget", asyn
         reactions: [
           {
             content: "👍",
-            events: authors.map((authorId, index) => ({
+            events: people.map((person, index) => ({
               id: String(index),
-              authorId,
+              authorId: person.pubkey,
             })),
           },
         ],
       }}
-      session={{ ...h.session, profiles: { ...h.session.profiles, ensure } }}
+      session={h.session}
       scope="test"
       disabled={false}
       tools={tools}
       inline={inline}
     />,
   );
-  act(() => screen.getByRole("button", { name: "👍: 1025 people" }).focus());
-  const preview = await screen.findByRole("dialog");
-  expect(ensure).toHaveBeenCalledWith(authors.slice(0, 1024), "background");
-  for (const author of authors)
-    expect(preview.textContent).toContain(author.slice(0, 10));
+  const pill = screen.getByRole("button", { name: "👍: 1025 people" });
+  fireEvent.mouseEnter(pill);
+  // Pointer transit must not start profile enrichment before opening.
+  expect(h.session.profiles.snapshot().get(first.pubkey)).toBeUndefined();
+  act(() => pill.focus());
+  const preview = await screen.findByRole("tooltip");
+  await act(settleReads);
+  expect(preview.textContent).toContain("Reactor 0");
+  expect(h.session.profiles.snapshot().get(other.pubkey)?.name).toBe(
+    "Existing colleague",
+  );
+  // Names outside the first visible page remain readable as identity fallbacks.
+  expect(preview.textContent).toContain(last.pubkey.slice(0, 10));
+  expect(h.session.profiles.snapshot().has(last.pubkey)).toBe(false);
 });
 
 it("keeps custom emoji URLs separate and updates a grouped count when I join", async () => {
@@ -374,7 +429,11 @@ it("keeps failed first-reaction delivery visible and retries the same event", as
   });
   const h = harness([], publish);
   render(<h.Controls />);
-  fireEvent.click(screen.getByRole("button", { name: "React with ❤️" }));
+  fireEvent.click(
+    within(screen.getByTestId("reaction-controls")).getByRole("button", {
+      name: "Choose reaction",
+    }),
+  );
   await act(async () => {
     await flush();
     await flush();
@@ -392,10 +451,17 @@ it("keeps failed first-reaction delivery visible and retries the same event", as
 it("prevents duplicate submissions and unavailable-message actions", async () => {
   const h = harness();
   const view = render(<h.Controls disabled />);
-  fireEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+  fireEvent.click(
+    within(screen.getByTestId("reaction-controls")).getByRole("button", {
+      name: "Choose reaction",
+    }),
+  );
   expect(h.session.outbox?.snapshot()).toHaveLength(0);
   view.rerender(<h.Controls />);
-  const button = screen.getByRole("button", { name: "React with 👍" });
+  const button = within(screen.getByTestId("reaction-controls")).getByRole(
+    "button",
+    { name: "Choose reaction" },
+  );
   fireEvent.click(button);
   fireEvent.click(button);
   expect(h.session.outbox?.snapshot()).toHaveLength(1);
@@ -557,7 +623,7 @@ it("loads names for people who only reacted after a preview opens", async () => 
   });
   fireEvent.mouseEnter(pill);
   fireEvent.mouseMove(pill);
-  const preview = await screen.findByRole("dialog");
+  const preview = await screen.findByRole("tooltip");
   const profileReads = () =>
     h.wire.pending.filter((entry) =>
       entry.filters.some((filter) => filter.kinds?.includes(0)),

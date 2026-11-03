@@ -1,3 +1,4 @@
+import { useProfileGeneration } from "../../features/relay/react";
 import {
   useEffect,
   useLayoutEffect,
@@ -89,12 +90,14 @@ export function ActivityAccessory(props: ActivityProps) {
   const resolveName = useChannelIdentityNames(session, channelId);
   const keys = [...entries, ...stopped].map((entry) => entry.agent);
   const identityKeys = keys.join(":");
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (identityKeys)
       void session.profiles
         .ensure(identityKeys.split(":"), "background")
         .catch(() => {});
-  }, [session.profiles, identityKeys]);
+  }, [session.profiles, identityKeys, profileGeneration]);
   const suffixes = publicKeyLabels(keys);
   const names = keys.map((key) =>
     resolveName(

@@ -3,6 +3,7 @@ import { eventDto } from "./events";
 import { keypair, signed } from "./testing";
 import { createVerifiedProfileDirectory } from "./verified-profile-directory";
 import {
+  VERIFIED_PROFILE_BATCH,
   verifiedProfile,
   verifiedProfileAuthority,
   verifiedProfileDiscovery,
@@ -10,6 +11,7 @@ import {
   type VerifiedProfileSink,
 } from "./verified-profile";
 
+const tick = () => new Promise((resolve) => setTimeout(resolve));
 const relay = keypair();
 const alice = keypair();
 const bob = keypair();
@@ -213,6 +215,29 @@ it("batches and deduplicates subjects, retains retractions, and fences retired c
   }
 });
 
+it("notifies once per replay, then once per live change", async () => {
+  const h = harness();
+  try {
+    h.directory.ensure([alice.pubkey, bob.pubkey]);
+    await Promise.resolve();
+    const sink = h.subscriptions[0]?.sink;
+    assert(sink);
+    h.changed.mockClear();
+    sink.event(projection(10));
+    sink.event(projection(10, bob.pubkey));
+    expect(h.changed).not.toHaveBeenCalled();
+    expect(h.directory.snapshot().size).toBe(2);
+    sink.eose();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    sink.event(projection(10)); // Unchanged head.
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    sink.event(projection(11));
+    expect(h.changed).toHaveBeenCalledTimes(2);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
 it("a newer malformed projection invalidates an older valid name", async () => {
   const h = harness();
   try {
@@ -248,6 +273,29 @@ it("an incomplete lookup leaves omitted cached subjects unreconciled", async () 
     next.event(projection(11, bob.pubkey));
     next.eose();
     expect(h.directory.snapshot().get(alice.pubkey)?.status).toBe("cached");
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("does not re-send a batch an outage ended", async () => {
+  const h = harness();
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const first = h.subscriptions[0];
+    assert(first);
+    first.sink.event(projection());
+    first.sink.eose();
+    // An outage ends the sync, then reports the connection down.
+    first.sink.closed("disconnected: live connection lost");
+    h.directory.connected(false);
+    await Promise.resolve();
+    expect(h.subscriptions).toHaveLength(1);
+    expect(h.directory.snapshot().get(alice.pubkey)?.status).toBe("cached");
+    h.directory.connected(true);
+    await Promise.resolve();
+    expect(h.subscriptions.filter((item) => !item.stopped)).toHaveLength(1);
   } finally {
     h.directory.dispose();
   }
@@ -293,6 +341,7 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
     const profile = directory.queries.snapshot().get(alice.pubkey);
     expect(profile?.name).toBe("Alice");
     expect(profile?.about).toBe("About Alice");
@@ -302,12 +351,115 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
       bob.pubkey.slice(0, 10),
     );
     sink.event(retract(20));
+    await tick(); // Verified changes publish on the next macrotask.
     expect(directory.queries.snapshot().get(alice.pubkey)?.name).toBe(
       "Self name",
     );
     expect(
       directory.queries.snapshot().get(alice.pubkey)?.verified,
     ).toBeUndefined();
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("qualifies verified namesakes and shared usernames, but not a unique verified name", async () => {
+  const { createProfileDirectory } = await import("./profile-directory");
+  const carol = keypair();
+  const dave = keypair();
+  const verifiedAs = (subject: string, displayName: string, username: string) =>
+    eventDto(
+      signed(relay, {
+        kind: 30382,
+        content: "",
+        created_at: 10,
+        tags: [
+          ["d", subject],
+          ["p", subject],
+          ["active", "true"],
+          ["display_name", displayName],
+          ["username", username],
+          ["issuer_label", "Example"],
+          ["verified_at", "10"],
+        ],
+      }),
+    );
+  let sink: VerifiedProfileSink | undefined;
+  const directory = createProfileDirectory(
+    { read: async () => [] },
+    undefined,
+    undefined,
+    {
+      authority: { ...authority, multipleIssuers: false },
+      subscribe(_filter, next) {
+        sink = next;
+        return () => {};
+      },
+    },
+  );
+  try {
+    const people = [alice, bob, carol, dave];
+    directory.accept(
+      people.map((key) =>
+        eventDto(signed(key, { kind: 0, tags: [], content: "{}" })),
+      ),
+    );
+    await directory.ensure(people.map((key) => key.pubkey));
+    assert(sink);
+    sink.event(verifiedAs(alice.pubkey, "Sam", "sam1"));
+    sink.event(verifiedAs(bob.pubkey, "Sam", "sam2"));
+    sink.event(verifiedAs(carol.pubkey, "Carol", "shared"));
+    sink.event(verifiedAs(dave.pubkey, "Dave", "shared"));
+    sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
+    const name = (key: { pubkey: string }) =>
+      directory.queries.snapshot().get(key.pubkey)?.name;
+    expect(name(alice)).toBe(`Sam (${alice.pubkey.slice(0, 10)})`);
+    expect(name(bob)).toBe(`Sam (${bob.pubkey.slice(0, 10)})`);
+    expect(name(carol)).toBe(`Carol (${carol.pubkey.slice(0, 10)})`);
+    expect(name(dave)).toBe(`Dave (${dave.pubkey.slice(0, 10)})`);
+    sink.event(retract(20, bob.pubkey));
+    sink.event(retract(20, dave.pubkey));
+    await tick(); // Verified changes publish on the next macrotask.
+    expect(name(alice)).toBe("Sam");
+    expect(name(carol)).toBe("Carol");
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("coalesces a burst of verified changes into one directory notification", async () => {
+  const { createProfileDirectory } = await import("./profile-directory");
+  let sink: VerifiedProfileSink | undefined;
+  const directory = createProfileDirectory(
+    { read: async () => [] },
+    undefined,
+    undefined,
+    {
+      authority,
+      subscribe(_filter, next) {
+        sink = next;
+        return () => {};
+      },
+    },
+  );
+  try {
+    await directory.ensure([alice.pubkey, bob.pubkey]);
+    assert(sink);
+    const changed = vi.fn();
+    directory.queries.subscribe(changed);
+    sink.event(projection(10));
+    sink.event(projection(10, bob.pubkey));
+    sink.eose();
+    sink.event(projection(11)); // A live change in the same burst.
+    expect(changed).not.toHaveBeenCalled();
+    await tick();
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(
+      directory.queries.snapshot().get(alice.pubkey)?.verified,
+    ).toMatchObject({
+      verifiedAt: 11,
+    });
   } finally {
     directory.dispose();
   }
@@ -456,6 +608,7 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   const wire = scriptedTransport(alice.pubkey, relay.pubkey);
   let live: import("./live").LiveCallbacks | undefined;
   let sink: VerifiedProfileSink | undefined;
+  let requests = 0;
   const refresh = vi.fn(async () => null);
   const owner = createRelaySession({
     ...wire.transport,
@@ -469,6 +622,7 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
         retry() {},
         dispose() {},
         syncVerifiedProfiles(_filter, next) {
+          requests++;
           sink = next;
           return () => {};
         },
@@ -478,10 +632,21 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   try {
     assert(live);
     live.state({ status: "connected", routes: [] });
+    // An over-budget request is rejected before it reaches verification.
+    await expect(
+      owner.session.profiles.ensure(
+        Array.from({ length: 1025 }, (_, index) =>
+          index.toString(16).padStart(64, "0"),
+        ),
+      ),
+    ).rejects.toThrow("budget");
+    await Promise.resolve();
+    expect(requests).toBe(0);
     await owner.session.profiles.ensure([alice.pubkey]);
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
     expect(owner.session.profiles.snapshot().get(alice.pubkey)?.name).toBe(
       "Alice",
     );
@@ -489,15 +654,97 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
       owner.session.profiles.snapshot().get(alice.pubkey)?.verified?.status,
     ).toBe("checked");
     live.state({ status: "connecting", routes: [] });
+    await tick(); // Verified changes publish on the next macrotask.
     expect(
       owner.session.profiles.snapshot().get(alice.pubkey)?.verified?.status,
     ).toBe("cached");
     live.state({ status: "connected", routes: [] });
     await Promise.resolve();
     expect(refresh).toHaveBeenCalledTimes(1);
+    await tick();
     expect(
       owner.session.profiles.snapshot().get(alice.pubkey)?.verified,
     ).toBeUndefined();
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("keeps a verified name and its live check when channel access ends", async () => {
+  const { createRelaySession } = await import("./session");
+  const { roster, scriptedTransport } = await import("./testing");
+  const wire = scriptedTransport(alice.pubkey, relay.pubkey);
+  let live: import("./live").LiveCallbacks | undefined;
+  let sink: VerifiedProfileSink | undefined;
+  let subscribed = 0;
+  let stopped = 0;
+  const owner = createRelaySession({
+    ...wire.transport,
+    verifiedProfiles: { ...authority, multipleIssuers: false },
+    subscribe(callbacks) {
+      live = callbacks;
+      return {
+        update() {},
+        retry() {},
+        dispose() {},
+        syncVerifiedProfiles(_filter, next) {
+          subscribed++;
+          sink = next;
+          return () => {
+            stopped++;
+          };
+        },
+      };
+    },
+  });
+  const isProfileRead = (filters: readonly { kinds?: readonly number[] }[]) =>
+    filters.every(
+      (filter) => filter.kinds?.length === 1 && filter.kinds[0] === 0,
+    );
+  const denyPending = () => {
+    for (const entry of wire.pending.splice(0))
+      if (isProfileRead(entry.filters)) entry.respond([]);
+      else entry.fail(new Error("Relay read failed (403)"));
+  };
+  const verified = () =>
+    owner.session.profiles.snapshot().get(alice.pubkey)?.verified;
+  try {
+    assert(live);
+    live.state({ status: "connected", routes: [] });
+    const ensured = owner.session.profiles.ensure([alice.pubkey]);
+    await vi.waitFor(() =>
+      expect(wire.pending.some((entry) => isProfileRead(entry.filters))).toBe(
+        true,
+      ),
+    );
+    denyPending();
+    await ensured;
+    assert(sink);
+    sink.event(projection());
+    sink.eose();
+    await tick(); // Verified changes publish on the next macrotask.
+    expect(verified()).toMatchObject({
+      displayName: "Alice",
+      status: "checked",
+    });
+    // A denied channel, then a denied channel list: profiles do not depend on
+    // channels, so neither removes the verified name or stops its check.
+    live.receive(["a", "b"].map((id) => roster(relay, id, [alice.pubkey], 10)));
+    owner.session.channels.ensure("a");
+    await vi.waitFor(() => {
+      denyPending();
+      expect(owner.session.channels.window("a").status).toBe("error");
+    });
+    owner.session.channels.refreshList?.();
+    await vi.waitFor(() => {
+      denyPending();
+      expect(owner.session.channels.list().status).toBe("error");
+    });
+    expect(verified()).toMatchObject({
+      displayName: "Alice",
+      status: "checked",
+    });
+    expect([subscribed, stopped]).toEqual([1, 0]);
   } finally {
     owner.dispose();
   }
@@ -557,6 +804,31 @@ it("keeps batch membership and checked status stable when subjects are added or 
   }
 });
 
+it("notifies when ensure evicts a subject, not when it only adds one", async () => {
+  const h = harness();
+  const keys = Array.from({ length: 1025 }, (_, index) =>
+    index.toString(16).padStart(64, "0"),
+  );
+  try {
+    h.directory.ensure(keys.slice(0, 1024));
+    await Promise.resolve();
+    expect(h.changed).not.toHaveBeenCalled();
+    // Re-ensuring the first key makes the second the least recent.
+    h.directory.ensure([keys[0] as string]);
+    h.directory.ensure([keys[1024] as string]);
+    await Promise.resolve();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    const wanted = h.subscriptions
+      .filter((item) => !item.stopped)
+      .flatMap((item) => item.subjects);
+    expect(wanted).toHaveLength(1024);
+    expect(wanted).toContain(keys[0]);
+    expect(wanted).not.toContain(keys[1]);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
 it("keeps kind-0 enrichment retryable after a verified-only profile loads", async () => {
   const { createProfileDirectory } = await import("./profile-directory");
   let sink: VerifiedProfileSink | undefined;
@@ -587,6 +859,7 @@ it("keeps kind-0 enrichment retryable after a verified-only profile loads", asyn
     assert(sink);
     sink.event(projection());
     sink.eose();
+    await tick();
     expect(directory.queries.snapshot().get(alice.pubkey)?.name).toBe("Alice");
     fail = false;
     await directory.ensure([alice.pubkey]);
@@ -597,5 +870,228 @@ it("keeps kind-0 enrichment retryable after a verified-only profile loads", asyn
     });
   } finally {
     directory.dispose();
+  }
+});
+
+it("reuses an unchanged head's projection across snapshots", async () => {
+  const h = harness();
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const sink = h.subscriptions[0]?.sink;
+    assert(sink);
+    sink.event(projection());
+    sink.eose();
+    const checked = h.directory.snapshot().get(alice.pubkey);
+    expect(checked?.status).toBe("checked");
+    expect(h.directory.snapshot().get(alice.pubkey)).toBe(checked);
+    h.directory.connected(false);
+    const cached = h.directory.snapshot().get(alice.pubkey);
+    expect(cached?.status).toBe("cached");
+    expect(h.directory.snapshot().get(alice.pubkey)).toBe(cached);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("keeps an unchanged head's projection through an equal discovery refresh", async () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn(async () => ({ ...authority }));
+  const h = harness(refresh);
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const sink = h.subscriptions[0]?.sink;
+    assert(sink);
+    sink.event(projection());
+    sink.eose();
+    const checked = h.directory.snapshot().get(alice.pubkey);
+    expect(checked?.status).toBe("checked");
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(h.directory.snapshot().get(alice.pubkey)).toBe(checked);
+  } finally {
+    h.directory.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("re-sends a batch a replaced socket ended and keeps its check quiet while connected", async () => {
+  const h = harness();
+  const active = () => h.subscriptions.filter((item) => !item.stopped);
+  try {
+    h.directory.ensure([alice.pubkey, bob.pubkey]);
+    await Promise.resolve();
+    const first = h.subscriptions[0];
+    assert(first);
+    first.sink.event(projection());
+    first.sink.event(projection(10, bob.pubkey));
+    first.sink.eose();
+    const shown = h.directory.snapshot();
+    h.changed.mockClear();
+    // A planned renewal replaces the socket; the connection stays up.
+    first.sink.closed("disconnected: live connection lost");
+    await Promise.resolve();
+    expect(h.changed).not.toHaveBeenCalled();
+    expect(h.directory.snapshot()).toEqual(shown);
+    expect(h.directory.snapshot().get(alice.pubkey)?.status).toBe("checked");
+    const replacement = active()[0];
+    assert(replacement && replacement !== first);
+    expect(replacement.subjects).toEqual([alice.pubkey, bob.pubkey]);
+    // A replay that confirms what is shown does not notify.
+    replacement.sink.event(projection());
+    replacement.sink.event(projection(10, bob.pubkey));
+    replacement.sink.eose();
+    expect(h.changed).not.toHaveBeenCalled();
+    expect(h.directory.snapshot().get(bob.pubkey)?.status).toBe("checked");
+    // A replay that differs notifies once.
+    replacement.sink.closed("disconnected: live connection lost");
+    await Promise.resolve();
+    const third = active()[0];
+    assert(third);
+    third.sink.event(projection(12));
+    third.sink.eose();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    expect(h.directory.snapshot().get(alice.pubkey)?.verifiedAt).toBe(12);
+    expect(h.directory.snapshot().has(bob.pubkey)).toBe(false);
+    // Any other end still fails the batch without a retry.
+    h.changed.mockClear();
+    third.sink.closed("error: relay refused");
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    expect(active()).toHaveLength(0);
+    expect(h.directory.snapshot().get(alice.pubkey)?.status).toBe("cached");
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("publishes a pre-EOSE change after a second renewal", async () => {
+  const h = harness();
+  const active = () => h.subscriptions.filter((item) => !item.stopped);
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const first = h.subscriptions[0];
+    assert(first);
+    first.sink.event(projection());
+    first.sink.eose();
+    first.sink.closed("disconnected: live connection lost");
+    await Promise.resolve();
+    const second = active()[0];
+    assert(second);
+    second.sink.event(projection(12));
+    h.changed.mockClear();
+    second.sink.closed("disconnected: live connection lost");
+    await Promise.resolve();
+    const third = active()[0];
+    assert(third && third !== second);
+    third.sink.event(projection(12));
+    third.sink.eose();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    expect(h.directory.snapshot().get(alice.pubkey)?.verifiedAt).toBe(12);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("publishes a pre-EOSE change after an open batch is rebuilt", async () => {
+  const h = harness();
+  const active = () => h.subscriptions.filter((item) => !item.stopped);
+  try {
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const first = active()[0];
+    assert(first);
+    first.sink.event(projection());
+    first.sink.eose();
+    first.sink.closed("disconnected: live connection lost");
+    await Promise.resolve();
+    const renewed = active()[0];
+    assert(renewed);
+    renewed.sink.event(projection(12));
+    h.changed.mockClear();
+    h.directory.ensure([bob.pubkey]);
+    await Promise.resolve();
+    const rebuilt = active()[0];
+    assert(rebuilt && rebuilt !== renewed);
+    // An incomplete replay that flips no checked status.
+    rebuilt.sink.event(projection(12));
+    rebuilt.sink.event(projection(12));
+    rebuilt.sink.eose();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    expect(h.directory.snapshot().get(alice.pubkey)?.verifiedAt).toBe(12);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("grows with the profile limit and evicts the least recently ensured when it shrinks", async () => {
+  const h = harness();
+  try {
+    h.directory.resize(1025);
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    h.subscriptions[0]?.sink.event(projection());
+    h.directory.ensure(
+      Array.from({ length: 1024 }, (_, i) => i.toString(16).padStart(64, "0")),
+    );
+    expect(h.directory.snapshot().has(alice.pubkey)).toBe(true);
+    h.changed.mockClear();
+    h.directory.resize(1024);
+    expect(h.directory.snapshot().has(alice.pubkey)).toBe(false);
+    expect(h.changed).toHaveBeenCalledTimes(1);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("shrinks a full head cache by request order, not by arrival order", async () => {
+  const h = harness();
+  const carol = keypair();
+  try {
+    // The directory follows any limit; three heads stand for a full cache.
+    h.directory.resize(3);
+    const subjects = [alice.pubkey, bob.pubkey, carol.pubkey];
+    h.directory.ensure(subjects);
+    await Promise.resolve();
+    const [batch] = h.subscriptions;
+    assert(batch);
+    for (const subject of subjects) batch.sink.event(projection(10, subject));
+    batch.sink.eose();
+    expect(h.directory.snapshot().size).toBe(3);
+    // The first head to arrive is now the most recently requested.
+    h.directory.ensure([alice.pubkey]);
+    h.changed.mockClear();
+    h.directory.resize(2);
+    const snapshot = h.directory.snapshot();
+    expect([...snapshot.keys()].sort()).toEqual(
+      [alice.pubkey, carol.pubkey].sort(),
+    );
+    expect(h.changed).toHaveBeenCalledTimes(1);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("stops the syncs a shrink emptied without another ensure", async () => {
+  const h = harness();
+  try {
+    h.directory.resize(VERIFIED_PROFILE_BATCH + 1);
+    const old = Array.from({ length: VERIFIED_PROFILE_BATCH }, (_, i) =>
+      (i + 1).toString(16).padStart(64, "0"),
+    );
+    h.directory.ensure(old);
+    await Promise.resolve();
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const [full, recent] = h.subscriptions;
+    assert(full && recent);
+    // Shrinking to one keeps the most recently requested subject only.
+    h.directory.resize(1);
+    await Promise.resolve();
+    expect(full.stopped).toBe(true);
+    expect(recent.stopped).toBe(false);
+  } finally {
+    h.directory.dispose();
   }
 });

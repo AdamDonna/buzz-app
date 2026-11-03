@@ -374,7 +374,7 @@ The relay session exposes `directMessages` over its existing verified reader and
 outbox. People are kind-0 pages: a 15-profile browse preview (30 for search), followed by
 30-profile browse batches. Searches retain 30-profile pages because profile metadata
 can be large enough to exceed the read budget in larger batches. Remote name
-searches are debounced by 150 ms.
+searches are debounced by 300 ms and need at least two characters.
 Opening uses the development broker's purpose-bound `/direct-message` endpoint:
 it signs kind 41010 with one to eight distinct other participant keys, checks the
 exact command receipt, and returns the canonical channel ID. A unique client tag
@@ -997,7 +997,7 @@ control for roster, verified roles, missing member names, shared agent choices,
 archive visibility, agent ownership/manager names and the active directory search. Errors stay near their data,
 without separate fetch-retry buttons. The current search text is retained; directory
 refresh starts at page one rather than mixing old pages with fresh results. Empty
-queries and view-only membership do not trigger directory searches. Cached names
+queries and DM membership do not trigger directory searches. Large channel rosters also use directory search when the viewer cannot add members. Cached names
 reuse the shared profile directory; failed/missing names are retried. The separate
 roster read remains usable when role verification fails. The refresh icon spins
 linearly until all these reads settle (except with reduced motion), but stays still
@@ -1032,7 +1032,7 @@ addition to the heading’s own top inset; invitation/recovery spacing is unchan
 The search composition reduces the shared header-to-body gap by `--space-2`
 (16px normally, 8px at the compact breakpoint) without affecting other dialogs.
 The member-list area flexes into the remaining dialog height and owns the only
-scrollbar, including search results and recovery messages. The role groups and
+scrollbar, including search results and recovery messages. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
 Not in this channel flow naturally one after the other; empty groups are hidden. Only the bordered viewport fills spare
 height, never a group inside it. The shared Dialog's opt-in flex body
 keeps the outer body non-scrolling; other dialogs are unchanged.
@@ -1183,7 +1183,19 @@ The port retains the prepared-store implementation and its behavior tests:
   retained-window live catch-up. Optional profile enrichment stays background.
   Selecting an already-queued catch-up promotes that existing read without adding
   a request or resetting its deadline.
-- 1,024 profile entries / 2 MiB signed-record budget, narrow row profile selectors,
+- 1,024 profile entries and an aggregate signed-record byte budget of the entry
+  limit × 2 KiB, evicting the least recently requested profile. While a channel is
+  open and active (not a retained background tab), it reserves room for its whole
+  roster on top of that base, up to 10,240 entries. Leaving gives the room back
+  after the current task, so a remount or a roster count change keeps the loaded
+  profiles; the shrink cancels background profile reads still in flight, and
+  stops the verified-name syncs it emptied. Verified-name syncs (128 people
+  each) have their own pool of 80, enough for the largest cache, apart from the
+  32 artifact syncs. A background profile read of many pages publishes once,
+  when its pages settle (a foreground read that joins it publishes at once), so
+  an open mention menu re-ranks a large roster once instead of per page. The
+  channel avatar preview reads at most the first 1,024 members; only the mention
+  menu reads a whole large roster. Narrow row profile selectors,
   and request-warmed avatars (fetched and decoded, nothing retained; disabled
   under the Save-Data preference). Signature verification yields in batches.
 - Account/relay-scoped IndexedDB: 64 records / 8 MiB global disk budget, 24-hour
@@ -1242,32 +1254,33 @@ in-place recovery, denial-by-omission and both document themes in Chromium/WebKi
 
 ## DM label recovery invariant
 
-Access-loss purges remain authoritative: never keep old profiles just to preserve
-sidebar names. After roster membership changes, visible DMs must reacquire their
-missing names through the shared profile directory at background priority, without
-blocking conversation opening. Recovery must cover both loaded profiles being
-purged and an initial profile read being cancelled before any name arrives.
+Access-loss purges remove channel content, not profiles. A kind 0 profile is a
+global relay event that any community member can read, so a lost channel does not
+make a name private; the profile directory keeps it, and a profile read in
+flight finishes. This holds for a denied channel list too: profiles do not
+depend on channels. Only a full cache clear (logout, community or scope change)
+empties the directory. After roster membership
+changes, visible DMs must reacquire missing names through the shared profile
+directory at background priority, without blocking conversation opening. Recovery
+covers a cleared directory (a full cache clear) and an initial profile read that
+comes back empty or fails.
 
 `ChannelsPage` passes the **full** roster to `useChannelLabels`; the hook filters
 visible conversations for display/profile demand, but derives its recovery trigger
-from all channel IDs. Deleting an already-hidden or archived channel can still
-invalidate shared profiles. Missing-profile and membership keys remain stable on
+from all channel IDs. Missing-profile and membership keys remain stable on
 ordinary message/preview updates: missing/failed responses must not start a
 render-driven request loop. Key fragments remain the fallback for unavailable names.
 
 `useChannelLabels.test.tsx` binds the mounted hook to real session roster omission,
-including hidden/archived deletion, stale in-flight replies and unsuccessful name
-reads. `tests/browser/dm-labels.spec.mjs` guards the production page wiring and DOM
+including hidden/archived deletion, a name read that finishes after the deletion,
+and empty or failed name reads that retry once on a roster change. `tests/browser/dm-labels.spec.mjs` guards the production page wiring and DOM
 labels through the real Refresh channels control and broker.
 
-Open channel timelines and mounted thread/media-comment views also recover: after
-an access-loss purge, each retained window and each mounted thread of a channel the
-viewer can still read requests its rows' names once, at background priority. Names
-whose only evidence was in the lost channel are not requested. A channel opened
-afterwards from a head read shortly before the purge is not covered: its next head
-read or an older page restores its names, while new traffic and the viewer's own
-sends restore only its latest rows. `revocation.test.ts` covers roster omission,
-denied reads and a mention that appears only in a thread reply.
+Open channel timelines and mounted thread/media-comment views need no recovery
+after access loss: their names stay in the directory. `revocation.test.ts` covers
+roster omission, denied channel reads and a denied channel list keeping names, a
+profile read in flight finishing, and a full cache clear still fencing a profile
+read.
 
 These are foundational recovery constraints, not a new shared-session API or a
 guarantee of general profile retry after every cache clear/network failure. See
@@ -1289,14 +1302,21 @@ channel-scoped payloads from the connected relay become activity rows; malformed
 unknown and other authors' summaries are not rendered as JSON. These events do not
 grant/revoke access: the existing signed roster remains authoritative.
 
-The timeline groups adjacent arrivals/departures into compact avatar-and-text rows.
-Messages, local-day changes and gaps over an hour break groups; removals by different
-actors stay separate. Same-adder additions use “added by you” for the viewer;
-mixed arrivals do not invent an adder. Grouping is presentation-only: signed event
-IDs and cursors remain per event, and live activity counts against the row budget.
-Profiles reuse the
-shared background directory/cache, and reading anchors can resolve a member of a
-group. Activity has no message actions, thread, unread evidence or chat preview.
+The timeline shows only explicit additions by another actor and removals; self-joins
+and voluntary leaves are hidden before grouping. Each uninterrupted run of visible
+membership activity becomes one centered avatar-and-text row. Messages and huddles
+break runs; local-day changes, elapsed time and different removal actors do not.
+Each person appears only under their latest visible action in the run, including
+in the hover detail: removal followed by re-addition is described as an addition.
+The group keeps its newest event's identity and its oldest event's date.
+
+Small same-adder additions use “added by you” for the viewer; mixed additions do not
+invent an adder. Large or mixed summaries keep one name per action and a count;
+hovering, clicking or keyboard-opening the count shows the full scrollable people
+list for that action. Grouping is presentation-only: all signed events remain in
+the group, IDs and cursors remain per event, and reading anchors can resolve any
+member event. Profiles reuse the shared background directory/cache. Activity has no
+message actions, thread, unread evidence or chat preview.
 A Solo chat omits its owner's additions and removals of agents before its first
 message once history reaches its start; later changes, people and agents added by others still
 show. Membership, access and pagination are unchanged.
@@ -1548,6 +1568,39 @@ options exposes local-only manual unread, explicit mark-through and sync recover
 Older synchronized hints may expire under bounded retention. Synced manual-unread
 and OS notifications are not enabled by this feature.
 
+### Keyboard navigation and reading
+
+The Channels plugin registers Slack-style shortcuts through the shared dispatcher, so
+each is listed in Settings → Shortcuts and can be rebound. All run while typing in the
+message editor and are ignored behind a dialog. None run in a terminal, which keeps
+Escape and Option+Arrow for the shell.
+
+- **Previous/next conversation** (Option+Up/Down) and **previous/next unread
+  conversation** (Option+Shift+Up/Down) step through the sidebar's rendered order,
+  Solo chats and team rows alike. `conversation-rows.ts` scans the sidebar's
+  `Subscribed channels` list, so sorting, sections, filters and the All/Solo/Team pane
+  are already applied; rows in a collapsed section or the inactive pane are skipped. A
+  row is unread when it shows the unread or thread-activity marker that
+  `SidebarUnread` also reads. The open conversation is the row marked `aria-current`.
+  Stepping does not wrap, and at either end it does nothing. When the open
+  conversation is not among the rows, next starts from the top and previous from the
+  bottom. A conversation listed in two sections is stepped over once. The shortcuts
+  are unavailable, leaving the key alone, while the sidebar renders no rows (for
+  example behind another page's own sidebar). Stepping activates the row's own
+  button, so it takes the exact path of a click: the saved selection, navigation
+  intent, session staleness guard and Solo's immediate activation. The list scrolls
+  just far enough to show the row, and nothing above it moves.
+- **Mark conversation as read** (Escape) uses the open conversation's
+  `unread.markChannelRead`, as the row menu's Mark as read does, with no success toast.
+  A failure shows an error toast. The page publishes it only for a joined,
+  non-preview conversation (not the new message page), and it is available only while
+  the connection has `frontier-sync`, the conversation shows unread and focus is not a
+  text field outside the composer. It never consumes a dismissal: the dispatcher skips
+  events something already handled, panels, tabs, completions and message edits stop
+  Escape themselves, and the narrow navigation drawer now prevents it when it closes.
+- **Mark all as read** (Shift+Escape) is registered by the shell; see
+  [shell design](shell-design.md).
+
 
 ### Attachment layout and scrolling
 
@@ -1581,6 +1634,7 @@ Image attachments reserve loading geometry from valid `imeta dim` metadata,
 bounded to 360px wide and 320px tall without enlarging the frame beyond the
 original dimensions. Missing/invalid dimensions, including metadata that would
 reserve less than one CSS pixel on either axis, use a 360:320 loading frame.
+When sending media, the app copies `dim` from the relay's upload result.
 After the original decodes, its natural dimensions replace metadata and the
 loading frame. Loaded previews follow the image's aspect ratio with no grey
 backing or letterboxing, bounded to 360px wide and 320px tall. Exceptionally thin

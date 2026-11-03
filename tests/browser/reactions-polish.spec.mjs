@@ -51,7 +51,7 @@ test("grouped reaction counts fit and preview in both themes and text sizes", as
     document.documentElement.style.setProperty("--buzz-text-scale", "1"),
   );
   await group.focus();
-  const preview = page.locator('.buzz-preview-card[role="dialog"]');
+  const preview = page.locator('.buzz-preview-card[role="tooltip"]');
   await expect(preview).toBeVisible();
   await expect(preview).toHaveCSS("opacity", "1");
   await preview.screenshot({
@@ -585,6 +585,13 @@ test.describe("reaction control rendering", () => {
   test("add-reaction icon stays still while neighboring emojis animate", async ({
     page,
   }) => {
+    // Failed-image retries reflow the message and interrupt a resting hover.
+    await page.route("**/emoji-media/**", (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="7" fill="purple"/></svg>',
+      }),
+    );
     await page.goto("/tests/fixtures/emoji.html?reactions&wrap");
     const message = page
       .locator("[data-message-id]")
@@ -593,6 +600,9 @@ test.describe("reaction control rendering", () => {
     const row = message.getByTestId("reaction-row");
     const plus = row.getByRole("button", { name: "Add reaction" });
     const emoji = row.locator('button[data-reaction="👍"]');
+    await expect(
+      row.locator('button[data-reaction=":party:"] img'),
+    ).toHaveJSProperty("naturalWidth", 16);
     await expect(plus).toBeVisible();
     // Fractional placement exposes repaint shifts that integer-aligned rows hide.
     await row.evaluate((el) => {
@@ -654,4 +664,18 @@ test.describe("reaction control rendering", () => {
     ).toBeVisible();
     expect(await plus.boundingBox()).toEqual(bounds);
   });
+});
+
+// Browser-only: actual overflow decides whether the portal belongs in Tab order.
+test("short reactor lists do not add a keyboard stop", async ({ page }) => {
+  await page.goto("/tests/fixtures/emoji.html?reactions&grouped=8");
+  const group = page.getByRole("button", { name: "👍: 8 people" });
+  await group.focus();
+  const preview = page.getByRole("tooltip");
+  await expect(preview).toBeVisible();
+  const people = preview.getByRole("region", { name: "Everyone who reacted" });
+  await expect(people).not.toHaveAttribute("tabindex", "0");
+  await page.keyboard.press("Tab");
+  await expect(people).not.toBeFocused();
+  await expect(group).not.toBeFocused();
 });

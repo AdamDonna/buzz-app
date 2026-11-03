@@ -23,6 +23,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { Dialog } from "../shared/design-system/ui/Dialog";
 import { UpdateNotice } from "../features/updates/UpdateNotice";
 import { RejectedLinkNotice } from "../features/navigation/RejectedLinkNotice";
+import { ExternalAuthorizationDialog } from "../features/agents/ExternalAuthorizationDialog";
 import { CreationReview } from "../bundled/agents/CreationReview";
 import { UpdateReview } from "../bundled/agents/UpdateReview";
 import { InterruptedNotice } from "../features/agents/InterruptedNotice";
@@ -63,6 +64,7 @@ import {
   SignInEnding,
 } from "../features/federated-identity/LaunchSignIn";
 import { launchVisible, setLaunchReady, subscribeLaunch } from "./launch";
+import { AgentCompletionNotifications } from "../features/notifications/AgentCompletionNotifications";
 
 export function App({ services }: { services: AppServices }) {
   const identity = services.identity;
@@ -88,6 +90,7 @@ export function App({ services }: { services: AppServices }) {
             identity={services.identity}
             communities={services.communities}
             invites={services.invites}
+            federatedIdentity={services.firstRunFederatedIdentity}
           >
             <LaunchSignIn identity={services.federatedIdentity}>
               <ConnectedApp services={services} />
@@ -105,6 +108,17 @@ export function App({ services }: { services: AppServices }) {
 }
 
 function ConnectedApp({ services }: { services: AppServices }) {
+  return (
+    <ToastProvider
+      portalContainer={document.getElementById("buzz-toast-root") ?? undefined}
+    >
+      <AgentCompletionNotifications services={services} />
+      <ConnectedAppContent services={services} />
+    </ToastProvider>
+  );
+}
+
+function ConnectedAppContent({ services }: { services: AppServices }) {
   const { plugins } = services;
   const [workspaceElement, setWorkspaceElement] =
     useState<HTMLDivElement | null>(null);
@@ -520,9 +534,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
     </div>
   );
   return (
-    <ToastProvider
-      portalContainer={document.getElementById("buzz-toast-root") ?? undefined}
-    >
+    <>
       <SignInEnding identity={services.federatedIdentity} />
       <ChannelNavigationProvider relay={services.relay}>
         <AgentsContext.Provider value={services.agents}>
@@ -623,6 +635,12 @@ function ConnectedApp({ services }: { services: AppServices }) {
           >
             <UpdateNotice updates={services.updates} />
             <RejectedLinkNotice links={services.rejectedLinks} />
+            <ExternalAuthorizationDialog
+              connection={services.externalApps}
+              agents={services.agents}
+              communities={services.communities}
+              relay={services.relay}
+            />
             <InterruptedNotice agents={services.agents} />
             <CreationReview agents={services.agents} />
             <UpdateReview agents={services.agents} />
@@ -652,6 +670,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
             // The inert launch surface would swallow the modal's initial focus.
             open={settings && !launching}
             title="Settings"
+            visit
             closeLabel="Close Settings"
             size="expanded"
             container={workspaceElement}
@@ -724,6 +743,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
                     notifications={services.notifications}
                     updates={services.updates}
                     navigation={route.request}
+                    installRequests={services.pluginInstallRequests}
                     navigationPane
                     onDeparturePending={(pending) => {
                       const client = services.communities.snapshot();
@@ -779,6 +799,6 @@ function ConnectedApp({ services }: { services: AppServices }) {
           </Dialog>
         </AgentsContext.Provider>
       </ChannelNavigationProvider>
-    </ToastProvider>
+    </>
   );
 }

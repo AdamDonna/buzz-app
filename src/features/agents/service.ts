@@ -1,6 +1,10 @@
 import type {} from "../navigation/service";
+import { removeSessionPrompts } from "./session-prompts";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
 import { respond } from "../../buzz-mcp/rpc";
+import { respondExternal } from "../../buzz-mcp/external";
+import type { ExternalScope } from "./external-connection";
+import { externalMcpEnabled } from "./external-connection";
 import { connectMcp } from "../../buzz-mcp/connection";
 import type {
   HostMcpServer,
@@ -175,7 +179,10 @@ import { readInterrupted, writeInterrupted } from "./interrupted";
 import { AttentionSources, type AttentionProducer } from "./attention-sources";
 import { type AddedTool, BUZZ_SESSION } from "../../buzz-mcp/session-tools";
 import { nameSoloChat } from "./solo-chat-name";
-import { forgetDefaultAgent } from "../solo/default-agent";
+import {
+  clearDeletedDefaultAgent,
+  forgetDefaultAgent,
+} from "../solo/default-agent";
 
 /** Where an agent runs: `here`, with its key on this device; `hosted`, by its
  * type's provider; or `elsewhere`, on another of the owner's devices. Only an
@@ -307,12 +314,16 @@ export type AgentTab<Config = unknown> = Readonly<{
   component: ComponentType<AgentViewProps<Config>>;
 }>;
 /** A tab a plugin adds to the settings of every agent running on this device,
- * whatever its type. It reads the agent and saves through the plugin's own
- * `agents`. */
+ * whatever its type, or only those `when` accepts. It reads the agent and
+ * saves through the plugin's own `agents`. */
 export type AgentAddedTab = Readonly<{
   id: string;
   title: string;
   component: ComponentType<{ agent: Agent }>;
+  /** Whether the tab shows for this agent; absent, it shows for each. */
+  when?: (agent: Agent) => boolean;
+  /** Calls `listener` when `when` may answer differently. */
+  subscribe?: (listener: () => void) => () => void;
 }>;
 export type RegisteredAgentAddedTab = Contribution<AgentAddedTab>;
 /** One of an agent's conversation sessions on this device. Without `root` it
@@ -1035,7 +1046,8 @@ export type Agents = {
   register<Config>(type: AgentType<Config>): void;
   types(): readonly RegisteredAgentType[];
   /** Adds a tab to the settings of every agent running on this device,
-   * whatever its type, after Activity. It shows while the plugin is on. */
+   * whatever its type, or of those its `when` accepts, after Activity. It
+   * shows while the plugin is on. */
   registerTab(tab: AgentAddedTab): void;
   /** The tabs active plugins add now. */
   addedTabs(): readonly RegisteredAgentAddedTab[];
@@ -1072,6 +1084,14 @@ export type Agents = {
    * it; like any type whose agents run here, it has `run`. A kept handle
    * throws once this no longer holds, so ask again when acting. */
   handle(agent: AgentKey): AgentHandle | undefined;
+  canConnectExternal(agent: AgentKey): boolean;
+  /** Creates a separate owner-approved external grant in the selected community. */
+  connectExternal(
+    agent: AgentKey,
+    signal: AbortSignal,
+    connected: () => void,
+    scopes?: readonly ExternalScope[],
+  ): Promise<HostMcpServer>;
   /** The owner's connection to a running agent's community, which need not be
    * the selected one: read the agent's conversations through this. */
   relay(agent: AgentKey): RelayData | undefined;
@@ -1887,6 +1907,7 @@ export class AgentsService extends Service implements Agents {
         },
       },
       activity: localActivity,
+      channel: (agent, event) => this.channelOf(agent, event),
       soloChat: (agent, channel, signal) =>
         soloChat(() => this.relay(agent.key), agent.owner, channel, signal),
       remembered: (key, slug, body) => this.coreMemory.wrote(key, slug, body),
@@ -2059,10 +2080,21 @@ export class AgentsService extends Service implements Agents {
     if (
       !/^[a-z0-9][a-z0-9._-]*$/.test(tab.id ?? "") ||
       !tab.title ||
-      typeof tab.component !== "function"
+      typeof tab.component !== "function" ||
+      (tab.when !== undefined && typeof tab.when !== "function") ||
+      (tab.subscribe !== undefined && typeof tab.subscribe !== "function")
     )
       throw new Error("Agent tabs need an id, a title and a component");
     this.tabContributions.register(this.ctx, tab);
+    // A new state object, so views asking `when` render again.
+    const { subscribe } = tab;
+    if (subscribe)
+      this.ctx.effect(() =>
+        subscribe(() => {
+          this.state = Object.freeze({ ...this.state });
+          this.notify();
+        }),
+      );
   }
   addedTabs = () => this.tabContributions.snapshot();
   controlAttention() {
@@ -2440,6 +2472,114 @@ export class AgentsService extends Service implements Agents {
   handle(key: AgentKey) {
     const owner = this.ctx.pluginOwner;
     return owner && this.runners.handle(key, owner.id);
+  }
+  canConnectExternal(key: AgentKey) {
+    const handle = this.runners.handle(key);
+    return (
+      externalMcpEnabled(this.communities.snapshot().selected) &&
+      !!handle &&
+      !handle.protection
+    );
+  }
+  async connectExternal(
+    key: AgentKey,
+    signal: AbortSignal,
+    connected: () => void,
+    scopes: readonly ExternalScope[] = ["read", "post"],
+  ) {
+    if (this.ctx.pluginOwner?.id !== "buzz.agents")
+      throw new Error("Authorize external apps in Buzz.");
+    const host = this.ctx.host;
+    if (!host?.serveMcp)
+      throw new Error("External connections require Buzz desktop.");
+    const handle = this.runners.handle(key);
+    if (!handle)
+      throw new Error("This agent is not running in this copy of Buzz.");
+    if (handle.protection)
+      throw new Error("Protected agents cannot use external connections.");
+    const relay = this.relay(key);
+    const session = relay?.snapshot().session;
+    const agent = this.agent(key);
+    const source = ownerReads(relay, handle.pubkey);
+    const selected = this.communities.snapshot();
+    if (!externalMcpEnabled(selected.selected))
+      throw new Error("External apps are not enabled for this community.");
+    if (
+      !source ||
+      !relay ||
+      !session ||
+      !agent ||
+      !selected.selected ||
+      selected.viewer !== handle.owner ||
+      relayOrigin(selected.selected) !== relayOrigin(agent.relay)
+    )
+      throw new Error("Select this agent's connected community first.");
+    const controller = new AbortController();
+    const lifetime = AbortSignal.any([signal, controller.signal]);
+    const check = () => {
+      lifetime.throwIfAborted();
+      handle.attention.enabled();
+      const current = this.communities.snapshot();
+      if (
+        current.viewer !== selected.viewer ||
+        current.selected !== selected.selected ||
+        !externalMcpEnabled(current.selected) ||
+        ownerReads(this.relay(key), handle.pubkey)?.connection !==
+          source.connection ||
+        !session.agentChoices
+          .snapshot()
+          .selectable.some((agent) => agent.pubkey === handle.pubkey)
+      )
+        throw new Error(
+          "The external connection has ended. Authorize the external app again in Buzz.",
+        );
+    };
+    const changed = () => {
+      try {
+        check();
+      } catch {
+        controller.abort();
+      }
+    };
+    const stops = [
+      this.subscribe(changed),
+      this.communities.subscribe(changed),
+      relay.subscribe(changed),
+      session.agentChoices.subscribe(changed),
+    ];
+    const release = () => {
+      for (const stop of stops) stop();
+    };
+    try {
+      check();
+      const server = await connectMcp(
+        host.serveMcp.bind(host),
+        (signal) => {
+          const client = appClient(handle, {
+            signal,
+            check,
+            relayAuthor: source.relayAuthor?.(),
+            signingAuthority: source.workflowAuthority(),
+            read: async () => {
+              throw new Error("External connections cannot read files.");
+            },
+            memories: async () => {
+              throw new Error("External connections cannot read memory.");
+            },
+          });
+          return (message) => {
+            check();
+            return respondExternal(client, message, connected, scopes);
+          };
+        },
+        lifetime,
+      );
+      void server.closed.then(release);
+      return server;
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
   note(key: AgentKey, channelId: string, text: string, root?: string) {
     return this.runners.note(key, channelId, text, root);
@@ -3606,6 +3746,14 @@ export class AgentsService extends Service implements Agents {
     // one that is not stays listed here with Forget.
     const shown = this.selectedOrigin();
     const rows = this.liveRows(pubkey);
+    const roleBindings = [
+      ...new Map(
+        rows.flatMap((row) => {
+          const binding = this.bindingOf(row);
+          return binding ? [[binding.scope, binding] as const] : [];
+        }),
+      ).values(),
+    ];
     const unfinished = `${identity.name} isn't deleted yet and may still be in some channels. It stays stopped; Delete it again to finish.`;
     // Left its home, which keeps its config: that is archived first, so a
     // failure leaves it listed here to Delete again.
@@ -3649,6 +3797,17 @@ export class AgentsService extends Service implements Agents {
     // Drops its settings.
     await this.refresh();
     forgetDefaultAgent(pubkey);
+    const failed: string[] = [];
+    for (const binding of roleBindings)
+      try {
+        await clearDeletedDefaultAgent(binding.session, binding.scope, pubkey);
+      } catch {
+        failed.push(binding.origin);
+      }
+    if (failed.length)
+      throw new Error(
+        `${identity.name} was deleted, but Buzz couldn't clear it as your Bestie in ${failed.join(", ")}. Open Bestie to choose another.`,
+      );
   }
   /** Archives the config channel in the agent's home community, which it is
    * no longer a member of. Nothing to do when its config never synced. */
@@ -3912,7 +4071,13 @@ export class AgentsService extends Service implements Agents {
       await this.writeUnfinished(
         this.unfinished.filter((setup) => setup.pubkey !== pubkey),
       );
-      await handOnMainAgent(binding.session, pubkey);
+      try {
+        await handOnMainAgent(binding.session, pubkey);
+      } catch {
+        throw new Error(
+          `${agent.name} was deleted, but Buzz couldn't clear it as your Bestie. Open Bestie to choose another.`,
+        );
+      }
     });
   }
   private async exclusive<T>(pubkey: string, step: () => Promise<T>) {
@@ -4490,8 +4655,11 @@ export class AgentsService extends Service implements Agents {
     if (given === base) return;
     const next = given && key !== pubkeyOf(key) ? ownRecord(key, given) : given;
     if (next) await writeRecord(this.storage, next);
-    else if (this.storage.get(recordKey(key)) !== null)
-      await removeRecord(this.storage, key);
+    else {
+      if (this.storage.get(recordKey(key)) !== null)
+        await removeRecord(this.storage, key);
+      await removeSessionPrompts(this.storage, key);
+    }
     const { [key]: _, ...others } = this.records;
     this.records = next ? { ...others, [key]: next } : others;
   }
@@ -5457,6 +5625,7 @@ async function leaveCommunity(
 async function handOnMainAgent(session: RelaySession, pubkey: string) {
   await session.agentChoices.refresh(true, { fresh: true });
   forgetDefaultAgent(pubkey);
+  await clearDeletedDefaultAgent(session, session.scope, pubkey);
 }
 /** The membership's community, as its owner knows it. */
 /** The origin of the agent's home community, as native saved it on the row:

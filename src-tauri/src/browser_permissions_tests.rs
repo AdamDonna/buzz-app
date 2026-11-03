@@ -107,6 +107,8 @@ fn native_command_permissions_isolate_webviews() {
         "relay_sign_read_state",
         "relay_publish_read_state",
         "relay_http",
+        "relay_http_cancel",
+        "relay_verify_signatures",
         "relay_workflow_runs",
         "relay_project_git",
         "relay_project_git_cancel",
@@ -155,6 +157,7 @@ fn native_command_permissions_isolate_webviews() {
         "plugin_host_process_write",
         "plugin_host_process_kill",
         "plugin_host_mcp_serve",
+        "plugin_host_mcp_authorize",
         "plugin_host_mcp_reply",
         "plugin_host_mcp_close",
         "plugin_host_read_file",
@@ -334,7 +337,15 @@ fn native_command_permissions_isolate_webviews() {
             "remote content must not use main grants: {command}"
         );
     }
-    assert!(invoke(main.as_ref(), "plugin:window|close", local_origin).is_ok());
+    for command in ["plugin:window|close", "plugin:window|is_focused"] {
+        assert!(
+            invoke(main.as_ref(), command, local_origin).is_ok(),
+            "main must receive {command}"
+        );
+        assert!(invoke(main.as_ref(), command, "https://example.org").is_err());
+        assert!(invoke(guest.as_ref(), command, local_origin).is_err());
+        assert!(invoke(huddle.as_ref(), command, local_origin).is_err());
+    }
 
     #[cfg(all(feature = "native-mcp", target_os = "macos"))]
     {

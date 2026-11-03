@@ -22,7 +22,7 @@ import {
 import type { ShortcutBindingsSnapshot } from "../../features/shortcuts/preferences";
 import type { AppServices } from "../services";
 import { HOST_SHORTCUT_ORDER } from "../shortcuts";
-import { conversationComposerFocusTarget } from "../focus-navigation";
+import { conversationFocusTarget } from "../focus-navigation";
 import { orderPages, shellPresentation } from "./presentation";
 import { matchName } from "../../features/search/match";
 import {
@@ -50,6 +50,8 @@ export type SearchServices = Pick<
   >;
 const SEARCH_ID = "global-search";
 const SEARCH_BINDING: KeyBinding = { key: "k", mod: true };
+// Slack opens its ⌘K switcher from ⌘T too; the hint shows ⌘K.
+const SEARCH_BINDINGS = [SEARCH_BINDING, { key: "t", mod: true }];
 const CONVERSATION_SEARCH_ID = "conversation-search";
 const CONVERSATION_SEARCH_BINDING: KeyBinding = { key: "f", mod: true };
 const NO_OVERRIDES: ShortcutBindingsSnapshot = { overrides: {}, error: null };
@@ -110,7 +112,7 @@ export function PageSearch({
       services?.shortcuts.registerHost({
         id: SEARCH_ID,
         title: "Search Buzz",
-        binding: SEARCH_BINDING,
+        binding: SEARCH_BINDINGS,
         order: HOST_SHORTCUT_ORDER.search,
         allowInEditable: true,
         run: begin,
@@ -208,7 +210,7 @@ export function PageSearch({
         finalFocus={() =>
           returnFocus.current?.id === "main-content"
             ? (composerChannel.current &&
-                conversationComposerFocusTarget(composerChannel.current)) ||
+                conversationFocusTarget(composerChannel.current)) ||
               false
             : returnFocus.current
         }
@@ -229,7 +231,7 @@ export function PageSearch({
           )
             (
               (composerChannel.current &&
-                conversationComposerFocusTarget(composerChannel.current)) ||
+                conversationFocusTarget(composerChannel.current)) ||
               main
             ).focus({ preventScroll: true });
         }}

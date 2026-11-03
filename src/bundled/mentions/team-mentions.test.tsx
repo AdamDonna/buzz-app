@@ -674,7 +674,8 @@ it("directory pages rebuild the name index only for people they add", async () =
   // Pages of members change no row.
   await type("pe");
   await type("per");
-  expect(h.session.directMessages.people).toHaveBeenCalledTimes(3);
+  // `p` is too short to search; `pe` and `per` each read.
+  expect(h.session.directMessages.people).toHaveBeenCalledTimes(2);
   expect(starts).not.toHaveBeenCalled();
   // An outsider is a new choice set: one rebuild, then reused while it stays.
   page = [...members, outsider];
@@ -686,6 +687,72 @@ it("directory pages rebuild the name index only for people they add", async () =
   expect(starts).not.toHaveBeenCalled();
   view.unmount();
   h.library.dispose();
+});
+
+it("a mention keystroke checks longer names only on choices the query matches", async () => {
+  const h = fixture({ count: 300 });
+  // A running directory search leaves Space undecided, so the chooser asks
+  // whether a known name continues the query.
+  vi.mocked(h.session.directMessages.people).mockImplementation(
+    () => new Promise(() => {}),
+  );
+  const menu = inline(h.session);
+  try {
+    await waitFor(() => expect(menu.result()?.items.length).toBeGreaterThan(0));
+    const longer = vi.spyOn(personMatch, "extendsName");
+    // Team names are checked separately; count member names only.
+    const checked = () =>
+      longer.mock.calls
+        .map(([name]) => name)
+        .filter((name) => name.startsWith("Person"));
+    for (const query of ["zz", "Person 0"]) {
+      longer.mockClear();
+      menu.view.rerender(
+        <MentionCompletion
+          {...menu.props}
+          query={{ start: 0, end: query.length + 1, query }}
+        />,
+      );
+      await waitFor(() =>
+        expect(h.session.directMessages.people).toHaveBeenCalled(),
+      );
+      // `Person 0` is continued by the ten `Person 0x` names; `zz` by none.
+      if (query !== "zz")
+        await waitFor(() => expect(checked().length).toBeGreaterThan(0));
+      // Only names that start with the query can continue it.
+      expect(checked().every((name) => name.startsWith(query))).toBe(true);
+    }
+  } finally {
+    menu.view.unmount();
+    h.library.dispose();
+  }
+});
+
+it("Retry rereads members whose names a background read found missing", async () => {
+  const h = fixture({ count: 3 });
+  const nameless = h.people[2]?.pubkey ?? "";
+  (h.session.profiles.snapshot() as Map<string, unknown>).delete(nameless);
+  const ensure = vi.fn(async () => {});
+  Object.assign(h.session.profiles, { ensure });
+  const menu = inline(h.session);
+  try {
+    await waitFor(() => expect(menu.result()?.retry).toBeDefined());
+    expect(ensure).toHaveBeenLastCalledWith(
+      expect.arrayContaining([nameless]),
+      "background",
+    );
+    act(() => menu.result()?.retry?.());
+    // Background enrichment skips known absences; an explicit Retry does not.
+    await waitFor(() =>
+      expect(ensure).toHaveBeenLastCalledWith(
+        expect.arrayContaining([nameless]),
+        "foreground",
+      ),
+    );
+  } finally {
+    menu.view.unmount();
+    h.library.dispose();
+  }
 });
 
 it("an open chooser relabels choices when only names change", async () => {
