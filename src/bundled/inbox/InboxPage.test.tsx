@@ -16,8 +16,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { PageTabs } from "../channels/PageTabs";
 import { InboxPage, type ArchiveShortcut } from "./InboxPage";
+import { InboxPreview } from "./InboxPreview";
 import { huddleDescription } from "../../features/huddle/lifecycle";
-import { archiveKey, readArchives } from "./archive";
+import { archiveKey, readArchives, updateArchive } from "./archive";
 import { viewRevision, writeView } from "../../shared/view-state";
 import { composerDOMFixture } from "../../features/messages/composer-testing";
 import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
@@ -26,7 +27,7 @@ import { createRelaySession } from "../../features/relay/session";
 import type { RelaySnapshot, RelayData } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
 import type { PageNavigation } from "../../features/navigation/service";
-import { inboxRouteTarget, type InboxRoute } from "./route";
+import { inboxRouteTarget, inboxTarget, type InboxRoute } from "./route";
 import type { ReadFilter, RelayEvent } from "../../features/relay/events";
 import { matchesEvent } from "../../features/relay/projection";
 import {
@@ -1570,6 +1571,128 @@ it("reconciles saved preferences from another window", async () => {
     "aria-pressed",
     "true",
   );
+});
+
+/** The sidebar hover card over the same session as the page. */
+const previewAt = (h: ReturnType<typeof fixture>, close = vi.fn()) => (
+  <InboxPreview
+    relay={h.relay}
+    navigator={{ open: h.open } as unknown as Navigation}
+    close={close}
+  />
+);
+const previewRows = () =>
+  within(
+    screen.getByRole("list", { name: "Recent Inbox conversations" }),
+  ).queryAllByRole("listitem");
+async function markRead(h: ReturnType<typeof fixture>, channelId: string) {
+  const items = h.session.unread
+    .inbox()
+    .items.filter((entry) => entry.channelId === channelId);
+  if (!items.length) throw new Error(`Missing ${channelId} conversation`);
+  await act(async () => {
+    for (const item of items)
+      if (item.target.kind === "channel")
+        await h.session.unread.prepareChannelRead(channelId)();
+      else
+        for (const step of item.readThrough)
+          await h.session.unread.markThrough(step.target, step.messageId);
+  });
+}
+
+it("previews recent conversations without archived ones and opens a row directly", async () => {
+  const h = fixture({ withDm: true });
+  const close = vi.fn();
+  render(previewAt(h, close));
+  await waitFor(() => expect(previewRows()).toHaveLength(3));
+  expect(
+    screen.getByText("1 mention · 1 thread · 1 DM unread"),
+  ).toBeInTheDocument();
+  // The card reads archives but never reopens them; that write is the page's.
+  const dm = h.session.unread
+    .inbox()
+    .items.find((item) => item.channelId === "dm-room");
+  if (!dm) throw new Error("Missing DM conversation");
+  act(() =>
+    updateArchive(h.session.scope, dm, true, Math.floor(Date.now() / 1000)),
+  );
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  expect(screen.queryByText("A direct reply")).not.toBeInTheDocument();
+  expect(screen.getByText("1 mention · 1 thread unread")).toBeInTheDocument();
+
+  fireEvent.click(
+    within(previewRows()[0] as HTMLElement).getByRole("button", {
+      name: /^Open Alice in #Design/,
+    }),
+  );
+  expect(close).toHaveBeenCalledOnce();
+  expect(h.open).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: "conversation",
+      scope: h.scope,
+      channelId: "room",
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open Inbox" }));
+  expect(close).toHaveBeenCalledTimes(2);
+  expect(h.open).toHaveBeenLastCalledWith(inboxTarget);
+});
+
+it("keeps Unread only to the card and offers recent activity once caught up", async () => {
+  const h = fixture({ withDm: true });
+  const view = render(previewAt(h));
+  await waitFor(() => expect(previewRows()).toHaveLength(3));
+  await markRead(h, "dm-room");
+  await waitFor(() =>
+    expect(screen.getByText("1 mention · 1 thread unread")).toBeInTheDocument(),
+  );
+  const unreadOnly = () => screen.getByRole("switch", { name: "Unread only" });
+  fireEvent.click(unreadOnly());
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  expect(screen.queryByText("A direct reply")).not.toBeInTheDocument();
+
+  // The choice survives reopening the card, and the page keeps its own filters.
+  view.unmount();
+  render(previewAt(h));
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  expect(unreadOnly()).toBeChecked();
+  expect(savedFilters(h)).toBeNull();
+
+  await markRead(h, "room");
+  expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+  expect(screen.getByText("Nothing unread")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show recent activity" }));
+  await waitFor(() => expect(previewRows()).toHaveLength(3));
+  expect(unreadOnly()).not.toBeChecked();
+});
+
+it("shows the card's connection and read failures with their recovery", async () => {
+  const offline = fixture();
+  const view = render(previewAt(offline));
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  act(() => offline.disconnect());
+  expect(
+    await screen.findByText("Choose a community to see your inbox."),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: "Unread only" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Open Inbox" })).toBeEnabled();
+  view.unmount();
+
+  const h = fixture({ failRoster: true });
+  render(previewAt(h));
+  expect(await screen.findByRole("alert")).toHaveTextContent("roster offline");
+  const release = h.recoverRoster();
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    await waitFor(() => expect(h.rosterStarted()).toBe(true));
+  } finally {
+    await act(async () => release());
+  }
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 function fixture(
