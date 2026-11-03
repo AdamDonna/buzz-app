@@ -139,6 +139,20 @@ async fn its_buzz_credential_is_revoked_while_a_detached_descendant_holds_its_ou
     let (credential, token) = issued(&fixture).await;
     let processes = HostProcesses::default();
     let (channel, _events) = channel();
+    let dir = tempfile::tempdir().unwrap();
+    let ready = dir.path().join("detached");
+    // Ends the descendant however the test ends, releasing its pipes.
+    struct Detached(std::path::PathBuf);
+    impl Drop for Detached {
+        fn drop(&mut self) {
+            if let Ok(pid) = std::fs::read_to_string(&self.0) {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", pid.trim()])
+                    .status();
+            }
+        }
+    }
+    let detached = Detached(ready.clone());
     let handle = processes
         .start(
             0,
@@ -146,10 +160,13 @@ async fn its_buzz_credential_is_revoked_while_a_detached_descendant_holds_its_ou
             "sh",
             command(
                 "sh",
-                // The pause lets the descendant leave the group before `sh` exits.
+                // `sh` waits for the descendant to report it left the group,
+                // then for a line; the descendant holds the pipes until killed.
                 &[
                     "-c",
-                    "perl -e 'setpgrp(0, 0); sleep 3' & sleep 0.5; read line",
+                    r#"perl -e 'setpgrp(0, 0); open(F, ">", "$ARGV[0].tmp") or die; print F $$; close F; rename("$ARGV[0].tmp", $ARGV[0]); sleep' "$0" &
+                    while [ ! -e "$0" ]; do sleep 0.01; done; read line"#,
+                    ready.to_str().unwrap(),
                 ],
             ),
             Some(credential),
@@ -189,6 +206,15 @@ async fn its_buzz_credential_is_revoked_while_a_detached_descendant_holds_its_ou
         .bind(&held, "p", fixture.agent.pubkey.clone(), RELAY.into())
         .await
         .is_err());
+    // Releasing the pipes lets the entry go.
+    drop(detached);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while processes.registry().entries.contains_key(&handle) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the entry outlived its output");
 }
 
 #[cfg(unix)]

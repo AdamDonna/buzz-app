@@ -148,6 +148,10 @@ impl Admission {
     pub(crate) fn header(&self) -> Option<&str> {
         self.cached.as_ref().map(|cached| cached.header.as_str())
     }
+    pub(crate) fn assertion(&self) -> Option<&str> {
+        self.header()
+            .and_then(|header| header.strip_prefix("Bearer "))
+    }
     pub(crate) fn dispatch(&self) -> Result<(), String> {
         self.commit(false, || Ok(()))?;
         if self

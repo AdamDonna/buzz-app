@@ -16,7 +16,6 @@ pub(crate) struct Fixture {
 }
 
 pub(crate) fn fixture() -> Fixture {
-    let dir = tempfile::tempdir().unwrap();
     let key = Secret::generate().unwrap();
     let agent = AppAgent {
         pubkey: key.pubkey().into(),
@@ -36,11 +35,22 @@ pub(crate) fn fixture() -> Fixture {
         protection_revision: 0,
     };
     let identity = FederatedIdentity::unconfigured();
+    let tokens = AgentTokens::in_memory(identity.clone());
+    fixture_with(agent, key, identity, tokens)
+}
+
+fn fixture_with(
+    agent: AppAgent,
+    key: Secret,
+    identity: FederatedIdentity,
+    tokens: AgentTokens,
+) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
     let host = AppAgentHost::holding(
         dir.path().join("identities.json"),
         &agent,
         Secret::parse(&key.hex(), key.pubkey()).unwrap(),
-        AgentTokens::in_memory(identity.clone()),
+        tokens,
     );
     Fixture {
         service: CredentialService::new(host.clone(), "xyz.block.buzz.test".into()),
@@ -666,6 +676,35 @@ async fn evidence_and_auth_tag_come_from_the_agent() {
     }
 }
 
+#[tokio::test]
+async fn evidence_is_the_bare_assertion_the_cli_prefixes_once() {
+    use crate::federated_identity::agent::tests as agent;
+    let probe = agent::fixture("http://unused".into());
+    let reply = agent::issued(&probe.agent, json!({}));
+    let (base, served) = agent::issuer(vec![
+        (200, agent::enrolled(&probe.agent.owner)),
+        (200, reply),
+    ])
+    .await;
+    let signed_in = agent::fixture(base);
+    let (agent_row, key) = (probe.agent, probe.key);
+    let fixture = fixture_with(
+        agent_row,
+        key,
+        FederatedIdentity::unconfigured(),
+        signed_in.tokens.clone(),
+    );
+    let (_issued, token) = bound(&fixture).await;
+    let reply = ask(&fixture, &token, "federated_identity", &[RELAY]).await;
+    let jwt = reply.1["result"].as_str().unwrap().to_owned();
+    assert_eq!(jwt.split('.').count(), 3, "a compact JWT: {jwt}");
+    assert!(!jwt.contains(' '), "no scheme: {jwt}");
+    // What the CLI sends: exactly one scheme in front of the assertion.
+    let header = format!("Bearer {jwt}");
+    assert_eq!(header.matches("Bearer ").count(), 1);
+    assert_eq!(agent::settled(served).await.len(), 2);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_token_is_rate_limited_and_recovers() {
     let fixture = fixture();
@@ -764,4 +803,35 @@ async fn the_listener_answers_only_its_callers() {
     assert_eq!(path.status(), 404);
     let get = client.get(url).send().await.unwrap();
     assert_eq!(get.status(), 405);
+}
+
+/// Run only inside the re-launched copy below, never in the shared test runner.
+#[test]
+fn inherited_child() {
+    if std::env::var_os("BUZZ_TEST_INHERITED_CHILD").is_none() {
+        return;
+    }
+    drop_inherited();
+    let child = std::process::Command::new("sh")
+        .args(["-c", "printf %s \"${BUZZ_CREDENTIAL_PROVIDER-unset}\""])
+        .output()
+        .unwrap();
+    print!("child saw [{}]", String::from_utf8_lossy(&child.stdout));
+}
+
+#[test]
+fn a_launch_token_reaches_no_child_the_app_spawns() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "credential_service::tests::inherited_child",
+            "--nocapture",
+        ])
+        .env("BUZZ_TEST_INHERITED_CHILD", "1")
+        .env(ENV, "sentinel-token")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(stdout.contains("child saw [unset]"), "{stdout}");
 }

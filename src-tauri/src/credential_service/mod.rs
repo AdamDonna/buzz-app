@@ -41,6 +41,12 @@ use zeroize::Zeroizing;
 
 /// Set in a harness's environment: `{"url": …, "token": …}`.
 pub(crate) const ENV: &str = "BUZZ_CREDENTIAL_PROVIDER";
+
+/// A token this app was itself launched with belongs to another app's agent;
+/// dropped before any thread starts, so no process it spawns inherits it.
+pub(crate) fn drop_inherited() {
+    std::env::remove_var(ENV);
+}
 const VERSION_HEADER: HeaderName = HeaderName::from_static("buzz-credential-provider");
 const VERSIONS: [u32; 1] = [1];
 const ENDPOINT: &str = "/v1";
@@ -390,7 +396,8 @@ impl CredentialService {
                     .await
                     .map_err(Failure::unavailable)?;
                 admission.dispatch().map_err(Failure::unavailable)?;
-                Ok(admission.header().unwrap_or_default().to_owned())
+                // The contract's result is the assertion itself; the caller adds `Bearer `.
+                Ok(admission.assertion().unwrap_or_default().to_owned())
             }
             ("auth_tag", []) => {
                 let (agent, _) = key().await.map_err(Failure::unavailable)?;

@@ -923,8 +923,9 @@ native code.
   answers `rate_limited` with a retry delay. It is revoked as soon as its
   process exits, even while a descendant still holds its output or
   environment, and for good once its agent is deleted, the owner signs out or
-  changes account, or the identity closes: each request rechecks the agent's
-  incarnation and the owner's retirement count recorded at binding, and a
+  changes account, or the identity closes: each request rechecks the owner's
+  retirement count recorded when the token was issued and the agent's
+  incarnation recorded at binding, and a
   closed identity issues no token.
 - **Callers.** Requests must name the bound address in `Host` and carry no
   `Origin`, so a web page cannot use it. Only harnesses with one process per
