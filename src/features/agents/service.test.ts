@@ -7769,6 +7769,127 @@ it("finds an event the relay stores late with an older time, after a read passed
   }
 });
 
+it("finds an event stored late below where an interrupted read went on, and gives none twice", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // What the first copy was given, though its turns never end.
+    const first: string[] = [];
+    const { service, history, recover, storage, connect } = await setup({
+      identities: [echo],
+      runOnce: async ({ delivery }) => {
+        const { trigger } = delivery;
+        if (trigger.type === "catch-up")
+          first.push(
+            ...trigger.events.map(
+              ({ event }) => event.content.split(" ")[0] ?? "",
+            ),
+          );
+        await blocked;
+        return { ok: true };
+      },
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/notes": { ...chat["watch/chat"], kinds: [30023] },
+      },
+    });
+    await settle();
+    // Large enough that a turn takes a few, so the lane fills long before
+    // the window is given and the read waits part way.
+    const note = (content: string, created_at: number) =>
+      eventDto(
+        signed(author, {
+          kind: 30023,
+          content: `${content} ${"x".repeat(20_000)}`,
+          created_at,
+          tags: [["h", channel]],
+        }),
+      );
+    const notes = Array.from({ length: 40 }, (_, i) =>
+      note(`n${i}`, now + 2 + i * 10),
+    );
+    history.push(...notes);
+    vi.setSystemTime((now + 700) * 1000);
+    recover();
+    const saved = () =>
+      Object.values(readCheckpoints(storage)).find(
+        (checkpoint) => checkpoint.after,
+      );
+    await vi.waitFor(() => expect(saved()).toBeDefined());
+    await settle();
+    const after = saved()?.after?.created_at ?? 0;
+    expect(after).toBeLessThan(now + 2 + 39 * 10);
+    // Then one is stored late, older than the last given but in the overlap.
+    history.push(note("late", now + 105));
+    expect(now + 105).toBeLessThan(after);
+    expect(first.length).toBeGreaterThan(0);
+    connect(false);
+    release();
+    const second = await setup({
+      storage,
+      identities: [echo],
+      history: [...history],
+    });
+    second.recover();
+    await settle();
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await settle();
+    const again = heard(second.run).map(
+      (content) => content.split(" ")[0] ?? "",
+    );
+    expect(again.filter((content) => content === "late")).toEqual(["late"]);
+    // None given before the restart is given again; the rest come once.
+    expect(again.filter((content) => content !== "late").sort()).toEqual(
+      notes
+        .filter(({ created_at }) => created_at > after)
+        .map(({ created_at }) => `n${(created_at - now - 2) / 10}`)
+        .sort(),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("gives no live message again after a restart when a polled watch hears more than it keeps", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const storage = memoryStorage();
+    const first = await setup({ storage, identities: [echo] });
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/chat": { ...chat["watch/chat"], channels: "all" },
+        "watch/channel": null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    // More than a stream keeps as heard, inside one overlap, while polls run.
+    const sent: ReturnType<typeof posted>[] = [];
+    for (let index = 0; index < 300; index++) {
+      const live = posted(`live ${index}`, nowSeconds());
+      first.history.push(live);
+      sent.push(live);
+      first.emit({ events: [live], channelId: channel });
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+    expect(heard(first.run).length).toBeGreaterThan(0);
+    first.connect(false);
+    const second = await setup({ storage, identities: [echo], history: sent });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("reads what a route missed while it was down, though it comes back between reads", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {

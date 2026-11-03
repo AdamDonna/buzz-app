@@ -7,6 +7,7 @@ import {
   catchUpKey,
   finished,
   HEARD_LIMIT,
+  heardOf,
   readCheckpoints,
   readWindow,
   splitLegacyCheckpoints,
@@ -312,4 +313,31 @@ it("shrinks the overlap to keep the newest heard events", () => {
       skipped: false,
     }),
   ).toEqual({ through: upper });
+});
+
+it("moves past the heard it drops, but not past what was read or a window's cursor", () => {
+  const heard = Array.from({ length: HEARD_LIMIT + 2 }, (_, i) => ({
+    id: id(i + 1),
+    created_at: 1000 + i,
+  }));
+  // Read through 1100: it moves past the two oldest, which were read.
+  expect(heardOf({ through: 0, read: 1100 }, heard)).toMatchObject({
+    through: 1001,
+    read: 1100,
+    heard: heard.slice(2),
+  });
+  // Read only through 1000: past that, one may not have been read yet.
+  const unread = heardOf({ through: 0, read: 1000 }, heard);
+  expect(unread.through).toBe(1000);
+  expect(unread.read).toBeUndefined();
+  expect(unread.heard).toHaveLength(HEARD_LIMIT);
+  // A window being given goes no further than before its cursor's second.
+  const after = { created_at: 1001, id: id(2) };
+  expect(heardOf({ through: 0, upper: 2000, after }, heard)).toMatchObject({
+    through: 1000,
+    upper: 2000,
+    after,
+  });
+  // Unread, with no window: it keeps the newest and stays where it is.
+  expect(heardOf({ through: 0 }, heard).through).toBe(0);
 });

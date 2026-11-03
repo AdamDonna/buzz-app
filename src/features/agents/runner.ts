@@ -76,10 +76,10 @@ import { setAttention, type AgentRecord, type TimerProgress } from "./store";
 import type { Start } from "./agent-start";
 import { type Pulses, pulseTyping } from "./typing";
 import {
+  admitted,
   CATCH_UP_PAGES,
-  delivered,
   finished,
-  HEARD_LIMIT,
+  heardOf,
   inStream,
   oldestFirst,
   POLL_OVERLAP,
@@ -1117,32 +1117,23 @@ export class AgentRunners {
   private heardIn(key: string, event: RelayEvent) {
     const checkpoint = this.checkpoints[key];
     if (!checkpoint || !undelivered(checkpoint, event)) return false;
-    const heard = [
-      ...(checkpoint.heard ?? []),
-      { created_at: event.created_at, id: event.id },
-    ];
     this.checkpoints = {
       ...this.checkpoints,
-      [key]: { ...checkpoint, heard: heard.slice(-HEARD_LIMIT) },
+      [key]: heardOf(checkpoint, [...(checkpoint.heard ?? []), event]),
     };
     return true;
   }
   /** Sets a stream's checkpoint, keeping what it heard live past it as well
    * as what the checkpoint itself lists as heard. */
   private setCheckpoint(key: string, checkpoint: Checkpoint) {
-    const kept = (this.checkpoints[key]?.heard ?? []).filter((event) =>
-      undelivered({ ...checkpoint, heard: [] }, event),
-    );
-    const ids = new Set(checkpoint.heard?.map(({ id }) => id));
-    const heard = [
-      ...kept.filter(({ id }) => !ids.has(id)),
-      ...(checkpoint.heard ?? []),
-    ]
-      .sort(oldestFirst)
-      .slice(-HEARD_LIMIT);
+    // Kept below a window's cursor too: one read with an overlap lists there
+    // what it gave, which a restart before it is done must not give again.
     this.checkpoints = {
       ...this.checkpoints,
-      [key]: heard.length ? { ...checkpoint, heard } : checkpoint,
+      [key]: heardOf(checkpoint, [
+        ...(this.checkpoints[key]?.heard ?? []),
+        ...(checkpoint.heard ?? []),
+      ]),
     };
   }
   /** Keeps each agent's catch-up going: on start, and after each connect, its
@@ -1470,8 +1461,15 @@ export class AgentRunners {
               if (!taken) return;
               skipped = false;
               index += taken;
-              const last = events[index - 1] as RelayEvent;
-              progress(stream.key, delivered(window.upper, last));
+              progress(
+                stream.key,
+                admitted(
+                  window,
+                  events.slice(0, index),
+                  this.checkpoints[stream.key]?.heard,
+                  overlap(stream),
+                ),
+              );
             }
             progress(
               stream.key,
