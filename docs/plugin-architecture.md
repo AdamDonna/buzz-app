@@ -539,6 +539,33 @@ presentation retires. This is not a global navigation API or an access grant.
 A tab's `open` replaces that tab; a channel drawer or side-column panel's `open`
 opens the target as a new tab.
 
+### Huddle status
+
+While native Huddles is available and active, it provides an optional
+read-only `huddleStatus` service with this document's call phase, so a plugin
+such as a music player can pause for a call. Read it with
+`ctx.inject(["huddleStatus"], (scope) => …)` instead of adding it to required
+`inject`. The callback runs only while Huddles provides the service, and its
+scope is disposed when Huddles unloads. External plugins declare the
+structural type themselves.
+
+```ts
+type HuddleStatus = {
+  version: 1;
+  phase():
+    | "idle" | "incoming" | "connecting" | "connected" | "leaving" | "error";
+  subscribe(listener: () => void): () => void; // returns unsubscribe
+};
+```
+
+The phase belongs to this window's call, not to the viewer's identity, so a
+call on another device never appears here. `connecting` begins before the
+microphone prompt. `leaving` covers call teardown; a teardown failure moves to
+`error`, so the end of `leaving` does not by itself prove the native call closed.
+`subscribe` also fires for changes other than the phase, such as speaking
+levels, so compare `phase()` with the last value seen. The service exposes no
+destination, roster, audio or controls.
+
 ### Opening targets from channel plugins
 
 Every plugin surface in a channel or thread can open a target, such as a panel

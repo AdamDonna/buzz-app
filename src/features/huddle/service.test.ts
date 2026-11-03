@@ -1,3 +1,4 @@
+import { Context } from "@deepseek-ai/cordis";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelSummary } from "../relay/contracts";
 import type { RelayData, RelaySnapshot } from "../relay/service";
@@ -5,7 +6,7 @@ import { keypair, signed } from "../relay/testing";
 import { createRelaySession } from "../relay/session";
 import type { HuddleAudio, OpenHuddleAudio } from "./audio";
 import type { HuddleBridge, HuddleDestination, HuddleUpdate } from "./bridge";
-import { createHuddles } from "./service";
+import { createHuddles, provideHuddleStatus } from "./service";
 
 const destination: HuddleDestination = {
   channelId: "00000000-0000-4000-8000-000000000001",
@@ -453,3 +454,48 @@ it.each([
     await h.dispose();
   },
 );
+
+it("publishes this document's call phase to optional consumers until Huddles unloads", async () => {
+  const h = harness();
+  const leaving = deferred<void>();
+  vi.mocked(h.bridge.close).mockReturnValueOnce(leaving.promise);
+  const root = new Context();
+  const provider = root.plugin({
+    apply: (ctx: Context) => provideHuddleStatus(ctx, h.service),
+  });
+  await provider;
+  const seen: string[] = [];
+  let withdrawn = false;
+  const consumer = root.plugin({
+    apply(ctx: Context) {
+      ctx.inject(["huddleStatus"], (scope) => {
+        const status = scope.huddleStatus;
+        if (!status) throw new Error("inject ran without the service");
+        expect(status.version).toBe(1);
+        const record = () => {
+          const phase = status.phase();
+          if (seen.at(-1) !== phase) seen.push(phase);
+        };
+        record();
+        scope.effect(() => status.subscribe(record));
+        scope.effect(() => () => {
+          withdrawn = true;
+        });
+      });
+    },
+  });
+  await consumer;
+  await h.service.join(destination);
+  h.receive({ type: "connected", room: "room", participants: [] });
+  const left = h.service.leave();
+  expect(h.service.snapshot().phase).toBe("leaving");
+  leaving.resolve();
+  await left;
+  expect(seen).toEqual(["idle", "connecting", "connected", "leaving", "idle"]);
+  expect(Object.isFrozen(root.reflect.get("huddleStatus"))).toBe(true);
+  await provider.dispose();
+  expect(root.reflect.get("huddleStatus")).toBeUndefined();
+  await vi.waitFor(() => expect(withdrawn).toBe(true));
+  await consumer.dispose();
+  await h.dispose();
+});
