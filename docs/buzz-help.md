@@ -127,7 +127,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   Mute suppresses notifications for messages that do not mention you; mentions can still notify
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
-  dots; muting does not mark messages or threads as read.
+  dots, and muted activity does not light the macOS Dock unread dot. Muting does
+  not mark messages or threads as read.
 - **Manage members** shows **General** access first in the member list. **Public**
   lets people in the community read and new people participate; **View only**
   lets them read; **Private** limits access to people added to the channel.
