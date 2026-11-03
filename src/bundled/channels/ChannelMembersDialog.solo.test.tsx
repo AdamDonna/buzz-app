@@ -756,7 +756,6 @@ it.each(["member", "guest"] as const)(
     let confirmation = await screen.findByRole("alertdialog");
     expect(confirmation).toHaveAccessibleName("Change general access?");
     expect(confirmation).toHaveTextContent("full history and Canvas");
-    expect(confirmation).toHaveTextContent("No channel members will be added");
     expect(t.published).toHaveLength(0);
     await user.click(
       within(confirmation).getByRole("button", { name: "Cancel" }),

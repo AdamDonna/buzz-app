@@ -181,7 +181,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   a Private chat **View only** and posts a link there, after confirming community
   access to the full history and Canvas. Public and View only chats keep their
   current access and just post the link.
-  It does not add channel members or their agents to the chat or their sidebar.
+  Opening a shared chat link creates no sidebar entry.
   Direct invitations still add members. Pasting a link to a Private chat you own into a channel, thread or DM
   uses the same confirmation, then sends your original message. Other chat links
   send without changing access; recipients still need permission to read.

@@ -8,8 +8,7 @@ filing is private client-side organization, independent of access; see
 
 - A Solo chat is a channel with the `buzz.solo` label.
 - Channel visibility and signed membership control access. Direct invitations
-  add members; sharing from Chat access to a channel opens community reading
-  without adding its members.
+  add members; sharing from Chat access to a channel opens community reading.
 - A shared chat link is an ordinary message containing
   `[Chat: name](buzz://channel/<id>)`. It renders as a chat card when the target
   is a Solo chat; the `Chat:` label lets a viewer without access see it as one.
@@ -20,8 +19,8 @@ The access dialog has two ways to share:
 1. **Add a person**: one membership grant, no message.
 2. **Share with a channel**: make a Private chat View only, then post its link.
    Public and View only chats keep their access and only post the link.
-   Channel members and their agents can read without joining; this does not add
-   them to the chat or put it in their sidebar. This is community-wide reading,
+   Channel members and their agents can read without joining. Opening the link
+   creates no sidebar entry. This is community-wide reading,
    not access limited to the chosen channel.
 
 ## Access dialog
@@ -64,9 +63,10 @@ While searching, eligible stream/forum channels appear in a **Channels** group;
 expandable to inspect participants. **Share** checks current access. If it is
 Private, the owner confirms that the community can read the full history and
 Canvas before one signed edit makes it View only. Public (existing) and View only
-chats keep their current access; no confirmation or access write is needed. The flow then posts one link through the Outbox and closes; destination
-members are not added and no one is mentioned. The toast **Shared in #channel**
-offers **View**, which opens the posted link. Cancel changes nothing. With no
+chats keep their current access; no confirmation or access write is needed. The
+flow then posts one link through the Outbox and closes; no one is mentioned.
+The toast **Shared in #channel** offers **View**, which opens the posted link.
+Cancel changes nothing. With no
 channel selected, **Done** closes without writes.
 
 An access failure leaves the link unsent. An uncertain access save offers
@@ -143,8 +143,7 @@ Pasting a recognized Solo chat link into a composer stages it as a chat card.
 Sending the card into a channel, thread or DM uses the same policy as Share.
 For a Private chat you own, **Share as View only** confirms community access to
 its full history and Canvas, opens reading, then sends your original message.
-It adds no destination members or agents. **Cancel** leaves access and the draft
-unchanged. There is no member-granting Share and send or Send link only choice.
+**Cancel** leaves access and the draft unchanged.
 
 Public and View only chats send without a prompt and retain their access.
 Links to chats you do not own also send without changing access; recipients still

@@ -540,7 +540,6 @@ test.describe("View only channel share", () => {
       await expect(input).toBeVisible();
       await send.click();
       await expect(confirmation).toContainText("full history and Canvas");
-      await expect(confirmation).toContainText("No one will be added");
       await expect(
         confirmation.getByRole("button", { name: "Cancel", exact: true }),
       ).toBeFocused();

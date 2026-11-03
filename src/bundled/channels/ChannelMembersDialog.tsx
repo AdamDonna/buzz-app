@@ -1896,7 +1896,7 @@ export function ChannelMembersDialog({
             variant="prominent"
             title={
               share.destination
-                ? "Sharing opens Private chats as View only and posts a link without adding members."
+                ? "Sharing opens Private chats as View only and posts a link."
                 : undefined
             }
             loading={share.busy}
@@ -1993,8 +1993,7 @@ export function ChannelMembersDialog({
               >
                 <div className={styles.stagedName}>
                   <p className="text-body-sm text-subtle">
-                    Share a link. Private chats become View only. People and
-                    agents in this channel won’t be added to the chat.
+                    Share a link. Private chats become View only.
                   </p>
                   <Accordion
                     key={chosen.id}
@@ -2385,7 +2384,7 @@ export function ChannelMembersDialog({
       {share.confirmation && chosen && (
         <AlertDialog
           title="Change general access?"
-          description={`${SOLO_ACCESS_DISCLOSURE} The chat will be View only, and its link will be posted in ${channelText(chosen)}. No channel members will be added to the chat.`}
+          description={`${SOLO_ACCESS_DISCLOSURE} The chat will be View only, and its link will be posted in ${channelText(chosen)}.`}
           pending={share.busy}
           onClose={share.cancelConfirmation}
           initialFocus={cancelShare}

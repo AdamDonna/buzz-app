@@ -98,9 +98,8 @@ behavior on the label, so a rename touches copy only.
   Private chat View only and posts a link, after confirming full-history and
   Canvas disclosure. Public and View only chats keep their access and only post
   the link. Pasting an owned Private chat link uses the same confirmation before
-  sending the original message. The channel's people and agents are not added
-  to the chat, and opening the link creates no sidebar entry. Current access is grouped
-  into **People** and **Agents** like a channel, with Owner and Admin tags. Future
+  sending the original message. Opening the link creates no sidebar entry.
+  Current access is grouped into **People** and **Agents** like a channel, with Owner and Admin tags. Future
   joins/departures are not synchronized. Copy link grants no access; Done with no
   channel closes without writes. Shared uses verified membership and cached human
   evidence, not privacy inference or a required role refresh. See
