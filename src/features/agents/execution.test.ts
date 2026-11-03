@@ -192,6 +192,30 @@ it.each(["caller abort", "joined caller abort", "adapter unload"] as const)(
   },
 );
 
+it("preserves an adapter's reset error and permits a new session", async () => {
+  const f = await setup();
+  const error = Object.assign(
+    new Error("The saved target expired. Start a new session."),
+    {
+      code: "EXECUTION_SESSION_RESET_REQUIRED",
+    },
+  );
+  f.connect.mockRejectedValueOnce(error);
+  await f.registry.bind(f.plugin, agent, harness, input);
+  await expect(
+    f.registry.open(f.native, agent, harness, {
+      ...session,
+      intent: "existing",
+    }),
+  ).rejects.toBe(error);
+  expect(f.target.spawn).not.toHaveBeenCalled();
+  const next = await f.registry.open(f.native, agent, harness, {
+    key: "replacement-session",
+    intent: "new",
+  });
+  expect(next?.workspace).toBe("/work/task");
+});
+
 it("retires owned processes on adapter unload and never opens local execution for a saved binding", async () => {
   const f = await setup();
   await f.registry.bind(f.plugin, agent, harness, input);
