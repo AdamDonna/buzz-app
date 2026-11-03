@@ -370,3 +370,32 @@ it.each(["stop", "failure"])(
     }
   },
 );
+
+it("closes once when clearing listening re-enters subscribers", async () => {
+  const f = setup();
+  f.agents([agent("a")]);
+  f.listening.mockImplementation(() => f.call({}));
+  f.start();
+  await vi.waitFor(() =>
+    expect(f.listening).toHaveBeenLastCalledWith("human", "a", true),
+  );
+  f.agents([]);
+  await vi.waitFor(() => expect(f.bridge.close).toHaveBeenCalledOnce());
+});
+
+it("never marks an aborted pending adapter as listening", async () => {
+  const f = setup();
+  f.agents([agent("a")]);
+  const connection = { input: vi.fn(), close: vi.fn() };
+  const opened = deferred<typeof connection>();
+  f.voice.mockImplementationOnce(() => opened.promise);
+  const dispose = f.start();
+  await vi.waitFor(() => expect(f.voice).toHaveBeenCalledOnce());
+  f.agents([]);
+  expect(f.listening).toHaveBeenLastCalledWith("human", "a", false);
+  opened.resolve(connection);
+  await dispose();
+  expect(f.listening).toHaveBeenLastCalledWith("human", "a", false);
+  expect(f.listening).not.toHaveBeenCalledWith("human", "a", true);
+  expect(connection.close).toHaveBeenCalledOnce();
+});
