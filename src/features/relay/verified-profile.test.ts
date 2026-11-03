@@ -213,7 +213,7 @@ it("batches and deduplicates subjects, retains retractions, and fences retired c
   }
 });
 
-it("notifies once per replay, then once per live change", async () => {
+it("notifies once per replay, then once per batch of live changes", async () => {
   const h = harness();
   try {
     h.directory.ensure([alice.pubkey, bob.pubkey]);
@@ -228,8 +228,14 @@ it("notifies once per replay, then once per live change", async () => {
     sink.eose();
     expect(h.changed).toHaveBeenCalledTimes(1);
     sink.event(projection(10)); // Unchanged head.
+    await Promise.resolve();
     expect(h.changed).toHaveBeenCalledTimes(1);
+    // Live changes delivered together notify once, after the batch.
     sink.event(projection(11));
+    sink.event(projection(11, bob.pubkey));
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    expect(h.directory.snapshot().get(bob.pubkey)?.verifiedAt).toBe(11);
+    await Promise.resolve();
     expect(h.changed).toHaveBeenCalledTimes(2);
   } finally {
     h.directory.dispose();
@@ -325,6 +331,7 @@ it("overlays verified names, qualifies collisions, preserves kind 0 details, and
       bob.pubkey.slice(0, 10),
     );
     sink.event(retract(20));
+    await Promise.resolve();
     expect(directory.queries.snapshot().get(alice.pubkey)?.name).toBe(
       "Self name",
     );
@@ -392,6 +399,7 @@ it("qualifies verified namesakes and shared usernames, but not a unique verified
     expect(name(dave)).toBe(`Dave (${dave.pubkey.slice(0, 10)})`);
     sink.event(retract(20, bob.pubkey));
     sink.event(retract(20, dave.pubkey));
+    await Promise.resolve();
     expect(name(alice)).toBe("Sam");
     expect(name(carol)).toBe("Carol");
   } finally {

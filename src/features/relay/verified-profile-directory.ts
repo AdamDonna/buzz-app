@@ -36,9 +36,20 @@ export function createVerifiedProfileDirectory(
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let queued = false;
   let evicted = false;
+  let liveChanged = false;
   let closed = false;
   let online = true;
 
+  /** Each notification refolds the whole profile directory: live changes
+   * delivered together (one verified batch of frames) notify once. */
+  function changedLive() {
+    if (liveChanged) return;
+    liveChanged = true;
+    queueMicrotask(() => {
+      liveChanged = false;
+      if (!closed) changed();
+    });
+  }
   function stopBatches() {
     for (const batch of batches) batch.stop();
     batches.clear();
@@ -137,7 +148,7 @@ export function createVerifiedProfileDirectory(
               count++;
               seen.add(subject);
               accept(event);
-            } else if (accept(event)) changed();
+            } else if (accept(event)) changedLive();
           },
           eose() {
             if (!active) return;
