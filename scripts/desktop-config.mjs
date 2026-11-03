@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
@@ -58,4 +59,17 @@ export function desktopOverlay(root) {
   const icon = worktreeIcon(root);
   if (icon) config.bundle = { icon: [icon] };
   return config;
+}
+
+// Each worktree owns one native MCP test instance (docs/native-mcp.md), so
+// relaunches keep its app data and its client finds it rather than another
+// worktree's. The bridge scans 100 ports up from its base, so bases are 100
+// apart, in [20000, 59900]. native_mcp.rs checks the identifier shape and
+// that the base is within 1024-65436.
+export function nativeMcpInstance(root) {
+  const digest = createHash("sha256").update(root, "utf8").digest("hex");
+  return {
+    identifier: `dev.local.buzz.foundation.nexus-test-${digest.slice(0, 12)}`,
+    port: 20000 + Number(BigInt(`0x${digest}`) % 400n) * 100,
+  };
 }
