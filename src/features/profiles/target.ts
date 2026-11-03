@@ -35,23 +35,19 @@ export function profileKey(target: string): string | undefined {
   }
 }
 
-/** App-local Activity destination, never a public identity or authority claim.
- * `transcript` is for an opener that knows which one conversation the work is
- * in: Activity then shows that conversation's transcript first. */
-export function profileActivityViewTarget(
-  pubkey: string,
-  options?: { transcript: boolean },
-): string | undefined {
+/** App-local Activity destination, never a public identity or authority
+ * claim. An agent has one, so its Activity tab is reused however it opens; an
+ * opener that knows the conversation asks for its transcript with
+ * `openProfileTranscript`. */
+export function profileActivityViewTarget(pubkey: string): string | undefined {
   return profileTarget(pubkey)
-    ? `buzz:profile?agent=${pubkey.toLowerCase()}&tab=activity${options?.transcript ? "&open=transcript" : ""}`
+    ? `buzz:profile?agent=${pubkey.toLowerCase()}&tab=activity`
     : undefined;
 }
 export function profileActivityViewKey(target: string): string | undefined {
   try {
     const agent = new URL(target).searchParams.get("agent");
-    return agent &&
-      (target === profileActivityViewTarget(agent) ||
-        target === profileActivityViewTarget(agent, { transcript: true }))
+    return agent && target === profileActivityViewTarget(agent)
       ? agent
       : undefined;
   } catch {
@@ -71,23 +67,18 @@ export function subscribeProfileTranscripts(listener: () => void) {
   transcriptListeners.add(listener);
   return () => void transcriptListeners.delete(listener);
 }
-/** Opens `target` through `open`, asking the profile it opens to show its
- * transcript once. A transcript destination opens the agent's one Activity
- * destination, so an Activity tab already open is reused rather than joined
- * by another. A target that is only shown again, as when its retained tab
- * remounts on returning to the channel, asks for nothing. */
+/** Opens an Activity `target` through `open`, asking the profile it opens
+ * to show its conversation's transcript once. A target that is only shown
+ * again, as when its retained tab remounts on returning to the channel, asks
+ * for nothing. */
 export function openProfileTranscript(
   target: string,
   open: (target: string) => boolean,
 ): boolean {
-  const agent = profileActivityTranscript(target)
-    ? profileActivityViewKey(target)
-    : undefined;
-  const activity = agent && profileActivityViewTarget(agent);
-  if (!activity) return open(target);
-  transcriptRequests.set(activity, ++transcriptOpenings);
-  const opened = open(activity);
-  if (!opened) transcriptRequests.delete(activity);
+  if (!profileActivityViewKey(target)) return open(target);
+  transcriptRequests.set(target, ++transcriptOpenings);
+  const opened = open(target);
+  if (!opened) transcriptRequests.delete(target);
   changed();
   return opened;
 }
@@ -101,11 +92,4 @@ export function claimProfileTranscript(target: string): number | undefined {
   const opening = transcriptRequests.get(target);
   if (transcriptRequests.delete(target)) changed();
   return opening;
-}
-/** Whether an Activity destination asks for its conversation's transcript. */
-export function profileActivityTranscript(target: string): boolean {
-  const agent = profileActivityViewKey(target);
-  return (
-    !!agent && target === profileActivityViewTarget(agent, { transcript: true })
-  );
 }

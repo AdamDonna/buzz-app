@@ -1364,13 +1364,11 @@ function ChannelWorkspace({
     const activityAgent = handoff?.activityAgent.current;
     if (activityAgent && activityAgent.channelId === currentId) {
       const { transcript } = activityAgent;
-      const target = profileActivityViewTarget(activityAgent.agent, {
-        transcript: !!transcript,
-      });
+      const target = profileActivityViewTarget(activityAgent.agent);
       const panel = target && panels.resolve(target);
       if (target && panel) {
         panelTrigger.current = activityAgent.trigger;
-        openProfileTranscript(target, (next) => {
+        const show = (next: string) => {
           open(
             {
               channelId: activityAgent.channelId,
@@ -1381,7 +1379,10 @@ function ChannelWorkspace({
             true,
           );
           return true;
-        });
+        };
+        // Only a known conversation asks for its transcript.
+        if (transcript) openProfileTranscript(target, show);
+        else show(target);
       }
       handoff.activityAgent.current = undefined;
     }

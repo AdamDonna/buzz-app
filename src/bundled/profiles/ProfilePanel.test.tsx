@@ -485,15 +485,9 @@ function renderAgentActivity(
     registerTab: () => {},
     controlAttention: () => {},
   } as unknown as Agents;
-  // What an opener that knows the conversation asks for.
-  const asking = profileActivityViewTarget(key, { transcript: true }) ?? "";
-  let target = profileActivityViewTarget(key) ?? "";
+  const target = profileActivityViewTarget(key) ?? "";
   // Like Working now: the opener asks as it opens the target.
-  if (transcript === "opened")
-    openProfileTranscript(asking, (next) => {
-      target = next;
-      return true;
-    });
+  if (transcript === "opened") openProfileTranscript(target, () => true);
   const panel = (mount: number) => (
     <ProfilePanel
       key={mount}
@@ -518,7 +512,7 @@ function renderAgentActivity(
       owner.dispose();
     },
     {
-      asking,
+      target,
       offered,
       /** Remounts the retained profile, as on returning to its channel. */
       remount: () => view.rerender(panel(++mounts)),
@@ -672,7 +666,7 @@ it("keeps a new opening for a profile on another section to itself, so a remount
   try {
     await user.click(screen.getByRole("tab", { name: "Identity" }));
     // Working now opens the retained profile again while it shows Identity.
-    act(() => void openProfileTranscript(dispose.asking, () => true));
+    act(() => void openProfileTranscript(dispose.target, () => true));
     dispose.remount();
     expect(screen.getByText("Echo activity")).toBeVisible();
     expect(screen.queryByText("Transcript first")).toBeNull();
@@ -682,7 +676,7 @@ it("keeps a new opening for a profile on another section to itself, so a remount
   dispose = renderAgentActivity(sections, "thread-root", "shown again");
   try {
     await user.click(screen.getByRole("tab", { name: "Identity" }));
-    act(() => void openProfileTranscript(dispose.asking, () => true));
+    act(() => void openProfileTranscript(dispose.target, () => true));
     // Not remounted, the profile shows Activity for the opening itself.
     expect(
       screen.getByRole("tab", { name: "Activity", selected: true }),
@@ -708,7 +702,7 @@ it("keeps an unsaved change until the reader chooses to leave it for a transcrip
   try {
     await user.click(screen.getByRole("tab", { name: "Identity" }));
     await user.click(screen.getByRole("button", { name: "Make a change" }));
-    act(() => void openProfileTranscript(dispose.asking, () => true));
+    act(() => void openProfileTranscript(dispose.target, () => true));
     // The section guard asks first, as choosing the Activity tab does.
     const dialog = screen.getByRole("alertdialog", {
       name: "Discard changes?",
@@ -737,7 +731,7 @@ it("asks an Activity tab already open for the transcript, rather than opening an
     const opened: string[] = [];
     act(
       () =>
-        void openProfileTranscript(dispose.asking, (next) => {
+        void openProfileTranscript(dispose.target, (next) => {
           opened.push(next);
           return true;
         }),

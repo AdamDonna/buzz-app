@@ -1534,7 +1534,7 @@ it.each([
     } as unknown as RelaySession;
     const noEntries: never[] = [];
     const empty = { snapshot: () => noEntries, subscribe };
-    const target = `buzz:profile?agent=${"a".repeat(64)}&tab=activity&open=transcript`;
+    const target = `buzz:profile?agent=${"a".repeat(64)}&tab=activity`;
     const entries = [
       {
         id: "activity",

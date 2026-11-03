@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   openProfileTranscript,
+  profileActivityViewKey,
   profileActivityViewTarget,
 } from "../profiles/target";
 import {
@@ -189,16 +190,16 @@ export function TypingIndicator({
     return rootId ? { rootId } : undefined;
   };
   // Only work in one known conversation opens straight to its transcript.
-  const activityTarget = (pubkey: string) => {
+  const knownConversation = (pubkey: string) => {
     const roots = details.get(pubkey)?.roots ?? [];
-    const known =
+    return (
       !!threadRootId ||
-      (roots.length === 1 && (roots[0] === null || !!roots[0]));
-    return profileActivityViewTarget(pubkey, { transcript: known });
+      (roots.length === 1 && (roots[0] === null || !!roots[0]))
+    );
   };
   const directTarget =
     clickOpensPanel && agents.length === 1 && firstAgent
-      ? activityTarget(firstAgent)
+      ? profileActivityViewTarget(firstAgent)
       : undefined;
   const agentStatus = (
     pubkey: string,
@@ -206,7 +207,7 @@ export function TypingIndicator({
   ) => {
     const detail = details.get(pubkey);
     if (!detail) return null;
-    const target = activityTarget(pubkey);
+    const target = profileActivityViewTarget(pubkey);
     const canOpen = !!target && !!openActivity && !!canOpenActivity?.(target);
     const knownRoots = detail.roots.filter(
       (value) => typeof value === "string",
@@ -282,10 +283,13 @@ export function TypingIndicator({
               overflow={Math.max(0, agents.length - 4)}
               openTarget={
                 openActivity &&
-                ((target, origin) =>
-                  openProfileTranscript(target, (next) =>
-                    openActivity(next, origin),
-                  ))
+                ((target, origin) => {
+                  const agent = profileActivityViewKey(target);
+                  const show = (next: string) => openActivity(next, origin);
+                  return agent && knownConversation(agent)
+                    ? openProfileTranscript(target, show)
+                    : show(target);
+                })
               }
               directTarget={
                 directTarget && canOpenActivity?.(directTarget)

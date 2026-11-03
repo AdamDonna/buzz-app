@@ -524,9 +524,7 @@ function ActivityBubble({
           <div className={styles.previews}>
             {entries.map((entry) => {
               // Opens the agent's Activity on this message's transcript.
-              const target = profileActivityViewTarget(entry.agent, {
-                transcript: true,
-              });
+              const target = profileActivityViewTarget(entry.agent);
               const preview = entry.working
                 ? currentActivity(entry.records, entry.turns)
                 : undefined;

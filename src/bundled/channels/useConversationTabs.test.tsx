@@ -321,12 +321,10 @@ it("reuses an agent's open Activity tab when its transcript is asked for", () =>
     h.result.current.openConversationLink("alpha", activity);
   });
   act(() => {
-    openProfileTranscript(
-      profileActivityViewTarget(agent, { transcript: true }) ?? "",
-      (next) =>
-        h.result.current.openConversationLink("alpha", next, {
-          rootId: "root",
-        }),
+    openProfileTranscript(activity, (next) =>
+      h.result.current.openConversationLink("alpha", next, {
+        rootId: "root",
+      }),
     );
   });
   expect(h.result.current.items).toHaveLength(1);
