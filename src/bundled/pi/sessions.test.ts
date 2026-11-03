@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { stats } from "../usage/stats";
 import type {
   AgentExecution,
   AgentExecutionBinding,
@@ -9,7 +10,8 @@ import type {
   Delivery,
   StandaloneTurn,
 } from "../../features/agents/service";
-import { memoryStorage } from "../../features/agents/test-fakes";
+import type { AgentStore } from "../../features/agents/store";
+import { sharedFiles, memoryStorage } from "../../features/agents/test-fakes";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { deferred, fakeHost } from "./pi-testing";
 import { DEFAULT_CONFIG, PiRuntime } from "./runtime";
@@ -25,11 +27,12 @@ afterEach(() => {
 });
 
 function fixture(
-  storage = memoryStorage(),
+  storage: AgentStore = memoryStorage(),
   options: {
     pending?: boolean;
     holdOpen?: boolean;
     staleSnapshot?: boolean;
+    recorded?: () => object | Promise<object>;
   } = {},
 ) {
   const local = fakeHost({
@@ -80,7 +83,7 @@ function fixture(
         });
         return { conversation: 1, submission: 1 };
       },
-      recorded: () => ({ models: {} }),
+      recorded: () => options.recorded?.() ?? { models: {} },
       entries: () => ({
         entries: [
           {
@@ -135,13 +138,10 @@ function fixture(
     ): Promise<AgentExecution | undefined> => {
       // The key must reach durable storage before the adapter sees it.
       expect(
-        storage
-          .keys()
-          .some(
-            (key) =>
-              storage.get(key) === session.key ||
-              storage.get(key)?.includes(`"key":"${session.key}"`),
-          ),
+        Object.values(await storage.scan("buzz.pi.sessions.v1:")).some(
+          (value) =>
+            value === session.key || value.includes(`"key":"${session.key}"`),
+        ),
       ).toBe(true);
       let held = targets.get(session.key);
       if (!held || held.lifetime.signal.aborted) {
@@ -758,20 +758,30 @@ it.each([
     code: "EXECUTION_SESSION_RESET_REQUIRED",
     omit: true,
     cancel: false,
+    nextTurn: true,
+  },
+  {
+    failure: "expired target before another turn",
+    code: "EXECUTION_SESSION_RESET_REQUIRED",
+    omit: true,
+    cancel: false,
+    nextTurn: false,
   },
   {
     failure: "other replaced target error",
     code: "EXECUTION_UNAVAILABLE",
     omit: false,
     cancel: false,
+    nextTurn: true,
   },
   {
     failure: "cancelled history read",
     code: "EXECUTION_SESSION_RESET_REQUIRED",
     omit: false,
     cancel: true,
+    nextTurn: true,
   },
-])("keeps healthy usage with $failure", async ({ code, omit, cancel }) => {
+])("handles $failure in usage", async ({ code, omit, cancel, nextTurn }) => {
   const f = fixture();
   const first = f.delivery();
   await f.runtime.run(first);
@@ -782,9 +792,11 @@ it.each([
     { channelId, root },
     "new",
   );
-  const next = f.delivery();
-  await f.runtime.run(next);
-  await f.result(next);
+  if (nextTurn) {
+    const next = f.delivery();
+    await f.runtime.run(next);
+    await f.result(next);
+  }
   const currentKey = [...f.targets.keys()][1];
   await f.runtime.retire(self);
   const connect = f.execute.getMockImplementation();
@@ -801,9 +813,30 @@ it.each([
   });
   const usage = f.runtime.usage(self, 0, lifetime.signal);
   if (omit) {
-    expect((await usage).map((session) => session.id)).toEqual([
-      `${currentKey}/1`,
-    ]);
+    const snapshots = await usage;
+    if (nextTurn) {
+      expect(
+        snapshots.find((session) => session.id === `${currentKey}/1`),
+      ).toMatchObject({ gaps: [], observations: [expect.any(Object)] });
+    } else {
+      const total = stats(
+        [
+          {
+            agent: f.agent as unknown as Agent,
+            harness: "buzz.pi/pi",
+            sessions: snapshots,
+          },
+        ],
+        102_000,
+        1,
+      );
+      expect(total.sessions).toBe(1);
+      expect(total.cost).toEqual({ partial: true });
+      expect(total.tokens).toEqual({ partial: true });
+    }
+    expect(
+      snapshots.find((session) => session.id === `${oldKey}/1`),
+    ).toMatchObject({ gaps: [expect.any(String)], observations: [] });
   } else {
     await expect(usage).rejects.toBe(cancel ? stopped : failure);
   }
@@ -841,4 +874,311 @@ it("keeps reset errors visible for current usage and resume", async () => {
     true,
   );
   expect(f.execute.mock.calls.at(-1)?.[1].intent).toBe("existing");
+});
+
+it("discovers another window's sessions through places and usage after handoff", async () => {
+  const files = sharedFiles();
+  const f = fixture(files.open());
+  const reader = fixture(files.open());
+  const usageReader = fixture(files.open());
+  const first = f.delivery();
+  await f.runtime.run(first);
+  await f.result(first);
+  await f.runtime.retire(self);
+  expect(reader.runtime.sessions(self)).toEqual([]);
+  expect(await reader.runtime.places(self)).toHaveLength(1);
+  expect(reader.runtime.sessions(self)).toHaveLength(1);
+  expect(reader.execute).not.toHaveBeenCalled();
+  const connect = f.execute.getMockImplementation();
+  if (!connect) throw new Error("Missing target adapter");
+  usageReader.execute.mockImplementation(connect);
+  const usage = await usageReader.runtime.usage(
+    self,
+    0,
+    new AbortController().signal,
+  );
+  expect(usage).toHaveLength(1);
+  expect(usage[0]?.observations).toHaveLength(1);
+  expect(usageReader.runtime.sessions(self)).toHaveLength(1);
+});
+
+it.each(["success", "failure"])(
+  "closes usage-only runtimes after %s",
+  async (outcome) => {
+    const options = {
+      recorded: () => {
+        if (outcome === "failure") throw new Error("Usage read failed");
+        return { models: {} };
+      },
+    };
+    const f = fixture(undefined, options);
+    const turn = f.delivery();
+    await f.runtime.run(turn);
+    await f.result(turn);
+    await f.runtime.retire(self);
+    const reading = f.runtime.usage(self, 0, new AbortController().signal);
+    if (outcome === "failure")
+      await expect(reading).rejects.toThrow("Usage read failed");
+    else expect(await reading).toHaveLength(1);
+    const restored = [...f.targets.values()][0];
+    expect(restored?.execution.dispose).toHaveBeenCalledOnce();
+    expect(restored?.execution.signal.aborted).toBe(true);
+  },
+);
+
+it("keeps a usage runtime when a delivery joins its held read", async () => {
+  const entered = deferred();
+  const release = deferred<object>();
+  const options = {
+    pending: false,
+    recorded: () => {
+      entered.resolve();
+      return release.promise;
+    },
+  };
+  const f = fixture(undefined, options);
+  const first = f.delivery();
+  await f.runtime.run(first);
+  await f.result(first);
+  await f.runtime.retire(self);
+  const reading = f.runtime.usage(self, 0, new AbortController().signal);
+  let active: Delivery | undefined;
+  try {
+    await entered.promise;
+    options.pending = true;
+    active = f.delivery();
+    await f.runtime.run(active);
+    release.resolve({ models: {} });
+    expect(await reading).toHaveLength(1);
+    const current = [...f.targets.values()][0];
+    expect(current?.execution.dispose).not.toHaveBeenCalled();
+    expect(f.runtime.working(self)).toHaveLength(1);
+  } finally {
+    release.resolve({ models: {} });
+    f.wait.resolve({ status: "done" });
+    await reading;
+    if (active) await f.result(active);
+  }
+});
+
+it.each([
+  ["interrupt", false],
+  ["activity", false],
+  ["admission", false],
+  ["interrupt", true],
+  ["activity", true],
+  ["admission", true],
+] as const)(
+  "cancels pending allocation on %s with prior execution %s and retries its saved key",
+  async (action, established) => {
+    const f = fixture();
+    if (established) {
+      const first = f.delivery();
+      await f.runtime.run(first);
+      await f.result(first);
+      const initial = [...f.targets.values()][0];
+      if (!initial) throw new Error("Missing established target");
+      initial.lifetime.abort(new Error("Provider unloaded"));
+    }
+    const entered = deferred<AbortSignal>();
+    const release = deferred<AgentExecution>();
+    f.execute.mockImplementationOnce(async (_agent, session) => {
+      const signal = session.signal;
+      if (!signal) throw new Error("Missing allocation signal");
+      const abort = () => release.reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      entered.resolve(signal);
+      try {
+        return await release.promise;
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
+    });
+    const admission = new AbortController();
+    const turn = {
+      ...f.delivery(),
+      signal: admission.signal,
+      interruptible: vi.fn<NonNullable<Delivery["interruptible"]>>(),
+    };
+    const openingCall = f.execute.mock.calls.length;
+    const running = f.runtime.run(turn);
+    let stopped: Promise<void> | undefined;
+    try {
+      const signal = await entered.promise;
+      if (action === "interrupt") {
+        stopped = f.runtime.session(
+          { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent,
+          { channelId, root },
+          "interrupt",
+        );
+      } else if (action === "activity") {
+        const stop = turn.interruptible.mock.calls[0]?.[0];
+        if (!stop) throw new Error("Pending turn has no interrupt handler");
+        stopped = stop();
+      } else admission.abort(new Error("Admission ended"));
+      // Memory-backed control reads finish before the next event-loop task.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(signal.aborted).toBe(true);
+      await stopped;
+      await running;
+      await f.result(turn);
+      const saved = f.execute.mock.calls[openingCall]?.[1].key;
+      const retry = f.delivery();
+      const retryCall = f.execute.mock.calls.length;
+      await f.runtime.run(retry);
+      await expect(f.result(retry)).resolves.toMatchObject({ ok: true });
+      expect(f.execute.mock.calls[retryCall]?.[1]).toMatchObject({
+        key: saved,
+        intent: established ? "existing" : "new",
+      });
+    } finally {
+      release.reject(new Error("Release allocation"));
+      await running;
+      await stopped?.catch(() => undefined);
+    }
+  },
+);
+
+it("keeps established execution alive after an admission deadline", async () => {
+  const f = fixture(undefined, { pending: true });
+  const admission = new AbortController();
+  const turn = { ...f.delivery(), signal: admission.signal };
+  try {
+    await f.runtime.run(turn);
+    admission.abort(new Error("Admission ended"));
+    const current = [...f.targets.values()][0];
+    expect(current?.execution.signal.aborted).toBe(false);
+    expect(current?.execution.dispose).not.toHaveBeenCalled();
+    f.wait.resolve({ status: "done" });
+    await expect(f.result(turn)).resolves.toMatchObject({ ok: true });
+  } finally {
+    f.wait.resolve({ status: "done" });
+  }
+});
+
+it("keeps a shared usage runtime until its final reader leaves", async () => {
+  const entered = [deferred(), deferred()];
+  const release = [deferred<object>(), deferred<object>()];
+  let index = 0;
+  const f = fixture(undefined, {
+    recorded: () => {
+      const reading = index++;
+      entered[reading]?.resolve();
+      const gate = release[reading];
+      if (!gate) throw new Error("Unexpected usage read");
+      return gate.promise;
+    },
+  });
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  await f.runtime.retire(self);
+  const first = f.runtime.usage(self, 0, new AbortController().signal);
+  let second: ReturnType<PiSessions["usage"]> | undefined;
+  try {
+    await entered[0]?.promise;
+    second = f.runtime.usage(self, 0, new AbortController().signal);
+    await entered[1]?.promise;
+    const current = [...f.targets.values()][0];
+    release[0]?.resolve({ models: {} });
+    await first;
+    expect(current?.execution.dispose).not.toHaveBeenCalled();
+    release[1]?.resolve({ models: {} });
+    await second;
+    expect(current?.execution.dispose).toHaveBeenCalledOnce();
+  } finally {
+    for (const gate of release) gate.resolve({ models: {} });
+    await Promise.all([first, second]);
+  }
+});
+
+it.each([false, true])(
+  "releases a cancelled usage read with retained runtime %s",
+  async (retained) => {
+    const entered = deferred();
+    const release = deferred<object>();
+    const f = fixture(undefined, {
+      recorded: () => {
+        entered.resolve();
+        return release.promise;
+      },
+    });
+    const first = f.delivery();
+    await f.runtime.run(first);
+    await f.result(first);
+    if (!retained) await f.runtime.retire(self);
+    const lifetime = new AbortController();
+    const stopped = new Error("Usage read cancelled");
+    let outcome: unknown;
+    const reading = f.runtime.usage(self, 0, lifetime.signal).catch((error) => {
+      outcome = error;
+    });
+    try {
+      await entered.promise;
+      const current = [...f.targets.values()][0];
+      lifetime.abort(stopped);
+      // Abort handlers and their cleanup finish before the next event-loop task.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(outcome).toBe(stopped);
+      expect(current?.execution.signal.aborted).toBe(!retained);
+    } finally {
+      release.resolve({ models: {} });
+      await reading;
+    }
+  },
+);
+
+it("rejects usage from a guest conversation that differs from saved metadata", async () => {
+  const f = fixture();
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  const target = [...f.targets.values()][0];
+  if (!target) throw new Error("Missing target");
+  target.places.set(`${channelId}/${root}`, { conversation: 2, seen: 101 });
+  await expect(
+    f.runtime.usage(self, 0, new AbortController().signal),
+  ).rejects.toThrow("saved conversation");
+});
+
+it("returns fresh places while usage joins the pending inventory refresh", async () => {
+  const files = sharedFiles();
+  const f = fixture(files.open());
+  const storage = { ...files.open() };
+  const reader = fixture(storage);
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  await f.runtime.retire(self);
+  const connect = f.execute.getMockImplementation();
+  if (!connect) throw new Error("Missing target adapter");
+  reader.execute.mockImplementation(connect);
+  const scan = storage.scan;
+  const entered = deferred();
+  const first = deferred();
+  const second = deferred();
+  let index = 0;
+  vi.spyOn(storage, "scan").mockImplementation(async (prefix) => {
+    const snapshot = await scan(prefix);
+    if (index++ === 0) {
+      entered.resolve();
+      await first.promise;
+    } else await second.promise;
+    return snapshot;
+  });
+  const places = reader.runtime.places(self);
+  let usage: ReturnType<PiSessions["usage"]> | undefined;
+  try {
+    await entered.promise;
+    usage = reader.runtime.usage(self, 0, new AbortController().signal);
+    // Both consumers finish their memory-backed selection reads in this task.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    first.resolve();
+    expect(await places).toHaveLength(1);
+    expect(reader.runtime.sessions(self)).toHaveLength(1);
+  } finally {
+    first.resolve();
+    second.resolve();
+    await Promise.all([places, usage]);
+  }
 });

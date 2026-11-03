@@ -103,3 +103,90 @@ it("keeps the latest of overlapping reads visible after an external New", async 
     await Promise.all([old, next]);
   }
 });
+
+it("refreshes current and historical sessions from an already-loaded window", async () => {
+  const files = sharedFiles();
+  const reader = new PiSessionStore(files.open());
+  const writer = new PiSessionStore(files.open());
+  const initial = await writer.current("agent", "channel/root");
+  await writer.save("agent", { ...initial, conversation: 1 });
+  await writer.replace("agent", "channel/root");
+  const current = {
+    ...(await writer.current("agent", "channel/root")),
+    conversation: 2,
+  };
+  await writer.save("agent", current);
+  await reader.refresh("agent");
+  expect(reader.list("agent")).toEqual([current]);
+  expect(
+    reader
+      .history("agent")
+      .map((session) => session.key)
+      .sort(),
+  ).toEqual([initial.key, current.key].sort());
+  const updated = { ...current, at: 200 };
+  await reader.save("agent", updated);
+  expect(reader.list("agent")).toEqual([updated]);
+});
+
+it("keeps local New visible when an earlier inventory scan finishes late", async () => {
+  const files = sharedFiles();
+  const storage = { ...files.open() };
+  const store = new PiSessionStore(storage);
+  const initial = await store.current("agent", "channel/root");
+  await store.save("agent", { ...initial, conversation: 1 });
+  const scan = storage.scan;
+  const entered = deferred();
+  const release = deferred();
+  vi.spyOn(storage, "scan").mockImplementation(async (prefix) => {
+    const entries = await scan(prefix);
+    entered.resolve();
+    await release.promise;
+    return entries;
+  });
+  const refreshing = store.refresh("agent");
+  try {
+    await entered.promise;
+    await store.replace("agent", "channel/root");
+    const current = await store.current("agent", "channel/root");
+    release.resolve();
+    await refreshing;
+    expect(store.list("agent")).toEqual([current]);
+  } finally {
+    release.resolve();
+    await refreshing;
+  }
+});
+
+it("keeps refreshed inventory visible when an older keyed read finishes late", async () => {
+  const files = sharedFiles();
+  const writer = new PiSessionStore(files.open());
+  const initial = await writer.current("agent", "channel/root");
+  await writer.save("agent", { ...initial, conversation: 1 });
+  const storage = { ...files.open() };
+  const reader = new PiSessionStore(storage);
+  const read = storage.read;
+  const entered = deferred();
+  const release = deferred();
+  vi.spyOn(storage, "read").mockImplementation(async (key) => {
+    const text = await read(key);
+    if (key.endsWith(initial.key)) {
+      entered.resolve();
+      await release.promise;
+    }
+    return text;
+  });
+  const old = reader.current("agent", "channel/root");
+  try {
+    await entered.promise;
+    await writer.replace("agent", "channel/root");
+    const current = await writer.current("agent", "channel/root");
+    await reader.refresh("agent");
+    release.resolve();
+    await old;
+    expect(reader.list("agent")).toEqual([current]);
+  } finally {
+    release.resolve();
+    await old;
+  }
+});

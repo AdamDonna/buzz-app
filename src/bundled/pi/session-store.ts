@@ -14,12 +14,53 @@ const state = (agent: string, key: string) =>
   `${PREFIX}${agent}:session:${key}`;
 
 export class PiSessionStore {
+  private readonly inventory = new Map<string, Record<string, string>>();
+  private readonly refreshing = new Map<string, Promise<void>>();
+  private readonly refreshes = new Map<string, object>();
   private readonly requests = new Map<string, object>();
   private readonly observed = new Map<
     string,
     Map<string, PiSession | undefined>
   >();
   constructor(private readonly storage: AgentStore) {}
+
+  refresh(agent: string): Promise<void> {
+    const held = this.refreshing.get(agent);
+    if (held) return held;
+    const pending = this.refreshInventory(agent).finally(() => {
+      if (this.refreshing.get(agent) === pending) this.refreshing.delete(agent);
+    });
+    this.refreshing.set(agent, pending);
+    return pending;
+  }
+
+  private async refreshInventory(agent: string) {
+    const prefix = `${PREFIX}${agent}:`;
+    for (;;) {
+      const request = {};
+      this.refreshes.set(agent, request);
+      for (const key of this.requests.keys())
+        if (key.startsWith(prefix)) this.requests.delete(key);
+      const entries = await this.storage.scan(prefix);
+      if (this.refreshes.get(agent) !== request) continue;
+      this.inventory.set(agent, entries);
+      this.observed.delete(agent);
+      return;
+    }
+  }
+
+  private entries(agent: string) {
+    return (
+      this.inventory.get(agent) ??
+      Object.fromEntries(
+        this.storage.keys().flatMap((key) => {
+          if (!key.startsWith(`${PREFIX}${agent}:`)) return [];
+          const value = this.storage.get(key);
+          return value === null ? [] : [[key, value]];
+        }),
+      )
+    );
+  }
 
   async read(agent: string, place: string): Promise<PiSession | undefined> {
     const request = this.request(agent, place);
@@ -59,7 +100,12 @@ export class PiSessionStore {
   }
 
   async save(agent: string, session: PiSession) {
-    await this.storage.set(state(agent, session.key), JSON.stringify(session));
+    this.refreshes.delete(agent);
+    const text = JSON.stringify(session);
+    await this.storage.set(state(agent, session.key), text);
+    this.refreshes.delete(agent);
+    const inventory = this.inventory.get(agent);
+    if (inventory) inventory[state(agent, session.key)] = text;
     if (this.observed.get(agent)?.get(session.place)?.key === session.key)
       this.observe(agent, session.place, session);
   }
@@ -73,15 +119,18 @@ export class PiSessionStore {
   }
 
   async remove(agent: string, session: PiSession) {
+    this.refreshes.delete(agent);
     await this.storage.set(state(agent, session.key), null);
+    this.refreshes.delete(agent);
+    const inventory = this.inventory.get(agent);
+    if (inventory) delete inventory[state(agent, session.key)];
   }
 
   history(agent: string): PiSession[] {
     const prefix = `${PREFIX}${agent}:session:`;
     const sessions = new Map<string, PiSession>();
-    for (const key of this.storage.keys()) {
+    for (const [key, text] of Object.entries(this.entries(agent))) {
       if (!key.startsWith(prefix)) continue;
-      const text = this.storage.get(key);
       if (text) {
         const session = this.parse(text, key.slice(prefix.length));
         sessions.set(session.key, session);
@@ -94,10 +143,10 @@ export class PiSessionStore {
   list(agent: string): PiSession[] {
     const prefix = `${PREFIX}${agent}:place:`;
     const listed = new Map<string, PiSession>();
-    for (const key of this.storage.keys()) {
+    const entries = this.entries(agent);
+    for (const [key, id] of Object.entries(entries)) {
       if (!key.startsWith(prefix)) continue;
-      const id = this.storage.get(key);
-      const text = id && this.storage.get(state(agent, id));
+      const text = entries[state(agent, id)];
       if (text)
         listed.set(
           key.slice(prefix.length),
@@ -116,6 +165,7 @@ export class PiSessionStore {
     place: string,
     session: PiSession | undefined,
   ) {
+    this.refreshes.delete(agent);
     this.requests.delete(pointer(agent, place));
     let current = this.observed.get(agent);
     if (!current) {
@@ -126,6 +176,7 @@ export class PiSessionStore {
   }
 
   private request(agent: string, place: string) {
+    this.refreshes.delete(agent);
     const request = {};
     this.requests.set(pointer(agent, place), request);
     return request;

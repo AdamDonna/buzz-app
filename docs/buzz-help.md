@@ -182,8 +182,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   Each conversation session uses its own target. Later turns reuse that target;
   **Start a new session** requests another one. The plugin manages workspaces,
   credentials, and expired targets. If it cannot restore a session, Buzz shows
-  an error. It does not move that work to this computer. Pi usage can exclude
-  replaced sessions whose targets can no longer be restored. Codex uses the account
+  an error. It does not move that work to this computer. Pi usage reports gaps
+  for replaced sessions whose targets can no longer be restored. **Interrupt**
+  also cancels target setup. A later turn retries the same session. Codex uses the account
   on the target. Buzz keeps agent identity and tool access in the desktop app.
   Remote Codex transcripts, usage totals, and media downloads are unavailable.
 - An agent's name and picture identify it. Instructions shape its response
