@@ -306,6 +306,20 @@ export class CodexRuntime {
   private executionKey(agent: AgentKey, scope: string, conversation: string) {
     return `buzz.codex.sessions.execution.v1:${scope}:${agent}:${conversation}`;
   }
+  private sessionRecord(text: string): {
+    key: string;
+    intent: "new" | "existing";
+  } {
+    const value = JSON.parse(text);
+    if (
+      !value ||
+      typeof value.key !== "string" ||
+      !value.key ||
+      (value.intent !== "new" && value.intent !== "existing")
+    )
+      throw new Error("Invalid saved execution session");
+    return value;
+  }
   private async connection(
     agent: AgentKey,
     scope: string,
@@ -337,9 +351,14 @@ export class CodexRuntime {
     if (signal?.aborted) cancel();
     const lifetime = abort.signal;
     const ready = (async () => {
-      const sessionKey =
+      const stored = this.sessionRecord(
         (await this.storage.read(key)) ??
-        (await this.storage.add(key, crypto.randomUUID()));
+          (await this.storage.add(
+            key,
+            JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+          )),
+      );
+      const sessionKey = stored.key;
       lifetime.throwIfAborted();
       const savedKey = this.storageKey(scope, agent, sessionKey);
       const saved = this.load(
@@ -349,7 +368,7 @@ export class CodexRuntime {
       );
       const session: AgentExecutionSession = {
         key: sessionKey,
-        intent: saved[conversation] ? "existing" : "new",
+        intent: stored.intent,
         signal: lifetime,
       };
       const execution = await this.execution?.(agent, session);
@@ -358,7 +377,18 @@ export class CodexRuntime {
         throw new Error("Codex runtime is retired");
       }
       if (!execution) return this;
-      execution.signal.throwIfAborted();
+      try {
+        if (stored.intent === "new")
+          await this.storage.set(
+            key,
+            JSON.stringify({ key: sessionKey, intent: "existing" }),
+          );
+        lifetime.throwIfAborted();
+        execution.signal.throwIfAborted();
+      } catch (error) {
+        await execution.dispose();
+        throw error;
+      }
       const transport = new CodexExecution(execution);
       const runtime = new CodexRuntime(
         transport.spawn,
@@ -474,7 +504,10 @@ export class CodexRuntime {
           `${agent.key}/${conversation}`,
           action,
           async () => {
-            await this.storage.set(key, crypto.randomUUID());
+            await this.storage.set(
+              key,
+              JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+            );
             const prior = this.remote.get(key);
             this.remote.delete(key);
             prior?.runtime.dispose();
@@ -841,11 +874,13 @@ export class CodexRuntime {
           .keys()
           .filter((key) => key.startsWith(prefix))
           .flatMap((key) => {
-            const sessionKey = this.storage.get(key);
-            if (!sessionKey) return [];
+            const stored = this.storage.get(key);
+            if (!stored) return [];
             return this.savedConversations(
               agent,
-              this.load(this.storageKey(scope, agent, sessionKey)),
+              this.load(
+                this.storageKey(scope, agent, this.sessionRecord(stored).key),
+              ),
             );
           })
           .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));

@@ -4980,7 +4980,7 @@ it("resumes the durably saved thread even when the host cache has no thread", as
   const key = `buzz.codex.sessions.execution.v1:${scope}:${pubkey}:${conversation}`;
   const savedKey = `buzz.codex.sessions.v17:${scope}:${pubkey}:session:durable-session`;
   const durable = new Map([
-    [key, "durable-session"],
+    [key, JSON.stringify({ key: "durable-session", intent: "existing" })],
     [
       savedKey,
       JSON.stringify({
@@ -5086,7 +5086,7 @@ it("keeps restored history when the next turn is refused after a lost first resp
   const conversation = JSON.stringify(["channel", root]);
   f.storage.set(
     `buzz.codex.sessions.execution.v1:${scope}:${pubkey}:${conversation}`,
-    "restored",
+    JSON.stringify({ key: "restored", intent: "existing" }),
   );
   const savedKey = `buzz.codex.sessions.v17:${scope}:${pubkey}:session:restored`;
   f.storage.set(
@@ -5128,4 +5128,50 @@ it("keeps restored history when the next turn is refused after a lost first resp
   ]);
   expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
   await guest.complete(1);
+});
+
+it("keeps existing intent after restart when the first target opens but its turn is refused", async () => {
+  const guests: ReturnType<typeof fixture>[] = [];
+  const execution = vi.fn(async () => {
+    const guest = fixture();
+    if (!guests.length) guest.failing.add("turn/start");
+    guests.push(guest);
+    return guestTarget(guest);
+  });
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const delivery = f.delivery("first attempt");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  const saved = new Map(f.storage);
+  f.runtime.dispose();
+  const restored = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+  );
+  for (const [key, value] of saved) restored.storage.set(key, value);
+  await restored.runtime.run(restored.delivery("retry after restart"));
+  await vi.waitFor(() => expect(guests[1]?.starts()).toHaveLength(1));
+  const calls = execution.mock.calls as unknown as [
+    string,
+    { key: string; intent: string },
+  ][];
+  expect(calls[0]?.[1].intent).toBe("new");
+  expect(calls[1]?.[1]).toMatchObject({
+    key: calls[0]?.[1].key,
+    intent: "existing",
+  });
+  await guests[1]?.complete();
 });
