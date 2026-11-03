@@ -177,6 +177,13 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool("edit", "Edit your message.", { id: str, text: str }, ["id", "text"]),
   tool(
+    "delete",
+    "Delete one of your own messages: only the message with this id, never another author's.",
+    { id: str },
+    ["id"],
+    { readOnlyHint: false, destructiveHint: true },
+  ),
+  tool(
     "react",
     "React to a message.",
     { id: str, emoji: str, off: { type: "boolean" } },
@@ -569,6 +576,26 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       ],
     });
     return "edited";
+  },
+
+  async delete(tools, args) {
+    const { client } = tools;
+    const id = required(args, "id");
+    const target = await tools.event(id);
+    const channel = tag(target, "h");
+    if (!channel) throw new Error(`${id} is not a channel message.`);
+    if (target.pubkey !== client.pubkey)
+      throw new Error("Only your own messages can be deleted.");
+    await client.publish({
+      kind: 5,
+      content: "",
+      tags: [
+        ["h", channel],
+        ["e", id],
+        ["k", String(target.kind)],
+      ],
+    });
+    return "deleted";
   },
 
   async react(tools, args) {

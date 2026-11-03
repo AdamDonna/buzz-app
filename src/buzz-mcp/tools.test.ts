@@ -7,7 +7,7 @@ import { respond } from "./rpc";
 import { ATTENTION_TOOLS } from "./attention";
 import { createHash } from "node:crypto";
 import { callTool, memoryVersion, TOOLS } from "./tools";
-import { callSessionTool } from "./session-tools";
+import { callSessionTool, sessionTools } from "./session-tools";
 import { SOLO_WORKER_TOOLS } from "./solo-worker";
 import { Context } from "@deepseek-ai/cordis";
 import { AgentProtectionService } from "../features/agent-protection/service";
@@ -4078,5 +4078,48 @@ it("needs the message to reply under", async () => {
       text: "hi",
     }),
   ).rejects.toThrow("parent is required");
+  expect(published).toEqual([]);
+});
+
+it("deletes only the given message, one target per deletion", async () => {
+  const mine = event({ id: root, pubkey: me, created_at: 100 });
+  const copy = event({
+    id: nested,
+    pubkey: me,
+    created_at: 101,
+    tags: [
+      ["h", "chan"],
+      ["buzz:copy-of", root],
+    ],
+  });
+  const { client, published } = fake([mine, copy]);
+  expect(
+    await callTool(client, { channel: "chan" }, "delete", { id: nested }),
+  ).toContain("deleted");
+  expect(published).toEqual([
+    {
+      kind: 5,
+      content: "",
+      tags: [
+        ["h", "chan"],
+        ["e", nested],
+        ["k", "9"],
+      ],
+    },
+  ]);
+});
+
+it("marks delete as destructive, also as a session lists it", () => {
+  for (const tools of [TOOLS, sessionTools()])
+    expect(tools.find((tool) => tool.name === "delete")).toMatchObject({
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    });
+});
+
+it("refuses to delete another author's message", async () => {
+  const { client, published } = fake([event({ id: root, pubkey: alice })]);
+  await expect(
+    callTool(client, { channel: "chan" }, "delete", { id: root }),
+  ).rejects.toThrow("Only your own messages can be deleted.");
   expect(published).toEqual([]);
 });
