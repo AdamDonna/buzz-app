@@ -76,6 +76,7 @@ import { FileAttachment } from "./FileAttachment";
 import { useReferenceDirectory } from "./ReferenceText";
 import { EditedMarker, MessageMarkdown } from "./MessageMarkdown";
 import { safeMessageUrl } from "../relay/message-content";
+import referenceStyles from "../../shared/InlineReference.module.css";
 import styles from "./Messages.module.css";
 import { usesLargeEmojiPresentation } from "./emoji-size";
 import { separateChatCards } from "./chat-cards";
@@ -954,7 +955,24 @@ function MessageRowContent({
                           className={styles.authorAgentIcon}
                         />
                       )}
-                      {name}
+                      {clickable && !stackPrevious ? (
+                        // The avatar remains this destination's single Tab stop.
+                        <button
+                          type="button"
+                          tabIndex={-1}
+                          className={`${referenceStyles.link} ${styles.authorName}`}
+                          onClick={(event) => {
+                            // WebKit skips focusing buttons on pointer click, so the
+                            // profile tab's close would have no origin to return to.
+                            event.currentTarget.focus();
+                            openLink(target);
+                          }}
+                        >
+                          {name}
+                        </button>
+                      ) : (
+                        name
+                      )}
                     </strong>
                     {session && !stackPrevious && (
                       <UserStatusDisplay

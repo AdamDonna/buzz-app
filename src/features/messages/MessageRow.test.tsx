@@ -193,6 +193,43 @@ it("tells link handlers the thread a reply was opened from", () => {
   }
 });
 
+it("opens the sender profile from the byline name like the avatar", () => {
+  const open = vi.fn(() => true);
+  const authorId = "ab".repeat(32);
+  const props = {
+    row: { ...row, authorId, threadRootId: "thread", replyCount: 0 },
+    profile: { name: "Morgan" },
+    media: () => undefined,
+    onOpenLink: open,
+    canOpenLink: () => true,
+    day: false,
+    retry: undefined,
+  };
+  try {
+    const view = renderDom(<MessageRow {...props} />);
+    const sender = screen.getByRole("button", { name: "Morgan" });
+    // The avatar keeps the row's single Tab stop for this destination.
+    expect(sender).toHaveAttribute("tabindex", "-1");
+    fireEvent.click(sender);
+    expect(sender).toHaveFocus();
+    fireEvent.click(
+      screen.getByRole("button", { name: "View Morgan profile" }),
+    );
+    expect(open.mock.calls).toEqual([
+      [profileTarget(authorId), { rootId: "thread" }],
+      [profileTarget(authorId), { rootId: "thread" }],
+    ]);
+    // A continuation's byline is screen-reader text, not a hidden control.
+    view.rerender(<MessageRow {...props} stackPrevious />);
+    expect(screen.queryByRole("button", { name: "Morgan" })).toBeNull();
+    view.rerender(<MessageRow {...props} canOpenLink={() => false} />);
+    expect(screen.queryByRole("button", { name: "Morgan" })).toBeNull();
+    expect(screen.getByText("Morgan")).toBeInTheDocument();
+  } finally {
+    cleanup();
+  }
+});
+
 it("keeps plain agent presence without avatar activity, and omits human presence from messages", () => {
   const agentRow = { ...row, authorId: "a".repeat(64) };
   const subscribe = vi.fn(() => () => {});

@@ -210,6 +210,16 @@
   min-width: 0;
   max-width: 100%;
 }
+/* A byline names a person as text, so its link stays quiet until hovered. */
+.author .authorName {
+  --link-text: currentColor;
+  /* Restated over the channel host's button reset. */
+  color: var(--link-text);
+  text-decoration: none;
+}
+.author .authorName:hover {
+  text-decoration: underline;
+}
 .authorAgentIcon {
   display: inline-block;
   width: 1em;
