@@ -56,6 +56,7 @@ import {
   dispatchAgentHooks,
   type AgentHook,
   type AgentHookContext,
+  type AgentHookDispatchOptions,
 } from "./hooks";
 import { ownerReads } from "./reads";
 // Agents: agents that are plugins from the start. A plugin registers an agent
@@ -1022,7 +1023,7 @@ export type Agents = {
     event: string,
     input: unknown,
     context: AgentHookContext,
-    options: { accepts(output: unknown): boolean; milliseconds: number },
+    options: AgentHookDispatchOptions,
   ): Promise<unknown>;
   /** Registers a deterministic source owned by this plugin. Attention controls
    * its lifetime; output goes privately to the watch's saved conversation.
@@ -1505,7 +1506,7 @@ export class AgentsService extends Service implements Agents {
     event: string,
     input: unknown,
     context: AgentHookContext,
-    options: { accepts(output: unknown): boolean; milliseconds: number },
+    options: AgentHookDispatchOptions,
   ) {
     const owner = this.ctx.pluginOwner;
     if (!owner || !harness.startsWith(`${owner.id}/`))
@@ -1518,6 +1519,7 @@ export class AgentsService extends Service implements Agents {
       context,
       options.accepts,
       options.milliseconds,
+      options.compose,
     );
   }
   private readonly contributions;
