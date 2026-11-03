@@ -1,3 +1,7 @@
+import { watchPulls } from "../../bundled/github/watcher";
+import type { PullStates } from "../../bundled/github/pull-states";
+import type { AddedTool } from "../../buzz-mcp/session-tools";
+import type { BuzzClient } from "../../buzz-mcp/client";
 import { registerAttention } from "./attention-command";
 import { canMessageAgent, createAgentChoices } from "./choices";
 import { createAgentLibrary } from "./library";
@@ -27,6 +31,7 @@ import { bytesToHex } from "nostr-tools/utils";
 import { finalizeEvent, generateSecretKey } from "nostr-tools";
 import {
   afterEach,
+  onTestFinished,
   beforeAll,
   beforeEach,
   describe,
@@ -9838,6 +9843,82 @@ it.each(["event", "timer", "source"] as const)(
       }),
     ).rejects.toThrow(/not a member.*delivery channel/i);
     expect((await attention.show("watch/unreachable")).object).toBeNull();
+  },
+);
+
+it.each(refusedChannels)(
+  "preserves a GitHub watch when a move to %s is refused",
+  async (target) => {
+    const { service, run, emit, session } = await setup();
+    watchChannelMetadata(session);
+    await service.create({ type: "example/echo", name: "Echo" });
+    await service.save(bot, { attentionEnabled: true });
+    const { attention } = await handleOf(run, emit);
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const tools: AddedTool[] = [];
+    watchPulls(
+      {
+        agents: {
+          addAttentionSource: () => {},
+          addTool: (tool: AddedTool) => tools.push(tool),
+        },
+        effect: () => {},
+      } as unknown as Context,
+      {
+        read: async () => ({
+          state: {
+            state: "open",
+            head: "1111111111",
+            feedback: { viewer: "alice", ids: [], items: [] },
+          },
+        }),
+      } as unknown as PullStates,
+      undefined,
+    );
+    const tool = tools[0];
+    if (!tool) throw new Error("Missing GitHub watch tool");
+    const client = { key: bot, pubkey: bot, attention } as BuzzClient;
+    const url = "https://github.com/block/buzz-app/pull/2311";
+    await tool.call(
+      client,
+      { channel, topLevel: true },
+      { url, interest: "default" },
+    );
+    const watch = attention.watches({ interest: "default", type: "source" })[0];
+    if (!watch) throw new Error("Missing GitHub watch");
+    const slug = `watch/${watch.id}`;
+    const before = await attention.show(slug);
+    await attention.write(
+      "interest/moved",
+      { type: "interest", instructions: "Follow the PR here" },
+      { expected: "object-v1:absent" },
+    );
+    await expect(
+      tool.call(
+        client,
+        { channel: target, topLevel: true },
+        { url, interest: "moved" },
+      ),
+    ).rejects.toThrow(/not a member.*delivery channel/i);
+    expect(await attention.show(slug)).toEqual(before);
+    // Retry after returning to a confirmed destination, using the same watch.
+    await tool.call(
+      client,
+      { channel, topLevel: true },
+      { url, interest: "moved" },
+    );
+    expect((await attention.show(slug)).object).toMatchObject({
+      interest_id: "moved",
+      channel,
+    });
+    expect(attention.watches({ type: "source" })).toHaveLength(1);
   },
 );
 
