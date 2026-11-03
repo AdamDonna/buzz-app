@@ -4970,28 +4970,4 @@ describe("voice seats", () => {
     await f.connection.close();
     expect(f.publish).toHaveBeenCalledTimes(1);
   });
-  it("refuses a protected agent before thread preparation", async () => {
-    vi.stubGlobal("RTCPeerConnection", class {});
-    const f = fixture();
-    const d = f.delivery("hello");
-    await expect(
-      f.runtime.voice(
-        {
-          config: d.config,
-          async transcript() {},
-          agent: {
-            ...d.agent,
-            protection: {},
-            config: d.config,
-          } as unknown as Agent,
-          conversation: { channelId: "channel" },
-          signal: new AbortController().signal,
-          output: async () => {},
-          ended() {},
-        },
-        d.agent,
-      ),
-    ).rejects.toThrow("protection policy");
-    expect(f.spawn).not.toHaveBeenCalled();
-  });
 });

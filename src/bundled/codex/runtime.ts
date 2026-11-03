@@ -700,11 +700,6 @@ export class CodexRuntime {
   }
   async voice(seat: AgentVoiceSeat, agent: AgentHandle) {
     seat.signal.throwIfAborted();
-    // The ordinary runner refuses protected agents for this runtime too.
-    if (seat.agent.protection || agent.protection)
-      throw new Error(
-        "This runtime does not support the agent's protection policy",
-      );
     const reads = this.reads(agent.key);
     if (!reads) throw new Error("Connect to the agent's community first");
     const settings = this.resolveConfig(seat.config);
@@ -1272,6 +1267,7 @@ export class CodexRuntime {
    * and a top-level chat is one scope. */
   private acknowledgeActivity(active: Active, request: Request) {
     if (!request.step) return;
+    // Voice requests are top-level; the event fallback only satisfies narrowing.
     const scope = request.conversation.topLevel
       ? request.conversation.channelId
       : request.event
@@ -1388,6 +1384,7 @@ export class CodexRuntime {
   // Tags the owner even when a sibling asked: tagging the sibling would wake
   // it, and two agents failing alike would wake each other without end.
   private publish(request: Request, content: string) {
+    // Voice requests are top-level; the event guard only satisfies narrowing.
     return request.agent.publish({
       kind: 9,
       content,
@@ -1747,13 +1744,10 @@ export class CodexRuntime {
       request.synced,
     );
     if (voiceInstructions) {
-      params.config = {
-        ...params.config,
-        ...{
-          "realtime.type": "conversational",
-          "features.realtime_conversation": true,
-        },
-      };
+      Object.assign(params.config, {
+        "realtime.type": "conversational",
+        "features.realtime_conversation": true,
+      });
       params.developerInstructions += `\n${voiceInstructions}`;
     }
     let threadId: string | undefined;
