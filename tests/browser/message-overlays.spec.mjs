@@ -706,20 +706,45 @@ test("comment actions revealed while the drawer slides realign when it settles",
 test("a grouped reaction toggles my contribution while its preview is open", async ({
   page,
 }) => {
+  // Failed fixture images otherwise retry and move this row under the pointer.
+  await page.route("**/emoji-media/**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22"><circle cx="11" cy="11" r="10" fill="purple"/></svg>',
+    }),
+  );
   await page.goto("/tests/fixtures/emoji.html?reactions&repeated");
   const row = page.locator("[data-message-id]").first();
+  for (const source of ["original.png", "reaction.png"])
+    await expect(row.locator(`img[src*="${source}"]`)).toHaveJSProperty(
+      "naturalWidth",
+      22,
+    );
   const button = row.locator('button[data-reaction="😂"]');
   const matching = row.locator('button[data-reaction="😂"]');
   await expect(button).toHaveCount(1);
   await expect(matching).toHaveCount(1);
   await expect(button).toHaveAccessibleName("😂: 2 people");
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:10Z"));
   let exit;
   try {
     for (let cycle = 0; cycle < 2; cycle++) {
       await page.mouse.move(0, 0);
       await button.hover();
       // Unmount the old popup while the trigger's new hover is still pending.
-      if (exit) await exit.evaluate((animation) => animation.finish());
+      if (exit) {
+        await exit.evaluate(async (animation) => {
+          const finished = animation.effect.target
+            .getAnimations()
+            .map((item) => item.finished);
+          animation.finish();
+          await Promise.all(finished);
+        });
+        await page.clock.runFor(32);
+        await expect(page.locator(".buzz-preview-card")).toHaveCount(0);
+      }
+      await page.clock.runFor(300);
       const preview = page.locator(".buzz-preview-card[data-open]");
       await expect(preview).toBeVisible();
       await expect(preview).toContainText("Fixture Member");
@@ -747,6 +772,7 @@ test("a grouped reaction toggles my contribution while its preview is open", asy
       await expect(button).toHaveAttribute("aria-disabled", "false");
     }
   } finally {
+    await page.clock.resume();
     await exit?.evaluate((animation) => animation.finish());
     await exit?.dispose();
   }
