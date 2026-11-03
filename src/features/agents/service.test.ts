@@ -5526,6 +5526,37 @@ it("keeps at most one occurrence of a timer waiting, and never runs one removed 
   expect(slugs).toEqual(["watch/kept", "watch/kept"]);
 });
 
+it("runs an hourly timer once after the computer sleeps through several hours, then an hour later", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  const { service, run } = await setup();
+  await service.create({ type: "example/echo", name: "Echo" });
+  await service.save(bot, { attentionEnabled: true });
+  await service.save(bot, {
+    attention: {
+      "watch/hourly": {
+        type: "timer",
+        interest_id: "default",
+        prompt: "Hourly upkeep wake",
+        enabled: true,
+        interval_secs: 3600,
+        armed_at: 1_000_000,
+        max_occurrences: null,
+        expires_at: null,
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  expect(run).toHaveBeenCalledTimes(1);
+  // Asleep for five hours: the clock jumps, and no tick ran meanwhile.
+  vi.setSystemTime(Date.now() + 5 * 3_600_000);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(run).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(3_590_000);
+  expect(run).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(run).toHaveBeenCalledTimes(3);
+});
+
 it("gives each due timer a turn when one's runs outlast its interval", async () => {
   vi.useFakeTimers({ now: 1_000_000 });
   const { service, run } = await setup();

@@ -70,8 +70,26 @@ control now in their place, or to the section heading if none is left, unless
 you already moved it elsewhere.
 Changing your Bestie stops an **Add to all** still under way.
 Public channels
-need nothing: agents read them already. Check-ins and adding Bestie to new
-channels you create are not set up yet.
+need nothing: agents read them already. Adding Bestie to new channels you
+create is not set up yet.
+
+**Check-ins → Every hour** needs Remembers you, and turning memory off turns it
+off too. On adds the `buzz:bestie/checkin.hourly` Hourly upkeep section to the
+instructions and an hourly Attention timer, `watch/bestie-hourly-check-in`,
+that wakes Bestie in your DM with it. Each check-in reads what is new in
+that DM and in the private channels Bestie was added to, and reports only in
+the DM. On also turns on the agent's Attention,
+which the Watching tab shows. Off removes the section and the timer and leaves
+Attention on, since the agent's other watches may need it. The timer runs while
+Buzz is open and the Watching plugin is on: this plugin doesn't call
+`controlAttention()`, so turning Watching off still turns Attention off for
+every agent. While the timer can't run, the row says it is paused, and a
+timer paused on its own in the Attention tab says to turn the switch off and on
+again to restart it. If the instructions fail to save after the timer did, On
+removes the timer again, and turns Attention back off if it turned it on; a
+timer still left without its section gets a **Remove** row. After a
+sleep it runs once, not once for each missed hour. Each
+check-in is a feature in `features.ts`, so another kind is one more entry.
 
 ### Choosing a Bestie
 
