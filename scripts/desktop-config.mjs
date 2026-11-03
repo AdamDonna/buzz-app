@@ -1,4 +1,28 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseEnv } from "node:util";
 import { worktreeIcon } from "./worktree-icon.mjs";
+
+// The environment a launcher gives Tauri: the process plus every `BUZZ_` value
+// in repository-root `.env.local`. Like the native build, it skips Vite's mode
+// files; unlike it, values are always literal (no `$VAR` expansion, quoted or
+// not), as in the frontend's Builderlab URL reader. Process values win,
+// including an explicit empty one. Names without the `BUZZ_` prefix stay out:
+// the file can hold unrelated settings and credentials. Updater inputs stay
+// release-only, from the process environment.
+export function launchEnvironment(root) {
+  let text = "";
+  try {
+    text = readFileSync(join(root, ".env.local"), "utf8");
+  } catch (error) {
+    // Never echo the file: it can contain unrelated local credentials.
+    if (error?.code !== "ENOENT") throw new Error("Could not read .env.local");
+  }
+  const local = Object.entries(parseEnv(text.replace(/^\uFEFF/, ""))).filter(
+    ([name]) => name.startsWith("BUZZ_") && !name.startsWith("BUZZ_UPDATER_"),
+  );
+  return { ...Object.fromEntries(local), ...process.env };
+}
 
 // Pull `--<name> <value>` and `--<name>=<value>` out of a launcher's arguments.
 // Scanning stops at `--`, after which everything belongs to Tauri's runner, and the

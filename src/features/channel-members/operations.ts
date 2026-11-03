@@ -54,7 +54,7 @@ export function createMemberAdditions(
     add(
       channelId: string,
       pubkey: string,
-      options: { role?: "guest" } = {},
+      options: { role?: "guest"; retry?: true } = {},
     ): Promise<void> {
       if (signal.aborted)
         return Promise.reject(new Error("The community connection closed."));
@@ -62,10 +62,17 @@ export function createMemberAdditions(
       const existing = pending.get(key);
       // An addition under way keeps the role it asked for; another role
       // waits for it rather than joining it or racing it with a second write.
-      if (existing)
-        return intents.get(key)?.role === options.role
-          ? existing
-          : Promise.reject(new Error(differentRole));
+      if (existing) {
+        if (intents.get(key)?.role !== options.role)
+          return Promise.reject(new Error(differentRole));
+        if (intents.get(key)?.retry !== options.retry)
+          return Promise.reject(
+            new Error(
+              "A member operation is already running. Wait for it to finish, then try again.",
+            ),
+          );
+        return existing;
+      }
       const matches = (item: Addition) =>
         item.channelId === channelId && item.pubkey === pubkey;
       const previous = snapshot.find(matches);
@@ -73,6 +80,8 @@ export function createMemberAdditions(
       intents.set(key, intent);
       if (options.role) intent.role = options.role;
       else delete intent.role;
+      if (options.retry) intent.retry = true;
+      else delete intent.retry;
       let confirmed = previous?.confirmed ?? false;
       const update = (item?: Addition) => {
         if (!signal.aborted)

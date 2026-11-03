@@ -1033,6 +1033,35 @@ export const test = base.extend({
         return [39000, 39002].flatMap((kind) =>
           answer(community, { ...filter, kinds: [kind] }),
         );
+      const previewId = filter["#d"]?.length === 1 && filter["#d"][0];
+      const preview =
+        previewId &&
+        !rosterIds.includes(previewId) &&
+        soloDetails.get(`${community}/${previewId}`);
+      const rosterKind = filter.kinds?.find(
+        (kind) => kind === 39001 || kind === 39002,
+      );
+      if (preview && rosterKind) {
+        const owner = preview.tags.find(([key]) => key === "P")?.[1];
+        return [
+          sign(
+            rosterKind,
+            [
+              ["d", previewId],
+              ...(owner
+                ? [
+                    rosterKind === 39002
+                      ? ["p", owner, "", "owner"]
+                      : ["p", owner, "owner"],
+                  ]
+                : []),
+            ],
+            "",
+            relayKey,
+            lifecycleTime,
+          ),
+        ];
+      }
       if (filter.kinds?.includes(13535)) {
         expect(filter).toEqual({
           kinds: [13535],
@@ -1066,7 +1095,16 @@ export const test = base.extend({
       if (ownSoloChannels.length > 0 && filter.ids)
         return [
           ...readEvents.get(community).values(),
-          ...(histories.get(`${community}/${filter["#h"]?.[0]}`) ?? []),
+          ...[...histories.entries()]
+            .filter(
+              ([key]) =>
+                key.startsWith(`${community}/`) &&
+                (!filter["#h"] ||
+                  filter["#h"].some(
+                    (channel) => key === `${community}/${channel}`,
+                  )),
+            )
+            .flatMap(([, events]) => events),
         ].filter((event) => filter.ids.includes(event.id));
       if (filter.kinds?.includes(20001))
         return filter.authors.map((author) =>
@@ -1138,7 +1176,8 @@ export const test = base.extend({
                 "p",
                 viewer,
                 "",
-                lifecycleRows.some((row) => row.id === id)
+                lifecycleRows.some((row) => row.id === id) ||
+                ownSoloChannels.includes(id)
                   ? lifecycleRole === "nonmember"
                     ? "member"
                     : lifecycleRole
@@ -2430,6 +2469,20 @@ export const test = base.extend({
       await use({
         sign: (template) => finalizeEvent(template, userKey),
         channelMetadata: (id, tags) => sign(39000, [["d", id], ...tags]),
+        // Model an owner changing visibility; production discovery consumes the
+        // signed metadata through normal reads/live traffic.
+        setChannelMetadata(id, tags) {
+          const event = sign(
+            39000,
+            [["d", id], ...tags],
+            "",
+            relayKey,
+            ++lifecycleTime,
+          );
+          soloDetails.set(`primary/${id}`, event);
+          relay.publish("primary", event, { requireSubscriber: false });
+          return event;
+        },
         signRelay: (template) => finalizeEvent(template, relayKey),
         membershipSnapshot(role) {
           expect(["owner", "admin", "member"]).toContain(role);

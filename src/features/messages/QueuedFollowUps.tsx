@@ -30,6 +30,10 @@ export function QueuedFollowUps({
   const entries = useSyncExternalStore(queue.subscribe, queue.snapshot).filter(
     (entry) => entry.channelId === channelId,
   );
+  const storageError = useSyncExternalStore(
+    queue.subscribe,
+    queue.storageError,
+  );
   const section = useRef<HTMLElement>(null);
   const focused = useRef<
     { id: string; action: "send" | "remove" | "preview" } | undefined
@@ -51,13 +55,18 @@ export function QueuedFollowUps({
     if (next) next.focus();
     else focusComposer();
   }, [entries, focusComposer]);
-  if (!entries.length) return null;
+  if (!entries.length && !storageError) return null;
   return (
     <section
       ref={section}
       className={styles.queue}
       aria-label="Queued follow-ups"
     >
+      {storageError && (
+        <p role="alert" className="text-body-sm text-danger">
+          {storageError}
+        </p>
+      )}
       <ol className={styles.list}>
         {entries.map((entry) => (
           <li key={entry.id} className={styles.row}>
@@ -68,6 +77,16 @@ export function QueuedFollowUps({
                   focused.current = { id: entry.id, action: "preview" };
                 }}
               />
+              {entry.sending && !entry.error && (
+                <p className="text-caption">Sending…</p>
+              )}
+              {entry.restored && !entry.sending && !entry.error && (
+                <p className="text-caption">
+                  {entry.predecessorRemoved
+                    ? "Paused because an earlier message was handled in another window. Send when ready."
+                    : "Saved before restart. Send when ready."}
+                </p>
+              )}
               {entry.error && (
                 <p role="alert" className="text-body-sm text-danger">
                   {entry.error}
@@ -80,6 +99,7 @@ export function QueuedFollowUps({
                 onFocus={() => {
                   focused.current = { id: entry.id, action: "remove" };
                 }}
+                disabled={entry.sending}
                 data-remove-action
                 style={{ width: "var(--space-6)", height: "var(--space-6)" }}
                 variant="destructive-quiet"
@@ -98,9 +118,7 @@ export function QueuedFollowUps({
                   focused.current = { id: entry.id, action: "send" };
                 }}
                 disabled={disabled}
-                onClick={() => {
-                  queue.sendNow(entry.id);
-                }}
+                send={(check) => queue.sendNow(entry.id, check)}
               />
             </div>
           </li>
@@ -198,12 +216,15 @@ function QueuePreview({ text, onFocus }: { text: string; onFocus(): void }) {
 function QueuedSend({
   recipients,
   channelId,
+  send,
   ...props
-}: Pick<ButtonProps, "disabled" | "onClick" | "onFocus"> & {
+}: Pick<ButtonProps, "disabled" | "onFocus"> & {
+  send(check: () => void): void;
   recipients: readonly string[];
   channelId: string;
 }) {
-  const state = useSessionState(useContext(AgentsContext), recipients, {
+  const agents = useContext(AgentsContext);
+  const state = useSessionState(agents, recipients, {
     channelId,
   });
   const compacting = state === "compacting";
@@ -216,6 +237,22 @@ function QueuedSend({
       <Button
         {...props}
         data-queue-action="send"
+        onClick={() =>
+          send(() => {
+            if (
+              recipients.some((pubkey) => {
+                const key = agents?.find(pubkey)?.key;
+                return (
+                  key &&
+                  agents?.sessionState(key, { channelId }) === "compacting"
+                );
+              })
+            )
+              throw new Error(
+                "Wait for compaction to finish, or interrupt it.",
+              );
+          })
+        }
         variant="subtle-muted"
         size="xs"
         style={{

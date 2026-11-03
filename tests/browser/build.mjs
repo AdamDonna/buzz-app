@@ -78,6 +78,9 @@ export async function buildApp(
           : {}),
         ...(developmentReact ? { "import.meta.env.DEV": "true" } : {}),
         "import.meta.env.VITE_BUZZ_LIVE": '"1"',
+        "import.meta.env.VITE_BUZZ_TEST_RESUME_AGENTS": JSON.stringify(
+          localAgentActivity === "resumable",
+        ),
         "import.meta.env.VITE_BUZZ_COMMUNITY_ALIASES":
           JSON.stringify(fixtureAliases),
         ...(developmentReact

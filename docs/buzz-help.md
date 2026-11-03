@@ -89,6 +89,10 @@ that agent in Buzz; they do not notify the external app through this connection.
 
 ## Conversations and communities
 
+- With **Voice Notes** enabled, use the microphone in the composer to record
+  and attach a voice note. Sending requires ffmpeg on the host computer. Sent
+  notes support playback and seeking; a note's duration appears once it
+  starts playing.
 - Long message bubbles use the available conversation width, stopping 32px
   before the opposite speaker’s avatar column. Short messages hug their text.
 - Hover over a message to reveal the capsule above it: add a reaction, reply,
@@ -123,7 +127,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   grants access.
 - **Mute** is available from a channel or DM's sidebar context menu. Once
   confirmed, a crossed-out bell appears immediately after its name. New messages
-  do not make muted channel names bold; muted DM names still become bold.
+  do not make muted channel or DM names bold.
   Mute suppresses notifications for messages that do not mention you; mentions can still notify
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
@@ -138,9 +142,15 @@ that agent in Buzz; they do not notify the external app through this connection.
   it searches only once that word has at least three characters, even with
   `from:` or `in:`. A shorter last word shows how many characters to type, not
   "no results".
+- **Long text pastes** that exceed the message limit show an error and leave
+  your draft unchanged. Shorten the text, or save it as a text file and use
+  **Attach files** where uploads are available.
 - **File sharing** is available through **Attach files** in the composer when
   uploads are available. Files and media are shared with the conversation's
-  members. Do not promise support for every file type or size.
+  members. If an upload fails, its attachment shows the reason, **Retry**, and
+  **Remove**. Follow the error's guidance before retrying, or remove the attachment
+  to unblock Send; your typed message stays in the composer. Do not promise
+  support for every file type or size.
 - **Emoji suggestions** appear when you type `:` and an emoji name. If a name
   is shortened with an ellipsis, hover over it or use the arrow keys to select
   it and see the full name in a tooltip.
@@ -163,12 +173,56 @@ that agent in Buzz; they do not notify the external app through this connection.
   between pages set to three fingers (or two or three fingers). Two-finger
   scrolling does not navigate.
 - **Sharing a Solo chat** grants access to its conversation history, not only
-  the next message. Copying its link alone does not grant access. Check the
-  intended people and destination before changing access.
+  the next message. Its access dialog offers **View only** for community reading
+  or **Private** for people added to the chat. Public is not offered in
+  this UI; a Public policy set through another client appears as
+  **Public (existing)**. This is not protocol enforcement. View-only visitors
+  cannot post; existing members keep their roles. Returning to Private warns
+  about retained viewers unless verified roles show no Guests, including while
+  roles load or fail to load; remove them in People to end their access. Public
+  (existing) → Private also warns that joined members retain their access.
+  Public (existing) → View only confirms that existing
+  members keep their access. Agents the owner adds through
+  access search or a composer mention receive Bot access so they can reply,
+  including with a Guest admission default. Conversion to a channel offers
+  Private, View only and Public, starts from the chat's current access, and saves
+  the selected policy. Choosing Private during conversion also warns that people
+  who joined keep their access until removed in People. Opening a private chat to the community warns that its full
+  history and Canvas, including workspace folders and agent instructions, become
+  readable. View only retains Guest admission. Copying its link alone does not grant access. Check the intended people
+  and destination before changing access. If an older saved invitation granted
+  view-only access, remove that person in People and invite them again for
+  participation. For an older unresolved invitation, use **Retry** in Outbox
+  or add the person again if the receipt is already Seen. After its 15-minute
+  delivery window, Buzz verifies the original command and current membership
+  before allowing a fresh participation invitation; failed checks keep the original.
+  If the original invitation was applied and the person was later removed, Retry
+  clears the old row without re-adding them. Use **Add** in People to invite them again.
+- **Open links in your browser**: on desktop, ⌘-click (Ctrl-click on Windows
+  and Linux) an HTTP(S) link in a message to open it in your default browser
+  instead of a side panel. You can also right-click the link and choose
+  **Open in browser**.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
+
+## Saved Solo follow-ups
+
+Messages queued behind a working agent are saved on this device for the current
+account and community. Saved text, recipients, uploaded attachments, references,
+and model choices survive a reload or restart; uploads still in progress are not
+queued yet.
+
+After restart, saved messages stay paused. **Send** sends a selected row, and
+**Remove** discards an unsent row. **Resume** restarts supported interrupted turns
+and unpauses saved follow-ups in those chats, sending them in order as turns finish.
+**Don’t resume** leaves them paused. Chats outside that recovery stay paused too.
+
+If another window may be sending a message, check the conversation before sending
+again. Remove is unavailable once delivery owns the message; use its delivery
+recovery controls instead. A save or recovery error keeps the draft or queued row
+available rather than silently discarding it.
 
 ## Choosing and customizing agents
 

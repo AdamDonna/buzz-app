@@ -76,6 +76,7 @@ function recipe(name, ...args) {
       path.join(directory, "pnpm"),
       `#!${process.execPath}\nrequire("node:fs").appendFileSync(process.env.BUZZ_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWER:" + JSON.stringify(process.env.BUZZ_DEV_VIEWER));
+if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG, other: process.env.LOCAL_ONLY_SECRET, updater: process.env.BUZZ_UPDATER_ENDPOINT }));
 \n`,
       { mode: 0o755 },
     );
@@ -113,6 +114,9 @@ if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWE
           // Do not inherit the operator's public pin in isolated launcher tests.
           BUZZ_DEV_VIEWER: undefined,
           BUZZ_DEV_SIGNING_IDENTITY: undefined,
+          BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: undefined,
+          LOCAL_ONLY_SECRET: undefined,
+          BUZZ_UPDATER_ENDPOINT: undefined,
           ...settings.env,
         },
         encoding: "utf8",
@@ -563,3 +567,54 @@ for (const [name, settings, expected] of [
     );
   });
 }
+
+// `.env.local` is a launch environment source for `BUZZ_` names, so native
+// build inputs such as the FI descriptor can live there.
+const descriptor = '{"version":1,"id":"example"}';
+for (const target of ["desktop", "desktop-bundle"])
+  for (const [name, settings, expected] of [
+    [
+      "local value",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\nLOCAL_ONLY_SECRET=local\nBUZZ_UPDATER_ENDPOINT=https://updates.example\n`,
+      },
+      { fi: descriptor },
+    ],
+    [
+      "process override",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n`,
+        env: { BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: "process" },
+      },
+      { fi: "process" },
+    ],
+    [
+      "explicit empty override",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n`,
+        env: { BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: "" },
+      },
+      { fi: "" },
+    ],
+    [
+      "literal dollar",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='{"organization":"$LOCAL_ONLY_SECRET"}'\nLOCAL_ONLY_SECRET=local\n`,
+      },
+      { fi: '{"organization":"$LOCAL_ONLY_SECRET"}' },
+    ],
+    [
+      "mode file ignored",
+      { mode: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n` },
+      {},
+    ],
+    ["unset", {}, {}],
+  ])
+    test(`${target} passes .env.local BUZZ_ values to Tauri: ${name}`, () => {
+      const result = recipe(target, settings);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.stdout.includes(`ENV:${JSON.stringify(expected)}`),
+        result.stdout,
+      );
+    });
