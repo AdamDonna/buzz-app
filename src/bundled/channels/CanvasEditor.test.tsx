@@ -1043,6 +1043,12 @@ it("stores no draft after restoring over a revision Refresh history found", asyn
   await waitFor(() =>
     expect(screen.getAllByRole("radio")[0]).toHaveAccessibleName(/Current/),
   );
+  // The selected older revision now compares against the refreshed head.
+  const changes = screen.getByRole("region", {
+    name: "Changes from current version",
+  });
+  expect(changes).toHaveTextContent("Removed: Remote edit");
+  expect(changes).toHaveTextContent(`Added: ${old.content}`);
   await user.click(
     screen.getByRole("button", { name: "Restore this version" }),
   );

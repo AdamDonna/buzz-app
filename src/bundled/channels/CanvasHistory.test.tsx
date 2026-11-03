@@ -12,6 +12,11 @@ import {
   scriptedTransport,
   signed,
 } from "../../features/relay/testing";
+import {
+  CANVAS_DIFF_EDIT_LENGTH,
+  CANVAS_DIFF_TIMEOUT_MS,
+  canvasDiffRows,
+} from "./CanvasDiff";
 import { CanvasHistory } from "./CanvasHistory";
 
 afterEach(cleanup);
@@ -214,5 +219,79 @@ it("shows full content when a comparison exceeds its bounds", async () => {
     expect(screen.getByLabelText("Revision Markdown")).toHaveValue(many("a"));
   } finally {
     dispose();
+  }
+});
+
+it("falls back when a comparison exceeds the edit-length bound", () => {
+  const side = (prefix: string) =>
+    Array.from(
+      { length: CANVAS_DIFF_EDIT_LENGTH },
+      (_, i) => `${prefix}${i}`,
+    ).join("\n");
+  expect(canvasDiffRows(side("a"), side("a"))).toBeDefined();
+  expect(canvasDiffRows(side("a"), side("b"))).toBeUndefined();
+});
+
+it("falls back when a comparison exceeds its time bound", () => {
+  const now = vi.spyOn(Date, "now");
+  let clock = 0;
+  now.mockImplementation(() => (clock += CANVAS_DIFF_TIMEOUT_MS));
+  try {
+    expect(canvasDiffRows("a\nb\nc", "x\nb\ny")).toBeUndefined();
+  } finally {
+    now.mockRestore();
+  }
+  expect(canvasDiffRows("a\nb\nc", "x\nb\ny")).toBeDefined();
+});
+
+it("never compares against a current Canvas that could not be read", async () => {
+  const older = revision("Plan", 1);
+  const history = vi
+    .fn()
+    .mockResolvedValue({ revisions: [older], next: undefined });
+  const canvas = { available: true, history } as unknown as ChannelCanvas;
+  const wire = scriptedTransport(keypair().pubkey, keypair().pubkey);
+  const reader = createRelayReader(wire.transport);
+  const directory = createProfileDirectory(reader.reader);
+  const refreshHead = vi.fn(async () => {});
+  const show = (
+    loaded: boolean,
+    head: ReturnType<typeof revision> | undefined,
+  ) => (
+    <CanvasHistory
+      canvas={canvas}
+      channelId="x"
+      profiles={directory.queries}
+      head={head}
+      busy={false}
+      loaded={loaded}
+      dirty={false}
+      refreshHead={refreshHead}
+      restore={async () => {}}
+    />
+  );
+  try {
+    const view = render(show(false, undefined));
+    expect(
+      await screen.findByText(/current Canvas could not be read/),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Revision Markdown")).toHaveValue("Plan");
+    expect(screen.queryByText("Same as current version.")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Changes from current version" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Restore this version" }),
+    ).toBeDisabled();
+    act(() => screen.getByRole("button", { name: "Retry" }).click());
+    expect(refreshHead).toHaveBeenCalledTimes(1);
+    // Recovered: a genuinely absent head compares against empty.
+    view.rerender(show(true, undefined));
+    expect(lines()).toEqual(["+Plan"]);
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+  } finally {
+    cleanup();
+    directory.dispose();
+    reader.dispose();
   }
 });

@@ -267,6 +267,21 @@ export function CanvasHistory({
           />
           {full ? (
             fullContent()
+          ) : !loaded ? (
+            <>
+              {busy ? (
+                <p role="status">Reading the current Canvas…</p>
+              ) : (
+                <div className={styles.actions}>
+                  <p role="alert">
+                    The current Canvas could not be read, so this version cannot
+                    be compared with it.
+                  </p>
+                  <Button onClick={() => void refreshHead()}>Retry</Button>
+                </div>
+              )}
+              {fullContent()}
+            </>
           ) : selected.id === head?.id || selected.content === headContent ? (
             <p>Same as current version.</p>
           ) : (

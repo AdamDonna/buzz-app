@@ -4,8 +4,8 @@ import styles from "./ChannelTemplates.module.css";
 
 /** Comparisons beyond these bounds show full content instead of a diff. */
 export const CANVAS_DIFF_LINES = 5000;
-const MAX_EDIT_LENGTH = 2000;
-const TIMEOUT_MS = 200;
+export const CANVAS_DIFF_EDIT_LENGTH = 2000;
+export const CANVAS_DIFF_TIMEOUT_MS = 200;
 const CONTEXT = 3;
 
 type Row = { key: number } & (
@@ -33,8 +33,8 @@ export function canvasDiffRows(current: string, revision: string) {
   )
     return undefined;
   const changes = diffLines(current, revision, {
-    maxEditLength: MAX_EDIT_LENGTH,
-    timeout: TIMEOUT_MS,
+    maxEditLength: CANVAS_DIFF_EDIT_LENGTH,
+    timeout: CANVAS_DIFF_TIMEOUT_MS,
   });
   if (!changes) return undefined;
   const rows: Row[] = [];
@@ -79,7 +79,12 @@ export function CanvasDiff({
   );
   if (!rows) return fallback("Comparison too large; showing full content.");
   return (
-    <section aria-label="Changes from current version" className={styles.diff}>
+    <section
+      aria-label="Changes from current version"
+      className={styles.diff}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: The scroll owner must support keyboard panning.
+      tabIndex={0}
+    >
       {rows.map((row) =>
         row.kind === "skip" ? (
           <div key={row.key} className={styles.diffSkip}>

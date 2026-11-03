@@ -49,6 +49,9 @@
   overflow: auto;
   font-family: var(--font-mono);
   font-size: var(--text-mono-sm);
+  line-height: var(--text-mono-sm--line-height);
+  letter-spacing: var(--text-mono-sm--letter-spacing);
+  font-weight: var(--text-mono-sm--font-weight);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -64,6 +67,11 @@
 .diffLine[data-change="same"],
 .diffSkip {
   color: var(--text-secondary);
+}
+
+html[data-keyboard-navigation] .diff:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 
 .diffMark {
