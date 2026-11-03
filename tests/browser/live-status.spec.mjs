@@ -96,6 +96,7 @@ for (const target of ["alpha", "profiles"]) {
     page,
     app,
   }, testInfo) => {
+    await page.clock.install();
     if (target === "profiles")
       await page.addInitScript(() =>
         localStorage.setItem("buzz-appearance.v1", "dark"),
@@ -147,6 +148,27 @@ for (const target of ["alpha", "profiles"]) {
         await expect.poll(() => requests().length).toBeGreaterThan(before);
       }
     }
+    // Manual retry skips backoff only for a failed source, not an in-flight
+    // REQ awaiting EOSE. Keep the shown notice, fail the fresh automatic REQ,
+    // and pause the page's recovery timer so it cannot satisfy this assertion.
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+    const manualFailure = "temporary: manual retry fixture";
+    app.relay.failRoute("primary", target, manualFailure);
+    await expect(
+      page.getByText(`Live updates: ${manualFailure}`, { exact: true }),
+    ).toBeVisible();
+    const beforeManual = requests().length;
+    await page
+      .getByRole("button", { name: "Close Channel settings tab", exact: true })
+      .click();
+    // Retry now stays available to skip the wait.
+    await retryNow(page).focus();
+    await retryNow(page).press("Enter");
+    await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
+    await expect(notice(page)).toBeVisible();
+    await page.clock.resume();
+    await openChannelDetails(page);
+    await openDiagnostics(page);
     // The notice keeps showing while the retried REQ waits for EOSE, and it
     // must not block the header, composer, or narrow navigation.
     for (const width of [390, 800, 1440]) {
@@ -192,15 +214,9 @@ for (const target of ["alpha", "profiles"]) {
       await openDiagnostics(page);
       await expect(notice(page)).toHaveCount(1);
     }
-    const beforeManual = requests().length;
     await page
       .getByRole("button", { name: "Close Channel settings tab", exact: true })
       .click();
-    // Retry now stays available to skip the wait.
-    await retryNow(page).focus();
-    await retryNow(page).press("Enter");
-    await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
-    await expect(notice(page)).toBeVisible();
     app.relay.releaseEose(target);
     await expect(notice(page)).toHaveCount(0);
     await openChannelDetails(page);
