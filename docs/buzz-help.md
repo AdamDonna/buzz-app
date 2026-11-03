@@ -123,7 +123,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   grants access.
 - **Mute** is available from a channel or DM's sidebar context menu. Once
   confirmed, a crossed-out bell appears immediately after its name. New messages
-  do not make muted channel names bold; muted DM names still become bold.
+  do not make muted channel or DM names bold.
   Mute suppresses notifications for messages that do not mention you; mentions can still notify
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
