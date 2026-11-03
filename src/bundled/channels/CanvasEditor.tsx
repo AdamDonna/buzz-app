@@ -92,6 +92,8 @@ export function CanvasEditor({
   const view = useRef<HTMLElement>(null);
   const viewRetry = useRef<HTMLButtonElement>(null);
   const recovery = useRef<HTMLButtonElement>(null);
+  const comparison = useRef<HTMLDivElement>(null);
+  const historyRetry = useRef<HTMLButtonElement>(null);
   const [recovering, setRecovering] = useState(false);
   // The tab host places focus when Canvas opens, and a recovery button holds
   // it while its read is pending. Take it into the active tab's content once a
@@ -111,7 +113,12 @@ export function CanvasEditor({
       previous === document.activeElement ||
       (!previous.isConnected && document.activeElement === document.body)
     )
-      (tab === "view" ? view : editor).current?.focus();
+      (tab === "view"
+        ? view
+        : tab === "history"
+          ? comparison
+          : editor
+      ).current?.focus();
   }, [loaded, busy, tab]);
   const [confirmReload, setConfirmReload] = useState(false);
   const cancelReload = useRef<HTMLButtonElement>(null);
@@ -388,6 +395,9 @@ export function CanvasEditor({
               dirty={dirty}
               readOnly={readOnly}
               refreshHead={() => load()}
+              retryHead={() => recover(false, historyRetry.current)}
+              comparisonRef={comparison}
+              retryRef={historyRetry}
               restore={restore}
             />
           )}

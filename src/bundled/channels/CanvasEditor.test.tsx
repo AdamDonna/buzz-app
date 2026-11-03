@@ -846,6 +846,12 @@ const restored = {
   content: old.content,
   created_at: head.created_at + 1,
 };
+async function fullRevision(user: ReturnType<typeof userEvent.setup>) {
+  const toggle = screen.getByRole("checkbox", { name: "Show full content" });
+  if (toggle.getAttribute("aria-checked") !== "true") await user.click(toggle);
+  return screen.getByRole("textbox", { name: "Revision Markdown" });
+}
+
 async function openHistory(user: ReturnType<typeof userEvent.setup>) {
   await waitFor(() =>
     expect(
@@ -895,9 +901,7 @@ it.each([false, true])(
     expect(text).toHaveValue(content);
     expect(screen.getByRole("button", { name: "Save Canvas" })).toBeDisabled();
     await openHistory(user);
-    expect(
-      screen.getByRole("textbox", { name: "Revision Markdown" }),
-    ).toHaveValue(old.content);
+    expect(await fullRevision(user)).toHaveValue(old.content);
     expect(
       screen.getByRole("button", { name: "Restore this version" }),
     ).toBeDisabled();
@@ -976,9 +980,7 @@ it("loads history only on demand and preserves draft/base through preview and ca
   fireEvent.change(editor, { target: { value: "Local edits" } });
   const before = readView(scope, `canvas-draft-v1:${channelId}`, null);
   await openHistory(user);
-  expect(
-    screen.getByRole("textbox", { name: "Revision Markdown" }),
-  ).toHaveValue(old.content);
+  expect(await fullRevision(user)).toHaveValue(old.content);
   for (const dismissal of ["cancel", "escape", "backdrop"]) {
     await user.click(
       screen.getByRole("button", { name: "Restore this version" }),
@@ -1057,6 +1059,12 @@ it("stores no draft after restoring over a revision Refresh history found", asyn
   await waitFor(() =>
     expect(screen.getAllByRole("radio")[0]).toHaveAccessibleName(/Current/),
   );
+  // The selected older revision now compares against the refreshed head.
+  const changes = screen.getByRole("region", {
+    name: "Changes from current version",
+  });
+  expect(changes).toHaveTextContent("Removed: Remote edit");
+  expect(changes).toHaveTextContent(`Added: ${old.content}`);
   await user.click(
     screen.getByRole("button", { name: "Restore this version" }),
   );
@@ -1221,6 +1229,10 @@ it("retries history failures, pages without losing selection and reconciles sele
   expect(canvas.history).toHaveBeenLastCalledWith(channelId, cursor);
   await waitFor(() => expect(screen.getAllByRole("radio")[1]).toHaveFocus());
   await user.click(screen.getAllByRole("radio")[1] as HTMLElement);
+  const changes = () =>
+    screen.getByRole("region", { name: "Changes from current version" });
+  expect(changes()).toHaveTextContent("Removed: Saved");
+  expect(changes()).toHaveTextContent("Added: Earlier");
   canvas.save.mockResolvedValueOnce(restored);
   canvas.history.mockResolvedValueOnce({
     revisions: [restored, head],
@@ -1233,9 +1245,13 @@ it("retries history failures, pages without losing selection and reconciles sele
   await waitFor(() =>
     expect(screen.getByRole("radio", { name: /Current/ })).toBeChecked(),
   );
-  expect(
-    screen.getByRole("textbox", { name: "Revision Markdown" }),
-  ).toHaveValue(restored.content);
+  expect(screen.getByText("Same as current version.")).toBeVisible();
+  // The diff follows the new head.
+  await user.click(screen.getAllByRole("radio")[1] as HTMLElement);
+  expect(changes()).toHaveTextContent("Removed: Earlier");
+  expect(changes()).toHaveTextContent("Added: Saved");
+  await user.click(screen.getAllByRole("radio")[0] as HTMLElement);
+  expect(await fullRevision(user)).toHaveValue(restored.content);
   expect(
     screen.getByRole("button", { name: "Restore this version" }),
   ).toBeDisabled();
@@ -1316,7 +1332,60 @@ it("prevents all dismissal during restore and ignores a history response from an
     await stale;
   });
   expect(screen.getByRole("radio", { name: /Current/ })).toBeChecked();
-  expect(
-    screen.getByRole("textbox", { name: "Revision Markdown" }),
-  ).toHaveValue(restored.content);
+  expect(await fullRevision(user)).toHaveValue(restored.content);
 });
+
+it.each(["diff", "absent", "moved"] as const)(
+  "keeps History's head-read Retry focused through repeated failure and hands focus to the comparison: %s",
+  async (outcome) => {
+    const user = userEvent.setup();
+    let land!: (event: typeof head) => Promise<void>;
+    const { canvas } = fixture((canvas) => {
+      canvas.read.mockRejectedValueOnce(new Error("Offline"));
+      canvas.history.mockResolvedValue({
+        revisions: [head, old],
+        next: undefined,
+      });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Offline");
+    await user.click(screen.getByRole("tab", { name: "History" }));
+    await user.click(
+      (await screen.findAllByRole("radio")).at(-1) as HTMLElement,
+    );
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(
+      screen.queryByRole("region", { name: "Changes from current version" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Restore this version" }),
+    ).toBeDisabled();
+
+    canvas.read.mockRejectedValueOnce(new Error("Still unreachable"));
+    retry.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(canvas.read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(retry).not.toHaveAttribute("aria-busy", "true"));
+    expect(retry).toBeInTheDocument();
+    expect(retry).toHaveFocus();
+
+    land = hold(canvas.read);
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(canvas.read).toHaveBeenCalledTimes(3));
+    expect(retry).toHaveAttribute("aria-busy", "true");
+    expect(retry).toHaveFocus();
+    // Repeat activation while the read is pending starts no other read.
+    await user.keyboard("{Enter}");
+    expect(canvas.read).toHaveBeenCalledTimes(3);
+    const composer = screen.getByRole("button", { name: "Message composer" });
+    if (outcome === "moved") composer.focus();
+    await act(() => land(outcome === "absent" ? (undefined as never) : head));
+    const changes = screen.getByRole("region", {
+      name: "Changes from current version",
+    });
+    expect(changes).toHaveTextContent(`Added: ${old.content}`);
+    if (outcome === "absent") expect(changes).not.toHaveTextContent("Removed:");
+    else expect(changes).toHaveTextContent(`Removed: ${head.content}`);
+    if (outcome === "moved") expect(composer).toHaveFocus();
+    else expect(document.activeElement).toContainElement(changes);
+  },
+);

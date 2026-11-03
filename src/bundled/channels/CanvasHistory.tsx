@@ -1,4 +1,5 @@
 import {
+  type Ref,
   useCallback,
   useEffect,
   useMemo,
@@ -17,11 +18,14 @@ import type { ProfileQueries } from "../../features/relay/profile-directory";
 import { useProfileGeneration } from "../../features/relay/react";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { publicKeyLabels } from "../../shared/identity/public-key";
+import { Checkbox } from "../../shared/design-system/ui/Checkbox";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
+import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { Textarea } from "../../shared/design-system/ui/Textarea";
+import { CanvasDiff } from "./CanvasDiff";
 import styles from "./ChannelTemplates.module.css";
 
 export function CanvasHistory({
@@ -33,6 +37,9 @@ export function CanvasHistory({
   loaded,
   dirty,
   refreshHead,
+  retryHead,
+  comparisonRef,
+  retryRef,
   restore,
   readOnly = false,
 }: {
@@ -45,12 +52,17 @@ export function CanvasHistory({
   dirty: boolean;
   readOnly?: boolean;
   refreshHead(): Promise<void>;
+  /** Retries a failed head read from `retryRef`, which keeps focus. */
+  retryHead(): void;
+  comparisonRef?: Ref<HTMLDivElement>;
+  retryRef?: Ref<HTMLButtonElement>;
   restore(revision: RelayEvent): Promise<void>;
 }) {
   const [page, setPage] = useState<CanvasHistoryPage>();
   const [selected, setSelected] = useState<RelayEvent>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [full, setFull] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirm, setConfirm] = useState(false);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -138,6 +150,23 @@ export function CanvasHistory({
     };
     // This panel is keyed by the owning channel/session and mounted lazily.
   }, [load]);
+  // A head read that has failed stays failed through its retry, so Retry
+  // keeps its place and focus until a read lands.
+  const [headFailed, setHeadFailed] = useState(false);
+  if (loaded ? headFailed : !busy && !headFailed) setHeadFailed(!loaded);
+  const headContent = head?.content ?? "";
+  const fullContent = (note?: string) => (
+    <>
+      {note && <p>{note}</p>}
+      <Textarea
+        aria-label="Revision Markdown"
+        variant="code"
+        rows={10}
+        readOnly
+        value={selected?.content ?? ""}
+      />
+    </>
+  );
   const tooLarge =
     selected &&
     new TextEncoder().encode(selected.content).length > CANVAS_BYTES;
@@ -244,13 +273,44 @@ export function CanvasHistory({
       )}
       {selected && (
         <>
-          <Textarea
-            aria-label="Revision Markdown"
-            variant="code"
-            rows={10}
-            readOnly
-            value={selected.content}
+          <Checkbox
+            label="Show full content"
+            checked={full}
+            onCheckedChange={setFull}
           />
+          <div ref={comparisonRef} tabIndex={-1}>
+            {full ? (
+              fullContent()
+            ) : !loaded ? (
+              <LoadingRegion
+                pending={!headFailed}
+                label="Reading the current Canvas…"
+                feedback={
+                  headFailed ? (
+                    <div className={styles.actions}>
+                      <p role="alert">
+                        The current Canvas could not be read, so this version
+                        cannot be compared with it.
+                      </p>
+                      <Button ref={retryRef} loading={busy} onClick={retryHead}>
+                        Retry
+                      </Button>
+                    </div>
+                  ) : undefined
+                }
+              >
+                {fullContent()}
+              </LoadingRegion>
+            ) : selected.id === head?.id || selected.content === headContent ? (
+              <p>Same as current version.</p>
+            ) : (
+              <CanvasDiff
+                current={headContent}
+                revision={selected.content}
+                fallback={fullContent}
+              />
+            )}
+          </div>
           {!selected.content && <p>This version is empty.</p>}
           {tooLarge && (
             <p>

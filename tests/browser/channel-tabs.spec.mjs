@@ -604,6 +604,8 @@ test.describe("archived Canvas", () => {
       canvas.getByRole("button", { name: "Save Canvas" }),
     ).toBeDisabled();
     await canvas.getByRole("tab", { name: "History", exact: true }).click();
+    await expect(canvas.getByText("Same as current version.")).toBeVisible();
+    await canvas.getByRole("checkbox", { name: "Show full content" }).click();
     await expect(
       canvas.getByRole("textbox", { name: "Revision Markdown" }),
     ).toHaveValue("Archived plan");

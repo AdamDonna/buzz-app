@@ -100,6 +100,15 @@ test("Canvas history previews and restores without losing the editor draft", asy
   await dialog.getByRole("tab", { name: "History", exact: true }).click();
   await expect(dialog.getByRole("radio")).toHaveCount(2);
   await dialog.getByRole("radio").last().click();
+  const changes = dialog.getByRole("region", {
+    name: "Changes from current version",
+  });
+  await expect(changes).toContainText("Removed: # Current notes");
+  await expect(changes).toContainText(`Added: ${old.content}`);
+  // The bounded diff is its own scroll owner, so keyboard users can enter it.
+  await changes.focus();
+  await expect(changes).toBeFocused();
+  await dialog.getByRole("checkbox", { name: "Show full content" }).click();
   await expect(
     dialog.getByRole("textbox", { name: "Revision Markdown" }),
   ).toHaveValue(old.content);
