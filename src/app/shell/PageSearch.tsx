@@ -187,16 +187,18 @@ export function PageSearch({
       <IconButton
         hint="familiar"
         ref={trigger}
-        variant="inverted"
+        variant="ghost"
         size="md"
-        shape="round"
+        shape="control"
         aria-label="Search Buzz"
         title={`Search Buzz (${shortcut})`}
         onClick={() => {
           trigger.current?.focus();
           begin();
         }}
-        icon={<MagnifyingGlassIcon size={16} aria-hidden="true" />}
+        icon={
+          <MagnifyingGlassIcon size={20} strokeWidth={2.5} aria-hidden="true" />
+        }
       />
       <Dialog
         open={open}

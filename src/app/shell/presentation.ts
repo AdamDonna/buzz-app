@@ -57,6 +57,8 @@ export function pagePlacement(page: RegisteredPage) {
   if (!page.primary) return undefined;
   switch (page.key) {
     case "buzz.channels/channels":
+    case "buzz.inbox/inbox":
+    case "buzz.bestie/bestie":
     case "buzz.reminders/reminders":
     case "buzz.agents/agents":
     case "buzz.workflows/workflows":

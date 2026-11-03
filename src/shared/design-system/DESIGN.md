@@ -1166,6 +1166,17 @@ components, not a screenshot's measured offsets.
   Existing channel/workspace tabs retain `Tabs variant="navigation"`; the channel's
   single non-closable tab uses `showSelection={false}`. Do not invent tab semantics
   for a static page just to reproduce its appearance.
+- **Conversation membership identity (proposed):** channels and DMs combine the
+  member avatar stack above a capsule name and chevron in one `SurfaceButton`.
+  It shares the message column’s window-centered alignment when space permits
+  (pane-centered when split), while trailing actions retain the
+  standard panel-header alignment. It uses message-sized (32px) avatars and
+  sidebar-row body-sm labels. Solo chats preview their participating agents.
+  It has no header
+  divider; message history fades at its top and bottom edges. It opens the existing
+  membership manager. `PanelWorkspace` uses this identity
+  instead of a lone permanent tab; when extra tabs exist, it retains their strip
+  beside the identity. Other header actions stay at the trailing edge.
 - **Trailing actions:** use `IconButton size="sm" variant="ghost"` with 1rem
   artwork, an action-specific `aria-label`, and a matching `title` hint. Use the
   shared Menu with an icon-only trigger for overflow. Keep permission, pending,
@@ -1220,8 +1231,8 @@ this height. Headers use 0.25rem inline padding (matching the centered 2rem cont
 block inset), 1rem identity icons, and
 0.25rem gaps between action buttons without reducing their hit areas. Navigation
 tabs use 1rem icons or fill avatars and 0.5rem leading padding.
-Header spacing, icons, and controls scale with rem; separators remain
-1px hairlines. Titles and actions may wrap when their content needs more room.
+Header spacing, icons, and controls scale with rem. Panel headers have no bottom
+divider. Titles and actions may wrap when their content needs more room.
 Static identities use PanelHeaderLabel to share navigation tabs’ icon slot,
 regular title weight, and leading inset without adding a tab stop. Terminal context
 can follow the label; Inbox and Bestie use the same composition.
@@ -2012,8 +2023,17 @@ For full-page destinations, compose native-button `NavigationItem variant="pill"
 inside `nav.chrome-navigation`. It shares the chrome tab material and selected fill
 but keeps normal Tab/Enter and `aria-current="page"` semantics. Do not give route
 buttons a tablist/tabpanel relationship when selection moves focus to main content.
-The wide shell topbar is the deliberate exception: global destinations use
-`Tabs variant="chrome"` linked to the retained, labelled page panel. Arrow keys
+The wide shell dock is the deliberate exception: global destinations use
+`Tabs variant="dock"` linked to the retained, labelled page panel.
+The proposed dock appearance uses independent 40px icons with no resting fill,
+12px corners, the sidebar selected fill and paired ink for the active tile,
+and an absolutely positioned 12×4px capsule overlapping its bottom edge, reserving
+no layout space, with a 2px outside outline matching the app background.
+Pointer hover uses the message-reaction lift, tilt, and scale on the artwork only;
+keyboard interaction and reduced motion omit it. Bestie artwork renders at twice the standard visual size within
+the same dock button footprint.
+Dock labels remain accessible and use instant tooltips centered beneath each
+button, without an entrance animation; badges overlay the tile. Left/Right arrow keys
 move focus without selecting; Enter, Space or pointer selection changes the page
 while focus stays on its tab. The host passes per-opening focus intent so page
 autofocus does not override that handoff. Explicit content openings, including
@@ -2117,3 +2137,11 @@ motion and hidden documents; it never owns focus or blocks an action.
 ### Standalone account cards
 
 First-run setup uses `Panel shape="card"`, matching Builderlab/Auth0: content-sized, `radius-card` corners and `shadow-card` lift. Compose a 490px reading column with space-8 insets, title/body-sm typography, shared Field/Input controls and large capsule actions. Keep welcome artwork separate from these opaque setup cards.
+
+### Compact control groups
+
+`buzz-compact-controls` is an opt-in wrapper recipe for compact adjacent Button
+and IconButton actions, currently used by message reaction capsules and their
+Add reaction control. It supplies a 1.625rem height, square icon geometry, and
+content-width labelled controls. Features retain placement and behavior; the
+shared recipe owns sizing. Do not infer this treatment from product data attributes.

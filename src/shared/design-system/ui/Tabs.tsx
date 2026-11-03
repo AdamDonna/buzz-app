@@ -2,6 +2,7 @@ import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import { NavigationItem } from "./NavigationItem";
 import { IconButton } from "./IconButton";
 import { Input } from "./Input";
+import { Tooltip } from "./Tooltip";
 import {
   ContextMenuRoot,
   ContextMenuTrigger,
@@ -93,6 +94,7 @@ export type TabItem<Value extends string> = {
  */
 export type TabsVariant =
   | "chrome"
+  | "dock"
   | "panel"
   | "workspace"
   | "navigation"
@@ -107,6 +109,7 @@ export function Tabs<Value extends string>({
   onReselect,
   trailingAction,
   variant = "chrome",
+  orientation = "horizontal",
   size = "md",
   showSelection = true,
   previewValue,
@@ -133,6 +136,7 @@ export function Tabs<Value extends string>({
   onReselect?: (value: Value) => void;
   trailingAction?: ReactNode;
   variant?: TabsVariant;
+  orientation?: "horizontal" | "vertical";
   /** Segmented filter track size; other variants retain their own geometry. */
   size?: "sm" | "md";
   /** Hide the visual selection for a single-view header; tab semantics remain. */
@@ -142,7 +146,7 @@ export function Tabs<Value extends string>({
   /** Brief visual confirmation of a tab arriving after a completed move. */
   arrivalValue?: Value | undefined;
 }) {
-  const iconOnly = variant === "segmented-icons";
+  const iconOnly = variant === "segmented-icons" || variant === "dock";
   const [renaming, setRenaming] = useState<Value>();
   if (renaming !== undefined && !items.some((item) => item.value === renaming))
     setRenaming(undefined);
@@ -150,7 +154,7 @@ export function Tabs<Value extends string>({
   const strip = (
     <>
       <BaseTabs.List ref={list} className="buzz-tabs-list" aria-label={label}>
-        {showSelection && variant !== "navigation" && (
+        {showSelection && variant !== "navigation" && variant !== "dock" && (
           <BaseTabs.Indicator
             className="buzz-tabs-indicator"
             render={
@@ -167,24 +171,24 @@ export function Tabs<Value extends string>({
             }
           />
         )}
-        {items.map((item) => (
-          <TabMenu
-            key={JSON.stringify([tabMenu?.key, item.value])}
-            label={item.label}
-            actions={item.actions}
-            closeAll={tabMenu?.closeAll}
-            closeOthers={
-              tabMenu?.closeOthers &&
-              (() => tabMenu.closeOthers?.(item.value) ?? false)
-            }
-            onClose={item.onClose}
-            onRename={item.onRename && (() => setRenaming(item.value))}
-          >
+        {items.map((item) => {
+          const tab = (
             <BaseTabs.Tab
               value={item.value}
-              title={item.label}
+              title={variant === "dock" ? undefined : item.label}
               disabled={item.disabled}
               data-icon-only={iconOnly || undefined}
+              onPointerEnter={
+                variant === "dock"
+                  ? (event) => {
+                      if (event.pointerType !== "mouse") return;
+                      event.currentTarget.style.setProperty(
+                        "--dock-icon-tilt",
+                        `${Math.random() * 20 - 10}deg`,
+                      );
+                    }
+                  : undefined
+              }
               render={
                 variant === "navigation" ? (
                   <NavigationItem
@@ -208,7 +212,16 @@ export function Tabs<Value extends string>({
               {...(item.panelId
                 ? { id: `${item.panelId}-tab`, "aria-controls": item.panelId }
                 : {})}
-              onClick={() => {
+              onPointerLeave={
+                variant === "dock"
+                  ? (event) => {
+                      delete event.currentTarget.dataset.dockClicked;
+                    }
+                  : undefined
+              }
+              onClick={(event) => {
+                if (variant === "dock")
+                  event.currentTarget.dataset.dockClicked = "";
                 if (item.value === value) onReselect?.(item.value);
               }}
               onDoubleClick={item.onRename && (() => setRenaming(item.value))}
@@ -265,35 +278,63 @@ export function Tabs<Value extends string>({
                   <span className={iconOnly ? "sr-only" : undefined}>
                     {item.label}
                   </span>
-                  {item.trailing}
+                  {variant === "dock" && item.trailing ? (
+                    <span className="buzz-tabs-badge">{item.trailing}</span>
+                  ) : (
+                    item.trailing
+                  )}
                 </>
               )}
             </BaseTabs.Tab>
-            {item.onClose && (
-              <IconButton
-                size="xs"
-                aria-label={`Close ${item.label} tab`}
-                onClick={item.onClose}
-                icon={<XIcon size="1rem" aria-hidden="true" />}
-              />
-            )}
-            {item.onRename && renaming === item.value && (
-              <TabRename
-                label={item.label}
-                onDone={(name) => {
-                  setRenaming(undefined);
-                  if (name !== undefined) item.onRename?.(name);
-                }}
-              />
-            )}
-          </TabMenu>
-        ))}
+          );
+          return (
+            <TabMenu
+              key={JSON.stringify([tabMenu?.key, item.value])}
+              label={item.label}
+              actions={item.actions}
+              closeAll={tabMenu?.closeAll}
+              closeOthers={
+                tabMenu?.closeOthers &&
+                (() => tabMenu.closeOthers?.(item.value) ?? false)
+              }
+              onClose={item.onClose}
+              onRename={item.onRename && (() => setRenaming(item.value))}
+            >
+              {variant === "dock" ? (
+                <Tooltip content={item.label} hint="instant" side="bottom">
+                  {tab}
+                </Tooltip>
+              ) : (
+                tab
+              )}
+              {item.onClose && (
+                <IconButton
+                  size="xs"
+                  aria-label={`Close ${item.label} tab`}
+                  onClick={item.onClose}
+                  icon={<XIcon size="1rem" aria-hidden="true" />}
+                />
+              )}
+              {item.onRename && renaming === item.value && (
+                <TabRename
+                  label={item.label}
+                  onDone={(name) => {
+                    setRenaming(undefined);
+                    if (name !== undefined) item.onRename?.(name);
+                  }}
+                />
+              )}
+            </TabMenu>
+          );
+        })}
       </BaseTabs.List>
       {trailingAction}
     </>
   );
   return (
     <BaseTabs.Root
+      orientation={orientation}
+      data-orientation={orientation}
       data-buzz-ui=""
       className={renderPanel ? "buzz-tab-panels" : "buzz-tabs"}
       data-variant={variant}

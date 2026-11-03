@@ -89,6 +89,10 @@ that agent in Buzz; they do not notify the external app through this connection.
 
 ## Conversations and communities
 
+- Each reaction emoji has its own capsule. Hover or focus it to see everyone
+  who reacted. Large lists scroll within the preview. With a keyboard, Tab into
+  the list to scroll it; Escape dismisses the preview. Clicking the emoji adds
+  or removes your reaction.
 - Long message bubbles use the available conversation width, stopping 32px
   before the opposite speaker’s avatar column. Short messages hug their text.
 - Hover over a message to reveal the capsule above it: add a reaction, reply,
@@ -198,6 +202,18 @@ that agent in Buzz; they do not notify the external app through this connection.
   and Linux) an HTTP(S) link in a message to open it in your default browser
   instead of a side panel. You can also right-click the link and choose
   **Open in browser**.
+- **Conversation members**: click the combined member avatars and conversation
+  name in the header to open membership management. Other header actions remain
+  on the right. Solo chats show the included agents above the chat name.
+- **Top dock**: icon buttons in the top bar switch between app destinations,
+  including Inbox and Bestie.
+  Community switching and your profile are on the right. Hover for
+  their names; the selected destination has a theme-colored background and a small capsule
+  overlapping its bottom edge. Narrow windows collect these destinations under **More pages**.
+- **Messages sidebar**: available only in Messages, sharing one surface with the
+  conversation. The message column centers against the window when space allows;
+  split panes center within their own pane. When hidden, the top-left **+** opens
+  the same New menu. The resize divider becomes clearer as the pointer approaches.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community

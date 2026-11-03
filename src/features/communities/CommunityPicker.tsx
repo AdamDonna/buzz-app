@@ -59,8 +59,10 @@ export function CommunityPicker({
   onSelect,
   onOpenTarget,
   settingsCards,
+  presentation = "default",
 }: {
   communities: Communities;
+  presentation?: "default" | "icon";
   federatedIdentity?: FederatedIdentity | undefined;
   invite?: (InviteLink & { requestId: number }) | undefined;
   onInviteClose?: ((requestId: number) => void) | undefined;
@@ -196,7 +198,7 @@ export function CommunityPicker({
         >
           <PopoverTrigger
             render={
-              client.memberships.length === 0 ? (
+              client.memberships.length === 0 && presentation === "default" ? (
                 <Button
                   ref={triggerRef}
                   size="sm"
@@ -212,8 +214,14 @@ export function CommunityPicker({
                   size="md"
                   variant="avatar"
                   shape="round"
-                  aria-label={`Community switcher: ${active ? communityName(active) : "Personal space"}`}
-                  title={active ? communityName(active) : "Personal space"}
+                  aria-label={`Community switcher: ${active ? communityName(active) : client.memberships.length ? "Personal space" : "Communities"}`}
+                  title={
+                    active
+                      ? communityName(active)
+                      : client.memberships.length
+                        ? "Personal space"
+                        : "Communities"
+                  }
                   icon={
                     active ? (
                       <Avatar

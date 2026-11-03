@@ -27,13 +27,13 @@
   color: var(--text-subtle);
 }
 
-.root[data-size="small"] .item {
+.root:is([data-size="small"], [data-size="default"]) .item {
   padding: 1.5px;
   width: 1.5rem;
   height: 1.5rem;
 }
 /* Keep short counts round; wider counts grow into a capsule. */
-.root[data-size="small"] .count {
+.root:is([data-size="small"], [data-size="default"]) .count {
   display: inline-grid;
   place-items: center;
   flex-shrink: 0;
@@ -45,6 +45,15 @@
   border-radius: var(--radius-pill);
   background: var(--affordance-selected);
   box-shadow: inset 0 0 0 1.5px var(--surface-panel);
+}
+
+.root[data-size="default"] .item {
+  width: var(--space-8);
+  height: var(--space-8);
+}
+.root[data-size="default"] .count {
+  min-width: var(--space-8);
+  height: var(--space-8);
 }
 
 .root[data-size="mini"] {

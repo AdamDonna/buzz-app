@@ -119,3 +119,61 @@ it("rereads the names it shows after an access purge empties the directory", asy
     reader.dispose();
   }
 });
+
+it("shows only participating agents in Solo and updates when one leaves", () => {
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  let list = {
+    channels: [
+      {
+        id: "solo",
+        channelType: "solo",
+        members: ["human", "included", "remote"],
+      },
+    ],
+  };
+  const choices = {
+    identities: [
+      {
+        pubkey: "included",
+        name: "Included agent",
+        avatar: "https://example.test/agent.png",
+      },
+      { pubkey: "absent", name: "Not in this chat" },
+    ],
+  };
+  const profiles = new Map([
+    ["human", { name: "Human", isAgent: false }],
+    ["remote", { name: "Remote agent", isAgent: true }],
+  ]);
+  const session = {
+    channels: { subscribeList: subscribe, list: () => list },
+    profiles: {
+      subscribe,
+      snapshot: () => profiles,
+      ensure: vi.fn().mockResolvedValue(undefined),
+    },
+    agentChoices: { subscribe, snapshot: () => choices },
+    media: (url: string) => url,
+  } as unknown as RelaySession;
+  render(<ChannelMemberAvatars session={session} channelId="solo" />);
+  expect(
+    screen.getByTitle("Included agent").querySelector("img"),
+  ).toHaveAttribute("src", "https://example.test/agent.png");
+  expect(screen.getByTitle("Remote agent")).toBeInTheDocument();
+  expect(screen.queryByTitle("Human")).not.toBeInTheDocument();
+  expect(screen.queryByTitle("Not in this chat")).not.toBeInTheDocument();
+  act(() => {
+    list = {
+      channels: [
+        { id: "solo", channelType: "solo", members: ["human", "remote"] },
+      ],
+    };
+    for (const listener of listeners) listener();
+  });
+  expect(screen.queryByTitle("Included agent")).not.toBeInTheDocument();
+  expect(screen.getByTitle("Remote agent")).toBeInTheDocument();
+});

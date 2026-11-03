@@ -458,6 +458,7 @@
   .buzz-tooltip[data-ending-style] {
     transition-duration: var(--duration-fast);
   }
+  .buzz-tooltip[data-hint="instant"],
   .buzz-tooltip[data-instant],
   html[data-keyboard-navigation] .buzz-tooltip {
     transition: none;

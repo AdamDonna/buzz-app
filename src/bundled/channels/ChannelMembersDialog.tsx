@@ -1,3 +1,5 @@
+import { ChannelHeaderIdentity } from "./ChannelHeaderIdentity";
+import { ChannelMemberAvatars } from "./ChannelMemberAvatars";
 import { useProfileGeneration } from "../../features/relay/react";
 import { archiveHides } from "../../features/relay/identity-archives";
 import { Button as BaseButton } from "@base-ui/react/button";
@@ -412,10 +414,12 @@ export function ChannelMembersButton({
   signal,
   owner,
   label = "Access",
+  conversationName,
 }: {
   session: RelaySession;
   channelId: string;
   label?: string;
+  conversationName?: string;
   /** Someone else's Solo chat names its owner on the Access control. */
   owner?: { name: string; picture?: string | undefined } | undefined;
   agents?: Agents | undefined;
@@ -432,22 +436,37 @@ export function ChannelMembersButton({
   const trigger = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <IconButton
-        ref={trigger}
-        size="sm"
-        aria-label={owner ? `${label}, ${soloOwnerLabel(owner)}` : label}
-        title={owner ? soloOwnerLabel(owner) : label}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen(true)}
-        icon={
-          owner ? (
-            <SoloOwnerAvatar owner={owner} />
-          ) : (
-            <UsersIcon size="1rem" aria-hidden="true" />
-          )
-        }
-      />
+      {conversationName !== undefined ? (
+        <ChannelHeaderIdentity
+          ref={trigger}
+          name={conversationName}
+          avatars={
+            <ChannelMemberAvatars session={session} channelId={channelId} />
+          }
+          aria-label={`Manage members of ${conversationName}`}
+          title="Manage members"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+        />
+      ) : (
+        <IconButton
+          ref={trigger}
+          size="sm"
+          aria-label={owner ? `${label}, ${soloOwnerLabel(owner)}` : label}
+          title={owner ? soloOwnerLabel(owner) : label}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+          icon={
+            owner ? (
+              <SoloOwnerAvatar owner={owner} />
+            ) : (
+              <UsersIcon size="1rem" aria-hidden="true" />
+            )
+          }
+        />
+      )}
       {open && (
         <ChannelMembersDialog
           key={channelId}

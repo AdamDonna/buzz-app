@@ -29,8 +29,8 @@ export type PreviewCardProps = {
   "aria-label"?: string;
   /** Optional anchor that makes the whole card open the trigger's destination. */
   link?: ReactElement;
-  /** First supplemental button, reachable from the trigger with Tab. Not used with link. */
-  actionRef?: RefObject<HTMLButtonElement | null>;
+  /** First supplemental control or scrollport, reachable with Tab. Not used with link. */
+  actionRef?: RefObject<HTMLElement | null>;
 };
 
 const focusableActions =

@@ -985,3 +985,82 @@ test.each([false, true])(
     expect(closeSide).toHaveBeenCalledTimes(1);
   },
 );
+
+test("conversation identity preserves content and focus when the last detail tab closes", async () => {
+  const manage = vi.fn();
+  function IdentityWorkspace() {
+    const [detail, setDetail] = useState(false);
+    const [selected, select] = useState("conversation");
+    return (
+      <PanelWorkspace
+        main
+        focusOnMount={false}
+        identity={
+          <button type="button" onClick={manage}>
+            Manage Nightriders members
+          </button>
+        }
+        value={selected}
+        select={select}
+        items={[
+          {
+            id: "conversation",
+            label: "Nightriders",
+            content: (
+              <>
+                <input aria-label="Conversation draft" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDetail(true);
+                    select("detail");
+                  }}
+                >
+                  Open detail
+                </button>
+              </>
+            ),
+          },
+          ...(detail
+            ? [
+                {
+                  id: "detail",
+                  label: "Detail",
+                  content: <p>Detail content</p>,
+                  close: () => {
+                    setDetail(false);
+                    select("conversation");
+                  },
+                },
+              ]
+            : []),
+        ]}
+      />
+    );
+  }
+  render(<IdentityWorkspace />);
+  expect(screen.getByRole("region", { name: "Nightriders" })).toBeVisible();
+  expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Manage Nightriders members" }),
+  );
+  expect(manage).toHaveBeenCalledOnce();
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Conversation draft" }),
+    "Keep this draft",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open detail" }));
+  expect(
+    screen.getByRole("tab", { name: "Detail", selected: true }),
+  ).toBeVisible();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Close Detail tab" }),
+  );
+  expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("textbox", { name: "Conversation draft" }),
+  ).toHaveValue("Keep this draft");
+  expect(
+    screen.getByRole("button", { name: "Manage Nightriders members" }),
+  ).toHaveFocus();
+});

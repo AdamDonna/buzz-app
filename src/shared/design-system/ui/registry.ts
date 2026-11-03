@@ -566,11 +566,12 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
     purpose:
       "Show overlapping identities, three unless the caller sets a maximum, and an overflow count on one line. The enclosing control supplies the accessible name.",
     behavior:
-      "Decorative artwork composed from Avatar; mini, small, and hero sizes use a surface-colored inset to separate overlapping images. Identity data stays with the caller. Optional entrance motion respects reduced motion.",
+      "Decorative artwork composed from Avatar; mini, small, default (32px), and hero sizes use a surface-colored inset to separate overlapping images. Identity data stays with the caller. Optional entrance motion respects reduced motion.",
     variants: [
       "mini",
       "compact",
       "small",
+      "default",
       "hero",
       "hero-large",
       "circle",
@@ -685,11 +686,12 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
     slug: "tabs",
     name: "Tabs",
     purpose:
-      "Switch between sibling views. Choose chrome for the app backdrop, panel for a plain surface, segmented for grouped filters on an opaque surface, workspace for combined panes, or navigation for content-sized tabs capped at 12rem with icons or avatars. Closable tabs provide a sibling close button and support Delete or middle-click. The caller owns selection, retained content, and the next selection after closing.",
+      "Switch between sibling views. Choose dock for icon-only shell destinations with a themed selection and active dot, chrome for grouped tabs on the app backdrop, panel for a plain surface, segmented for grouped filters on an opaque surface, workspace for combined panes, or navigation for content-sized tabs capped at 12rem with icons or avatars. Closable tabs provide a sibling close button and support Delete or middle-click. The caller owns selection, retained content, and the next selection after closing.",
     behavior:
-      "Base UI Tabs. The segmented-icons variant keeps item labels accessible and available as titles while showing only icons. Items can be disabled. Navigation items accept attentionRequest to identify a repeated opening without changing focus or remounting content. Hosts may opt movable tabs into Panel Swap title-only dragging using TabDragFeedback; hosts own hit testing, cancellation and the committed order. tabMenu composes the host’s scoped Close all tabs action with Rename tab in one shared menu, without changing tab selection.",
+      "Base UI Tabs. Icon-only variants keep item labels accessible. Dock labels use instant tooltips centered beneath their buttons; segmented-icons labels remain available as titles. Items can be disabled. Navigation items accept attentionRequest to identify a repeated opening without changing focus or remounting content. Hosts may opt movable tabs into Panel Swap title-only dragging using TabDragFeedback; hosts own hit testing, cancellation and the committed order. tabMenu composes the host’s scoped Close all tabs action with Rename tab in one shared menu, without changing tab selection.",
     variants: [
       "chrome",
+      "dock",
       "panel",
       "workspace",
       "navigation",

@@ -12,7 +12,7 @@ import {
 import { FAMILIAR_HINT_REST_MS, HELPFUL_HINT_REST_MS } from "./hoverIntent";
 
 /** DESIGN.md "Hover timing": how long a hint waits for a resting pointer. */
-export type HintTiming = "helpful" | "familiar";
+export type HintTiming = "helpful" | "familiar" | "instant";
 
 /** Hints in one provider open instantly while a neighbor is showing. */
 export function TooltipProvider({ children }: { children: ReactNode }) {
@@ -41,7 +41,7 @@ export function Tooltip({
   hint?: HintTiming | undefined;
   closeOnClick?: boolean;
   disableHoverablePopup?: boolean;
-  side?: "top" | "right";
+  side?: "top" | "right" | "bottom";
   /** Attach a non-interactive hint below/right of the native pointer. */
   follow?: "trigger" | "pointer";
   /** Action feedback may open a hint after an asynchronous result. */
@@ -99,7 +99,11 @@ export function Tooltip({
       <BaseTooltip.Trigger
         ref={setTrigger}
         delay={
-          hint === "familiar" ? FAMILIAR_HINT_REST_MS : HELPFUL_HINT_REST_MS
+          hint === "instant"
+            ? 0
+            : hint === "familiar"
+              ? FAMILIAR_HINT_REST_MS
+              : HELPFUL_HINT_REST_MS
         }
         closeOnClick={closeOnClick}
         // Base UI merges render-element props last. Put the combined link on
@@ -132,6 +136,7 @@ export function Tooltip({
             data-color-mode={children.props["data-color-mode"]}
             className="buzz-tooltip"
             data-follow={follow}
+            data-hint={hint}
           >
             {content}
           </BaseTooltip.Popup>

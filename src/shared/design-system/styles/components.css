@@ -417,6 +417,19 @@
     width: var(--size-control-sm);
     height: var(--size-control-sm);
   }
+  /* Opt-in compact control group: one geometry for labelled and icon actions. */
+  .buzz-compact-controls {
+    --compact-control-size: calc(var(--space-6) + var(--space-half));
+  }
+  .buzz-compact-controls .buzz-button:not([data-icon-variant]) {
+    min-height: var(--compact-control-size);
+    padding: calc(var(--space-1) + var(--space-half) / 2)
+      calc(var(--space-1h) + var(--space-half) / 2);
+  }
+  .buzz-compact-controls .buzz-button[data-icon-variant] {
+    width: var(--compact-control-size);
+    height: var(--compact-control-size);
+  }
   /* Compact icon actions: 20px control with 12px artwork. */
   .buzz-button[data-icon-variant][data-icon-size="xs"] {
     width: var(--space-5);
@@ -1128,6 +1141,91 @@
     box-shadow: var(--shadow-xs);
   }
 
+  /* Dock destinations retain tab behavior, with independent icon tiles. */
+  .buzz-tabs[data-variant="dock"] {
+    display: inline-flex;
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-list {
+    gap: var(--space-2);
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-tab {
+    flex: none;
+    width: var(--size-control);
+    height: var(--size-control);
+    padding: 0;
+    border-radius: calc(var(--radius-row) - var(--space-1));
+    corner-shape: squircle;
+    color: var(--text-chrome-subtle);
+    background: transparent;
+  }
+  .buzz-tabs[data-variant="dock"]
+    .buzz-tabs-tab:hover:not([data-selected], [data-disabled]) {
+    background: var(--affordance-chrome-hover);
+    color: var(--text-standard);
+  }
+  .buzz-tabs[data-variant="dock"]
+    .buzz-tabs-tab:active:not([data-selected], [data-disabled]) {
+    background: var(--affordance-backdrop-pressed);
+    color: var(--text-standard);
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-tab[data-selected] {
+    background: var(--surface-sidebar-selected);
+    color: var(--text-sidebar-selected);
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-tab[data-selected]::after {
+    content: "";
+    position: absolute;
+    top: calc(100% - var(--space-1) / 2);
+    left: calc(50% - var(--space-3) / 2);
+    width: var(--space-3);
+    height: var(--space-1);
+    border-radius: var(--radius-pill);
+    background: var(--text-standard);
+    outline: 2px solid var(--bg-app);
+    pointer-events: none;
+  }
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-badge {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    max-width: var(--space-8);
+    max-height: var(--space-4);
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .buzz-tabs[data-variant="dock"]:where([data-orientation="vertical"])
+    .buzz-tabs-list {
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  /* Match message reaction playfulness without moving the tile or indicator. */
+  @media (hover: hover) and (pointer: fine) and (
+      prefers-reduced-motion: no-preference
+    ) {
+    .buzz-tabs[data-variant="dock"] .buzz-tabs-icon {
+      transform-origin: 50% 70%;
+      transition: transform var(--duration-settle) var(--easing-settle);
+    }
+    html:not([data-keyboard-navigation])
+      .buzz-tabs[data-variant="dock"]
+      .buzz-tabs-tab:enabled:hover:not([data-dock-clicked])
+      .buzz-tabs-icon {
+      transform: translateY(calc(-1 * var(--space-half)))
+        rotate(clamp(-4deg, var(--dock-icon-tilt, -3deg), 4deg)) scale(1.25);
+      transition-duration: var(--duration-state);
+      transition-timing-function: var(--easing-enter);
+    }
+    html:not([data-keyboard-navigation])
+      .buzz-tabs[data-variant="dock"]
+      .buzz-tabs-tab:enabled:hover:active
+      .buzz-tabs-icon {
+      transform: scale(0.96);
+      transition-duration: var(--duration-fast);
+    }
+  }
+
   /* Segmented filters on opaque surfaces, as used by sidebar scope. */
   .buzz-tabs:is([data-variant="segmented"], [data-variant="segmented-icons"]) {
     display: flex;
@@ -1264,24 +1362,9 @@
     padding-inline: var(--space-1);
   }
 
-  /* The painted band includes the outer rim above and excludes the separator
-     below. Center its controls one hairline above the layout box's center. */
+  /* Keep the established optical alignment with the panel’s outer rim. */
   .panel-header > * {
     translate: 0 -1px;
-  }
-
-  .panel-header::after {
-    position: absolute;
-    inset-block-end: 0;
-    inset-inline: var(--space-1);
-    height: 1px;
-    background: var(--border-standard);
-    content: "";
-    pointer-events: none;
-  }
-
-  .panel[data-joined] .panel-header::after {
-    inset-inline: 0;
   }
 
   .panel-header[data-variant="compact"] {
@@ -1312,9 +1395,6 @@
   .panel-header[data-variant="card"] {
     min-width: 0;
     flex-wrap: nowrap;
-  }
-  .panel-header[data-variant="card"]::after {
-    display: none;
   }
   .panel-header[data-variant="card"] .panel-header-title {
     flex: 1 1 0;
@@ -1976,6 +2056,12 @@
     @apply text-caption;
     align-items: center;
     justify-content: center;
+  }
+
+  .buzz-tabs[data-variant="dock"] .buzz-tabs-icon {
+    flex-basis: var(--space-5);
+    width: var(--space-5);
+    height: var(--space-5);
   }
 
   html[data-keyboard-navigation] .buzz-surface-button:focus-visible,

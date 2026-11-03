@@ -34,7 +34,7 @@ export function PageNavigation({
     return (
       <Tabs
         label="Topbar pages"
-        variant="chrome"
+        variant="dock"
         value={pages.some((page) => page.key === selected) ? selected : null}
         onValueChange={(key) => onSelect(key, { focus: "preserve" })}
         onReselect={(key) => {
@@ -47,7 +47,20 @@ export function PageNavigation({
             value: page.key,
             label: presentation(page).label,
             icon: (
-              <PageIcon icon={icon} image={image} size={16} strokeWidth={2.5} />
+              <span
+                className={
+                  page.key === BESTIE_PAGE
+                    ? "shell-dock-bestie-icon"
+                    : undefined
+                }
+              >
+                <PageIcon
+                  icon={icon}
+                  image={image}
+                  size={20}
+                  strokeWidth={2.5}
+                />
+              </span>
             ),
             panelId: `shell-page-${page.key}`,
             trailing: Badge ? (

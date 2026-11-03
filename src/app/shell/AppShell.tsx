@@ -144,7 +144,10 @@ function AppShellContent({
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const navigationToggle = useRef<HTMLButtonElement>(null);
-  const visibleSidebar = narrow ? navigationOpen : sidebarOpen;
+  const visibleSidebar =
+    channelsNavigation && (narrow ? navigationOpen : sidebarOpen);
+  const creationInNavigation =
+    !!creationAction && creationInSidebar && visibleSidebar;
   useEffect(
     () =>
       searchServices?.shortcuts.registerHost({
@@ -197,7 +200,7 @@ function AppShellContent({
     const content = sidebar ? (
       sidebar(
         pageNavigation,
-        creationAction && creationInSidebar && (
+        creationAction && creationInNavigation && (
           <div ref={setCreationContainer} />
         ),
       )
@@ -225,7 +228,7 @@ function AppShellContent({
     sidebar,
     sidebarScope,
     creationAction,
-    creationInSidebar,
+    creationInNavigation,
   ]);
   const headerPages = useMemo(
     () =>
@@ -361,7 +364,7 @@ function AppShellContent({
           data-tauri-drag-region={macDesktop ? undefined : true}
           {...titleBarDragProps}
         >
-          {(collapsibleSidebar || narrow) && (
+          {channelsNavigation && (collapsibleSidebar || narrow) && (
             <IconButton
               hint="familiar"
               ref={navigationToggle}
@@ -381,12 +384,18 @@ function AppShellContent({
             />
           )}
           {navigationControls}
-          {creationAction && !creationInSidebar && (
+          {creationAction && !creationInNavigation && (
             <div ref={setCreationContainer} />
           )}
         </div>
         <div className="shell-center-capsule shell-capsule">
-          <div className="shell-page-switcher chrome-navigation">
+          <div
+            className={
+              compactPages
+                ? "shell-page-switcher chrome-navigation"
+                : "shell-page-switcher"
+            }
+          >
             {headerPages.length > 0 && (
               <PopoverRoot
                 open={overflowOpen && compactPages}
@@ -522,70 +531,104 @@ function AppShellContent({
           className={`shell-body ${selected === "settings" ? "shell-body-settings" : ""}`}
         >
           <div className="relative flex min-h-0 min-w-0 flex-1">
-            <div className="shell-content">
+            <Panel as="div" joined>
               <div
-                id="shell-navigation"
-                className="shell-navigation"
-                data-sidebar-collapsible={
-                  (collapsibleSidebar && !narrow) || undefined
-                }
-                data-sidebar-open={visibleSidebar || undefined}
-                aria-hidden={(collapsibleSidebar || narrow) && !visibleSidebar}
-                inert={(collapsibleSidebar || narrow) && !visibleSidebar}
-                data-expanded={navigationOpen}
-                onKeyDown={(event) => {
+                onPointerMove={(event) => {
                   if (
-                    event.key === "Escape" &&
-                    !event.shiftKey &&
-                    navigationOpen &&
-                    !event.defaultPrevented
-                  ) {
-                    // Closing the drawer consumes Escape, so it marks nothing read.
-                    event.preventDefault();
-                    setNavigationOpen(false);
-                    navigationToggle.current?.focus();
-                  }
+                    event.pointerType !== "mouse" ||
+                    !visibleSidebar ||
+                    narrow
+                  )
+                    return;
+                  const divider =
+                    event.currentTarget.querySelector<HTMLElement>(
+                      "#shell-navigation",
+                    );
+                  if (!divider) return;
+                  const distance = Math.abs(
+                    event.clientX - divider.getBoundingClientRect().right,
+                  );
+                  divider.style.setProperty(
+                    "--sidebar-divider-proximity",
+                    String(Math.max(0, 1 - distance / 80)),
+                  );
                 }}
+                onPointerLeave={(event) => {
+                  event.currentTarget
+                    .querySelector<HTMLElement>("#shell-navigation")
+                    ?.style.removeProperty("--sidebar-divider-proximity");
+                }}
+                className="shell-content"
+                data-messages={channelsNavigation || undefined}
               >
-                <div className="shell-navigation-content">{navigation}</div>
-              </div>
-              <main
-                id="main-content"
-                tabIndex={-1}
-                className="min-h-0 min-w-0 flex-1"
-              >
-                <Panel as="div" joined>
-                  <PanelFrame companion={companion}>
-                    <div
-                      id={`shell-page-${panelKey}`}
-                      {...(!compactPages && selectedTopbarPage
-                        ? {
-                            role: "tabpanel",
-                            "aria-labelledby": `shell-page-${panelKey}-tab`,
-                            tabIndex: 0,
-                            "data-focus-inset": "",
-                          }
-                        : {})}
-                      className={
-                        fillsWorkspace
-                          ? "buzz-tabs-panel h-full min-h-0"
-                          : "buzz-tabs-panel h-full min-h-0 overflow-y-auto px-2 pt-10 pb-8 sm:px-4 sm:pt-14 sm:pb-10"
+                {channelsNavigation && (
+                  <div
+                    id="shell-navigation"
+                    className="shell-navigation"
+                    data-sidebar-collapsible={
+                      (collapsibleSidebar && !narrow) || undefined
+                    }
+                    data-sidebar-open={visibleSidebar || undefined}
+                    aria-hidden={
+                      (collapsibleSidebar || narrow) && !visibleSidebar
+                    }
+                    inert={(collapsibleSidebar || narrow) && !visibleSidebar}
+                    data-expanded={navigationOpen}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Escape" &&
+                        !event.shiftKey &&
+                        navigationOpen &&
+                        !event.defaultPrevented
+                      ) {
+                        // Closing the drawer consumes Escape, so it marks nothing read.
+                        event.preventDefault();
+                        setNavigationOpen(false);
+                        navigationToggle.current?.focus();
                       }
-                    >
+                    }}
+                  >
+                    <div className="shell-navigation-content">{navigation}</div>
+                  </div>
+                )}
+                <main
+                  id="main-content"
+                  tabIndex={-1}
+                  className="min-h-0 min-w-0 flex-1"
+                >
+                  <Panel as="div" joined>
+                    <PanelFrame companion={companion}>
                       <div
+                        id={`shell-page-${panelKey}`}
+                        {...(!compactPages && selectedTopbarPage
+                          ? {
+                              role: "tabpanel",
+                              "aria-labelledby": `shell-page-${panelKey}-tab`,
+                              tabIndex: 0,
+                              "data-focus-inset": "",
+                            }
+                          : {})}
                         className={
                           fillsWorkspace
-                            ? "h-full min-h-0"
-                            : "mx-auto w-full max-w-4xl"
+                            ? "buzz-tabs-panel h-full min-h-0"
+                            : "buzz-tabs-panel h-full min-h-0 overflow-y-auto px-2 pt-10 pb-8 sm:px-4 sm:pt-14 sm:pb-10"
                         }
                       >
-                        {children}
+                        <div
+                          className={
+                            fillsWorkspace
+                              ? "h-full min-h-0"
+                              : "mx-auto w-full max-w-4xl"
+                          }
+                        >
+                          {children}
+                        </div>
                       </div>
-                    </div>
-                  </PanelFrame>
-                </Panel>
-              </main>
-            </div>
+                    </PanelFrame>
+                  </Panel>
+                </main>
+              </div>
+            </Panel>
           </div>
         </div>
       </div>

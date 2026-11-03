@@ -15,7 +15,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RegisteredPage } from "../../features/pages/service";
 import { createServices, type AppServices } from "../services";
@@ -79,8 +79,8 @@ it("hides and shows the channel sidebar without re-rendering its content", async
     },
     {
       id: "inbox",
-      key: "buzz.inbox/inbox",
-      pluginId: "buzz.inbox",
+      key: "example.inbox/inbox",
+      pluginId: "example.inbox",
       revision: "1",
       title: "Inbox",
       component: () => null,
@@ -126,115 +126,53 @@ it("hides and shows the channel sidebar without re-rendering its content", async
   expect(content).toBeInTheDocument();
   expect(renders).toHaveBeenCalledTimes(rendered);
 
-  // A selection change still reaches the page rows the sidebar renders.
-  rerender(shell("buzz.inbox/inbox"));
-  expect(renders.mock.calls.length).toBeGreaterThan(rendered);
-  expect(row()).toHaveAttribute("aria-current", "page");
+  rerender(shell("example.inbox/inbox"));
+  expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Hide sidebar" })).toBeNull();
+  rerender(shell("buzz.channels/channels"));
+  expect(screen.getByRole("complementary", { name: "Sidebar" })).toBeVisible();
 });
 
-it("lets a plugin page hide and show the shell sidebar", async () => {
-  const current = createServices();
-  services = current;
-  const pages: RegisteredPage[] = [
-    {
-      id: "main",
-      key: "example.plugin/main",
-      pluginId: "example.plugin",
-      revision: "1",
-      title: "Beacon",
-      component: () => null,
-      primary: true,
-    },
-  ];
-  render(
-    <ToastProvider>
-      <AppShell
-        pages={pages}
-        selected="example.plugin/main"
-        navigationAttempt=""
-        onSelect={() => {}}
-        tone="default"
-        communities={current.communities}
-        accountActions={current.accountActions}
-        appearance={testAppearance}
-      >
-        content
-      </AppShell>
-    </ToastProvider>,
-  );
-
-  const navigation = document.getElementById("shell-navigation");
-  expect(
-    within(screen.getByRole("navigation", { name: "Pages" })).getByRole(
-      "button",
-      { name: "Beacon" },
-    ),
-  ).toBeInTheDocument();
-  expect(navigation).toHaveAttribute("data-sidebar-collapsible");
-  await userEvent.click(screen.getByRole("button", { name: "Hide sidebar" }));
-  expect(navigation).toHaveAttribute("aria-hidden", "true");
-  expect(navigation).toHaveAttribute("inert");
-  expect(screen.getByRole("button", { name: "Show sidebar" })).toHaveAttribute(
-    "aria-expanded",
-    "false",
-  );
-  expect(
-    screen.queryByRole("navigation", { name: "Pages" }),
-  ).not.toBeInTheDocument();
-
-  await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
-  expect(navigation).toHaveAttribute("aria-hidden", "false");
-  expect(navigation).not.toHaveAttribute("inert");
-  expect(screen.getByRole("button", { name: "Hide sidebar" })).toHaveAttribute(
-    "aria-expanded",
-    "true",
-  );
-  expect(
-    within(screen.getByRole("navigation", { name: "Pages" })).getByRole(
-      "button",
-      { name: "Beacon" },
-    ),
-  ).toBeInTheDocument();
-});
-
-it("does not make a non-primary plugin page's sidebar collapsible", () => {
-  const current = createServices();
-  services = current;
-  const pages: RegisteredPage[] = [
-    {
-      id: "secondary",
-      key: "example.plugin/secondary",
-      pluginId: "example.plugin",
-      revision: "1",
-      title: "Secondary",
-      component: () => null,
-      primary: false,
-    },
-  ];
-  render(
-    <ToastProvider>
-      <AppShell
-        pages={pages}
-        selected="example.plugin/secondary"
-        navigationAttempt=""
-        onSelect={() => {}}
-        tone="default"
-        communities={current.communities}
-        accountActions={current.accountActions}
-        appearance={testAppearance}
-      >
-        content
-      </AppShell>
-    </ToastProvider>,
-  );
-
-  expect(document.getElementById("shell-navigation")).not.toHaveAttribute(
-    "data-sidebar-collapsible",
-  );
-  expect(
-    screen.queryByRole("button", { name: "Hide sidebar" }),
-  ).not.toBeInTheDocument();
-});
+it.each([true, false])(
+  "shows only main content in other apps (primary: %s)",
+  (primary) => {
+    const current = createServices();
+    services = current;
+    render(
+      <ToastProvider>
+        <AppShell
+          pages={[
+            {
+              id: "main",
+              key: "example.plugin/main",
+              pluginId: "example.plugin",
+              revision: "1",
+              title: "Beacon",
+              component: () => null,
+              primary,
+              sidebar: () => null,
+            },
+          ]}
+          selected="example.plugin/main"
+          navigationAttempt=""
+          onSelect={() => {}}
+          tone="default"
+          sidebar={() => <aside aria-label="Message sidebar">Messages</aside>}
+          communities={current.communities}
+          accountActions={current.accountActions}
+          appearance={testAppearance}
+        >
+          Main app content
+        </AppShell>
+      </ToastProvider>,
+    );
+    expect(screen.getByText("Main app content")).toBeVisible();
+    expect(
+      screen.queryByRole("complementary", { name: "Message sidebar" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /sidebar/i })).toBeNull();
+  },
+);
 
 it("keeps built-in sidebar controls available before page contributions load", () => {
   const current = createServices();
@@ -263,66 +201,7 @@ it("keeps built-in sidebar controls available before page contributions load", (
   );
 });
 
-it("lets a non-primary page-owned sidebar collapse without losing local state", async () => {
-  const current = createServices();
-  services = current;
-  function ContributedSidebar() {
-    const [value, setValue] = useState("kept");
-    return (
-      <aside aria-label="Beacon sidebar" className="shell-sidebar">
-        <button type="button" onClick={() => setValue("changed")}>
-          {value}
-        </button>
-      </aside>
-    );
-  }
-  const sidebar = () => <ContributedSidebar />;
-  const pages: RegisteredPage[] = [
-    {
-      id: "main",
-      key: "example.plugin/main",
-      pluginId: "example.plugin",
-      revision: "1",
-      title: "Beacon",
-      component: () => null,
-      sidebar: () => null,
-    },
-  ];
-  render(
-    <ToastProvider>
-      <AppShell
-        pages={pages}
-        selected="example.plugin/main"
-        navigationAttempt=""
-        onSelect={() => {}}
-        tone="default"
-        sidebar={sidebar}
-        communities={current.communities}
-        accountActions={current.accountActions}
-        appearance={testAppearance}
-      >
-        content
-      </AppShell>
-    </ToastProvider>,
-  );
-  const nav = document.getElementById("shell-navigation");
-  const contribution = screen.getByRole("complementary", {
-    name: "Beacon sidebar",
-  });
-  await userEvent.click(
-    within(contribution).getByRole("button", { name: "kept" }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "Hide sidebar" }));
-  expect(nav).toHaveAttribute("aria-hidden", "true");
-  expect(nav).toHaveAttribute("inert");
-  await userEvent.click(screen.getByRole("button", { name: "Show sidebar" }));
-  expect(nav).toHaveAttribute("aria-hidden", "false");
-  expect(
-    within(contribution).getByRole("button", { name: "changed" }),
-  ).toBeVisible();
-});
-
-it("keeps narrow contributed sidebars in the existing Escape-dismissed navigation drawer", async () => {
+it("keeps the narrow Messages sidebar in the existing Escape-dismissed navigation drawer", async () => {
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
     matches: true,
@@ -351,7 +230,7 @@ it("keeps narrow contributed sidebars in the existing Escape-dismissed navigatio
     <ToastProvider>
       <AppShell
         pages={pages}
-        selected="example.plugin/main"
+        selected="buzz.channels/channels"
         navigationAttempt={attempt}
         onSelect={() => {}}
         tone="default"
@@ -410,7 +289,7 @@ it("shows a primary plugin page's declared icon beside its nav label", () => {
     <ToastProvider>
       <AppShell
         pages={pages}
-        selected="example.plugin/main"
+        selected="buzz.channels/channels"
         navigationAttempt=""
         onSelect={() => {}}
         tone="default"
@@ -455,7 +334,7 @@ it("contains a throwing page badge to its own nav row", () => {
       <ToastProvider>
         <AppShell
           pages={pages}
-          selected="example.plugin/broken"
+          selected="buzz.channels/channels"
           navigationAttempt=""
           onSelect={() => {}}
           tone="default"
@@ -517,7 +396,7 @@ it("partitions primary pages without duplicate links and preserves exact selecti
       </AppShell>
     </ToastProvider>
   );
-  const { rerender } = render(shell());
+  const { rerender } = render(shell(pages, "buzz.channels/channels"));
   for (const [name, landmark] of [
     ["Sidebar", "Pages"],
     ["Topbar", "Topbar pages"],
@@ -536,6 +415,7 @@ it("partitions primary pages without duplicate links and preserves exact selecti
   expect(
     screen.queryByRole("button", { name: "Search only" }),
   ).not.toBeInTheDocument();
+  rerender(shell());
   const toolbar = screen.getByRole("button", { name: "Toolbar" });
   expect(toolbar).toHaveAttribute("aria-current", "page");
   expect(toolbar).not.toHaveAttribute("aria-expanded");
@@ -648,7 +528,7 @@ it("falls back from a failed toolbar image and isolates toolbar badge errors", (
   }
 });
 
-it("uses chrome tabs with manual keyboard selection, page linkage, and isolated badges", async () => {
+it("uses dock tabs with manual keyboard selection, page linkage, and isolated badges", async () => {
   const current = createServices();
   services = current;
   const onSelect = vi.fn();
@@ -681,7 +561,7 @@ it("uses chrome tabs with manual keyboard selection, page linkage, and isolated 
   );
   const { rerender } = render(shell("example/Messages"));
   const tabs = screen.getByRole("tablist", { name: "Topbar pages" });
-  expect(tabs.parentElement).toHaveAttribute("data-variant", "chrome");
+  expect(tabs.parentElement).toHaveAttribute("data-variant", "dock");
   const messages = within(tabs).getByRole("tab", {
     name: /Messages\s*3 unread/,
   });
@@ -732,7 +612,7 @@ it("uses chrome tabs with manual keyboard selection, page linkage, and isolated 
 });
 
 it.each([false, true])(
-  "keeps Inbox in Messages and preserves sidebar visibility across pages (compact: %s)",
+  "gives Inbox and Bestie their own dock destinations without message sidebars (compact: %s)",
   async (compact) => {
     vi.stubGlobal("matchMedia", (media: string) => ({
       media,
@@ -785,11 +665,7 @@ it.each([false, true])(
         name: "Communities",
       }),
     ).toBeVisible();
-    if (!compact)
-      expect(screen.getByRole("button", { name: "Inbox" })).toHaveAttribute(
-        "aria-current",
-        "page",
-      );
+    expect(document.getElementById("shell-navigation")).toBeNull();
     if (compact)
       await userEvent.click(screen.getByRole("button", { name: "More pages" }));
     const nav = screen.getByRole("navigation", {
@@ -798,9 +674,16 @@ it.each([false, true])(
     const messages = within(nav).getByRole(compact ? "button" : "tab", {
       name: "Messages",
     });
-    expect(messages).toHaveAttribute(
+    const inbox = within(nav).getByRole(compact ? "button" : "tab", {
+      name: "Inbox",
+    });
+    const bestie = within(nav).getByRole(compact ? "button" : "tab", {
+      name: "Bestie",
+    });
+    expect(bestie).toBeVisible();
+    expect(inbox).toHaveAttribute(
       compact ? "aria-current" : "aria-selected",
-      "true",
+      compact ? "page" : "true",
     );
     const top = within(nav).getByRole(compact ? "button" : "tab", {
       name: "Top",
@@ -818,23 +701,16 @@ it.each([false, true])(
     expect(top).toHaveFocus();
     expect(
       within(nav).queryByRole("tab", { name: "Bestie" }),
-    ).not.toBeInTheDocument();
-    rerender(shell("fixture.projects/projects"));
-    expect(document.getElementById("shell-navigation")).toHaveAttribute(
-      "aria-hidden",
-      "false",
-    );
-    rerender(shell("buzz.bestie/bestie"));
-    expect(screen.getByRole("button", { name: "Bestie" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-    expect(document.getElementById("shell-navigation")).toHaveAttribute(
-      "aria-hidden",
-      "false",
-    );
-    rerender(shell("example/top"));
-    expect(screen.getByRole("button", { name: "Hide sidebar" })).toBeVisible();
+    ).toBeInTheDocument();
+    for (const key of [
+      "fixture.projects/projects",
+      "buzz.bestie/bestie",
+      "example/top",
+    ]) {
+      rerender(shell(key));
+      expect(document.getElementById("shell-navigation")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Hide sidebar" })).toBeNull();
+    }
     expect(top).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: "Top" })).toHaveTextContent(
       "Child content",
@@ -848,23 +724,21 @@ it.each([false, true])(
       "page",
     );
     rerender(shell("buzz.inbox/inbox"));
-    expect(messages).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("button", { name: "Hide sidebar" })).toBeVisible();
-    const panel = screen.getByRole("tabpanel", { name: "Messages" });
-    expect(panel).toHaveAttribute("id", messages.getAttribute("aria-controls"));
-    expect(panel).toHaveAttribute("aria-labelledby", messages.id);
+    expect(inbox).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: "Hide sidebar" })).toBeNull();
+    const panel = screen.getByRole("tabpanel", { name: "Inbox" });
+    expect(panel).toHaveAttribute("id", inbox.getAttribute("aria-controls"));
+    expect(panel).toHaveAttribute("aria-labelledby", inbox.id);
     expect(panel).toHaveTextContent("Child content");
     await userEvent.click(messages);
     expect(onSelect).toHaveBeenLastCalledWith("buzz.channels/channels", {
       focus: "preserve",
     });
+    rerender(shell("buzz.channels/channels"));
     await userEvent.click(screen.getByRole("button", { name: "Hide sidebar" }));
     rerender(shell("fixture.projects/projects"));
-    expect(document.getElementById("shell-navigation")).toHaveAttribute(
-      "aria-hidden",
-      "true",
-    );
-    rerender(shell("buzz.inbox/inbox"));
+    expect(document.getElementById("shell-navigation")).toBeNull();
+    rerender(shell("buzz.channels/channels"));
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBeVisible();
     rerender(shell("settings"));
     expect(
@@ -932,6 +806,14 @@ it.each([true, false])(
       </ToastProvider>,
     );
     await user.click(screen.getByRole("button", { name: "Hide sidebar" }));
+    expect(
+      within(screen.getByRole("banner")).getByRole("button", { name: "New" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "New" }));
+    expect(
+      await screen.findByRole("menuitem", { name: "New chat" }),
+    ).toBeVisible();
+    await user.keyboard("{Escape}");
     fireEvent.keyDown(window, { key: "n", ctrlKey: true });
     expect(
       await screen.findByRole("menuitem", { name: "New chat" }),
