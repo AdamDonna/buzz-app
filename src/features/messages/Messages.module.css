@@ -365,6 +365,8 @@
 }
 .reactionPreviewContent {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
   justify-items: center;
   gap: var(--space-1);
   max-width: 28rem;
@@ -372,6 +374,10 @@
   overflow-wrap: anywhere;
 }
 .reactionPreview.reactionPreview {
+  /* Spend available height on the names scrollport, keeping emoji and label visible. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   max-width: min(30rem, 85vw, var(--available-width, 100vw));
 }
 .reactionPreviewEmoji {
@@ -396,6 +402,7 @@
 }
 .reactionPreviewNames {
   @apply text-caption text-standard;
+  min-height: 0;
   max-width: 100%;
   max-height: min(20rem, 40vh);
   overflow-y: auto;

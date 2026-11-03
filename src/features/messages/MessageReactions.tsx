@@ -352,6 +352,8 @@ function ReactionEmoji({
         anchor={emojiAnchor}
         open={shown}
         warm={previewWarm}
+        // Scrollability must not change positioning and its measured available height.
+        sticky
         {...(overflowing && {
           actionRef: peopleList,
           "aria-label": `People who reacted with ${name}`,

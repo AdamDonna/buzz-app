@@ -65,13 +65,15 @@ test("grouped reaction counts fit and preview in both themes and text sizes", as
 test("all reactor names wrap and remain reachable with pointer and keyboard", async ({
   page,
 }, testInfo) => {
-  for (const { count, width, scale } of [
-    { count: 150, width: 1440, scale: 1 },
-    { count: 40, width: 520, scale: 2 },
+  for (const { count, width, height, scale, longNames } of [
+    { count: 40, width: 1440, height: 700, scale: 2, longNames: false },
+    { count: 40, width: 520, height: 400, scale: 1, longNames: false },
+    { count: 150, width: 1440, height: 950, scale: 1, longNames: true },
+    { count: 40, width: 520, height: 950, scale: 2, longNames: true },
   ]) {
-    await page.setViewportSize({ width, height: 950 });
+    await page.setViewportSize({ width, height });
     await page.goto(
-      `/tests/fixtures/emoji.html?reactions&grouped=${count}&long-names`,
+      `/tests/fixtures/emoji.html?reactions&grouped=${count}${longNames ? "&long-names" : ""}`,
     );
     await page.evaluate(
       (scale) =>
@@ -83,36 +85,46 @@ test("all reactor names wrap and remain reachable with pointer and keyboard", as
     );
     const group = page.getByRole("button", { name: `👍: ${count} people` });
     await group.hover();
-    const preview = page.locator(
-      '.buzz-preview-card[role="dialog"][data-open]',
-    );
+    const preview = page.locator(".buzz-preview-card[data-open]");
     const people = preview.getByRole("region", {
       name: "Everyone who reacted",
     });
     await expect(people).toBeVisible();
     for (let index = 1; index <= count; index++)
-      await expect(people).toContainText(`Teammate ${index} `);
+      await expect(people).toContainText(
+        new RegExp(`Teammate ${index}(?:\\s|,|$)`),
+      );
     await expect(preview).not.toContainText("others");
-    // The pointer must be able to leave the reaction row and enter its portal.
-    await people.hover();
-    await page.mouse.wheel(0, 400);
-    await expect
-      .poll(() => people.evaluate((el) => el.scrollTop))
-      .toBeGreaterThan(0);
-    await expect(preview).toBeVisible();
-    await group.focus();
-    await page.keyboard.press("Tab");
-    await expect(people).toBeFocused();
-    await page.keyboard.press("ControlOrMeta+End");
-    // End is the native scrollport command; no app handler substitutes for it.
-    await page.keyboard.press("End");
-    await expect
-      .poll(() =>
-        people.evaluate((el) =>
-          Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop),
-        ),
-      )
-      .toBeLessThanOrEqual(1);
+    // Long-name fixtures overflow; normal names fit when the popup can use the viewport.
+    await expect(preview).toHaveAttribute(
+      "role",
+      longNames ? "dialog" : "tooltip",
+    );
+    if (longNames) {
+      // The pointer must be able to leave the reaction row and enter its portal.
+      await people.hover();
+      await page.mouse.wheel(0, 400);
+      await expect
+        .poll(() => people.evaluate((el) => el.scrollTop))
+        .toBeGreaterThan(0);
+      await expect(preview).toBeVisible();
+      await group.focus();
+      await page.keyboard.press("Tab");
+      await expect(people).toBeFocused();
+      await page.keyboard.press("ControlOrMeta+End");
+      // End is the native scrollport command; no app handler substitutes for it.
+      await page.keyboard.press("End");
+      await expect
+        .poll(() =>
+          people.evaluate((el) =>
+            Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop),
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+    } else {
+      await expect(people).not.toHaveAttribute("tabindex", "0");
+      await group.focus();
+    }
     for (const theme of ["light", "dark"]) {
       await page.evaluate(
         (theme) => (document.documentElement.dataset.colorMode = theme),
@@ -122,9 +134,25 @@ test("all reactor names wrap and remain reachable with pointer and keyboard", as
       expect(card.x).toBeGreaterThanOrEqual(0);
       expect(card.x + card.width).toBeLessThanOrEqual(width);
       expect(card.y).toBeGreaterThanOrEqual(0);
-      expect(card.y + card.height).toBeLessThanOrEqual(950);
+      expect(card.y + card.height).toBeLessThanOrEqual(height);
+      await expect
+        .poll(() => preview.evaluate((el) => el.scrollHeight - el.clientHeight))
+        .toBe(0);
+      const lastName = await people
+        .locator("[data-author]")
+        .last()
+        .boundingBox();
+      const list = await people.boundingBox();
+      expect(lastName.y).toBeGreaterThanOrEqual(list.y);
+      expect(lastName.y + lastName.height).toBeLessThanOrEqual(
+        list.y + list.height + 1,
+      );
+      const label = await preview.locator("span").last().boundingBox();
+      expect(label.y + label.height).toBeLessThanOrEqual(card.y + card.height);
       await page.screenshot({
-        path: testInfo.outputPath(`all-reactors-${count}-${theme}.png`),
+        path: testInfo.outputPath(
+          `all-reactors-${count}-${width}x${height}-${theme}.png`,
+        ),
       });
     }
     await page.keyboard.press("Escape");
