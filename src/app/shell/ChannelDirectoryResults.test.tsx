@@ -2,6 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { Context } from "@deepseek-ai/cordis";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -402,6 +403,62 @@ it("shows a failed directory read with a retry", async () => {
       expect(rows()).toContainEqual(expect.stringContaining("buzz-community")),
     );
     expect(screen.queryByText("Couldn’t load channels.")).toBeNull();
+  } finally {
+    await t.dispose();
+  }
+});
+
+it("draws the first rows of a long list and more as its end nears, counting them all", async () => {
+  const observed = new Set<Element>();
+  let report: IntersectionObserverCallback = () => {};
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        report = callback;
+      }
+      observe(row: Element) {
+        observed.add(row);
+      }
+      unobserve(row: Element) {
+        observed.delete(row);
+      }
+      disconnect() {
+        observed.clear();
+      }
+    },
+  );
+  const t = connected({ newer: 150 });
+  try {
+    t.render();
+    await openSearch();
+    await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
+    await waitFor(() => expect(rows()).toHaveLength(100));
+    const options = screen.getAllByRole("option");
+    // Assistive technology hears the whole list's size.
+    expect(options[0]).toHaveAttribute("aria-setsize", "153");
+    expect(options[99]).toHaveAttribute("aria-posinset", "100");
+    // A row well above the end coming into view draws nothing more.
+    const near = (index: number) =>
+      options[index]?.closest("[data-search-key]") ?? undefined;
+    const show = (row: Element | undefined) =>
+      act(() =>
+        report(
+          [{ target: row, isIntersecting: true } as IntersectionObserverEntry],
+          {} as IntersectionObserver,
+        ),
+      );
+    show(near(10));
+    expect(rows()).toHaveLength(100);
+    // Nearing the last drawn rows draws the rest.
+    show(near(90));
+    await waitFor(() => expect(rows()).toHaveLength(153));
+    expect(screen.getAllByRole("option")[152]).toHaveAttribute(
+      "aria-posinset",
+      "153",
+    );
+    // Every drawn row is watched once, the old ones still included.
+    expect(observed.size).toBe(153);
   } finally {
     await t.dispose();
   }

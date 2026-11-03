@@ -19,6 +19,11 @@ import {
 } from "./SearchChoices";
 
 const collator = new Intl.Collator();
+/** Rows drawn at first, and added each time the last ones near the view:
+ * the list looks whole, without thousands of rows to lay out at once. */
+const FIRST_ROWS = 100;
+const MORE_ROWS = 100;
+const GROW_AHEAD = 25;
 
 /** Read-only isn't unjoined: guests and cached channels are members too.
  * The same rule as All's "Public channel · not joined". */
@@ -119,8 +124,35 @@ export function ChannelDirectoryResults({
         ),
     [directory.directory, needle, joined, member],
   );
-  const destinations: SearchDestination[] = rows.map(
-    ({ channel, joined, match }) => {
+  // A kept place reopens with its row drawn.
+  const placed = () => {
+    const key = views.place.anchor?.key ?? views.place.key;
+    const index = key
+      ? rows.findIndex(({ channel }) => `directory:${channel.id}` === key)
+      : -1;
+    return Math.max(FIRST_ROWS, index + MORE_ROWS);
+  };
+  const [drawing, setDrawing] = useState(() => ({
+    needle,
+    rows: placed(),
+  }));
+  // New typed text starts from the top, so it draws the first rows again.
+  const drawn = drawing.needle === needle ? drawing.rows : FIRST_ROWS;
+  const keyIndex = useMemo(
+    () =>
+      new Map(
+        rows.map(({ channel }, index) => [`directory:${channel.id}`, index]),
+      ),
+    [rows],
+  );
+  const grow = (keys: readonly string[]) => {
+    if (drawn >= rows.length) return;
+    if (keys.some((key) => (keyIndex.get(key) ?? -1) >= drawn - GROW_AHEAD))
+      setDrawing({ needle, rows: drawn + MORE_ROWS });
+  };
+  const destinations: SearchDestination[] = rows
+    .slice(0, drawn)
+    .map(({ channel, joined, match }) => {
       const people = members.counts.get(channel.id);
       const detail = [joined && "Joined", channel.description]
         .filter(Boolean)
@@ -149,11 +181,10 @@ export function ChannelDirectoryResults({
         run: () =>
           joined ? openConversation(channel.id) : openPreview(channel.id),
       };
-    },
-  );
+    });
   const failed = list.status === "error" || directory.error;
   const settled = ready && !directory.loading && !failed;
-  const count = destinations.length;
+  const count = rows.length;
   // One polite summary once a switch or filter settles, not per keystroke.
   const summary = settled
     ? needle
@@ -182,15 +213,17 @@ export function ChannelDirectoryResults({
       views={views}
       highlightEmpty
       // Counts fill in for the rows in view, after the rows themselves.
-      onRowsShown={(keys) =>
-        members.show(keys.map((key) => key.slice("directory:".length)))
-      }
+      onRowsShown={(keys) => {
+        members.show(keys.map((key) => key.slice("directory:".length)));
+        grow(keys);
+      }}
       groups={[
         {
           // Typed results sit under the Channels tab that names them.
           label: needle ? "Channels" : "Channels you can join",
           hideLabel: !!needle,
           destinations,
+          total: count,
         },
       ]}
     >

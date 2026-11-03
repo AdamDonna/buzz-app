@@ -42,6 +42,9 @@ export type SearchGroup = {
   /** Message-content scores are not comparable to named destinations. */
   rank?: number;
   destinations: readonly SearchDestination[];
+  /** How many rows the whole list holds when only its first are drawn, so
+   * assistive technology counts them all. */
+  total?: number;
   empty?: ReactNode;
   notice?: ReactNode;
 };
@@ -86,6 +89,13 @@ export type SearchPlace = {
   key: string;
   anchor?: { key: string; offset: number } | undefined;
 };
+
+const rowKeysOf = (elements: readonly Element[]) =>
+  elements.flatMap((row) =>
+    row instanceof HTMLElement && row.dataset.searchKey
+      ? [row.dataset.searchKey]
+      : [],
+  );
 
 export function SearchChoices({
   groups: originalGroups,
@@ -258,6 +268,18 @@ export function SearchChoices({
     };
   }, [switchView]);
   const resultsLabel = views?.resultsLabel ?? "Search results";
+  // A group drawn in part says where each row sits in the whole of it.
+  const positions = new Map<
+    string,
+    { "aria-setsize": number; "aria-posinset": number }
+  >();
+  for (const { destinations, total } of groups)
+    if (total !== undefined)
+      for (const [index, { key }] of destinations.entries())
+        positions.set(key, {
+          "aria-setsize": total,
+          "aria-posinset": index + 1,
+        });
   // A view returns to its kept position, waiting for late rows to make room
   // until the person scrolls or moves the highlight themselves.
   const restore = useRef(place?.top ?? 0);
@@ -299,25 +321,16 @@ export function SearchChoices({
   const shown = useRef(onRowsShown);
   shown.current = onRowsShown;
   const watching = !!onRowsShown;
-  const rowKeys = destinations.map(({ key }) => key).join("\n");
-  // biome-ignore lint/correctness/useExhaustiveDependencies: New rows need watching.
+  const rowsObserver = useRef<
+    { observer: IntersectionObserver; watched: Set<Element> } | undefined
+  >(undefined);
   useEffect(() => {
     const root = resultsContent.current;
-    if (!root || !watching) return;
-    const rows = [...root.querySelectorAll<HTMLElement>("[data-search-key]")];
-    const keys = (elements: readonly Element[]) =>
-      elements.flatMap((row) =>
-        row instanceof HTMLElement && row.dataset.searchKey
-          ? [row.dataset.searchKey]
-          : [],
-      );
-    if (typeof IntersectionObserver === "undefined") {
-      shown.current?.(keys(rows));
+    if (!root || !watching || typeof IntersectionObserver === "undefined")
       return;
-    }
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = keys(
+        const visible = rowKeysOf(
           entries.flatMap((entry) =>
             entry.isIntersecting ? [entry.target] : [],
           ),
@@ -327,8 +340,35 @@ export function SearchChoices({
       // Half a view ahead, so details are usually there before the row is.
       { root, rootMargin: "50% 0px" },
     );
-    for (const row of rows) observer.observe(row);
-    return () => observer.disconnect();
+    rowsObserver.current = { observer, watched: new Set() };
+    return () => {
+      observer.disconnect();
+      rowsObserver.current = undefined;
+    };
+  }, [watching]);
+  const rowKeys = destinations.map(({ key }) => key).join("\n");
+  // Only rows not yet watched start watching, so a list that grows as it
+  // scrolls doesn't observe its earlier rows again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: New rows need watching.
+  useEffect(() => {
+    const root = resultsContent.current;
+    if (!root || !watching) return;
+    const rows = [...root.querySelectorAll<HTMLElement>("[data-search-key]")];
+    const watch = rowsObserver.current;
+    if (!watch) {
+      shown.current?.(rowKeysOf(rows));
+      return;
+    }
+    for (const row of watch.watched)
+      if (!row.isConnected) {
+        watch.observer.unobserve(row);
+        watch.watched.delete(row);
+      }
+    for (const row of rows)
+      if (!watch.watched.has(row)) {
+        watch.watched.add(row);
+        watch.observer.observe(row);
+      }
   }, [watching, rowKeys]);
   return (
     <div
@@ -602,6 +642,7 @@ export function SearchChoices({
                                   aria-selected={
                                     hasControls ? undefined : selected === key
                                   }
+                                  {...(!hasControls && positions.get(key))}
                                   tabIndex={-1}
                                   aria-current={false}
                                   highlighted={selected === key}
