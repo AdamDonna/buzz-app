@@ -1290,12 +1290,19 @@ export class AgentRunners {
       };
       this.passes.set(runner.key, next);
       this.setCatching(runner, new Set(reading.map(({ slug }) => slug)));
+      const channels = live ?? new Map<string, number>();
       void this.readMissed(
         runner,
         next,
         reading,
-        since,
-        overlapOf(live ?? new Map()),
+        // A stream live does not cover is read as a poll reads it: an edit
+        // starts a new pass, and edits more often than the poll would
+        // otherwise keep it from being read.
+        (stream) =>
+          coveredSince(stream, channels) === undefined
+            ? Math.max(since, now - CATCH_UP_POLL_LAG)
+            : since,
+        overlapOf(channels),
       );
     }
     // Once each catch-up is under way, so they are heard after what it reads.

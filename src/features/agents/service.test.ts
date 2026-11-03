@@ -7704,6 +7704,50 @@ it.each([
   },
 );
 
+it("reads again what live does not hear while its watch is edited more often than it reads", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    const { service, run, history, recover } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    const quiet = { ...chat["watch/chat"], kinds: [30023] };
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: { "watch/channel": null, "watch/quiet": quiet },
+    });
+    await settle();
+    vi.setSystemTime((now + 1) * 1000);
+    recover();
+    await settle();
+    history.push(
+      eventDto(
+        signed(author, {
+          kind: 30023,
+          content: "while edited",
+          created_at: now + 2,
+          tags: [["h", channel]],
+        }),
+      ),
+    );
+    // Each edit starts the watches' catch-up again, more often than it reads
+    // by itself.
+    for (let edit = 0; edit < 30; edit++) {
+      await service.save(bot, {
+        attention: {
+          "watch/quiet": { ...quiet, exclude_authors: [keypair().pubkey] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await settle();
+    }
+    expect(heard(run)).toEqual(["while edited"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("finds an event the relay stores late with an older time, after a read passed that time, once", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
