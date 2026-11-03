@@ -4843,6 +4843,12 @@ it("gives each conversation a durable target key and rotates only its New sessio
   expect(firstKey).toBeTruthy();
   expect(calls[1]?.[1].key).not.toBe(firstKey);
   expect(calls.map((call) => call[1].intent)).toEqual(["new", "new"]);
+  await vi.waitFor(() =>
+    expect(savedPrompts(f.storage).map(([id]) => id)).toEqual([
+      JSON.stringify([calls[0]?.[1].key, "thread-1"]),
+      JSON.stringify([calls[1]?.[1].key, "thread-1"]),
+    ]),
+  );
   const agent = { ...first.agent, config: first.config } as unknown as Agent;
   await f.runtime.session(agent, { channelId: "channel", root }, "interrupt");
   expect(guests[0]?.sent.some((wire) => wire.method === "turn/interrupt")).toBe(

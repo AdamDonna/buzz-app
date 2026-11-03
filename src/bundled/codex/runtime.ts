@@ -2096,18 +2096,23 @@ export class CodexRuntime {
 
       active.turnId = turn.turn.id;
       if (fresh)
-        void this.prompts(agent.key).save(active.threadId, [
-          {
-            label: "base",
-            text: params.developerInstructions,
-          },
-          {
-            label: EACH_TURN,
-            text: Object.values(additionalContext)
-              .map(({ value }) => value)
-              .join(""),
-          },
-        ]);
+        void this.prompts(agent.key).save(
+          this.targetKey
+            ? JSON.stringify([this.targetKey, active.threadId])
+            : active.threadId,
+          [
+            {
+              label: "base",
+              text: params.developerInstructions,
+            },
+            {
+              label: EACH_TURN,
+              text: Object.values(additionalContext)
+                .map(({ value }) => value)
+                .join(""),
+            },
+          ],
+        );
       this.acknowledgeActivity(active, request);
       // A conversation new to this agent: name its Solo chat meanwhile.
       if (request.named && !existing)
