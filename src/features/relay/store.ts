@@ -189,19 +189,39 @@ export function createChannelStore(
   directory: ProfileDirectory,
   options: ChannelStoreOptions = {},
 ) {
+  // A fold reads the profile directory only through attested agent owners.
+  // Keep the answers each fold received: a profile change that leaves them
+  // all alone cannot change its rows.
+  const foldOwners = new WeakMap<
+    readonly ChannelMessage[],
+    ReadonlyMap<string, string | undefined>
+  >();
   const foldChannelMessages = (
     channelId: string,
     author: string,
     events: readonly import("./events").EventData[],
   ) => {
     const started = performance.now();
+    const owners = new Map<string, string | undefined>();
     const rows = foldMessages(channelId, author, events, {
       signingAuthority: transport?.archiveAuthority,
-      agentOwner: directory.queries.owner,
+      agentOwner: (pubkey) => {
+        const owner = directory.queries.owner?.(pubkey);
+        owners.set(pubkey, owner);
+        return owner;
+      },
     });
+    foldOwners.set(rows, owners);
     clientMetrics.cpu("fold", performance.now() - started, events.length);
     return rows;
   };
+  const ownersChanged = (
+    owners: ReadonlyMap<string, string | undefined> | undefined,
+  ) =>
+    !owners ||
+    [...owners].some(
+      ([pubkey, owner]) => directory.queries.owner?.(pubkey) !== owner,
+    );
   const {
     maxWindows = 3,
     unavailableReason,
@@ -2992,26 +3012,49 @@ export function createChannelStore(
   let previousLocal = new Map(
     (local?.snapshot() ?? []).map((item) => [item.event.id, item]),
   );
+  // What each tail preview this listener computed depended on: its fold's
+  // owner answers and which head events it included. Marks, not the events,
+  // so a tail does not keep an evicted head alive.
+  const previewFolds = new WeakMap<
+    object,
+    {
+      owners: ReadonlyMap<string, string | undefined> | undefined;
+      head: number | undefined;
+    }
+  >();
+  const headMarks = new WeakMap<readonly RelayEvent[], number>();
+  let headMark = 0;
+  const markHead = (events: readonly RelayEvent[] | undefined) => {
+    if (!events) return;
+    const mark = headMarks.get(events) ?? ++headMark;
+    headMarks.set(events, mark);
+    return mark;
+  };
   const unsubscribeProfiles = directory.queries.subscribe(() => {
     if (disposed || !transport) return;
     for (const [id, head] of heads.entries())
-      heads.set(id, {
-        ...head,
-        rows: Object.freeze(
-          foldChannelMessages(id, transport.relayAuthor, head.events),
-        ),
-      });
+      if (ownersChanged(foldOwners.get(head.rows)))
+        heads.replace(id, {
+          ...head,
+          rows: Object.freeze(
+            foldChannelMessages(id, transport.relayAuthor, head.events),
+          ),
+        });
     for (const [id, tail] of tails.entries()) {
-      const next = {
-        ...tail,
-        preview: messagePreview(
-          foldChannelMessages(id, transport.relayAuthor, [
-            ...(heads.peek(id)?.events ?? []),
-            ...tail.events,
-          ]),
-        ),
-      };
-      tails.set(id, next, tailBytes(next));
+      const head = heads.peek(id)?.events;
+      const folded = previewFolds.get(tail);
+      if (folded?.head === markHead(head) && !ownersChanged(folded?.owners))
+        continue;
+      const rows = foldChannelMessages(id, transport.relayAuthor, [
+        ...(head ?? []),
+        ...tail.events,
+      ]);
+      const next = { ...tail, preview: messagePreview(rows) };
+      previewFolds.set(next, {
+        owners: foldOwners.get(rows),
+        head: markHead(head),
+      });
+      tails.replace(id, next, tailBytes(next));
     }
     for (const state of windows.values()) setWindow(state, {});
     setList(list);
