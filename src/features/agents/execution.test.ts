@@ -184,12 +184,17 @@ it("reads a binding saved after another window loads, and keeps local selection 
   const stale = await setup(disk.open());
   const writer = await setup(disk.open());
   await writer.registry.bind(writer.plugin, agent, harness, input);
+  await expect(stale.registry.check(agent, "buzz.codex/codex")).rejects.toThrow(
+    "does not support",
+  );
   expect(
     (await stale.registry.open(stale.native, agent, harness))?.binding
       .workspace,
   ).toBe(input.workspace);
 
   const localAgent = "b".repeat(64);
+  await stale.registry.check(localAgent, harness);
+  expect(disk.disk.has(`buzz.agent.execution.v1:${localAgent}`)).toBe(false);
   expect(
     await stale.registry.open(stale.native, localAgent, harness),
   ).toBeUndefined();

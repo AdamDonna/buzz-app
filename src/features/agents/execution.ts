@@ -65,11 +65,17 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   >();
   const read = (agent: AgentKey): AgentExecutionBinding | undefined => {
     if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
-    const text = storage.get(PREFIX + agent);
+    return parse(storage.get(PREFIX + agent));
+  };
+  const parse = (text: string | null): AgentExecutionBinding | undefined => {
     if (text === null || text === LOCAL) return;
     const binding = JSON.parse(text) as AgentExecutionBinding;
     validate(binding);
     return Object.freeze(binding);
+  };
+  const inspect = async (agent: AgentKey) => {
+    if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
+    return parse(await storage.read(PREFIX + agent));
   };
   const binding = async (agent: AgentKey) => {
     if (!AGENT_KEY.test(agent)) throw new Error("Invalid agent membership key");
@@ -130,6 +136,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
   });
   return {
     read,
+    inspect,
     binding,
     register(ctx: Context, provider: AgentExecutionProvider) {
       if (
@@ -178,7 +185,7 @@ export function createAgentExecutions(root: Context, storage: AgentStore) {
       }
     },
     async check(agent: AgentKey, harness: string) {
-      const saved = read(agent);
+      const saved = await inspect(agent);
       if (saved) providerFor(saved, harness);
     },
     async open(

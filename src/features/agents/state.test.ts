@@ -231,6 +231,9 @@ it("rejects native execution when native state cannot be read", async () => {
   try {
     const fallback = await loadAgentStorage(local, native);
     await expect(
+      executionStorage(fallback).read("buzz.agent.execution.v1:aa"),
+    ).rejects.toThrow("Native agent storage is unavailable");
+    await expect(
       executionStorage(fallback).add("buzz.agent.execution.v1:aa", '"local"'),
     ).rejects.toThrow("Native agent storage is unavailable");
   } finally {

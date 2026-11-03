@@ -428,7 +428,8 @@ it("brings over an identity not already an agent, with its type's defaults and w
 });
 
 it("binds a dedicated native agent and preserves its target when a provider change is refused", async () => {
-  const { ctx, plugin, service, native } = await setup();
+  const storage = memoryStorage();
+  const { ctx, plugin, service, native } = await setup({ storage });
   plugin.agents.register({
     id: "native",
     title: "Native",
@@ -485,10 +486,22 @@ it("binds a dedicated native agent and preserves its target when a provider chan
   expect((await plugin.agents.execution(agent.key))?.binding.workspace).toBe(
     "/work/task",
   );
+  const get = storage.get;
+  const cached = vi
+    .spyOn(storage, "get")
+    .mockImplementation((key) =>
+      key.startsWith("buzz.agent.execution.v1:") ? null : get(key),
+    );
+  const read = vi.spyOn(storage, "read");
+  read.mockRejectedValueOnce(new Error("Saved state is unavailable"));
+  await expect(service.retype(agent.key, "example/echo")).rejects.toThrow(
+    "Saved state is unavailable",
+  );
   await expect(service.retype(agent.key, "example/echo")).rejects.toThrow(
     "does not support the saved execution binding",
   );
   expect(native.setType).not.toHaveBeenCalled();
+  cached.mockRestore();
   expect(service.executionBinding(agent.key)?.target).toBe("guest-1");
 });
 

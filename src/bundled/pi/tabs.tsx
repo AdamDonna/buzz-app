@@ -934,10 +934,7 @@ export function createTabs({
       try {
         await save({
           ...draft,
-          workspace:
-            bound?.workspace ||
-            draft.workspace.trim() ||
-            DEFAULT_CONFIG.workspace,
+          workspace: draft.workspace.trim() || DEFAULT_CONFIG.workspace,
         });
       } catch (reason) {
         setError(errorText(reason));
