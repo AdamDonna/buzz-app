@@ -95,16 +95,27 @@ export function AgentTabs(props: {
       ? "agent:management"
       : "agent:settings";
   const panelId = (value: string) => `${panelPrefix}-${value}`;
+  const choose = (value: string) => {
+    if (value === selected?.value || draft.saving) return;
+    if (draft.dirty || props.settingsHost.pendingSave) setPendingTab(value);
+    else setTab(value);
+  };
+  // A new transcript request shows Activity, as choosing its tab would.
+  const opening = props.initialTranscript?.opening;
+  const [asked, setAsked] = useState(opening);
+  if (opening !== asked) {
+    setAsked(opening);
+    if (
+      opening !== undefined &&
+      sections.some((section) => section.value === "agent:activity")
+    )
+      choose("agent:activity");
+  }
   return (
     <AgentSaveState value={reportDraft}>
       <Tabs
         value={selected?.value ?? ""}
-        onValueChange={(value) => {
-          if (value === selected?.value || draft.saving) return;
-          if (draft.dirty || props.settingsHost.pendingSave)
-            setPendingTab(value);
-          else setTab(value);
-        }}
+        onValueChange={choose}
         items={sections.map(({ value, label }) => ({
           value,
           label,

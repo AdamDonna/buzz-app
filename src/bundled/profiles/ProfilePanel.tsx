@@ -317,6 +317,13 @@ function ProfileDetails({
   const [tab, setTab] = useState<
     "info" | "activity" | "channels" | `agent:${string}`
   >(initialTab);
+  // A new transcript request shows Activity, as choosing its tab would.
+  const opening = initialTranscript?.opening;
+  const [asked, setAsked] = useState(opening);
+  if (opening !== asked) {
+    setAsked(opening);
+    if (opening !== undefined) setTab("activity");
+  }
   // An agent's sections come from its type and the app, not the harness.
   const plugin = useAgent(agents, pubkey);
   const agentTypes = useSyncExternalStore(
