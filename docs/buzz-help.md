@@ -107,7 +107,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   an agent, and send a message. Solo conversations continue at the chat's top
   level rather than requiring a new thread for each reply. Solo chats can also
   be shared with other people; do not describe every Solo chat as visible only
-  to its creator.
+  to its creator. When an agent finishes outside the Solo chat you are viewing,
+  Buzz uses a desktop notification; if desktop delivery is unavailable, an
+  in-app message offers **View** instead.
 - **Team** contains community channels and their threads. Use the **@** picker
   to address a channel member. Typing a name alone does not guarantee a
   notification. Selecting someone outside the channel does not grant access;

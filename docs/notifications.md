@@ -55,12 +55,13 @@ checks, not that an OS banner was displayed or read.
   template mentions and other recipients; DM and relevant-reply policies still
   apply. This does not change notification settings or suppress all workflows.
 - Local agent completions alert only for relay-verified Solo chats. Their agent
-  replies do not also produce a mention alert. When Buzz is focused elsewhere,
-  the existing app toast says the agent is done, names the Solo chat, and offers
-  **View**; when another app is focused, the native banner uses the same completion
-  framing: “Agent is done” and “View in Chat.” A focused, visibly active matching
-  Solo chat stays quiet. Ordinary DMs keep their message alerts and do not receive
-  an additional agent-completion alert.
+  replies do not also produce a mention alert. Completions use the native alert
+  path whether Buzz is focused or another app is active, including work in another
+  joined community. If native delivery is unavailable or not permitted, Buzz falls
+  back to an in-app toast that names the Solo chat and offers **View**. A focused,
+  visibly active matching Solo chat stays quiet, including when focus or navigation
+  changes while delivery is pending. Ordinary DMs keep their message alerts and do
+  not receive an additional agent-completion alert.
 - Messages signed `audience=agents` (coordination between agents) never alert,
   even when they mention the viewer. The unread engine applies the same rule
   ([quiet agent messages](unread.md#relevant-replies)), so badges, Inbox, thread
@@ -139,8 +140,9 @@ Tauri response channel is registered before native submission.
 
 Desktop clicks restore/foreground Buzz and then call the existing activation
 closure. macOS installs one app-lifetime delegate at setup and routes body
-clicks by request ID to the running presentation callback. Its foreground completion keeps
-notifications in Notification Center without displaying a banner. Native
+clicks by request ID to the running presentation callback. Foreground agent
+completions request both a banner and a Notification Center entry; every other
+foreground notification remains list-only. Native
 submission completion reports errors but does not confirm display; successful
 submissions stay registered for clicks. Unbundled development processes do not
 call UserNotifications or borrow Terminal's notification identity. Windows
@@ -174,7 +176,8 @@ Reload/cold-start restoration remains out of scope.
 
 Real banners require OS permission, an available notification service and
 appropriate app packaging/installation. macOS development processes outside an
-app bundle cannot submit notifications. For local macOS acceptance, install a
+app bundle cannot submit notifications; agent completions use their in-app
+fallback in those cases. For local macOS acceptance, install a
 stable code-signing certificate (Apple Development or a trusted local development
 certificate), set its name or SHA-1 as `BUZZ_DEV_SIGNING_IDENTITY` in `.env.local`,
 quit other Buzz copies, then use
