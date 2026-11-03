@@ -72,6 +72,7 @@ fn main() {
             "identity_legacy_available",
             "identity_import_legacy",
             "identity_create",
+            "onboarding_preserve_window",
             "identity_export",
             "nsec_backup_available",
             "nsec_backup_session",

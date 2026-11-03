@@ -2090,3 +2090,24 @@ chevron. Unavailable chat cards retain a lock and unavailable accessible text;
 unknown access does not earn a chevron. Display chat cards as **Chat:**, while
 accepting legacy **Session:** and **Session ·** authored links without rewriting
 historical messages or their receipts.
+
+
+### Mobile-aligned onboarding
+
+The first-launch welcome uses mobile's fixed light chartreuse artwork (#d7d72e)
+with dark and pale-blue decorative bees. Use the existing light scope for readable
+shared controls even when the app is dark. The exact artwork hues are confined to
+IdentitySetup.module.css; controls keep shared prominent/subtle/ghost recipes.
+Subsequent setup screens use the current mode's opaque panel surface, a reading
+column, and bottom-stacked 52px capsule actions. Desktop-only key recovery, backup
+consent and migration choices retain their existing behavior.
+
+At the owner's direction to match mobile, the onboarding scope maps its complete
+heading role to Inter 30/36 regular with -1px tracking and body to 16/24 regular
+with -0.25px tracking, in rem units. This is local to the first-launch composition;
+it does not change the app-wide type ramp. Decorative motion stops for reduced
+motion and hidden documents; it never owns focus or blocks an action.
+
+### Standalone account cards
+
+First-run setup uses `Panel shape="card"`, matching Builderlab/Auth0: content-sized, `radius-card` corners and `shadow-card` lift. Compose a 490px reading column with space-8 insets, title/body-sm typography, shared Field/Input controls and large capsule actions. Keep welcome artwork separate from these opaque setup cards.

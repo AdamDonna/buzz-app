@@ -51,3 +51,14 @@
     transition-duration: 120ms;
   }
 }
+
+/* Native Mac first-welcome reveal; other launches retain the normal loader. */
+html[data-welcome-intro] {
+  background: transparent;
+}
+html[data-welcome-intro] .buzz-launch {
+  background: transparent;
+}
+html[data-welcome-intro] .buzz-launch picture {
+  visibility: hidden;
+}

@@ -614,6 +614,7 @@ async fn update_restart<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(
 }
 fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        window_state::onboarding_preserve_window,
         huddle_window_reset_incoming,
         huddle_window_open,
         huddle_window_update,
