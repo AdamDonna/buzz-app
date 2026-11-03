@@ -3033,6 +3033,7 @@ function Composer({
                 attachments.store.remove(id);
                 if (item?.status === "error" && item.error === error)
                   setError(undefined);
+                input.current?.focus();
               }}
               retry={(id) => {
                 const item = attachments.items.find(

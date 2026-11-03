@@ -1997,7 +1997,7 @@ it.each([false, true])(
     await waitFor(() =>
       expect(
         screen.getAllByRole("alert").map((node) => node.textContent),
-      ).toEqual([UPLOAD_FAILURES.metadata]),
+      ).toEqual([`metadata.txt: ${UPLOAD_FAILURES.metadata}`]),
     );
     expect(
       screen.getByText(`Upload failed: ${UPLOAD_FAILURES.metadata}`),
@@ -2005,10 +2005,10 @@ it.each([false, true])(
     expect(h.input()).toHaveValue(tagged ? "@Honey caption" : "caption");
     expect(h.publish).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "Retry metadata.txt" }),
-      { key: "Delete" },
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove metadata.txt" }),
     );
+    expect(h.input()).toHaveFocus();
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await waitFor(() =>
@@ -2664,22 +2664,22 @@ it("offers message preparation retry after a failed attachment send remounts", a
   );
 });
 
-it("keeps a remaining upload failure banner when removing one of two failed files", async () => {
+it("identifies failed filenames through retry and removal when service errors match", async () => {
   const h = await mountUploadComposer();
   attachByPaste(h.input(), attachmentFile("one.txt"));
   attachByPaste(h.input(), attachmentFile("two.txt"));
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
   await act(async () => {
-    h.uploadCalls[0]?.result.reject(new Error("first failed"));
+    h.uploadCalls[0]?.result.reject(new Error("HTTP 503"));
   });
   await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
   await act(async () => {
-    h.uploadCalls[1]?.result.reject(new Error("second failed"));
+    h.uploadCalls[1]?.result.reject(new Error("HTTP 503"));
   });
   await waitFor(() =>
     expect(
       screen.getAllByRole("alert").map((node) => node.textContent),
-    ).toEqual(["first failed", "second failed"]),
+    ).toEqual(["one.txt: HTTP 503", "two.txt: HTTP 503"]),
   );
   await userEvent.click(screen.getByRole("button", { name: "Retry one.txt" }));
   await waitFor(() => expect(h.uploadCalls).toHaveLength(3));
@@ -2689,13 +2689,12 @@ it("keeps a remaining upload failure banner when removing one of two failed file
   await waitFor(() =>
     expect(
       screen.getAllByRole("alert").map((node) => node.textContent),
-    ).toEqual(["first failed again", "second failed"]),
+    ).toEqual(["one.txt: first failed again", "two.txt: HTTP 503"]),
   );
-  fireEvent.keyDown(screen.getByRole("button", { name: "Retry one.txt" }), {
-    key: "Delete",
-  });
+  await userEvent.click(screen.getByRole("button", { name: "Remove one.txt" }));
+  expect(h.input()).toHaveFocus();
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
-    "second failed",
+    "two.txt: HTTP 503",
   ]);
   await waitFor(() =>
     expect(within(h.form()).queryByText("one.txt")).not.toBeInTheDocument(),
@@ -2723,7 +2722,7 @@ it("retains successful attachment uploads after a later file fails and retries o
   });
   await screen.findAllByRole("alert");
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
-    "relay down",
+    "retry.txt: relay down",
   ]);
   expect(screen.getByText("Upload failed: relay down")).toBeVisible();
   expect(h.input()).toHaveValue("caption");
