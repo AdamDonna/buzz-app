@@ -4,6 +4,7 @@ import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Checkbox } from "../../shared/design-system/ui/Checkbox";
 import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
+import { nativeBuilderlab } from "../../bundled/builderlab/session";
 import {
   FindCommunityError,
   findCommunity,
@@ -26,7 +27,7 @@ const FAILURES: Record<FindFailure, { message: string; retry: boolean }> = {
   "unsupported-auth": {
     message:
       "This community requires sign-in that this Buzz build cannot confirm. Ask its administrator for a supported build and try again.",
-    retry: true,
+    retry: false,
   },
   unreachable: {
     message: "Could not reach the relay. Check your connection and try again.",
@@ -149,6 +150,8 @@ export function FindCommunity({
     );
   }
   const { found } = state;
+  const unsupportedSignIn =
+    found.requiresNipFi && (!nativeBuilderlab() || !found.nipFiCompatible);
   const policy = found.policy;
   const needsAge = policy?.age_attestation_required === true;
   const needsAgreement = Boolean(
@@ -168,11 +171,19 @@ export function FindCommunity({
   return (
     <>
       {heading("Join Community")}
-      {found.requiresNipFi && (
-        <p className="text-body text-subtle">
-          This community requires account sign-in and a linked Buzz identity.
-          Your existing key will be kept.
+      {unsupportedSignIn ? (
+        <p role="alert" className="text-body text-danger">
+          This community requires account sign-in. Ask its administrator for a
+          supported Buzz build configured for this host and compatible community
+          settings. Your key is kept.
         </p>
+      ) : (
+        found.requiresNipFi && (
+          <p className="text-body text-subtle">
+            This community requires account sign-in and a linked Buzz identity.
+            Your existing key will be kept.
+          </p>
+        )
       )}
       <div className="flex items-center gap-3">
         <Avatar alt="" fallback={found.host} src={found.icon} />
@@ -233,7 +244,7 @@ export function FindCommunity({
         </Button>
         <Button
           variant="prominent"
-          disabled={!consented || joining}
+          disabled={!consented || joining || !!unsupportedSignIn}
           onClick={() => void join()}
         >
           Join

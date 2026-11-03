@@ -1,4 +1,5 @@
 import { Button } from "../../shared/design-system/ui/Button";
+import { nativeBuilderlab } from "../../bundled/builderlab/session";
 
 /**
  * Pause on a found community that this build's Builderlab does not host (one
@@ -15,6 +16,7 @@ export function ConnectChoice({
   onBack,
   requiresSignIn = false,
   signInOrigin,
+  nipFiCompatible = true,
 }: {
   /** The found community's host, as the find page shows it. */
   host: string;
@@ -26,7 +28,11 @@ export function ConnectChoice({
   onBack: () => void;
   requiresSignIn?: boolean;
   signInOrigin?: string | undefined;
+  nipFiCompatible?: boolean;
 }) {
+  const unsupportedSignIn =
+    requiresSignIn &&
+    (!nativeBuilderlab() || !signInOrigin || !nipFiCompatible);
   return (
     <>
       <div>
@@ -43,25 +49,29 @@ export function ConnectChoice({
           {host}
         </p>
         <p className="mt-2 text-body text-subtle">
-          {requiresSignIn
-            ? "This community requires account sign-in, including when you use an existing key. Buzz keeps that key."
-            : "Buzz relies on a key for your identity."}
+          {unsupportedSignIn
+            ? "This community requires account sign-in. Ask its administrator for a supported Buzz build configured for this host and compatible community settings. Your key is kept."
+            : requiresSignIn
+              ? "This community requires account sign-in, including when you use an existing key. Buzz keeps that key."
+              : "Buzz relies on a key for your identity."}
         </p>
-        {signInOrigin && (
+        {signInOrigin && !unsupportedSignIn && (
           <p className="mt-2 break-all text-body text-subtle">
             Sign in at {signInOrigin}.
           </p>
         )}
       </div>
-      <div className="flex flex-col gap-3">
-        <Button variant="prominent" size="lg" onClick={onConnect}>
-          Sign in with email
-        </Button>
-        {/* The secondary choice is deliberately smaller than the primary. */}
-        <Button size="sm" data-return-focus="import" onClick={onImport}>
-          I already have a key
-        </Button>
-      </div>
+      {!unsupportedSignIn && (
+        <div className="flex flex-col gap-3">
+          <Button variant="prominent" size="lg" onClick={onConnect}>
+            Sign in with email
+          </Button>
+          {/* The secondary choice is deliberately smaller than the primary. */}
+          <Button size="sm" data-return-focus="import" onClick={onImport}>
+            I already have a key
+          </Button>
+        </div>
+      )}
       <div className="flex gap-3">
         <Button onClick={onBack}>Back</Button>
       </div>
