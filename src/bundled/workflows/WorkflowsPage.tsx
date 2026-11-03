@@ -171,7 +171,11 @@ export function WorkflowCommunity({
       openChannel("");
       return;
     }
-    if (definition.owner !== viewer || !capability.availability.delete) return;
+    if (
+      !capability.permissions.canDelete(definition) ||
+      !capability.availability.delete
+    )
+      return;
     deleting.current = true;
     try {
       capability.delete(definition);

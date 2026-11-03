@@ -85,6 +85,7 @@ import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import { messages } from "./WorkflowOperations";
 import { ConfirmAction } from "./ConfirmAction";
+import { useWorkflowCanDelete } from "./useWorkflowCanDelete";
 import { WorkflowRuns } from "./WorkflowRuns";
 import { getWorkflowActivationWarning } from "./workflowActivationWarning";
 import {
@@ -546,6 +547,7 @@ function WorkflowCard({
   const presentation = workflowCardPresentation(definition.yaml);
   const enabled = fields.enabled !== false;
   const readonly = definition.owner !== viewer;
+  const canDelete = useWorkflowCanDelete(capability, definition);
   const submittedOperation = operations.find(
     (operation) => operation.eventId === submitted?.operationId,
   );
@@ -677,7 +679,7 @@ function WorkflowCard({
           <MenuItem
             tone="danger"
             disabled={
-              readonly ||
+              !canDelete ||
               locked ||
               awaitingReadback ||
               !capability.availability.delete
@@ -769,7 +771,7 @@ function WorkflowCard({
               <MenuItem
                 tone="danger"
                 disabled={
-                  readonly ||
+                  !canDelete ||
                   locked ||
                   awaitingReadback ||
                   !capability.availability.delete
@@ -894,6 +896,7 @@ function WorkflowCard({
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => {
             setConfirmDelete(false);
+            if (!capability.permissions.canDelete(definition)) return;
             onDelete(definition);
           }}
         />

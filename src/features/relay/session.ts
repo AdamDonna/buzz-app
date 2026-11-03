@@ -1103,6 +1103,7 @@ export function createRelaySession(
     acceptDiscovery: (events) => channels.acceptDiscovery(events),
   });
   const workflows = createWorkflows({
+    profiles: profiles.queries,
     reader: transport ? verified : undefined,
     viewer: transport?.viewer ?? "",
     outbox: writes?.outbox,

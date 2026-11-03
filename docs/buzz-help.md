@@ -192,3 +192,11 @@ Release builds ignore this optional helper.
 ### Builderlab in development
 
 With the pinned-viewer development server, Settings → Plugins → Builderlab manages one sign-in for hosted communities, remote agents and apps. It survives app reloads while the server runs. Signing out or session expiry signs all three out. The credential stays on the server and is not saved to disk.
+
+## Deleting an agent’s workflow
+
+In **Workflows → Owner → All channel workflows**, open the workflow’s actions
+menu and choose **Delete workflow**. You can delete workflows you authored or
+workflows authored by an agent whose ownership Buzz has verified belongs to you.
+Confirm the deletion; pending or uncertain results remain in the workflow notices.
+Owning the agent does not grant permission to edit or run its workflow.

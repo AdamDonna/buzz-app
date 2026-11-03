@@ -21,6 +21,7 @@ import { saveAwaitsReadback } from "./WorkflowLanding";
 import { exactSaveReadback } from "./editor-model";
 import { DEFAULT_FORM_STATE, formStateToYaml } from "./workflowFormTypes";
 import { useWorkflowView } from "./useWorkflowView";
+import { useWorkflowCanDelete } from "./useWorkflowCanDelete";
 import {
   type ChannelLabel,
   channelIcon,
@@ -106,6 +107,7 @@ export function WorkflowChannel({
     !!draft?.operationId && (!operation || operation.outcome === "pending");
   const [localDraftAtRisk, setLocalDraftAtRisk] = useState(false);
   const readonly = !!draft?.original && draft.original.owner !== viewer;
+  const canDelete = useWorkflowCanDelete(capability, draft?.original);
   const dirty = !!draft && (draft.yaml !== draft.initial || localDraftAtRisk);
   const atRisk = dirty || !!draft?.operationId;
   // A run request never changes configuration, so its lost receipt cannot
@@ -236,7 +238,7 @@ export function WorkflowChannel({
     if (
       !draft?.original ||
       submission.current ||
-      readonly ||
+      !capability.permissions.canDelete(draft.original) ||
       unresolvedWrite ||
       !capability.availability.delete ||
       draft.operationId
@@ -371,7 +373,7 @@ export function WorkflowChannel({
               )
             }
             actions={
-              !readonly && (
+              canDelete && (
                 <MenuItem
                   tone="danger"
                   disabled={
