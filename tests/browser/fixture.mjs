@@ -1095,7 +1095,16 @@ export const test = base.extend({
       if (ownSoloChannels.length > 0 && filter.ids)
         return [
           ...readEvents.get(community).values(),
-          ...(histories.get(`${community}/${filter["#h"]?.[0]}`) ?? []),
+          ...[...histories.entries()]
+            .filter(
+              ([key]) =>
+                key.startsWith(`${community}/`) &&
+                (!filter["#h"] ||
+                  filter["#h"].some(
+                    (channel) => key === `${community}/${channel}`,
+                  )),
+            )
+            .flatMap(([, events]) => events),
         ].filter((event) => filter.ids.includes(event.id));
       if (filter.kinds?.includes(20001))
         return filter.authors.map((author) =>

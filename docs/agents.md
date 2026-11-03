@@ -481,6 +481,45 @@ shown the mention's thread, including what it already posted there.
 Mentions queued behind a working turn, watch turns and other types are not
 kept.
 
+### Saved Solo follow-ups
+
+The queued rows above the Solo composer are unsent messages, separate from the
+agent runner's interrupted turns. They are saved on this device in view storage,
+partitioned by account and community. Text, recipients, uploaded attachments,
+references, and model/effort choices survive a reload or app restart. An upload
+still in progress has not yet entered this queue.
+
+Restored rows remain paused with **Send** and **Remove** while the owner decides.
+**Resume** also unpauses saved follow-ups in the chats whose interrupted requests
+are being resumed. Each chat waits for those exact requests to settle, including
+the read/startup gap, then sends one queued message per completed turn. An old
+observer turn associated with the resumed request does not hold the queue forever;
+fresh local completion is required. Uncertain or unreadable requests keep waiting.
+If a type cannot resume or the relay confirms a request is gone, its saved follow-ups
+return to paused; fresh follow-ups are not marked as restored, and other agents’ waits
+remain intact. Resume does not establish channel admission: an incomplete empty roster
+keeps saved rows until discovery or an explicit removal establishes their status. Incomplete recipient discovery
+defers release until availability can be determined. A predecessor removed by another
+window pauses only its successors when this window cannot establish its completion;
+earlier rows continue draining. Automatic release rechecks saved FIFO order under a
+chat-scoped lock. A durable handoff marker records the sent event and its confirmed completion,
+including completion after Resume. Explicit dismissal or abandonment retires the
+matching marker under the chat lock. A window-liveness Web Lock prevents a closed
+window’s stale marker from pausing fresh rows. It survives removal of the sent row; a
+window that cannot establish that predecessor's completion pauses its competing
+rows for explicit Send rather than starting overlapping work. The paused rows explain that an earlier message was
+handled in another window.
+**Don’t resume** leaves the saved follow-ups paused. Other chats remain paused.
+Every release rechecks membership and recipient availability. A failed save keeps the
+composer draft; a failed removal keeps the row. Delivery transfers to the existing
+Outbox only after its journal is durable. Once Outbox owns a message, Remove stays
+disabled even if saving its recovery receipt fails; Send retries that same receipt.
+Remove is disabled during an active handoff;
+a per-row lock also prevents another window from removing it mid-send. If another window has begun sending,
+reload to recover its original receipt rather than publishing a second message.
+If a handoff was interrupted before a receipt was saved, the row remains available
+for inspection; check the conversation before removing it and sending again.
+
 ## Shared agent selection
 
 `session.agentChoices` is the canonical read-only selection projection. Mention

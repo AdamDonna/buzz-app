@@ -1,3 +1,4 @@
+import { followUpQueue } from "../messages/follow-up-queue";
 import { registerAttention } from "./attention-command";
 import { canMessageAgent, createAgentChoices } from "./choices";
 import { createAgentLibrary } from "./library";
@@ -7018,7 +7019,10 @@ describe("a turn closing or reloading the app stopped", () => {
     });
     await settle();
     expect(names(second.service.snapshot().interrupted)).toEqual(["Echo"]);
+    const pause = vi.spyOn(followUpQueue(second.session), "pauseAfter");
     second.service.dismissInterrupted();
+    expect(pause).toHaveBeenCalledWith(bot, { [asked.id]: channel });
+    pause.mockRestore();
     expect(second.service.snapshot().interrupted).toEqual([]);
     expect(readInterrupted(second.storage)).toEqual({});
     second.service.resumeInterrupted();
@@ -7237,6 +7241,106 @@ describe("a turn closing or reloading the app stopped", () => {
       "Echo, do X (resumed)",
       "Echo, do Y instead (resumed)",
     ]);
+  });
+
+  it("returns follow-ups to paused when the resumed request is missing from the relay", async () => {
+    const storage = memoryStorage() as AgentStore;
+    await writeInterrupted(storage, bot, { ["f".repeat(64)]: channel });
+    const app = await setup({ storage, identities: [echo], resumes: true });
+    await settle();
+    const queue = followUpQueue(app.session);
+    const resume = vi.spyOn(queue, "resumeAfter");
+    const pause = vi.spyOn(queue, "pauseAfter");
+    app.service.resumeInterrupted();
+    await vi.waitFor(() =>
+      expect(pause).toHaveBeenCalledWith(bot, { ["f".repeat(64)]: channel }),
+    );
+    expect(resume).toHaveBeenCalledWith(
+      bot,
+      { ["f".repeat(64)]: channel },
+      expect.any(Function),
+    );
+    expect(readInterrupted(storage)).toEqual({});
+    expect(app.run).not.toHaveBeenCalled();
+    resume.mockRestore();
+    pause.mockRestore();
+  });
+
+  it("does not pause fresh follow-ups when a gated resumed reread finds no request", async () => {
+    const storage = memoryStorage() as AgentStore;
+    const request = "f".repeat(64);
+    await writeInterrupted(storage, bot, { [request]: channel });
+    const app = await setup({ storage, identities: [echo], resumes: true });
+    await settle();
+    const queue = followUpQueue(app.session);
+    Object.assign(app.session, {
+      agentActivity: {
+        subscribe: () => () => {},
+        activate: () => () => {},
+        snapshot: () => ({
+          status: "listening",
+          turns: [],
+          local: [],
+          typing: [],
+        }),
+      },
+    });
+    Object.assign(app.session.agentChoices, { subscribe: () => () => {} });
+    const publish = vi.fn(() => "fresh-event");
+    queue.submit({
+      channelId: channel,
+      recipients: [bot],
+      text: "Saved",
+      restored: true,
+      beforeRelease: async () => {},
+      publish: () => "saved-event",
+    });
+    const savedId = queue.snapshot()[0]?.id ?? "missing";
+    const read = vi.mocked(app.session.readRemote);
+    let release!: (events: RelayEvent[]) => void;
+    const gate = new Promise<RelayEvent[]>((resolve) => {
+      release = resolve;
+    });
+    read.mockImplementationOnce(() => gate);
+    const pause = vi.spyOn(queue, "pauseAfter");
+    try {
+      app.service.resumeInterrupted();
+      queue.submit({
+        channelId: channel,
+        recipients: [bot],
+        text: "Fresh",
+        publish,
+      });
+      release([]);
+      await vi.waitFor(() =>
+        expect(pause).toHaveBeenCalledWith(bot, { [request]: channel }),
+      );
+      expect(
+        queue.snapshot().find((row) => row.text === "Fresh")?.restored,
+      ).not.toBe(true);
+      queue.remove(savedId);
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+    } finally {
+      release([]);
+      pause.mockRestore();
+    }
+  });
+
+  it("does not arm follow-ups for an interrupted agent whose type cannot resume", async () => {
+    const storage = memoryStorage() as AgentStore;
+    await writeInterrupted(storage, bot, { ["f".repeat(64)]: channel });
+    const app = await setup({ storage, identities: [echo], resumes: false });
+    await settle();
+    const queue = followUpQueue(app.session);
+    const resume = vi.spyOn(queue, "resumeAfter");
+    const pause = vi.spyOn(queue, "pauseAfter");
+    app.service.resumeInterrupted();
+    await vi.waitFor(() => expect(readInterrupted(storage)).toEqual({}));
+    expect(resume).not.toHaveBeenCalled();
+    expect(pause).toHaveBeenCalledWith(bot, { ["f".repeat(64)]: channel });
+    expect(app.run).not.toHaveBeenCalled();
+    resume.mockRestore();
+    pause.mockRestore();
   });
 
   it("is not saved for a type that does not resume", async () => {

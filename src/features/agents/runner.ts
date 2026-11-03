@@ -398,6 +398,12 @@ export type RunnerHost = {
   starting?(agent: Agent, channelId: string): Promise<void> | undefined;
   /** Its community, while live. */
   community(agent: Agent): LiveCommunity | undefined;
+  /** Arms saved composer follow-ups behind these exact interrupted requests. */
+  resumeFollowUps?(agent: Agent, turns: Readonly<Record<string, string>>): void;
+  abandonFollowUps?(
+    agent: Agent,
+    turns: Readonly<Record<string, string>>,
+  ): void;
   /** Every saved record, whose watches' catch-up progress is kept. */
   records(): readonly AgentRecord[];
   /** Catch-up progress, as saved. */
@@ -608,7 +614,13 @@ export class AgentRunners {
   /** Gives each of `keys` again the turns it was left working on, once
    * its community is connected. */
   resumeInterrupted(keys: readonly AgentKey[]) {
-    for (const key of keys) this.resuming.add(key);
+    for (const key of keys) {
+      this.resuming.add(key);
+      const agent = this.host.agent(key);
+      const turns = this.left[key];
+      if (agent && turns && this.runners.get(key)?.type?.resumes)
+        this.host.resumeFollowUps?.(agent, turns);
+    }
     for (const runner of this.runners.values()) this.resumeTurns(runner);
   }
   /** Forgets the turns the app left `keys` working on last time. */
@@ -616,6 +628,8 @@ export class AgentRunners {
     for (const key of keys) {
       const { [key]: turns, ...rest } = this.left;
       if (!turns || !this.runs(key)) continue;
+      const agent = this.host.agent(key);
+      if (agent) this.host.abandonFollowUps?.(agent, turns);
       this.unmark(key, Object.keys(turns));
       this.left = rest;
     }
@@ -1223,7 +1237,11 @@ export class AgentRunners {
     const { [runner.key]: _, ...rest } = this.left;
     this.left = rest;
     const ids = Object.keys(left);
-    if (!runner.type.resumes) return this.unmark(runner.key, ids);
+    if (!runner.type.resumes) {
+      this.host.abandonFollowUps?.(agent, left);
+      return this.unmark(runner.key, ids);
+    }
+    this.host.resumeFollowUps?.(agent, left);
     // Not read(): it returns the owner's own mentions as unproven outbox copies.
     void community.session
       .readRemote([{ ids, limit: ids.length }], {
@@ -1251,10 +1269,11 @@ export class AgentRunners {
             });
             if (queued) kept.add(event.id);
           }
-          this.unmark(
-            runner.key,
-            ids.filter((id) => !kept.has(id)),
+          const forgotten = Object.fromEntries(
+            Object.entries(left).filter(([id]) => !kept.has(id)),
           );
+          this.host.abandonFollowUps?.(agent, forgotten);
+          this.unmark(runner.key, Object.keys(forgotten));
         },
         (error) => {
           this.left = { ...this.left, [runner.key]: left };

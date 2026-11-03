@@ -203,6 +203,23 @@ that agent in Buzz; they do not notify the external app through this connection.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
 
+## Saved Solo follow-ups
+
+Messages queued behind a working agent are saved on this device for the current
+account and community. Saved text, recipients, uploaded attachments, references,
+and model choices survive a reload or restart; uploads still in progress are not
+queued yet.
+
+After restart, saved messages stay paused. **Send** sends a selected row, and
+**Remove** discards an unsent row. **Resume** restarts supported interrupted turns
+and unpauses saved follow-ups in those chats, sending them in order as turns finish.
+**Don’t resume** leaves them paused. Chats outside that recovery stay paused too.
+
+If another window may be sending a message, check the conversation before sending
+again. Remove is unavailable once delivery owns the message; use its delivery
+recovery controls instead. A save or recovery error keeps the draft or queued row
+available rather than silently discarding it.
+
 ## Choosing and customizing agents
 
 - Buzz supports different agent types, including Claude, Codex, Goose, and Pi.

@@ -45,6 +45,7 @@ function fixture() {
     observeDismiss: () => () => {},
     observeSend: () => () => {},
     ready: async () => {},
+    recovery: async () => undefined,
     recover: async () => {},
     acknowledge: async () => {},
     supports: () => true,

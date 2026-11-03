@@ -63,6 +63,7 @@ function harness(room = "room", delivery: "failed" | "unknown" = "failed") {
       supports: () => true,
       ready: async () => {},
       send: () => "id",
+      recovery: async () => undefined,
       recover: async () => {},
       acknowledge: async () => {},
       snapshot: () => [pending],
