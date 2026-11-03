@@ -361,6 +361,8 @@ function crossTokenLine(
 type PendingChip = { id: string; name: string };
 // Pending chip ids outlive an editor: a host keeps its resolvers across remounts.
 let pendingChips = 0;
+// Token hosts are keyed so one chip leaving keeps every later chip mounted.
+let tokenHosts = 0;
 export type EditableInputProps = Omit<
   HTMLAttributes<ComposerInputElement>,
   "onChange" | "onInput"
@@ -433,6 +435,7 @@ export function EditableInput({
     new Map<
       HTMLElement,
       {
+        key: string;
         source: string;
         resource: ComposerResource | null;
         pending: PendingChip | null;
@@ -504,6 +507,7 @@ export function EditableInput({
       return projected.value;
     };
     const tokenViews = () => refresh((revision) => revision + 1);
+    let formats: string | undefined;
     const selected = () => {
       const { from, to, empty, $from } = editor.state.selection;
       const active = inlineFormats
@@ -519,10 +523,13 @@ export function EditableInput({
           return present;
         })
         .map(({ mark }) => mark);
-      current.current.onFormatsChange([
-        ...active,
-        ...activeBlockFormats(editor.state),
-      ]);
+      const next = [...active, ...activeBlockFormats(editor.state)];
+      // Every transaction lands here; an unchanged toolbar state must not
+      // re-render the whole composer once more per keystroke.
+      if (next.join() !== formats) {
+        formats = next.join();
+        current.current.onFormatsChange(next);
+      }
       editor.dom.dispatchEvent(new Event("select"));
     };
     const normalize = new Plugin({
@@ -1734,22 +1741,27 @@ export function EditableInput({
           selected();
         },
         nodeViews: {
+          // Tokens also come and go in transactions the normalizer appends,
+          // which report no change of their own; render each new host's artwork.
           token(node, _view, getPos) {
             const dom = document.createElement("span");
             dom.className = tokenClass.current;
             dom.contentEditable = "false";
             dom.dataset.source = node.attrs.source;
             hosts.current.set(dom, {
+              key: `token-${++tokenHosts}`,
               source: node.attrs.source,
               resource: node.attrs.resource,
               pending: node.attrs.pending,
               position: getPos,
             });
+            tokenViews();
             return {
               dom,
               ignoreMutation: () => true,
               destroy() {
                 hosts.current.delete(dom);
+                tokenViews();
               },
             };
           },
@@ -2513,6 +2525,7 @@ export function EditableInput({
             (decoration?.content ?? host.source)
           ),
           element,
+          host.key,
         );
       })}
     </>
