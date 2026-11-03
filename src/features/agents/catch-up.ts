@@ -39,6 +39,9 @@ export type Checkpoint = Readonly<{
  * checkpoint past them every few seconds while the app listens; past this,
  * `heardOf` moves it past the oldest. */
 export const HEARD_LIMIT = 256;
+/** The most heard events a stream keeps while it cannot move past them, as
+ * when its reads fail while live goes on; past it, the oldest go anyway. */
+export const HEARD_MOST = 16 * HEARD_LIMIT;
 /** Seconds a stream that live does not cover reads again below the top of
  * its last read: as far as live resumes behind a drop. The relay accepts an
  * event whose time is up to its drift behind when it stores it, and the
@@ -88,7 +91,8 @@ export const undelivered = (checkpoint: Checkpoint, event: Position) =>
  * first. Past `HEARD_LIMIT` of them the oldest go, and `through` moves up to
  * the newest of those, so none is given again after a restart; but never
  * past what was read, nor into the second of a window's last delivered
- * event, so no event left to read is passed over. */
+ * event, so no event left to read is passed over. Those it cannot move past
+ * stay, up to `HEARD_MOST`: a later read or tick moves past them. */
 export function heardOf(
   checkpoint: Checkpoint,
   heard: readonly Position[],
@@ -115,7 +119,7 @@ export function heardOf(
       Math.min(bound, (done[over - 1] as Position).created_at),
     );
   }
-  const kept = past(done).slice(-HEARD_LIMIT);
+  const kept = past(done).slice(-HEARD_MOST);
   return {
     ...rest,
     through,
@@ -444,13 +448,18 @@ export function admitted(
   const last = given.at(-1);
   const cursor = delivered(window.upper, last);
   if (overlap <= 0 || !last) return cursor;
-  // A window resumed after `after` delivered all of that second once it
-  // goes on to a later one; ids before it there are not listed.
+  // A window resumed after an `after` saved without an overlap delivered
+  // all of that second once it goes on to a later one, and lists none of
+  // it. One saved with an overlap lists them, and keeps `through` where it
+  // began, so each later read still finds an event stored late below it.
   const { through, after } = window.checkpoint;
+  const listed = !after || heard.some(({ id }) => id === after.id);
   return heardOf(
     {
       ...cursor,
-      through: Math.min(after?.created_at ?? through, last.created_at - 1),
+      through: listed
+        ? through
+        : Math.min(after.created_at, last.created_at - 1),
     },
     [...heard, ...given],
   );

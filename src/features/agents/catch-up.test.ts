@@ -5,6 +5,8 @@ import {
   CATCH_UP_PAGE,
   CATCH_UP_PAGES,
   catchUpKey,
+  admitted,
+  delivered,
   finished,
   HEARD_LIMIT,
   heardOf,
@@ -326,11 +328,12 @@ it("moves past the heard it drops, but not past what was read or a window's curs
     read: 1100,
     heard: heard.slice(2),
   });
-  // Read only through 1000: past that, one may not have been read yet.
+  // Read only through 1000: past that, one may not have been read yet, and
+  // it keeps every one past where it stays, so none is given again.
   const unread = heardOf({ through: 0, read: 1000 }, heard);
   expect(unread.through).toBe(1000);
   expect(unread.read).toBeUndefined();
-  expect(unread.heard).toHaveLength(HEARD_LIMIT);
+  expect(unread.heard).toEqual(heard.slice(1));
   // A window being given goes no further than before its cursor's second.
   const after = { created_at: 1001, id: id(2) };
   expect(heardOf({ through: 0, upper: 2000, after }, heard)).toMatchObject({
@@ -338,6 +341,48 @@ it("moves past the heard it drops, but not past what was read or a window's curs
     upper: 2000,
     after,
   });
-  // Unread, with no window: it keeps the newest and stays where it is.
-  expect(heardOf({ through: 0 }, heard).through).toBe(0);
+  // Unread, with no window: it stays where it is and keeps them all.
+  expect(heardOf({ through: 0 }, heard)).toEqual({ through: 0, heard });
+});
+
+it("finds an event stored late below a window cut short twice, and gives none twice", async () => {
+  const at = (i: number, created_at: number, content = `e${i}`) => ({
+    id: id(i),
+    created_at,
+    content,
+  });
+  const events: Stored[] = [at(1, 110), at(2, 120), at(3, 130), at(4, 140)];
+  const { read } = relay(events);
+  const overlap = 1000;
+  const given: string[] = [];
+  const give = (window: { events: readonly Stored[] }, count: number) => {
+    const taken = window.events.slice(0, count);
+    given.push(...taken.map(({ content }) => content));
+    return taken;
+  };
+  const first = await readWindow(all, { through: 100 }, 200, read);
+  if (!first) throw new Error("no window");
+  const cut = admitted(first, give(first, 2), [], overlap);
+  // Stored late, below where the window goes on.
+  events.push(at(5, 115, "late"));
+  const second = await readWindow(all, cut, 200, read);
+  if (!second) throw new Error("no window");
+  const again = admitted(second, give(second, 1), cut.heard, overlap);
+  expect(again.through).toBe(100);
+  const third = await readWindow(all, again, 200, read);
+  if (!third) throw new Error("no window");
+  give(third, third.events.length);
+  const done = finished(third, again.heard, overlap);
+  const poll = await readWindow(all, done, 210, read);
+  if (!poll) throw new Error("no window");
+  give(poll, poll.events.length);
+  expect(given).toEqual(["e1", "e2", "e3", "e4", "late"]);
+  // Cut short by a read with no overlap, which lists none it gave: the
+  // next read with one goes on past all of that second.
+  const plain = delivered(200, at(2, 120));
+  const resumed = await readWindow(all, plain, 200, read);
+  if (!resumed) throw new Error("no window");
+  expect(
+    admitted(resumed, resumed.events.slice(0, 1), [], overlap).through,
+  ).toBe(120);
 });

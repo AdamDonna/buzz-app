@@ -7934,6 +7934,40 @@ it("gives no live message again after a restart when a polled watch hears more t
   }
 });
 
+it("gives no live message again after a restart when a polled watch hears more between reads than it keeps", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const storage = memoryStorage();
+    const first = await setup({ storage, identities: [echo] });
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/chat": { ...chat["watch/chat"], channels: "all" },
+        "watch/channel": null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    // Ten a second: more than it keeps as heard between two reads.
+    const sent: ReturnType<typeof posted>[] = [];
+    for (let second = 0; second < 60; second++) {
+      const batch = Array.from({ length: 10 }, (_, index) =>
+        posted(`live ${second}.${index}`, nowSeconds()),
+      );
+      first.history.push(...batch);
+      sent.push(...batch);
+      first.emit({ events: batch, channelId: channel });
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(heard(first.run).length).toBeGreaterThan(0);
+    first.connect(false);
+    const second = await setup({ storage, identities: [echo], history: sent });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("reads what a route missed while it was down, though it comes back between reads", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
