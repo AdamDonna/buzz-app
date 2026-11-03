@@ -653,3 +653,43 @@ it("opens removed Messages settings links at Appearance without adding a navigat
   });
   expect(screen.queryByRole("button", { name: "Messages" })).toBeNull();
 });
+
+it("Back closes Settings onto the view beneath and Forward reopens it; other shortcuts stay blocked", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  activation.release();
+  const current = createServices();
+  services = current;
+  render(<App services={current} />);
+  // Whatever view the app settles on first lies beneath Settings.
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).not.toBe("pending"),
+  );
+  const beneath = current.navigation.snapshot().entry.target;
+  const settings = { version: 1, kind: "settings", scope: null } as const;
+  void current.navigation.open(settings);
+  const dialog = await screen.findByRole("dialog", { name: "Settings" });
+  expect(dialog).toHaveAttribute("data-navigation-visit");
+  const key = (init: KeyboardEventInit) =>
+    fireEvent.keyDown(screen.getByRole("button", { name: "Close Settings" }), {
+      ctrlKey: true,
+      ...init,
+    });
+  // Home is not a Back/Forward shortcut: Settings keeps today's modal policy.
+  key({ key: "o", shiftKey: true });
+  await act(async () => {});
+  expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  key({ key: "[" });
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull(),
+  );
+  expect(current.navigation.snapshot().entry.target).toEqual(beneath);
+  fireEvent.keyDown(document.body, { ctrlKey: true, key: "]" });
+  expect(await screen.findByRole("dialog", { name: "Settings" })).toBeVisible();
+});

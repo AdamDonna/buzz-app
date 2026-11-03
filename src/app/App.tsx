@@ -670,6 +670,7 @@ function ConnectedAppContent({ services }: { services: AppServices }) {
             // The inert launch surface would swallow the modal's initial focus.
             open={settings && !launching}
             title="Settings"
+            visit
             closeLabel="Close Settings"
             size="expanded"
             container={workspaceElement}

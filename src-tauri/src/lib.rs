@@ -60,6 +60,8 @@ mod legacy_cli_shortcut;
 mod legacy_communities;
 #[cfg(any(not(target_os = "macos"), test))]
 mod microphone;
+#[cfg(target_os = "macos")]
+mod mouse_nav;
 
 mod notifications;
 mod os_idle;
@@ -904,6 +906,8 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             notifications::macos::init();
+            #[cfg(target_os = "macos")]
+            mouse_nav::install(app.handle());
             #[cfg(target_os = "macos")]
             if let Some(home) = dirs::home_dir() {
                 if let Err(error) = legacy_cli_shortcut::remove_stale(&home.join(".local/bin")) {
