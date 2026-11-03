@@ -67,6 +67,7 @@ function fixture(
   hooks?: ConstructorParameters<typeof CodexRuntime>[7],
   execution?: ConstructorParameters<typeof CodexRuntime>[8],
   persisted?: AgentStore,
+  inspect?: ConstructorParameters<typeof CodexRuntime>[10],
 ) {
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
@@ -362,7 +363,8 @@ function fixture(
     hooks,
     execution,
     undefined,
-    execution ? async () => ({ provider: "test/guest" }) : undefined,
+    inspect ??
+      (execution ? async () => ({ provider: "test/guest" }) : undefined),
   );
   runtimes.push(runtime);
   const events: EventData[] = [];
@@ -5175,3 +5177,78 @@ it("keeps existing intent after restart when the first target opens but its turn
   });
   await guests[1]?.complete();
 });
+
+it("uses the default local flow without opening or claiming execution", async () => {
+  const execution = vi.fn(async (): Promise<AgentExecution | undefined> => {
+    throw new Error("A local turn must not open an execution target");
+  });
+  const inspect = vi.fn(async () => undefined);
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+    undefined,
+    inspect,
+  );
+  await f.runtime.run(f.delivery("local turn"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  expect(
+    f.sent.find((wire) => wire.method === "thread/start")?.params,
+  ).toMatchObject({ cwd: "/tmp/codex-test" });
+  expect(inspect).toHaveBeenCalledWith(pubkey);
+  expect(execution).not.toHaveBeenCalled();
+  expect(
+    [...f.storage.keys()].some(
+      (key) =>
+        key.startsWith("buzz.agent.execution.") ||
+        key.startsWith("buzz.codex.sessions.execution."),
+    ),
+  ).toBe(false);
+  await f.complete();
+});
+
+it.each(["conversation", "standalone"])(
+  "does not revive disposed local work after %s inspection",
+  async (mode) => {
+    const inspected = deferred<undefined>();
+    const started = deferred<void>();
+    const execution = vi.fn(async () => undefined);
+    const f = fixture(
+      [],
+      undefined,
+      false,
+      {},
+      undefined,
+      undefined,
+      execution,
+      undefined,
+      async () => {
+        started.resolve();
+        return inspected.promise;
+      },
+    );
+    const delivery = f.delivery("local work");
+    const result =
+      mode === "conversation"
+        ? f.runtime.run(delivery)
+        : f.runtime.runOnce({
+            delivery,
+            key: "watch",
+            signal: delivery.signal,
+            prompt: async () => undefined,
+          });
+    const rejected = expect(result).rejects.toThrow(
+      "Codex runtime is disposed",
+    );
+    await started.promise;
+    f.runtime.dispose();
+    inspected.resolve(undefined);
+    await rejected;
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(execution).not.toHaveBeenCalled();
+  },
+);

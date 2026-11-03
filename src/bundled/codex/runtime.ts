@@ -327,19 +327,7 @@ export class CodexRuntime {
     signal?: AbortSignal,
   ): Promise<CodexRuntime> {
     if (this.disposed) throw new Error("Codex runtime is disposed");
-    if (!this.execution) return this;
-    if (!(await this.inspect?.(agent))) {
-      const execution = await this.execution(agent, {
-        key: conversation,
-        intent: "new",
-        ...(signal ? { signal } : {}),
-      });
-      if (execution) {
-        await execution.dispose();
-        throw new Error("The execution selection changed. Retry this message.");
-      }
-      return this;
-    }
+    if (!this.execution || !(await this.inspect?.(agent))) return this;
     const key = this.executionKey(agent, scope, conversation);
     const held = this.remote.get(key);
     if (held && !held.execution.signal.aborted) return held.runtime;
@@ -1012,6 +1000,7 @@ export class CodexRuntime {
     for (const listener of this.listeners) listener();
   }
   async run(delivery: Delivery): Promise<void> {
+    if (this.disposed) throw new Error("Codex runtime is disposed");
     delivery.signal.throwIfAborted();
     const { trigger, agent } = delivery;
     // Unaddressed watches and timers come as standalone turns (`runOnce`).
@@ -1076,12 +1065,8 @@ export class CodexRuntime {
       );
       return handoff.done;
     }
-    await this.connection(
-      agent.key,
-      reads.scope,
-      conversationKey,
-      delivery.signal,
-    );
+    if (this.disposed) throw new Error("Codex runtime is disposed");
+    delivery.signal.throwIfAborted();
     let finishActivity!: (result: WorkOutcome) => void;
     const replied = new Promise<WorkOutcome>((resolve) => {
       finishActivity = resolve;
@@ -1272,6 +1257,7 @@ export class CodexRuntime {
     signal: turnSignal,
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
+    if (this.disposed) throw new Error("Codex runtime is disposed");
     const { agent } = delivery;
     const reads = this.reads(agent.key);
     if (!reads)
@@ -1301,8 +1287,9 @@ export class CodexRuntime {
         await this.storage.set(storageKey, null);
       }
     }
-    if (this.execution)
-      await this.connection(agent.key, scope, key, turnSignal);
+    if (this.disposed) throw new Error("Codex runtime is disposed");
+    if (turnSignal.aborted)
+      return { ok: false, error: message(turnSignal.reason) };
     const entry = this.entry(agent.key, scope);
     const settings = this.resolveConfig(delivery.config);
     const team = delivery.team ?? "";
