@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createAgentChoices } from "../../../features/agents/choices";
 import { bindNames } from "../../../features/identity-names/service";
 import { createNameProvider } from "../../../features/identity-names/directory";
 import { resolveIdentityNames } from "../../../features/identity-names/policy";
@@ -40,7 +41,17 @@ const channelList = {
     },
   ],
 };
-const library = { status: "ready" as const, identities: [] };
+const library = {
+  status: "ready" as const,
+  identities: emptyList,
+  definitions: emptyList,
+};
+const agentLibrary = {
+  snapshot: () => library,
+  subscribe: empty,
+  retain: empty,
+  refresh: async () => {},
+};
 const rawSession = {
   messages: {
     send: () => "preview-send",
@@ -75,18 +86,12 @@ const rawSession = {
     ensureList: () => {},
     refreshList: () => {},
   },
-  agentLibrary: {
-    snapshot: () => library,
-    subscribe: empty,
-    retain: empty,
-    refresh: async () => {},
-  },
-  agentChoices: {
-    snapshot: () => library,
-    subscribe: empty,
-    retain: empty,
-    refresh: async () => {},
-  },
+  agentLibrary,
+  agentChoices: createAgentChoices({
+    scope: `product-preview:${alice}`,
+    library: agentLibrary,
+    signal: new AbortController().signal,
+  }),
   archives: {
     snapshot: () => archiveSnapshot,
     subscribe: empty,
