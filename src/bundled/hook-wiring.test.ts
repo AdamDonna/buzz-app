@@ -37,7 +37,7 @@ it.each(["claude", "codex", "pi"] as const)(
   "labels registered %s adapter hook output",
   async (name) => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux");
-    const output =
+    let output: unknown =
       name === "pi" ? { block: "Wait" } : { decision: "block", reason: "Wait" };
     const dispatchHook = vi.fn(
       (
@@ -90,5 +90,21 @@ it.each(["claude", "codex", "pi"] as const)(
         : { decision: "block", reason: "[Buzz plugin: reply-first] Wait" },
     );
     expect(dispatchHook).toHaveBeenCalledOnce();
+    if (name === "pi") {
+      output = { output: [{ type: "text", text: '{"ok":true}' }] };
+      expect(
+        await hook?.("a".repeat(64), "session", "afterTool", {
+          call: { parent: { taskId: "outer", callId: "outer-tool" } },
+        }),
+      ).toEqual(output);
+      expect(
+        await hook?.("a".repeat(64), "session", "afterTool", { call: {} }),
+      ).toEqual({
+        output: [
+          { type: "text", text: "[Buzz plugin: reply-first]" },
+          { type: "text", text: '{"ok":true}' },
+        ],
+      });
+    }
   },
 );

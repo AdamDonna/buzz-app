@@ -36,15 +36,20 @@ export function nativeHookOutput(output: unknown, pluginId: string): unknown {
 }
 
 /** Pi's arguments and opaque details are tool data, not hook explanations. */
-export function piHookOutput(output: unknown, pluginId: string): unknown {
+export function piHookOutput(
+  output: unknown,
+  pluginId: string,
+  input?: unknown,
+): unknown {
   if (!record(output)) return output;
   return {
     ...output,
     ...(typeof output.block === "string" && {
       block: label(pluginId, output.block),
     }),
-    ...(Array.isArray(output.output) && {
-      output: [{ type: "text", text: label(pluginId, "") }, ...output.output],
-    }),
+    ...(Array.isArray(output.output) &&
+      !(record(input) && record(input.call) && input.call.parent != null) && {
+        output: [{ type: "text", text: label(pluginId, "") }, ...output.output],
+      }),
   };
 }

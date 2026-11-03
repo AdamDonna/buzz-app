@@ -40,7 +40,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
           {
             accepts: (output) => output != null,
             milliseconds: 25000,
-            compose: piHookOutput,
+            compose: (output, pluginId) =>
+              piHookOutput(output, pluginId, input),
           },
         )) ?? null
       );
