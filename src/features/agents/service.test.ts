@@ -446,12 +446,13 @@ it("brings over an identity not already an agent, with its type's defaults and w
 it("binds a dedicated native agent and preserves its target when a provider change is refused", async () => {
   const storage = memoryStorage();
   const { ctx, plugin, service, native } = await setup({ storage });
+  const retire = vi.fn(async () => {});
   plugin.agents.register({
     id: "native",
     title: "Native",
     execution: true,
     protection: true,
-    retire: vi.fn(async () => {}),
+    retire,
     defaults: () => ({ config: {} }),
     run: vi.fn(),
   });
@@ -479,10 +480,23 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     name: "Dedicated",
   });
   await service.retype(agent.key, "example/native");
-  await adapter.agents.bindExecution(agent.key, {
-    id: "remote",
-    config: { profile: "scratch" },
-  });
+  const binding = { id: "remote", config: { profile: "scratch" } };
+  native.claim.mockResolvedValueOnce(false);
+  await expect(
+    adapter.agents.bindExecution(agent.key, binding),
+  ).rejects.toThrow("Another copy of Buzz is running this agent");
+  expect(service.executionBinding(agent.key)).toBeUndefined();
+  const retiring = Promise.withResolvers<void>();
+  retire.mockClear();
+  retire.mockImplementationOnce(() => retiring.promise);
+  const changing = adapter.agents.bindExecution(agent.key, binding);
+  try {
+    await vi.waitFor(() => expect(retire).toHaveBeenCalledWith(agent.key));
+    expect(service.executionBinding(agent.key)).toBeUndefined();
+  } finally {
+    retiring.resolve();
+  }
+  await changing;
   expect(service.executionBinding(agent.key)).toEqual({
     provider: "internal/remote",
     config: { profile: "scratch" },

@@ -1533,6 +1533,10 @@ export class AgentsService extends Service implements Agents {
       throw new Error("This agent does not support plugin execution");
     if (member.protection)
       throw new Error("Plugin execution does not support protected agents");
+    if (!this.types().find((type) => type.key === member.type)?.retire)
+      throw new Error(
+        "This runtime cannot safely change its execution provider",
+      );
     await this.runners.retype(key, member.name, () =>
       this.typeChange(member, async () => {
         await this.executions.bind(this.ctx, key, member.type, binding);
@@ -1550,7 +1554,7 @@ export class AgentsService extends Service implements Agents {
   async execution(key: AgentKey, session: AgentExecutionSession) {
     const member = this.liveMember(key);
     if (!member) throw new Error("No such agent on this device");
-    if (member.protection && (await this.executions.binding(key)))
+    if (member.protection && (await this.executions.inspect(key)))
       throw new Error("Plugin execution does not support protected agents");
     return this.executions.open(this.ctx, key, member.type, session);
   }
@@ -1764,7 +1768,7 @@ export class AgentsService extends Service implements Agents {
           await this.runners.retype(agent.key, agent.name, async () => {
             if (policy !== null)
               for (const member of members)
-                if (await this.executions.binding(member.key))
+                if (await this.executions.inspect(member.key))
                   throw new Error(
                     "Plugin execution does not support protected agents",
                   );

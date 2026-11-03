@@ -50,3 +50,56 @@ it("keeps a replacement visible when an old state read finishes late", async () 
     await old;
   }
 });
+
+it("keeps the latest of overlapping reads visible after an external New", async () => {
+  const files = sharedFiles();
+  const writer = new PiSessionStore(files.open());
+  const initial = await writer.current("agent", "channel/root");
+  await writer.save("agent", { ...initial, conversation: 1 });
+  const storage = { ...files.open() };
+  const reader = new PiSessionStore(storage);
+  await reader.current("agent", "channel/root");
+  const read = storage.read;
+  const oldReading = deferred();
+  const newReading = deferred();
+  const releaseOld = deferred();
+  const releaseNew = deferred();
+  vi.spyOn(storage, "read").mockImplementation(async (key) => {
+    const text = await read(key);
+    if (key.includes(":session:")) {
+      if (key.endsWith(initial.key)) {
+        oldReading.resolve();
+        await releaseOld.promise;
+      } else {
+        newReading.resolve();
+        await releaseNew.promise;
+      }
+    }
+    return text;
+  });
+  const old = reader.current("agent", "channel/root");
+  let next: ReturnType<PiSessionStore["current"]> | undefined;
+  try {
+    await oldReading.promise;
+    await writer.replace("agent", "channel/root");
+    const replacement = {
+      ...(await writer.current("agent", "channel/root")),
+      conversation: 2,
+    };
+    await writer.save("agent", replacement);
+    next = reader.current("agent", "channel/root");
+    await newReading.promise;
+    releaseOld.resolve();
+    expect((await old).key).toBe(initial.key);
+    releaseNew.resolve();
+    expect(await next).toEqual(replacement);
+    expect(reader.list("agent")).toEqual([replacement]);
+    const saved = { ...replacement, at: 200 };
+    await reader.save("agent", saved);
+    expect(reader.list("agent")).toEqual([saved]);
+  } finally {
+    releaseOld.resolve();
+    releaseNew.resolve();
+    await Promise.all([old, next]);
+  }
+});

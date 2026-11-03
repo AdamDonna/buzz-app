@@ -192,6 +192,30 @@ it.each(["caller abort", "joined caller abort", "adapter unload"] as const)(
   },
 );
 
+it("preserves an adapter's reset error and permits a new session", async () => {
+  const f = await setup();
+  const error = Object.assign(
+    new Error("The saved target expired. Start a new session."),
+    {
+      code: "EXECUTION_SESSION_RESET_REQUIRED",
+    },
+  );
+  f.connect.mockRejectedValueOnce(error);
+  await f.registry.bind(f.plugin, agent, harness, input);
+  await expect(
+    f.registry.open(f.native, agent, harness, {
+      ...session,
+      intent: "existing",
+    }),
+  ).rejects.toBe(error);
+  expect(f.target.spawn).not.toHaveBeenCalled();
+  const next = await f.registry.open(f.native, agent, harness, {
+    key: "replacement-session",
+    intent: "new",
+  });
+  expect(next?.workspace).toBe("/work/task");
+});
+
 it("retires owned processes on adapter unload and never opens local execution for a saved binding", async () => {
   const f = await setup();
   await f.registry.bind(f.plugin, agent, harness, input);
@@ -251,18 +275,21 @@ it("blocks runtime access until the binding is saved and propagates a failed sav
   expect(failed.registry.read(agent)).toBeUndefined();
 });
 
-it("refuses to redirect an agent whose local runtime is already open", async () => {
-  const f = await setup();
+it("keeps local execution free of saved claims and permits later adapter selection", async () => {
+  const disk = sharedFiles();
+  const f = await setup(disk.open());
   expect(
     await f.registry.open(f.native, agent, harness, session),
   ).toBeUndefined();
-  await expect(
-    f.registry.bind(f.plugin, agent, harness, input),
-  ).rejects.toThrow("another execution binding");
-  expect(f.registry.read(agent)).toBeUndefined();
+  expect(disk.disk.size).toBe(0);
+  expect(f.connect).not.toHaveBeenCalled();
+  await f.registry.bind(f.plugin, agent, harness, input);
+  expect(
+    (await f.registry.open(f.native, agent, harness, session))?.workspace,
+  ).toBe("/work/task");
 });
 
-it("reads a binding saved after another window loads, and keeps local selection after restart", async () => {
+it("reads a binding saved after another window loads", async () => {
   const disk = sharedFiles();
   const stale = await setup(disk.open());
   const writer = await setup(disk.open());
@@ -282,41 +309,44 @@ it("reads a binding saved after another window loads, and keeps local selection 
     await stale.registry.open(stale.native, localAgent, harness, session),
   ).toBeUndefined();
   const restarted = await setup(disk.open());
-  await expect(
-    restarted.registry.bind(restarted.plugin, localAgent, harness, input),
-  ).rejects.toThrow("another execution binding");
+  await restarted.registry.bind(restarted.plugin, localAgent, harness, input);
+  expect(restarted.registry.read(localAgent)?.provider).toBe("internal/remote");
 });
 
-it("does not start local work while its durable claim is pending or failed", async () => {
-  const saved = deferred<void>();
-  const disk = sharedFiles();
-  const f = await setup(disk.open(saved.promise));
-  const first = f.registry.open(f.native, agent, harness, session);
-  const otherRegistry = await setup(f.storage);
-  const second = otherRegistry.registry.open(
-    otherRegistry.native,
-    agent,
-    harness,
-    session,
-  );
-  let completed = false;
-  void second.then(() => {
-    completed = true;
+it("waits for authoritative selection and rejects an unreadable selection", async () => {
+  const selected = deferred<string | null>();
+  const started = deferred<void>();
+  const f = await setup({
+    ...memoryStorage(),
+    read: async () => {
+      started.resolve();
+      return selected.promise;
+    },
   });
-  await Promise.resolve();
-  expect(completed).toBe(false);
-  saved.resolve();
-  await expect(first).resolves.toBeUndefined();
-  await expect(second).resolves.toBeUndefined();
+  let completed = false;
+  const opening = f.registry
+    .open(f.native, agent, harness, session)
+    .then((value) => {
+      completed = true;
+      return value;
+    });
+  await started.promise;
+  try {
+    expect(completed).toBe(false);
+    expect(f.connect).not.toHaveBeenCalled();
+  } finally {
+    selected.resolve(null);
+  }
+  await expect(opening).resolves.toBeUndefined();
 
   const failed = await setup({
     ...memoryStorage(),
-    add: async () => {
-      throw new Error("disk full");
+    read: async () => {
+      throw new Error("Saved state is unavailable");
     },
   });
   await expect(
     failed.registry.open(failed.native, agent, harness, session),
-  ).rejects.toThrow("disk full");
-  expect(failed.target.spawn).not.toHaveBeenCalled();
+  ).rejects.toThrow("Saved state is unavailable");
+  expect(failed.connect).not.toHaveBeenCalled();
 });
