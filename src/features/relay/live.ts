@@ -363,9 +363,9 @@ type Route = {
    * relay may have left that channel out. Re-send at its EOSE. */
   regranted?: boolean;
   /** The grants that re-send it, or will at its EOSE, or came before its REQ
-   * was sent. A re-send overlaps its live predecessor until EOSE, so only
-   * these channels can have a gap: the relay may have checked the
-   * predecessor's REQ before their grant. */
+   * was sent and stay until EOSE. A re-send overlaps its live predecessor
+   * until EOSE, so only these channels can have a gap: the relay may have
+   * checked the predecessor's REQ before their grant. */
   grants?: Set<string>;
   granted?: Set<string>;
   /** When its REQ was sent (ms), for the slow batch refresh. */
@@ -1043,7 +1043,10 @@ export function subscribeRelayTraffic(
                 route.resumedChannels?.has(id) &&
                 (!route.replayChannels || route.replayChannels.includes(id)) &&
                 (route.counts?.get(id) ?? 0) < LIVE_REPLAY_LIMIT &&
-                !route.repairs?.has(id),
+                !route.repairs?.has(id) &&
+                // A grant before its REQ: the replay was planned from the old
+                // cursor. A grant after it re-sends the batch at this EOSE.
+                (route.regranted || !route.grants?.has(id)),
             );
       const channels = route.channelIds ?? route.channelId;
       if (continuous.length)
@@ -1189,10 +1192,13 @@ export function subscribeRelayTraffic(
         )
       )
         delete route.granted;
-      // Their channels still owe the history from before their grant.
-      if (route.grants && route.granted)
-        for (const id of route.grants) route.granted.add(id);
-      delete route.grants;
+      // Their channels still owe the history from before their grant. With no
+      // overlap claim, keep them until EOSE: a drop first must still not keep
+      // their cursors from the predecessor.
+      if (route.granted) {
+        for (const id of route.grants ?? []) route.granted.add(id);
+        delete route.grants;
+      }
       route.sentAt = Date.now();
       wires.set(wire, route);
       route.deadline = setTimeout(() => {
@@ -1843,6 +1849,8 @@ export function subscribeRelayTraffic(
           replace(route).granted = grants ?? new Set();
           notify();
         }
+        // Established after its grants: its stream holds their channels.
+        else delete route.grants;
         if (valid()) pump();
       } else if (data[0] === "CLOSED") {
         const reason =

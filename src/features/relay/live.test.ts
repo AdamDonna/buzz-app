@@ -2579,35 +2579,87 @@ describe("a reconnect's replay of a grant", () => {
     },
   );
 
-  it("catches up a channel granted while its batch's renewal waits to retry", async () => {
+  it.each([
+    ["waits to retry", false],
+    ["retry is in flight", true],
+  ])(
+    "catches up a channel granted while its batch's renewal %s",
+    async (_, retried) => {
+      vi.useFakeTimers({ now: 1_700_000_000_000 });
+      const h = setup([], undefined, 10, () => 0.5);
+      try {
+        age();
+        h.owner.update(["a", "b"], ["a", "b"]);
+        await establish(h.first);
+        const batches = () =>
+          h.first.requests().filter((r) => scopeOf(r).length > 1);
+        while (batches().length < 2) {
+          await vi.advanceTimersByTimeAsync(60_000);
+          await h.first.receive(["NOTICE", "live"]);
+        }
+        // The slow refresh fails transiently: the live batch stays, the
+        // renewal waits unsent for the next minute.
+        const renewal = batches().at(-1);
+        assert.exists(renewal);
+        await h.first.receive(["CLOSED", renewal[1], "error: unavailable"]);
+        // Delivered late, so the dropped connection heard the relay after it.
+        const notice = grantNotice(h, "b", Math.floor(Date.now() / 1000) - 130);
+        await grant(h, "b", h.first, notice);
+        if (retried) {
+          // The minute tick sends the renewal again; it drops before its EOSE.
+          while (batches().length < 3) {
+            await vi.advanceTimersByTimeAsync(60_000);
+            await h.first.receive(["NOTICE", "live"]);
+          }
+        }
+        h.callbacks.established.mockClear();
+        h.first.close();
+        await vi.advanceTimersByTimeAsync(500);
+        const second = h.sockets[1];
+        assert.exists(second);
+        await second.auth();
+        await vi.advanceTimersByTimeAsync(750);
+        expect(await replay(h, second, notice)).toEqual([]);
+        expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+          [["a", "b"], undefined, ["a"]],
+        ]);
+      } finally {
+        h.owner.dispose();
+      }
+    },
+  );
+
+  it("catches up a channel granted while its batch waits to retry its first REQ", async () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 });
     const h = setup([], undefined, 10, () => 0.5);
     try {
       age();
       h.owner.update(["a", "b"], ["a", "b"]);
       await establish(h.first);
-      const batches = () =>
-        h.first.requests().filter((r) => scopeOf(r).length > 1);
-      while (batches().length < 2) {
-        await vi.advanceTimersByTimeAsync(60_000);
-        await h.first.receive(["NOTICE", "live"]);
-      }
-      // The slow refresh fails transiently: the live batch stays, the
-      // renewal waits unsent for the next minute.
-      const renewal = batches().at(-1);
-      assert.exists(renewal);
-      await h.first.receive(["CLOSED", renewal[1], "error: unavailable"]);
-      // Delivered late, so the dropped connection heard the relay after it.
-      const notice = grantNotice(h, "b", Math.floor(Date.now() / 1000) - 130);
-      await grant(h, "b", h.first, notice);
-      h.callbacks.established.mockClear();
       h.first.close();
       await vi.advanceTimersByTimeAsync(500);
       const second = h.sockets[1];
       assert.exists(second);
       await second.auth();
       await vi.advanceTimersByTimeAsync(750);
-      expect(await replay(h, second, notice)).toEqual([]);
+      const batches = () =>
+        second.requests().filter((r) => scopeOf(r).length > 1);
+      const first = batches()[0];
+      assert.exists(first);
+      await second.receive(["CLOSED", first[1], "auth-required: sign in"]);
+      for (const r of second.requests())
+        if (r !== first) await second.receive(["EOSE", r[1]]);
+      h.callbacks.established.mockClear();
+      // The retry follows the grant, but its replay was planned from b's cursor.
+      await grant(h, "b", second);
+      for (let tick = 0; tick < 30 && batches().length < 2; tick++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        await second.receive(["NOTICE", "live"]);
+      }
+      const retry = batches().at(-1);
+      assert.exists(retry);
+      await second.receive(["EOSE", retry[1]]);
+      expect(batches()).toHaveLength(2);
       expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
         [["a", "b"], undefined, ["a"]],
       ]);
@@ -2615,6 +2667,55 @@ describe("a reconnect's replay of a grant", () => {
       h.owner.dispose();
     }
   });
+
+  it.each([
+    ["an undecodable event", () => [{}]],
+    [
+      "the event limit",
+      (h: ReturnType<typeof setup>) =>
+        Array.from({ length: 500 }, (_, i) => grantNotice(h, `other-${i}`)),
+    ],
+  ] as const)(
+    "re-sends for an old grant after the dropped connection's membership replay held %s",
+    async (_, events) => {
+      vi.useFakeTimers({ now: 1_700_000_000_000 });
+      const h = setup([], undefined, 10, () => 0.5);
+      try {
+        age();
+        h.owner.update(["a", "b"], ["a", "b"]);
+        await h.first.auth();
+        await vi.advanceTimersByTimeAsync(750);
+        const membership = h.first
+          .requests()
+          .find((r) => filtersOf(r)[0]?.kinds.includes(44100));
+        assert.exists(membership);
+        for (const event of events(h))
+          await h.first.receive(["EVENT", membership[1], event]);
+        for (const [, id] of h.first.requests())
+          await h.first.receive(["EOSE", id]);
+        // A grant that replay may have missed: stamped well before the drop.
+        const notice = grantNotice(h, "b", Math.floor(Date.now() / 1000) - 400);
+        for (let tick = 0; tick < 3; tick++) {
+          await vi.advanceTimersByTimeAsync(60_000);
+          await h.first.receive(["NOTICE", "live"]);
+        }
+        h.callbacks.established.mockClear();
+        h.first.close();
+        await vi.advanceTimersByTimeAsync(500);
+        const second = h.sockets[1];
+        assert.exists(second);
+        await second.auth();
+        await vi.advanceTimersByTimeAsync(750);
+        const resent = await replay(h, second, notice);
+        expect(resent.map(scopeOf)).toEqual([["a", "b"]]);
+        expect(
+          h.callbacks.established.mock.calls.filter((c) => c[0]).at(-1),
+        ).toEqual([["a", "b"], undefined, ["a"]]);
+      } finally {
+        h.owner.dispose();
+      }
+    },
+  );
 });
 
 it("reports no channel continuous when a grant's re-send is retried after it lost its predecessor", async () => {
