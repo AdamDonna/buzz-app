@@ -145,7 +145,7 @@ export function reactionTrigger(element: HTMLElement) {
 export function replyTrigger(element: HTMLElement) {
   return Array.from(
     element.querySelectorAll<HTMLButtonElement>(
-      '[role="group"] button[aria-label="Reply"]:not(:disabled)',
+      '[role="group"] button[aria-label="Reply in thread"]:not(:disabled)',
     ),
   ).find((trigger) => trigger.closest(ROW) === element);
 }

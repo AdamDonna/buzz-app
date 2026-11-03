@@ -35,7 +35,7 @@ function setup(own: boolean, reply = vi.fn()) {
   const list = document.createElement("section");
   list.innerHTML =
     '<div data-message-id="one"><div data-layout="timeline">One' +
-    '<div role="group"><button aria-label="Reply">Reply</button></div>' +
+    '<div role="group"><button aria-label="Reply in thread">Reply in thread</button></div>' +
     "</div></div>";
   document.body.append(list);
   list.querySelector("button")?.addEventListener("click", reply);

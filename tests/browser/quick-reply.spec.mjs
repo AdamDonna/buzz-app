@@ -185,10 +185,9 @@ test("main conversation replies inline and keeps the existing thread summary", a
   ).toHaveCount(0);
   const summary = row.getByRole("button", { name: /^View thread:/ });
   await expect(summary).toBeVisible();
-  await hoverMessage(row);
-  await row
-    .getByRole("button", { name: "Reply in thread", exact: true })
-    .click();
+  // Up selects the newest message from the now-empty composer; T replies.
+  await channel.press("ArrowUp");
+  await page.keyboard.press("t");
   await expect(
     preview.getByText("Reply in thread", { exact: true }),
   ).toBeVisible();
