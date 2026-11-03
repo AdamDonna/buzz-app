@@ -16,7 +16,10 @@ import {
   type Delivery,
   type SnapshotRead,
 } from "./agent-config-artifacts";
-import { AgentConfigHistory } from "./AgentConfigHistory";
+import {
+  AgentConfigHistory,
+  AgentConfigVersionRow,
+} from "./AgentConfigHistory";
 import { HISTORY_PAGE } from "./agent-config-history";
 
 afterEach(cleanup);
@@ -46,6 +49,43 @@ const rev = (
       ...(prev ? [["prev", prev]] : []),
     ],
   }) as RelayEvent;
+
+it("shows recent versions relatively and older dates with an exact timestamp", () => {
+  const now = Date.UTC(2026, 10, 3, 20);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const recent = {
+    ...rev("recent", "old", "new"),
+    created_at: now / 1000 - 7200,
+  };
+  const old = {
+    ...rev("old", undefined, "old"),
+    created_at: Date.UTC(2025, 9, 27, 18) / 1000,
+  };
+  try {
+    render(
+      <ul>
+        {[recent, old].map((event) => (
+          <AgentConfigVersionRow
+            key={event.id}
+            event={event}
+            head={recent}
+            expected={expected}
+            label="Instructions"
+            onSelect={() => {}}
+          />
+        ))}
+      </ul>,
+    );
+    const time = screen.getByText("2 hours ago");
+    expect(time.tagName).toBe("TIME");
+    expect(time).toHaveAttribute("datetime", "2026-11-03T18:00:00.000Z");
+    expect(time.getAttribute("title")).toMatch(/2026/);
+    expect(time.getAttribute("title")).toMatch(/:00:00/);
+    expect(screen.getByText("Oct 27, 2025")).toBeVisible();
+  } finally {
+    clock.mockRestore();
+  }
+});
 
 it("pages older history, labels the gap, shows a diff and reverts on the head", async () => {
   // Newest first: r(n-1) … r0; one revision beyond the first page.

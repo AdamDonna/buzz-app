@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  formatFullTimestamp,
+  formatItemTimestamp,
+} from "../../shared/datetime";
+import { relativeTimestamp } from "../../shared/relative-timestamp";
 import type { RelayEvent } from "../relay/events";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -389,23 +394,38 @@ export function AgentConfigVersionRow({
   const invalid =
     artifactOp(event) !== "delete" &&
     revisionProblem(expected, event, settings);
+  const nowSeconds = Date.now() / 1000;
+  const timestamp =
+    nowSeconds - event.created_at < 7 * 24 * 60 * 60
+      ? relativeTimestamp(event.created_at, nowSeconds)
+      : formatItemTimestamp(event.created_at, { nowSeconds });
   return (
     <li className={styles.row}>
       <Button
         size="inline"
         variant="plain"
-        style={{ width: "100%", justifyContent: "flex-start" }}
+        style={{
+          width: "100%",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr)",
+        }}
         aria-haspopup="dialog"
         onClick={onSelect}
       >
-        <span className="text-caption text-left">
-          {label && `${label} · `}
-          {artifactOp(event)}
-          {event.id === head?.id ? " · Current" : ""}
-          {invalid ? " · Not valid" : ""}{" "}
-          <span className="text-secondary">
-            {new Date(event.created_at * 1000).toLocaleString()}
-          </span>
+        <span className="flex w-full min-w-0 items-center justify-between gap-3 text-caption text-left">
+          <span className="min-w-0 truncate">
+            {label && `${label} · `}
+            {artifactOp(event)}
+            {event.id === head?.id ? " · Current" : ""}
+            {invalid ? " · Not valid" : ""}
+          </span>{" "}
+          <time
+            className="shrink-0 whitespace-nowrap text-right text-secondary"
+            dateTime={new Date(event.created_at * 1000).toISOString()}
+            title={formatFullTimestamp(event.created_at)}
+          >
+            {timestamp}
+          </time>
         </span>
       </Button>
     </li>
