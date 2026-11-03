@@ -1134,6 +1134,11 @@
     background: var(--surface-control-selected);
     box-shadow: var(--shadow-xs);
   }
+  /* Only a new selection travels; resizing the selected tab follows layout. */
+  .buzz-tabs:is([data-variant="segmented"], [data-variant="segmented-icons"])
+  .buzz-tabs-indicator:not([data-selection-change]) {
+    transition: none;
+  }
 
   /* --- panel: an underline on a plain surface ---------------- */
 
