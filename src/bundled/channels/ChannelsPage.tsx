@@ -1969,6 +1969,8 @@ function ChannelWorkspace({
           session={queries}
           channelId={current.id}
           communities={communities}
+          // Routed Members is a navigation visit; without a navigator it is local.
+          visit={!!navigator}
           close={() => setMembersOpen(false)}
           trigger={
             membersTrigger.current?.isConnected

@@ -60,6 +60,8 @@ mod legacy_cli_shortcut;
 mod legacy_communities;
 #[cfg(any(not(target_os = "macos"), test))]
 mod microphone;
+#[cfg(target_os = "macos")]
+mod mouse_nav;
 
 mod notifications;
 mod os_idle;
@@ -108,7 +110,8 @@ use host_files::{
     plugin_host_save_bytes,
 };
 use host_mcp::{
-    plugin_host_mcp_close, plugin_host_mcp_reply, plugin_host_mcp_serve, HostMcpServers,
+    plugin_host_mcp_authorize, plugin_host_mcp_close, plugin_host_mcp_reply, plugin_host_mcp_serve,
+    HostMcpServers,
 };
 use host_process::{
     plugin_host_process_kill, plugin_host_process_spawn, plugin_host_process_write, HostProcesses,
@@ -721,6 +724,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         plugin_host_process_write,
         plugin_host_process_kill,
         plugin_host_mcp_serve,
+        plugin_host_mcp_authorize,
         plugin_host_mcp_reply,
         plugin_host_mcp_close,
         plugin_host_read_file,
@@ -902,6 +906,8 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             notifications::macos::init();
+            #[cfg(target_os = "macos")]
+            mouse_nav::install(app.handle());
             #[cfg(target_os = "macos")]
             if let Some(home) = dirs::home_dir() {
                 if let Err(error) = legacy_cli_shortcut::remove_stale(&home.join(".local/bin")) {

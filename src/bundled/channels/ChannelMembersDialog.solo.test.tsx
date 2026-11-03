@@ -4,6 +4,7 @@ import { SOLO_LABEL } from "../../features/solo/labels";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -18,6 +19,11 @@ import {
   profile,
   signed,
 } from "../../features/relay/testing";
+import { Context } from "@deepseek-ai/cordis";
+import { ShortcutsService } from "../../features/shortcuts/service";
+import { createNavigationController } from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
+import { registerNavigationShortcuts } from "../../app/shortcuts";
 import { matchesEvent } from "../../features/relay/projection";
 import type { RelayEvent } from "../../features/relay/events";
 import { PublishRejected } from "../../features/relay/outbox";
@@ -830,4 +836,66 @@ it("lets the chat owner remove someone with access from the row menu", async () 
     expect(t.published.map((event) => event.kind)).toEqual([9001]),
   );
   expect(t.members.get(source)).toEqual([t.viewer.pubkey]);
+});
+
+it("Back never walks history behind a pending Share, and the dialog still closes afterwards", async () => {
+  const t = fixture();
+  await t.ready();
+  t.addDestination(t.aria.pubkey);
+  t.failGrant(true);
+  const user = userEvent.setup();
+  t.mount();
+  await user.click(screen.getByRole("button", { name: "Access" }));
+  const dialog = screen.getByRole("dialog", { name: "Share access" });
+  await chooseDestination(user, dialog);
+  // Local Share access is not a navigation visit.
+  expect(dialog).not.toHaveAttribute("data-navigation-visit");
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const shortcuts = new ShortcutsService(ctx, window);
+  const controller = createNavigationController(createMemoryHistory());
+  const remove = registerNavigationShortcuts(shortcuts, controller.navigation);
+  let release!: () => void;
+  try {
+    const behind = { version: 1, kind: "settings" } as const;
+    void controller.navigation.open({ version: 1, kind: "home" });
+    void controller.navigation.open(behind);
+    await waitFor(() =>
+      expect(controller.navigation.snapshot().canGoBack).toBe(true),
+    );
+    // Share reads the destination's roster; hold it so Share stays pending.
+    t.holdRoster(new Promise<void>((resolve) => (release = resolve)));
+    await user.click(within(dialog).getByRole("button", { name: "Share" }));
+    fireEvent.keyDown(dialog, { key: "[", ctrlKey: true });
+    // The history-request.js route for mouse back.
+    window.dispatchEvent(new Event("buzz:history-back"));
+    await act(async () => {});
+    expect(controller.navigation.snapshot().attempt.entry.target).toEqual(
+      behind,
+    );
+    expect(dialog).toBeInTheDocument();
+    t.holdRoster(undefined);
+    release();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Chat invite refused",
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Access" }));
+    const again = screen.getByRole("dialog", { name: "Share access" });
+    await user.click(within(again).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(again).not.toBeInTheDocument());
+    expect(controller.navigation.snapshot().attempt.entry.target).toEqual(
+      behind,
+    );
+  } finally {
+    release?.();
+    t.holdRoster(undefined);
+    remove();
+    controller.dispose();
+    await ctx.fiber.dispose();
+  }
 });

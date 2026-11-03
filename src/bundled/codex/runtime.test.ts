@@ -2217,6 +2217,21 @@ it("reports an interruption cleanup failure when Codex reports surviving termina
   expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Needs attention");
   expect(f.process.end).toHaveBeenCalled();
 });
+/** The threads whose start prompt is saved, oldest first, and their parts. */
+const savedPrompts = (storage: Map<string, string>) => {
+  const value = [...storage].find(([key]) =>
+    key.startsWith("buzz.session-prompts.v1:codex:"),
+  )?.[1];
+  const { texts = [], sessions = [] } = JSON.parse(value ?? "{}") as {
+    texts?: string[];
+    sessions?: [string, [string, number][]][];
+  };
+  return sessions.map(([id, parts]) => [
+    id,
+    parts.map(([label, text]) => [label, texts[text]]),
+  ]);
+};
+
 it("restores a persisted binding after reload and starts fresh in a different workspace", async () => {
   const f = fixture();
   await f.runtime.run(f.delivery("work"));
@@ -2227,10 +2242,19 @@ it("restores a persisted binding after reload and starts fresh in a different wo
   );
   f.runtime.dispose();
   await f.exits.promise;
+  // A new thread saves what it started with: its developer instructions
+  // and its first turn's context.
+  const [[thread, parts] = []] = savedPrompts(f.storage);
+  expect(parts).toEqual([
+    ["base", expect.stringContaining("a coding agent in Buzz")],
+    ["each-turn", expect.stringContaining("<agent-instructions>")],
+  ]);
   const restored = fixture();
   for (const [key, value] of f.storage) restored.storage.set(key, value);
   await restored.runtime.run(restored.delivery("continue"));
   await vi.waitFor(() => expect(restored.starts()).toHaveLength(1));
+  // A resumed thread saves nothing over it.
+  expect(savedPrompts(restored.storage).map(([id]) => id)).toEqual([thread]);
   expect(
     restored.sent.find((w) => w.method === "thread/resume")?.params,
   ).toMatchObject({ excludeTurns: true });
@@ -2250,6 +2274,11 @@ it("restores a persisted binding after reload and starts fresh in a different wo
   });
   restored.complete();
   await vi.waitFor(() => expect(restored.publish).toHaveBeenCalledTimes(2));
+  // This fixture numbers threads afresh, so clear the restored record to
+  // see the new workspace's thread save its own.
+  for (const key of restored.storage.keys())
+    if (key.startsWith("buzz.session-prompts.v1:codex:"))
+      restored.storage.delete(key);
   const changed = restored.delivery("new workspace");
   await restored.runtime.run({
     ...changed,
@@ -2257,6 +2286,10 @@ it("restores a persisted binding after reload and starts fresh in a different wo
   });
   await vi.waitFor(() => expect(restored.starts()).toHaveLength(3));
   expect(restored.sent.some((w) => w.method === "thread/start")).toBe(true);
+  // A fresh thread in the new workspace saves its own.
+  await vi.waitFor(() =>
+    expect(savedPrompts(restored.storage)).toHaveLength(1),
+  );
   expect(restored.starts()[2]?.params).toMatchObject({
     model: "test-model",
     effort: "medium",
@@ -2571,7 +2604,13 @@ it("leaves a failed first startup unbound so the next mention can start fresh", 
   );
   f.complete();
   await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
-  expect(JSON.parse([...f.storage.values()][0] ?? "{}")).toMatchObject({
+  expect(
+    JSON.parse(
+      [...f.storage].find(([key]) =>
+        key.startsWith("buzz.codex.sessions."),
+      )?.[1] ?? "{}",
+    ),
+  ).toMatchObject({
     [JSON.stringify(["channel", root])]: { threadId: "thread-2" },
   });
 });
@@ -2641,11 +2680,21 @@ it.each([
   expect(f.publish.mock.calls[1]?.[0]).toMatchObject({
     content: recover ? "DONE" : expect.stringContaining(error),
   });
-  expect(JSON.parse([...f.storage.values()][0] ?? "{}")).toMatchObject({
+  expect(
+    JSON.parse(
+      [...f.storage].find(([key]) =>
+        key.startsWith("buzz.codex.sessions."),
+      )?.[1] ?? "{}",
+    ),
+  ).toMatchObject({
     [JSON.stringify(["channel", root])]: {
       threadId: recover ? "thread-2" : "thread-1",
     },
   });
+  // Only a thread started in place of the missing one saves a new prompt.
+  expect(savedPrompts(f.storage).map(([id]) => id)).toEqual(
+    recover ? ["thread-1", "thread-2"] : ["thread-1"],
+  );
 });
 
 it("routes callbacks by thread and turn, rejecting stale, unknown and malformed tools without writes", async () => {

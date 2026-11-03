@@ -750,7 +750,13 @@ export function createTabs(
         .then(
           (transcript): Read =>
             transcript
-              ? { status: "ready", transcript }
+              ? {
+                  status: "ready",
+                  transcript: {
+                    ...transcript,
+                    turns: runtime.prompts(agent.key).shown(transcript.turns),
+                  },
+                }
               : { status: "missing" },
           (reason): Read => ({ status: "error", error: message(reason) }),
         )

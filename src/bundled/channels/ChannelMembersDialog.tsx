@@ -534,6 +534,7 @@ export function ChannelMembersDialog({
   communities,
   navigator,
   signal,
+  visit = false,
 }: {
   session: RelaySession;
   channelId: string;
@@ -546,6 +547,8 @@ export function ChannelMembersDialog({
   navigator?: Navigation | undefined;
   /** The visit that opened this dialog; leaving it retires late results. */
   signal?: AbortSignal | undefined;
+  /** Opened as its own navigation visit, so Back closes it; local opens are not. */
+  visit?: boolean;
 } & MemberNavigation) {
   const presenceId = useId();
   const openingDestination = useRef(false);
@@ -1747,6 +1750,8 @@ export function ChannelMembersDialog({
   const dialog = (
     <Dialog
       open
+      // Its confirmation step is a nested surface, not part of the visit.
+      visit={visit && !selection}
       dismissOnOutsideClick
       preventClose={share.busy}
       step={

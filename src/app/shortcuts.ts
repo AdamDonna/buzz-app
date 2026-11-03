@@ -347,6 +347,8 @@ export function registerNavigationShortcuts(
       order: HOST_SHORTCUT_ORDER.navigationBack,
       binding: { key: "[", mod: true },
       allowInEditable: true,
+      // Back closes a dialog that is its own visit (docs/navigation-history.md).
+      allowInVisit: true,
       when: () => navigation.snapshot().canGoBack,
       run: navigation.back,
     }),
@@ -356,11 +358,24 @@ export function registerNavigationShortcuts(
       order: HOST_SHORTCUT_ORDER.navigationForward,
       binding: { key: "]", mod: true },
       allowInEditable: true,
+      allowInVisit: true,
       when: () => navigation.snapshot().canGoForward,
       run: navigation.forward,
     }),
   ];
+  // macOS mouse back/forward a focused browser page left unhandled runs the
+  // Back/Forward shortcut, with its own eligibility.
+  const history = (id: string) => (event: Event) => {
+    if (!event.defaultPrevented && shortcuts.runHost(id))
+      event.preventDefault();
+  };
+  const historyBack = history("navigation-back");
+  const historyForward = history("navigation-forward");
+  window.addEventListener("buzz:history-back", historyBack);
+  window.addEventListener("buzz:history-forward", historyForward);
   return () => {
+    window.removeEventListener("buzz:history-back", historyBack);
+    window.removeEventListener("buzz:history-forward", historyForward);
     for (const dispose of remove) dispose();
   };
 }

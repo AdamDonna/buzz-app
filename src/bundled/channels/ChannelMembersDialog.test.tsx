@@ -44,6 +44,11 @@ import { SEARCH_DEBOUNCE_MS } from "../../shared/search-debounce";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { profileTarget } from "../../features/profiles/target";
 import { ChannelMembersButton } from "./ChannelMembersDialog";
+import { Context } from "@deepseek-ai/cordis";
+import { ShortcutsService } from "../../features/shortcuts/service";
+import { createNavigationController } from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
+import { registerNavigationShortcuts } from "../../app/shortcuts";
 const stops: (() => void)[] = [];
 const memberData = () => screen.getByRole("region", { name: "Member list" });
 // Vitest globals are disabled; join owned tasks before this file's explicit cleanup.
@@ -676,6 +681,34 @@ it("explains imported agents with the current community's badge and nested popov
     expect(screen.queryByRole("dialog", { name: "Agents scope" })).toBeNull(),
   );
   expect(screen.getByRole("dialog", { name: "Manage members" })).toBeVisible();
+  // A locally opened Members is not a navigation visit: Back stays blocked.
+  const members = screen.getByRole("dialog", { name: "Manage members" });
+  expect(members).not.toHaveAttribute("data-navigation-visit");
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const shortcuts = new ShortcutsService(ctx, window);
+  const controller = createNavigationController(createMemoryHistory());
+  const remove = registerNavigationShortcuts(shortcuts, controller.navigation);
+  try {
+    const behind = { version: 1, kind: "settings" } as const;
+    void controller.navigation.open({ version: 1, kind: "home" });
+    void controller.navigation.open(behind);
+    await vi.waitFor(() =>
+      expect(controller.navigation.snapshot().canGoBack).toBe(true),
+    );
+    fireEvent.keyDown(members, { key: "[", ctrlKey: true });
+    await act(async () => {});
+    expect(controller.navigation.snapshot().attempt.entry.target).toEqual(
+      behind,
+    );
+  } finally {
+    remove();
+    controller.dispose();
+    await ctx.fiber.dispose();
+  }
   await vi.waitFor(() => expect(badge).toHaveFocus());
   expect(t.publish).not.toHaveBeenCalled();
 });
