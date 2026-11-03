@@ -1730,6 +1730,12 @@ it("retries the card's connection, activity and read-state failures", async () =
   await waitFor(() =>
     expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
   );
+  act(() => h.failSync("read state offline"));
+  expect(screen.getByRole("alert")).toHaveTextContent("read state offline");
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() => expect(h.retrySync).toHaveBeenCalledTimes(2));
+  act(() => h.failSync());
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
   // Cleared activity is not reported as nothing to read.
   await act(async () => {
@@ -2082,12 +2088,23 @@ function fixture(
     work: ReturnType<typeof owner.session.unread.markThrough>;
   }[] = [];
   const retrySync = vi.fn(() => owner.session.unread.retrySync());
+  let failedSync: ReturnType<typeof owner.session.unread.sync> | undefined;
+  const syncListeners = new Set<() => void>();
   const observedSession = {
     ...owner.session,
     messages: { ...owner.session.messages },
     unread: {
       ...owner.session.unread,
       retrySync,
+      sync: () => failedSync ?? owner.session.unread.sync(),
+      subscribeSync(listener: () => void) {
+        syncListeners.add(listener);
+        const stop = owner.session.unread.subscribeSync(listener);
+        return () => {
+          syncListeners.delete(listener);
+          stop();
+        };
+      },
       markThrough(
         target: Parameters<typeof owner.session.unread.markThrough>[0],
         id: string,
@@ -2346,6 +2363,12 @@ function fixture(
       for (const listener of subscribers) listener();
     },
     retryConnection,
+    failSync(error?: string) {
+      failedSync = error
+        ? { ...owner.session.unread.sync(), error }
+        : undefined;
+      for (const listener of syncListeners) listener();
+    },
     failConnection(error: string) {
       connection = { ...connection, status: "error", error, generation: 2 };
       for (const listener of subscribers) listener();

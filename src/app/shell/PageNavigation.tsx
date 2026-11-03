@@ -219,13 +219,9 @@ function PagePreview({
       open={open}
       actionsRef={actions}
       onOpenChange={(next, details) => {
-        // Hover only: pressing or focusing the row selects the page instead.
+        // Hover only: pressing the row selects the page instead.
         if (next) handoff.current = false;
-        setOpen(
-          next &&
-            details.reason !== "trigger-press" &&
-            details.reason !== "trigger-focus",
-        );
+        setOpen(next && details.reason !== "trigger-press");
       }}
     >
       {/* Marked transient, so a conversation's default focus is not held back. */}

@@ -689,8 +689,7 @@ it("previews a sidebar page on hover only, away from its selected page and heade
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
 
-    // Pressing or focusing the row selects its page instead of opening the card.
-    fireEvent.focus(inbox);
+    // Pressing the row selects its page instead of opening the card.
     fireEvent.click(inbox);
     expect(onSelect).toHaveBeenLastCalledWith("example/Inbox");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
