@@ -507,6 +507,8 @@ export function watchPulls(
         object && object.type !== "interest" ? object.interest_id : undefined;
       if (object && object.type !== "interest" && owner !== interest) {
         // Admission and the transfer share one write; a refusal keeps the old watch.
+        if (!attention.enabled())
+          throw new Error("Turn on Attention to watch pull requests");
         await attention.write(
           `watch/${id}`,
           { type: "source", interest_id: interest, ...fields },
