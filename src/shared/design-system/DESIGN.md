@@ -870,6 +870,23 @@ A sidebar unread cue is strong (`prominent`) only when a DM, a mention of you or
 a thread reply waits past its edge; ordinary unread uses the `subtle` Button,
 whose light gray fill holds up over the list where glass would disappear.
 
+Arriving at a message, by link, search, the inbox or closing its thread,
+briefly marks it. A filled bubble takes `affordance-message-highlight` (your
+own, `affordance-message-own-highlight`) as a see-through layer: the regular
+overlay step, about twice hover, in the direction the bubble's chips already
+take, so chips stay readable on top. While the cue shows it replaces hover
+rather than stacking on it. A row without a filled bubble (membership lines,
+emoji-only, attachments, tables and diffs) is washed with
+`surface-message-highlight` instead. The cue is paint-only and
+belongs to the message reveal, so every route that lands on a message gets it;
+a reveal behind a covering panel, restored scroll and your own send do not.
+Each row type marks its paint surface with `data-highlight-surface`, which
+excludes the day divider. The cue waits until the message and the list around
+it have held still for 200ms (at most 1.5s), so it never flashes while a fresh
+channel is still loading, then holds about a second and fades over about a
+second. A repeat arrival restarts the cue. Reduced motion holds the tint the
+same time and removes it without fading.
+
 The message hover toolbar uses the 12px rounded-container radius
 with a 2px inset. Its independent icon actions retain their shared 10px corners.
 

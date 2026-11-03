@@ -85,14 +85,15 @@ export function createVerifiedProfileDirectory(
     }
   }
 
+  /** Returns whether the head changed; the caller owns notification. */
   function accept(event: RelayEvent) {
-    if (!authority || !enabled) return;
+    if (!authority || !enabled) return false;
     const subject = verifiedProfileSubject(event, authority);
-    if (!subject || !wanted.has(subject)) return;
+    if (!subject || !wanted.has(subject)) return false;
     const old = heads.peek(subject);
-    if (newer(old, event) === old) return;
+    if (newer(old, event) === old) return false;
     heads.set(subject, event);
-    changed();
+    return true;
   }
   function start(
     currentAuthority: VerifiedProfileAuthority,
@@ -129,11 +130,13 @@ export function createVerifiedProfileDirectory(
             if (!active) return;
             const subject = verifiedProfileSubject(event, currentAuthority);
             if (!subject || !chunk.includes(subject)) return;
+            // Each notification refolds the whole profile directory, so a
+            // replay notifies once at EOSE (or failure), not per event.
             if (!ready) {
               count++;
               seen.add(subject);
-            }
-            accept(event);
+              accept(event);
+            } else if (accept(event)) changed();
           },
           eose() {
             if (!active) return;

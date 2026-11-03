@@ -1,6 +1,6 @@
 // FOUNDATION: Startup, navigation, contributed pages, and built-in Settings.
 import { AgentAvatarArtworkProvider } from "../features/agents/AgentAvatarArtworkProvider";
-import { IdentitySetup } from "../features/identity/IdentitySetup";
+import { Welcome } from "../features/identity/Welcome";
 import { NewMenu } from "./shell/NewMenu";
 import { PrimarySidebar } from "./shell/PrimarySidebar";
 import { ChannelNavigationProvider } from "../features/channel-navigation/ChannelNavigationState";
@@ -63,6 +63,7 @@ import {
   SignInEnding,
 } from "../features/federated-identity/LaunchSignIn";
 import { launchVisible, setLaunchReady, subscribeLaunch } from "./launch";
+import { AgentCompletionNotifications } from "../features/notifications/AgentCompletionNotifications";
 
 export function App({ services }: { services: AppServices }) {
   const identity = services.identity;
@@ -84,14 +85,18 @@ export function App({ services }: { services: AppServices }) {
       >
         <LaunchWindowControls />
         {services.identity ? (
-          <IdentitySetup identity={services.identity}>
+          <Welcome
+            identity={services.identity}
+            communities={services.communities}
+            invites={services.invites}
+          >
             <LaunchSignIn identity={services.federatedIdentity}>
               <ConnectedApp services={services} />
               {!launching && (
                 <LegacyCommunityImport communities={services.communities} />
               )}
             </LaunchSignIn>
-          </IdentitySetup>
+          </Welcome>
         ) : (
           <ConnectedApp services={services} />
         )}
@@ -101,6 +106,17 @@ export function App({ services }: { services: AppServices }) {
 }
 
 function ConnectedApp({ services }: { services: AppServices }) {
+  return (
+    <ToastProvider
+      portalContainer={document.getElementById("buzz-toast-root") ?? undefined}
+    >
+      <AgentCompletionNotifications services={services} />
+      <ConnectedAppContent services={services} />
+    </ToastProvider>
+  );
+}
+
+function ConnectedAppContent({ services }: { services: AppServices }) {
   const { plugins } = services;
   const [workspaceElement, setWorkspaceElement] =
     useState<HTMLDivElement | null>(null);
@@ -516,9 +532,7 @@ function ConnectedApp({ services }: { services: AppServices }) {
     </div>
   );
   return (
-    <ToastProvider
-      portalContainer={document.getElementById("buzz-toast-root") ?? undefined}
-    >
+    <>
       <SignInEnding identity={services.federatedIdentity} />
       <ChannelNavigationProvider relay={services.relay}>
         <AgentsContext.Provider value={services.agents}>
@@ -736,6 +750,9 @@ function ConnectedApp({ services }: { services: AppServices }) {
                         );
                     }}
                     onSection={openSettingsSection}
+                    onPluginImportClosed={() =>
+                      route.dismissPluginImport(route.request)
+                    }
                     onProvider={route.setSettingsProvider}
                     onUnsavedChange={setSettingsUnsaved}
                   />
@@ -772,6 +789,6 @@ function ConnectedApp({ services }: { services: AppServices }) {
           </Dialog>
         </AgentsContext.Provider>
       </ChannelNavigationProvider>
-    </ToastProvider>
+    </>
   );
 }
