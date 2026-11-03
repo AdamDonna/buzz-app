@@ -45,6 +45,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
         (key, listener) => agents.relay(key)?.subscribe(listener) ?? (() => {}),
         execution,
         { ...options, inspectExecution: (key) => agents.inspectExecution(key) },
+        agents.storage,
       ),
   );
   ctx.agentProtection.registerModels({

@@ -28,6 +28,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     localStorage,
     () => agents.tools(),
     repositoriesContext,
+    agents.storage,
   );
   const desktop =
     host.spawn && host.resolveDirectory

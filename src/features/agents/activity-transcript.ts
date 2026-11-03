@@ -60,6 +60,8 @@ export type TranscriptTurn = {
   triggeringEventIds: string[];
   sessionId?: string;
   newSession: boolean;
+  /** The first shown turn of a session that began before the shown ones. */
+  continued?: boolean;
   /** Selected ACP session config values, e.g. model and thinking level. */
   config: string[];
   startedAt: number;
@@ -91,6 +93,29 @@ const PROMPT_METHODS = new Set([
   "_session/steering",
   "_goose/unstable/session/steer",
 ]);
+
+const TITLES = new Map(
+  Object.entries({
+    identity: "Identity",
+    base: "Base",
+    workspace: "Workspace",
+    "community-repositories": "Repositories folder",
+    "agent-instructions": "Agent instructions",
+    team: "Team",
+    "core-memory": "Core memory",
+    "recent-notes": "Recent notes",
+    context: "Context",
+    "buzz-event": "Buzz event",
+    "buzz-events": "Buzz events",
+    "thread-context": "Thread context",
+    "conversation-context": "Conversation context",
+    "turn-context": "Turn context",
+    interest: "Interest",
+    text: "Text",
+  }),
+);
+/** A prompt section's readable title; an unknown tag shows as it is. */
+export const sectionTitle = (tag: string) => TITLES.get(tag) ?? tag;
 
 /** Split top-level `<tag attrs>` … `</tag>` prompt framing; other text is kept. */
 export function promptSections(text: string): PromptSection[] {

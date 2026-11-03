@@ -16,6 +16,10 @@ import {
 } from "../../features/agent-harness/plugin-wake";
 import type { AgentKey } from "../../features/agents/membership";
 import type { AgentReads } from "../../features/agents/reads";
+import {
+  EACH_TURN,
+  sessionPrompts,
+} from "../../features/agents/session-prompts";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import type {
   Agent,
@@ -945,6 +949,10 @@ export class CodexRuntime {
    * `useOpenedSession` gives them to a thread `find` returned. */
   channelLabel(agent: AgentKey, channelId: string) {
     return this.reads(agent)?.channelLabel(channelId);
+  }
+  /** What each of the agent's threads started with. */
+  prompts(agent: AgentKey) {
+    return sessionPrompts(this.storage, "codex", agent);
   }
   private storageKey(
     scope: string,
@@ -1992,6 +2000,8 @@ export class CodexRuntime {
           { code: "EXECUTION_SESSION_RESET_REQUIRED" },
         );
       let started: Started;
+      // Only a thread started here keeps what it started with.
+      let fresh = !resuming;
       if (resuming) {
         const { threadId } = existing;
         const missing = (error: unknown) => {
@@ -2015,6 +2025,7 @@ export class CodexRuntime {
           })
           .catch(async (error) => {
             missing(error);
+            fresh = true;
             return start();
           });
       } else started = await start();
@@ -2047,6 +2058,13 @@ export class CodexRuntime {
         ready();
         return;
       }
+      const additionalContext = turnContext(
+        agent,
+        settings,
+        request.team,
+        memory,
+        this.repositories(request.scope),
+      );
       if (this.target && !resuming)
         await this.save(request, entry, key, {
           pending: true,
@@ -2065,13 +2083,7 @@ export class CodexRuntime {
           effort,
           ...summary,
           // Application context is a developer message that updates on each turn.
-          additionalContext: turnContext(
-            agent,
-            settings,
-            request.team,
-            memory,
-            this.repositories(request.scope),
-          ),
+          additionalContext,
         })
         .catch(async (error: unknown) => {
           if (this.target && !resuming && error instanceof Refused) {
@@ -2081,7 +2093,21 @@ export class CodexRuntime {
           }
           throw error;
         });
+
       active.turnId = turn.turn.id;
+      if (fresh)
+        void this.prompts(agent.key).save(active.threadId, [
+          {
+            label: "base",
+            text: params.developerInstructions,
+          },
+          {
+            label: EACH_TURN,
+            text: Object.values(additionalContext)
+              .map(({ value }) => value)
+              .join(""),
+          },
+        ]);
       this.acknowledgeActivity(active, request);
       // A conversation new to this agent: name its Solo chat meanwhile.
       if (request.named && !existing)

@@ -730,6 +730,7 @@ it("lists the agent's goose sessions and shows one's transcript", async () => {
   const runtime = {
     subscribe: () => () => {},
     sessions: () => none,
+    prompts: () => ({ shown: (turns: unknown) => turns }),
   } as unknown as GooseRuntime;
   const { ActivityTab } = createTabs({
     setup: new GooseSetup(fake),
@@ -819,6 +820,7 @@ it("opens a session transcript its history lookup finds after the profile shows"
   const runtime = {
     subscribe: () => () => {},
     sessions: () => none,
+    prompts: () => ({ shown: (turns: unknown) => turns }),
   } as unknown as GooseRuntime;
   const { ActivityTab } = createTabs({
     setup: new GooseSetup(fake),
@@ -857,6 +859,7 @@ it("says it is reading goose's sessions until the list arrives", async () => {
   const runtime = {
     subscribe: () => () => {},
     sessions: () => none,
+    prompts: () => ({ shown: (turns: unknown) => turns }),
   } as unknown as GooseRuntime;
   const { ActivityTab } = createTabs({
     setup: new GooseSetup(fake),
