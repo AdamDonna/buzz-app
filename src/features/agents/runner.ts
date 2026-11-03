@@ -49,6 +49,7 @@ import {
 } from "./attention";
 import {
   checkedWrite,
+  AttentionError,
   interestIds,
   show,
   watchSummaries,
@@ -391,6 +392,8 @@ export type RunnerHost = {
   /** Whether the agent is in the event's channel, or undefined while its
    * roster is only the one saved on disk and the relay has not confirmed it. */
   member(agent: Agent, event: Pick<RelayEvent, "tags">): boolean | undefined;
+  /** Whether the agent can receive watched events from the channel. */
+  reads(agent: Agent, event: Pick<RelayEvent, "tags">): boolean | undefined;
   /** Whether the event's channel is a DM between the agent and one other. */
   dm(agent: Agent, event: RelayEvent): boolean;
   /** While the owner is still starting this chat, settles once it can take
@@ -1925,7 +1928,7 @@ export class AgentRunners {
       this.heldForStartup = true;
       return { triggers: [], held: true, discarded };
     }
-    const member = this.host.member(agent, event);
+    const member = this.host.reads(agent, event);
     if (member === undefined) return { triggers: [], held: true };
     if (!member) return { triggers: [] };
     const destinations = matches.map(({ watch }) =>
@@ -2950,6 +2953,28 @@ export class AgentRunners {
             );
             lifetime.throwIfAborted();
             check?.();
+            if (value && value.type !== "interest" && value.enabled) {
+              const agent = this.host.agent(key);
+              if (!agent) throw new Error("This agent is no longer running");
+              if (value.type === "event" && value.channels !== "all")
+                for (const channel of value.channels)
+                  if (
+                    this.host.reads(agent, { tags: [["h", channel]] }) !== true
+                  )
+                    throw new AttentionError(
+                      "invalid-operation",
+                      `Cannot receive events from channel ${channel}. Join it and wait for confirmed channel metadata before enabling this watch.`,
+                    );
+              if (
+                value.channel &&
+                this.host.member(agent, { tags: [["h", value.channel]] }) !==
+                  true
+              )
+                throw new AttentionError(
+                  "invalid-operation",
+                  `Agent is not a member of the delivery channel ${value.channel}, or membership is unconfirmed. Join it and wait for confirmation before enabling this watch.`,
+                );
+            }
             return next;
           });
           return show(after, slug, seconds());

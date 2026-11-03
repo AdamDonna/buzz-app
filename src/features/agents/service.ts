@@ -1721,6 +1721,7 @@ export class AgentsService extends Service implements Agents {
       ready: (key) => this.ready(key),
       agent: (key) => this.agent(key),
       member: (agent, event) => this.member(agent, event),
+      reads: (agent, event) => this.reads(agent, event),
       dm: (agent, event) => this.dm(agent, event),
       starting: (agent, channelId) =>
         this.bindingOf(agent)?.session.channelWrites.starting(channelId),
@@ -5573,6 +5574,14 @@ export class AgentsService extends Service implements Agents {
     const summary = this.channelOf(agent, event);
     if (summary?.cached) return undefined;
     return !!summary?.members?.includes(agent.pubkey);
+  }
+  /** Whether an event from this channel can wake a watch. Keep listening
+   * admission and delivery on this policy as channel access evolves. */
+  private reads(
+    agent: Agent,
+    event: Pick<RelayEvent, "tags">,
+  ): boolean | undefined {
+    return this.member(agent, event);
   }
   /** Whether the event's channel is a DM of exactly the agent and one other,
    * by the same roster. A group DM, or one whose roster is unknown, is not. */
