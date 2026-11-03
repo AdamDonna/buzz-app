@@ -327,30 +327,35 @@ describe("native live verification", () => {
   );
 });
 /** The relay's member-added notice for `channel` on the viewer's membership
- * route: the one event that makes a live batch re-send its REQ. */
+ * route: the one event that makes a live batch re-send its REQ. The relay
+ * stamps it with its clock when the grant commits. */
 async function grant(
   h: { key: ReturnType<typeof keypair>; first: Socket },
   channel: string,
   socket = h.first,
+  event = grantNotice(h, channel),
 ) {
   const membership = socket
     .requests()
     .find((r) => filtersOf(r)[0]?.kinds.includes(44100));
   assert.exists(membership);
-  await socket.receive([
-    "EVENT",
-    membership[1],
-    signed(keypair(), {
-      kind: 44100,
-      content: "",
-      tags: [
-        ["p", h.key.pubkey],
-        ["h", channel],
-      ],
-    }),
-  ]);
+  await socket.receive(["EVENT", membership[1], event]);
   await vi.advanceTimersByTimeAsync(0);
 }
+const grantNotice = (
+  h: { key: ReturnType<typeof keypair> },
+  channel: string,
+  created_at = Math.floor(Date.now() / 1000),
+) =>
+  signed(keypair(), {
+    kind: 44100,
+    content: "",
+    created_at,
+    tags: [
+      ["p", h.key.pubkey],
+      ["h", channel],
+    ],
+  });
 it("uses independent explicit channel routes and self-p globals; equal interests do not restart", async () => {
   vi.useFakeTimers();
   const h = setup();
@@ -2440,6 +2445,176 @@ it("reports only the granted channels of a grant's re-send as owing a catch-up",
   } finally {
     h.owner.dispose();
   }
+});
+
+describe("a reconnect's replay of a grant", () => {
+  /** Live with `b` granted at the start, heard two recovery ticks later. */
+  async function granted(h: ReturnType<typeof setup>, finish: boolean) {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await establish(h.first);
+    const notice = grantNotice(h, "b");
+    await grant(h, "b", h.first, notice);
+    const resent = h.first.requests().at(-1);
+    assert.exists(resent);
+    if (finish) await h.first.receive(["EOSE", resent[1]]);
+    for (let tick = 0; tick < 3; tick++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await h.first.receive(["NOTICE", "live"]);
+    }
+    h.callbacks.established.mockClear();
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    return { notice, second };
+  }
+  async function replay(
+    h: ReturnType<typeof setup>,
+    second: Socket,
+    notice: ReturnType<typeof grantNotice>,
+  ) {
+    const sent = second.requests().length;
+    await grant(h, "b", second, notice);
+    for (const [, id] of second.requests()) await second.receive(["EOSE", id]);
+    const resent = second.requests().slice(sent);
+    for (const [, id] of resent) await second.receive(["EOSE", id]);
+    return resent;
+  }
+
+  it("does not catch up a channel whose grant the dropped connection finished", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      const { notice, second } = await granted(h, true);
+      expect(await replay(h, second, notice)).toEqual([]);
+      expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+        [["a", "b"], undefined, ["a", "b"]],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
+  it("catches up a channel whose grant's re-send the drop cut", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      const { notice, second } = await granted(h, false);
+      expect(await replay(h, second, notice)).toEqual([]);
+      expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+        [["a", "b"], undefined, ["a"]],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
+  it("catches up a channel whose grant came while its batch REQ was in flight", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      age();
+      h.owner.update(["a", "b"], ["a", "b"]);
+      await establish(h.first);
+      // A three-minute outage.
+      h.first.close();
+      vi.setSystemTime(Date.now() + 180_000);
+      await vi.advanceTimersByTimeAsync(500);
+      const second = h.sockets[1];
+      assert.exists(second);
+      await second.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      // Stored in the outage, so this connection's membership replay holds it.
+      const notice = grantNotice(h, "b", Math.floor(Date.now() / 1000) - 62);
+      await grant(h, "b", second, notice);
+      for (const r of second.requests())
+        if (!scopeOf(r).includes("a")) await second.receive(["EOSE", r[1]]);
+      h.callbacks.established.mockClear();
+      // The batch never reached EOSE, so its channels keep the first
+      // connection's cursors: b's predates its grant.
+      second.close();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const third = h.sockets[2];
+      assert.exists(third);
+      await third.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      expect(await replay(h, third, notice)).toEqual([]);
+      expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+        [["a", "b"], undefined, ["a"]],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
+  it.each([
+    [60, "a minute before", []],
+    [59, "within a minute of", [["a", "b"]]],
+  ])(
+    "re-sends only for a grant stamped later than a minute before the dropped connection last heard the relay (%i s: %s)",
+    async (margin, _, expected) => {
+      vi.useFakeTimers({ now: 1_700_000_000_000 });
+      const h = setup([], undefined, 10, () => 0.5);
+      try {
+        const { second } = await granted(h, true);
+        // The membership replay starts 960 s before that connection's end.
+        const [since] = sinceOf(
+          second,
+          (r) => filtersOf(r)[0]?.kinds.includes(44100) === true,
+        );
+        assert.exists(since);
+        const notice = grantNotice(h, "b", since + 960 - margin);
+        const resent = await replay(h, second, notice);
+        expect(resent.map(scopeOf)).toEqual(expected);
+        expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+          [["a", "b"], undefined, ["a", "b"]],
+          ...(expected.length ? [[["a", "b"], undefined, ["a"]]] : []),
+        ]);
+      } finally {
+        h.owner.dispose();
+      }
+    },
+  );
+
+  it("catches up a channel granted while its batch's renewal waits to retry", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      age();
+      h.owner.update(["a", "b"], ["a", "b"]);
+      await establish(h.first);
+      const batches = () =>
+        h.first.requests().filter((r) => scopeOf(r).length > 1);
+      while (batches().length < 2) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        await h.first.receive(["NOTICE", "live"]);
+      }
+      // The slow refresh fails transiently: the live batch stays, the
+      // renewal waits unsent for the next minute.
+      const renewal = batches().at(-1);
+      assert.exists(renewal);
+      await h.first.receive(["CLOSED", renewal[1], "error: unavailable"]);
+      // Delivered late, so the dropped connection heard the relay after it.
+      const notice = grantNotice(h, "b", Math.floor(Date.now() / 1000) - 130);
+      await grant(h, "b", h.first, notice);
+      h.callbacks.established.mockClear();
+      h.first.close();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = h.sockets[1];
+      assert.exists(second);
+      await second.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      expect(await replay(h, second, notice)).toEqual([]);
+      expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+        [["a", "b"], undefined, ["a"]],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  });
 });
 
 it("reports no channel continuous when a grant's re-send is retried after it lost its predecessor", async () => {

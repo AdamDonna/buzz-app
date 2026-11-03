@@ -970,10 +970,15 @@ the granted ones continuous, and the session keeps what that connection's
 earlier establishment of them decided. The granted channels still catch up:
 the relay may have checked the predecessor's REQ before their grant. A re-send
 sent after its predecessor closed (a refusal closes both) overlaps nothing, so
-it reports no channel continuous. The
-membership replay re-delivers grants from its last 16 minutes, so a channel
-granted that recently (created, joined, added, a DM opened) catches up at every
-reconnect.
+it reports no channel continuous. A grant
+also ends its channel's cursor (the relay may have left the channel out before
+it), and only a stream that held the channel after the grant sets it again, so
+a re-send the drop cut leaves the channel to catch up. The membership replay
+re-delivers grants from its last 16 minutes. The relay stamps a grant notice
+with its own clock after the grant commits, so an earlier connection whose
+membership replay was complete acted on every notice stamped at least a minute
+before it last heard the relay. A reconnect re-sends nothing for those; a
+notice stamped later, such as one stored during the outage, is a new grant.
 
 A retained window that was verified when the stream dropped, and a thread view
 that was settled then, skip the head, page and thread reads for such a
