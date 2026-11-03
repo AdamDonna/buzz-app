@@ -916,8 +916,13 @@ Each local agent enrolls using the signed-in owner's session and its own NIP-98
 proof. The native agent-token owner stores the resulting grant beside session
 records in the same OS secure-store service, keyed by profile, deployment, owner
 public key and agent public key: in the session's item on macOS, under a
-separate key elsewhere. Neither grants nor
-assertion headers cross IPC. Enrollment validates the returned owner and issuer;
+separate key elsewhere. Grants never cross IPC, and assertion headers cross it
+only as the `repo` tool's Git headers. There the NIP-98 proof is bound to one
+repository URL for 60 seconds, while the assertion is scoped to the relay for
+the lifetime its issuer set and bound to the agent's key, so it is unusable
+without that key (NIP-FI, Assertion–key binding). Git asks for an assertion
+valid for at least 70 seconds and fails rather than accept a shorter one.
+Enrollment validates the returned owner and issuer;
 assertions are checked for the agent key, issuer, relay audience and lifetime.
 The relay remains responsible for signature and authorization verification.
 
