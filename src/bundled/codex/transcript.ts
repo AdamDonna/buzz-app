@@ -10,13 +10,14 @@ import {
 } from "../../features/agents/activity-transcript";
 import type { AgentKey } from "../../features/agents/membership";
 import { sessionTag, sessionTitle } from "./prompt";
-import { AppServer, type Spawn } from "./rpc";
+import { AppServer, Oversized, type Spawn } from "./rpc";
 import { readFile } from "../../buzz-mcp/app-client";
 import { restoreRecordedTools } from "./recorded-tools";
 
 /** The latest turns shown; earlier ones stay in Codex's own history. */
 export const TURN_LIMIT = 20;
-/** Items per `thread/items/list` request, well within app-server's frame. */
+/** Items per `thread/items/list` request, which fit app-server's frame unless
+ * they average over 80 KiB. */
 const ITEM_PAGE = 50;
 
 type Json = Record<string, unknown>;
@@ -353,22 +354,31 @@ async function page(rpc: AppServer, threadId: string, limit: number) {
   return { data: data.slice(0, limit), more: !!cursor };
 }
 
-/** A turn's items, oldest first, a page per request. */
+/** A turn's items, oldest first, a page per request. A page over app-server's
+ * frame closes the connection, so it is read again from its cursor on a fresh
+ * one, at half the size, as is the rest of the turn. */
 async function items(rpc: AppServer, threadId: string, turnId: string) {
   const all: Json[] = [];
   let cursor: string | null = null;
-  do {
-    const next: { data: { item: Json }[]; nextCursor: string | null } =
-      await rpc.request("thread/items/list", {
+  for (let limit = ITEM_PAGE; ; ) {
+    let next: { data: { item: Json }[]; nextCursor: string | null };
+    try {
+      next = await rpc.request("thread/items/list", {
         threadId,
         turnId,
-        limit: ITEM_PAGE,
+        limit,
         ...(cursor ? { cursor } : {}),
       });
+    } catch (error) {
+      if (!(error instanceof Oversized) || limit === 1) throw error;
+      limit = Math.ceil(limit / 2);
+      await rpc.reopen();
+      continue;
+    }
     all.push(...next.data.map((entry) => entry.item));
     cursor = next.data.length ? next.nextCursor : null;
-  } while (cursor);
-  return all;
+    if (!cursor) return all;
+  }
 }
 const turns = async (rpc: AppServer, threadId: string, limit: number) =>
   (await page(rpc, threadId, limit))?.data ?? [];

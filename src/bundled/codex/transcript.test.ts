@@ -471,6 +471,68 @@ it("reads a turn whose items together exceed app-server's output frame", async (
   ]);
 });
 
+it("reads a page over app-server's output frame again on a fresh connection, at half the size", async () => {
+  // 40 items of 200 KiB: a page of 50 or 25 is over the 4 MiB bound, 13 fit.
+  const commands = Array.from({ length: 40 }, (_, index) => ({
+    type: "commandExecution",
+    id: `c${index}`,
+    command: "cat log",
+    aggregatedOutput: "x".repeat(200 * 1024),
+    status: "completed",
+  }));
+  const { spawn, sent } = server(paged([turn({ items: commands })]));
+  const read = await readTranscript(
+    spawn,
+    { ...lookup, threadId: "thread-1" },
+    new AbortController().signal,
+  );
+  expect(
+    read?.turns[0]?.items.filter((item) => item.type === "tool"),
+  ).toHaveLength(40);
+  const page = (limit: number, cursor?: string) => ({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    limit,
+    ...(cursor ? { cursor } : {}),
+  });
+  expect(
+    sent.filter((w) => w.method === "thread/items/list").map((w) => w.params),
+  ).toEqual([
+    page(50),
+    page(25),
+    page(13),
+    page(13, "13"),
+    page(13, "26"),
+    page(13, "39"),
+  ]);
+  expect(spawn.mock.calls.filter(([id]) => id === "app-server")).toHaveLength(
+    3,
+  );
+});
+
+it("fails a transcript with an item over app-server's output frame", async () => {
+  const huge = {
+    type: "commandExecution",
+    id: "c1",
+    command: "cat log",
+    aggregatedOutput: "x".repeat(5 * 1024 * 1024),
+    status: "completed",
+  };
+  const { spawn, sent } = server(paged([turn({ items: [huge] })]));
+  await expect(
+    readTranscript(
+      spawn,
+      { ...lookup, threadId: "thread-1" },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("Codex output frame is too large");
+  expect(
+    sent
+      .filter((w) => w.method === "thread/items/list")
+      .map((w) => (w.params as { limit: number }).limit),
+  ).toEqual([50, 25, 13, 7, 4, 2, 1]);
+});
+
 it("merges the threads other builds started, found by tag or by their earlier name", async () => {
   const tag = sessionTag(agent.key, lookup);
   const title = `Buzz #dev · thread ${root.slice(0, 8)} · Sol`;
