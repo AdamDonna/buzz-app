@@ -19,9 +19,10 @@ export const CATCH_UP_BYTES = 8 * 1024 * 1024;
 /** Every event of the stream created at or before `through` was delivered
  * or skipped. While a window (`through`, `upper`] is being delivered, `after`
  * is the last event delivered of it, in delivery order: oldest first, ties by
- * id. A restart goes on after it, up to `upper`. One read with an overlap
- * keeps `through` behind it and lists what it delivered as heard, so its next
- * read still finds an event stored late below it. `heard` are later ones
+ * id. A restart goes on after it, up to `upper`. A window read with an
+ * overlap has no `after`: it lists what it delivered as heard, and keeps
+ * `through` as far behind as the relay can still store an event late, so a
+ * later read finds one at any place in that order. `heard` are later ones
  * already heard live or delivered, which catch-up skips too. `read`, when
  * later than `through`, is how far the stream was last read: one read again
  * with an overlap keeps `through` behind it. `hidden` marks one moved while
@@ -40,8 +41,10 @@ export type Checkpoint = Readonly<{
  * `heardOf` moves it past the oldest. */
 export const HEARD_LIMIT = 256;
 /** The most heard events a stream keeps while it cannot move past them, as
- * when its reads fail while live goes on; past it, the oldest go anyway. */
-export const HEARD_MOST = 16 * HEARD_LIMIT;
+ * when its reads fail while live goes on, or while a window read with an
+ * overlap is given: twice the most one window reads. Past it, the oldest go
+ * anyway. */
+export const HEARD_MOST = 2 * CATCH_UP_PAGES * CATCH_UP_PAGE;
 /** Seconds a stream that live does not cover reads again below the top of
  * its last read: as far as live resumes behind a drop. The relay accepts an
  * event whose time is up to its drift behind when it stores it, and the
@@ -327,8 +330,7 @@ export type Window<Event extends Position> = Readonly<{
   checkpoint: Checkpoint;
   /** Older missed events were skipped: the window passed its bounds. */
   skipped: boolean;
-  /** Every event read of the window, delivered now or before; not one stored
-   * late below where an interrupted window went on, which is still to give. */
+  /** Every event read of the window, delivered now or before. */
   read: readonly Position[];
 }>;
 
@@ -356,15 +358,6 @@ export async function readWindow<Event extends Position>(
   const after = checkpoint.after;
   const pending = (events: Event[]) =>
     events.sort(oldestFirst).filter((event) => undelivered(checkpoint, event));
-  // What is read and known given: an older second than `after`'s, not
-  // heard, was stored late, so a later read finds it.
-  const given = (events: Event[]) =>
-    events.filter(
-      (event) =>
-        !after ||
-        event.created_at >= after.created_at ||
-        !!checkpoint.heard?.some(({ id }) => id === event.id),
-    );
   const events: Event[] = [];
   let bytes = 0;
   let cursor: Position | undefined;
@@ -395,7 +388,7 @@ export async function readWindow<Event extends Position>(
       const reached = (cursor as Position).created_at;
       return {
         events: pending(events.filter((event) => event.created_at > reached)),
-        read: given(events.filter((event) => event.created_at > reached)),
+        read: events.filter((event) => event.created_at > reached),
         upper: window,
         checkpoint: {
           through: Math.max(reached, checkpoint.through),
@@ -413,7 +406,7 @@ export async function readWindow<Event extends Position>(
   }
   return {
     events: pending(events),
-    read: given(events),
+    read: events,
     upper: window,
     checkpoint: {
       through: checkpoint.through,
@@ -436,9 +429,10 @@ export function delivered(window: number, last?: Position): Checkpoint {
 }
 
 /** The checkpoint once `given`, the window's events delivered so far, oldest
- * first, are. One with an `overlap` keeps `through` where the window began
- * and lists them as heard, with what it `heard` before, so a read after an
- * interruption still finds an event stored late below them. */
+ * first, are. One with an `overlap` saves no cursor: it lists them as heard,
+ * with what it `heard` before, and moves `through` only to where the relay
+ * can no longer store an event late, so a read after an interruption still
+ * finds one stored late anywhere among them. */
 export function admitted(
   window: Window<Position>,
   given: readonly Position[],
@@ -448,20 +442,25 @@ export function admitted(
   const last = given.at(-1);
   const cursor = delivered(window.upper, last);
   if (overlap <= 0 || !last) return cursor;
-  // A window resumed after an `after` saved without an overlap delivered
-  // all of that second once it goes on to a later one, and lists none of
-  // it. One saved with an overlap lists them, and keeps `through` where it
-  // began, so each later read still finds an event stored late below it.
+  // A cursor saved without an overlap passed what it delivered of its
+  // second, and lists none of it: those are listed now, in its place.
   const { through, after } = window.checkpoint;
-  const listed = !after || heard.some(({ id }) => id === after.id);
+  const passed = after
+    ? window.read.filter(
+        (event) =>
+          event.created_at === after.created_at &&
+          oldestFirst(event, after) <= 0,
+      )
+    : [];
   return heardOf(
     {
-      ...cursor,
-      through: listed
-        ? through
-        : Math.min(after.created_at, last.created_at - 1),
+      through: Math.max(
+        through,
+        Math.min(last.created_at - 1, window.upper - overlap),
+      ),
+      upper: window.upper,
     },
-    [...heard, ...given],
+    [...heard, ...passed, ...given],
   );
 }
 

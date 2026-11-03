@@ -376,13 +376,74 @@ it("finds an event stored late below a window cut short twice, and gives none tw
   const poll = await readWindow(all, done, 210, read);
   if (!poll) throw new Error("no window");
   give(poll, poll.events.length);
-  expect(given).toEqual(["e1", "e2", "e3", "e4", "late"]);
-  // Cut short by a read with no overlap, which lists none it gave: the
-  // next read with one goes on past all of that second.
+  // Found as soon as the window goes on, in its place in order.
+  expect(given).toEqual(["e1", "e2", "late", "e3", "e4"]);
+});
+
+it("finds an event stored late in the second a cut-short read went on from, before it in order", async () => {
+  const at = (i: number, created_at: number, content = `e${i}`) => ({
+    id: id(i),
+    created_at,
+    content,
+  });
+  const events: Stored[] = [at(2, 120), at(3, 120), at(4, 130)];
+  const { read } = relay(events);
+  const overlap = 1000;
+  const given: string[] = [];
+  const give = (window: { events: readonly Stored[] }, count: number) => {
+    const taken = window.events.slice(0, count);
+    given.push(...taken.map(({ content }) => content));
+    return taken;
+  };
+  const first = await readWindow(all, { through: 100 }, 200, read);
+  if (!first) throw new Error("no window");
+  const cut = admitted(first, give(first, 2), [], overlap);
+  expect(cut.after).toBeUndefined();
+  // Same second as the last one given, and before it in order.
+  events.push(at(1, 120, "late"));
+  const rest = await readWindow(all, cut, 200, read);
+  if (!rest) throw new Error("no window");
+  give(rest, rest.events.length);
+  const done = finished(rest, cut.heard, overlap);
+  const poll = await readWindow(all, done, 210, read);
+  give(poll ?? { events: [] }, Number.MAX_SAFE_INTEGER);
+  expect(given.sort()).toEqual(["e2", "e3", "e4", "late"]);
+});
+
+it("lists what a cursor saved without an overlap passed, once a read with one goes on, and gives none again", async () => {
+  const at = (i: number, created_at: number) => ({
+    id: id(i),
+    created_at,
+    content: `e${i}`,
+  });
+  const events: Stored[] = [at(1, 120), at(2, 120), at(3, 130)];
+  const { read } = relay(events);
+  const overlap = 1000;
+  // e1 and e2 were given by a read with no overlap, which saved a cursor.
   const plain = delivered(200, at(2, 120));
   const resumed = await readWindow(all, plain, 200, read);
   if (!resumed) throw new Error("no window");
-  expect(
-    admitted(resumed, resumed.events.slice(0, 1), [], overlap).through,
-  ).toBe(120);
+  expect(resumed.events.map(({ content }) => content)).toEqual(["e3"]);
+  const cut = admitted(resumed, resumed.events, [], overlap);
+  expect(cut.after).toBeUndefined();
+  expect(cut.heard?.map(({ id }) => id)).toEqual([id(1), id(2), id(3)]);
+  const again = await readWindow(all, cut, 200, read);
+  expect(again?.events).toEqual([]);
+  if (!again) throw new Error("no window");
+  const done = finished(again, cut.heard, overlap);
+  expect((await readWindow(all, done, 210, read))?.events ?? []).toEqual([]);
+  // A cursor passed only its own second: one older, not heard, is still
+  // to give.
+  events.push(at(4, 110));
+  const behind = await readWindow(
+    all,
+    { through: 100, upper: 200, after: { created_at: 120, id: id(2) } },
+    200,
+    read,
+  );
+  if (!behind) throw new Error("no window");
+  const listed = admitted(behind, behind.events.slice(-1), [], overlap);
+  expect(listed.heard?.map(({ id }) => id)).toEqual([id(1), id(2), id(3)]);
+  const rest = await readWindow(all, listed, 200, read);
+  expect(rest?.events.map(({ content }) => content)).toEqual(["e4"]);
 });

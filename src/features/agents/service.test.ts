@@ -7863,13 +7863,17 @@ it("finds an event stored late below where an interrupted read went on, and give
     history.push(...notes);
     vi.setSystemTime((now + 700) * 1000);
     recover();
+    // Part way: the window's bound is saved, with what it gave as heard.
     const saved = () =>
       Object.values(readCheckpoints(storage)).find(
-        (checkpoint) => checkpoint.after,
+        (checkpoint) => checkpoint.upper && checkpoint.heard?.length,
       );
     await vi.waitFor(() => expect(saved()).toBeDefined());
     await settle();
-    const after = saved()?.after?.created_at ?? 0;
+    expect(saved()?.after).toBeUndefined();
+    const after = Math.max(
+      ...(saved()?.heard ?? []).map(({ created_at }) => created_at),
+    );
     expect(after).toBeLessThan(now + 2 + 39 * 10);
     // Then one is stored late, older than the last given but in the overlap.
     history.push(note("late", now + 105));
