@@ -1025,7 +1025,7 @@ export type NewAgent = Readonly<{
 }>;
 export type Agents = {
   registerExecution(provider: AgentExecutionProvider): void;
-  /** Select the adapter before first runtime use. This is write-once. */
+  /** Select the adapter while the agent is idle. This is write-once. */
   bindExecution(
     agent: AgentKey,
     binding: Readonly<{ id: string; config?: JsonValue }>,

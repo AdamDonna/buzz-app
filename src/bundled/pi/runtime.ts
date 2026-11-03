@@ -750,6 +750,7 @@ export class PiRuntime {
     const same = prior?.topLevel === topLevel;
     const wait = prior && (same ? prior.handed : prior.settled);
     const request = wake?.type === "plugin" ? `${WAKE}${wake.id}` : event.id;
+    let persistenceError: Error | undefined;
     let submitted:
       | { submission: number; conversation: number }
       | false
@@ -857,11 +858,15 @@ export class PiRuntime {
           throw new Error("Pi changed its admitted conversation");
         receipt.conversation = submitted.conversation;
       }
-      await this.routing.recordPlace?.(
-        key,
-        submitted.conversation,
-        event.created_at,
-      );
+      try {
+        await this.routing.recordPlace?.(
+          key,
+          submitted.conversation,
+          event.created_at,
+        );
+      } catch (error) {
+        persistenceError = new Error(errorText(error));
+      }
       if (
         this.remember(agent.key, key, submitted.conversation, event.created_at)
       )
@@ -878,6 +883,7 @@ export class PiRuntime {
           submitted.submission,
           attention ? request : undefined,
         );
+        if (persistenceError) throw persistenceError;
         // An answer Pi wrote without `send` stays in local activity.
         if (waited.status === "done") return { ok: true };
         // A turn the owner stopped, or a removed agent's, says nothing more.

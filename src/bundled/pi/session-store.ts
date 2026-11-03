@@ -72,6 +72,25 @@ export class PiSessionStore {
     this.observe(agent, place, session);
   }
 
+  async remove(agent: string, session: PiSession) {
+    await this.storage.set(state(agent, session.key), null);
+  }
+
+  history(agent: string): PiSession[] {
+    const prefix = `${PREFIX}${agent}:session:`;
+    const sessions = new Map<string, PiSession>();
+    for (const key of this.storage.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const text = this.storage.get(key);
+      if (text) {
+        const session = this.parse(text, key.slice(prefix.length));
+        sessions.set(session.key, session);
+      }
+    }
+    for (const session of this.list(agent)) sessions.set(session.key, session);
+    return [...sessions.values()];
+  }
+
   list(agent: string): PiSession[] {
     const prefix = `${PREFIX}${agent}:place:`;
     const listed = new Map<string, PiSession>();
@@ -112,11 +131,12 @@ export class PiSessionStore {
     return request;
   }
 
-  private parse(text: string, key: string, place: string): PiSession {
+  private parse(text: string, key: string, place?: string): PiSession {
     const value = JSON.parse(text) as PiSession;
     if (
       value.key !== key ||
-      value.place !== place ||
+      typeof value.place !== "string" ||
+      (place !== undefined && value.place !== place) ||
       !Number.isFinite(value.at) ||
       (value.opened !== undefined && value.opened !== true) ||
       (value.conversation !== undefined &&

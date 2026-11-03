@@ -47,7 +47,7 @@ export class PiSessions {
   constructor(
     private readonly agents: Pick<
       Agents,
-      "storage" | "execution" | "inspectExecution"
+      "storage" | "execution" | "inspectExecution" | "executionBinding"
     >,
     private readonly factory: Factory,
   ) {
@@ -109,25 +109,13 @@ export class PiSessions {
   }
 
   private selection(agent: string) {
+    if (this.agents.executionBinding(agent)) return true;
     const known = this.selections.get(agent);
     if (known === undefined && !this.inspections.has(agent))
       void this.inspect(agent).catch((error) =>
         console.warn(`Pi agent ${agent} selection read failed`, error),
       );
     return known;
-  }
-
-  private async selected(agent: string) {
-    if (await this.inspect(agent)) return true;
-    const execution = await this.agents.execution(agent, {
-      key: crypto.randomUUID(),
-      intent: "new",
-    });
-    if (execution) {
-      await execution.dispose();
-      throw new Error("The execution selection changed. Try again.");
-    }
-    return false;
   }
 
   private runtime(agent: string, session: PiSession): Open {
@@ -210,15 +198,20 @@ export class PiSessions {
     const scope = `${agent}/${place}`;
     const generation = this.generations.get(scope) ?? {};
     this.generations.set(scope, generation);
-    if (!(await this.selected(delivery.agent.key))) return false;
-    await this.changes.get(scope);
-    delivery.signal.throwIfAborted();
-    const session = await this.store.current(delivery.agent.key, place);
-    live();
-    if (this.generations.get(scope) !== generation)
-      throw new Error("Pi session was retired");
-    const opened = this.runtime(delivery.agent.key, session);
-    await opened.runtime.run(delivery);
+    if (!(await this.inspect(delivery.agent.key))) return false;
+    const changing = this.changes.get(scope);
+    const run = async () => {
+      await changing;
+      delivery.signal.throwIfAborted();
+      const session = await this.store.current(delivery.agent.key, place);
+      live();
+      if (this.generations.get(scope) !== generation)
+        throw new Error("Pi session was retired");
+      const opened = this.runtime(delivery.agent.key, session);
+      await opened.runtime.run(delivery);
+    };
+    if (changing) delivery.workingUntil(run());
+    else await run();
     return true;
   }
   run(delivery: Delivery) {
@@ -227,7 +220,7 @@ export class PiSessions {
 
   async runOnce(turn: StandaloneTurn) {
     const live = this.live(turn.delivery.agent.key);
-    if (!(await this.selected(turn.delivery.agent.key)))
+    if (!(await this.inspect(turn.delivery.agent.key)))
       return this.local.runOnce(turn);
     turn.signal.throwIfAborted();
     const text = await turn.prompt();
@@ -238,20 +231,25 @@ export class PiSessions {
       return { ok: true };
     const session: PiSession = { key: crypto.randomUUID(), place: "", at: 0 };
     await this.store.save(turn.delivery.agent.key, session);
-    turn.signal.throwIfAborted();
-    live();
-    const opened = this.runtime(turn.delivery.agent.key, session);
-    const abort = () => opened.lifetime.abort(turn.signal.reason);
-    turn.signal.addEventListener("abort", abort, { once: true });
-    if (turn.signal.aborted) abort();
+    let opened: Open | undefined;
+    const abort = () => opened?.lifetime.abort(turn.signal.reason);
     try {
+      turn.signal.throwIfAborted();
+      live();
+      opened = this.runtime(turn.delivery.agent.key, session);
+      turn.signal.addEventListener("abort", abort, { once: true });
+      if (turn.signal.aborted) abort();
       return await opened.runtime.runOnce({
         ...turn,
         prompt: async () => text,
       });
     } finally {
       turn.signal.removeEventListener("abort", abort);
-      await this.close(opened);
+      try {
+        if (opened) await this.close(opened);
+      } finally {
+        await this.store.remove(turn.delivery.agent.key, session);
+      }
     }
   }
 
@@ -373,8 +371,11 @@ export class PiSessions {
     live();
     const usage = await Promise.all(
       this.store
-        .list(agent)
-        .filter((session) => session.conversation !== undefined)
+        .history(agent)
+        .filter(
+          (session) =>
+            session.conversation !== undefined && session.at >= since,
+        )
         .map(async (session) =>
           (
             await this.runtime(agent, session).runtime.usage(
@@ -409,7 +410,7 @@ export class PiSessions {
     action: SessionControlAction,
   ) {
     const live = this.live(agent.key);
-    if (!(await this.selected(agent.key)))
+    if (!(await this.inspect(agent.key)))
       return this.local.session(agent, place, action);
     live();
     const key = this.controlKey(agent, place);

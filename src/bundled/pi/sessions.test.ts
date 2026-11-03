@@ -35,7 +35,11 @@ function fixture(
   const local = fakeHost({
     unfinished: () => ({ submissions: [] }),
     place: () => ({ seen: 0 }),
+    places: () => ({
+      places: [{ key: `${channelId}/${root}`, conversation: 1, seen: 100 }],
+    }),
     deliver: () => ({ submission: 1, conversation: 1 }),
+    once: () => ({ submission: 1, conversation: 1 }),
     wait: () => ({ status: "done" }),
   });
   const wait = deferred<object>();
@@ -140,8 +144,10 @@ function fixture(
           ),
       ).toBe(true);
       let held = targets.get(session.key);
-      if (!held) {
+      if (!held || held.lifetime.signal.aborted) {
+        const places = held?.places;
         held = target(session.key);
+        for (const [key, place] of places ?? []) held.places.set(key, place);
         targets.set(session.key, held);
       }
       allocated.resolve();
@@ -158,8 +164,9 @@ function fixture(
     storage,
     execution: execute,
     inspectExecution: inspect,
-    executionBinding: () =>
+    executionBinding: vi.fn((): AgentExecutionBinding | undefined =>
       options.staleSnapshot ? undefined : { provider: "test/remote" },
+    ),
   };
   const runtime = new PiSessions(
     services as never,
@@ -202,8 +209,15 @@ function fixture(
       workingUntil: vi.fn(),
       ignored: vi.fn(),
     }) as unknown as Delivery;
-  const result = (turn: Delivery) =>
-    vi.mocked(turn.workingUntil).mock.calls[0]?.[0];
+  const result = async (turn: Delivery) => {
+    const calls = vi.mocked(turn.workingUntil).mock.calls;
+    let outcome: unknown;
+    for (let index = 0; index < calls.length; index++) {
+      const value = await calls[index]?.[0];
+      if (value !== undefined) outcome = value;
+    }
+    return outcome;
+  };
   const f = {
     runtime,
     services,
@@ -411,6 +425,7 @@ it("gives standalone turns their own target and closes each target", async () =>
   expect(f.targets.size).toBe(2);
   for (const { execution } of f.targets.values())
     expect(execution.dispose).toHaveBeenCalledOnce();
+  expect(f.storage.keys()).toEqual([]);
 });
 
 it("New invalidates a pending route before the adapter opens", async () => {
@@ -447,17 +462,26 @@ it("New invalidates a pending route before the adapter opens", async () => {
   }
 });
 
-it("keeps local Pi turns local after the atomic execution claim", async () => {
-  const f = fixture();
+it("keeps default local Pi turns free of session writes and adapter calls", async () => {
+  const f = fixture(undefined, { staleSnapshot: true });
+  const add = vi.spyOn(f.storage, "add");
+  const set = vi.spyOn(f.storage, "set");
   f.inspect.mockResolvedValue(undefined);
   f.execute.mockResolvedValue(undefined);
   const turn = f.delivery();
   await f.runtime.run(turn);
   await expect(f.result(turn)).resolves.toMatchObject({ ok: true });
-  expect(f.execute).toHaveBeenCalledWith(self, {
-    key: expect.any(String),
-    intent: "new",
-  });
+  await expect(
+    f.runtime.runOnce({
+      delivery: f.delivery(),
+      key: "watch",
+      signal: new AbortController().signal,
+      prompt: async () => "Inspect",
+    } as unknown as StandaloneTurn),
+  ).resolves.toEqual({ ok: true });
+  expect(f.execute).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
+  expect(set).not.toHaveBeenCalled();
   expect(f.targets.size).toBe(0);
   expect(f.local.processes).toHaveLength(1);
 });
@@ -500,11 +524,16 @@ it("holds deliveries until New saves its pointer and closes the old runtime", as
   try {
     await writing.promise;
     const next = f.delivery();
-    const running = f.runtime.run(next);
+    let handed = false;
+    const running = f.runtime.run(next).then(() => {
+      handed = true;
+    });
     // In-memory admission work finishes before the next event-loop task.
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(old?.host.requests("deliver")).toHaveLength(1);
     expect(f.targets.size).toBe(1);
+    expect(handed).toBe(true);
+    expect(next.workingUntil).toHaveBeenCalledOnce();
     release.resolve();
     await changing;
     await running;
@@ -549,6 +578,7 @@ it("cancels standalone adapter setup without retiring the agent", async () => {
       ok: false,
       error: "Stop standalone",
     });
+    expect(f.storage.keys()).toEqual([]);
     const next = f.delivery();
     await f.runtime.run(next);
     await expect(f.result(next)).resolves.toMatchObject({ ok: true });
@@ -601,4 +631,88 @@ it("keeps equal conversation numbers distinct in usage from two targets", async 
   expect(
     usage.every((session) => session.observations[0]?.tokens.input === 1),
   ).toBe(true);
+});
+
+it("shows a later remote selection after confirmed local use", async () => {
+  const f = fixture(undefined, { staleSnapshot: true });
+  f.inspect.mockResolvedValue(undefined);
+  f.execute.mockResolvedValue(undefined);
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  await f.runtime.places(self);
+  expect(f.runtime.sessions(self)).toHaveLength(1);
+  f.services.executionBinding.mockReturnValue({ provider: "test/remote" });
+  expect(f.runtime.sessions(self)).toEqual([]);
+  expect(f.runtime.working(self)).toEqual([]);
+  const agent = { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent;
+  expect(f.runtime.sessionState(agent, { channelId, root })).toBe("idle");
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it("tracks a submitted turn until it settles when session metadata cannot be saved", async () => {
+  const f = fixture(undefined, { pending: true });
+  const set = f.storage.set;
+  vi.spyOn(f.storage, "set").mockImplementation(async (key, text) => {
+    if (text && JSON.parse(text).conversation !== undefined)
+      throw new Error("Metadata write failed");
+    return set(key, text);
+  });
+  const turn = f.delivery();
+  try {
+    await f.runtime.run(turn);
+    // Handover and its failure handlers finish before the next event-loop task.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const remote = [...f.targets.values()][0];
+    expect(remote?.host.requests("wait")).toHaveLength(1);
+    expect(
+      f.runtime.sessionState(
+        { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent,
+        { channelId, root },
+      ),
+    ).toBe("active");
+    f.wait.resolve({ status: "done" });
+    await expect(f.result(turn)).resolves.toMatchObject({
+      ok: false,
+      error: "Metadata write failed",
+    });
+  } finally {
+    f.wait.resolve({ status: "done" });
+  }
+});
+
+it("includes replaced conversations in usage", async () => {
+  const f = fixture();
+  const first = f.delivery();
+  await f.runtime.run(first);
+  await f.result(first);
+  const oldKey = [...f.targets.keys()][0];
+  await f.runtime.session(
+    { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent,
+    { channelId, root },
+    "new",
+  );
+  const next = f.delivery();
+  await f.runtime.run(next);
+  await f.result(next);
+  expect(f.runtime.sessions(self)).toHaveLength(1);
+  const usage = await f.runtime.usage(self, 0, new AbortController().signal);
+  expect(usage.map((session) => session.id).sort()).toEqual(
+    [...f.targets.keys()].map((key) => `${key}/1`).sort(),
+  );
+  expect(usage).toHaveLength(2);
+  expect(usage.some((session) => session.id === `${oldKey}/1`)).toBe(true);
+});
+
+it("filters old sessions before restoring targets for usage", async () => {
+  const f = fixture();
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  await f.runtime.retire(self);
+  f.execute.mockClear();
+  await expect(
+    f.runtime.usage(self, 200000, new AbortController().signal),
+  ).resolves.toEqual([]);
+  expect(f.execute).not.toHaveBeenCalled();
 });
