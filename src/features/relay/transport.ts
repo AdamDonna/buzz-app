@@ -300,6 +300,11 @@ async function parseEvents(
   if (!native) return checkChunks(verify);
   const events = await native.settle(await checkChunks(native.prepare));
   if (signal?.aborted) throw new DOMException("Read cancelled", "AbortError");
+  if (!events.every((event) => event !== undefined))
+    throw new ReadError(
+      "invalid-response",
+      "Relay supplied a malformed or invalidly signed event",
+    );
   return events;
 }
 
@@ -1406,6 +1411,10 @@ export async function connectSignedTransport(
           }),
           socketFactory,
           owner.live,
+          undefined,
+          undefined,
+          undefined,
+          signer.verifySignatures,
         );
       } catch (error) {
         owner.streams--;

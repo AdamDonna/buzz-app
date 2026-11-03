@@ -16,7 +16,14 @@ import {
   type ObserverFrame,
 } from "../agents/observer.ts";
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
-import { createEventVerifier, eventDto } from "./events.ts";
+import {
+  createEventVerifier,
+  eventDto,
+  type PreparedEvent,
+  type RelayEvent,
+  type SignatureVerifier,
+} from "./events.ts";
+import { yieldToHost } from "./yield.ts";
 import { EMOJI_SET } from "./emoji.ts";
 import type {
   ArtifactSyncFilter,
@@ -35,6 +42,11 @@ export const LIVE_BATCH_REFRESH_INTERVAL = 15 * 60_000;
 export const SETUP_CONCURRENCY = 4;
 /** How long one channel REQ may wait for EOSE before its route fails. */
 export const SETUP_TIMEOUT_MS = 10_000;
+// Include the in-flight batch. Four 10-channel setup REQs can replay 20,000
+// events before globals/syncs; allow that burst while bounding retained payloads.
+const VERIFY_QUEUE_FRAMES = 32_768;
+const VERIFY_QUEUE_BYTES = 64 * 1024 * 1024;
+const VERIFY_BATCH_SIZE = 12; // Same hash-work slice as finite reads.
 const MAX_QUOTA_RETRIES = 3;
 const BASE_RECONNECT_DELAY = 500;
 const MAX_RECONNECT_DELAY = 30_000;
@@ -346,6 +358,7 @@ export function subscribeRelayTraffic(
   setupConcurrency = SETUP_CONCURRENCY,
   setupTimeoutMs = SETUP_TIMEOUT_MS,
   random: () => number = Math.random,
+  signatures?: SignatureVerifier,
 ): LiveSubscription {
   const log = getLogger("relay-ws");
   const peer = relayLabel(url);
@@ -360,6 +373,8 @@ export function subscribeRelayTraffic(
   let generation = 0,
     serial = 0;
   let authenticated = false;
+  let pendingSince: number | undefined;
+  let clearIncoming = () => {};
   // Whether the relay sent anything since the last recovery tick, the probe
   // that asks it to when it did not, and the current socket's reconnect.
   let heard = false;
@@ -406,7 +421,7 @@ export function subscribeRelayTraffic(
   // establishes it leaves the cursor, so flapping does not lose it.
   const cursors = new Map<string, LiveCursor>();
   // Outlives each socket, so a reconnect's replay reuses the proofs.
-  const verify = createEventVerifier(LIVE_PROOF_ENTRIES);
+  const verify = createEventVerifier(LIVE_PROOF_ENTRIES, signatures);
   const cursorKeys = (route: Route) =>
     scope(route).length
       ? scope(route).map((id) => `channel:${id}`)
@@ -954,7 +969,10 @@ export function subscribeRelayTraffic(
       // EOSE on this connection is the only evidence a route was live. A
       // renewal, pending or failed, still streams through the established wire
       // it kept, but only for the channels the route still covers.
-      const liveUntil = Math.floor(heardAt / 1000);
+      // Receiving a frame is not delivery while its native check is pending.
+      const liveUntil = Math.floor(
+        Math.min(heardAt, pendingSince ?? heardAt) / 1000,
+      );
       for (const route of routes.values()) {
         const { previous } = route;
         const source =
@@ -972,6 +990,7 @@ export function subscribeRelayTraffic(
       }
     }
     generation++;
+    clearIncoming();
     authenticated = false;
     presenceReceipt?.finish(false);
     admission.setup(routes, false);
@@ -1083,6 +1102,66 @@ export function subscribeRelayTraffic(
           () => reconnect("Live authentication timed out"),
           10000,
         );
+      }
+    };
+    const incoming: {
+      data: unknown[];
+      bytes: number;
+      receivedAt: number;
+      done: () => void;
+    }[] = [];
+    let incomingBytes = 0;
+    let draining = false;
+    clearIncoming = () => {
+      for (const frame of incoming) frame.done();
+      incoming.length = 0;
+      incomingBytes = 0;
+      pendingSince = undefined;
+    };
+    const active = (data: unknown[]) =>
+      authenticated &&
+      typeof data[1] === "string" &&
+      (wires.has(data[1]) || syncWires.has(data[1]));
+    const drain = async () => {
+      const native = verify.native;
+      if (!native) return;
+      draining = true;
+      try {
+        while (valid() && incoming.length) {
+          // Coalesce a burst and let rendering/input run between hash batches.
+          await yieldToHost();
+          if (!valid()) return;
+          const batch = incoming.slice(0, VERIFY_BATCH_SIZE);
+          const prepared = new Map<unknown[], PreparedEvent>();
+          for (const { data } of batch) {
+            if (data[0] !== "EVENT" || !active(data)) continue;
+            try {
+              prepared.set(data, native.prepare(data[2]));
+            } catch {
+              // Delivery retains each stream's existing invalid-event policy.
+            }
+          }
+          const checked = await native.settle([...prepared.values()]);
+          if (!valid()) return;
+          const events = new Map(
+            [...prepared.keys()].map((data, index) => [data, checked[index]]),
+          );
+          // Keep the batch in the queue through callbacks: a callback can close
+          // the connection, and its resume must include any undelivered frames.
+          for (const frame of batch) {
+            if (!valid()) return;
+            receive(frame.data, events.get(frame.data));
+            if (!valid()) return;
+            incoming.shift();
+            incomingBytes -= frame.bytes;
+            pendingSince = incoming[0]?.receivedAt;
+            frame.done();
+          }
+        }
+      } catch {
+        reconnect("Live event verification failed");
+      } finally {
+        draining = false;
       }
     };
     ws.onmessage = async (event) => {
@@ -1198,20 +1277,51 @@ export function subscribeRelayTraffic(
         }
         return;
       }
+      if (
+        !active(data) ||
+        !["EVENT", "EOSE", "CLOSED"].includes(data[0] as string)
+      )
+        return;
+      if (!verify.native) {
+        let checked: RelayEvent | undefined;
+        if (data[0] === "EVENT") {
+          try {
+            checked = verify(data[2]);
+          } catch {
+            // The receiving stream decides whether an invalid event ends it.
+          }
+        }
+        receive(data, checked);
+        return;
+      }
+      const bytes = event.data.length * 2;
+      if (
+        incoming.length >= VERIFY_QUEUE_FRAMES ||
+        incomingBytes + bytes > VERIFY_QUEUE_BYTES
+      ) {
+        reconnect("Live event verification backlog exceeded");
+        return;
+      }
+      await new Promise<void>((done) => {
+        incoming.push({ data, bytes, receivedAt: heardAt, done });
+        incomingBytes += bytes;
+        pendingSince ??= heardAt;
+        if (!draining) void drain();
+      });
+    };
+    function receive(data: unknown[], checked?: RelayEvent) {
+      if (!valid()) return;
       const sync =
         typeof data[1] === "string" ? syncWires.get(data[1]) : undefined;
       if (sync) {
         if (!authenticated) return;
         if (data[0] === "EVENT") {
-          let incoming: VerifiedEvent;
-          try {
-            incoming = verify(data[2]);
-          } catch {
+          if (!checked) {
             send(["CLOSE", data[1]]);
             endSync(sync, "error: relay supplied an invalid event");
             return;
           }
-          sync.sink.event(incoming);
+          sync.sink.event(checked);
         } else if (data[0] === "EOSE") sync.sink.eose();
         else if (data[0] === "CLOSED") {
           const reason =
@@ -1242,14 +1352,12 @@ export function subscribeRelayTraffic(
         return;
       }
       if (data[0] === "EVENT") {
-        let incoming: VerifiedEvent;
-        try {
-          incoming = verify(data[2]);
-        } catch {
+        if (!checked) {
           // One undecodable event must not take the route (or its batch) down.
           log.warn(`${peer} dropped an undecodable live event`);
           return;
         }
+        const incoming = checked;
         const ids = scope(route);
         const tags = incoming.tags.filter(([name]) => name === "h");
         const destination =
@@ -1358,7 +1466,7 @@ export function subscribeRelayTraffic(
           reason.startsWith("rate-limited:") || reason.startsWith("error:"),
         );
       }
-    };
+    }
     ws.onerror = (event) => {
       const failure = event as Event & { terminal?: boolean; message?: string };
       if (failure.terminal)

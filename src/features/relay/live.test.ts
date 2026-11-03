@@ -17,7 +17,16 @@ import {
   subscribeRelayTraffic,
   type LiveCallbacks,
 } from "./live";
-import { keypair, message, roster, signed, scriptedTransport } from "./testing";
+import {
+  keypair,
+  message,
+  nativeSignatureChecks,
+  roster,
+  signed,
+  scriptedTransport,
+} from "./testing";
+import type { SignatureVerifier } from "./events";
+import { yieldToHost } from "./yield";
 import { createRelaySession } from "./session";
 import { liveRecoveryStatus } from "./live-recovery";
 import { createPresence } from "../presence/presence";
@@ -98,6 +107,7 @@ function setup(
   channels = ["a", "b"],
   admission = createLiveAdmission(),
   random?: () => number,
+  signatures?: SignatureVerifier,
 ) {
   const key = keypair(),
     sockets: Socket[] = [];
@@ -122,12 +132,197 @@ function setup(
     undefined,
     undefined,
     random,
+    signatures,
   );
   owner.update(channels);
   const first = sockets[0];
   assert.exists(first);
   return { key, sockets, callbacks, owner, first };
 }
+
+describe("native live verification", () => {
+  function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const check = vi.fn<SignatureVerifier>(async (claims) => {
+      await promise;
+      return nativeSignatureChecks({ claims });
+    });
+    return { check, release };
+  }
+  const channelRequest = (socket: Socket) => {
+    const route = socket
+      .requests()
+      .find((request) => scopeOf(request).includes("a"));
+    assert.exists(route);
+    return route;
+  };
+
+  it("batches a burst without JS signatures and delivers valid events before EOSE and CLOSED", async () => {
+    const host = gate();
+    const h = setup(["a"], undefined, undefined, host.check);
+    const delivered: string[] = [];
+    h.callbacks.receive.mockImplementation(([event], provenance) =>
+      delivered.push(`${event?.content}:${provenance?.phase}`),
+    );
+    h.callbacks.established.mockImplementation((channel) => {
+      if (channel === "a") delivered.push("EOSE");
+    });
+    try {
+      await h.first.auth();
+      const route = channelRequest(h.first);
+      const first = message(h.key, "a", "first", 1700000000);
+      const second = message(h.key, "a", "second", 1700000001);
+      const frames = [
+        ["EVENT", route[1], first],
+        ["EVENT", route[1], { ...first, content: "tampered" }],
+        ["EVENT", route[1], { ...second, sig: "0".repeat(128) }],
+        ["EVENT", route[1], second],
+        ["EOSE", route[1]],
+        ["EVENT", route[1], first],
+        ["CLOSED", route[1], "restricted: not a channel member"],
+        ["EVENT", route[1], second],
+      ].map((frame) => h.first.receive(frame));
+      vi.mocked(verifyEvent).mockClear();
+      await vi.waitFor(() => expect(host.check).toHaveBeenCalledOnce());
+      expect(host.check.mock.calls[0]?.[0]).toHaveLength(5);
+      expect(delivered).toEqual([]);
+      host.release();
+      await Promise.all(frames);
+      expect(delivered).toEqual([
+        "first:replay",
+        "second:replay",
+        "EOSE",
+        "first:live",
+      ]);
+      expect(h.callbacks.denied).toHaveBeenCalledWith(
+        "a",
+        "restricted: not a channel member",
+      );
+      expect(verifyEvent).not.toHaveBeenCalled();
+    } finally {
+      host.release();
+      h.owner.dispose();
+    }
+  });
+
+  it.each(["retire", "disconnect", "dispose"])(
+    "discards native results after %s",
+    async (action) => {
+      const host = gate();
+      const h = setup(["a"], undefined, undefined, host.check);
+      try {
+        await h.first.auth();
+        const route = channelRequest(h.first);
+        const event = message(h.key, "a", "late", 1700000000);
+        const frames = [
+          h.first.receive(["EVENT", route[1], event]),
+          h.first.receive(["EOSE", route[1]]),
+        ];
+        await vi.waitFor(() => expect(host.check).toHaveBeenCalledOnce());
+        if (action === "retire") h.owner.update([]);
+        else if (action === "disconnect") h.first.close();
+        else h.owner.dispose();
+        host.release();
+        await host.check.mock.results[0]?.value;
+        await Promise.all(frames);
+        // Finish the native-result microtasks even when disconnect settled the frames early.
+        await yieldToHost();
+        expect(h.callbacks.receive).not.toHaveBeenCalled();
+        expect(h.callbacks.established).not.toHaveBeenCalledWith("a");
+      } finally {
+        host.release();
+        h.owner.dispose();
+      }
+    },
+  );
+
+  it("recovers a rejected host check without admitting the event or its EOSE", async () => {
+    const check = vi
+      .fn<SignatureVerifier>(async (claims) =>
+        nativeSignatureChecks({ claims }),
+      )
+      .mockRejectedValueOnce(new Error("host unavailable"));
+    const h = setup(["a"], undefined, undefined, check);
+    try {
+      await h.first.auth();
+      const route = channelRequest(h.first);
+      const event = message(h.key, "a", "retry", 1700000000);
+      await Promise.all([
+        h.first.receive(["EVENT", route[1], event]),
+        h.first.receive(["EOSE", route[1]]),
+      ]);
+      expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("retrying");
+      expect(h.callbacks.receive).not.toHaveBeenCalled();
+      expect(h.callbacks.established).not.toHaveBeenCalledWith("a");
+      h.owner.retry();
+      const next = h.sockets[1];
+      assert.exists(next);
+      await next.auth();
+      await next.receive(["EVENT", channelRequest(next)[1], event]);
+      expect(h.callbacks.receive).toHaveBeenCalledWith([event], {
+        phase: "replay",
+        channelId: "a",
+      });
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
+  it.each(["frames", "bytes"])(
+    "bounds pending %s and resumes before undelivered native work",
+    async (bound) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_700_000_000_000);
+      const host = gate();
+      const h = setup(["a"], undefined, () => 0, host.check);
+      try {
+        await h.first.auth();
+        for (const req of h.first.requests())
+          await h.first.receive(["EOSE", req[1]]);
+        const admittedAt = Math.floor(Date.now() / 1000);
+        const route = channelRequest(h.first);
+        const event = message(h.key, "a", "pending", 1700000000);
+        const pending = h.first.receive(["EVENT", route[1], event]);
+        await vi.waitFor(() => expect(host.check).toHaveBeenCalledOnce());
+        // Control traffic can advance liveness while the native batch is held.
+        await vi.advanceTimersByTimeAsync(14 * LIVE_RECOVERY_INTERVAL);
+        await h.first.receive(["NOTICE", "still connected"]);
+        const count = bound === "frames" ? 32_768 : 38;
+        const frame =
+          bound === "frames"
+            ? ["EOSE", route[1]]
+            : ["EVENT", route[1], { ...event, content: "x".repeat(900_000) }];
+        await Promise.all([
+          pending,
+          ...Array.from({ length: count }, () => h.first.receive(frame)),
+        ]);
+        expect(h.callbacks.state.mock.lastCall?.[0]).toMatchObject({
+          status: "retrying",
+          error: "Live event verification backlog exceeded",
+        });
+        h.owner.retry();
+        const next = h.sockets[1];
+        assert.exists(next);
+        await next.auth();
+        expect(channelRequest(next)[2].since).toBe(
+          Math.max(route[2].since, admittedAt - 960),
+        );
+        host.release();
+        await host.check.mock.results[0]?.value;
+        await yieldToHost();
+        expect(h.callbacks.receive).not.toHaveBeenCalled();
+        await next.receive(["EVENT", channelRequest(next)[1], event]);
+        expect(h.callbacks.receive).toHaveBeenCalledOnce();
+      } finally {
+        host.release();
+        h.owner.dispose();
+      }
+    },
+  );
+});
 /** The relay's member-added notice for `channel` on the viewer's membership
  * route: the one event that makes a live batch re-send its REQ. */
 async function grant(
