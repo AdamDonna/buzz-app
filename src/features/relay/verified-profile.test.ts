@@ -3,6 +3,7 @@ import { eventDto } from "./events";
 import { keypair, signed } from "./testing";
 import { createVerifiedProfileDirectory } from "./verified-profile-directory";
 import {
+  VERIFIED_PROFILE_BATCH,
   verifiedProfile,
   verifiedProfileAuthority,
   verifiedProfileDiscovery,
@@ -512,12 +513,18 @@ it("hides cached marks on successful disable, retains history, and reconciles af
     first.event(projection());
     first.eose();
     expect(h.directory.snapshot().get(alice.pubkey)?.status).toBe("checked");
+    const withdrawn = h.directory.authority();
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect(h.directory.authority()).toBeUndefined();
     expect(h.directory.snapshot().size).toBe(0);
     expect(h.subscriptions[0]?.stopped).toBe(true);
     first.event(projection(30)); // retired subscriptions cannot edit history
     await vi.advanceTimersByTimeAsync(5 * 60_000);
+    // The same key, re-enabled, is a new authority: nothing checked under the
+    // withdrawn one counts as checked by it.
+    expect(h.directory.authority()).toEqual(withdrawn);
+    expect(h.directory.authority()).not.toBe(withdrawn);
     expect(h.directory.snapshot().get(alice.pubkey)).toMatchObject({
       verifiedAt: 10,
       status: "cached",
@@ -1021,5 +1028,118 @@ it("publishes a pre-EOSE change after an open batch is rebuilt", async () => {
     expect(h.directory.snapshot().get(alice.pubkey)?.verifiedAt).toBe(12);
   } finally {
     h.directory.dispose();
+  }
+});
+
+it("grows with the profile limit and evicts the least recently ensured when it shrinks", async () => {
+  const h = harness();
+  try {
+    h.directory.resize(1025);
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    h.subscriptions[0]?.sink.event(projection());
+    h.directory.ensure(
+      Array.from({ length: 1024 }, (_, i) => i.toString(16).padStart(64, "0")),
+    );
+    expect(h.directory.snapshot().has(alice.pubkey)).toBe(true);
+    h.changed.mockClear();
+    h.directory.resize(1024);
+    expect(h.directory.snapshot().has(alice.pubkey)).toBe(false);
+    expect(h.changed).toHaveBeenCalledTimes(1);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("shrinks a full head cache by request order, not by arrival order", async () => {
+  const h = harness();
+  const carol = keypair();
+  try {
+    // The directory follows any limit; three heads stand for a full cache.
+    h.directory.resize(3);
+    const subjects = [alice.pubkey, bob.pubkey, carol.pubkey];
+    h.directory.ensure(subjects);
+    await Promise.resolve();
+    const [batch] = h.subscriptions;
+    assert(batch);
+    for (const subject of subjects) batch.sink.event(projection(10, subject));
+    batch.sink.eose();
+    expect(h.directory.snapshot().size).toBe(3);
+    // The first head to arrive is now the most recently requested.
+    h.directory.ensure([alice.pubkey]);
+    h.changed.mockClear();
+    h.directory.resize(2);
+    const snapshot = h.directory.snapshot();
+    expect([...snapshot.keys()].sort()).toEqual(
+      [alice.pubkey, carol.pubkey].sort(),
+    );
+    expect(h.changed).toHaveBeenCalledTimes(1);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("stops the syncs a shrink emptied without another ensure", async () => {
+  const h = harness();
+  try {
+    h.directory.resize(VERIFIED_PROFILE_BATCH + 1);
+    const old = Array.from({ length: VERIFIED_PROFILE_BATCH }, (_, i) =>
+      (i + 1).toString(16).padStart(64, "0"),
+    );
+    h.directory.ensure(old);
+    await Promise.resolve();
+    h.directory.ensure([alice.pubkey]);
+    await Promise.resolve();
+    const [full, recent] = h.subscriptions;
+    assert(full && recent);
+    // Shrinking to one keeps the most recently requested subject only.
+    h.directory.resize(1);
+    await Promise.resolve();
+    expect(full.stopped).toBe(true);
+    expect(recent.stopped).toBe(false);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("notifies profile subscribers when discovery withdraws the authority, even with no verified profile shown", async () => {
+  vi.useFakeTimers();
+  const { createRelaySession } = await import("./session");
+  const { scriptedTransport } = await import("./testing");
+  const wire = scriptedTransport(alice.pubkey, relay.pubkey);
+  const owner = createRelaySession({
+    ...wire.transport,
+    query: async () => [],
+    verifiedProfiles: authority,
+    readVerifiedProfileAuthority: async () => null,
+    subscribe(callbacks) {
+      callbacks.state({ status: "connected", routes: [] });
+      return {
+        update() {},
+        retry() {},
+        dispose() {},
+        syncVerifiedProfiles: () => () => {},
+      };
+    },
+  });
+  const profiles = owner.session.profiles;
+  try {
+    // Demand arms the discovery refresh; nobody here has a verified profile.
+    void profiles.ensure([alice.pubkey]);
+    await vi.advanceTimersByTimeAsync(0);
+    const before = profiles.snapshot();
+    expect(profiles.verifiedAuthority?.()).toMatchObject(authority);
+    const notified = vi.fn();
+    const stop = profiles.subscribe(notified);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    // The directory coalesces its publish to the next macrotask.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(profiles.verifiedAuthority?.()).toBeUndefined();
+    expect(profiles.snapshot()).toBe(before);
+    expect(notified).toHaveBeenCalled();
+    stop();
+  } finally {
+    owner.dispose();
+    vi.useRealTimers();
   }
 });

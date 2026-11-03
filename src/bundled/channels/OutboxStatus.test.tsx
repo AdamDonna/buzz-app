@@ -105,10 +105,32 @@ it("does not show private feedback body or generic retry in the channel outbox",
   expect(retry).not.toHaveBeenCalled();
 });
 
-it("preserves generic retry for legacy unguarded invitations", () => {
-  const { retry } = show(invitation);
+it("routes an unadopted no-role invitation through member verification", async () => {
+  const { retry, add } = show({
+    ...invitation,
+    delivery: "unknown",
+    event: {
+      ...invitation.event,
+      tags: [
+        ["h", "channel"],
+        ["p", "person"],
+      ],
+    },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  expect(retry).toHaveBeenCalledWith("invite");
+  await waitFor(() =>
+    expect(add).toHaveBeenCalledExactlyOnceWith("channel", "person", {
+      retry: true,
+    }),
+  );
+  expect(retry).not.toHaveBeenCalled();
+});
+it("keeps a malformed no-role invitation out of generic replay", async () => {
+  const { retry, add } = show(invitation);
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Reopen Members");
+  expect(retry).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
 });
 
 it("routes an ordinary addition retry through fresh membership checks", async () => {
@@ -126,9 +148,33 @@ it("routes an ordinary addition retry through fresh membership checks", async ()
   });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() =>
-    expect(add).toHaveBeenCalledExactlyOnceWith("channel", "person"),
+    expect(add).toHaveBeenCalledExactlyOnceWith("channel", "person", {
+      retry: true,
+    }),
   );
   expect(retry).not.toHaveBeenCalled();
+});
+
+it("retries a guest addition as a guest", async () => {
+  const { add } = show({
+    ...invitation,
+    event: {
+      ...invitation.event,
+      tags: [
+        ["h", "channel"],
+        ["p", "person"],
+        ["role", "guest"],
+      ],
+    },
+    recovery: { key: "member-add:channel:person", value: "1" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() =>
+    expect(add).toHaveBeenCalledExactlyOnceWith("channel", "person", {
+      role: "guest",
+      retry: true,
+    }),
+  );
 });
 
 it.each(

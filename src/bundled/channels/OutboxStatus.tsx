@@ -61,7 +61,8 @@ export function OutboxStatus({
                     try {
                       if (
                         item.event.kind === 9000 &&
-                        item.recovery?.key.startsWith("member-add:")
+                        (item.recovery?.key.startsWith("member-add:") ||
+                          !item.event.tags.some(([tag]) => tag === "role"))
                       ) {
                         const channelId = item.event.tags.find(
                           ([tag]) => tag === "h",
@@ -74,7 +75,15 @@ export function OutboxStatus({
                             "Reopen Members to check this addition.",
                           );
                         // A stale explicit role must never overwrite a newer admission.
-                        await memberAdditions.add(channelId, pubkey);
+                        // A guest addition is retried as one, so it can finish
+                        // its own receipt and never sends a writing role.
+                        const guest = item.event.tags.some(
+                          ([tag, value]) => tag === "role" && value === "guest",
+                        );
+                        await memberAdditions.add(channelId, pubkey, {
+                          ...(guest ? { role: "guest" } : {}),
+                          retry: true,
+                        });
                       } else outbox.retry(item.event.id);
                       setError(undefined);
                     } catch (reason) {

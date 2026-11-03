@@ -1,3 +1,4 @@
+import { followUpQueue } from "../messages/follow-up-queue";
 import { registerAttention } from "./attention-command";
 import { canMessageAgent, createAgentChoices } from "./choices";
 import { createAgentLibrary } from "./library";
@@ -383,7 +384,10 @@ beforeEach(() => {
   records.unshare.mockReset();
   records.unshare.mockImplementation(async () => void steps.push("unshare"));
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 it("creates an agent in the community shown, with its type's defaults, and publishes its profile", async () => {
   const { service, native } = await setup();
@@ -5523,6 +5527,37 @@ it("keeps at most one occurrence of a timer waiting, and never runs one removed 
   expect(slugs).toEqual(["watch/kept", "watch/kept"]);
 });
 
+it("runs an hourly timer once after the computer sleeps through several hours, then an hour later", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  const { service, run } = await setup();
+  await service.create({ type: "example/echo", name: "Echo" });
+  await service.save(bot, { attentionEnabled: true });
+  await service.save(bot, {
+    attention: {
+      "watch/hourly": {
+        type: "timer",
+        interest_id: "default",
+        prompt: "Hourly upkeep wake",
+        enabled: true,
+        interval_secs: 3600,
+        armed_at: 1_000_000,
+        max_occurrences: null,
+        expires_at: null,
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  expect(run).toHaveBeenCalledTimes(1);
+  // Asleep for five hours: the clock jumps, and no tick ran meanwhile.
+  vi.setSystemTime(Date.now() + 5 * 3_600_000);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(run).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(3_590_000);
+  expect(run).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(run).toHaveBeenCalledTimes(3);
+});
+
 it("gives each due timer a turn when one's runs outlast its interval", async () => {
   vi.useFakeTimers({ now: 1_000_000 });
   const { service, run } = await setup();
@@ -6984,7 +7019,10 @@ describe("a turn closing or reloading the app stopped", () => {
     });
     await settle();
     expect(names(second.service.snapshot().interrupted)).toEqual(["Echo"]);
+    const pause = vi.spyOn(followUpQueue(second.session), "pauseAfter");
     second.service.dismissInterrupted();
+    expect(pause).toHaveBeenCalledWith(bot, { [asked.id]: channel });
+    pause.mockRestore();
     expect(second.service.snapshot().interrupted).toEqual([]);
     expect(readInterrupted(second.storage)).toEqual({});
     second.service.resumeInterrupted();
@@ -7203,6 +7241,106 @@ describe("a turn closing or reloading the app stopped", () => {
       "Echo, do X (resumed)",
       "Echo, do Y instead (resumed)",
     ]);
+  });
+
+  it("returns follow-ups to paused when the resumed request is missing from the relay", async () => {
+    const storage = memoryStorage() as AgentStore;
+    await writeInterrupted(storage, bot, { ["f".repeat(64)]: channel });
+    const app = await setup({ storage, identities: [echo], resumes: true });
+    await settle();
+    const queue = followUpQueue(app.session);
+    const resume = vi.spyOn(queue, "resumeAfter");
+    const pause = vi.spyOn(queue, "pauseAfter");
+    app.service.resumeInterrupted();
+    await vi.waitFor(() =>
+      expect(pause).toHaveBeenCalledWith(bot, { ["f".repeat(64)]: channel }),
+    );
+    expect(resume).toHaveBeenCalledWith(
+      bot,
+      { ["f".repeat(64)]: channel },
+      expect.any(Function),
+    );
+    expect(readInterrupted(storage)).toEqual({});
+    expect(app.run).not.toHaveBeenCalled();
+    resume.mockRestore();
+    pause.mockRestore();
+  });
+
+  it("does not pause fresh follow-ups when a gated resumed reread finds no request", async () => {
+    const storage = memoryStorage() as AgentStore;
+    const request = "f".repeat(64);
+    await writeInterrupted(storage, bot, { [request]: channel });
+    const app = await setup({ storage, identities: [echo], resumes: true });
+    await settle();
+    const queue = followUpQueue(app.session);
+    Object.assign(app.session, {
+      agentActivity: {
+        subscribe: () => () => {},
+        activate: () => () => {},
+        snapshot: () => ({
+          status: "listening",
+          turns: [],
+          local: [],
+          typing: [],
+        }),
+      },
+    });
+    Object.assign(app.session.agentChoices, { subscribe: () => () => {} });
+    const publish = vi.fn(() => "fresh-event");
+    queue.submit({
+      channelId: channel,
+      recipients: [bot],
+      text: "Saved",
+      restored: true,
+      beforeRelease: async () => {},
+      publish: () => "saved-event",
+    });
+    const savedId = queue.snapshot()[0]?.id ?? "missing";
+    const read = vi.mocked(app.session.readRemote);
+    let release!: (events: RelayEvent[]) => void;
+    const gate = new Promise<RelayEvent[]>((resolve) => {
+      release = resolve;
+    });
+    read.mockImplementationOnce(() => gate);
+    const pause = vi.spyOn(queue, "pauseAfter");
+    try {
+      app.service.resumeInterrupted();
+      queue.submit({
+        channelId: channel,
+        recipients: [bot],
+        text: "Fresh",
+        publish,
+      });
+      release([]);
+      await vi.waitFor(() =>
+        expect(pause).toHaveBeenCalledWith(bot, { [request]: channel }),
+      );
+      expect(
+        queue.snapshot().find((row) => row.text === "Fresh")?.restored,
+      ).not.toBe(true);
+      queue.remove(savedId);
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+    } finally {
+      release([]);
+      pause.mockRestore();
+    }
+  });
+
+  it("does not arm follow-ups for an interrupted agent whose type cannot resume", async () => {
+    const storage = memoryStorage() as AgentStore;
+    await writeInterrupted(storage, bot, { ["f".repeat(64)]: channel });
+    const app = await setup({ storage, identities: [echo], resumes: false });
+    await settle();
+    const queue = followUpQueue(app.session);
+    const resume = vi.spyOn(queue, "resumeAfter");
+    const pause = vi.spyOn(queue, "pauseAfter");
+    app.service.resumeInterrupted();
+    await vi.waitFor(() => expect(readInterrupted(storage)).toEqual({}));
+    expect(resume).not.toHaveBeenCalled();
+    expect(pause).toHaveBeenCalledWith(bot, { ["f".repeat(64)]: channel });
+    expect(app.run).not.toHaveBeenCalled();
+    resume.mockRestore();
+    pause.mockRestore();
   });
 
   it("is not saved for a type that does not resume", async () => {
@@ -12348,6 +12486,183 @@ it("exposes agent execution only inside an Attention source run", async () => {
   await settle();
   await expect(input.spawn("command", {})).rejects.toThrow();
 });
+
+it.each([
+  "",
+  "https://other.example.test",
+  "https://relay.example.test.evil.test",
+  "https://relay.example.test:8443",
+])(
+  "refuses external grants outside the enabled communities (%s)",
+  async (enabled) => {
+    vi.stubEnv("VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES", enabled);
+    const f = await setup();
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
+      const serveMcp = vi.fn();
+      f.ctx.provide("host", {
+        serveMcp,
+      } as unknown as import("../host/service").Host);
+      const owner = f.ctx.extend({
+        pluginOwner: { id: "buzz.agents", revision: "one" },
+      });
+      expect(f.service.canConnectExternal(bot)).toBe(false);
+      await expect(
+        owner.agents.connectExternal(
+          bot,
+          new AbortController().signal,
+          () => {},
+        ),
+      ).rejects.toThrow("External apps are not enabled for this community.");
+      expect(serveMcp).not.toHaveBeenCalled();
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  },
+);
+
+it.each(["disabled runtime", "lost custody"])(
+  "reports external connection availability after %s and recovery",
+  async (reason) => {
+    vi.stubEnv(
+      "VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES",
+      "https://relay.example.test",
+    );
+    let active = true;
+    const listeners = new Set<() => void>();
+    const f = await setup({
+      pluginActive: () => active,
+      subscribePlugin: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    try {
+      await f.service.create({ type: "example/echo", name: "Echo" });
+      await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
+      expect(f.service.canConnectExternal(bot)).toBe(true);
+      if (reason === "disabled runtime") {
+        active = false;
+        for (const listener of listeners) listener();
+      } else {
+        f.native.claim.mockResolvedValue(false);
+        f.emit({ events: [event("1", { tags: [["p", bot]] })] });
+      }
+      await vi.waitFor(() =>
+        expect(f.plugin.agents.handle(bot)).toBeUndefined(),
+      );
+      expect(f.service.find(bot)?.place).toBe("here");
+      expect(f.service.canConnectExternal(bot)).toBe(false);
+      active = true;
+      f.native.claim.mockResolvedValue(true);
+      for (const listener of listeners) listener();
+      f.emit({ events: [event("2", { tags: [["p", bot]] })] });
+      await vi.waitFor(() =>
+        expect(f.service.canConnectExternal(bot)).toBe(true),
+      );
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  },
+);
+
+it.each(["community selection", "reconnect", "identity", "runtime", "revoke"])(
+  "ends an external grant on %s and refuses later tool calls",
+  async (reason) => {
+    vi.stubEnv(
+      "VITE_BUZZ_EXTERNAL_MCP_COMMUNITIES",
+      "https://relay.example.test",
+    );
+    const f = await setup();
+    Object.assign(f.session.agentChoices, {
+      snapshot: () => ({ selectable: [{ pubkey: bot }] }),
+      subscribe: () => () => {},
+    });
+    let handler: import("../host/service").McpHandler | undefined;
+    const closed = runnerGate();
+    const close = vi.fn(async () => {
+      closed.resolve();
+    });
+    f.ctx.provide("host", {
+      serveMcp: async (receive: import("../host/service").McpHandler) => {
+        handler = receive;
+        return {
+          url: "http://127.0.0.1:1234/mcp",
+          headers: [],
+          closed: closed.promise,
+          close,
+        };
+      },
+    } as unknown as import("../host/service").Host);
+    await f.service.create({ type: "example/echo", name: "Echo" });
+    await vi.waitFor(() => expect(f.plugin.agents.handle(bot)).toBeDefined());
+    const owner = f.ctx.extend({
+      pluginOwner: { id: "buzz.agents", revision: "one" },
+    });
+    const controller = new AbortController();
+    const admitted = vi.fn();
+    const server = await owner.agents.connectExternal(
+      bot,
+      controller.signal,
+      admitted,
+    );
+    const call = handler;
+    if (!call) throw new Error("Missing server handler");
+    expect(
+      await call({
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18" },
+      }),
+    ).toHaveProperty("result.protocolVersion", "2025-06-18");
+    const post = {
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "send",
+        arguments: { channel, text: "External test", audience: "everyone" },
+      },
+    };
+    expect(await call(post)).toHaveProperty(
+      "result.content.0.text",
+      expect.stringContaining("sent "),
+    );
+    expect(f.native.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ pubkey: bot }),
+      expect.objectContaining({ content: "External test" }),
+    );
+    const published = f.native.publish.mock.calls.length;
+    const entered = runnerGate(),
+      release = runnerGate();
+    const starting = vi
+      .spyOn(f.session.channelWrites, "starting")
+      .mockImplementation(() => {
+        entered.resolve();
+        return release.promise;
+      });
+    const outcome = call(post).catch((error) => error);
+    try {
+      await entered.promise;
+      if (reason === "community selection")
+        f.select("https://other.example.test");
+      else if (reason === "reconnect") f.connect(true);
+      else if (reason === "identity") f.signIn(other);
+      else if (reason === "runtime") {
+        f.plugin.agents.register({ ...f.type, id: "replacement" });
+        await f.service.retype(bot, "example/replacement");
+      } else controller.abort();
+    } finally {
+      release.resolve();
+      starting.mockRestore();
+    }
+    expect(await outcome).toBeInstanceOf(Error);
+    await vi.waitFor(() => expect(close).toHaveBeenCalled());
+    await expect(call(post)).rejects.toThrow();
+    expect(f.native.publish).toHaveBeenCalledTimes(published);
+    await server.close();
+  },
+);
 
 it.each(["return", "throw"])(
   "revokes source commands on %s without losing queued output",

@@ -1,4 +1,4 @@
-import { ByteLru } from "./budget";
+import { ByteLru, PROFILE_CACHE_BASE, PROFILE_ENTRY_BYTES } from "./budget";
 import { newer, type RelayEvent } from "./events";
 import {
   VERIFIED_PROFILE_BATCH,
@@ -23,10 +23,13 @@ export function createVerifiedProfileDirectory(
     signal: AbortSignal,
   ) => Promise<VerifiedProfileAuthority | null>,
 ) {
-  const heads = new ByteLru<RelayEvent>(1024, 2 * 1024 * 1024);
+  let limit = PROFILE_CACHE_BASE;
+  const heads = new ByteLru<RelayEvent>(limit, limit * PROFILE_ENTRY_BYTES);
   // Least recently ensured first.
   const wanted = new Set<string>();
   const checked = new Set<string>();
+  // Subjects whose head changed since the owner last took them.
+  const accepted = new Set<string>();
   type Batch = {
     stop(): void;
     subjects: readonly string[];
@@ -83,12 +86,14 @@ export function createVerifiedProfileDirectory(
           heads.clear();
         }
         // An equal refresh keeps the current object, so unchanged heads keep
-        // their projections.
+        // their projections. Re-enabling starts a new one: whatever was checked
+        // under the withdrawn authority must be checked again.
         if (
+          !enabled ||
           authority?.pubkey !== next.pubkey ||
           authority.multipleIssuers !== next.multipleIssuers
         )
-          authority = next;
+          authority = { ...next };
         enabled = true;
         schedule();
       }
@@ -132,6 +137,7 @@ export function createVerifiedProfileDirectory(
     const old = heads.peek(subject);
     if (newer(old, event) === old) return false;
     heads.set(subject, event);
+    accepted.add(subject);
     return true;
   }
   function start(
@@ -273,6 +279,28 @@ export function createVerifiedProfileDirectory(
       }
     });
   }
+  /** Drops the least recently ensured identities past the limit. */
+  function trim() {
+    const gone = new Set<string>();
+    for (const oldest of wanted) {
+      if (wanted.size - gone.size <= limit) break;
+      gone.add(oldest);
+    }
+    forget(gone);
+  }
+  /** Evicted identities leave membership, so a later ensure asks again. */
+  function forget(gone: ReadonlySet<string>) {
+    if (!gone.size) return;
+    for (const subject of gone) {
+      wanted.delete(subject);
+      heads.delete(subject);
+      checked.delete(subject);
+    }
+    evicted = true;
+    // A later ensure must issue a fresh REQ; the old one is past EOSE.
+    for (const batch of batches)
+      batch.subjects = batch.subjects.filter((key) => !gone.has(key));
+  }
   return {
     ensure(subjects: readonly string[]) {
       if (closed) return;
@@ -281,22 +309,38 @@ export function createVerifiedProfileDirectory(
         wanted.delete(subject);
         wanted.add(subject);
       }
-      const gone = new Set<string>();
-      for (const oldest of wanted) {
-        if (wanted.size <= 1024) break;
-        wanted.delete(oldest);
-        heads.delete(oldest);
-        checked.delete(oldest);
-        gone.add(oldest);
-      }
-      if (gone.size) {
-        evicted = true;
-        // A later ensure must issue a fresh REQ; the old one is past EOSE.
-        for (const batch of batches)
-          batch.subjects = batch.subjects.filter((key) => !gone.has(key));
-      }
+      trim();
       schedule();
       if (!refreshTimer && !discovery) armRefresh();
+    },
+    /** Follows the profile directory's limit; shrinking evicts and notifies now. */
+    resize(next: number) {
+      if (closed || next === limit) return;
+      limit = next;
+      // Request order decides who goes. After the trim every head is still
+      // wanted, so the head budget can only evict for bytes.
+      trim();
+      const before = heads.keys();
+      if (heads.resize(limit, limit * PROFILE_ENTRY_BYTES))
+        forget(new Set(before.filter((subject) => !heads.peek(subject))));
+      if (evicted) {
+        evicted = false;
+        changed();
+      }
+      // Stop the live syncs a shrink emptied now, not at the next ensure.
+      schedule();
+    },
+    /** The current authority, or undefined while discovery disables marks. */
+    authority: (): VerifiedProfileAuthority | undefined =>
+      enabled ? authority : undefined,
+    /** Whether a head is held for `subject`: its snapshot entry, or its absence
+     * for an inactive or malformed head, is then the answer. */
+    holds: (subject: string) => enabled && !!heads.peek(subject),
+    /** Subjects whose head changed since the last call, held or since evicted. */
+    takeAccepted() {
+      const taken = [...accepted];
+      accepted.clear();
+      return taken;
     },
     snapshot(): ReadonlyMap<string, VerifiedProfile> {
       const currentAuthority = authority;

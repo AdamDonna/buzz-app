@@ -1,3 +1,4 @@
+import { receiveAttachment } from "./attachment-file.mjs";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
@@ -381,10 +382,10 @@ test("declared and streamed request budgets reject before signing or forwarding"
   for (const declared of [true, false]) {
     const req = Readable.from(
       (function* () {
-        const chunk = Buffer.alloc(1024 * 1024);
-        for (let size = 0; size < UPLOAD_MAX_BYTES; size += chunk.length)
-          yield chunk;
+        // Cross the cumulative limit without hashing/spooling the entire budget.
+        // The second chunk fits by itself; the preceding byte makes it too large.
         yield Buffer.from("x");
+        yield Buffer.alloc(UPLOAD_MAX_BYTES);
       })(),
     );
     req.headers = declared
@@ -396,6 +397,27 @@ test("declared and streamed request budgets reject before signing or forwarding"
     req.destroy();
   }
   expect(forward).not.toHaveBeenCalled();
+});
+
+test("the spool budget counts bytes across chunks", async () => {
+  const req = Readable.from([
+    Buffer.alloc(8),
+    Buffer.alloc(8),
+    Buffer.alloc(1),
+  ]);
+  req.headers = {};
+  try {
+    await expect(
+      receiveAttachment(
+        req,
+        16,
+        new AbortController().signal,
+        () => new Error("size"),
+      ),
+    ).rejects.toThrow("size");
+  } finally {
+    req.destroy();
+  }
 });
 
 test("the whole-operation timeout aborts a stalled body without forwarding", async () => {

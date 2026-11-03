@@ -38,6 +38,8 @@ import type {
   SessionState,
 } from "../../features/agents/service";
 import { type AgentKey, pubkeyOf } from "../../features/agents/membership";
+import { sessionPrompts } from "../../features/agents/session-prompts";
+import { localStore, type AgentStore } from "../../features/agents/store";
 import type { Host } from "../../features/host/service";
 import type { EventData } from "../../features/relay/events";
 import type { RelayData } from "../../features/relay/service";
@@ -161,7 +163,14 @@ export class GooseRuntime {
     /** Desktop-local repository instructions; standalone hosts keep their own layout. */
     private readonly repositories: (scope: string | undefined) => string = () =>
       "",
+    /** Agent storage, where what each session started with is kept. */
+    private readonly agentStore: AgentStore = localStore(),
   ) {}
+
+  /** What each of the agent's sessions started with. */
+  prompts(agent: AgentKey) {
+    return sessionPrompts(this.agentStore, "goose", agent);
+  }
 
   /** The desktop host's methods goose agents run with. */
   private get desktop() {
@@ -762,6 +771,8 @@ export class GooseRuntime {
       tools,
       process: this.goose,
       store: localSessions(this.storage, agent),
+      started: (session, text) =>
+        void this.prompts(agent).save(session, [{ label: "", text }]),
       onChange: () => this.notify(),
       // Read as each turn starts, so a change needs no restart.
       choice: () => ({

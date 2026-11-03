@@ -337,6 +337,7 @@ it("honors the promoted DM's mute and unread state through reads and Bestie repl
       },
     },
     {
+      readStateFloor: () => 0,
       readPublisherLock: async (_signal, work) => work(),
       readStateStorage: {
         async update(change) {
@@ -422,10 +423,7 @@ it("honors the promoted DM's mute and unread state through reads and Bestie repl
     within(row()).getByRole("img", { name: /1 observed unread messages/ }),
   ).toBeInTheDocument();
   expect(row().querySelector("[data-channel-priority]")).toBeNull();
-  expect(row().querySelector("[data-bestie-unread]")).toHaveAttribute(
-    "data-bestie-unread",
-    "true",
-  );
+  expect(row().querySelector("[data-bestie-unread]")).toBeNull();
   expect(dmRow()).toBeNull();
   await act(async () => {
     muted = false;
@@ -440,10 +438,7 @@ it("honors the promoted DM's mute and unread state through reads and Bestie repl
     muted = true;
     await preferences.queries.refresh();
   });
-  expect(row().querySelector("[data-bestie-unread]")).toHaveAttribute(
-    "data-bestie-unread",
-    "true",
-  );
+  expect(row().querySelector("[data-bestie-unread]")).toBeNull();
   expect(row().querySelector("[data-channel-activity]")).toBeNull();
   expect(row()).toHaveAccessibleName(/1 unread thread/);
   expect(dmRow()).toBeNull();

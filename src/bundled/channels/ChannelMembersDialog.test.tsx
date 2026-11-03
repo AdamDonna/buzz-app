@@ -44,6 +44,11 @@ import { SEARCH_DEBOUNCE_MS } from "../../shared/search-debounce";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { profileTarget } from "../../features/profiles/target";
 import { ChannelMembersButton } from "./ChannelMembersDialog";
+import { Context } from "@deepseek-ai/cordis";
+import { ShortcutsService } from "../../features/shortcuts/service";
+import { createNavigationController } from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
+import { registerNavigationShortcuts } from "../../app/shortcuts";
 const stops: (() => void)[] = [];
 const memberData = () => screen.getByRole("region", { name: "Member list" });
 // Vitest globals are disabled; join owned tasks before this file's explicit cleanup.
@@ -110,6 +115,8 @@ async function setup(
       page: number,
     ) => Promise<RelayEvent[]>;
     communities?: CommunityReader;
+    visibility?: "private" | "public";
+    joinRole?: "member" | "guest";
   } = {},
 ) {
   const viewer = keypair(),
@@ -157,7 +164,8 @@ async function setup(
       tags: [
         ["d", id],
         ["t", type.includes("solo") ? "stream" : type],
-        ["private"],
+        [options.visibility ?? "private"],
+        ...(options.joinRole ? [["join_role", options.joinRole]] : []),
         ["name", "Design"],
         ...(type.includes("solo")
           ? [
@@ -676,6 +684,34 @@ it("explains imported agents with the current community's badge and nested popov
     expect(screen.queryByRole("dialog", { name: "Agents scope" })).toBeNull(),
   );
   expect(screen.getByRole("dialog", { name: "Manage members" })).toBeVisible();
+  // A locally opened Members is not a navigation visit: Back stays blocked.
+  const members = screen.getByRole("dialog", { name: "Manage members" });
+  expect(members).not.toHaveAttribute("data-navigation-visit");
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const shortcuts = new ShortcutsService(ctx, window);
+  const controller = createNavigationController(createMemoryHistory());
+  const remove = registerNavigationShortcuts(shortcuts, controller.navigation);
+  try {
+    const behind = { version: 1, kind: "settings" } as const;
+    void controller.navigation.open({ version: 1, kind: "home" });
+    void controller.navigation.open(behind);
+    await vi.waitFor(() =>
+      expect(controller.navigation.snapshot().canGoBack).toBe(true),
+    );
+    fireEvent.keyDown(members, { key: "[", ctrlKey: true });
+    await act(async () => {});
+    expect(controller.navigation.snapshot().attempt.entry.target).toEqual(
+      behind,
+    );
+  } finally {
+    remove();
+    controller.dispose();
+    await ctx.fiber.dispose();
+  }
   await vi.waitFor(() => expect(badge).toHaveFocus());
   expect(t.publish).not.toHaveBeenCalled();
 });
@@ -2659,7 +2695,7 @@ it("lets the Solo owner add an agent without sending a message", async () => {
     "Add people, agents or a channel",
   );
   expect(screen.queryByText(/Join this channel/)).not.toBeInTheDocument();
-  expect(screen.getByText(/Adding an agent won’t start a run/)).toBeVisible();
+  expect(input).not.toHaveAttribute("aria-describedby");
   expect(screen.getByRole("dialog")).not.toHaveAccessibleDescription();
   expect(
     screen.queryByRole("region", { name: "Not in this chat" }),
@@ -2697,6 +2733,7 @@ it("lets the Solo owner add an agent without sending a message", async () => {
   ).toEqual([
     ["h", "11111111-1111-4111-8111-111111111111"],
     ["p", t.agent.pubkey],
+    ["role", "bot"],
   ]);
   await t.user.click(screen.getByRole("button", { name: "Close" }));
   await t.user.click(t.trigger);
@@ -2924,6 +2961,23 @@ it.each([false, true])(
       screen.queryByRole("region", { name: "Not in this chat" }),
     ).toBeNull();
     expect(t.publish).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["private", "public"] as const)(
+  "adds the Solo owner's agent as Bot in a %s chat with a Guest default",
+  async (visibility) => {
+    const t = await setup("solo", false, true, undefined, undefined, {
+      visibility,
+      joinRole: "guest",
+    });
+    await t.user.type(screen.getByRole("searchbox"), "Fixture agent");
+    await t.user.click(
+      await screen.findByRole("button", { name: /Add Fixture agent/ }),
+    );
+    await screen.findByText("Fixture agent added.");
+    expect(t.publish).toHaveBeenCalledOnce();
+    expect(t.publish.mock.calls[0]?.[0].tags).toContainEqual(["role", "bot"]);
   },
 );
 
@@ -3238,9 +3292,19 @@ it.each(["public", "private"] as const)(
   },
 );
 
-it.each([false, true])(
-  "explains reading and contribution access without joining or editing as a Guest %s",
-  async (guest) => {
+it.each([
+  { solo: false, guest: false, joinRole: "guest" },
+  { solo: false, guest: true, joinRole: "guest" },
+  { solo: true, guest: false, joinRole: "guest" },
+  { solo: true, guest: true, joinRole: "guest" },
+  { solo: true, guest: false, joinRole: "member" },
+] as const)(
+  "reads preview rosters without joining or editing (Solo: $solo, Guest: $guest, admission: $joinRole)",
+  async ({ solo, guest, joinRole }) => {
+    const participation =
+      guest || joinRole === "guest"
+        ? "Viewing only. Ask an owner or admin to participate."
+        : "New people can participate. People already in the channel keep their access.";
     const id = "11111111-1111-4111-8111-111111111111";
     const viewer = keypair(),
       relay = keypair(),
@@ -3254,7 +3318,13 @@ it.each([false, true])(
           ["t", "stream"],
           ["public"],
           ["name", "Reading room"],
-          ["join_role", "guest"],
+          ["join_role", joinRole],
+          ...(solo
+            ? [
+                ["t", SOLO_LABEL],
+                ["P", owner.pubkey],
+              ]
+            : []),
         ],
       }),
       signed(relay, {
@@ -3319,11 +3389,7 @@ it.each([false, true])(
       </ToastProvider>,
     );
     await user.click(screen.getByRole("button", { name: "Access" }));
-    expect(
-      await screen.findByText(
-        "Viewing only. Ask an owner or admin to participate.",
-      ),
-    ).toBeVisible();
+    expect(await screen.findByText(participation)).toBeVisible();
     expect(
       screen.queryByText("You have read-only access to this channel."),
     ).not.toBeInTheDocument();
@@ -3336,7 +3402,7 @@ it.each([false, true])(
     ).toHaveTextContent("Anyone in the community can read.");
     expect(
       screen.getByRole("region", { name: "General access" }),
-    ).toHaveTextContent("Viewing only. Ask an owner or admin to participate.");
+    ).toHaveTextContent(participation);
     // Finish the roster read before checking that the dialog cannot invite or mutate.
     await vi.waitFor(() =>
       expect(
@@ -3344,8 +3410,13 @@ it.each([false, true])(
       ).toHaveAttribute("data-refreshing", "false"),
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "People" })).toHaveTextContent(
+      "Channel owner",
+    );
     expect(
-      screen.getByRole("searchbox", { name: "Search people and agents" }),
+      screen.getByRole("searchbox", {
+        name: solo ? "Search people and channels" : "Search people and agents",
+      }),
     ).toHaveAttribute("placeholder", "Search members");
     expect(load).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
