@@ -3592,6 +3592,69 @@ it("opens someone else's chat at the tag its row previews", async () => {
   );
 });
 
+it("opens someone else's chat at a newer top-level tag after an older threaded one", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true });
+  const root = h.root;
+  if (!root) throw new Error("Missing fixture root");
+  h.events.push(
+    message(h.alice, "room", "Older threaded tag", 20, [
+      ["e", root.id, "", "reply"],
+      ["p", h.viewer.pubkey],
+    ]),
+  );
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  fireEvent.click(
+    within(rows()[0] as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  await waitFor(() =>
+    expect(h.tabOpens.at(-1)).toEqual({
+      channelId: "room",
+      messageId: h.mention.id,
+    }),
+  );
+});
+
+it("archiving the open shared chat moves on before its reads finish saving", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const shared = rows().find((row) => row.textContent?.includes("Design"));
+  if (!shared) throw new Error("Missing shared chat row");
+  fireEvent.click(within(shared).getByRole("button", { name: /^Open / }));
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  // Marked unread again, so archiving it has reads to save.
+  await act(() =>
+    h.owner.session.unread.markUnreadLocal({
+      kind: "message",
+      channelId: "room",
+      messageId: h.mention.id,
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      h.owner.session.unread.snapshot({ kind: "channel", channelId: "room" })
+        .observedCount,
+    ).toBeGreaterThan(0),
+  );
+  const release = h.holdSave();
+  try {
+    await archiveOpened(h);
+    // The next conversation opens while the archived chat's reads still save,
+    // so a tab chosen meanwhile is never replaced by a late advance.
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(rows()[0]).toHaveTextContent("A direct reply");
+    expect(rows()[0]).toHaveAttribute("data-selected");
+  } finally {
+    await act(async () => release());
+  }
+});
+
 it("archiving someone else's chat from Inbox also reads its tags", async () => {
   const h = fixture({ sharedSolo: true });
   render(h.view);

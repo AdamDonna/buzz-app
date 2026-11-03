@@ -149,23 +149,27 @@ const targetOf = (item: InboxItem) => ({
 });
 
 /** DMs and a Solo chat's own messages open whole; others open at their
- * message. Someone else's chat opens whole at the tag its row previews. */
+ * message. Someone else's chat opens at the tag its row previews: in its
+ * thread, or the whole chat at a top-level tag. */
 const tabTarget = (
   item: InboxItem,
   channel: Parameters<typeof ownSolo>[0],
-): PageTabTarget =>
-  item.target.kind === "channel" ||
-  (channel?.channelType === "solo" && !item.thread)
-    ? {
-        channelId: item.channelId,
-        ...(channel?.channelType === "solo" &&
-          !ownSolo(channel) && { messageId: item.messageId }),
-      }
-    : {
-        channelId: item.channelId,
-        threadId: item.rootId ?? item.messageId,
-        messageId: item.messageId,
-      };
+): PageTabTarget => {
+  const shared = channel?.channelType === "solo" && !ownSolo(channel);
+  if (
+    item.target.kind === "channel" ||
+    (shared ? !item.rootId : channel?.channelType === "solo" && !item.thread)
+  )
+    return {
+      channelId: item.channelId,
+      ...(shared && { messageId: item.messageId }),
+    };
+  return {
+    channelId: item.channelId,
+    threadId: item.rootId ?? item.messageId,
+    messageId: item.messageId,
+  };
+};
 
 type Selection = { channelId: string; messageId: string; rootId?: string };
 // The row a tab opened, kept as long as the session's tabs so returning to
@@ -711,25 +715,53 @@ function InboxList({
       );
     };
     let advanced: InboxItem | undefined;
+    // Archiving the open conversation closes its tab and opens the next;
+    // restoring it keeps its tab.
+    const navigate = () => {
+      // Retry retains the cutoff, but navigation follows the currently rendered view.
+      const current = archiveView.current;
+      const leaves =
+        current.show === "inbox"
+          ? value
+          : current.show === "archived" && !value;
+      const index = current.visible.findIndex(
+        (row) =>
+          row.channelId === item.channelId &&
+          (row.id === item.id || row.messageIds.includes(item.messageId)),
+      );
+      const next =
+        leaves && index >= 0
+          ? (current.visible[index + 1] ?? current.visible[index - 1])
+          : undefined;
+      updateArchive(archiveScope, conversation, value, at);
+      setMenu(undefined);
+      if (!leaves) return;
+      const channelOf = (row: InboxItem) =>
+        session.channels
+          .list()
+          .channels.find((entry) => entry.id === row.channelId);
+      if (
+        value &&
+        current.selected?.channelId === item.channelId &&
+        current.selected.messageIds.includes(item.messageId) &&
+        current.opened &&
+        closeTab(current.opened)
+      ) {
+        if (next && openRow(next, channelOf(next))) {
+          advanced = next;
+          setSelectedTarget(targetOf(next));
+          return;
+        }
+        setSelectedTarget(undefined);
+      }
+      focusRow.current = next?.id ?? "";
+    };
     void run(
       async () => {
-        // Retry retains the cutoff, but navigation follows the currently rendered view.
-        const current = archiveView.current;
-        const leaves =
-          current.show === "inbox"
-            ? value
-            : current.show === "archived" && !value;
-        const index = current.visible.findIndex(
-          (row) =>
-            row.channelId === item.channelId &&
-            (row.id === item.id || row.messageIds.includes(item.messageId)),
-        );
-        const next =
-          leaves && index >= 0
-            ? (current.visible[index + 1] ?? current.visible[index - 1])
-            : undefined;
+        navigate();
         // Someone else's chat has no sidebar row to carry its dot, so archiving
-        // its tags also reads them.
+        // its tags also reads them. The reads follow navigation, so a tab chosen
+        // while they save is never replaced.
         const shared = session.channels
           .list()
           .channels.find((entry) => entry.id === item.channelId);
@@ -742,30 +774,6 @@ function InboxList({
         )
           for (const step of conversation.readThrough)
             await session.unread.markThrough(step.target, step.messageId);
-        updateArchive(archiveScope, conversation, value, at);
-        setMenu(undefined);
-        if (!leaves) return;
-        const channelOf = (row: InboxItem) =>
-          session.channels
-            .list()
-            .channels.find((entry) => entry.id === row.channelId);
-        // Archiving the open conversation closes its tab and opens the next;
-        // restoring it keeps its tab.
-        if (
-          value &&
-          current.selected?.channelId === item.channelId &&
-          current.selected.messageIds.includes(item.messageId) &&
-          current.opened &&
-          closeTab(current.opened)
-        ) {
-          if (next && openRow(next, channelOf(next))) {
-            advanced = next;
-            setSelectedTarget(targetOf(next));
-            return;
-          }
-          setSelectedTarget(undefined);
-        }
-        focusRow.current = next?.id ?? "";
       },
       valid,
       () => {
