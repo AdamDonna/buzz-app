@@ -731,7 +731,7 @@ type HostedAgentType = Omit<AgentType, "voice"> & {
   voice?(seat: AgentVoicePipe): Promise<AgentVoiceConnection>;
 };
 export type AgentVoiceConnection = Readonly<{
-  /** Owner-only audio in the same format as output. Borrowed for this call. */
+  /** Owner-only 48 kHz mono frames of up to 5760 samples (native plays out 10 ms frames). Borrowed for this call. */
   input(samples: number[]): void;
   /** Host aborts signal, then awaits close to finish teardown. Idempotent. */
   close(): void | Promise<void>;

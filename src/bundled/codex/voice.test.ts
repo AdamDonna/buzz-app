@@ -16,8 +16,19 @@ afterEach(() => {
 function fixture(resume = Promise.resolve()) {
   const tracks = [{ stop: vi.fn() }];
   const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
+  const source = {
+    ...node(),
+    start: vi.fn(),
+    stop: vi.fn(),
+    buffer: undefined,
+  };
   const context = {
     ...node(),
+    createBuffer: vi.fn((_channels: number, length: number, rate: number) => ({
+      duration: length / rate,
+      copyToChannel: vi.fn(),
+    })),
+    createBufferSource: vi.fn(() => source),
     currentTime: 0,
     sampleRate: 48000,
     destination: {},
@@ -107,6 +118,7 @@ function fixture(resume = Promise.resolve()) {
     output,
     rpc,
     context,
+    source,
     peer,
     capture,
     tracks,
@@ -187,4 +199,25 @@ it("awaits a late start before stopping and releasing an aborted open", async ()
   expect(f.rpc.request).toHaveBeenLastCalledWith("thread/realtime/stop", {
     threadId: "thread",
   });
+});
+
+it("schedules native 480-sample owner frames for 10 ms", async () => {
+  const f = fixture();
+  const connection = await f.open();
+  connection.input(Array(480).fill(0.2));
+  expect(f.context.createBuffer).toHaveBeenCalledWith(1, 480, 48000);
+  expect(f.context.createBuffer.mock.results[0].value.duration).toBe(0.01);
+  expect(f.source.start).toHaveBeenNthCalledWith(1, 0.02);
+  connection.input(Array(480).fill(0.2));
+  expect(f.source.start).toHaveBeenNthCalledWith(2, 0.03);
+  await connection.close();
+});
+it("rejects empty and oversized owner frames before allocating audio", async () => {
+  const f = fixture();
+  const connection = await f.open();
+  connection.input([]);
+  connection.input(Array(5761).fill(0.2));
+  expect(f.context.createBuffer).not.toHaveBeenCalled();
+  expect(f.source.start).not.toHaveBeenCalled();
+  await connection.close();
 });

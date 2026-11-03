@@ -150,11 +150,12 @@ export async function openVoice(
       input(samples: number[]) {
         if (
           closed ||
-          samples.length !== 960 ||
+          !samples.length ||
+          samples.length > 5760 ||
           next > context.currentTime + 0.2
         )
           return;
-        const buffer = context.createBuffer(1, 960, 48000);
+        const buffer = context.createBuffer(1, samples.length, 48000);
         buffer.copyToChannel(Float32Array.from(samples), 0);
         const source = context.createBufferSource();
         source.buffer = buffer;
