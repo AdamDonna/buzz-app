@@ -205,9 +205,9 @@ export function createProfileDirectory(
   ) {
     if (closed) throw new DOMException("Session closed", "AbortError");
     const unique = [...new Set(ids)];
-    verified?.ensure(unique);
     if (!refresh && unique.length > 1024)
       throw new Error("Profile request exceeds the directory budget");
+    verified?.ensure(unique);
     const signal = controller.signal;
     const waiting = new Set<Promise<void>>();
     const missing = unique.filter((id) => {

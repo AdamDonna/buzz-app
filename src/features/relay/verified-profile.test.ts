@@ -542,6 +542,7 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   const wire = scriptedTransport(alice.pubkey, relay.pubkey);
   let live: import("./live").LiveCallbacks | undefined;
   let sink: VerifiedProfileSink | undefined;
+  let requests = 0;
   const refresh = vi.fn(async () => null);
   const owner = createRelaySession({
     ...wire.transport,
@@ -555,6 +556,7 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
         retry() {},
         dispose() {},
         syncVerifiedProfiles(_filter, next) {
+          requests++;
           sink = next;
           return () => {};
         },
@@ -564,6 +566,16 @@ it("wires session profile demand, live updates, disconnection, and refreshed dis
   try {
     assert(live);
     live.state({ status: "connected", routes: [] });
+    // An over-budget request is rejected before it reaches verification.
+    await expect(
+      owner.session.profiles.ensure(
+        Array.from({ length: 1025 }, (_, index) =>
+          index.toString(16).padStart(64, "0"),
+        ),
+      ),
+    ).rejects.toThrow("budget");
+    await Promise.resolve();
+    expect(requests).toBe(0);
     await owner.session.profiles.ensure([alice.pubkey]);
     assert(sink);
     sink.event(projection());
@@ -717,6 +729,31 @@ it("keeps batch membership and checked status stable when subjects are added or 
     h.directory.ensure([alice.pubkey]);
     await Promise.resolve();
     expect(h.subscriptions.at(-1)?.subjects).toContain(alice.pubkey);
+  } finally {
+    h.directory.dispose();
+  }
+});
+
+it("notifies when ensure evicts a subject, not when it only adds one", async () => {
+  const h = harness();
+  const keys = Array.from({ length: 1025 }, (_, index) =>
+    index.toString(16).padStart(64, "0"),
+  );
+  try {
+    h.directory.ensure(keys.slice(0, 1024));
+    await Promise.resolve();
+    expect(h.changed).not.toHaveBeenCalled();
+    // Re-ensuring the first key makes the second the least recent.
+    h.directory.ensure([keys[0] as string]);
+    h.directory.ensure([keys[1024] as string]);
+    await Promise.resolve();
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    const wanted = h.subscriptions
+      .filter((item) => !item.stopped)
+      .flatMap((item) => item.subjects);
+    expect(wanted).toHaveLength(1024);
+    expect(wanted).toContain(keys[0]);
+    expect(wanted).not.toContain(keys[1]);
   } finally {
     h.directory.dispose();
   }

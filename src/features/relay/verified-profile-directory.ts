@@ -24,7 +24,8 @@ export function createVerifiedProfileDirectory(
   ) => Promise<VerifiedProfileAuthority | null>,
 ) {
   const heads = new ByteLru<RelayEvent>(1024, 2 * 1024 * 1024);
-  const wanted = new Map<string, number>();
+  // Least recently ensured first.
+  const wanted = new Set<string>();
   const checked = new Set<string>();
   type Batch = { stop(): void; subjects: readonly string[] };
   const batches = new Set<Batch>();
@@ -33,8 +34,8 @@ export function createVerifiedProfileDirectory(
   let discoveryFresh = !!authority;
   let discovery: AbortController | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-  let interest = 0;
   let queued = false;
+  let evicted = false;
   let closed = false;
   let online = true;
 
@@ -201,7 +202,11 @@ export function createVerifiedProfileDirectory(
       }
       while (unassigned.length)
         start(currentAuthority, unassigned.splice(0, VERIFIED_PROFILE_BATCH));
-      changed();
+      // Starting REQs changes no snapshot; only eviction removes names.
+      if (evicted) {
+        evicted = false;
+        changed();
+      }
     });
   }
   return {
@@ -209,18 +214,22 @@ export function createVerifiedProfileDirectory(
       if (closed) return;
       for (const subject of subjects) {
         if (!/^[0-9a-f]{64}$/.test(subject)) continue;
-        wanted.set(subject, ++interest);
+        wanted.delete(subject);
+        wanted.add(subject);
       }
-      while (wanted.size > 1024) {
-        const oldest = [...wanted].reduce((old, entry) =>
-          entry[1] < old[1] ? entry : old,
-        )[0];
+      const gone = new Set<string>();
+      for (const oldest of wanted) {
+        if (wanted.size <= 1024) break;
         wanted.delete(oldest);
         heads.delete(oldest);
         checked.delete(oldest);
+        gone.add(oldest);
+      }
+      if (gone.size) {
+        evicted = true;
         // A later ensure must issue a fresh REQ; the old one is past EOSE.
         for (const batch of batches)
-          batch.subjects = batch.subjects.filter((key) => key !== oldest);
+          batch.subjects = batch.subjects.filter((key) => !gone.has(key));
       }
       schedule();
       if (!refreshTimer && !discovery) armRefresh();
