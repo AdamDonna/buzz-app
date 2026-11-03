@@ -306,8 +306,8 @@ test.describe("pages inside one second", () => {
     page,
     app,
   }) => {
-    // Leave room above the reader for the drag, even with short same-second pages.
-    const pending = await reading(page, app, 250);
+    const pending = await reading(page, app, 1400);
+    const pageIds = new Set(pending.events.map((event) => event.id));
     const box = await history(page).boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
@@ -323,6 +323,12 @@ test.describe("pages inside one second", () => {
         .toBeGreaterThan(height);
       await settle(page);
       await expectAnchor(page, held);
+      // Keep enough gesture samples even when the randomized page is short.
+      const distance = Math.min(
+        150,
+        Math.floor((await history(page).evaluate((e) => e.scrollTop)) / 12),
+      );
+      expect(distance).toBeGreaterThan(0);
       // A scrollbar drag moves the scroller with no further input events,
       // into older rows that measure as they mount, short of the loaded top.
       // Once a step carries the held row out of view, the timeline holds the
@@ -330,16 +336,27 @@ test.describe("pages inside one second", () => {
       // could pick another row once rows above it measure.
       let step = 0;
       let handOvers = 0;
+      let crossedPage = false;
       for (
         ;
-        step < 10 && (await history(page).evaluate((e) => e.scrollTop)) >= 150;
+        (step < 6 || !crossedPage) &&
+        (await history(page).evaluate((e) => e.scrollTop)) >= distance;
         step++
       ) {
-        const read = await anchor(page, held.id, -150);
-        if (read.id === held.id) held = { ...held, y: held.y + 150 };
+        const read = await anchor(page, held.id, -distance);
+        if (read.id === held.id) held = { ...held, y: held.y + distance };
         else {
           held = read;
           handOvers++;
+        }
+        if (!crossedPage && pageIds.has(held.id)) {
+          crossedPage = true;
+          // An image finishing below the new reader must not restore the old one.
+          await history(page).evaluate((e, id) => {
+            const extra = document.createElement("div");
+            extra.style.height = "300px";
+            e.querySelector(`[data-message-id="${id}"] p`).after(extra);
+          }, held.id);
         }
         await settle(page);
         await expectAnchor(page, held);
@@ -347,6 +364,7 @@ test.describe("pages inside one second", () => {
       // The drag hands over at least once and keeps asserting after it.
       expect(step).toBeGreaterThanOrEqual(6);
       expect(handOvers).toBeGreaterThan(0);
+      expect(crossedPage, "drag reads a row from the released page").toBe(true);
     } finally {
       await page.mouse.up();
     }
