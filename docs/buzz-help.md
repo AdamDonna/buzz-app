@@ -187,6 +187,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   also cancels target setup. A later turn retries the same session. Codex uses the account
   on the target. Buzz keeps agent identity and tool access in the desktop app.
   Remote Codex transcripts, usage totals, and media downloads are unavailable.
+  Open Activity again to read conversations saved by another Buzz window.
 - An agent's name and picture identify it. Instructions shape its response
   style, tasks, initiative, and boundaries. They do not add tools, credentials,
   or permissions. Saving instructions affects future work, not past messages.

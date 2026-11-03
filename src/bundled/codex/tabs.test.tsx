@@ -71,9 +71,11 @@ function fixture({
   channels = [{ id: "channel", name: "general" }],
   binding,
   inspection,
+  sessionStorage,
 }: {
   binding?: AgentExecutionBinding;
   inspection?: Promise<AgentExecutionBinding | undefined>;
+  sessionStorage?: AgentStore;
   /** Agent storage, which keeps the provider defaults. */
   storage?: AgentStore;
   /** The community's channels, read each time they are listed. */
@@ -191,6 +193,7 @@ function fixture({
   const relay = {
     snapshot: () => ({
       status: "ready",
+      scope: "test",
       session: {
         channels: {
           list: () => ({ channels }),
@@ -198,16 +201,24 @@ function fixture({
       },
     }),
   } as unknown as RelayData;
-  const sessions = localStore({
-    getItem: () => JSON.stringify(saved),
-    setItem: () => undefined,
-  } as unknown as Storage);
+  const sessions =
+    sessionStorage ??
+    localStore({
+      getItem: () => JSON.stringify(saved),
+      setItem: () => undefined,
+    } as unknown as Storage);
   const runtime = new CodexRuntime(
     spawn,
     (key) => ownerReads(relay, pubkeyOf(key)),
     async () => undefined,
     sessions,
     (raw) => provider.resolve(raw),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    async () => inspection ?? binding,
   );
   const tabs = createTabs(
     provider,
@@ -1770,9 +1781,10 @@ it("keeps remote settings read-only without opening a model catalog", async () =
 it("loads bound conversations before listing them and never reads guest transcripts on the desktop", async () => {
   const loading = deferred<AgentExecutionBinding | undefined>();
   const f = fixture({ inspection: loading.promise });
-  vi.spyOn(f.runtime, "conversations").mockReturnValue([
-    { key: "guest", channelId: "channel", threadId: "guest-thread" },
-  ]);
+  vi.spyOn(f.runtime, "listConversations").mockImplementation(async () => {
+    await loading.promise;
+    return [{ key: "guest", channelId: "channel", threadId: "guest-thread" }];
+  });
   render(<f.tabs.ActivityTab {...f.props()} />);
   try {
     expect(screen.getByRole("status")).toHaveTextContent(
@@ -1790,5 +1802,128 @@ it("loads bound conversations before listing them and never reads guest transcri
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Transcripts are unavailable for remote Codex agents",
   );
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
+it.each([true, false])(
+  "lists saved remote inventory from another window without local history (has turn: %s)",
+  async (hasTurn) => {
+    const agent = "a".repeat(64);
+    const root = "e".repeat(64);
+    const place = JSON.stringify(["channel", root]);
+    const prefix = `buzz.codex.sessions.v17:test:${agent}`;
+    const items = new Map([
+      [
+        prefix,
+        JSON.stringify({
+          [JSON.stringify(["channel", "channel"])]: {
+            threadId: "local-thread",
+            workspace: "/local",
+          },
+        }),
+      ],
+    ]);
+    const durable = new Map(items);
+    const sessionStorage = fileStore(
+      items,
+      async () => {},
+      undefined,
+      async (key) => durable.get(key) ?? null,
+      async (prefix) =>
+        Object.fromEntries(
+          [...durable].filter(([key]) => key.startsWith(prefix)),
+        ),
+    );
+    const f = fixture({ binding: { provider: "test/guest" }, sessionStorage });
+    durable.set(
+      `buzz.codex.sessions.execution.v1:test:${agent}:${place}`,
+      JSON.stringify({ key: "remote-session", intent: "existing" }),
+    );
+    if (hasTurn)
+      durable.set(
+        `${prefix}:session:remote-session`,
+        JSON.stringify({
+          [place]: { threadId: "remote-thread", workspace: "/guest" },
+        }),
+      );
+    render(<f.tabs.ActivityTab {...f.props()} />);
+    if (hasTurn)
+      expect(
+        await screen.findByTitle("general · thread eeeeeeee"),
+      ).toBeVisible();
+    else
+      expect(
+        await screen.findByText(
+          "No other conversations saved in this app yet.",
+        ),
+      ).toBeVisible();
+    expect(screen.queryByTitle("general · channel")).not.toBeInTheDocument();
+    expect(f.spawn).not.toHaveBeenCalled();
+  },
+);
+
+it("shows a saved inventory read error and retries without opening execution", async () => {
+  let failed = true;
+  const sessionStorage = fileStore(
+    new Map(),
+    async () => {},
+    undefined,
+    undefined,
+    async () => {
+      if (failed) throw new Error("Saved inventory is unavailable");
+      return {};
+    },
+  );
+  const f = fixture({ binding: { provider: "test/guest" }, sessionStorage });
+  render(<f.tabs.ActivityTab {...f.props()} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Saved inventory is unavailable",
+  );
+  failed = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(
+    await screen.findByText("No other conversations saved in this app yet."),
+  ).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
+it("keeps a later Activity read when an earlier closed tab finishes last", async () => {
+  const agent = "a".repeat(64);
+  const started = deferred<void>();
+  const first = deferred<Record<string, string>>();
+  let scans = 0;
+  const sessionStorage = fileStore(
+    new Map(),
+    async () => {},
+    undefined,
+    async () =>
+      JSON.stringify({
+        [JSON.stringify(["channel", "channel"])]: {
+          threadId: "old-thread",
+          workspace: "/guest",
+        },
+      }),
+    async () => {
+      if (++scans !== 1) return {};
+      started.resolve();
+      return first.promise;
+    },
+  );
+  const f = fixture({ binding: { provider: "test/guest" }, sessionStorage });
+  const view = render(<f.tabs.ActivityTab {...f.props()} />);
+  await started.promise;
+  view.unmount();
+  render(<f.tabs.ActivityTab {...f.props()} />);
+  expect(
+    await screen.findByText("No other conversations saved in this app yet."),
+  ).toBeVisible();
+  await act(async () => {
+    first.resolve({
+      pointer: JSON.stringify({ key: "old", intent: "existing" }),
+    });
+  });
+  expect(screen.queryByTitle("general · channel")).not.toBeInTheDocument();
+  expect(f.runtime.conversations(agent)).toEqual([]);
   expect(f.spawn).not.toHaveBeenCalled();
 });

@@ -204,8 +204,10 @@ target's settings. The adapter manages target credentials and workspaces.
 Codex starts a Node.js relay that runs `codex app-server` on the target.
 The target needs a configured Codex account. Its hook server listens on guest
 loopback. Hook requests share the process connection and use the existing
-agent and session checks. Codex saves its thread under the session key. Settings
-accept an explicit model ID or the target's default. The adapter selects the
+agent and session checks. Codex saves its thread under the session key.
+Activity reads saved session pointers and thread records when it opens, without
+opening targets. An empty remote list does not include local conversations.
+Settings accept an explicit model ID or the target's default. The adapter selects the
 workspace. Remote Codex transcripts, usage totals, and media downloads are
 unavailable in this preview.
 

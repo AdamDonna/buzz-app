@@ -898,11 +898,40 @@ export function createTabs(
   /** The agent's sessions: the one it was opened from, recent ones, and their
    * transcripts. */
   function ActivityTab(props: Parameters<typeof ActivityContent>[0]) {
-    const inspected = useBinding(props.agent.key);
-    if (inspected.checking)
+    const agent = props.agent.key;
+    const revision = useSyncExternalStore(runtime.subscribe, () =>
+      runtime
+        .sessions(agent)
+        .map(({ key, status }) => `${key}:${status}`)
+        .join("\0"),
+    );
+    const [attempt, retry] = useState(0);
+    const [read, setRead] = useState<{
+      agent: AgentKey;
+      rows?: SavedConversation[];
+      error?: string;
+    }>();
+    // biome-ignore lint/correctness/useExhaustiveDependencies: turn state and retries refresh saved inventory.
+    useEffect(() => {
+      let current = true;
+      void runtime.listConversations(agent).then(
+        (rows) => current && setRead({ agent, rows }),
+        (error) => current && setRead({ agent, error: message(error) }),
+      );
+      return () => {
+        current = false;
+      };
+    }, [agent, revision, attempt]);
+    if (read?.agent !== agent)
       return <p role="status">Loading saved conversations…</p>;
-    if (inspected.error) return <p role="alert">{inspected.error}</p>;
-    return <ActivityContent {...props} />;
+    if (read.error)
+      return (
+        <div className="grid gap-2">
+          <p role="alert">{read.error}</p>
+          <Button onClick={() => retry((value) => value + 1)}>Try again</Button>
+        </div>
+      );
+    return <ActivityContent {...props} listed={read.rows} />;
   }
   function ActivityContent({
     agent,
@@ -910,17 +939,19 @@ export function createTabs(
     initialTranscript,
     close,
     openConversation,
+    listed,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation?: AgentViewProps<Config>["conversation"];
     initialTranscript?: AgentViewProps<Config>["initialTranscript"];
     close?: AgentViewProps<Config>["close"];
     openConversation?: AgentViewProps<Config>["openConversation"];
+    listed?: SavedConversation[];
   }) {
     const sessions = useSyncExternalStore(runtime.subscribe, () =>
       runtime.sessions(agent.key),
     );
-    const conversations = runtime.conversations(agent.key);
+    const conversations = listed ?? runtime.conversations(agent.key);
     const {
       session: here,
       searching,

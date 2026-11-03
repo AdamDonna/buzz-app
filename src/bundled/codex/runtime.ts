@@ -270,6 +270,8 @@ export class CodexRuntime {
   private server: Server | undefined;
   private stopping = new Map<AgentKey, Promise<void>>();
   private views = new Map<AgentKey, readonly SessionView[]>();
+  private inventories = new Map<AgentKey, SavedConversation[] | null>();
+  private inventoryReads = new Map<AgentKey, object>();
   private listeners = new Set<() => void>();
   /** Read-only model discovery, kept until effective model settings change. */
   private previews = new Map<
@@ -702,6 +704,11 @@ export class CodexRuntime {
       }
     }
     const present = new Set(agents.map((agent) => agent.key));
+    for (const key of this.inventoryReads.keys())
+      if (!present.has(key)) {
+        this.inventories.delete(key);
+        this.inventoryReads.delete(key);
+      }
     for (const key of this.previews.keys())
       if (!present.has(key)) {
         this.previews.delete(key);
@@ -756,6 +763,8 @@ export class CodexRuntime {
     }
     this.remote.clear();
     this.previews.clear();
+    this.inventories.clear();
+    this.inventoryReads.clear();
     for (const entry of this.entries.values()) entry.abort.abort();
     this.entries.clear();
     this.views.clear();
@@ -856,8 +865,39 @@ export class CodexRuntime {
     }
     return {};
   }
-  /** The agent's bindings in this community, most recently used first. */
+  async listConversations(agent: AgentKey): Promise<SavedConversation[]> {
+    const request = {};
+    this.inventoryReads.set(agent, request);
+    let rows: SavedConversation[] | null = null;
+    if (await this.inspect?.(agent)) {
+      const reads = this.reads(agent);
+      if (!reads) throw new Error("The agent's community is unavailable.");
+      rows = [];
+      const prefix = `buzz.codex.sessions.execution.v1:${reads.scope}:${agent}:`;
+      const pointers = await this.storage.scan(prefix);
+      for (const text of Object.values(pointers)) {
+        const key = this.storageKey(
+          reads.scope,
+          agent,
+          this.sessionRecord(text).key,
+        );
+        rows.push(
+          ...this.savedConversations(
+            agent,
+            this.load(key, await this.storage.read(key), true),
+          ),
+        );
+      }
+      rows.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+    }
+    if (!this.disposed && this.inventoryReads.get(agent) === request)
+      this.inventories.set(agent, rows);
+    return rows ?? this.localConversations(agent);
+  }
+  /** The last observed bindings, most recently used first. */
   conversations(agent: AgentKey): SavedConversation[] {
+    if (this.inventories.has(agent))
+      return this.inventories.get(agent) ?? this.localConversations(agent);
     if (this.execution) {
       const scope = this.reads(agent)?.scope;
       if (scope) {
@@ -888,6 +928,9 @@ export class CodexRuntime {
           return conversations.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
       }
     }
+    return this.localConversations(agent);
+  }
+  private localConversations(agent: AgentKey) {
     const reads = this.reads(agent);
     const saved =
       this.entries.get(agent)?.saved ??
