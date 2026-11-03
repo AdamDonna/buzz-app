@@ -187,9 +187,15 @@ lifetime. `dispose` stops owned processes; it preserves the adapter's saved targ
 mapping. If an existing session cannot be restored, the adapter rejects with
 `code: "EXECUTION_SESSION_RESET_REQUIRED"`. Buzz shows the error and does not
 resume old harness state in an empty replacement workspace.
-Usage omits this error only for a replaced session with a different saved
-current key. Usage from that old target is unavailable. A reset error from
-the current session still rejects the usage request.
+Usage returns an incomplete snapshot for a replaced target that cannot be
+restored. Its `gaps` field lets the consumer keep its earlier totals and show
+what is unavailable. A reset error from the current session still rejects the
+usage request. Runtimes opened only for usage close when those reads end.
+A conversation that joins such a runtime keeps it alive.
+
+Interrupt cancels pending allocation and keeps the durable key for retry.
+Admission cancellation stops allocation until the target is established.
+Activity and usage refresh saved session inventory across open Buzz copies.
 
 Settings, model discovery, and session listings do not create targets. Remote
 Pi settings accept explicit provider and model IDs, or blank values for the

@@ -182,8 +182,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   Each conversation session uses its own target. Later turns reuse that target;
   **Start a new session** requests another one. The plugin manages workspaces,
   credentials, and expired targets. If it cannot restore a session, Buzz shows
-  an error. It does not move that work to this computer. Usage can exclude
-  replaced sessions whose targets can no longer be restored.
+  an error. It does not move that work to this computer. Usage reports gaps
+  for replaced sessions whose targets can no longer be restored. **Interrupt**
+  also cancels target setup. A later turn retries the same session.
 - An agent's name and picture identify it. Instructions shape its response
   style, tasks, initiative, and boundaries. They do not add tools, credentials,
   or permissions. Saving instructions affects future work, not past messages.
