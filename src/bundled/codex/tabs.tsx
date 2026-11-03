@@ -908,11 +908,10 @@ export function createTabs(
           .join("\0")}`,
     );
     const [attempt, retry] = useState(0);
-    const [read, setRead] = useState<{
-      agent: AgentKey;
-      rows?: SavedConversation[];
-      error?: string;
-    }>();
+    const [read, setRead] = useState<
+      | { agent: AgentKey; rows: SavedConversation[] }
+      | { agent: AgentKey; error: string }
+    >();
     // biome-ignore lint/correctness/useExhaustiveDependencies: turn state and retries refresh saved inventory.
     useEffect(() => {
       let current = true;
@@ -926,7 +925,7 @@ export function createTabs(
     }, [agent, revision, attempt]);
     if (read?.agent !== agent)
       return <p role="status">Loading saved conversations…</p>;
-    if (read.error)
+    if ("error" in read)
       return (
         <div className="grid gap-2">
           <p role="alert">{read.error}</p>
