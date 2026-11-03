@@ -456,6 +456,7 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     run: vi.fn(),
   });
   const target = {
+    workspace: "/work/task",
     spawn: vi.fn(),
     readFile: vi.fn(),
     resolveDirectory: vi.fn(),
@@ -471,7 +472,7 @@ it("binds a dedicated native agent and preserves its target when a provider chan
   adapter.agents.registerExecution({
     id: "remote",
     harnesses: ["example/native"],
-    connect: () => target,
+    connect: async () => target,
   });
   const agent = await service.create({
     type: "example/native",
@@ -480,13 +481,11 @@ it("binds a dedicated native agent and preserves its target when a provider chan
   await service.retype(agent.key, "example/native");
   await adapter.agents.bindExecution(agent.key, {
     id: "remote",
-    target: "guest-1",
-    workspace: "/work/task",
+    config: { profile: "scratch" },
   });
   expect(service.executionBinding(agent.key)).toEqual({
     provider: "internal/remote",
-    target: "guest-1",
-    workspace: "/work/task",
+    config: { profile: "scratch" },
   });
   const setProtection = vi.fn(async () => {});
   Object.assign(native, { setProtection });
@@ -496,10 +495,11 @@ it("binds a dedicated native agent and preserves its target when a provider chan
   expect(setProtection).not.toHaveBeenCalled();
   await plugin.agentProtection.saveAgent(agent.pubkey, 0, null);
   expect(setProtection).toHaveBeenCalledWith(agent.pubkey, 0, "example", null);
-  await expect(adapter.agents.execution(agent.key)).rejects.toThrow(
+  const session = { key: "session-1", intent: "new" as const };
+  await expect(adapter.agents.execution(agent.key, session)).rejects.toThrow(
     "Only the native harness",
   );
-  expect((await plugin.agents.execution(agent.key))?.binding.workspace).toBe(
+  expect((await plugin.agents.execution(agent.key, session))?.workspace).toBe(
     "/work/task",
   );
   const get = storage.get;
@@ -518,7 +518,9 @@ it("binds a dedicated native agent and preserves its target when a provider chan
   );
   expect(native.setType).not.toHaveBeenCalled();
   cached.mockRestore();
-  expect(service.executionBinding(agent.key)?.target).toBe("guest-1");
+  expect(service.executionBinding(agent.key)?.config).toEqual({
+    profile: "scratch",
+  });
 });
 
 it("brings back unarchived an agent whose Delete cleanup archived it, or says it stays archived", async () => {

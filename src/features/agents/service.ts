@@ -4,7 +4,9 @@ import {
   type AgentExecution,
   type AgentExecutionBinding,
   type AgentExecutionProvider,
+  type AgentExecutionSession,
 } from "./execution";
+import type { JsonValue } from "../navigation/targets";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
 import { respond } from "../../buzz-mcp/rpc";
 import { connectMcp } from "../../buzz-mcp/connection";
@@ -300,6 +302,8 @@ export type AgentViewProps<Config = unknown> = {
  * starting config, from `defaults`, to fill in. The app owns its key, name and
  * picture around it. */
 export type AgentCreateProps<Config = unknown> = {
+  /** The existing membership when this control appears on its library card. */
+  agentKey?: AgentKey;
   /** Model fields may use the compact card treatment in the library. */
   modelAppearance?: "glass-ghost";
   config: Config;
@@ -1021,14 +1025,18 @@ export type NewAgent = Readonly<{
 }>;
 export type Agents = {
   registerExecution(provider: AgentExecutionProvider): void;
-  /** Bind a dedicated agent before its first local runtime use. This is write-once. */
+  /** Select the adapter before first runtime use. This is write-once. */
   bindExecution(
     agent: AgentKey,
-    binding: Readonly<{ id: string; target: string; workspace: string }>,
+    binding: Readonly<{ id: string; config?: JsonValue }>,
   ): Promise<void>;
   executionBinding(agent: AgentKey): AgentExecutionBinding | undefined;
+  inspectExecution(agent: AgentKey): Promise<AgentExecutionBinding | undefined>;
   /** Only the agent's native harness can open its bound target. */
-  execution(agent: AgentKey): Promise<AgentExecution | undefined>;
+  execution(
+    agent: AgentKey,
+    session: AgentExecutionSession,
+  ): Promise<AgentExecution | undefined>;
   registerHook(hook: AgentHook): void;
   /** Dispatches hooks for this plugin's agent types in contribution order. */
   dispatchHook(
@@ -1515,7 +1523,7 @@ export class AgentsService extends Service implements Agents {
   }
   async bindExecution(
     key: AgentKey,
-    binding: Readonly<{ id: string; target: string; workspace: string }>,
+    binding: Readonly<{ id: string; config?: JsonValue }>,
   ) {
     const member = this.liveMember(key);
     if (
@@ -1535,12 +1543,16 @@ export class AgentsService extends Service implements Agents {
     if (!this.liveMember(key)) throw new Error("No such agent on this device");
     return this.executions.read(key);
   }
-  async execution(key: AgentKey) {
+  async inspectExecution(key: AgentKey) {
+    if (!this.liveMember(key)) throw new Error("No such agent on this device");
+    return this.executions.inspect(key);
+  }
+  async execution(key: AgentKey, session: AgentExecutionSession) {
     const member = this.liveMember(key);
     if (!member) throw new Error("No such agent on this device");
     if (member.protection && (await this.executions.binding(key)))
       throw new Error("Plugin execution does not support protected agents");
-    return this.executions.open(this.ctx, key, member.type);
+    return this.executions.open(this.ctx, key, member.type, session);
   }
   private readonly hookContributions;
   registerHook(hook: AgentHook) {
