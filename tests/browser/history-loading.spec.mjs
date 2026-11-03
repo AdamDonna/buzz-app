@@ -306,6 +306,9 @@ test.describe("pages inside one second", () => {
     page,
     app,
   }) => {
+    // A shorter scroller lets the drag carry the held row out of view even
+    // when the randomized page leaves little loaded history above the reader.
+    await page.setViewportSize({ width: 1440, height: 600 });
     const pending = await reading(page, app, 1400);
     const box = await history(page).boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
