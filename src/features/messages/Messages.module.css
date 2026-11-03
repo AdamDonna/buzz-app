@@ -216,6 +216,8 @@
   /* Restated over the channel host's button reset. */
   color: var(--link-text);
   text-decoration: none;
+  /* Keep the hover padding outside the byline's caption line box. */
+  margin-block: calc(-1 * var(--space-half));
 }
 .author .authorName:hover {
   text-decoration: underline;
