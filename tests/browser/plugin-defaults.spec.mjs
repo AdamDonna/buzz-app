@@ -39,6 +39,49 @@ test("cold app startup pins both plugins off across a second launch", async ({
   });
 });
 
+// Exercise the client-record heuristic before any plugin settings exist,
+// without the shared page's init script manufacturing explicit preferences.
+test("an untouched client profile keeps both plugins on across reopen", async ({
+  context,
+  app,
+}) => {
+  const upgraded = await context.newPage();
+  await upgraded.route(
+    new URL("/", app.origin).href,
+    (route) =>
+      route.fulfill({ contentType: "text/html", body: "<!doctype html>" }),
+    { times: 1 },
+  );
+  await upgraded.goto(app.origin);
+  await upgraded.evaluate((viewer) => {
+    localStorage.setItem(
+      `buzz-client.v1:${viewer}`,
+      JSON.stringify({
+        profile: { name: "Untouched upgrade" },
+        memberships: [{ id: "primary", name: "Primary" }],
+        selected: "primary",
+      }),
+    );
+  }, app.viewer);
+  expect(await upgraded.evaluate(() => Object.keys(localStorage))).toEqual([
+    `buzz-client.v1:${app.viewer}`,
+  ]);
+  for (let launch = 0; launch < 2; launch++) {
+    await upgraded.reload();
+    await plugins(upgraded);
+    for (const name of ["Reminders", "Workflows"])
+      await expect(pluginAction(upgraded, name)).toHaveAccessibleName(
+        /^Disable /,
+      );
+    expect(
+      await upgraded.evaluate(
+        () => JSON.parse(localStorage.getItem("buzzodz.plugins.v1")).enabled,
+      ),
+    ).toMatchObject({ "buzz.reminders": true, "buzz.workflows": true });
+    await closeSettings(upgraded);
+  }
+});
+
 // The shared fixture seeds fresh plugin decisions before community data.
 // Representative app wiring: real catalogs -> Settings actions -> sidebar page,
 // across reload. Choice permutations live in storage unit tests.
