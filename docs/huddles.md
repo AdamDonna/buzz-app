@@ -233,8 +233,9 @@ seat supplies the agent record, room conversation, abort signal, output callback
 and `ended(error?)`; resolved config, revisions, synced settings and team come from
 the same launch resolver as text, and stay fixed for that seat. The harness returns
 `input(samples)` and idempotent `close()`.
-Both directions use the existing 48 kHz mono, 960-sample float frames. The harness
-owns turn-taking and interruptions; the huddles plugin owns eligibility and the
+Output is 48 kHz mono, exactly 960 finite samples per frame; input is the owner's
+48 kHz mono playout, up to 5760 samples per frame (native delivers 10 ms frames).
+The harness owns turn-taking and interruptions; the huddles plugin owns eligibility and the
 native connection. The record carries no tool authority: each harness obtains
 its own authorized agent handle and applies the same protections as an owner
 mention when adopting voice work.
