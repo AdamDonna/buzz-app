@@ -16,6 +16,8 @@ import { restoreRecordedTools } from "./recorded-tools";
 
 /** The latest turns shown; earlier ones stay in Codex's own history. */
 export const TURN_LIMIT = 20;
+/** Items per `thread/items/list` request, well within app-server's frame. */
+const ITEM_PAGE = 50;
 
 type Json = Record<string, unknown>;
 type Turn = {
@@ -324,8 +326,9 @@ export async function findConversation(
 type Page = { data: Turn[]; nextCursor: string | null };
 
 /** A thread's latest `limit` turns, newest first, and whether it has earlier
- * ones, or undefined when Codex no longer has it. Read a turn per request:
- * app-server's output frame bounds one full turn, not a page of them. */
+ * ones, or undefined when Codex no longer has it. Turns are listed without
+ * their items, which are read a page at a time: app-server's output frame
+ * bounds a page of items, while one long turn can exceed it. */
 async function page(rpc: AppServer, threadId: string, limit: number) {
   const data: Turn[] = [];
   let cursor: string | null = null;
@@ -333,19 +336,39 @@ async function page(rpc: AppServer, threadId: string, limit: number) {
     do {
       const next: Page = await rpc.request<Page>("thread/turns/list", {
         threadId,
-        limit: 1,
+        limit: limit - data.length,
         sortDirection: "desc",
-        itemsView: "full",
+        itemsView: "notLoaded",
         ...(cursor ? { cursor } : {}),
       });
       data.push(...next.data);
       cursor = next.data.length ? next.nextCursor : null;
     } while (cursor && data.length < limit);
+    for (const turn of data.slice(0, limit))
+      turn.items = await items(rpc, threadId, turn.id);
   } catch (error) {
     if (missing(error)) return undefined;
     throw error;
   }
   return { data: data.slice(0, limit), more: !!cursor };
+}
+
+/** A turn's items, oldest first, a page per request. */
+async function items(rpc: AppServer, threadId: string, turnId: string) {
+  const all: Json[] = [];
+  let cursor: string | null = null;
+  do {
+    const next: { data: { item: Json }[]; nextCursor: string | null } =
+      await rpc.request("thread/items/list", {
+        threadId,
+        turnId,
+        limit: ITEM_PAGE,
+        ...(cursor ? { cursor } : {}),
+      });
+    all.push(...next.data.map((entry) => entry.item));
+    cursor = next.data.length ? next.nextCursor : null;
+  } while (cursor);
+  return all;
 }
 const turns = async (rpc: AppServer, threadId: string, limit: number) =>
   (await page(rpc, threadId, limit))?.data ?? [];

@@ -222,7 +222,8 @@ it("keeps a send that failed or has not finished as a tool call", () => {
   ]);
 });
 
-/** An app-server answering `thread/turns/list` as the test says, and
+/** An app-server answering `thread/turns/list` as the test says, with the
+ * turns' items through `thread/items/list` when listed without them, and
  * `thread/list` from `threads` as Codex searches names: only the default
  * provider's threads, here none, unless asked for every provider's. */
 function server(
@@ -231,6 +232,7 @@ function server(
   rollout?: string,
 ) {
   const sent: Wire[] = [];
+  const items = new Map<string, unknown[]>();
   const spawn = vi.fn(async (_id: string, options?: HostProcessOptions) => {
     if (_id === "read") {
       // Match the desktop host's process-directory contract.
@@ -257,21 +259,23 @@ function server(
         const params = wire.params as Record<string, unknown>;
         const reply =
           wire.method === "thread/turns/list"
-            ? list(params)
-            : wire.method === "thread/read"
-              ? { result: { thread: { path: "/sessions/rollout.jsonl" } } }
-              : wire.method === "thread/list"
-                ? {
-                    result: {
-                      data: threads.filter(
-                        (thread) =>
-                          Array.isArray(params.modelProviders) &&
-                          !params.modelProviders.length &&
-                          thread.name.includes(String(params.searchTerm)),
-                      ),
-                    },
-                  }
-                : { result: {} };
+            ? unloaded(list(params), params, items)
+            : wire.method === "thread/items/list"
+              ? itemPage(items, params)
+              : wire.method === "thread/read"
+                ? { result: { thread: { path: "/sessions/rollout.jsonl" } } }
+                : wire.method === "thread/list"
+                  ? {
+                      result: {
+                        data: threads.filter(
+                          (thread) =>
+                            Array.isArray(params.modelProviders) &&
+                            !params.modelProviders.length &&
+                            thread.name.includes(String(params.searchTerm)),
+                        ),
+                      },
+                    }
+                  : { result: {} };
         options?.onStdout?.(`${JSON.stringify({ id: wire.id, ...reply })}\n`);
       },
       end: async () => exit(0),
@@ -280,6 +284,40 @@ function server(
     };
   });
   return { spawn, sent };
+}
+
+/** A `thread/turns/list` answer without its turns' items, as Codex gives for
+ * `itemsView: "notLoaded"`, keeping them for `thread/items/list`. */
+function unloaded(
+  reply: Wire,
+  { itemsView }: Record<string, unknown>,
+  items: Map<string, unknown[]>,
+): Wire {
+  const result = reply.result as
+    | { data?: Record<string, unknown>[] }
+    | undefined;
+  if (itemsView !== "notLoaded" || !result?.data) return reply;
+  const data = result.data.map(({ items: all, ...turn }) => {
+    items.set(String(turn.id), all as unknown[]);
+    return { ...turn, items: [] };
+  });
+  return { result: { ...result, data } };
+}
+
+/** `thread/items/list` over a turn's items, oldest first, a page at a time. */
+function itemPage(
+  items: Map<string, unknown[]>,
+  { turnId, limit, cursor }: Record<string, unknown>,
+): Wire {
+  const all = items.get(String(turnId)) ?? [];
+  const start = Number(cursor ?? 0);
+  const end = start + Number(limit);
+  return {
+    result: {
+      data: all.slice(start, end).map((item) => ({ item, turnId })),
+      nextCursor: end < all.length ? String(end) : null,
+    },
+  };
 }
 
 /** `thread/turns/list` over a thread's turns, newest first, a page at a time. */
@@ -347,7 +385,7 @@ it("loads the recorded script through the declared file reader, and reports unav
   );
 });
 
-it("reads the latest turns oldest first, a turn per request, and closes its app-server", async () => {
+it("reads the latest turns oldest first, and closes its app-server", async () => {
   const { spawn, sent } = server(
     paged([
       turn({ id: "turn-2", status: "inProgress", completedAt: null }),
@@ -363,21 +401,14 @@ it("reads the latest turns oldest first, a turn per request, and closes its app-
     new AbortController().signal,
   );
   expect(spawn).toHaveBeenCalledWith("app-server", expect.anything());
-  const requests = sent.filter((w) => w.method === "thread/turns/list");
-  expect(requests).toHaveLength(TURN_LIMIT);
-  expect(requests.slice(0, 2).map((w) => w.params)).toEqual([
+  expect(
+    sent.filter((w) => w.method === "thread/turns/list").map((w) => w.params),
+  ).toEqual([
     {
       threadId: "thread-1",
-      limit: 1,
+      limit: TURN_LIMIT,
       sortDirection: "desc",
-      itemsView: "full",
-    },
-    {
-      threadId: "thread-1",
-      limit: 1,
-      sortDirection: "desc",
-      itemsView: "full",
-      cursor: "1",
+      itemsView: "notLoaded",
     },
   ]);
   expect(read?.turns).toHaveLength(TURN_LIMIT);
@@ -411,6 +442,33 @@ it("reads turns that each fit app-server's output frame but together do not", as
   );
   expect(read?.turns.map((t) => t.turnId)).toEqual(["a", "b", "c"]);
   expect(read?.more).toBe(false);
+});
+
+it("reads a turn whose items together exceed app-server's output frame", async () => {
+  // A long turn of 100 small commands: 4.4 MiB as one frame, over the 4 MiB
+  // bound, while each page of its items fits.
+  const commands = Array.from({ length: 100 }, (_, index) => ({
+    type: "commandExecution",
+    id: `c${index}`,
+    command: "cat log",
+    aggregatedOutput: "x".repeat(45 * 1024),
+    status: "completed",
+  }));
+  const { spawn, sent } = server(paged([turn({ items: commands })]));
+  const read = await readTranscript(
+    spawn,
+    { ...lookup, threadId: "thread-1" },
+    new AbortController().signal,
+  );
+  expect(
+    read?.turns[0]?.items.filter((item) => item.type === "tool"),
+  ).toHaveLength(100);
+  expect(
+    sent.filter((w) => w.method === "thread/items/list").map((w) => w.params),
+  ).toEqual([
+    { threadId: "thread-1", turnId: "turn-1", limit: 50 },
+    { threadId: "thread-1", turnId: "turn-1", limit: 50, cursor: "50" },
+  ]);
 });
 
 it("merges the threads other builds started, found by tag or by their earlier name", async () => {
