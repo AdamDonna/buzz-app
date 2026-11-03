@@ -112,11 +112,6 @@
   flex-shrink: 0;
   color: var(--text-metadata);
 }
-@media (prefers-reduced-motion: no-preference) {
-  .muted {
-    transition: color var(--duration-state) var(--easing-state);
-  }
-}
 .label:only-child {
   width: 100%;
 }
