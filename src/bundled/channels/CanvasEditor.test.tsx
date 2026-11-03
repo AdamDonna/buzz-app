@@ -4,12 +4,12 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderView,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { StrictMode, useLayoutEffect } from "react";
+import { StrictMode, useLayoutEffect, type ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keypair, signed } from "../../features/relay/testing";
@@ -21,6 +21,22 @@ import {
 } from "../../shared/view-state";
 import { CanvasEditor } from "./CanvasEditor";
 import type { ChannelCanvas } from "../../features/channel-templates/capability";
+
+// Canvas opens on View; these tests exercise Edit and History.
+function openEdit() {
+  for (const tab of screen.queryAllByRole("tab", { name: "Edit" }))
+    if (tab.getAttribute("aria-selected") !== "true") fireEvent.click(tab);
+}
+function render(ui: ReactNode, options?: Parameters<typeof renderView>[1]) {
+  const result = renderView(ui, options);
+  openEdit();
+  const rerender = result.rerender;
+  result.rerender = (ui) => {
+    rerender(ui);
+    openEdit();
+  };
+  return result;
+}
 
 const profiles = {
   snapshot: () => new Map(),

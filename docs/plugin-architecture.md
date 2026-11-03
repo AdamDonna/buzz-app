@@ -850,6 +850,16 @@ storage is unavailable they survive only while the editor stays open. Save never
 promotes local recovery storage to shared state. Already accepted outbox operations
 remain session-owned if the drawer closes or plugin is disabled.
 
+**Canvas view:** Channel actions → View canvas opens on View, which renders the
+saved head (never a local draft) as GitHub-flavored Markdown with its own loading,
+read-failure retry and empty states. Raw HTML shows as text, inline images show
+their alt text, and only credential-free HTTP(S) and validated Buzz links are
+active. Rendering has its own budget of 128 KiB of text, independent of the save
+limit: larger Canvases, and Canvases nested past the shared Markdown depth limit,
+show a labelled source view even when saving them is allowed. Edit and History
+are unchanged; read-only viewers keep Edit so recovered drafts stay visible, with
+Save and Restore disabled. Restoring does not switch tabs.
+
 **Canvas history:** Channel actions → View canvas → History lazily reads retained
 kind-40100 revisions in pages of 25, ordered by `created_at DESC, id ASC` with
 `until`/`before_id` keyset cursors. The first page is writer-backed so a just-restored

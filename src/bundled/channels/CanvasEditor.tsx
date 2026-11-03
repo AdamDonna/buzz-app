@@ -10,6 +10,7 @@ import type { ChannelCanvas } from "../../features/channel-templates/capability"
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { CanvasHistory } from "./CanvasHistory";
+import { CanvasView } from "./CanvasView";
 import type { RelayEvent } from "../../features/relay/events";
 import {
   clearView,
@@ -32,15 +33,18 @@ export function CanvasEditor({
   scope,
   channelId,
   readOnly = false,
+  openLink = () => false,
 }: {
   canvas: ChannelCanvas;
   profiles: ProfileQueries;
   scope: string;
   channelId: string;
   readOnly?: boolean;
+  /** Opens a Buzz link in the app; false lets the link open externally. */
+  openLink?: (url: string) => boolean;
 }) {
   const panelId = useId();
-  const [tab, setTab] = useState<"edit" | "history">("edit");
+  const [tab, setTab] = useState<"view" | "edit" | "history">("view");
   const key = `canvas-draft-v1:${channelId}`;
   const draftRevision = useSyncExternalStore(
     useCallback((notify) => subscribeView(scope, notify), [scope]),
@@ -84,6 +88,7 @@ export function CanvasEditor({
     [error, setError] = useState("");
   const operation = useRef(0);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const view = useRef<HTMLElement>(null);
   const recovery = useRef<HTMLButtonElement>(null);
   const [recovering, setRecovering] = useState(false);
   // The tab host places focus when Canvas opens, and a recovery button holds
@@ -91,7 +96,7 @@ export function CanvasEditor({
   // only if it is still there; never pull it back from elsewhere.
   const handoff = useRef<Element | null>(null);
   useEffect(() => {
-    const host = editor.current?.closest("[data-panel-workspace]");
+    const host = view.current?.closest("[data-panel-workspace]");
     handoff.current = host?.contains(document.activeElement)
       ? document.activeElement
       : null;
@@ -104,8 +109,8 @@ export function CanvasEditor({
       previous === document.activeElement ||
       (!previous.isConnected && document.activeElement === document.body)
     )
-      editor.current?.focus();
-  }, [loaded, busy]);
+      (tab === "view" ? view : editor).current?.focus();
+  }, [loaded, busy, tab]);
   const [confirmReload, setConfirmReload] = useState(false);
   const cancelReload = useRef<HTMLButtonElement>(null);
   useEffect(
@@ -286,9 +291,12 @@ export function CanvasEditor({
           label="Canvas views"
           value={tab}
           onValueChange={(next) => {
-            if (!busy) setTab(next);
+            // History stays mounted while a read or write it started settles.
+            if (!busy || (tab !== "history" && next !== "history"))
+              setTab(next);
           }}
           items={[
+            { value: "view", label: "View", panelId: `${panelId}-view` },
             { value: "edit", label: "Edit", panelId: `${panelId}-edit` },
             {
               value: "history",
@@ -297,6 +305,24 @@ export function CanvasEditor({
             },
           ]}
         />
+        <div
+          hidden={tab !== "view"}
+          role="tabpanel"
+          id={`${panelId}-view`}
+          aria-labelledby={`${panelId}-view-tab`}
+        >
+          {tab === "view" && (
+            <CanvasView
+              content={head?.content}
+              loaded={loaded}
+              error={error}
+              busy={busy}
+              retry={() => recover(false)}
+              openLink={openLink}
+              focusRef={view}
+            />
+          )}
+        </div>
         <div
           hidden={tab !== "edit"}
           role="tabpanel"

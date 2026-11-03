@@ -18,3 +18,28 @@
   padding: var(--space-3) var(--space-panel-inset);
   border-top: 1px solid var(--border-standard);
 }
+.markdown {
+  overflow-wrap: anywhere;
+}
+.markdown > * {
+  margin-block: 0;
+}
+.markdown > * + * {
+  margin-block-start: var(--space-4);
+}
+.markdown pre {
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.markdown a:not([data-solo-link]) {
+  color: var(--text-link);
+  text-decoration: underline;
+}
+.markdown table {
+  display: block;
+  overflow: auto;
+}
+.markdown ul,
+.markdown ol {
+  padding-inline-start: var(--space-6);
+}
