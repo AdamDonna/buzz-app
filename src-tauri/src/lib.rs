@@ -116,7 +116,7 @@ use host_mcp::{
 };
 use host_process::{
     plugin_host_process_bind_agent, plugin_host_process_kill, plugin_host_process_spawn,
-    plugin_host_process_write, HostProcesses,
+    plugin_host_process_tool_credential, plugin_host_process_write, HostProcesses,
 };
 use host_request::{
     plugin_host_call_context, plugin_host_request, plugin_host_request_bytes, plugin_host_upload,
@@ -724,6 +724,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         plugin_host_upload,
         plugin_host_process_spawn,
         plugin_host_process_bind_agent,
+        plugin_host_process_tool_credential,
         plugin_host_process_write,
         plugin_host_process_kill,
         plugin_host_mcp_serve,

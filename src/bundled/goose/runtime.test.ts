@@ -590,7 +590,7 @@ describe("GooseRuntime", () => {
     expect(fake.geese[0]?.turns.map((turn) => turn.text)).toHaveLength(1);
   });
 
-  it("keeps goose while another agent runs, and stops it with the last", async () => {
+  it("runs each agent in its own goose, which stops once that agent goes", async () => {
     const { agent, deliver, fake, runtime } = setup();
     const other = {
       ...agent,
@@ -607,12 +607,12 @@ describe("GooseRuntime", () => {
     running(agent, other);
     await deliver(message("1", "@Gander hi"));
     await flush(100);
-    running(other);
-    await flush(30);
     const [goose] = fake.geese;
-    expect(goose?.closed).toEqual(["session-1"]);
     expect(goose?.killed).toBe(false);
-    running();
+    // Its credential, in its own process, acts as this agent only.
+    expect(goose?.options.agentCredential).toBe(true);
+    expect(goose?.actedAs?.pubkey).toBe(agent.pubkey);
+    running(other);
     await flush(30);
     expect(goose?.killed).toBe(true);
     expect(fake.geese).toHaveLength(1);

@@ -80,6 +80,8 @@ export type ProcessProtection = Readonly<{
   readOnlyPaths: readonly string[];
   hiddenPaths: readonly string[];
 }>;
+/** The variable a Buzz credential is handed over in. */
+export const CREDENTIAL_ENV = "BUZZ_CREDENTIAL_PROVIDER";
 export type HostProcessOptions = Readonly<{
   /** Follow the arguments the manifest declares. */
   args?: readonly string[];
@@ -106,6 +108,12 @@ export type HostProcess = Readonly<{
   /** Only with `agentCredential`: lets its credential act as this agent of
    * the plugin's type from now on. A process acts as one agent only. */
   actAs?(agent: Readonly<{ pubkey: string; relay: string }>): Promise<void>;
+  /** For a host several agents share: the `BUZZ_CREDENTIAL_PROVIDER` value
+   * for only this agent's tool processes, never the host's own environment.
+   * The same each call; revoked once the host exits. Undefined on Windows. */
+  toolCredential?(
+    agent: Readonly<{ pubkey: string; relay: string }>,
+  ): Promise<string | undefined>;
   /** The exit code once it exits; null when a signal ended it. */
   exited: Promise<number | null>;
 }>;
@@ -395,6 +403,16 @@ export class HostService extends Service implements Host {
             relay,
           }),
       }),
+      toolCredential: async ({
+        pubkey,
+        relay,
+      }: Readonly<{ pubkey: string; relay: string }>) =>
+        (await invoke<string | null>("plugin_host_process_tool_credential", {
+          id: owner.id,
+          handle,
+          pubkey,
+          relay,
+        })) ?? undefined,
       exited,
     });
   }

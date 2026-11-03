@@ -928,9 +928,11 @@ native code.
   incarnation recorded at binding, and a
   closed identity issues no token.
 - **Callers.** Requests must name the bound address in `Host` and carry no
-  `Origin`, so a web page cannot use it. Only harnesses with one process per
-  agent get a token (Claude Code); goose, Pi and Codex host every agent in one
-  process and get none. Windows has no transport in version 1 and gets none.
+  `Origin`, so a web page cannot use it. A process serving one agent
+  carries its token (Claude Code, and goose, which runs one process per
+  agent). A process serving several (Codex, Pi) carries none; each agent's
+  token goes only into that agent's tool commands and is revoked when the
+  process exits. Windows has no transport in version 1 and gets none.
 
 In an FI build, Builderlab's remote-agent, hosted-community, known-community,
 Apps viewer and backup calls go through the native FI session. The renderer

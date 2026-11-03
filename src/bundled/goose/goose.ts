@@ -173,6 +173,7 @@ export const GooseProcess = {
       cwd: string;
       env?: Readonly<Record<string, string | null>>;
       serve?: ServeMcp;
+      agent?: Readonly<{ pubkey: string; relay: string }>;
     }>,
   ) =>
     AcpProcess.start(spawn, GOOSE, {

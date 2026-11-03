@@ -13,7 +13,7 @@ import {
   localSessions,
   type SavedConversation,
   ServerPool,
-  SharedProcess,
+  AgentProcess,
 } from "./sessions";
 
 const tools: ToolServer = async (_conversation, message) => ({
@@ -47,7 +47,7 @@ const setup = (
     ...(silent && { silent }),
     providers: [{ providerId: "openai", defaultModel: "gpt-default" }],
   });
-  const process = new SharedProcess(
+  const process = new AgentProcess(
     fake,
     serve ? serve(fake.serve) : fake.serve,
   );
@@ -529,7 +529,7 @@ describe("AgentSessions", () => {
     const sessions = new AgentSessions({
       resolveDirectory: fake.resolveDirectory,
       tools,
-      process: new SharedProcess(fake, fake.serve),
+      process: new AgentProcess(fake, fake.serve),
       pool: new ServerPool(),
       store: { set: (key, saved) => void store.set(key, saved) },
       launch: async () => {
@@ -558,7 +558,7 @@ describe("AgentSessions", () => {
     const sessions = new AgentSessions({
       resolveDirectory: fake.resolveDirectory,
       tools,
-      process: new SharedProcess(fake, fake.serve),
+      process: new AgentProcess(fake, fake.serve),
       pool: new ServerPool(),
       launch: async () => ({ workspace: "/w", systemPrompt: "" }),
       choice: () => ({ provider: "", model: "" }),
@@ -584,7 +584,7 @@ describe("AgentSessions", () => {
     const sessions = new AgentSessions({
       resolveDirectory: fake.resolveDirectory,
       tools,
-      process: new SharedProcess(fake, fake.serve),
+      process: new AgentProcess(fake, fake.serve),
       pool: new ServerPool(),
       launch,
       choice: () => ({ provider: "", model: "" }),
@@ -912,7 +912,7 @@ it("drops a source delivery invalidated during session startup", async () => {
   const sessions = new AgentSessions({
     resolveDirectory: fake.resolveDirectory,
     tools,
-    process: new SharedProcess(fake, fake.serve),
+    process: new AgentProcess(fake, fake.serve),
     pool: new ServerPool(),
     launch: async () => {
       await held;
@@ -970,7 +970,7 @@ it.each([false, true])(
     const sessions = new AgentSessions({
       resolveDirectory: fake.resolveDirectory,
       tools,
-      process: new SharedProcess({ ...fake, spawn }, fake.serve),
+      process: new AgentProcess({ ...fake, spawn }, fake.serve),
       pool: new ServerPool(),
       launch: async () => ({ workspace: "/w", systemPrompt: "" }),
       choice: () => choice,
@@ -1048,7 +1048,7 @@ it.each(["startup", "provider"] as const)(
     const sessions = new AgentSessions({
       resolveDirectory: fake.resolveDirectory,
       tools,
-      process: new SharedProcess({ ...fake, spawn }, fake.serve),
+      process: new AgentProcess({ ...fake, spawn }, fake.serve),
       pool: new ServerPool(),
       launch: async () => {
         if (boundary === "startup") {

@@ -73,6 +73,27 @@ struct Entry {
     stop: Option<oneshot::Sender<()>>,
     /// Its Buzz credential, revoked once it exits and this entry goes.
     credential: Option<Arc<Issued>>,
+    /// Tokens for its agents' tools, never its own environment; revoked with it.
+    tools: Arc<ToolCredentials>,
+}
+
+/// One token per agent a shared host runs, each handed only to that agent's
+/// tool processes.
+#[derive(Default)]
+struct ToolCredentials(Mutex<Option<Vec<ToolCredential>>>);
+struct ToolCredential {
+    pubkey: String,
+    relay: String,
+    issued: Issued,
+    env: zeroize::Zeroizing<String>,
+}
+impl ToolCredentials {
+    fn revoke(&self) {
+        let mut held = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        for tool in held.take().unwrap_or_default() {
+            tool.issued.revoke();
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -136,6 +157,7 @@ impl HostProcesses {
     ) -> Result<u64, String> {
         let state = self.clone();
         let credential = credential.map(Arc::new);
+        let tools = Arc::new(ToolCredentials(Mutex::new(Some(Vec::new()))));
         let mut registry = self.registry();
         if registry.page != page {
             return Err("The page reloaded".into());
@@ -169,6 +191,7 @@ impl HostProcesses {
                     .map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin))),
                 stop: Some(stop),
                 credential: credential.clone(),
+                tools: tools.clone(),
             },
         );
         drop(registry);
@@ -221,6 +244,7 @@ impl HostProcesses {
             if let Some(credential) = &credential {
                 credential.revoke();
             }
+            tools.revoke();
             // Descendants that outlived it go with it.
             #[cfg(unix)]
             if let Some(group) = group {
@@ -561,6 +585,75 @@ pub(crate) async fn plugin_host_process_bind_agent(
     match processes.owned(&id, handle, |entry| entry.credential.clone())? {
         Some(issued) => credentials.bind(&issued, &id, pubkey, relay).await,
         None => Ok(()),
+    }
+}
+
+/// The environment value that lets this agent's tools, run by a host shared
+/// by several agents, act as it; the same one for every call. It is revoked
+/// once the host exits. None where there is no transport (Windows).
+#[tauri::command]
+pub(crate) async fn plugin_host_process_tool_credential(
+    processes: tauri::State<'_, HostProcesses>,
+    credentials: tauri::State<'_, CredentialService>,
+    id: String,
+    handle: u64,
+    pubkey: String,
+    relay: String,
+) -> Result<Option<String>, String> {
+    processes
+        .tool_credential(&credentials, &id, handle, pubkey, relay)
+        .await
+}
+
+impl HostProcesses {
+    async fn tool_credential(
+        &self,
+        credentials: &CredentialService,
+        id: &str,
+        handle: u64,
+        pubkey: String,
+        relay: String,
+    ) -> Result<Option<String>, String> {
+        let tools = self.owned(id, handle, |entry| entry.tools.clone())?;
+        let held = |tools: &ToolCredentials| -> Result<Option<String>, String> {
+            let held = tools.0.lock().unwrap_or_else(|poison| poison.into_inner());
+            let held = held.as_ref().ok_or("The process has exited")?;
+            Ok(held
+                .iter()
+                .find(|tool| tool.pubkey == pubkey && tool.relay == relay)
+                .map(|tool| tool.env.to_string()))
+        };
+        if let Some(env) = held(&tools)? {
+            return Ok(Some(env));
+        }
+        let Some((issued, env)) = credentials.issue().await? else {
+            return Ok(None);
+        };
+        credentials
+            .bind(&issued, id, pubkey.clone(), relay.clone())
+            .await
+            .inspect_err(|_| issued.revoke())?;
+        let mut guard = tools.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(list) = guard.as_mut() else {
+            issued.revoke();
+            return Err("The process has exited".into());
+        };
+        // A concurrent call for the same agent won: keep one token.
+        if let Some(tool) = list
+            .iter()
+            .find(|tool| tool.pubkey == pubkey && tool.relay == relay)
+        {
+            issued.revoke();
+            return Ok(Some(tool.env.to_string()));
+        }
+        let value = env.to_string();
+        list.push(ToolCredential {
+            pubkey,
+            relay,
+            issued,
+            env,
+        });
+        Ok(Some(value))
     }
 }
 

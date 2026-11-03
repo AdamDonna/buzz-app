@@ -1,5 +1,5 @@
-// One agent's goose sessions, in the `goose-acp` process all goose agents
-// share. The sessions themselves live in the shared ACP client.
+// One agent's goose sessions, in that agent's own `goose-acp` process. The
+// sessions themselves live in the shared ACP client.
 import {
   AgentSessions as AcpAgentSessions,
   type SessionsOptions as AcpSessionsOptions,
@@ -22,25 +22,31 @@ export {
   type SessionStore,
 } from "../../features/agent-harness/acp/agent-sessions";
 
-/** The one `goose-acp` every goose agent's sessions open in, started in the
- * home folder when a session first needs it, and again after it exits. One
- * runtime shares one. */
-export class SharedProcess {
+/** The `goose-acp` one agent's sessions open in, started in the home folder
+ * when a session first needs it, and again after it exits. Its own process,
+ * so its environment carries only this agent's Buzz credential. */
+export class AgentProcess {
   private ready: Promise<AcpProcess> | undefined;
   constructor(
     private readonly host: GooseHost,
     /** Starts a session's MCP server for its agent's tools. */
     private readonly serve: ServeMcp,
+    /** The agent as its latest delivery named it, once known. */
+    private readonly agent: () =>
+      | Readonly<{ pubkey: string; relay: string }>
+      | undefined = () => undefined,
   ) {}
 
   /** The running process. One that failed to start is started again on the
    * next call. */
   get(): Promise<AcpProcess> {
     if (this.ready) return this.ready;
+    const agent = this.agent();
     const ready = (async () =>
       GooseProcess.start(this.host.spawn, {
         cwd: await this.host.resolveDirectory("~"),
         serve: this.serve,
+        ...(agent && { agent: { pubkey: agent.pubkey, relay: agent.relay } }),
       }))();
     const forget = () => {
       if (this.ready === ready) this.ready = undefined;
@@ -59,7 +65,7 @@ export class SharedProcess {
 
 export type SessionsOptions = Omit<AcpSessionsOptions, "label">;
 
-/** An agent's sessions, in the process all goose agents share. */
+/** An agent's sessions, in its own process. */
 export class AgentSessions extends AcpAgentSessions {
   constructor(options: SessionsOptions) {
     super({ ...options, label: "goose" });

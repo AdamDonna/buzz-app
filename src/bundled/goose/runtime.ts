@@ -57,7 +57,7 @@ import {
 } from "../claude-code/prompt";
 import { ownerCanvas, readProject } from "../../features/agent-harness/project";
 import type { ServeMcp, ToolServer } from "./goose";
-import { AgentSessions, localSessions, SharedProcess } from "./sessions";
+import { AgentProcess, AgentSessions, localSessions } from "./sessions";
 
 export type Config = Readonly<{
   /** A model the provider offers; empty uses the provider's default, or the
@@ -114,6 +114,8 @@ export function sessionTitle(
 
 type Entry = {
   sessions: AgentSessions;
+  /** Its own goose, stopped once the agent goes. */
+  goose: AgentProcess;
   config: Config;
   /** The team sections of the latest run; a change reopens idle sessions. */
   team: string;
@@ -136,14 +138,6 @@ type Entry = {
 
 export class GooseRuntime {
   private readonly agents = new Map<string, Entry>();
-  /** The goose every agent's sessions open in. */
-  private readonly goose = new SharedProcess(
-    {
-      spawn: (id, options) => this.desktop.spawn(id, options),
-      resolveDirectory: (path) => this.desktop.resolveDirectory(path),
-    },
-    (handler) => this.serve(handler),
-  );
   private readonly memoryReads = new MemoryReads();
   private readonly listeners = new Set<() => void>();
   private readonly views = new Map<
@@ -206,9 +200,9 @@ export class GooseRuntime {
     for (const [key, entry] of this.agents)
       if (!current.has(key)) {
         entry.sessions.dispose();
+        entry.goose.stop();
         this.agents.delete(key);
       }
-    if (!this.agents.size) this.goose.stop();
     for (const agent of agents) {
       const next = config(agent.config);
       const entry = this.agents.get(agent.key);
@@ -291,9 +285,11 @@ export class GooseRuntime {
   }
 
   dispose() {
-    for (const entry of this.agents.values()) entry.sessions.dispose();
+    for (const entry of this.agents.values()) {
+      entry.sessions.dispose();
+      entry.goose.stop();
+    }
     this.agents.clear();
-    this.goose.stop();
   }
 
   async run({
@@ -745,6 +741,14 @@ export class GooseRuntime {
       config: initial,
       team: "",
       sessions: undefined as unknown as AgentSessions,
+      goose: new AgentProcess(
+        {
+          spawn: (id, options) => this.desktop.spawn(id, options),
+          resolveDirectory: (path) => this.desktop.resolveDirectory(path),
+        },
+        (handler) => this.serve(handler),
+        () => entry.handle,
+      ),
       contexts: new Map(),
       policies: new Map(),
     };
@@ -769,7 +773,7 @@ export class GooseRuntime {
     entry.sessions = new AgentSessions({
       resolveDirectory: (path) => this.desktop.resolveDirectory(path),
       tools,
-      process: this.goose,
+      process: entry.goose,
       store: localSessions(this.storage, agent),
       started: (session, text) =>
         void this.prompts(agent).save(session, [{ label: "", text }]),

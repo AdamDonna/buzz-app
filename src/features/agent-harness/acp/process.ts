@@ -109,6 +109,8 @@ export class AcpProcess {
       env?: Readonly<Record<string, string | null>>;
       serve?: ServeMcp;
       signal?: AbortSignal;
+      /** The one agent the harness runs: its tools get its Buzz credential. */
+      agent?: Readonly<{ pubkey: string; relay: string }>;
     }>,
   ) {
     const { signal } = launch;
@@ -120,6 +122,7 @@ export class AcpProcess {
       cwd: launch.cwd,
       ...(launch.args ? { args: launch.args } : {}),
       env: { ...hooks.env, ...launch.env, ...PROTECTED_ENV },
+      agentCredential: !!launch.agent,
       onStdout: (data) => (acp ? acp.read(data) : early.push(data)),
       onStderr: (data) => {
         if (acp) acp.readError(data);
@@ -142,6 +145,11 @@ export class AcpProcess {
         .then(resolve, reject)
         .finally(() => signal?.removeEventListener("abort", cancel));
     });
+    if (launch.agent)
+      await process.actAs?.(launch.agent).catch((error: unknown) => {
+        void process.kill();
+        throw error;
+      });
     acp = new AcpProcess(process, hooks, launch.serve);
     for (const data of earlyErrors) acp.readError(data);
     for (const data of early) acp.read(data);

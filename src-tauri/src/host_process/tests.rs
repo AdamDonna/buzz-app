@@ -708,3 +708,64 @@ fn snapshot_mcp_and_containment_keep_the_verified_target_and_argument_order() {
         .unwrap()
         .success());
 }
+
+/// A shared host never carries a token; each agent's tools get their own,
+/// the same each time, which dies with the host.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_shared_hosts_tool_credential_is_its_agents_and_ends_with_it() {
+    use crate::credential_service::tests::{ask, fixture, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "sh",
+            command("sh", &["-c", "read line"]),
+            None,
+            channel,
+        )
+        .unwrap();
+    let pubkey = fixture.agent.pubkey.clone();
+    let env = processes
+        .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+        .await
+        .unwrap()
+        .unwrap();
+    let again = processes
+        .tool_credential(&fixture.service, "p", handle, pubkey.clone(), RELAY.into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(env, again);
+    let token: serde_json::Value = serde_json::from_str(&env).unwrap();
+    let token = token["token"].as_str().unwrap();
+    let reply = ask(&fixture, token, "get_public_key", &[]).await;
+    assert_eq!(reply.0, StatusCode::OK);
+    assert_eq!(reply.1["result"], pubkey.as_str());
+    // Only the plugin's own agents.
+    assert!(processes
+        .tool_credential(
+            &fixture.service,
+            "other",
+            handle,
+            pubkey.clone(),
+            RELAY.into()
+        )
+        .await
+        .is_err());
+    processes
+        .write("p", handle, "\n".into(), false)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while ask(&fixture, token, "get_public_key", &[]).await.0 == StatusCode::OK {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the token outlived its host");
+}
