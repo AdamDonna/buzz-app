@@ -30,7 +30,7 @@ export class CodexExecution {
     let connection: HostProcess | undefined;
     let buffer = "";
     const process = await this.execution.spawn("node", {
-      cwd: this.execution.binding.workspace,
+      cwd: this.execution.workspace,
       args: [
         "--input-type=module",
         "-e",

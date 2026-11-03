@@ -212,8 +212,9 @@ export class CodexProvider {
     this.set({ defaults });
   }
   resolve(raw: unknown, remote = false): Config {
-    const data = remote ? undefined : this.state.data;
     const explicit = readConfig(raw);
+    if (remote) return explicit;
+    const data = this.state.data;
     const inheritedModel = this.state.defaults.model;
     const unavailable = Boolean(
       inheritedModel && data && !catalogModel(inheritedModel, data),
@@ -421,54 +422,84 @@ export function createTabs(
   runtime: CodexRuntime,
   spawn: Spawn,
   setup: CodexSetup,
-  binding: (agent: AgentKey) => AgentExecutionBinding | undefined = () =>
-    undefined,
+  binding: (
+    agent: AgentKey,
+  ) => Promise<AgentExecutionBinding | undefined> = async () => undefined,
 ) {
   const login = setup;
 
-  function useProvider(agent?: AgentViewProps<Config>["agent"]) {
-    const agentKey = agent?.key;
-    const bound = !!(agentKey && binding(agentKey));
-    const [remote, setRemote] = useState<{
-      agent: AgentKey;
-      data?: Catalog;
+  function useBinding(agent?: AgentKey) {
+    const [attempt, setAttempt] = useState(0);
+    const [read, setRead] = useState<{
+      agent?: AgentKey;
+      binding?: AgentExecutionBinding;
       error?: string;
     }>();
-    const [attempt, retry] = useState(0);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: attempt retries inspection.
+    useEffect(() => {
+      let current = true;
+      if (!agent) {
+        setRead({});
+        return;
+      }
+      void binding(agent).then(
+        (binding) => {
+          if (current) setRead({ agent, ...(binding ? { binding } : {}) });
+        },
+        (error) => {
+          if (current) setRead({ agent, error: message(error) });
+        },
+      );
+      return () => {
+        current = false;
+      };
+    }, [agent, attempt]);
+    const held = read?.agent === agent ? read : undefined;
+    return {
+      bound: held?.binding,
+      checking: !!agent && !held,
+      error: held?.error ?? "",
+      retry: () => {
+        setRead(undefined);
+        setAttempt((value) => value + 1);
+      },
+    };
+  }
+  function useProvider(agent?: AgentViewProps<Config>["agent"]) {
+    const inspected = useBinding(agent?.key);
     const state = useSyncExternalStore(
       provider.subscribe,
       provider.snapshot,
       provider.snapshot,
     );
     useEffect(() => {
-      if (!bound && state.readiness === "checking" && !state.checking)
+      if (
+        !inspected.checking &&
+        !inspected.error &&
+        !inspected.bound &&
+        state.readiness === "checking" &&
+        !state.checking
+      )
         void provider.check();
-    }, [state.readiness, state.checking, bound]);
-    // biome-ignore lint/correctness/useExhaustiveDependencies: attempt retries the same target catalog.
-    useEffect(() => {
-      if (!agentKey || !bound) return;
-      let current = true;
-      setRemote(undefined);
-      void runtime.catalog(agentKey).then(
-        (models) => {
-          if (current) setRemote({ agent: agentKey, data: { models } });
-        },
-        (error) => {
-          if (current) setRemote({ agent: agentKey, error: message(error) });
-        },
-      );
-      return () => {
-        current = false;
-      };
-    }, [agentKey, bound, attempt]);
-    const held = remote?.agent === agent?.key ? remote : undefined;
+    }, [
+      state.readiness,
+      state.checking,
+      inspected.checking,
+      inspected.error,
+      inspected.bound,
+    ]);
     return {
       ...state,
-      ...(bound
-        ? { data: held?.data, checking: !held, error: held?.error ?? "" }
+      bound: inspected.bound,
+      ...(inspected.bound || inspected.checking || inspected.error
+        ? {
+            data: undefined,
+            checking: inspected.checking,
+            error: inspected.error,
+          }
         : {}),
       check: () =>
-        bound ? retry((value) => value + 1) : void provider.check(),
+        inspected.error ? inspected.retry() : void provider.check(),
     };
   }
 
@@ -779,16 +810,18 @@ export function createTabs(
     useEffect(() => {
       const abort = new AbortController();
       setLoading(true);
-      const reading = binding(agent.key)
-        ? Promise.reject(
-            new Error("Transcripts are unavailable for remote Codex agents."),
-          )
-        : readTranscript(
-            spawn,
-            { agent: { key: agent.key, name: agent.name }, ...conversation },
-            abort.signal,
-            (pubkey) => runtime.name(agent.key, pubkey),
+      const reading = binding(agent.key).then((bound) => {
+        if (bound)
+          throw new Error(
+            "Transcripts are unavailable for remote Codex agents.",
           );
+        return readTranscript(
+          spawn,
+          { agent: { key: agent.key, name: agent.name }, ...conversation },
+          abort.signal,
+          (pubkey) => runtime.name(agent.key, pubkey),
+        );
+      });
       void reading
         .then(
           (transcript): Read =>
@@ -858,7 +891,14 @@ export function createTabs(
 
   /** The agent's sessions: the one it was opened from, recent ones, and their
    * transcripts. */
-  function ActivityTab({
+  function ActivityTab(props: Parameters<typeof ActivityContent>[0]) {
+    const inspected = useBinding(props.agent.key);
+    if (inspected.checking)
+      return <p role="status">Loading saved conversations…</p>;
+    if (inspected.error) return <p role="alert">{inspected.error}</p>;
+    return <ActivityContent {...props} />;
+  }
+  function ActivityContent({
     agent,
     conversation,
     initialTranscript,
@@ -874,26 +914,7 @@ export function createTabs(
     const sessions = useSyncExternalStore(runtime.subscribe, () =>
       runtime.sessions(agent.key),
     );
-    const bound = !!binding(agent.key);
-    const [loaded, setLoaded] = useState<{ agent: AgentKey; error?: string }>();
-    useEffect(() => {
-      if (!bound) return;
-      let current = true;
-      void runtime.loadSessions(agent.key).then(
-        () => {
-          if (current) setLoaded({ agent: agent.key });
-        },
-        (error) => {
-          if (current) setLoaded({ agent: agent.key, error: message(error) });
-        },
-      );
-      return () => {
-        current = false;
-      };
-    }, [agent.key, bound]);
-    const ready = !bound || loaded?.agent === agent.key;
-    const conversations =
-      ready && !loaded?.error ? runtime.conversations(agent.key) : [];
+    const conversations = runtime.conversations(agent.key);
     const {
       session: here,
       searching,
@@ -946,8 +967,6 @@ export function createTabs(
         )}
         <section className={activityStyles.section}>
           <InlineHeader title="Recent conversations" />
-          {!ready && <p role="status">Loading saved conversations…</p>}
-          {ready && loaded?.error && <p role="alert">{loaded.error}</p>}
           <SettingsGroup layout="form">
             {recent.length || unbound.length ? (
               <ul className={activityStyles.list}>
@@ -1050,8 +1069,8 @@ export function createTabs(
       checking,
       defaults: providerDefaults,
       check,
+      bound,
     } = useProvider(agent);
-    const bound = binding(agent.key);
     useEffect(() => {
       setDraft(readConfig(agent.config));
     }, [agent.config]);
@@ -1085,7 +1104,7 @@ export function createTabs(
       try {
         const settings = readConfig({
           ...draft,
-          workspace: bound?.workspace ?? draft.workspace,
+          workspace: draft.workspace,
         });
         if (!validWorkspace(settings.workspace))
           throw new Error("Enter an absolute or ~/… workspace path.");
@@ -1114,12 +1133,20 @@ export function createTabs(
           </div>
         )}
         <ModelPicker
-          allowCustomModel={false}
+          allowCustomModel={!!bound}
           models={choices(data)}
           value={draft.model}
           defaultModel={catalogModel(providerDefaults.model, data)?.model ?? ""}
-          defaultLabel={providerDefaultLabel(providerDefaults.model, data)}
-          defaultDescription="Following the provider's model default"
+          defaultLabel={
+            bound
+              ? "Codex default"
+              : providerDefaultLabel(providerDefaults.model, data)
+          }
+          defaultDescription={
+            bound
+              ? "Use the model default on the target computer"
+              : "Following the provider's model default"
+          }
           loading={checking}
           disabled={saving}
           onChange={(model) =>
@@ -1180,12 +1207,14 @@ export function createTabs(
               label="Workspace"
               description={
                 bound
-                  ? "The execution binding fixes this workspace on the target computer."
+                  ? "The adapter selects a workspace for each conversation session."
                   : "Codex starts here with full access to your files and network. Buzz tools run inside the app. Inherited MCP/Apps/plugin tools are disabled."
               }
             >
               <Input
-                value={bound?.workspace ?? draft.workspace}
+                value={
+                  bound ? "Selected when the session starts" : draft.workspace
+                }
                 readOnly={!!bound}
                 placeholder="~/.buzz"
                 disabled={saving}

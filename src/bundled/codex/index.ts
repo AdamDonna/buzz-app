@@ -60,7 +60,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
           },
         }
       : undefined,
-    (key) => ctx.agents.execution(key),
+    (key, session) => ctx.agents.execution(key, session),
+    undefined,
+    (key) => ctx.agents.inspectExecution(key),
   );
   /** A Codex agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */
@@ -119,7 +121,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     SettingsTab,
     ActivityTab,
   } = createTabs(providerController, runtime, start, setup, (key) =>
-    ctx.agents.executionBinding(key),
+    ctx.agents.inspectExecution(key),
   );
   ctx.agents.register<Config>({
     id: TYPE_ID,
@@ -176,7 +178,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ...(spawn &&
       readFile && {
         usage: async (agent, { since, signal }) => {
-          if (ctx.agents.executionBinding(agent.key))
+          if (await ctx.agents.inspectExecution(agent.key))
             throw new Error("Usage is unavailable for remote Codex agents.");
           return readUsage({ spawn, readFile }, agent, since, signal);
         },
@@ -224,7 +226,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ],
     // A mention during the first download waits for it, within its deadline.
     ...codexRun(runtime, async (signal, agent) => {
-      if (await ctx.agents.execution(agent)) return;
+      if (await ctx.agents.inspectExecution(agent)) return;
       await setup.installed(signal);
       if (providerController.snapshot().readiness === "checking")
         await providerController.check();

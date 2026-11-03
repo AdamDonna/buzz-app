@@ -14,7 +14,7 @@ it("carries scoped native hooks over guest stdio and retires callback URLs", asy
   let exit!: Promise<number | null>;
   const output: { id: number; status: number; body: unknown }[] = [];
   const guest: AgentExecution = {
-    binding: { provider: "test/guest", target: "one", workspace: directory },
+    workspace: directory,
     signal: lifetime.signal,
     resolveDirectory: async (path) => path,
     readFile: async () => {

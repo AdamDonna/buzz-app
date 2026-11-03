@@ -29,6 +29,7 @@ function applied(binding?: AgentExecutionBinding) {
     host: { spawn: vi.fn(), readFile: vi.fn(), request: vi.fn() },
     agents: {
       executionBinding: () => binding,
+      inspectExecution: async () => binding,
       execution: async () => undefined,
       register: (registered: AgentType) => {
         type = registered;
@@ -131,6 +132,7 @@ it("stops agents that stop running even when the agent list could not be read", 
     host: { spawn: vi.fn(), request: vi.fn() },
     agents: {
       executionBinding: () => undefined,
+      inspectExecution: async () => undefined,
       execution: async () => undefined,
       register: () => undefined,
       snapshot: () => state,
@@ -197,6 +199,7 @@ it("starts the server once Codex is updated and checked, only while a Codex agen
     host: { spawn: vi.fn(), request: vi.fn() },
     agents: {
       executionBinding: () => undefined,
+      inspectExecution: async () => undefined,
       execution: async () => undefined,
       register: () => undefined,
       snapshot: () => state,
@@ -296,8 +299,6 @@ it("preserves a compatible shared Codex model", () => {
 it("reports remote usage as unavailable before reading desktop history", async () => {
   const type = applied({
     provider: "test/guest",
-    target: "one",
-    workspace: "/guest/project",
   });
   if (!type?.usage) throw new Error("Codex usage is not registered");
   await expect(

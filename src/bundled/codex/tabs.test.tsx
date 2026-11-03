@@ -70,8 +70,10 @@ function fixture({
   storage = localStore(),
   channels = [{ id: "channel", name: "general" }],
   binding,
+  inspection,
 }: {
   binding?: AgentExecutionBinding;
+  inspection?: Promise<AgentExecutionBinding | undefined>;
   /** Agent storage, which keeps the provider defaults. */
   storage?: AgentStore;
   /** The community's channels, read each time they are listed. */
@@ -207,7 +209,13 @@ function fixture({
     sessions,
     (raw) => provider.resolve(raw),
   );
-  const tabs = createTabs(provider, runtime, spawn, setup, () => binding);
+  const tabs = createTabs(
+    provider,
+    runtime,
+    spawn,
+    setup,
+    async () => inspection ?? binding,
+  );
   const props = (settings = defaults, save = vi.fn(async () => {})) =>
     ({
       agent: {
@@ -281,7 +289,7 @@ it("lists saved conversations and shows one's Codex thread, or that Codex no lon
     screen.getAllByRole("button", { name: /^View transcript/ })[
       index
     ] as HTMLElement;
-  expect(screen.getByTitle("general · thread eeeeeeee")).toBeVisible();
+  expect(await screen.findByTitle("general · thread eeeeeeee")).toBeVisible();
   fireEvent.click(viewButton(0));
   expect(await screen.findByText("what changed?")).toBeVisible();
   expect(screen.getByText("Two files.")).toBeVisible();
@@ -301,7 +309,7 @@ it("lists saved conversations and shows one's Codex thread, or that Codex no lon
   expect(save).not.toHaveBeenCalled();
 });
 
-it("sets the conversation the profile was opened from apart from recent conversations", () => {
+it("sets the conversation the profile was opened from apart from recent conversations", async () => {
   const root = "e".repeat(64);
   const f = fixture({
     saved: {
@@ -323,9 +331,9 @@ it("sets the conversation the profile was opened from apart from recent conversa
       conversation={{ channelId: "channel", rootId: root }}
     />,
   );
-  const opened = screen.getByRole("region", { name: "This thread" });
+  const opened = await screen.findByRole("region", { name: "This thread" });
   expect(
-    within(opened).getByRole("button", { name: /^View transcript/ }),
+    await within(opened).findByRole("button", { name: /^View transcript/ }),
   ).toBeVisible();
   expect(screen.getByTitle("general · channel")).toBeVisible();
   expect(screen.queryByText(/thread eeeeeeee/)).toBeNull();
@@ -367,12 +375,11 @@ it("brings an open transcript's tab back, and closes it when the profile moves",
     <Panel conversation={{ channelId: "channel", rootId: root }} />,
   );
   const tab = (name: string) => screen.getByRole("tab", { name });
-  const viewHere = () =>
+  const viewHere = async () =>
     user.click(
-      within(screen.getByRole("region", { name: "This thread" })).getByRole(
-        "button",
-        { name: /^View transcript/ },
-      ),
+      await within(
+        await screen.findByRole("region", { name: "This thread" }),
+      ).findByRole("button", { name: /^View transcript/ }),
     );
   const transcript = "general · thread eeeeeeee";
   await viewHere();
@@ -576,7 +583,7 @@ it("finds the thread's Codex session another build started", async () => {
       conversation={{ channelId: "channel", rootId: root }}
     />,
   );
-  const opened = screen.getByRole("region", { name: "This thread" });
+  const opened = await screen.findByRole("region", { name: "This thread" });
   fireEvent.click(
     await within(opened).findByRole("button", { name: /^View transcript/ }),
   );
@@ -607,7 +614,7 @@ it("shows the channel's current kind for a session another build started", async
     />
   );
   const view = render(shown());
-  const here = screen.getByRole("region", { name: "This thread" });
+  const here = await screen.findByRole("region", { name: "This thread" });
   await within(here).findByRole("button", { name: /^View transcript/ });
   expect(within(here).getByTitle("general").querySelector("svg")).toHaveClass(
     "tabler-icon-lock",
@@ -631,7 +638,7 @@ it("reports when looking for another build's Codex session fails", async () => {
   );
   expect(
     await within(
-      screen.getByRole("region", { name: "This channel" }),
+      await screen.findByRole("region", { name: "This channel" }),
     ).findByRole("alert"),
   ).toHaveTextContent("Could not look for a Codex session: database is locked");
 });
@@ -1674,7 +1681,7 @@ it("keeps the recommended model inherited when only effort changes", async () =>
   );
 });
 
-it("keeps same-channel recent threads visibly distinguishable", () => {
+it("keeps same-channel recent threads visibly distinguishable", async () => {
   const saved = Object.fromEntries(
     ["e", "f"].map((char) => [
       JSON.stringify(["channel", char.repeat(64)]),
@@ -1683,7 +1690,7 @@ it("keeps same-channel recent threads visibly distinguishable", () => {
   );
   const f = fixture({ saved });
   render(<f.tabs.ActivityTab {...f.props()} />);
-  const rows = screen.getAllByRole("listitem");
+  const rows = await screen.findAllByRole("listitem");
   expect(rows).toHaveLength(2);
   expect(rows.map((row) => row.textContent)).toEqual(
     expect.arrayContaining([
@@ -1695,32 +1702,32 @@ it("keeps same-channel recent threads visibly distinguishable", () => {
 
 it.each(["Needs attention", "Session could not be saved"])(
   "keeps %s diagnostics visible and multiline",
-  (status) => {
+  async (status) => {
     const f = fixture();
     vi.spyOn(f.runtime, "sessions").mockReturnValue([
       { key: "unbound", status, detail: "First line\nSecond line" },
     ]);
     render(<f.tabs.ActivityTab {...f.props()} />);
-    const diagnostic = screen.getByText("First line Second line");
+    const diagnostic = await screen.findByText("First line Second line");
     expect(diagnostic.closest("details")).toBeNull();
     expect(diagnostic.textContent).toBe("First line\nSecond line");
     expect(diagnostic).toHaveClass("whitespace-pre-wrap");
   },
 );
 
-it("collapses Working command details", () => {
+it("collapses Working command details", async () => {
   const f = fixture();
   vi.spyOn(f.runtime, "sessions").mockReturnValue([
     { key: "unbound", status: "Working", detail: "git status" },
   ]);
   render(<f.tabs.ActivityTab {...f.props()} />);
-  expect(screen.getByText("git status").closest("details")).not.toHaveAttribute(
-    "open",
-  );
+  expect(
+    (await screen.findByText("git status")).closest("details"),
+  ).not.toHaveAttribute("open");
   expect(screen.getByText("Latest activity")).toBeVisible();
 });
 
-it("shows the recent empty state when only the current runtime session exists", () => {
+it("shows the recent empty state when only the current runtime session exists", async () => {
   const key = JSON.stringify(["channel", "channel"]);
   const f = fixture({
     saved: { [key]: { threadId: "current", workspace: "/w", at: 1 } },
@@ -1735,64 +1742,39 @@ it("shows the recent empty state when only the current runtime session exists", 
     />,
   );
   expect(
-    screen.getByText("No other conversations saved in this app yet."),
+    await screen.findByText("No other conversations saved in this app yet."),
   ).toBeVisible();
   expect(screen.queryByRole("list")).not.toBeInTheDocument();
 });
 
-it("uses the guest catalog and keeps the bound workspace read-only", async () => {
-  const f = fixture({
-    binding: {
-      provider: "test/guest",
-      target: "one",
-      workspace: "/guest/project",
-    },
-  });
-  const catalog = vi.spyOn(f.runtime, "catalog").mockResolvedValue([
-    {
-      model: "guest",
-      displayName: "Guest model",
-      description: "",
-      isDefault: true,
-      defaultReasoningEffort: "high",
-      supportedReasoningEfforts: [{ reasoningEffort: "high", description: "" }],
-    },
-  ]);
+it("keeps remote settings read-only without opening a model catalog", async () => {
+  const f = fixture({ binding: { provider: "test/guest" } });
   render(<f.tabs.SettingsTab {...f.props()} />);
-  await waitFor(() => expect(screen.getByLabelText("Thinking")).toBeEnabled());
-  const workspace = screen.getByLabelText("Workspace");
-  expect(workspace).toHaveValue("/guest/project");
-  expect(workspace).toHaveAttribute("readonly");
+  await waitFor(() =>
+    expect(screen.getByLabelText("Workspace")).toHaveAttribute("readonly"),
+  );
+  expect(screen.getByLabelText("Workspace")).toHaveValue(
+    "Selected when the session starts",
+  );
   const user = userEvent.setup();
   await user.click(screen.getByRole("combobox", { name: "Model" }));
   expect(
-    await screen.findByRole("option", { name: /Guest model/ }),
+    await screen.findByRole("option", { name: /Custom model/ }),
   ).toBeVisible();
   expect(
     screen.queryByRole("option", { name: /Model A/ }),
   ).not.toBeInTheDocument();
-  expect(catalog).toHaveBeenCalledWith("a".repeat(64));
   expect(f.spawn).not.toHaveBeenCalled();
 });
 
 it("loads bound conversations before listing them and never reads guest transcripts on the desktop", async () => {
-  const f = fixture({
-    binding: {
-      provider: "test/guest",
-      target: "one",
-      workspace: "/guest/project",
-    },
-  });
-  const loading = deferred<void>();
-  const load = vi
-    .spyOn(f.runtime, "loadSessions")
-    .mockReturnValue(loading.promise);
+  const loading = deferred<AgentExecutionBinding | undefined>();
+  const f = fixture({ inspection: loading.promise });
   vi.spyOn(f.runtime, "conversations").mockReturnValue([
     { key: "guest", channelId: "channel", threadId: "guest-thread" },
   ]);
   render(<f.tabs.ActivityTab {...f.props()} />);
   try {
-    await waitFor(() => expect(load).toHaveBeenCalled());
     expect(screen.getByRole("status")).toHaveTextContent(
       "Loading saved conversations",
     );
@@ -1800,7 +1782,7 @@ it("loads bound conversations before listing them and never reads guest transcri
       screen.queryByRole("button", { name: /View transcript/ }),
     ).not.toBeInTheDocument();
   } finally {
-    await act(async () => loading.resolve());
+    await act(async () => loading.resolve({ provider: "test/guest" }));
   }
   fireEvent.click(
     await screen.findByRole("button", { name: /View transcript/ }),

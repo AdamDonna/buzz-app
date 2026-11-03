@@ -6,7 +6,11 @@ import { apply } from "./index";
 import { describe, afterEach, expect, it, vi } from "vitest";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
-import { localStore } from "../../features/agents/state";
+import {
+  localStore,
+  fileStore,
+  type AgentStore,
+} from "../../features/agents/state";
 import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
 import type { Agent, Delivery } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
@@ -42,6 +46,7 @@ const runtimes: CodexRuntime[] = [];
 afterEach(() => {
   for (const runtime of runtimes) runtime.dispose();
   runtimes.length = 0;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -61,6 +66,7 @@ function fixture(
   repositories?: (scope: string | undefined) => string,
   hooks?: ConstructorParameters<typeof CodexRuntime>[7],
   execution?: ConstructorParameters<typeof CodexRuntime>[8],
+  persisted?: AgentStore,
 ) {
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
@@ -69,6 +75,7 @@ function fixture(
   const sent: Wire[] = [];
   /** Methods the server answers with a JSON-RPC error instead of a result. */
   const failing = new Set<string>();
+  const failures = new Map<string, string>();
   /** Methods the server answers only once their promise settles. */
   const held = new Map<string, Promise<void>>();
   const toolCalls = new Map<
@@ -100,10 +107,15 @@ function fixture(
       }
       if (request.id == null) return;
       await held.get(request.method ?? "");
-      if (request.method && failing.has(request.method)) {
+      if (
+        request.method &&
+        (failing.has(request.method) || failures.has(request.method))
+      ) {
         emit({
           id: request.id,
-          error: { message: `${request.method} failed` },
+          error: {
+            message: failures.get(request.method) ?? `${request.method} failed`,
+          },
         });
         return;
       }
@@ -316,6 +328,13 @@ function fixture(
   };
   const relay = { snapshot: () => snapshot } as unknown as RelayData;
   const local = {
+    get length() {
+      return storage.size;
+    },
+    key: (index: number) => [...storage.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
     getItem: (key: string) => storage.get(key) ?? null,
     setItem: (key: string, value: string) => {
       storage.set(key, value);
@@ -336,12 +355,14 @@ function fixture(
     spawn,
     (key) => ownerReads(relay, pubkeyOf(key)),
     core,
-    store,
+    persisted ?? store,
     config,
     () => added,
     repositories,
     hooks,
     execution,
+    undefined,
+    execution ? async () => ({ provider: "test/guest" }) : undefined,
   );
   runtimes.push(runtime);
   const events: EventData[] = [];
@@ -463,6 +484,7 @@ function fixture(
       host: { spawn },
       agents: {
         executionBinding: () => undefined,
+        inspectExecution: async () => undefined,
         execution: async () => undefined,
         snapshot: () => ({ status: "ready", agents: [], running }),
         relay: () => relay,
@@ -595,6 +617,7 @@ function fixture(
     process,
     sent,
     failing,
+    failures,
     held,
     emit,
     publish,
@@ -4627,11 +4650,7 @@ it("rejects an execution open that completes after the agent retires", async () 
   );
   const lifetime = new AbortController();
   const target: AgentExecution = {
-    binding: {
-      provider: "test/guest",
-      target: "one",
-      workspace: "/guest/project",
-    },
+    workspace: "/guest/project",
     signal: lifetime.signal,
     spawn: f.spawn,
     resolveDirectory: async (path) => path,
@@ -4640,7 +4659,7 @@ it("rejects an execution open that completes after the agent retires", async () 
       lifetime.abort();
     }),
   };
-  const result = f.runtime.catalog(pubkey);
+  const result = f.runtime.run(f.delivery("open"));
   await started.promise;
   f.runtime.sync([]);
   opened.resolve(target);
@@ -4655,11 +4674,7 @@ it("runs bound Codex tools in the guest workspace, resumes, and stops on provide
     const lifetime = new AbortController();
     let f!: ReturnType<typeof fixture>;
     const target: AgentExecution = {
-      binding: {
-        provider: "test/guest",
-        target: "one",
-        workspace: "/guest/project",
-      },
+      workspace: "/guest/project",
       signal: lifetime.signal,
       spawn: vi.fn(async (_program, options) => {
         options?.onStdout?.(
@@ -4733,4 +4748,384 @@ it("runs bound Codex tools in the guest workspace, resumes, and stops on provide
   } finally {
     vi.useRealTimers();
   }
+});
+
+function guestTarget(guest: ReturnType<typeof fixture>): AgentExecution {
+  const lifetime = new AbortController();
+  return {
+    workspace: "/guest/project",
+    signal: lifetime.signal,
+    spawn: async (_program, options) => {
+      options?.onStdout?.(
+        `${JSON.stringify({ buzzCodexHook: "ready", url: "http://127.0.0.1:1234" })}\n`,
+      );
+      return guest.spawn("app-server", options);
+    },
+    readFile: async () => new Uint8Array(),
+    resolveDirectory: async (path) => path,
+    dispose: async () => {
+      lifetime.abort();
+    },
+  };
+}
+
+it("gives each conversation a durable target key and rotates only its New session", async () => {
+  vi.useFakeTimers();
+  const guests: ReturnType<typeof fixture>[] = [];
+  const execution = vi.fn(async () => {
+    const guest = fixture();
+    guests.push(guest);
+    return guestTarget(guest);
+  });
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const first = f.delivery("first");
+  const otherRoot = "e".repeat(64);
+  await f.runtime.run(first);
+  await vi.waitFor(() => expect(guests[0]?.starts()).toHaveLength(1));
+  await f.runtime.run(f.delivery("second conversation", otherRoot));
+  await vi.waitFor(() => expect(guests[1]?.starts()).toHaveLength(1));
+  const calls = execution.mock.calls as unknown as [
+    string,
+    { key: string; intent: string },
+  ][];
+  const firstKey = calls[0]?.[1].key;
+  expect(firstKey).toBeTruthy();
+  expect(calls[1]?.[1].key).not.toBe(firstKey);
+  expect(calls.map((call) => call[1].intent)).toEqual(["new", "new"]);
+  const agent = { ...first.agent, config: first.config } as unknown as Agent;
+  await f.runtime.session(agent, { channelId: "channel", root }, "interrupt");
+  expect(guests[0]?.sent.some((wire) => wire.method === "turn/interrupt")).toBe(
+    true,
+  );
+  expect(guests[1]?.sent.some((wire) => wire.method === "turn/interrupt")).toBe(
+    false,
+  );
+  await guests[1]?.complete();
+  await vi.waitFor(() =>
+    expect(
+      f.runtime.sessionState(agent, { channelId: "channel", root: otherRoot }),
+    ).toBe("idle"),
+  );
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  await f.runtime.session(agent, { channelId: "channel", root }, "new");
+  await f.runtime.run(f.delivery("after new"));
+  await vi.waitFor(() => expect(guests[2]?.starts()).toHaveLength(1));
+  expect(calls[2]?.[1]).toMatchObject({ intent: "new" });
+  expect(calls[2]?.[1].key).not.toBe(firstKey);
+  await guests[2]?.complete();
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  await f.runtime.run(f.delivery("same session"));
+  await vi.waitFor(() => expect(guests[2]?.starts()).toHaveLength(2));
+  expect(execution).toHaveBeenCalledTimes(3);
+  await guests[2]?.complete();
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  const saved = new Map(f.storage);
+  f.runtime.dispose();
+  const restored = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+  );
+  for (const [key, value] of saved) restored.storage.set(key, value);
+  await restored.runtime.run(restored.delivery("after restart"));
+  await vi.waitFor(() => expect(guests[3]?.starts()).toHaveLength(1));
+  expect(calls[3]?.[1]).toMatchObject({
+    key: calls[2]?.[1].key,
+    intent: "existing",
+  });
+  expect(guests[3]?.sent.some((wire) => wire.method === "thread/resume")).toBe(
+    true,
+  );
+  await guests[3]?.complete();
+});
+
+it("does not open execution when the session key cannot be saved", async () => {
+  const execution = vi.fn(async () => undefined);
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  vi.spyOn(f.storage, "set").mockImplementationOnce(() => {
+    throw new Error("State write failed");
+  });
+  await expect(f.runtime.run(f.delivery("first"))).rejects.toThrow(
+    "State write failed",
+  );
+  expect(execution).not.toHaveBeenCalled();
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
+it("keeps discovery and saved session reads free of execution allocation", async () => {
+  const execution = vi.fn(async () => undefined);
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const delivery = f.delivery("unused");
+  await f.runtime.preview({
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent);
+  await f.runtime.find(
+    { key: pubkey, name: "Codex" },
+    { channelId: "channel", root },
+    new AbortController().signal,
+  );
+  expect(f.runtime.conversations(pubkey)).toEqual([]);
+  expect(execution).not.toHaveBeenCalled();
+  expect(f.spawn).not.toHaveBeenCalled();
+  expect(f.storage.size).toBe(0);
+});
+
+it("keeps New disabled during an open and lets Stop cancel that open", async () => {
+  const opened = deferred<AgentExecution>();
+  const started = deferred<void>();
+  const execution = vi.fn(async () => {
+    started.resolve();
+    return opened.promise;
+  });
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const delivery = f.delivery("first");
+  const run = f.runtime.run(delivery);
+  const failed = expect(run).rejects.toThrow("Codex runtime is retired");
+  await started.promise;
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await expect(
+    f.runtime.session(agent, { channelId: "channel", root }, "new"),
+  ).rejects.toThrow("Wait for the active turn");
+  await f.runtime.session(agent, { channelId: "channel", root }, "interrupt");
+  const guest = fixture();
+  const target = guestTarget(guest);
+  opened.resolve(target);
+  await failed;
+  expect(target.signal.aborted).toBe(true);
+  expect(guest.spawn).not.toHaveBeenCalled();
+});
+
+it("retries a refused first turn but requires New when an accepted remote rollout is missing", async () => {
+  const guest = fixture();
+  const target = guestTarget(guest);
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => target,
+  );
+  const delivery = f.delivery("first attempt");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  guest.failing.add("turn/start");
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Needs attention");
+  guest.failing.delete("turn/start");
+  guest.failures.set(
+    "thread/resume",
+    "no rollout found for thread id thread-1",
+  );
+  await f.runtime.run(f.delivery("retry first turn"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(2));
+  expect(
+    guest.sent.filter((wire) => wire.method === "thread/start"),
+  ).toHaveLength(2);
+  await guest.complete(1);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  guest.failures.set(
+    "thread/resume",
+    "no rollout found for thread id thread-2",
+  );
+  await f.runtime.run(f.delivery("resume accepted turn"));
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(guest.starts()).toHaveLength(2);
+  expect(
+    guest.sent.filter((wire) => wire.method === "thread/start"),
+  ).toHaveLength(2);
+  expect(f.runtime.sessions(pubkey)[0]?.detail).toContain(
+    "Start a new session",
+  );
+});
+
+it("resumes the durably saved thread even when the host cache has no thread", async () => {
+  const conversation = JSON.stringify(["channel", root]);
+  const key = `buzz.codex.sessions.execution.v1:${scope}:${pubkey}:${conversation}`;
+  const savedKey = `buzz.codex.sessions.v17:${scope}:${pubkey}:session:durable-session`;
+  const durable = new Map([
+    [key, "durable-session"],
+    [
+      savedKey,
+      JSON.stringify({
+        [conversation]: {
+          threadId: "external-thread",
+          workspace: "/guest/project",
+        },
+      }),
+    ],
+  ]);
+  const store = fileStore(
+    new Map(),
+    async (key, value) => {
+      if (value === null) durable.delete(key);
+      else durable.set(key, value);
+    },
+    undefined,
+    async (key) => durable.get(key) ?? null,
+  );
+  const guest = fixture();
+  const execution = vi.fn(async () => guestTarget(guest));
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+    store,
+  );
+  await f.runtime.session(
+    {
+      ...f.delivery("unused").agent,
+      config: f.delivery("unused").config,
+    } as unknown as Agent,
+    { channelId: "channel", root },
+    "interrupt",
+  );
+  expect(execution).not.toHaveBeenCalled();
+  await f.runtime.run(f.delivery("resume"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(1));
+  expect(
+    guest.sent.find((wire) => wire.method === "thread/resume")?.params,
+  ).toMatchObject({ threadId: "external-thread" });
+  expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+  await guest.complete();
+});
+
+it("saves accepted thread state after its first durable write fails", async () => {
+  const durable = new Map<string, string>();
+  let failed = false;
+  const store = fileStore(new Map(), async (key, value) => {
+    if (
+      !failed &&
+      value?.includes('"threadId"') &&
+      !value.includes('"pending":true')
+    ) {
+      failed = true;
+      throw new Error("Accepted state write failed");
+    }
+    if (value === null) durable.delete(key);
+    else durable.set(key, value);
+  });
+  const guest = fixture();
+  const target = guestTarget(guest);
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => target,
+    store,
+  );
+  const delivery = f.delivery("first");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(failed).toBe(true);
+  const savedKey = [...durable.keys()].find((key) => key.includes(":session:"));
+  if (!savedKey) throw new Error("No thread state was saved");
+  const saved = JSON.parse((await store.read(savedKey)) ?? "{}");
+  expect(saved[JSON.stringify(["channel", root])]).toMatchObject({
+    threadId: "thread-1",
+  });
+  expect(saved[JSON.stringify(["channel", root])].pending).toBeUndefined();
+});
+
+it("keeps restored history when the next turn is refused after a lost first response", async () => {
+  const guest = fixture();
+  const f = fixture([], undefined, false, {}, undefined, undefined, async () =>
+    guestTarget(guest),
+  );
+  const conversation = JSON.stringify(["channel", root]);
+  f.storage.set(
+    `buzz.codex.sessions.execution.v1:${scope}:${pubkey}:${conversation}`,
+    "restored",
+  );
+  const savedKey = `buzz.codex.sessions.v17:${scope}:${pubkey}:session:restored`;
+  f.storage.set(
+    savedKey,
+    JSON.stringify({
+      [conversation]: {
+        threadId: "accepted-history",
+        workspace: "/guest/project",
+        pending: true,
+      },
+    }),
+  );
+  guest.failing.add("turn/start");
+  const delivery = f.delivery("next turn");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(
+    JSON.parse(f.storage.get(savedKey) ?? "{}")[conversation],
+  ).toMatchObject({ threadId: "accepted-history" });
+  expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+  guest.failing.delete("turn/start");
+  await f.runtime.run(f.delivery("retry"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(2));
+  expect(
+    guest.sent
+      .filter((wire) => wire.method === "thread/resume")
+      .map((wire) => wire.params),
+  ).toEqual([
+    expect.objectContaining({ threadId: "accepted-history" }),
+    expect.objectContaining({ threadId: "accepted-history" }),
+  ]);
+  expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+  await guest.complete(1);
 });
