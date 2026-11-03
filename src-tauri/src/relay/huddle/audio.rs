@@ -1,5 +1,6 @@
 use super::{now, template, Call, Channel, IdentityHost, Result, Update};
-use crate::federated_identity::{assertion, FederatedIdentity};
+use crate::federated_identity::{agent::Admission, assertion, FederatedIdentity};
+use buzz_agent_controller::{AppAgent, Secret};
 use buzz_audio_client::{
     connection::{self, AudioSocket as Socket},
     encoder::AudioEncoder,
@@ -31,6 +32,14 @@ pub(super) struct Connection {
     pub(super) peers: BTreeMap<u8, String>,
     pub(super) expires_at: Option<Instant>,
     pub(super) cancellation: CancellationToken,
+    /// Set only for an agent's seat: the one place its owner filter comes from.
+    pub(super) seat: Option<Seat>,
+}
+/// An agent's seat: it hears only `owner`, and lasts only while `admission`
+/// holds, which the heartbeat rechecks.
+pub(super) struct Seat {
+    owner: String,
+    admission: Admission,
 }
 
 fn tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>> {
@@ -100,6 +109,65 @@ async fn connect_via(
         peers,
         expires_at,
         cancellation,
+        seat: None,
+    })
+}
+
+/// Seats an agent as itself: its socket and its NIP-42 `relay` tag both come
+/// from the agent's own community, with the agent's NIP-FI evidence, if any.
+pub(super) async fn seat(
+    agent: &AppAgent,
+    key: &Secret,
+    admission: Admission,
+    parent: &str,
+    room: &str,
+) -> Result<Connection> {
+    seat_via(
+        agent,
+        key,
+        admission,
+        parent,
+        room,
+        Connector::Rustls(tls_config()?),
+    )
+    .await
+}
+
+async fn seat_via(
+    agent: &AppAgent,
+    key: &Secret,
+    admission: Admission,
+    parent: &str,
+    room: &str,
+    connector: Connector,
+) -> Result<Connection> {
+    let community = Url::parse(&agent.relay).map_err(|_| "Invalid Huddle relay")?;
+    let request = audio_request(&community, room, admission.header())?;
+    let joined = admission
+        .run(
+            false,
+            connection::connect(
+                request,
+                Some(parent),
+                Some(connector),
+                |challenge| async move { agent.audio_auth(key, &challenge) },
+            ),
+        )
+        .await?;
+    Ok(Connection {
+        socket: Some(joined.socket),
+        peers: joined
+            .peers
+            .into_iter()
+            .map(|p| (p.index, p.pubkey))
+            .collect(),
+        expires_at: admission.expires_at(),
+        // An agent has no NIP-FI session to retire; the heartbeat rechecks it.
+        cancellation: CancellationToken::new(),
+        seat: Some(Seat {
+            owner: agent.owner.clone(),
+            admission,
+        }),
     })
 }
 
@@ -203,12 +271,16 @@ struct Receiver {
 struct Codec {
     encoder: AudioEncoder,
     receivers: BTreeMap<u8, Receiver>,
+    /// The only pubkey decoded, if any. Indices are reused, so it is checked
+    /// on every frame, by pubkey, before any decoder exists.
+    only: Option<String>,
 }
 impl Codec {
-    fn new() -> Result<Self> {
+    fn new(only: Option<String>) -> Result<Self> {
         Ok(Self {
             encoder: AudioEncoder::new()?,
             receivers: BTreeMap::new(),
+            only,
         })
     }
     fn insert(&mut self, frame: &[u8], peers: &Peers) -> Result<()> {
@@ -218,7 +290,10 @@ impl Codec {
         let Some((index, header, payload)) = parse_relay_frame(frame) else {
             return Ok(());
         };
-        if !peers.contains_key(&index) {
+        let Some(peer) = peers.get(&index) else {
+            return Ok(());
+        };
+        if self.only.as_ref().is_some_and(|only| only != peer) {
             return Ok(());
         }
         if let std::collections::btree_map::Entry::Vacant(entry) = self.receivers.entry(index) {
@@ -287,7 +362,8 @@ pub(super) async fn run(
     let mut peers = connection.peers;
     let expires_at = connection.expires_at;
     let authorization_cancellation = connection.cancellation;
-    let mut codec = Codec::new()?;
+    let seat = connection.seat;
+    let mut codec = Codec::new(seat.as_ref().map(|seat| seat.owner.clone()))?;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut playout = tokio::time::interval(Duration::from_millis(10));
@@ -304,6 +380,7 @@ pub(super) async fn run(
                 // Cleanup must not be starved by a continuously ready audio stream.
                 _ = heartbeat.tick() => {
                     super::check_cancelled(&stop, touched)?;
+                    if let Some(seat) = &seat { seat.admission.dispatch()?; }
                     if last_received.elapsed() > Duration::from_secs(30) { return Err("Huddle connection timed out. You can join again.".into()); }
                     tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(now().to_be_bytes().to_vec().into()))).await.map_err(|_| "Huddle connection stalled")?.map_err(|_| "Huddle disconnected")?;
                 }
@@ -520,6 +597,7 @@ mod tests {
                     peers: Peers::new(),
                     expires_at: deadline,
                     cancellation: authorization_cancellation,
+                    seat: None,
                 },
                 pcm,
                 stop,
@@ -549,6 +627,64 @@ mod tests {
             active_call_error(false).await,
             "Huddle authorization changed. Join again to reconnect."
         );
+    }
+
+    /// An agent of owner `b…` in `relay`, attested by a fixed `auth` tag.
+    fn agent(key: &Secret, relay: String) -> AppAgent {
+        serde_json::from_value(json!({
+            "pubkey": key.pubkey(), "relay": relay, "owner": "b".repeat(64),
+            "auth": r#"["auth","owner","conditions","sig"]"#, "type": "p/t", "name": "Ada"
+        }))
+        .unwrap()
+    }
+
+    /// An agent's seat ends at its next heartbeat once the agent is deleted or
+    /// leaves the community; it has no session to retire it sooner.
+    #[tokio::test]
+    async fn a_seat_ends_when_its_agent_is_removed() {
+        use crate::federated_identity::agent::AgentTokens;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(frame)) = socket.next().await {
+                if matches!(frame, Message::Close(_)) {
+                    break;
+                }
+            }
+        });
+        let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}"))
+            .await
+            .unwrap();
+        let key = Secret::generate().unwrap();
+        let agent = agent(&key, "wss://relay.example".into());
+        let tokens = AgentTokens::unconfigured();
+        let stamp = tokens.stamp(&agent.pubkey, &agent.relay).unwrap();
+        let admission = tokens.authorize(&agent, &key, stamp).await.unwrap();
+        tokens.forget_row(&agent.pubkey, &agent.relay).unwrap();
+        let (_pcm, pcm) = mpsc::channel(1);
+        let (_stop, stop) = watch::channel(false);
+        let touched =
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(super::super::lease_time()));
+        let connection = Connection {
+            socket: Some(socket),
+            peers: Peers::new(),
+            expires_at: None,
+            cancellation: CancellationToken::new(),
+            seat: Some(Seat {
+                owner: agent.owner,
+                admission,
+            }),
+        };
+        let ended = tokio::time::timeout(
+            Duration::from_secs(5),
+            run(connection, pcm, stop, &Channel::new(|_| Ok(())), &touched),
+        )
+        .await
+        .expect("a removed agent kept its seat");
+        assert_eq!(ended.unwrap_err(), "This agent was deleted");
+        drop(server);
     }
 
     #[test]
@@ -641,6 +777,7 @@ mod tests {
                 viewer,
                 parent: uuid::Uuid::new_v4().to_string(),
                 room: None,
+                agent: None,
             };
             (
                 Relay(listener, acceptor),
@@ -783,6 +920,108 @@ mod tests {
             assert!(headers.get("authorization").is_none());
         }
 
+        /// An agent's seat signs NIP-42 as the agent, for its own community,
+        /// with its owner's attestation, and is born filtering for that owner.
+        #[tokio::test]
+        async fn an_agent_seat_signs_as_itself_and_hears_only_its_owner() {
+            use crate::federated_identity::agent::AgentTokens;
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (acceptor, connector) = tls();
+            let listener = Relay(listener, acceptor);
+            let key = Secret::generate().unwrap();
+            let agent = agent(&key, format!("wss://{}", listener.0.local_addr().unwrap()));
+            let tokens = AgentTokens::unconfigured();
+            let stamp = tokens.stamp(&agent.pubkey, &agent.relay).unwrap();
+            let admission = tokens.authorize(&agent, &key, stamp).await.unwrap();
+            let parent = uuid::Uuid::new_v4().to_string();
+            let seating = seat_via(&agent, &key, admission, &parent, "room", connector);
+            let relay_side = async {
+                let (mut socket, uri, headers) = upgrade(&listener).await;
+                (
+                    admit(&mut socket, &agent.pubkey).await,
+                    uri,
+                    headers,
+                    socket,
+                )
+            };
+            let (seated, (auth, uri, headers, socket)) = tokio::join!(seating, relay_side);
+            let seated = seated.unwrap();
+            assert_eq!(uri, "/huddle/room/audio");
+            assert!(headers.get(assertion::HEADER).is_none(), "a plain relay");
+            assert_eq!(
+                seated.seat.as_ref().map(|seat| &seat.owner),
+                Some(&agent.owner)
+            );
+
+            let event: nostr::event::Event = serde_json::from_value(auth["event"].clone()).unwrap();
+            event.verify().unwrap();
+            assert_eq!(event.pubkey.to_hex(), agent.pubkey);
+            let event = serde_json::to_value(event).unwrap();
+            assert_eq!(
+                event["tags"],
+                json!([
+                    ["relay", agent.relay],
+                    ["challenge", "relay-challenge"],
+                    ["auth", "owner", "conditions", "sig"]
+                ])
+            );
+            assert_eq!(auth["parent_channel_id"], parent);
+
+            // Seated, it plays its owner and never the stranger beside them.
+            let (owner, stranger) = (agent.owner.clone(), "c".repeat(64));
+            let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let updates = Channel::new({
+                let heard = heard.clone();
+                move |body| {
+                    let tauri::ipc::InvokeResponseBody::Json(json) = body else {
+                        panic!("updates are JSON");
+                    };
+                    let update: Value = serde_json::from_str(&json).unwrap();
+                    if update["type"] == "audio" {
+                        heard
+                            .lock()
+                            .unwrap()
+                            .push(update["peer"].as_str().unwrap().to_owned());
+                    }
+                    Ok(())
+                }
+            });
+            let (_pcm, pcm) = mpsc::channel(1);
+            let (stop, stopped) = watch::channel(false);
+            let touched = Arc::new(std::sync::atomic::AtomicU64::new(
+                super::super::super::lease_time(),
+            ));
+            let mut relay = socket;
+            let playing = run(seated, pcm, stopped, &updates, &touched);
+            let relay_side = async {
+                send(
+                    &mut relay,
+                    json!({"type":"joined","peers":[
+                    {"peer_index":1,"pubkey":owner},{"peer_index":2,"pubkey":stranger}]}),
+                )
+                .await;
+                let mut encoder = AudioEncoder::new().unwrap();
+                for index in [2, 1] {
+                    let frame = encoder.encode(&vec![0.1; FRAME_SAMPLES]).unwrap();
+                    relay
+                        .send(Message::Binary([vec![index], frame].concat().into()))
+                        .await
+                        .unwrap();
+                }
+                tokio::time::timeout(FAILURE_BOUND, async {
+                    while heard.lock().unwrap().len() < 3 {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("the owner was never heard");
+                stop.send(true).unwrap();
+            };
+            let (played, ()) = tokio::join!(playing, relay_side);
+            played.unwrap();
+            assert!(heard.lock().unwrap().iter().all(|peer| *peer == owner));
+        }
+
         /// Retire the session at `gate`, then let the relay continue: the retired
         /// connect must end without authenticating or returning a socket.
         async fn retired_at(gate: &str, retire: impl FnOnce(&FederatedIdentity)) {
@@ -872,7 +1111,7 @@ mod tests {
 
     #[test]
     fn mesh_join_delta_keeps_existing_speakers_and_reuse_clears_playout() {
-        let mut codec = Codec::new().unwrap();
+        let mut codec = Codec::new(None).unwrap();
         let mut peers = BTreeMap::from([(1, "a".repeat(64)), (2, "b".repeat(64))]);
         let frame = [
             vec![1],
@@ -904,11 +1143,59 @@ mod tests {
         assert!(codec.receivers.is_empty());
     }
 
+    /// A frame of `index` speaking.
+    fn spoken(codec: &mut Codec, index: u8) -> Vec<u8> {
+        [
+            vec![index],
+            codec.encoder.encode(&vec![0.1; FRAME_SAMPLES]).unwrap(),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn an_agent_seat_never_decodes_anyone_but_its_owner() {
+        let (owner, stranger) = ("a".repeat(64), "c".repeat(64));
+        let mut codec = Codec::new(Some(owner.clone())).unwrap();
+        let mut peers = BTreeMap::from([(1, owner.clone()), (2, stranger.clone())]);
+        let (from_owner, from_stranger) = (spoken(&mut codec, 1), spoken(&mut codec, 2));
+        codec.insert(&from_stranger, &peers).unwrap();
+        assert!(codec.receivers.is_empty(), "a stranger reached a decoder");
+        codec.insert(&from_owner, &peers).unwrap();
+        assert_eq!(codec.receivers.keys().collect::<Vec<_>>(), [&1]);
+
+        // The owner leaves and the stranger is given the owner's old index: the
+        // filter is by pubkey, so the reused index is still not heard.
+        codec.replace(&mut peers, BTreeMap::from([(1, stranger.clone())]));
+        codec.insert(&from_owner, &peers).unwrap();
+        assert!(
+            codec.receivers.is_empty(),
+            "a reused index reached a decoder"
+        );
+        // The owner rejoins elsewhere, also from a second device: both are heard.
+        codec.joined(
+            &mut peers,
+            BTreeMap::from([(3, owner.clone()), (4, owner.clone())]),
+        );
+        for index in [1, 2, 3, 4] {
+            let frame = spoken(&mut codec, index);
+            codec.insert(&frame, &peers).unwrap();
+        }
+        assert_eq!(codec.receivers.keys().collect::<Vec<_>>(), [&3, &4]);
+        let mut heard = Vec::new();
+        codec
+            .play(&peers, |peer, _| {
+                heard.push(peer);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(heard, [owner.clone(), owner]);
+    }
+
     #[test]
     fn malformed_frames_and_rosters_are_bounded() {
         assert!(roster(&json!({"peers":[{"peer_index":256,"pubkey":"a".repeat(64)}]})).is_err());
         assert!(roster(&json!({"peers":[{"peer_index":0,"pubkey":"bad"}]})).is_err());
-        let mut codec = Codec::new().unwrap();
+        let mut codec = Codec::new(None).unwrap();
         for frame in [vec![0; 8], vec![0; 40010], vec![0; 50]] {
             codec.insert(&frame, &Peers::new()).unwrap();
         }

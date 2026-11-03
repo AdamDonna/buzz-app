@@ -148,6 +148,10 @@ impl Admission {
     pub(crate) fn header(&self) -> Option<&str> {
         self.cached.as_ref().map(|cached| cached.header.as_str())
     }
+    /// When its assertion expires; `None` where the community takes none.
+    pub(crate) fn expires_at(&self) -> Option<tokio::time::Instant> {
+        self.cached.as_ref().map(|cached| cached.expires_at)
+    }
     pub(crate) fn dispatch(&self) -> Result<(), String> {
         self.commit(false, || Ok(()))?;
         if self

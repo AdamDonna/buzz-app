@@ -886,12 +886,14 @@ pub fn run() {
                 if let Some(settings) = gtk::Settings::default() {
                     settings.set_gtk_xft_hintstyle(Some("hintslight"));
                 }
-                // WebKitGTK hides `navigator.mediaDevices` unless media streams are on.
+                // WebKitGTK hides `navigator.mediaDevices` unless media streams are
+                // on, and `RTCPeerConnection` (agent voice) unless WebRTC is.
                 if let Some(main) = app.get_webview_window("main") {
                     main.with_webview(|webview| {
                         use webkit2gtk::{SettingsExt, WebViewExt};
                         if let Some(settings) = webview.inner().settings() {
                             settings.set_enable_media_stream(true);
+                            settings.set_enable_webrtc(true);
                         }
                     })?;
                 }

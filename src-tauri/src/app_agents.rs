@@ -162,7 +162,7 @@ impl AppAgentHost {
         .await
     }
     /// The agent, its key and its organization evidence, for one request.
-    async fn signer(
+    pub(crate) async fn signer(
         &self,
         pubkey: String,
         relay: String,

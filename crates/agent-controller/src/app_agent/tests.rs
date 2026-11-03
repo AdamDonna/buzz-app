@@ -496,6 +496,32 @@ fn signs_artifact_revisions_without_a_timeline_ms_tag() {
 }
 
 #[test]
+fn signs_audio_auth_for_only_the_challenge_in_its_own_community() {
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = Memory::default();
+    let (_, agent) = created(dir.path(), &credentials);
+    let key = agent.read_key(&credentials).unwrap();
+    let saved: Vec<String> = serde_json::from_str(&agent.auth).unwrap();
+    let auth = agent.audio_auth(&key, "relay-challenge").unwrap();
+    assert_eq!(auth["kind"], 22242);
+    assert_eq!(auth["pubkey"], agent.pubkey);
+    assert_eq!(auth["content"], "");
+    let tags: Vec<Vec<String>> = serde_json::from_value(auth["tags"].clone()).unwrap();
+    assert_eq!(
+        tags,
+        [
+            vec!["relay".to_owned(), RELAY.to_owned()],
+            vec!["challenge".to_owned(), "relay-challenge".to_owned()],
+            saved
+        ]
+    );
+    assert!(agent.audio_auth(&key, "").is_err());
+    assert!(agent.audio_auth(&key, &"c".repeat(4097)).is_err());
+    let other = Secret::generate().unwrap();
+    assert!(agent.audio_auth(&other, "relay-challenge").is_err());
+}
+
+#[test]
 fn signs_git_auth_for_one_repository_in_its_own_community() {
     let dir = tempfile::tempdir().unwrap();
     let credentials = Memory::default();
