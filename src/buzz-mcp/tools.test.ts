@@ -3892,31 +3892,42 @@ it("validates change drafts and passes only the proposed fields", async () => {
   });
 });
 
-it("uploads a proposed picture as the agent and drafts its URL", async () => {
+it("uploads a proposed picture as the agent once its draft is valid", async () => {
   const { client } = fake([]);
-  const saved = async () => ({ requestId: "draft", saved: false as const });
+  const image = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0]);
+  const read = client.read;
+  client.read = vi.fn(async (path: string) =>
+    path === "/tmp/me.png" || path === "kid.png" ? image : read(path),
+  );
+  const pictures: string[] = [];
+  const saved = async (input: { picture?: () => Promise<string> }) => {
+    if (input.picture) pictures.push(await input.picture());
+    return { requestId: "draft", saved: false as const };
+  };
   client.updateAgent = vi.fn(saved);
   client.createAgent = vi.fn(saved);
   await expect(
     callTool(client, {}, "agent_update", { agent: "Child", picture: "me.png" }),
   ).rejects.toThrow("Picture proposals are unavailable");
-  expect(client.read).not.toHaveBeenCalledWith("me.png");
+  expect(client.updateAgent).not.toHaveBeenCalled();
   client.uploadPicture = vi.fn(async (_data: Uint8Array, type: string) => ({
     url: "https://relay/media/x.png",
     sha256: "ab",
     size: 7,
     type,
   }));
-  for (const [name, args] of [
-    ["agent_update", { agent: "Child" }],
-    ["agent_create", { type: "codex/codex", name: "Child" }],
-  ] as const)
-    await expect(
-      callTool(client, {}, name, { ...args, picture: "notes.md" }),
-    ).rejects.toThrow("PNG, JPEG, GIF or WebP");
-  expect(client.upload).not.toHaveBeenCalled();
-  expect(client.updateAgent).not.toHaveBeenCalled();
-  expect(client.createAgent).not.toHaveBeenCalled();
+  // A text file, and a PNG signature cut short that the preparer would
+  // pass through unchanged.
+  for (const picture of ["notes.md", "short.png"])
+    for (const [name, args] of [
+      ["agent_update", { agent: "Child" }],
+      ["agent_create", { type: "codex/codex", name: "Child" }],
+    ] as const)
+      await expect(
+        callTool(client, {}, name, { ...args, picture }),
+      ).rejects.toThrow("PNG, JPEG, GIF or WebP");
+  expect(client.uploadPicture).not.toHaveBeenCalled();
+  expect(pictures).toEqual([]);
   await callTool(client, {}, "agent_update", {
     agent: "Child",
     picture: "/tmp/me.png",
@@ -3926,16 +3937,20 @@ it("uploads a proposed picture as the agent and drafts its URL", async () => {
     name: "Kid",
     picture: "kid.png",
   });
-  expect(client.uploadPicture).toHaveBeenCalledWith(PNG, "image/png");
+  expect(client.uploadPicture).toHaveBeenCalledWith(image, "image/png");
   expect(client.upload).not.toHaveBeenCalled();
-  expect(client.updateAgent).toHaveBeenCalledWith({
+  expect(pictures).toEqual([
+    "https://relay/media/x.png",
+    "https://relay/media/x.png",
+  ]);
+  expect(client.updateAgent).toHaveBeenLastCalledWith({
     agent: "Child",
-    picture: "https://relay/media/x.png",
+    picture: expect.any(Function),
   });
-  expect(client.createAgent).toHaveBeenCalledWith({
+  expect(client.createAgent).toHaveBeenLastCalledWith({
     type: "codex/codex",
     name: "Kid",
-    picture: "https://relay/media/x.png",
+    picture: expect.any(Function),
   });
 });
 

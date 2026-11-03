@@ -260,3 +260,21 @@ it("strips a proposed picture's metadata before uploading it as the agent", asyn
   const sent = Uint8Array.from(atob(data ?? ""), (c) => c.charCodeAt(0));
   expect(pngChunks(sent).map((c) => c.kind)).toEqual(["IHDR", "IDAT", "IEND"]);
 });
+
+it("refuses a proposed picture its preparation does not recognize", async () => {
+  const upload = vi.fn();
+  const client = appClient(
+    { pubkey: "agent", upload } as unknown as AgentHandle,
+    {
+      read: vi.fn(),
+      memories: async () => ({ entries: [], partial: false }),
+    },
+  );
+  await expect(
+    client.uploadPicture?.(
+      new TextEncoder().encode("GIF8x metadata"),
+      "image/gif",
+    ),
+  ).rejects.toThrow("PNG, JPEG, GIF or WebP");
+  expect(upload).not.toHaveBeenCalled();
+});

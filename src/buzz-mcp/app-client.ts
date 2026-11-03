@@ -130,11 +130,15 @@ export function appClient(
     },
     uploadPicture: async (data, mime) => {
       check();
+      const file = new File([new Uint8Array(data)], "picture", { type: mime });
       const picture = await prepareAttachment(
-        new File([new Uint8Array(data)], "picture", { type: mime }),
+        file,
         options.signal ?? new AbortController().signal,
         true,
       );
+      // It returns a file it doesn't recognize as an image unprepared.
+      if (picture === file)
+        throw new Error("picture must be a PNG, JPEG, GIF or WebP image");
       check();
       return agent.upload(
         toBase64(new Uint8Array(await picture.arrayBuffer())),
