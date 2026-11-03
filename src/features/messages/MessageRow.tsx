@@ -239,6 +239,11 @@ function MessageRowContent({
     row.channelId,
     (channel) => !!channel,
   );
+  const channelName = useListedChannel(
+    channels,
+    row.channelId,
+    (channel) => channel?.name,
+  );
   const cached = useListedChannel(
     channels,
     row.channelId,
@@ -954,6 +959,12 @@ function MessageRowContent({
                   <WorkflowByline
                     ownerId={row.workflowOwnerId}
                     ownerName={workflowOwnerName}
+                    ownerAgent={
+                      !!agentPubkeys?.has(row.workflowOwnerId) ||
+                      !!directory.profiles.get(row.workflowOwnerId)?.isAgent
+                    }
+                    channelId={row.channelId}
+                    channelName={channelName}
                     canOpenLink={canOpenLink}
                     onOpenLink={openLink}
                   />
