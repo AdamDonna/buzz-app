@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { channelIcon } from "../../features/channels/channel-icon";
 import {
   useChannelDirectory,
@@ -17,6 +17,8 @@ import {
   type SearchInputProps,
   type SearchViews,
 } from "./SearchChoices";
+
+const collator = new Intl.Collator();
 
 /** Read-only isn't unjoined: guests and cached channels are members too.
  * The same rule as All's "Public channel · not joined". */
@@ -47,16 +49,21 @@ export function ChannelDirectoryResults({
   const directory = useChannelDirectory(session.channels, ready);
   const members = useMemberCounts(session.channels);
   const needle = query.trim().toLowerCase().replace(/^#/, "");
-  const joined = list.channels.filter(
-    (channel) =>
-      isMember(channel) &&
-      !channel.archived &&
-      !channel.huddle &&
-      !channel.metadataPending &&
-      (channel.channelType === "stream" || channel.channelType === "forum"),
-  );
-  const member = new Set(
-    list.channels.filter(isMember).map((channel) => channel.id),
+  const { joined, member } = useMemo(
+    () => ({
+      joined: list.channels.filter(
+        (channel) =>
+          isMember(channel) &&
+          !channel.archived &&
+          !channel.huddle &&
+          !channel.metadataPending &&
+          (channel.channelType === "stream" || channel.channelType === "forum"),
+      ),
+      member: new Set(
+        list.channels.filter(isMember).map((channel) => channel.id),
+      ),
+    }),
+    [list.channels],
   );
   // Rows hold their places while later pages land: each page's new rows
   // join below the ones already shown, A–Z among themselves. A view opened
@@ -83,26 +90,35 @@ export function ChannelDirectoryResults({
     joined: boolean;
   }) =>
     joined ? 0 : (arrival.current.seen.get(channel.id) ?? arrival.current.page);
-  const rows = [
-    ...(needle
-      ? joined.map((channel) => ({ channel, joined: true }) as const)
-      : []),
-    ...directory.directory
-      .filter((channel) => !channel.archived && !member.has(channel.id))
-      .map((channel) => ({ channel, joined: false }) as const),
-  ]
-    .flatMap((row) => {
-      const match = needle ? matchName(row.channel.name, needle) : undefined;
-      return !needle || match ? [{ ...row, match }] : [];
-    })
-    .sort(
-      (a, b) =>
-        (a.match?.rank ?? 0) - (b.match?.rank ?? 0) ||
-        landed(a) - landed(b) ||
-        Number(b.joined) - Number(a.joined) ||
-        a.channel.name.localeCompare(b.channel.name) ||
-        a.channel.id.localeCompare(b.channel.id),
-    );
+  // Sorted once per directory, query or roster change; counts and other
+  // renders reuse it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `landed` reads the arrival ref the directory keys.
+  const rows = useMemo(
+    () =>
+      [
+        ...(needle
+          ? joined.map((channel) => ({ channel, joined: true }) as const)
+          : []),
+        ...directory.directory
+          .filter((channel) => !channel.archived && !member.has(channel.id))
+          .map((channel) => ({ channel, joined: false }) as const),
+      ]
+        .flatMap((row) => {
+          const match = needle
+            ? matchName(row.channel.name, needle)
+            : undefined;
+          return !needle || match ? [{ ...row, match }] : [];
+        })
+        .sort(
+          (a, b) =>
+            (a.match?.rank ?? 0) - (b.match?.rank ?? 0) ||
+            landed(a) - landed(b) ||
+            Number(b.joined) - Number(a.joined) ||
+            collator.compare(a.channel.name, b.channel.name) ||
+            a.channel.id.localeCompare(b.channel.id),
+        ),
+    [directory.directory, needle, joined, member],
+  );
   const destinations: SearchDestination[] = rows.map(
     ({ channel, joined, match }) => {
       const people = members.counts.get(channel.id);

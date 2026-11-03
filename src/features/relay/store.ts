@@ -116,6 +116,8 @@ const DISCOVERY_LIMIT = 500;
 // Public channel metadata for name search, read a page at a time up to a
 // bound; matches resolve exactly.
 const PUBLIC_CHANNEL_PAGE = 500;
+/** Rosters per member-count read: one can run to hundreds of KB. */
+const MEMBER_COUNT_CHUNK = 10;
 // One exact resolution can consume the reader's full response byte budget.
 const PUBLIC_CHANNEL_RESERVE_BYTES = 8 * 1024 * 1024;
 const PUBLIC_CHANNEL_DIRECTORY = 20_000;
@@ -308,6 +310,8 @@ export function createChannelStore(
   let dropped = true;
   const accessVersions = new Map<string, number>();
   const listListeners = new Set<Listener>();
+  /** Directory pages and finished reads, for browsing. */
+  const directoryListeners = new Set<Listener>();
   const windowListeners = new Map<string, Set<Listener>>();
   let intent: string | undefined = options.initialChannelId;
   let current: string | undefined;
@@ -1972,9 +1976,11 @@ export function createChannelStore(
         read: Promise<{ partial: boolean }>;
         /** A refresh of a finished read, whose names it keeps meanwhile. */
         refresh: boolean;
-        /** The open channels read so far (the prior read's during a
+        /** The finished read's open channels (the prior read's during a
          * refresh), newest metadata per channel. */
         open?: ReturnType<NonNullable<ChannelQueries["openDirectory"]>>;
+        /** A first read's open channels so far, for browsing only. */
+        pages?: ReturnType<NonNullable<ChannelQueries["openDirectory"]>>;
       }
     | undefined;
   const noOpenDirectory: ReturnType<
@@ -1991,29 +1997,55 @@ export function createChannelStore(
     }
     return latest;
   }
+  type DirectoryChannel = ReturnType<
+    NonNullable<ChannelQueries["openDirectory"]>
+  >[number];
+  function directoryChannel(
+    id: string,
+    event: RelayEvent,
+  ): DirectoryChannel | undefined {
+    const name = openMetadata(event) && metadataName(event);
+    if (!name) return undefined;
+    const type = tag(event, "t");
+    return Object.freeze({
+      id,
+      name,
+      ...(type === "stream" || type === "forum" ? { channelType: type } : {}),
+      ...(tag(event, "about") ? { description: tag(event, "about") } : {}),
+      ...(hasTag(event, "archived", "true") ? { archived: true as const } : {}),
+    });
+  }
   function openDirectoryChannels(events: readonly RelayEvent[]) {
     return Object.freeze(
       [...latestPublicMetadata(events).entries()].flatMap(([id, event]) => {
-        const name = openMetadata(event) && metadataName(event);
-        if (!name) return [];
-        const type = tag(event, "t");
-        return [
-          Object.freeze({
-            id,
-            name,
-            ...(type === "stream" || type === "forum"
-              ? { channelType: type }
-              : {}),
-            ...(tag(event, "about")
-              ? { description: tag(event, "about") }
-              : {}),
-            ...(hasTag(event, "archived", "true")
-              ? { archived: true as const }
-              : {}),
-          }),
-        ];
+        const channel = directoryChannel(id, event);
+        return channel ? [channel] : [];
       }),
     );
+  }
+  /** A first read's channels, folded a page at a time: each page projects
+   * only its own events, in the order the relay sent them. */
+  function directoryPages() {
+    const latest = new Map<string, RelayEvent>();
+    const channels = new Map<string, DirectoryChannel | undefined>();
+    let folded = 0;
+    return (events: readonly RelayEvent[]) => {
+      for (const event of events.slice(folded)) {
+        const id = tag(event, "d");
+        if (!id) continue;
+        const previous = latest.get(id);
+        const next = newer(previous, event);
+        if (next === previous) continue;
+        latest.set(id, next);
+        channels.set(id, directoryChannel(id, next));
+      }
+      folded = events.length;
+      return Object.freeze(
+        [...channels.values()].filter(
+          (channel): channel is DirectoryChannel => !!channel,
+        ),
+      );
+    };
   }
   /** All open channels' metadata, newest first, through the relay's
    * `(until, before_id)` cursor. One read serves every keystroke: a caller
@@ -2104,6 +2136,7 @@ export function createChannelStore(
         : undefined;
       let land = () => {};
       const next = () => new Promise<void>((settle) => (land = settle));
+      const fold = directoryPages();
       const read = (since?: number) =>
         readPublicDirectory(
           relay,
@@ -2114,11 +2147,12 @@ export function createChannelStore(
             const landed = land;
             entry.page = next();
             landed();
-            // A first read names its channels a page at a time, so browsing
-            // starts on the first page; a refresh keeps the prior names whole.
+            // A first read shows its channels a page at a time, so browsing
+            // starts on the first page; a refresh keeps the prior ones whole.
+            // Only browsing hears pages: name references wait for the end.
             if (!entry.refresh) {
-              entry.open = openDirectoryChannels(events);
-              notify(listListeners);
+              entry.pages = fold(events);
+              notify(directoryListeners);
             }
           },
           since,
@@ -2159,15 +2193,20 @@ export function createChannelStore(
           entry.at = now();
           entry.partial = partial;
           delete entry.previous;
+          delete entry.pages;
           // Name references in mounted rows read the directory through the
           // list subscription; the list itself is unchanged.
           entry.open = openDirectoryChannels(entry.events);
           notify(listListeners);
+          notify(directoryListeners);
           land();
         },
         () => {
           controllers.delete(controller);
-          if (publicDirectory === entry) publicDirectory = prior;
+          if (publicDirectory === entry) {
+            publicDirectory = prior;
+            if (entry.pages) notify(directoryListeners);
+          }
           land();
         },
       );
@@ -2227,9 +2266,13 @@ export function createChannelStore(
   async function readMemberCounts(
     channelIds: readonly string[],
     settings?: { signal?: AbortSignal | undefined },
-  ): Promise<ReadonlyMap<string, number>> {
+  ): Promise<{
+    counts: ReadonlyMap<string, number>;
+    failed: readonly string[];
+  }> {
     if (disposed || !transport || !discovery || options.cachedOnly)
       throw new Error("Relay is unavailable");
+    const relay = transport;
     const generation = epoch;
     if (memberCounts?.generation !== generation)
       memberCounts = { generation, counts: new Map() };
@@ -2241,18 +2284,23 @@ export function createChannelStore(
         ? discovery.get(id)?.members?.length
         : undefined;
       const known = counts.get(id);
-      if (members) answer.set(id, members);
+      if (members !== undefined) answer.set(id, members);
       else if (known && now() - known.at < REFERENCE_TTL)
         answer.set(id, known.count);
       else missing.push(id);
     }
-    for (let start = 0; start < missing.length; start += 100) {
-      const ids = missing.slice(start, start + 100);
-      const events = await transport.read(
+    // A roster can run to hundreds of KB, so reads stay small and run side
+    // by side. Each keeps what it found even when another fails.
+    const failed: string[] = [];
+    const chunks: string[][] = [];
+    for (let start = 0; start < missing.length; start += MEMBER_COUNT_CHUNK)
+      chunks.push(missing.slice(start, start + MEMBER_COUNT_CHUNK));
+    const read = async (ids: string[]) => {
+      const events = await relay.read(
         [
           {
             kinds: [39002],
-            authors: [transport.relayAuthor],
+            authors: [relay.relayAuthor],
             "#d": ids,
             limit: ids.length,
           },
@@ -2264,15 +2312,13 @@ export function createChannelStore(
           fresh: true,
         },
       );
-      settings?.signal?.throwIfAborted();
-      if (disposed || generation !== epoch)
-        throw new DOMException("Stale member counts", "AbortError");
+      if (settings?.signal?.aborted || disposed || generation !== epoch) return;
       const latest = new Map<string, RelayEvent>();
       for (const event of events) {
         const id = tag(event, "d");
         if (
           event.kind === 39002 &&
-          event.pubkey === transport.relayAuthor &&
+          event.pubkey === relay.relayAuthor &&
           id &&
           ids.includes(id)
         )
@@ -2287,8 +2333,14 @@ export function createChannelStore(
         counts.set(id, { count, at: now() });
         answer.set(id, count);
       }
-    }
-    return answer;
+    };
+    await Promise.all(
+      chunks.map((ids) => read(ids).catch(() => failed.push(...ids))),
+    );
+    settings?.signal?.throwIfAborted();
+    if (disposed || generation !== epoch)
+      throw new DOMException("Stale member counts", "AbortError");
+    return { counts: answer, failed };
   }
   async function searchPublic(
     query: string,
@@ -2993,6 +3045,12 @@ export function createChannelStore(
       publicDirectory?.generation === epoch
         ? (publicDirectory.open ?? noOpenDirectory)
         : noOpenDirectory,
+    browseDirectory: () =>
+      publicDirectory?.generation === epoch
+        ? (publicDirectory.pages ?? publicDirectory.open ?? noOpenDirectory)
+        : noOpenDirectory,
+    subscribeDirectory: (listener: Listener) =>
+      subscribe(directoryListeners, listener),
     describe: describeReference,
     refer: referChannel,
     refreshRoster,

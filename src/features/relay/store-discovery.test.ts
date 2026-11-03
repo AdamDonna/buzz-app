@@ -1447,6 +1447,48 @@ it("reads the open directory for browsing with descriptions, sharing the search 
   expect(h.pending).toHaveLength(0);
 });
 
+it("shows a first directory read's pages to browsing only, and names them for references once it finishes", async () => {
+  const h = setup({ publicDirectoryPage: 2, maxPublicDirectory: 10 });
+  h.channels.ensureList();
+  await h.rosters(0);
+  await h.settled();
+  const id = (n: number) =>
+    `13100000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const open = (n: number, at: number) =>
+    metadata(relay, id(n), `open-${n}`, at, [["public"], ["t", "stream"]]);
+  const list = vi.fn();
+  const pages = vi.fn();
+  const offList = h.channels.subscribeList(list);
+  const offPages = h.channels.subscribeDirectory?.(pages);
+  try {
+    const done = h.channels.readDirectory?.();
+    (await h.next(39000)).respond([
+      open(0, 1_700_000_003),
+      open(1, 1_700_000_002),
+    ]);
+    await vi.waitFor(() => expect(pages).toHaveBeenCalledTimes(1));
+    // Browsing has the first page; references and the list hear nothing yet.
+    expect(h.channels.browseDirectory?.()).toEqual([
+      { id: id(0), name: "open-0", channelType: "stream" },
+      { id: id(1), name: "open-1", channelType: "stream" },
+    ]);
+    expect(h.channels.openDirectory?.()).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+    (await h.next(39000)).respond([open(2, 1_700_000_001)]);
+    expect(await done).toEqual({ partial: false });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(pages).toHaveBeenCalledTimes(2);
+    const names = ["open-0", "open-1", "open-2"];
+    expect(h.channels.openDirectory?.().map(({ name }) => name)).toEqual(names);
+    expect(h.channels.browseDirectory?.().map(({ name }) => name)).toEqual(
+      names,
+    );
+  } finally {
+    offList();
+    offPages?.();
+  }
+});
+
 it("names the completed public directory's open channels for references, without reading", async () => {
   const h = setup();
   h.channels.ensureList();
@@ -1980,6 +2022,35 @@ it("finds a labeled system channel whose roster arrived before its metadata", as
   ]);
   names.respond([labeled]);
   expect(found.map((channel) => channel.id)).toEqual([id]);
+});
+
+it("counts members in small side-by-side reads, keeping each read's answers when another fails", async () => {
+  const h = setup();
+  h.channels.ensureList();
+  await h.rosters(0);
+  await h.settled();
+  const ids = Array.from(
+    { length: 12 },
+    (_, n) => `13200000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+  );
+  const counted = h.channels.readMemberCounts?.(ids);
+  const first = await h.next(39002);
+  const second = await h.next(39002);
+  // Ten rosters at most per read, and the second doesn't wait for the first.
+  expect(first.filters[0]?.["#d"]).toEqual(ids.slice(0, 10));
+  expect(second.filters[0]?.["#d"]).toEqual(ids.slice(10));
+  second.fail(new Error("Relay response too large"));
+  first.respond([roster(relay, ids[0] ?? "", [viewer.pubkey, relay.pubkey])]);
+  const result = await counted;
+  expect(result?.counts).toEqual(new Map([[ids[0], 2]]));
+  expect(result?.failed).toEqual(ids.slice(10));
+  // The answered count is kept; only the failed ids read again.
+  const again = h.channels.readMemberCounts?.([ids[0] ?? "", ...ids.slice(10)]);
+  const retry = await h.next(39002);
+  expect(retry.filters[0]?.["#d"]).toEqual(ids.slice(10));
+  retry.respond([]);
+  expect((await again)?.counts).toEqual(new Map([[ids[0], 2]]));
+  expect(h.pending).toHaveLength(0);
 });
 
 it("accepts only a directory page size that divides its budget", () => {
