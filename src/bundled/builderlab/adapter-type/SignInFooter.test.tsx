@@ -339,7 +339,13 @@ it("loads the pane after a late browser callback and verified exchange without w
       });
     return reply({ models: [] });
   });
-  const host: Host = { request, runCommand: vi.fn() };
+  const host: Host = {
+    request,
+    runCommand: vi.fn(),
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
+  };
   const session = createOAuthSession(
     (signal) => browserCredential(host, signal, bridge),
     undefined,

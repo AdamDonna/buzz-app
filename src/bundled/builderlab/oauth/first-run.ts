@@ -15,6 +15,11 @@ import { browserCredential, type Credential } from "./browser";
  * time; it does not depend on the plugin's JavaScript having started.
  */
 export const bundledHost: Host = {
+  repositoriesFolder: async () => {
+    throw new Error(
+      "Choose a connected community and account before reading the repositories folder.",
+    );
+  },
   runCommand: () => Promise.resolve(null),
   request: (request) =>
     invoke("plugin_host_request", {

@@ -62,6 +62,9 @@ function harness(room = "room", delivery: "failed" | "unknown" = "failed") {
       observeSend: () => () => {},
       supports: () => true,
       ready: async () => {},
+      whenPrepared: async () => {
+        throw new Error("No active preparation in this fixture");
+      },
       send: () => "id",
       recover: async () => {},
       acknowledge: async () => {},

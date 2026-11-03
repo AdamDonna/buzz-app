@@ -1,6 +1,11 @@
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import type {} from "../../plugins/api";
+import {
+  readRepositoriesFolder,
+  DEFAULT_REPOSITORIES_FOLDER,
+} from "../communities/repositories";
+import { splitPartition } from "../relay/partition";
 import { nativeIdentityEnabled } from "../identity/service";
 
 export type HostRequest = Readonly<{
@@ -137,6 +142,14 @@ type McpEvent =
  * This permits token reuse after initialization. The handler must bind identity
  * itself and grant every client the same authority. Defaults to false. */
 export type HostMcpOptions = Readonly<{ sharedSession?: boolean }>;
+/** Observation only. Canonical metadata grants no read or repository authority. */
+export type HostPathInspection =
+  | Readonly<{ exists: false }>
+  | Readonly<{
+      exists: true;
+      kind: "file" | "dir" | "symlink" | "other";
+      canonical?: string;
+    }>;
 export interface Host {
   denyMcpAuthorization?(request: McpAuthorization): Promise<void>;
   runCommand(id: string, input?: string): Promise<string | null>;
@@ -161,6 +174,10 @@ export interface Host {
    * links, created if missing, for a plugin whose manifest declares
    * `host.files`. Desktop only. */
   resolveDirectory?: (path: string) => Promise<string>;
+  /** lstat + realpath without creating anything. Desktop only, requires host.files. */
+  inspectPath?: (path: string) => Promise<HostPathInspection>;
+  /** Existing current community/account preference, or the host default. Never creates. */
+  repositoriesFolder(): Promise<string>;
   request(input: HostRequest): Promise<HostResponse>;
   /** POST-only, desktop and compatible native host required. A repeated call
    * authority rejects with unknown outcome, never resubmits or caches success.
@@ -502,6 +519,36 @@ export class HostService extends Service implements Host {
       revision: owner.revision,
       path,
     }).catch(rethrow);
+  }
+
+  async inspectPath(path: string): Promise<HostPathInspection> {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Files require an installed desktop plugin");
+    return invoke<HostPathInspection>("plugin_host_inspect_path", {
+      id: owner.id,
+      revision: owner.revision,
+      path,
+    }).catch(rethrow);
+  }
+
+  async repositoriesFolder(): Promise<string> {
+    const current = this.ctx.relay?.snapshot();
+    const bound = current?.scope && splitPartition(current.scope);
+    if (
+      !this.ctx.pluginOwner ||
+      current?.status !== "ready" ||
+      !bound ||
+      !current.viewer ||
+      bound.viewer !== current.viewer
+    )
+      throw new Error(
+        "Choose a connected community and account before reading the repositories folder.",
+      );
+    return (
+      readRepositoriesFolder(bound.communityOrigin, bound.viewer) ||
+      DEFAULT_REPOSITORIES_FOLDER
+    );
   }
 
   async request(input: HostRequest): Promise<HostResponse> {

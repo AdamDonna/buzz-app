@@ -45,6 +45,9 @@ function fixture() {
     observeDismiss: () => () => {},
     observeSend: () => () => {},
     ready: async () => {},
+    whenPrepared: async () => {
+      throw new Error("No active preparation in this fixture");
+    },
     recover: async () => {},
     acknowledge: async () => {},
     supports: () => true,

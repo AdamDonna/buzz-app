@@ -1,3 +1,4 @@
+import { TASK_MODE_LABEL } from "../solo/region-labels";
 import { archiveHides } from "../relay/identity-archives";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
@@ -39,6 +40,7 @@ export function canShareSoloChat(
     session.viewer &&
     session.outbox?.supports(9000) &&
     channel?.channelType === "solo" &&
+    !channel.labels?.includes(TASK_MODE_LABEL) &&
     channel.private &&
     !channel.readOnly &&
     !channel.cached &&

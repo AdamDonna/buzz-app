@@ -9,6 +9,7 @@ import type { ComposerInputElement } from "./composer-dom";
 import { composerDOMFixture } from "./composer-testing";
 import { composerClipboard, buzzCopyDocument } from "./composer-clipboard";
 import {
+  composerTokenDraft,
   readComposerDocument,
   projectComposerDocument,
 } from "./composer-document";
@@ -68,6 +69,32 @@ function mount(
   });
   return { input, view, draft: () => draft };
 }
+
+it("restores a seeded project as an editable removable token, never a recipient", () => {
+  const project = {
+    kind: "nexus.project" as const,
+    id: "opaque-project",
+    label: "Project",
+  };
+  const seeded = composerTokenDraft(project);
+  expect(seeded).toBeDefined();
+  const f = mount(mentionDraft(JSON.parse(JSON.stringify(seeded))));
+  expect(f.draft().tokens?.[0]?.token).toEqual(project);
+  expect(f.draft().recipients).toEqual([]);
+  act(() => f.input.insertText("Do work"));
+  expect(f.draft().tokens?.[0]?.token).toEqual(project);
+  act(() => {
+    const span = f.draft().tokens?.[0];
+    if (!span) throw new Error("Missing seeded token");
+    f.input.setSelectionRange(span.start, span.end);
+    f.input.insertText("");
+  });
+  expect(f.draft().tokens).toBeUndefined();
+  f.view.unmount();
+  expect(
+    mount(mentionDraft(JSON.parse(JSON.stringify(f.draft())))).draft().tokens,
+  ).toBeUndefined();
+});
 
 it("keeps token identity through typing, persistence, deletion and undo without recipients", () => {
   const f = mount();

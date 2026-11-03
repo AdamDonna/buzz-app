@@ -46,6 +46,9 @@ async function fixture(subject = "user", canUseRemoteAgents = true) {
   );
   await session.signIn();
   const host: Host = {
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
     runCommand: vi.fn(),
     request: vi.fn(async () =>
       response({ status: "LIST_AGENTS_STATUS_SUCCESS", agents: [row] }),

@@ -1,6 +1,12 @@
 import { Service, type Context } from "@deepseek-ai/cordis";
 import { createContributions } from "../../plugins/contributions";
-import { readView, viewRevision, writeView } from "../../shared/view-state";
+import {
+  readView,
+  replaceView,
+  viewRevision,
+  writeView,
+} from "../../shared/view-state";
+import { composerTokenDraft } from "../messages/composer-document";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { RelaySession } from "../relay/session";
 import type { JsonValue } from "../navigation/targets";
@@ -8,6 +14,7 @@ import type { PluginManager } from "../../plugins/manager";
 import { relayPartition } from "../relay/partition";
 import { ownSolo, soloLabels } from "../solo/labels";
 import { regionLabels, soloRegionLabel } from "../solo/region-labels";
+import { soloDraftTarget } from "./routes";
 import {
   projectSoloRegions,
   type RegisteredSoloSource,
@@ -30,9 +37,8 @@ type Runtime = {
 };
 export type SoloNavigationSnapshot = SoloPlacement &
   Readonly<{ binding?: SoloRegionBinding }>;
-const readers = new WeakMap<RelaySession, SoloNavigationService>();
-export const soloNavigationFor = (session: RelaySession) =>
-  readers.get(session);
+const readers = new WeakMap<object, SoloNavigationService>();
+export const soloNavigationFor = (session: object) => readers.get(session);
 const sameBinding = (a: SoloRegionBinding | undefined, b: SoloRegionBinding) =>
   !!a &&
   a.scope === b.scope &&
@@ -99,6 +105,19 @@ export class SoloNavigationService extends Service implements SoloNavigation {
   }
   snapshot = () => this.value;
   sources = () => this.contributions.snapshot();
+  taskSource(label: string) {
+    const region = this.value.regions.find((item) => item.label === label);
+    const source = region?.source;
+    if (!this.binding || region?.reason || !source?.task) return;
+    const runtime = this.runtimes.get(source);
+    if (!runtime || runtime.failed || runtime.controller.signal.aborted) return;
+    return {
+      source,
+      binding: this.binding,
+      signal: runtime.controller.signal,
+      label,
+    };
+  }
   reveal = (channelId: string, explicit = true) => {
     const target = this.ctx.navigation?.snapshot().entry.target;
     if (
@@ -383,6 +402,16 @@ export class SoloNavigationService extends Service implements SoloNavigation {
       (source.order !== undefined && !Number.isFinite(source.order))
     )
       throw new Error("Invalid Solo region source");
+    if (
+      source.task &&
+      (typeof source.task.prepare !== "function" ||
+        typeof source.task.markChannelStarted !== "function" ||
+        typeof source.task.recordFirstEvent !== "function" ||
+        typeof source.task.participants?.eligible !== "function" ||
+        typeof source.task.participants.defaultRecipient !== "function" ||
+        typeof source.task.participants.makePrimary !== "function")
+    )
+      throw new Error("Task drafts require preparation and participant policy");
     const identity = {};
     const host = this;
     const active = (binding: SoloRegionBinding) =>
@@ -398,6 +427,44 @@ export class SoloNavigationService extends Service implements SoloNavigation {
     this.contributions.register(this.ctx, { ...source, identity });
     return Object.freeze({
       label,
+      openDraft(binding, input) {
+        current(binding);
+        if (input.mode !== "task" || !host.taskSource(label))
+          throw new Error("Task drafts are unavailable for this region");
+        const primary = input.seed?.primary;
+        if (primary !== undefined && !/^[0-9a-f]{64}$/.test(primary))
+          throw new Error("Invalid primary agent");
+        const project = input.seed?.project;
+        if (project && primary)
+          throw new Error("Project and primary seeds cannot be combined.");
+        const draft =
+          project &&
+          composerTokenDraft({
+            kind: "nexus.project",
+            id: project.id,
+            label: project.label,
+          });
+        if (project !== undefined && !draft) throw new Error("Invalid project");
+        const draftId = crypto.randomUUID();
+        current(binding);
+        if (
+          draft &&
+          replaceView(
+            binding.scope,
+            `solo:task:${draftId}:new-draft`,
+            null,
+            draft,
+          ) !== "saved"
+        )
+          throw new Error("The task draft could not be saved. Try again.");
+        current(binding);
+        void host.ctx.navigation?.open(
+          soloDraftTarget(binding.scope, {
+            task: { region: label, draftId },
+            ...(primary ? { agent: primary } : {}),
+          }),
+        );
+      },
       async createChat(binding, input) {
         const session = current(binding);
         const start = session.channelWrites.start(

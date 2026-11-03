@@ -120,6 +120,7 @@
     "allow-plugin-host-mcp-reply",
     "allow-plugin-host-mcp-close",
     "allow-plugin-host-read-file",
+    "allow-plugin-host-inspect-path",
     "allow-plugin-host-resolve-directory",
     "allow-oauth-callback-begin",
     "allow-oauth-callback-wait",

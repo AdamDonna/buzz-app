@@ -33,6 +33,9 @@ async function fixture(reply: HostResponse | (() => Promise<HostResponse>)) {
   );
   await session.signIn();
   const host: Host = {
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
     runCommand: vi.fn(),
     request: vi.fn(async () => (typeof reply === "function" ? reply() : reply)),
   };

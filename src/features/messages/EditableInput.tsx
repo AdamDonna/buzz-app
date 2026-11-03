@@ -434,8 +434,8 @@ export function EditableInput({
       {
         source: string;
         resource: ComposerResource | null;
-        pending: PendingChip | null;
         semantic: ComposerToken | null;
+        pending: PendingChip | null;
         position(): number | undefined;
       }
     >(),
@@ -973,6 +973,52 @@ export function EditableInput({
       editor.dispatch(tr);
       return editor.state !== before;
     };
+    const insertToken = (
+      value: ComposerToken,
+      range: { start: number; end: number },
+    ) => {
+      if (!editable() || composing.current || editor.composing) return false;
+      const token = composerToken(value);
+      if (!token) return false;
+      const source = projection();
+      const from = source.position(range.start),
+        to = source.position(range.end, -1);
+      if (
+        source.source(from) !== range.start ||
+        source.source(to) !== range.end
+      )
+        return false;
+      const context = composerMarkdownContext(editor.state.doc, source);
+      if (
+        [...context.protected, ...markdownRanges(context.text).literal].some(
+          (span) => range.start < span.end && range.end > span.start,
+        )
+      )
+        return false;
+      const tr = closeHistory(editor.state.tr).replaceWith(
+        from,
+        to,
+        Fragment.fromArray([
+          composerSchema.nodes.token.create({
+            source: token.label,
+            semantic: token,
+          }),
+          composerSchema.text(" "),
+        ]),
+      );
+      const next = projectComposerDocument(tr.doc).draft;
+      if (
+        (next.tokens?.length ?? 0) > 32 ||
+        next.text.length > current.current.maxLength
+      )
+        return false;
+      tr.setSelection(
+        Selection.near(tr.doc.resolve(tr.mapping.map(to, 1)), -1),
+      );
+      editor.dispatch(tr.scrollIntoView());
+      editor.focus();
+      return true;
+    };
     /** The typed `@name` becomes one atom the host resolves later: one undo
      * step, like a selected mention, and the caret moves past its space. */
     const insertPendingMention = (
@@ -1118,52 +1164,6 @@ export function EditableInput({
           .setMeta("composer-normalized", true)
           .setMeta("addToHistory", false),
       );
-      return true;
-    };
-    const insertToken = (
-      value: ComposerToken,
-      range: { start: number; end: number },
-    ) => {
-      if (!editable() || composing.current || editor.composing) return false;
-      const token = composerToken(value);
-      if (!token) return false;
-      const source = projection();
-      const from = source.position(range.start),
-        to = source.position(range.end, -1);
-      if (
-        source.source(from) !== range.start ||
-        source.source(to) !== range.end
-      )
-        return false;
-      const context = composerMarkdownContext(editor.state.doc, source);
-      if (
-        [...context.protected, ...markdownRanges(context.text).literal].some(
-          (span) => range.start < span.end && range.end > span.start,
-        )
-      )
-        return false;
-      const tr = closeHistory(editor.state.tr).replaceWith(
-        from,
-        to,
-        Fragment.fromArray([
-          composerSchema.nodes.token.create({
-            source: token.label,
-            semantic: token,
-          }),
-          composerSchema.text(" "),
-        ]),
-      );
-      const next = projectComposerDocument(tr.doc).draft;
-      if (
-        (next.tokens?.length ?? 0) > 32 ||
-        next.text.length > current.current.maxLength
-      )
-        return false;
-      tr.setSelection(
-        Selection.near(tr.doc.resolve(tr.mapping.map(to, 1)), -1),
-      );
-      editor.dispatch(tr.scrollIntoView());
-      editor.focus();
       return true;
     };
     /** True, or the reason shown by the host. The link must survive its context. */
@@ -1785,8 +1785,8 @@ export function EditableInput({
             hosts.current.set(dom, {
               source: node.attrs.source,
               resource: node.attrs.resource,
-              pending: node.attrs.pending,
               semantic: composerToken(node.attrs.semantic) ?? null,
+              pending: node.attrs.pending,
               position: getPos,
             });
             return {

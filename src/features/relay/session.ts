@@ -27,6 +27,12 @@ import { channelIdentityUnsupported } from "./channel-labels";
 import { createWorkflows } from "../workflows/capability";
 import { isWorkflowOperation } from "../workflows/protocol";
 import {
+  recordTaskFirstEvent,
+  validateTaskPublication,
+  validateTaskMembers,
+  isTaskChannel,
+} from "../solo/task-mode";
+import {
   createRelayReader,
   type Priority,
   type ReadOptions,
@@ -276,7 +282,7 @@ export function createRelaySession(
   const writer = transport?.writer;
   const clock = new MessageClock();
   const uploadAttachment = transport?.uploadAttachment;
-  const writes =
+  const writes: ReturnType<typeof createOutbox> | undefined =
     transport && writer
       ? createOutbox(
           transport.viewer,
@@ -306,9 +312,23 @@ export function createRelaySession(
             onAccepted: (event, acknowledged) => {
               // Product feedback is accepted into a private sidecar, not queryable history.
               if (event.kind !== PRODUCT_FEEDBACK_KIND) confirm(event);
+              const recovery = writes?.outbox
+                .snapshot()
+                .find((item) => item.event.id === event.id)?.recovery;
+              if (recovery?.key.startsWith("solo-task:"))
+                void writes?.outbox
+                  .acknowledge(event.id)
+                  .catch((error) =>
+                    console.warn(
+                      "Task message recovery could not be released",
+                      error,
+                    ),
+                  );
               // An `unknown` attempt waits for confirm() to read it back.
               if (acknowledged) acceptOwnActivity(event);
             },
+            afterSigned: (event, recovery, signal): Promise<() => void> =>
+              recordTaskFirstEvent(session, event, recovery, signal),
             needsReceipt: isWorkflowOperation,
             onReceipt: (event, message) => workflows.receipt(event, message),
             // A chat this device is starting takes its events once the relay
@@ -323,6 +343,7 @@ export function createRelaySession(
               return ready;
             },
             preparePublish: async (event, signal) => {
+              validateTaskPublication(session, event);
               validateChannelWrite(event);
               workflows.validate(event);
               if (event.kind === 40100) {
@@ -337,6 +358,7 @@ export function createRelaySession(
                 signal,
               );
               return () => {
+                validateTaskPublication(session, event);
                 validateChannelWrite(event);
                 workflows.validate(event);
                 validateCanvasWrite(event);
@@ -1536,6 +1558,21 @@ export function createRelaySession(
         agentChoices.snapshot().selectable.map((agent) => agent.pubkey),
       archived: (pubkey) =>
         archiveHides(archives.queries, pubkey, transport?.viewer),
+      admission: (id, keys) => {
+        if (!isTaskChannel(session, id)) return;
+        const context = validateTaskMembers(session, id, keys);
+        return () => {
+          try {
+            return (
+              !context?.signal.aborted &&
+              validateTaskMembers(session, id, keys)?.binding.incarnation ===
+                context?.binding.incarnation
+            );
+          } catch {
+            return false;
+          }
+        };
+      },
     },
     transport?.relayAuthor,
     { read: (filters, settings) => readVerified(filters, settings, false) },

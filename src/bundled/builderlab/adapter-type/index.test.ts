@@ -53,6 +53,9 @@ async function fixture(subject = "account-a") {
   await session.signIn();
   const request = vi.fn<Host["request"]>();
   const host: Host = {
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
     runCommand: vi.fn(),
     request: async (input) =>
       input.url.endsWith("/get-model-catalog")

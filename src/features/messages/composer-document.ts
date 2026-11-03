@@ -12,7 +12,10 @@ import type {
   DraftRecipient,
   PendingMention,
 } from "./mention-draft";
-import type { ComposerResource } from "../conversation/contracts";
+import type {
+  ComposerResource,
+  ComposerToken,
+} from "../conversation/contracts";
 import { composerToken } from "./composer-token";
 
 /** The document owns editable marks and exact source tokens. Unimplemented
@@ -100,10 +103,10 @@ export const composerSchema = new Schema<
         recipient: { default: null },
         /** Host-owned `{ uri, label }`; valid only while `source` is its link. */
         resource: { default: null },
+        semantic: { default: null },
         /** `{ id, name }` while the host resolves a mention Space committed
          * before the chooser could decide. Never persists past the editor. */
         pending: { default: null },
-        semantic: { default: null },
         editAsText: { default: false },
       },
       leafText: (node) => node.attrs.source,
@@ -205,6 +208,21 @@ export function markdownRanges(text: string) {
     pending.push(...(node.children ?? []));
   }
   return { literal };
+}
+
+/** Seed a selected identity through the same semantic atom as editor insertion. */
+export function composerTokenDraft(
+  value: ComposerToken,
+): MentionDraft | undefined {
+  const token = composerToken(value);
+  if (!token) return;
+  const paragraph = composerSchema.nodes.paragraph.create(null, [
+    composerSchema.nodes.token.create({ source: token.label, semantic: token }),
+    composerSchema.text(" "),
+  ]);
+  return projectComposerDocument(
+    composerSchema.nodes.doc.create(null, paragraph),
+  ).draft;
 }
 
 /** Draft text stays the editing/completion coordinate space. Formatting metadata
@@ -385,8 +403,8 @@ export function projectComposerDocument(doc: EditorNode) {
   let text = "";
   const positions = new Array<number>(doc.content.size + 1).fill(0);
   const recipients: DraftRecipient[] = [];
-  const pending: PendingMention[] = [];
   const semantic: NonNullable<MentionDraft["tokens"]>[number][] = [];
+  const pending: PendingMention[] = [];
   const carets: number[] = [];
   const blocks: { from: number; to: number; start: number; code: boolean }[] =
     [];
@@ -465,8 +483,8 @@ export function projectComposerDocument(doc: EditorNode) {
     draft: {
       text,
       recipients,
-      ...(pending.length ? { pending } : {}),
       ...(semantic.length ? { tokens: semantic } : {}),
+      ...(pending.length ? { pending } : {}),
       document: { version: 1, content: doc.toJSON() },
     } satisfies MentionDraft,
     positions,

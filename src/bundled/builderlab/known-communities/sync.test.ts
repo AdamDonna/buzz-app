@@ -316,6 +316,9 @@ it("halts on a 200 list the real client cannot read, forgetting no membership", 
   );
   // A proxy's block page, a truncated or an empty body: a 200 that is no list.
   const host: Host = {
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
     runCommand: vi.fn(),
     request: vi.fn(async () => ({ status: 200, headers: {}, body: "" })),
   };

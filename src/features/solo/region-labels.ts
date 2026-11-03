@@ -1,6 +1,12 @@
 import { validChannelLabel } from "../relay/channel-labels";
 
 export const REGION_PREFIX = "buzz.region:";
+export const TASK_MODE_LABEL = "solo-task-mode:v1";
+/** Host-owned management labels cannot be removed by ordinary detail edits. */
+export const managedSoloLabels = (labels: readonly string[] = []) => [
+  ...regionLabels(labels),
+  ...(labels.includes(TASK_MODE_LABEL) ? [TASK_MODE_LABEL] : []),
+];
 export const regionLabels = (labels: readonly string[] = []) =>
   labels.filter(
     (label) => label.startsWith(REGION_PREFIX) && validChannelLabel(label),

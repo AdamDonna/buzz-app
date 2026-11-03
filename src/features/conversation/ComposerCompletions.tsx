@@ -196,6 +196,7 @@ export function ComposerCompletions({
     return () => document.removeEventListener("pointermove", record);
   }, [input]);
   const observation = editor.observation;
+  context = { ...context, composerSignal: editor.composerSignal };
   const document = readComposerSnapshot(resolved.document);
   if (context.draft && observation)
     context = {
@@ -238,6 +239,7 @@ export function ComposerCompletions({
         match.query.start,
         match.query.end,
         match.query.query,
+        context.recipients,
       ])}
       fallback={
         <span role="status">

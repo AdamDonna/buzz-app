@@ -618,6 +618,77 @@ it("closes a plugin's MCP servers when the plugin unloads", async () => {
   });
 });
 
+it("inspects paths with the calling plugin grant and preserves missing/dangling/error results", async () => {
+  const { plugin } = pluginContext();
+  vi.mocked(invoke)
+    .mockResolvedValueOnce({ exists: false })
+    .mockResolvedValueOnce({ exists: true, kind: "symlink" })
+    .mockRejectedValueOnce("Could not inspect path: Permission denied");
+  await expect(plugin.host.inspectPath?.("/missing")).resolves.toEqual({
+    exists: false,
+  });
+  expect(invoke).toHaveBeenLastCalledWith("plugin_host_inspect_path", {
+    id: "example.plugin",
+    revision: "abc",
+    path: "/missing",
+  });
+  await expect(plugin.host.inspectPath?.("/dangling")).resolves.toEqual({
+    exists: true,
+    kind: "symlink",
+  });
+  await expect(plugin.host.inspectPath?.("/restricted")).rejects.toThrow(
+    /Permission denied/,
+  );
+  vi.mocked(isTauri).mockReturnValue(false);
+  await expect(plugin.host.inspectPath?.("/file")).rejects.toThrow(
+    /desktop plugin/,
+  );
+  expect(invoke).toHaveBeenCalledTimes(3);
+});
+
+it("reads only the bound community/account repositories preference, defaults without creating, and rejects unreadable state", async () => {
+  const { repositoriesKey } = await import("../communities/repositories");
+  const { root, plugin } = pluginContext();
+  const viewer = "a".repeat(64),
+    other = "b".repeat(64);
+  let account = viewer,
+    community = "https://relay.example",
+    status: "ready" | "connecting" = "ready";
+  root.provide("relay", {
+    snapshot: () => ({
+      status,
+      scope: `${community}:${account}`,
+      viewer: account,
+    }),
+  });
+  const values = new Map<string, string>();
+  const getItem = vi.fn((key: string) => values.get(key) ?? null);
+  const setItem = vi.fn();
+  vi.stubGlobal("localStorage", { getItem, setItem });
+  expect(await plugin.host.repositoriesFolder()).toBe("~/.buzz/REPOS");
+  values.set(repositoriesKey(community, viewer), "/configured/source");
+  values.set(repositoriesKey("https://other.example", viewer), "/other/source");
+  expect(await plugin.host.repositoriesFolder()).toBe("/configured/source");
+  account = other;
+  expect(await plugin.host.repositoriesFolder()).toBe("~/.buzz/REPOS");
+  account = viewer;
+  community = "https://other.example";
+  expect(await plugin.host.repositoriesFolder()).toBe("/other/source");
+  status = "connecting";
+  await expect(plugin.host.repositoriesFolder()).rejects.toThrow(
+    /connected community/,
+  );
+  status = "ready";
+  getItem.mockImplementationOnce(() => {
+    throw new Error("Storage blocked");
+  });
+  await expect(plugin.host.repositoriesFolder()).rejects.toThrow(
+    "Storage blocked",
+  );
+  expect(setItem).not.toHaveBeenCalled();
+  expect(invoke).not.toHaveBeenCalled();
+});
+
 const onceContext = { boot: "12345678-1234-4234-8234-123456789abc", page: 1 };
 const onceInput = {
   url: "https://example.test/submit",

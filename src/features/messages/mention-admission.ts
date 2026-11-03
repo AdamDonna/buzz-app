@@ -1,6 +1,7 @@
 import type { ChannelSummary } from "../relay/contracts";
 import type { ComposerSession } from "./composer-session";
 import type { MentionRecipient } from "./mention-draft";
+import { isTaskChannel, taskChannelContext } from "../solo/task-mode";
 import { archiveHides } from "../relay/identity-archives";
 
 /** The shared archive discovery rule applied to mention recipients. */
@@ -39,6 +40,19 @@ export function mentionAdmission(
     .list()
     .channels.find((c) => c.id === channelId);
   if (channel?.archived || channel?.readOnly) return () => false;
+  if (isTaskChannel(session, channelId))
+    return (pubkey) => {
+      try {
+        return (
+          /^[0-9a-f]{64}$/.test(pubkey) &&
+          taskChannelContext(session, channelId)?.mode.participants.eligible(
+            pubkey,
+          ) === true
+        );
+      } catch {
+        return false;
+      }
+    };
   const allowed = roster
     ? new Set(roster.map((person) => person.pubkey))
     : new Set(channel?.members);

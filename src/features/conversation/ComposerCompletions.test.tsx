@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { createRef, useLayoutEffect } from "react";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ComposerCompletions } from "./ComposerCompletions";
 import type { CompletionEditor } from "./useCompletionEditor";
-import type { ComposerCompletion } from "./contracts";
+import type {
+  ComposerCompletion,
+  ComposerCompletionProps,
+  ComposerToolProps,
+  CompletionContext,
+} from "./contracts";
 import type { Contribution } from "../../plugins/contributions";
 import type { RelaySession } from "../relay/session";
 import type { ComposerInputElement } from "../messages/composer-dom";
@@ -14,6 +26,7 @@ import * as markdown from "../relay/message-content";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 const providers: Contribution<ComposerCompletion>[] = [
   {
@@ -34,6 +47,7 @@ function mount(text: string, caret = text.length, document?: ComposerSnapshot) {
     invalidate: () => {},
     keys: { current: undefined },
     composing: { current: false },
+    composerSignal: undefined,
   } as CompletionEditor;
   return render(
     <ComposerCompletions
@@ -104,3 +118,146 @@ it("does no additional Markdown parsing on ordinary typing", () => {
   mount("An ordinary message without a channel trigger");
   expect(scan).not.toHaveBeenCalled();
 });
+
+it.each(["replace", "remove", "unknown"])(
+  "retires recipient-scoped query closures on %s without changing text, caret or composer lifetime",
+  (change) => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const previous = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    onTestFinished(() => {
+      if (previous)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollIntoView",
+          previous,
+        );
+      else
+        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    const selected = [{ pubkey: "a".repeat(64), name: "Same label" }];
+    const next =
+      change === "replace"
+        ? [{ pubkey: "b".repeat(64), name: "Same label" }]
+        : change === "remove"
+          ? []
+          : undefined;
+    const matched: CompletionContext[] = [];
+    const requests: ComposerCompletionProps[] = [];
+    function Provider(props: ComposerCompletionProps) {
+      useLayoutEffect(() => {
+        requests.push(props);
+      });
+      return null;
+    }
+    const provider: Contribution<ComposerCompletion> = {
+      id: "skills",
+      key: "test/skills",
+      pluginId: "test",
+      revision: "1",
+      title: "Skills",
+      match: (_observation, context) => {
+        matched.push(context);
+        return { start: 0, end: 1, query: "" };
+      },
+      component: Provider,
+    };
+    const entries = [provider];
+    const registry = { snapshot: () => entries, subscribe: () => () => {} };
+    const input = createRef<HTMLTextAreaElement>();
+    const lifetime = new AbortController();
+    const editor: CompletionEditor = {
+      observation: { revision: 1, text: "/", start: 1, end: 1 },
+      valid: () => true,
+      observe: () => {},
+      invalidate: vi.fn(),
+      keys: { current: undefined },
+      composing: { current: false },
+      composerSignal: lifetime.signal,
+    };
+    const replace = vi.fn(() => true);
+    const retry = vi.fn();
+    const tree = (recipients: ComposerToolProps["recipients"] | undefined) => (
+      <>
+        <textarea ref={input} defaultValue="/" />
+        <ComposerCompletions
+          registry={registry}
+          editor={editor}
+          input={input as unknown as { current: ComposerInputElement | null }}
+          replace={replace}
+          resolved={{ text: "/", recipients: [] }}
+          session={{} as RelaySession}
+          scope="test"
+          channelId="channel"
+          {...(recipients === undefined ? {} : { recipients })}
+        />
+      </>
+    );
+    const view = render(tree(selected));
+    const old = requests.at(-1);
+    if (!old) throw new Error("Completion provider did not mount");
+    expect(old.recipients).toBe(selected);
+    expect(matched.at(-1)?.recipients).toBe(selected);
+    let release: ReturnType<ComposerCompletionProps["publish"]> = false;
+    act(() => {
+      release = old.publish({
+        items: [{ id: "old", label: "Old skill", edit: { text: "old" } }],
+        retry,
+      });
+    });
+    const oldChoice = screen.getByRole("option", { name: "Old skill" });
+    const oldRetry = screen.getByRole("option", { name: "Retry suggestions" });
+    const oldChoiceKeys = editor.keys.current;
+    const key = (key: string) =>
+      ({
+        key,
+        nativeEvent: {},
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      }) as unknown as Parameters<
+        NonNullable<CompletionEditor["keys"]["current"]>
+      >[0];
+    act(() => {
+      editor.keys.current?.(key("ArrowUp"));
+    });
+    const oldKeys = editor.keys.current;
+    view.rerender(tree(next));
+    const fresh = requests.at(-1);
+    if (!fresh) throw new Error("Updated completion provider did not mount");
+    expect(fresh).not.toBe(old);
+    expect(fresh.recipients).toBe(next);
+    expect(matched.at(-1)?.recipients).toBe(next);
+    expect(fresh.composerSignal).toBe(lifetime.signal);
+    expect(lifetime.signal.aborted).toBe(false);
+    expect(oldChoice.isConnected).toBe(false);
+    expect(oldRetry.isConnected).toBe(false);
+    act(() => {
+      expect(
+        old.publish({
+          items: [{ id: "late", label: "Late", edit: { text: "late" } }],
+        }),
+      ).toBe(false);
+      oldChoiceKeys?.(key("Enter"));
+      oldKeys?.(key("Enter"));
+      fireEvent.click(oldChoice);
+      fireEvent.click(oldRetry);
+      fresh.publish({
+        items: [{ id: "fresh", label: "Fresh skill", edit: { text: "fresh" } }],
+      });
+      if (typeof release === "function") release();
+    });
+    expect(replace).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+    expect(screen.getByRole("option", { name: "Fresh skill" })).toBeDefined();
+    expect(screen.queryByRole("option", { name: "Late" })).toBeNull();
+  },
+);

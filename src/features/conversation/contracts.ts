@@ -252,8 +252,14 @@ export type CompletionContext = Pick<
   "session" | "scope" | "channelId" | "threadRootId" | "inviteAgents"
 > &
   Readonly<{
+    /** Explicit selected mentions only; absent on older hosts means unknown.
+     * Empty means none selected, not a resolved default or admission grant. */
+    recipients?: ComposerToolProps["recipients"] | undefined;
     draft?: Readonly<{ mode: "task"; region: string; revision: number }>;
     channelRegion?: string;
+    /** One mounted composer, distinct from each query publication. Providers
+     * must dispose owned work on abort; absence does not permit concurrent search. */
+    composerSignal?: AbortSignal | undefined;
   }>;
 /** Semantic editor atoms are separate from notification recipients. Extra JSON
  * fields belong to the provider and round-trip without host interpretation. */

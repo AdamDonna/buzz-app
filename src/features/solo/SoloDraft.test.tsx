@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { webcrypto } from "node:crypto";
 import { projectTemplateId } from "./workspace";
 import { composerDOMFixture } from "../messages/composer-testing";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -14,15 +14,21 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { RelaySession } from "../relay/session";
+import { createRelaySession, type RelaySession } from "../relay/session";
 import { readView, writeView } from "../../shared/view-state";
 import { linkedDraftKey, type LinkedChat } from "./linked-chat";
 import { SoloDraft, resetNewChatProject } from "./SoloDraft";
 import { ChatNotStarted, createChannelWrites } from "../relay/channel-writes";
 import { createOutbox } from "../relay/outbox";
-import { keypair, signed } from "../relay/testing";
+import { keypair, metadata, roster, signed } from "../relay/testing";
 import { SOLO_LABEL } from "./labels";
 import { attachmentDraft } from "../messages/attachment-draft";
+import { createSoloRegionFixture } from "../channel-navigation/solo-navigation-testing";
+import { mentionDraft } from "../messages/mention-draft";
+import { composerMarkdown } from "../messages/composer-markdown";
+import { taskTokenTags, taskTokenFallback } from "../messages/task-tokens";
+import * as soloNavigation from "../channel-navigation/solo-navigation";
+import { soloDraft } from "../channel-navigation/routes";
 import type {
   ComposerToolProps,
   ConversationExtensions,
@@ -219,6 +225,8 @@ function setup(available = true) {
       ensure: async () => {},
     },
     outbox: {
+      ready: async () => {},
+      whenPrepared: vi.fn(async () => ({})),
       supports: () => true,
       snapshot: () => noOperations,
       subscribe: () => () => {},
@@ -2226,6 +2234,1308 @@ it("keeps an edited linked draft instead of reinserting its removed source", asy
   expect(t.messages.send.mock.calls[0]?.[1]).toBe(
     "@Member agent Changed request",
   );
+});
+
+it.each(["remove", "change"] as const)(
+  "restores project-only openDraft and never reseeds a %s edit",
+  async (action) => {
+    const f = setup();
+    const region = createSoloRegionFixture(f.session.viewer);
+    const agent = "a".repeat(64);
+    const project = { id: "selected-project", label: "Selected project" };
+    const prepare = vi.fn<
+      import("../channel-navigation/solo-navigation-contract").SoloTaskMode["prepare"]
+    >(async () => ({ ok: false, reason: "Review this task" }));
+    const source = await region.register({
+      task: {
+        prepare,
+        markChannelStarted: async () => "start",
+        recordFirstEvent: async () => {},
+        participants: {
+          eligible: (key) => key === agent,
+          defaultRecipient: () => agent,
+          makePrimary: async () => {},
+        },
+        header: (props) =>
+          "draft" in props ? (
+            <button
+              type="button"
+              onClick={() => {
+                const token = props.draft.tokens.find(
+                  (item) => item.kind === "nexus.project",
+                );
+                if (token)
+                  (action === "remove" ? props.removeToken : props.changeToken)(
+                    token.id,
+                  );
+              }}
+            >
+              {action} selected project
+            </button>
+          ) : null,
+      },
+    });
+    const lookup = vi
+      .spyOn(soloNavigation, "soloNavigationFor")
+      .mockReturnValue(region.service);
+    try {
+      source.handle.openDraft(source.binding(), {
+        mode: "task",
+        seed: { project },
+      });
+      const target = region.navigator.snapshot().entry.target;
+      if (target.kind !== "page") throw new Error("Missing task route");
+      const route = soloDraft(target.route?.params);
+      if (!route?.task) throw new Error("Missing task draft identity");
+      const mount = () =>
+        render(
+          <SoloDraft
+            session={f.session}
+            scope={region.scope}
+            agent={route.agent}
+            task={route.task}
+            onStarted={vi.fn()}
+          />,
+        );
+      let view = mount();
+      const user = userEvent.setup();
+      expect(
+        screen.getByLabelText("Project Selected project"),
+      ).toBeInTheDocument();
+      expect(route.agent).toBeUndefined();
+      const input = screen.getByRole(
+        "textbox",
+      ) as import("../messages/composer-dom").ComposerInputElement;
+      act(() =>
+        input.insertText(
+          "@Member agent ",
+          { pubkey: agent, name: "Member agent" },
+          { start: 0, end: 0 },
+        ),
+      );
+      await user.click(input);
+      await user.type(input, "Do the task");
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+      expect(prepare.mock.calls[0]?.[0]).toMatchObject({
+        primary: agent,
+        recipients: [agent],
+        tokens: [{ kind: "nexus.project", ...project }],
+      });
+      expect(f.channelWrites.start).not.toHaveBeenCalled();
+      view.unmount();
+      view = mount();
+      expect(
+        screen.getByLabelText("Project Selected project"),
+      ).toBeInTheDocument();
+      await user.click(
+        screen.getByRole("button", { name: `${action} selected project` }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByLabelText("Project Selected project"),
+        ).not.toBeInTheDocument(),
+      );
+      view.unmount();
+      mount();
+      expect(
+        screen.queryByLabelText("Project Selected project"),
+      ).not.toBeInTheDocument();
+      const saved = mentionDraft(
+        readView(
+          region.scope,
+          `solo:task:${route.task.draftId}:new-draft`,
+          null,
+        ),
+      );
+      expect(saved.tokens).toBeUndefined();
+      expect(saved.recipients.map((item) => item.pubkey)).toEqual([agent]);
+      expect(screen.getByRole("textbox")).toHaveTextContent("Do the task");
+    } finally {
+      cleanup();
+      lookup.mockRestore();
+      await region.dispose();
+    }
+  },
+);
+
+it("prepares a task before starting it, keeps a refused draft and signs only its primary recipient", async () => {
+  const f = setup();
+  const region = createSoloRegionFixture(f.session.viewer);
+  const agent = "a".repeat(64);
+  const prepare = vi.fn<
+    import("../channel-navigation/solo-navigation-contract").SoloTaskMode["prepare"]
+  >(async (input) => ({
+    ok: true as const,
+    channelId: "22222222-2222-4222-8222-222222222222",
+    members: input.recipients,
+    revision: input.revision,
+    preparationId: `prepared:${input.revision}`,
+  }));
+  prepare.mockImplementationOnce(async () => ({
+    ok: false,
+    reason: "Choose another agent",
+  }));
+  const source = await region.register({
+    task: {
+      prepare,
+      markChannelStarted: async () => "start",
+      recordFirstEvent: async () => {},
+      participants: {
+        eligible: (key) => key === agent,
+        defaultRecipient: () => agent,
+        makePrimary: async () => {},
+      },
+    },
+  });
+  const lookup = vi
+    .spyOn(soloNavigation, "soloNavigationFor")
+    .mockReturnValue(region.service);
+  const started = vi.fn();
+  const route = {
+    region: source.handle.label,
+    draftId: "33333333-3333-4333-8333-333333333333",
+  };
+  try {
+    render(
+      <SoloDraft
+        session={f.session}
+        scope="task-test"
+        agent={agent}
+        task={route}
+        onStarted={started}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), "Do the task");
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Choose another agent",
+      ),
+    );
+    expect(f.channelWrites.start).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveTextContent("Do the task");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(started).toHaveBeenCalledOnce());
+    const prepared = prepare.mock.calls[1]?.[0];
+    expect(prepared).toMatchObject({
+      draftId: route.draftId,
+      primary: agent,
+      tokens: [],
+      attachments: [],
+    });
+    expect(f.channelWrites.start.mock.calls[0]?.[2]).toEqual([agent]);
+    expect(f.messages.send.mock.calls[0]?.[2]).toEqual([agent]);
+    const recovery = f.messages.send.mock.calls[0]?.[4];
+    expect(JSON.parse(recovery?.value ?? "null")).toMatchObject({
+      draftId: route.draftId,
+      revision: prepared?.revision,
+      preparationId: `prepared:${prepared?.revision}`,
+      regionLabel: route.region,
+    });
+    expect(screen.queryByRole("button", { name: /workspace/i })).toBeNull();
+  } finally {
+    cleanup();
+    lookup.mockRestore();
+    await region.dispose();
+  }
+});
+
+it("rejects multiple task targets before preparation or creation and retains the draft", async () => {
+  const f = setup();
+  const region = createSoloRegionFixture(f.session.viewer);
+  const prepare = vi.fn();
+  const source = await region.register({
+    task: {
+      prepare,
+      markChannelStarted: async () => "start",
+      recordFirstEvent: async () => {},
+      participants: {
+        eligible: () => true,
+        defaultRecipient: () => undefined,
+        makePrimary: async () => {},
+        maxRecipients: 1,
+      },
+    },
+  });
+  const lookup = vi
+    .spyOn(soloNavigation, "soloNavigationFor")
+    .mockReturnValue(region.service);
+  const route = {
+    region: source.handle.label,
+    draftId: "33333333-3333-4333-8333-333333333333",
+  };
+  const first = "@Member agent",
+    second = "@Outside agent";
+  const draft = {
+    text: `${first} ${second} Help`,
+    recipients: [
+      {
+        pubkey: "a".repeat(64),
+        name: "Member agent",
+        start: 0,
+        end: first.length,
+      },
+      {
+        pubkey: "b".repeat(64),
+        name: "Outside agent",
+        start: first.length + 1,
+        end: first.length + 1 + second.length,
+      },
+    ],
+  };
+  writeView("task-many", `solo:task:${route.draftId}:new-draft`, draft);
+  try {
+    render(
+      <SoloDraft
+        session={f.session}
+        scope="task-many"
+        task={route}
+        onStarted={vi.fn()}
+      />,
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Tag one agent per message",
+      ),
+    );
+    expect(prepare).not.toHaveBeenCalled();
+    expect(f.channelWrites.start).not.toHaveBeenCalled();
+    expect(f.messages.send).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveTextContent("Help");
+    expect(
+      readView("task-many", `solo:task:${route.draftId}:new-draft`, null),
+    ).toMatchObject(draft);
+  } finally {
+    cleanup();
+    lookup.mockRestore();
+    await region.dispose();
+  }
+});
+
+it.each([false, true])(
+  "resumes the saved task pair before prepare and transfers edits, including token-only identity change=%s",
+  async (tokenOnly) => {
+    const f = setup();
+    const region = createSoloRegionFixture(f.session.viewer);
+    let eligible = true;
+    const prepare = vi.fn();
+    const source = await region.register({
+      task: {
+        prepare,
+        markChannelStarted: async () => "start",
+        recordFirstEvent: async () => {},
+        participants: {
+          eligible: () => eligible,
+          defaultRecipient: () => "a".repeat(64),
+          makePrimary: async () => {},
+        },
+      },
+    });
+    const lookup = vi
+      .spyOn(soloNavigation, "soloNavigationFor")
+      .mockReturnValue(region.service);
+    const route = {
+      region: source.handle.label,
+      draftId: "33333333-3333-4333-8333-333333333333",
+    };
+    const channelId = "22222222-2222-4222-8222-222222222222";
+    const recovery = {
+      key: `solo-task:${route.draftId}`,
+      value: JSON.stringify({
+        ...route,
+        regionLabel: route.region,
+        revision: 1,
+        preparationId: "original-preparation",
+        channelId,
+      }),
+    };
+    const event = {
+      id: "d".repeat(64),
+      pubkey: f.session.viewer,
+      kind: 9,
+      created_at: 1,
+      content: "original",
+      tags: [
+        ["h", channelId],
+        ["p", "a".repeat(64)],
+      ],
+    };
+    const create = {
+      ...event,
+      id: "c".repeat(64),
+      kind: 9007,
+      tags: [
+        ["h", channelId],
+        ["p", "a".repeat(64)],
+        ["t", SOLO_LABEL],
+        ["t", route.region],
+        ["t", "solo-task-mode:v1"],
+      ],
+    };
+    const retry = vi.fn();
+    const resumeStart = vi.fn(() => ({
+      create: create.id,
+      ready: Promise.resolve(),
+    }));
+    const savedOperations = [
+      { event, recovery, delivery: "failed" },
+      { event: create, delivery: "failed", guarded: true },
+    ];
+    assert.exists(f.session.outbox);
+    Object.assign(f.session.outbox, {
+      snapshot: () => savedOperations,
+      retry,
+    });
+    Object.assign(f.session.channelWrites, { resumeStart });
+    const savedChannels = {
+      channels: [
+        {
+          id: channelId,
+          creator: f.session.viewer,
+          channelType: "solo",
+          members: [f.session.viewer, "a".repeat(64)],
+          labels: [SOLO_LABEL, route.region, "solo-task-mode:v1"],
+        },
+      ],
+    };
+    Object.assign(f.session.channels, { list: () => savedChannels });
+    const newToken = {
+      kind: "nexus.repository" as const,
+      id: "new-repository",
+      label: "@repo",
+      verified: false,
+    };
+    const draft = tokenOnly
+      ? mentionDraft({
+          text: "",
+          recipients: [],
+          document: {
+            version: 1,
+            content: {
+              type: "doc",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [
+                    {
+                      type: "token",
+                      attrs: {
+                        source: "@Member agent",
+                        recipient: {
+                          pubkey: "a".repeat(64),
+                          name: "Member agent",
+                        },
+                      },
+                    },
+                    {
+                      type: "text",
+                      text: " Edited while original was signing ",
+                    },
+                    {
+                      type: "token",
+                      attrs: { source: newToken.label, semantic: newToken },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        })
+      : taggedDraft("Edited while original was signing");
+    if (tokenOnly) {
+      const oldToken = { ...newToken, id: "old-repository" };
+      event.content = [composerMarkdown(draft), taskTokenFallback([oldToken])]
+        .filter(Boolean)
+        .join("\n\n");
+      event.tags.push(...taskTokenTags([oldToken]));
+    }
+    writeView("task-resume", `solo:task:${route.draftId}:new-draft`, draft);
+    const started = vi.fn();
+    try {
+      const mounted = render(
+        <SoloDraft
+          session={f.session}
+          scope="task-resume"
+          task={route}
+          onStarted={started}
+        />,
+      );
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Send message" }));
+      await waitFor(() => expect(started).toHaveBeenCalledWith(channelId));
+      expect(prepare).not.toHaveBeenCalled();
+      expect(f.channelWrites.start).not.toHaveBeenCalled();
+      expect(f.messages.send).not.toHaveBeenCalled();
+      expect(resumeStart).toHaveBeenCalledWith(
+        create.id,
+        channelId,
+        f.session.viewer,
+        expect.any(Function),
+      );
+      expect(retry).toHaveBeenCalledWith(event.id, expect.any(Function));
+      expect(
+        readView("task-resume", `solo:task:${route.draftId}:new-draft`, null),
+      ).toBe("");
+      expect(readView("task-resume", `draft:${channelId}`, null)).toMatchObject(
+        draft,
+      );
+      mounted.unmount();
+      writeView("task-resume", `solo:task:${route.draftId}:new-draft`, draft);
+      started.mockClear();
+      resumeStart.mockClear();
+      retry.mockClear();
+      const cardOnly = {
+        text: "",
+        recipients: [],
+        chatCards: ["[Session: Existing work](buzz://channel/existing)"],
+      };
+      writeView("task-resume", `draft:${channelId}`, cardOnly);
+      const conflict = render(
+        <SoloDraft
+          session={f.session}
+          scope="task-resume"
+          task={route}
+          onStarted={started}
+        />,
+      );
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Send message" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          "already has a draft",
+        ),
+      );
+      expect(resumeStart).not.toHaveBeenCalled();
+      expect(retry).not.toHaveBeenCalled();
+      expect(started).not.toHaveBeenCalled();
+      expect(readView("task-resume", `draft:${channelId}`, null)).toMatchObject(
+        cardOnly,
+      );
+      expect(screen.getByRole("textbox")).toHaveTextContent(
+        "Edited while original was signing",
+      );
+      conflict.unmount();
+      eligible = false;
+      started.mockClear();
+      resumeStart.mockClear();
+      retry.mockClear();
+      render(
+        <SoloDraft
+          session={f.session}
+          scope="task-resume"
+          task={route}
+          onStarted={started}
+        />,
+      );
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Send message" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          "no longer eligible",
+        ),
+      );
+      expect(resumeStart).not.toHaveBeenCalled();
+      expect(retry).not.toHaveBeenCalled();
+      expect(started).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      lookup.mockRestore();
+      await region.dispose();
+    }
+  },
+);
+
+it("disposes the real completion lifetime when a task composer retargets region or session", async () => {
+  const completion = await import("../conversation/useCompletionEditor");
+  const original = completion.useCompletionEditor;
+  const signals: AbortSignal[] = [];
+  const observe = vi
+    .spyOn(completion, "useCompletionEditor")
+    .mockImplementation((...args) => {
+      const editor = original(...args);
+      if (editor.composerSignal && !signals.includes(editor.composerSignal))
+        signals.push(editor.composerSignal);
+      return editor;
+    });
+  try {
+    const f = setup();
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const view = (session: RelaySession, region: string) => (
+      <SoloDraft
+        session={session}
+        scope="lifetimes"
+        task={{ region, draftId }}
+        onStarted={vi.fn()}
+      />
+    );
+    const mounted = render(view(f.session, "buzz.region:example:first"));
+    const first = signals.at(-1);
+    assert.exists(first);
+    expect(first.aborted).toBe(false);
+    mounted.rerender(view(f.session, "buzz.region:example:second"));
+    const second = signals.at(-1);
+    assert.exists(second);
+    expect(second).not.toBe(first);
+    expect(first.aborted).toBe(true);
+    expect(second.aborted).toBe(false);
+    mounted.rerender(view(setup().session, "buzz.region:example:second"));
+    const third = signals.at(-1);
+    assert.exists(third);
+    expect(third).not.toBe(second);
+    expect(second.aborted).toBe(true);
+    expect(third.aborted).toBe(false);
+    mounted.unmount();
+    expect(third.aborted).toBe(true);
+  } finally {
+    observe.mockRestore();
+  }
+});
+
+it.each(["resume", "already_sent"])(
+  "permits one start across already-open drafts and preserves unresolved payload (%s)",
+  async (response) => {
+    const a = setup(),
+      b = setup();
+    const region = createSoloRegionFixture(a.session.viewer);
+    let claimed = false;
+    const mark = vi.fn(async () => {
+      if (claimed) return "resume" as const;
+      claimed = true;
+      return "start" as const;
+    });
+    const source = await region.register({
+      task: {
+        prepare: async (input) =>
+          claimed && response === "already_sent"
+            ? {
+                ok: false,
+                reason: "already_sent",
+                channelId: "22222222-2222-4222-8222-222222222222",
+              }
+            : {
+                ok: true,
+                channelId: "22222222-2222-4222-8222-222222222222",
+                preparationId: "frozen",
+                revision: input.revision,
+                members: input.recipients,
+              },
+        markChannelStarted: mark,
+        recordFirstEvent: async () => {},
+        participants: {
+          eligible: () => true,
+          defaultRecipient: () => "a".repeat(64),
+          makePrimary: async () => {},
+        },
+      },
+    });
+    const existingChannel = {
+      channels: [
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          creator: b.session.viewer,
+          channelType: "solo",
+          members: [b.session.viewer, "a".repeat(64)],
+          labels: [SOLO_LABEL, source.handle.label, "solo-task-mode:v1"],
+        },
+      ],
+    };
+    Object.assign(b.session.channels, { list: () => existingChannel });
+    const lookup = vi
+      .spyOn(soloNavigation, "soloNavigationFor")
+      .mockReturnValue(region.service);
+    let release = () => {};
+    const binding = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    assert.exists(a.session.outbox);
+    Object.assign(a.session.outbox, { whenPrepared: () => binding });
+    const route = {
+      region: source.handle.label,
+      draftId: "33333333-3333-4333-8333-333333333333",
+    };
+    const startedA = vi.fn(),
+      startedB = vi.fn();
+    try {
+      const first = render(
+        <SoloDraft
+          session={a.session}
+          scope="window-a"
+          agent={"a".repeat(64)}
+          task={route}
+          onStarted={startedA}
+        />,
+      );
+      const second = render(
+        <SoloDraft
+          session={b.session}
+          scope="window-b"
+          agent={"a".repeat(64)}
+          task={route}
+          onStarted={startedB}
+        />,
+      );
+      const user = userEvent.setup();
+      await user.type(
+        within(first.container).getByRole("textbox"),
+        "Frozen request",
+      );
+      await user.click(
+        within(first.container).getByRole("button", { name: "Send message" }),
+      );
+      await waitFor(() => expect(a.messages.send).toHaveBeenCalledOnce());
+      expect(
+        readView("window-a", `solo:task:${route.draftId}:new-draft`, null),
+      ).toMatchObject({ text: expect.stringContaining("Frozen request") });
+      expect(startedA).not.toHaveBeenCalled();
+      await user.type(
+        within(second.container).getByRole("textbox"),
+        "Different request",
+      );
+      await user.click(
+        within(second.container).getByRole("button", { name: "Send message" }),
+      );
+      await waitFor(() =>
+        expect(within(second.container).getByRole("alert")).toHaveTextContent(
+          "Finish creating",
+        ),
+      );
+      expect(b.channelWrites.start).not.toHaveBeenCalled();
+      expect(b.messages.send).not.toHaveBeenCalled();
+      expect(startedB).not.toHaveBeenCalled();
+      release();
+      await waitFor(() => expect(startedA).toHaveBeenCalledOnce());
+      expect(
+        readView("window-a", `solo:task:${route.draftId}:new-draft`, null),
+      ).toBe("");
+      expect(
+        readView("window-b", `solo:task:${route.draftId}:new-draft`, null),
+      ).toMatchObject({ text: expect.stringContaining("Different request") });
+    } finally {
+      release();
+      cleanup();
+      lookup.mockRestore();
+      await region.dispose();
+    }
+  },
+);
+
+it.each([false, true])(
+  "same-ID attachment recovery transfers only actual file edits (changed=%s)",
+  async (modified) => {
+    const f = setup(),
+      region = createSoloRegionFixture(f.session.viewer);
+    const viewer = f.session.viewer;
+    assert.exists(viewer);
+    const prepare = vi.fn(
+      async (
+        input: import("../channel-navigation/solo-navigation-contract").TaskDraft,
+      ) => ({
+        ok: true as const,
+        channelId: "22222222-2222-4222-8222-222222222222",
+        revision: input.revision,
+        preparationId: "frozen",
+        members: input.recipients,
+      }),
+    );
+    const source = await region.register({
+      task: {
+        prepare,
+        markChannelStarted: async () => "start",
+        recordFirstEvent: async () => {},
+        participants: {
+          eligible: () => true,
+          defaultRecipient: () => "a".repeat(64),
+          makePrimary: async () => {},
+        },
+      },
+    });
+    const lookup = vi
+      .spyOn(soloNavigation, "soloNavigationFor")
+      .mockReturnValue(region.service);
+    const route = {
+      region: source.handle.label,
+      draftId: "33333333-3333-4333-8333-333333333333",
+    };
+    const channelId = "22222222-2222-4222-8222-222222222222";
+    const { attachmentMessage } = await import("../relay/attachments");
+    const upload = vi.fn(async () => notes);
+    Object.assign(f.session, { attachments: { uploadForNewChat: upload } });
+    const files = attachmentDraft(
+      f.session,
+      `files:solo:task:${route.draftId}:new-draft`,
+      route.draftId,
+    );
+    files.addUploaded(notes);
+    writeView(
+      "files",
+      `solo:task:${route.draftId}:new-draft`,
+      taggedDraft("See attached"),
+    );
+    const eventId = "d".repeat(64),
+      retry = vi.fn();
+    let operations: readonly import("../relay/outbox").OutgoingEvent[] = [];
+    const whenPrepared = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Binding interrupted"))
+      .mockResolvedValue(undefined);
+    assert.exists(f.session.outbox);
+    Object.assign(f.session.outbox, {
+      snapshot: () => operations,
+      retry,
+      whenPrepared,
+    });
+    Object.assign(f.session.channelWrites, {
+      resumeStart: () => ({ create: "c".repeat(64), ready: Promise.resolve() }),
+    });
+    f.messages.send.mockImplementation(
+      (id, content, recipients, uploaded, recovery) => {
+        const message = attachmentMessage(content, uploaded ?? [], notes.url);
+        const event = {
+          id: eventId,
+          kind: 9,
+          pubkey: viewer,
+          content: message.content,
+          created_at: 1,
+          tags: [
+            ["h", id],
+            ...(recipients ?? []).map((key) => ["p", key]),
+            ...message.tags,
+          ],
+        };
+        operations = [{ event, recovery, delivery: "failed" }];
+        return eventId;
+      },
+    );
+    const started = vi.fn();
+    try {
+      render(
+        <SoloDraft
+          session={f.session}
+          scope="files"
+          task={route}
+          onStarted={started}
+        />,
+      );
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Send message" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          "Binding interrupted",
+        ),
+      );
+      expect(files.snapshot()).toHaveLength(1);
+      expect(started).not.toHaveBeenCalled();
+      const listed = {
+        channels: [
+          {
+            id: channelId,
+            channelType: "solo",
+            creator: f.session.viewer,
+            members: [f.session.viewer, "a".repeat(64)],
+            labels: [SOLO_LABEL, source.handle.label, "solo-task-mode:v1"],
+          },
+        ],
+      };
+      Object.assign(f.session.channels, { list: () => listed });
+      if (modified)
+        act(() =>
+          files.addUploaded({
+            ...notes,
+            name: "other.txt",
+            sha256: "e".repeat(64),
+            url: `https://relay.test/media/${"e".repeat(64)}.txt`,
+          }),
+        );
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Send message" }));
+      await waitFor(() => expect(started).toHaveBeenCalledWith(channelId));
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(f.messages.send).toHaveBeenCalledTimes(1);
+      expect(retry).toHaveBeenCalledWith(eventId, expect.any(Function));
+      expect(upload).not.toHaveBeenCalled();
+      expect(files.snapshot()).toHaveLength(0);
+      const target = attachmentDraft(
+        f.session,
+        `files:draft:${channelId}`,
+        channelId,
+      );
+      expect(target.snapshot()).toHaveLength(modified ? 2 : 0);
+      expect(readView("files", `draft:${channelId}`, null)).toEqual(
+        modified
+          ? expect.objectContaining({
+              text: expect.stringContaining("See attached"),
+            })
+          : null,
+      );
+    } finally {
+      cleanup();
+      lookup.mockRestore();
+      await region.dispose();
+    }
+  },
+);
+
+it.each(["refresh", "stable", "revoked", "startup"] as const)(
+  "persists first-message intent before waiting for task creation (%s)",
+  async (mode) => {
+    const viewer = keypair(),
+      agent = keypair(),
+      authority = keypair();
+    const region = createSoloRegionFixture(viewer.pubkey);
+    const channelId = "22222222-2222-4222-8222-222222222222";
+    const draftId = "33333333-3333-4333-8333-333333333333";
+    const gate = () => {
+      let resolve = () => {};
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    };
+    const createGate = gate();
+    const createEntered = gate();
+    const messageGate = gate();
+    const archiveGate = gate();
+    const archiveEntered = gate();
+    let refreshingFirstEvent = false;
+    let recordCalls = 0;
+    const signs: number[] = [];
+    let records: readonly import("../relay/outbox").OutgoingEvent[] = [];
+    let created = false;
+    let authorized = true;
+    const publish = vi.fn(async (event: Parameters<typeof signed>[1]) => {
+      if (event.kind === 9007) created = true;
+    });
+    const native = {
+      status: "ready" as const,
+      agents: [
+        {
+          pubkey: agent.pubkey,
+          name: "Task agent",
+          owner: viewer.pubkey,
+          relayUrl: "https://relay.test",
+        },
+      ],
+    };
+    const owner = createRelaySession(
+      {
+        viewer: viewer.pubkey,
+        scope: "https://relay.test",
+        relayAuthor: authority.pubkey,
+        archiveAuthority: authority.pubkey,
+        channelIdentity: true,
+        media: () => undefined,
+        query: async (filters) => {
+          if (
+            refreshingFirstEvent &&
+            filters.some((filter) => filter.kinds?.includes(13535))
+          ) {
+            archiveEntered.resolve();
+            await archiveGate.promise;
+          }
+          if (!created) return [];
+          return [
+            roster(authority, channelId, [viewer.pubkey, agent.pubkey]),
+            metadata(authority, channelId, "Task", undefined, [
+              ["t", "stream"],
+              ["private"],
+              ["t", SOLO_LABEL],
+              ["t", source.handle.label],
+              ["t", "solo-task-mode:v1"],
+              ["P", viewer.pubkey],
+            ]),
+          ].filter((event) =>
+            filters.some((filter) => filter.kinds?.includes(event.kind)),
+          );
+        },
+        writer: {
+          kinds: [9, 9007],
+          sign: async (template) => {
+            signs.push(template.kind);
+            if (template.kind === 9007) {
+              createEntered.resolve();
+              await createGate.promise;
+            }
+            if (template.kind === 9) await messageGate.promise;
+            return signed(viewer, template);
+          },
+          publish,
+        },
+      },
+      {
+        outboxStorage: {
+          load: () => [],
+          save: (next) => {
+            records = structuredClone(next);
+          },
+        },
+        agentChoices: {
+          snapshot: () => native,
+          subscribe: () => () => {},
+          refresh: async () => {},
+        },
+      },
+    );
+    const samples: {
+      archives: string;
+      eligible: boolean;
+      incarnation: string;
+      aborted: boolean;
+    }[] = [];
+    const source = await region.register({
+      task: {
+        prepare: async (draft) => ({
+          ok: true,
+          channelId,
+          revision: draft.revision,
+          preparationId: "first-send",
+          members: [viewer.pubkey, agent.pubkey],
+        }),
+        markChannelStarted: async () => "start",
+        // Exact plugin16 authorization boundary: fresh template refresh includes archives.
+        recordFirstEvent: async () => {
+          recordCalls++;
+          if (mode === "stable") return;
+          refreshingFirstEvent = true;
+          await owner.session.agentChoices.refresh("templates", {
+            fresh: true,
+          });
+        },
+        participants: {
+          eligible: (key) => {
+            const archives =
+              owner.session.agentChoices.snapshot().archives.status;
+            const eligible =
+              authorized && key === agent.pubkey && archives === "ready";
+            samples.push({
+              archives,
+              eligible,
+              incarnation: source.binding().incarnation,
+              aborted: source.signal().aborted,
+            });
+            return eligible;
+          },
+          defaultRecipient: () => agent.pubkey,
+          makePrimary: async () => {},
+        },
+      },
+    });
+    const lookup = vi
+      .spyOn(soloNavigation, "soloNavigationFor")
+      .mockReturnValue(region.service);
+    const started = vi.fn();
+    let mounted: ReturnType<typeof render> | undefined;
+    try {
+      await owner.session.outbox?.ready();
+      if (mode !== "startup") {
+        owner.session.channels.ensureList();
+        await waitFor(() =>
+          expect(owner.session.channels.list().status).toBe("ready"),
+        );
+      }
+      expect(owner.session.channels.list().channels).toHaveLength(0);
+      expect(created).toBe(false);
+      await owner.session.agentChoices.refresh("templates", { fresh: true });
+      const incarnation = source.binding().incarnation;
+      writeView(
+        "first-send-order",
+        `solo:task:${draftId}:new-draft`,
+        taggedDraft("Original task request", agent.pubkey, "Task agent"),
+      );
+      mounted = render(
+        <SoloDraft
+          session={owner.session}
+          scope="first-send-order"
+          task={{ region: source.handle.label, draftId }}
+          onStarted={started}
+        />,
+      );
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Send message" }));
+      await createEntered.promise;
+      await act(async () => {
+        messageGate.resolve();
+      });
+      await waitFor(() =>
+        expect(
+          records.find((item) => item.event.kind === 9)?.signed,
+        ).toBeDefined(),
+      );
+      expect(refreshingFirstEvent).toBe(false);
+      expect(
+        owner.session.outbox?.snapshot().map((item) => item.event.kind),
+      ).toEqual([9007, 9]);
+      expect(started).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox")).toHaveTextContent(
+        "Original task request",
+      );
+      authorized = mode !== "revoked";
+      await act(async () => {
+        createGate.resolve();
+      });
+      if (mode === "revoked") {
+        await waitFor(() =>
+          expect(
+            records.find((item) => item.event.kind === 9007),
+          ).toMatchObject({
+            signed: expect.anything(),
+            delivery: "failed",
+            guarded: true,
+            error: expect.stringContaining("Channel addition cancelled"),
+          }),
+        );
+        await waitFor(() =>
+          expect(screen.getByRole("alert")).toHaveTextContent(
+            "Channel addition cancelled",
+          ),
+        );
+        await waitFor(() =>
+          expect(records.find((item) => item.event.kind === 9)).toMatchObject({
+            signed: expect.anything(),
+            recovery: expect.anything(),
+            delivery: "failed",
+          }),
+        );
+        expect(started).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+        expect(recordCalls).toBe(0);
+        return;
+      }
+      await waitFor(() =>
+        expect(
+          owner.session.channels
+            .list()
+            .channels.find(
+              (channel) => channel.id === channelId && !channel.pending,
+            ),
+        ).toBeDefined(),
+      );
+      await act(async () => {
+        messageGate.resolve();
+      });
+      if (mode === "refresh" || mode === "startup") {
+        await archiveEntered.promise;
+        expect(owner.session.agentChoices.snapshot().archives.status).toBe(
+          "loading",
+        );
+        expect(samples).toContainEqual({
+          archives: "ready",
+          eligible: true,
+          incarnation,
+          aborted: false,
+        });
+        expect(source.binding().incarnation).toBe(incarnation);
+        expect(source.signal().aborted).toBe(false);
+        await act(async () => {
+          archiveGate.resolve();
+        });
+      }
+      await waitFor(() =>
+        expect(
+          owner.session.outbox?.snapshot().find((item) => item.event.kind === 9)
+            ?.delivery,
+        ).not.toBe("sending"),
+      );
+      let retriedRecordCalls = 0;
+      if (mode === "startup") {
+        const original = records.find((item) => item.event.kind === 9);
+        expect(original).toMatchObject({
+          signed: expect.anything(),
+          recovery: expect.anything(),
+          delivery: "failed",
+        });
+        await waitFor(() =>
+          expect(screen.getByRole("alert")).toHaveTextContent("participant"),
+        );
+        expect(started).not.toHaveBeenCalled();
+        await owner.session.agentChoices.refresh("templates", { fresh: true });
+        await waitFor(() =>
+          expect(owner.session.channels.list().status).toBe("ready"),
+        );
+        retriedRecordCalls = recordCalls;
+        await userEvent
+          .setup()
+          .click(screen.getByRole("button", { name: "Send message" }));
+        await waitFor(() =>
+          expect(publish.mock.calls.map(([event]) => event.kind)).toEqual([
+            9007, 9,
+          ]),
+        );
+        expect(records.find((item) => item.event.kind === 9)?.event.id).toBe(
+          original?.event.id,
+        );
+      }
+      expect(
+        owner.session.outbox?.snapshot().find((item) => item.event.kind === 9)
+          ?.error,
+      ).toBeUndefined();
+      await waitFor(() =>
+        expect(publish.mock.calls.map(([event]) => event.kind)).toEqual([
+          9007, 9,
+        ]),
+      );
+      expect(records.find((item) => item.event.kind === 9007)?.delivery).toBe(
+        "accepted",
+      );
+      expect(
+        records.find((item) => item.event.kind === 9)?.error,
+      ).toBeUndefined();
+      expect(started).toHaveBeenCalledWith(channelId);
+      expect(recordCalls).toBe(retriedRecordCalls + 1);
+      expect(signs).toEqual([9007, 9]);
+    } finally {
+      createGate.resolve();
+      messageGate.resolve();
+      archiveGate.resolve();
+      mounted?.unmount();
+      owner.dispose();
+      lookup.mockRestore();
+      await region.dispose();
+    }
+  },
+);
+
+it("shows pending accepted-message recovery and cancels binding when its draft region ends", async () => {
+  const f = setup(),
+    viewer = keypair(),
+    agent = "a".repeat(64);
+  Object.assign(f.session, { viewer: viewer.pubkey });
+  const region = createSoloRegionFixture(viewer.pubkey);
+  const record = vi.fn(async () => {}),
+    started = vi.fn(),
+    retry = vi.fn();
+  const channelId = "22222222-2222-4222-8222-222222222222",
+    draftId = "33333333-3333-4333-8333-333333333333";
+  let resolve = () => {};
+  const ready = new Promise<void>((done) => {
+    resolve = done;
+  });
+  const starting = vi.fn(() => ready);
+  const source = await region.register({
+    task: {
+      prepare: async () => ({ ok: false, reason: "Saved message only" }),
+      markChannelStarted: async () => "resume",
+      recordFirstEvent: record,
+      participants: {
+        eligible: (key) => key === agent,
+        defaultRecipient: () => agent,
+        makePrimary: async () => {},
+      },
+    },
+  });
+  const lookup = vi
+    .spyOn(soloNavigation, "soloNavigationFor")
+    .mockReturnValue(region.service);
+  const labels = [SOLO_LABEL, source.handle.label, "solo-task-mode:v1"];
+  const event = signed(viewer, {
+    kind: 9,
+    content: "@Member agent Saved request",
+    tags: [
+      ["h", channelId],
+      ["p", agent],
+    ],
+  });
+  const create = signed(viewer, {
+    kind: 9007,
+    content: "",
+    tags: [
+      ["h", channelId],
+      ["name", "Saved task"],
+      ["visibility", "private"],
+      ["channel_type", "stream"],
+      ...labels.map((label) => ["t", label]),
+      ["p", viewer.pubkey],
+      ["p", agent],
+    ],
+  });
+  const recovery = {
+    key: `solo-task:${draftId}`,
+    value: JSON.stringify({
+      draftId,
+      revision: 7,
+      preparationId: "prepared:7",
+      channelId,
+      regionLabel: source.handle.label,
+    }),
+  };
+  const operations = [
+    { event, signed: event, delivery: "accepted", recovery },
+    { event: create, signed: create, delivery: "accepted" },
+  ];
+  const channelList = {
+    channels: [
+      {
+        id: channelId,
+        channelType: "solo",
+        creator: viewer.pubkey,
+        members: [viewer.pubkey, agent],
+        labels,
+      },
+    ],
+  };
+  Object.assign(f.session.channels, { list: () => channelList });
+  Object.assign(f.session.channelWrites, {
+    starting,
+    resumeStart: () => ({ create: create.id, ready }),
+  });
+  Object.assign(f.session.outbox as object, {
+    snapshot: () => operations,
+    retry,
+  });
+  const key = `solo:task:${draftId}:new-draft`;
+  writeView("accepted-recovery", key, taggedDraft("Saved request"));
+  const view = render(
+    <SoloDraft
+      session={f.session}
+      scope="accepted-recovery"
+      task={{ region: source.handle.label, draftId }}
+      onStarted={started}
+    />,
+  );
+  try {
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(starting).toHaveBeenCalledWith(channelId));
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(record).not.toHaveBeenCalled();
+    expect(started).not.toHaveBeenCalled();
+    await act(async () => {
+      region.cache();
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(/abort/i);
+    await act(async () => {
+      resolve();
+    });
+    expect(record).not.toHaveBeenCalled();
+    expect(started).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+    expect(operations[0]).toMatchObject({
+      event: { id: event.id },
+      signed: event,
+      recovery,
+    });
+    expect(readView("accepted-recovery", key, null)).toMatchObject({
+      text: expect.stringContaining("Saved request"),
+    });
+  } finally {
+    resolve();
+    view.unmount();
+    lookup.mockRestore();
+    await region.dispose();
+  }
 });
 const aaron = { pubkey: "e".repeat(64), name: "Aaron" };
 /** A new Solo chat over the real mentions completion, with the agent

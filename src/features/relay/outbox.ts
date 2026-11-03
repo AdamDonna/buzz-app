@@ -53,6 +53,8 @@ export interface Outbox {
   observeSend(listener: SendObserver): () => void;
   supports(kind: number): boolean;
   ready(): Promise<void>;
+  /** Existing attempt only: signed persistence and binding before local delivery. */
+  whenPrepared(id: string): Promise<RelayEvent>;
   send(
     input: Pick<EventTemplate, "kind" | "content" | "tags"> & {
       /** NIP-AP: created_at of the newest observed head this event replaces. */
@@ -110,11 +112,19 @@ export function createOutbox(
     profiling = createRelayProfiler(),
     notifyListener = (listener: () => void) => listener(),
     preparePublish,
+    afterSigned,
     holdPublish,
     needsReceipt = () => false,
     onReceipt = (_event: EventData, _message: string | undefined) => {},
     clock = new MessageClock(),
   }: {
+    /** Runs after signed persistence and before local consumers or publication.
+     * Restored retries use the original event and recovery bytes. */
+    afterSigned?: (
+      event: RelayEvent,
+      recovery: OutboxRecovery | undefined,
+      signal: AbortSignal,
+    ) => Promise<undefined | (() => void)>;
     /** The session's send clock, shared with its rendered views. */
     clock?: MessageClock;
     timeoutMs?: number;
@@ -149,6 +159,19 @@ export function createOutbox(
   let finalSnapshot: readonly OutgoingEvent[] | undefined;
   let finalVisible: readonly OutgoingEvent[] | undefined;
   const completed = new ByteLru<OutgoingEvent>(MAX_CONFIRMED, 8 * 1024 * 1024);
+  const prepared = new ByteLru<RelayEvent>(MAX_CONFIRMED, 8 * 1024 * 1024);
+  const preparationWaiters = new Map<
+    string,
+    {
+      promise: Promise<RelayEvent>;
+      resolve(event: RelayEvent): void;
+      reject(reason: unknown): void;
+    }
+  >();
+  function rejectPreparation(id: string, reason: unknown) {
+    preparationWaiters.get(id)?.reject(reason);
+    preparationWaiters.delete(id);
+  }
   const sizes = new WeakMap<OutgoingEvent, number>();
   let pendingBytes = 0;
   const listeners = new Set<() => void>();
@@ -434,6 +457,7 @@ export function createOutbox(
     const attempt = attempts.get(id);
     if (!attempt) return;
     const error = new Error("Delivery timed out; check or retry this message");
+    rejectPreparation(id, error);
     if (attempt.controller) attempt.controller.abort(error);
     else {
       clearTimeout(attempt.timer);
@@ -519,6 +543,17 @@ export function createOutbox(
       replace({ ...current, signed });
       await Promise.race([persist(id), aborted]);
       if (closed || signal.aborted || !find(id)) return;
+      const beforeLocal = afterSigned
+        ? await Promise.race([
+            afterSigned(signed, find(id)?.recovery, signal),
+            aborted,
+          ])
+        : undefined;
+      if (closed || signal.aborted || !find(id)) return;
+      beforeLocal?.();
+      prepared.set(id, signed);
+      preparationWaiters.get(id)?.resolve(signed);
+      preparationWaiters.delete(id);
       const hold = holdPublish?.(signed);
       if (hold) {
         attempt.held = true;
@@ -562,6 +597,7 @@ export function createOutbox(
       delivered(signed);
       onAccepted(signed, true);
     } catch (error) {
+      rejectPreparation(id, error);
       const latest = find(id);
       // A verified observation ends the attempt even if its HTTP ACK never arrives.
       total(!closed && !latest ? "ok" : "error");
@@ -640,6 +676,27 @@ export function createOutbox(
   };
   const outbox: Outbox = Object.freeze({
     snapshot: () => finalSnapshot ?? snapshot,
+    whenPrepared(id: string) {
+      const event = prepared.get(id);
+      if (event) return Promise.resolve(event);
+      const existing = preparationWaiters.get(id);
+      if (existing) return existing.promise;
+      if (closed || !attempts.has(id))
+        return Promise.reject(
+          new Error(
+            "This saved task needs an explicit retry before it can finish.",
+          ),
+        );
+      let resolve!: (event: RelayEvent) => void;
+      let reject!: (reason: unknown) => void;
+      const promise = new Promise<RelayEvent>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      void promise.catch(() => {});
+      preparationWaiters.set(id, { promise, resolve, reject });
+      return promise;
+    },
     subscribe: (listener: () => void) => subscribe(listeners, listener),
     observeSend: (listener: SendObserver) => {
       sendListeners.add(listener);
@@ -847,6 +904,7 @@ export function createOutbox(
         !attempts.has(id) &&
         !dismissing.has(id)
       ) {
+        prepared.delete(id);
         // A profile retry can reuse an older, unguarded saved invitation.
         // Promote that intent before scheduling so signing and publication honor
         // the renewed caller policy, including after the next hydration.
@@ -963,6 +1021,12 @@ export function createOutbox(
         attempt?.controller?.abort();
         clearTimeout(attempt?.timer);
         attempts.delete(event.id);
+        rejectPreparation(
+          event.id,
+          new Error(
+            "Task receipt observed; reload to verify its first-event binding.",
+          ),
+        );
       }
       notify();
       void persist(first.id).catch(() => {});
@@ -972,6 +1036,8 @@ export function createOutbox(
       finalSnapshot = snapshot;
       finalVisible = visible;
       closed = true;
+      for (const id of preparationWaiters.keys())
+        rejectPreparation(id, abortError());
       admissionGates.clear();
       lifetime.abort();
       for (const attempt of attempts.values()) {

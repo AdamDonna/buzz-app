@@ -31,6 +31,9 @@ function setup(
 ) {
   const requests: HostRequest[] = [];
   const host: Host = {
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
     runCommand: async () => null,
     request: vi.fn(async (input: HostRequest) => {
       requests.push(input);

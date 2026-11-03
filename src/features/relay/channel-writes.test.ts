@@ -12,7 +12,7 @@ import {
   scriptedTransport,
   signed,
 } from "./testing";
-import { createRelaySession } from "./session";
+import { createRelaySession, type RelaySession } from "./session";
 import { PublishRejected } from "./outbox";
 import { canAddMembers } from "../channel-members/members";
 import type { ReadFilter, RelayEvent } from "./events";
@@ -716,6 +716,9 @@ function setup(
     observeDismiss: () => () => {},
     observeSend: () => () => {},
     ready: async () => {},
+    whenPrepared: async () => {
+      throw new Error("No active preparation in this fixture");
+    },
     recover: async () => {},
     acknowledge: async () => {},
     snapshot: () => [],
@@ -1325,6 +1328,9 @@ it.each([true, false])(
         observeDismiss: () => () => {},
         observeSend: () => () => {},
         ready: async () => {},
+        whenPrepared: async () => {
+          throw new Error("No active preparation in this fixture");
+        },
         recover: async () => {},
         acknowledge: async () => {},
         supports: () => true,
@@ -1757,5 +1763,221 @@ it("cancels a guarded Solo create after signing starts and requires a fresh gate
     }
   } finally {
     owner.dispose();
+  }
+});
+
+it("confirms a restored Solo create with a lost acknowledgement before attempting any resend", async () => {
+  const viewer = keypair(),
+    relay = keypair();
+  let records: readonly OutgoingEvent[] = [];
+  const storage = {
+    load: () => structuredClone(records),
+    save: (next: readonly OutgoingEvent[]) => {
+      records = structuredClone(next);
+    },
+  };
+  const blocked = new Promise<void>(() => {});
+  const sign = vi.fn(async (input: Parameters<typeof signed>[1]) =>
+    signed(viewer, input),
+  );
+  const transport = {
+    viewer: viewer.pubkey,
+    relayAuthor: relay.pubkey,
+    channelIdentity: true as const,
+    media: () => undefined,
+    query: async () => [],
+    writer: { kinds: [9007], sign, publish: async () => blocked },
+  };
+  const first = createRelaySession(transport, { outboxStorage: storage });
+  let second: ReturnType<typeof createRelaySession> | undefined;
+  try {
+    assert.exists(first.session.outbox);
+    await first.session.outbox.ready();
+    const channelId = "11111111-1111-4111-8111-111111111111";
+    const create = first.session.channelWrites.create(
+      channelId,
+      "Saved task",
+      undefined,
+      false,
+      [viewer.pubkey],
+      () => true,
+    );
+    await vi.waitFor(() => expect(records[0]?.signed).toBeDefined());
+    const saved = records[0]?.signed;
+    assert.exists(saved);
+    first.dispose();
+    const publish = vi.fn(async () => {});
+    const query = vi.fn(async (filters: readonly ReadFilter[]) =>
+      filters.some((filter) => filter.ids?.includes(create)) ? [saved] : [],
+    );
+    second = createRelaySession(
+      { ...transport, query, writer: { ...transport.writer, publish } },
+      { outboxStorage: storage },
+    );
+    assert.exists(second.session.outbox);
+    await second.session.outbox.ready();
+    const resumed = second.session.channelWrites.resumeStart(
+      create,
+      channelId,
+      viewer.pubkey,
+      () => true,
+    );
+    await resumed.ready;
+    expect(query).toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(sign).toHaveBeenCalledTimes(1);
+    expect(
+      second.session.channels
+        .list()
+        .channels.find((item) => item.id === channelId),
+    ).toMatchObject({ name: "Saved task" });
+  } finally {
+    first.dispose();
+    second?.dispose();
+  }
+});
+
+it("task member additions keep current policy through signing and require a fresh gate on restored retry", async () => {
+  const { createSoloRegionFixture } = await import(
+    "../channel-navigation/solo-navigation-testing"
+  );
+  const navigation = await import("../channel-navigation/solo-navigation");
+  const viewer = keypair(),
+    relay = keypair(),
+    a = keypair(),
+    b = keypair();
+  const region = createSoloRegionFixture(viewer.pubkey);
+  let eligibleB = true,
+    added = false;
+  const source = await region.register({
+    task: {
+      prepare: async () => ({ ok: false, reason: "unused" }),
+      markChannelStarted: async () => "resume",
+      recordFirstEvent: async () => {},
+      participants: {
+        eligible: (key) => key === a.pubkey || (key === b.pubkey && eligibleB),
+        defaultRecipient: () => a.pubkey,
+        makePrimary: async () => {},
+      },
+    },
+  });
+  const lookup = vi
+    .spyOn(navigation, "soloNavigationFor")
+    .mockReturnValue(region.service);
+  let records: readonly OutgoingEvent[] = [];
+  const storage = {
+    load: () => structuredClone(records),
+    save: (next: readonly OutgoingEvent[]) => {
+      records = structuredClone(next);
+    },
+  };
+  let release: ((event: RelayEvent) => void) | undefined;
+  let template: Parameters<typeof signed>[1] | undefined;
+  const sign = vi.fn((input: Parameters<typeof signed>[1]) => {
+    template = input;
+    return new Promise<RelayEvent>((resolve) => {
+      release = resolve;
+    });
+  });
+  const publish = vi.fn(async (_event: RelayEvent) => {
+    added = true;
+  });
+  const id = "11111111-1111-4111-8111-111111111111";
+  const transport = {
+    viewer: viewer.pubkey,
+    scope: "https://relay.test",
+    relayAuthor: relay.pubkey,
+    channelIdentity: true as const,
+    media: () => undefined,
+    query: async (filters: readonly ReadFilter[]) => {
+      const rows = [
+        roster(
+          relay,
+          id,
+          [viewer.pubkey, a.pubkey, ...(added ? [b.pubkey] : [])],
+          1_700_000_000 + (added ? 1 : 0),
+        ),
+        metadata(relay, id, "Task", undefined, [
+          ["t", "stream"],
+          ["private"],
+          ["t", SOLO_LABEL],
+          ["t", source.handle.label],
+          ["t", "solo-task-mode:v1"],
+          ["P", viewer.pubkey],
+        ]),
+      ];
+      return rows.filter((row) =>
+        filters.some((filter) => filter.kinds?.includes(row.kind)),
+      );
+    },
+    writer: { kinds: [9, 9000, 9007], sign, publish },
+  };
+  const native = {
+    snapshot: () => ({
+      status: "ready" as const,
+      agents: [a, b].map((key) => ({
+        pubkey: key.pubkey,
+        name: "Agent",
+        relayUrl: "https://relay.test",
+        owner: viewer.pubkey,
+      })),
+    }),
+    subscribe: () => () => {},
+    refresh: async () => {},
+  };
+  const first = createRelaySession(transport, {
+    outboxStorage: storage,
+    agentChoices: native,
+  });
+  let second: ReturnType<typeof createRelaySession> | undefined;
+  const restoreChannel = (session: RelaySession) =>
+    session.channels.start?.({
+      id,
+      name: "Task",
+      members: [viewer.pubkey, a.pubkey],
+      labels: [SOLO_LABEL, source.handle.label, "solo-task-mode:v1"],
+    });
+  try {
+    restoreChannel(first.session);
+    const adding = first.session.channelWrites.addAgents(id, [b.pubkey]);
+    const refused = expect(adding).rejects.toThrow();
+    await vi.waitFor(() => expect(template).toBeDefined());
+    eligibleB = false;
+    assert.exists(template);
+    assert.exists(release);
+    release(signed(viewer, template));
+    await refused;
+    expect(publish).not.toHaveBeenCalled();
+    const operation = records.find((item) => item.event.kind === 9000);
+    assert.exists(operation);
+    expect(operation.guarded).toBe(true);
+    expect(operation.signed).toBeDefined();
+    first.dispose();
+    second = createRelaySession(transport, {
+      outboxStorage: storage,
+      agentChoices: native,
+    });
+    restoreChannel(second.session);
+    assert.exists(second.session.outbox);
+    await second.session.outbox.ready();
+    expect(() => second?.session.outbox?.retry(operation.event.id)).toThrow(
+      /cancelled/,
+    );
+    await expect(
+      second.session.channelWrites.addAgents(id, [b.pubkey]),
+    ).rejects.toThrow(/participant/);
+    expect(publish).not.toHaveBeenCalled();
+    eligibleB = true;
+    await second.session.channelWrites.addAgents(id, [b.pubkey]);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(sign).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(publish.mock.calls[0]?.[0])).toBe(
+      JSON.stringify(operation.signed),
+    );
+  } finally {
+    first.dispose();
+    second?.dispose();
+    lookup.mockRestore();
+    await region.dispose();
   }
 });

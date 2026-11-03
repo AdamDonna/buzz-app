@@ -39,6 +39,10 @@ export function createChannelWrites(
   agents?: {
     selectable: () => readonly string[];
     archived: (pubkey: string) => boolean;
+    admission?: (
+      id: string,
+      keys: readonly string[],
+    ) => (() => boolean) | undefined;
   },
   relayAuthor?: string,
   /** Signed roster discovery, including channels this viewer cannot open. */
@@ -448,8 +452,13 @@ export function createChannelWrites(
   async function addAgents(
     id: string,
     keys: readonly string[],
-    active?: () => boolean,
+    caller?: () => boolean,
   ) {
+    const policy = agents?.admission?.(id, keys);
+    const active =
+      caller || policy
+        ? () => caller?.() !== false && policy?.() !== false
+        : undefined;
     if (active?.() === false)
       throw new DOMException("Channel addition cancelled", "AbortError");
     const original = await refreshMembership(id);
@@ -537,10 +546,10 @@ export function createChannelWrites(
    * once it is known to have none. A lost acknowledgment resends the same
    * create, which the relay confirms; when the attempts run out, the relay is
    * asked for the create until it answers. */
-  async function created(create: string) {
+  async function created(create: string, active?: () => boolean) {
     for (let tries = 1; tries <= 3; tries++) {
       try {
-        return await delivered(create);
+        return await delivered(create, active);
       } catch (error) {
         // Only the relay's refusal ends the start; a failure on this device,
         // before the create was sent, retries it.
@@ -553,7 +562,7 @@ export function createChannelWrites(
             String(error instanceof Error ? error.message : error),
             { cause: error },
           );
-        if (signal.aborted) throw error;
+        if (signal.aborted || active?.() === false) throw error;
       }
       // A failed check is not an answer; give the connection time to recover.
       await pause(500 * 2 ** tries, signal);
@@ -584,6 +593,55 @@ export function createChannelWrites(
       // The relay has no such create; `start` withdraws it.
       throw new ChatNotStarted("The relay has no record of it.");
     }
+  }
+  function trackStart(
+    id: string,
+    create: string,
+    active?: () => boolean,
+    setup?: { canvas: string; apply(): Promise<unknown> },
+  ) {
+    const existing = starts.get(id);
+    if (existing) return { create, ready: existing };
+    // The relay adds the members in the create, so the chat takes events
+    // once the create is OK.
+    const ready = created(create, active);
+    starts.set(id, ready);
+    canvases.set(id, setup?.canvas ?? "");
+    const settled = setup
+      ? ready.then(() =>
+          setup.apply().catch((reason) => {
+            console.warn("Solo chat setup did not finish", reason);
+          }),
+        )
+      : ready;
+    void ready.then(
+      // Confirming the chat only ends its pending listing.
+      () => refresh(id).catch(() => {}),
+      (error) => {
+        if (!(error instanceof ChatNotStarted)) return;
+        // A chat that was never made is gone, with everything sent in it.
+        channels.abandon?.(id);
+        for (const item of outbox?.snapshot() ?? [])
+          if (
+            outbox &&
+            item.event.tags.some(
+              ([name, value]) => name === "h" && value === id,
+            )
+          )
+            void withdraw(outbox, item.event.id).catch(() => {});
+      },
+    );
+    void ready
+      .catch(() => {})
+      .finally(() => {
+        if (starts.get(id) === ready) starts.delete(id);
+      });
+    void settled
+      .catch(() => {})
+      .finally(() => {
+        if (starts.get(id) === undefined) canvases.delete(id);
+      });
+    return { create, ready };
   }
   const api = Object.freeze({
     available,
@@ -700,6 +758,50 @@ export function createChannelWrites(
       setup?: { canvas: string; apply(): Promise<unknown> },
       options?: { labels?: readonly string[]; active?: () => boolean },
     ) {
+      // A task preparation can survive a crash before its first message is
+      // queued. Reuse its durable create rather than issuing another event.
+      if (options?.active) {
+        const saved = writer()
+          .snapshot()
+          .filter(
+            (item) =>
+              item.event.kind === 9007 &&
+              item.event.tags.some(
+                ([key, value]) => key === "h" && value === id,
+              ),
+          );
+        if (saved.length > 1)
+          throw new Error("Multiple saved creations need review in Outbox.");
+        const previous = saved[0];
+        if (previous) {
+          const values = (key: string) =>
+            previous.event.tags
+              .filter(([name]) => name === key)
+              .map((tag) => tag[1] ?? "");
+          const sameSet = (a: readonly string[], b: readonly string[]) =>
+            JSON.stringify([...new Set(a)].sort()) ===
+            JSON.stringify([...new Set(b)].sort());
+          if (
+            !sameSet(values("p"), members) ||
+            !sameSet(values("t"), [
+              SOLO_LABEL,
+              ...(named ? [SOLO_NAMED_LABEL] : []),
+              ...(options.labels ?? []),
+            ]) ||
+            values("ttl").join() !==
+              (ttlSeconds === undefined ? "" : String(ttlSeconds))
+          )
+            throw new Error(
+              "The saved task creation has different participants or settings. Resume it from Outbox.",
+            );
+          return api.resumeStart(
+            previous.event.id,
+            id,
+            previous.event.pubkey,
+            options.active,
+          );
+        }
+      }
       const create = api.create(
         id,
         title,
@@ -720,38 +822,60 @@ export function createChannelWrites(
         ],
         ttlSeconds,
       });
-      // The relay adds the members in the create, so the chat takes events
-      // once the create is OK.
-      const ready = created(create);
-      starts.set(id, ready);
-      canvases.set(id, setup?.canvas ?? "");
-      const settled = setup
-        ? ready.then(() =>
-            setup.apply().catch((reason) => {
-              console.warn("Solo chat setup did not finish", reason);
-            }),
-          )
-        : ready;
-      void ready.then(
-        // Confirming the chat only ends its pending listing.
-        () => refresh(id).catch(() => {}),
-        (error) => {
-          if (!(error instanceof ChatNotStarted)) return;
-          // A chat that was never made is gone, with everything sent in it.
-          channels.abandon?.(id);
-          for (const item of outbox?.snapshot() ?? [])
-            if (
-              outbox &&
-              item.event.tags.some(
-                ([name, value]) => name === "h" && value === id,
-              )
-            )
-              void withdraw(outbox, item.event.id).catch(() => {});
-        },
-      );
-      void ready.catch(() => {}).finally(() => starts.delete(id));
-      void settled.catch(() => {}).finally(() => canvases.delete(id));
-      return { create, ready };
+      return trackStart(id, create, options?.active, setup);
+    },
+    /** Resume only the saved create, with freshly authorized admission. The
+     * outbox has already verified this viewer's saved event on hydration. */
+    resumeStart(
+      create: string,
+      id: string,
+      owner: string,
+      active: () => boolean,
+    ) {
+      const source = writer();
+      const saved = source.snapshot().find((item) => item.event.id === create);
+      const event = saved?.event;
+      const one = (key: string) => {
+        const tags = event?.tags.filter(([name]) => name === key);
+        return tags?.length === 1 ? tags[0]?.[1] : undefined;
+      };
+      identifier(id);
+      const title = one("name");
+      const labels =
+        event?.tags
+          .filter(([name]) => name === "t")
+          .map((tag) => tag[1] ?? "") ?? [];
+      const members =
+        event?.tags
+          .filter(([name]) => name === "p")
+          .map((tag) => tag[1] ?? "") ?? [];
+      const ttl = one("ttl");
+      if (
+        event?.kind !== 9007 ||
+        event.pubkey !== owner ||
+        one("h") !== id ||
+        one("visibility") !== "private" ||
+        one("channel_type") !== "stream" ||
+        !title?.trim() ||
+        [...title].length > 120 ||
+        !labels.includes(SOLO_LABEL) ||
+        members.some((key) => !/^[0-9a-f]{64}$/.test(key)) ||
+        (ttl !== undefined &&
+          (!/^\d+$/.test(ttl) ||
+            Number(ttl) < 1 ||
+            Number(ttl) > 2_147_483_647))
+      )
+        throw new Error("The saved Solo creation is invalid.");
+      if (!active())
+        throw new DOMException("Channel creation cancelled", "AbortError");
+      channels.start?.({
+        id,
+        name: title,
+        members,
+        labels,
+        ttlSeconds: ttl === undefined ? undefined : Number(ttl),
+      });
+      return trackStart(id, create, active);
     },
     /** Settles when a chat this device is starting exists on the relay, so it
      * can be read and take events. */

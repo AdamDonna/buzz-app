@@ -13,6 +13,8 @@ import { afterEach, assert, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { SoloRegions } from "./SoloRegions";
+import { MessageComposer } from "../messages/MessageComposer";
+import { composerDOMFixture } from "../messages/composer-testing";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { MenuItem } from "../../shared/design-system/ui/Menu";
 import { SoloHeading } from "../../bundled/channels/SoloHeading";
@@ -28,6 +30,7 @@ import { useSidebarView } from "../../bundled/channels/useSidebarView";
 import { writeView } from "../../shared/view-state";
 import destinationStyles from "./SoloDestination.module.css";
 
+composerDOMFixture();
 const disposals: (() => unknown)[] = [];
 afterEach(async () => {
   cleanup();
@@ -1462,6 +1465,452 @@ it("hands a header menu action the durable trigger as its dialog origin", async 
   );
   expect(selected).toHaveBeenCalledOnce();
 });
+
+/** jsdom has no CSS animations; hold the real menu's close-completion boundary. */
+function holdDestinationMenuClose(menu: HTMLElement) {
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const observed = vi.fn();
+  Object.defineProperty(menu, "getAnimations", {
+    configurable: true,
+    value: () => {
+      if (!menu.hasAttribute("data-closed")) return [];
+      observed();
+      return [{ finished }];
+    },
+  });
+  return {
+    observed,
+    release: () => act(async () => finish()),
+  };
+}
+
+async function openDestinationActionMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  surface: "context" | "ellipsis",
+  input: "pointer" | "keyboard",
+) {
+  const row = screen.getByRole("button", { name: "Owned" });
+  const trigger = screen.getByRole("button", { name: "Actions for Owned" });
+  if (surface === "context") {
+    if (input === "pointer") fireEvent.contextMenu(row);
+    else {
+      row.focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+    }
+  } else if (input === "pointer") await user.click(trigger);
+  else {
+    trigger.focus();
+    await user.keyboard("{Enter}");
+  }
+  const menu = await waitFor(() => {
+    const open = screen
+      .getAllByRole("menu")
+      .find((item) => !item.hasAttribute("data-closed"));
+    assert(open);
+    return open;
+  });
+  await waitFor(() =>
+    expect(menu).toContainElement(document.activeElement as HTMLElement),
+  );
+  return menu;
+}
+
+it.each([
+  ["context", "pointer"],
+  ["context", "keyboard"],
+  ["ellipsis", "pointer"],
+  ["ellipsis", "keyboard"],
+] as const)(
+  "hands the %s destination action focus after %s menu close completes",
+  async (surface, input) => {
+    const h = fixture();
+    const pending: readonly never[] = [];
+    Object.assign(h.session, {
+      outbox: {
+        supports: (kind: number) => kind === 9,
+        snapshot: () => pending,
+        subscribe: () => () => {},
+        observeDismiss: () => () => {},
+      },
+    });
+    const selected = vi.fn();
+    function Destination({ ui }: SoloRegionProps) {
+      const [editing, setEditing] = useState(false);
+      return (
+        <>
+          <Row
+            ui={ui}
+            channelId="owned"
+            menuActions={[
+              {
+                id: "new-task",
+                label: "New task",
+                icon: <span />,
+                onSelect: () => {
+                  selected(document.activeElement);
+                  setEditing(true);
+                },
+              },
+            ]}
+          />
+          {editing && (
+            <MessageComposer
+              scope={h.scope}
+              session={h.session}
+              channelId="owned"
+              channelName="Owned"
+              label="New task draft"
+              autoFocus
+            />
+          )}
+        </>
+      );
+    }
+    await h.register({ component: Destination });
+    mount(h);
+    const user = userEvent.setup();
+    const menu = await openDestinationActionMenu(user, surface, input);
+    const close = holdDestinationMenuClose(menu);
+    try {
+      const action = screen.getByRole("menuitem", { name: "New task" });
+      if (input === "pointer") await user.click(action);
+      else {
+        await user.keyboard("{End}");
+        expect(action).toHaveFocus();
+        await user.keyboard("{Enter}");
+      }
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      expect(selected).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("textbox", { name: "New task draft" }),
+      ).toBeNull();
+    } finally {
+      await close.release();
+    }
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "New task draft" }),
+      ).toHaveFocus(),
+    );
+    expect(selected).toHaveBeenCalledExactlyOnceWith(
+      screen.getByRole("button", { name: "Owned" }),
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  },
+);
+
+it.each([
+  ["context", "rebind"],
+  ["context", "unmount"],
+  ["ellipsis", "rebind"],
+  ["ellipsis", "unmount"],
+] as const)(
+  "drops a queued %s destination action after %s before late close completion",
+  async (surface, retirement) => {
+    const h = fixture();
+    const selected = vi.fn();
+    await h.register({
+      component: ({ ui }) => (
+        <Row
+          ui={ui}
+          channelId="owned"
+          menuActions={[
+            {
+              id: "new-task",
+              label: "New task",
+              icon: <span />,
+              onSelect: selected,
+            },
+          ]}
+        />
+      ),
+    });
+    const view = mount(h);
+    const user = userEvent.setup();
+    const menu = await openDestinationActionMenu(user, surface, "pointer");
+    const close = holdDestinationMenuClose(menu);
+    try {
+      await user.click(screen.getByRole("menuitem", { name: "New task" }));
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      expect(selected).not.toHaveBeenCalled();
+      if (retirement === "rebind") await act(() => h.reconnect());
+      else view.unmount();
+    } finally {
+      await close.release();
+    }
+    expect(selected).not.toHaveBeenCalled();
+    expect(menu).not.toBeInTheDocument();
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "drops a queued %s destination action when its menu reopens and then closes with Escape",
+  async (surface) => {
+    const h = fixture();
+    const selected = vi.fn();
+    await h.register({
+      component: ({ ui }) => (
+        <Row
+          ui={ui}
+          channelId="owned"
+          menuActions={[
+            {
+              id: "new-task",
+              label: "New task",
+              icon: <span />,
+              onSelect: selected,
+            },
+          ]}
+        />
+      ),
+    });
+    mount(h);
+    const user = userEvent.setup();
+    const menu = await openDestinationActionMenu(user, surface, "pointer");
+    const close = holdDestinationMenuClose(menu);
+    try {
+      await user.click(screen.getByRole("menuitem", { name: "New task" }));
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      if (surface === "context")
+        fireEvent.contextMenu(screen.getByRole("button", { name: "Owned" }));
+      else
+        fireEvent.click(
+          screen.getByRole("button", { name: "Actions for Owned" }),
+        );
+      await waitFor(() => expect(menu).not.toHaveAttribute("data-closed"));
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(menu).toHaveAttribute("data-closed"));
+    } finally {
+      await close.release();
+    }
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(selected).not.toHaveBeenCalled();
+  },
+);
+
+async function deferredDestinationFixture(
+  label = "Pin",
+  run?: () => void | Promise<void>,
+) {
+  const h = fixture();
+  const pending: readonly never[] = [];
+  Object.assign(h.session, {
+    outbox: {
+      supports: (kind: number) => kind === 9,
+      snapshot: () => pending,
+      subscribe: () => () => {},
+      observeDismiss: () => () => {},
+    },
+  });
+  const selected = vi.fn();
+  function Destination({ ui }: SoloRegionProps) {
+    const [editing, setEditing] = useState(false);
+    return (
+      <>
+        <Row
+          ui={ui}
+          channelId="owned"
+          menuActions={[
+            {
+              id: "chosen",
+              label,
+              icon: <span />,
+              onSelect: () => {
+                selected(document.activeElement);
+                if (label === "New task") setEditing(true);
+                return run?.();
+              },
+            },
+          ]}
+        />
+        {editing && (
+          <MessageComposer
+            scope={h.scope}
+            session={h.session}
+            channelId="owned"
+            channelName="Owned"
+            label="New task draft"
+            autoFocus
+          />
+        )}
+      </>
+    );
+  }
+  await h.register({ component: Destination });
+  const view = mount(h);
+  const external = render(<input aria-label="Elsewhere" />);
+  return {
+    h,
+    view,
+    selected,
+    external,
+    user: userEvent.setup(),
+    row: screen.getByRole("button", { name: "Owned" }),
+    input: screen.getByRole("textbox", { name: "Elsewhere" }),
+  };
+}
+
+it.each(["context", "ellipsis"] as const)(
+  "keeps ordinary %s Escape and outside dismissal focus without running a contribution",
+  async (surface) => {
+    const h = await deferredDestinationFixture();
+    let menu = await openDestinationActionMenu(h.user, surface, "keyboard");
+    await h.user.keyboard("{Escape}");
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(h.row).toHaveFocus();
+    menu = await openDestinationActionMenu(h.user, surface, "pointer");
+    await h.user.click(h.input);
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(h.input).toHaveFocus();
+    expect(h.selected).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["context", "Pin", "pointer", "input"],
+  ["context", "New task", "keyboard", "input"],
+  ["context", "Pin", "keyboard", "other menu"],
+  ["context", "New task", "pointer", "other menu"],
+  ["ellipsis", "Pin", "keyboard", "input"],
+  ["ellipsis", "New task", "pointer", "input"],
+  ["ellipsis", "Pin", "pointer", "other menu"],
+  ["ellipsis", "New task", "keyboard", "other menu"],
+] as const)(
+  "cancels selected %s %s after %s selection moves to %s during exit",
+  async (surface, label, input, destination) => {
+    const h = await deferredDestinationFixture(label);
+    const menu = await openDestinationActionMenu(h.user, surface, input);
+    const close = holdDestinationMenuClose(menu);
+    let elsewhere: HTMLElement = h.input;
+    try {
+      const action = screen.getByRole("menuitem", { name: label });
+      if (input === "pointer") await h.user.click(action);
+      else {
+        await h.user.keyboard("{End}");
+        expect(action).toHaveFocus();
+        await h.user.keyboard("{Enter}");
+      }
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      if (destination === "other menu") {
+        render(
+          <div role="menu" aria-label="Other menu">
+            <button type="button" role="menuitem">
+              Other action
+            </button>
+          </div>,
+        );
+        elsewhere = screen.getByRole("menuitem", { name: "Other action" });
+      }
+      elsewhere.focus();
+      expect(elsewhere).toHaveFocus();
+      expect(h.selected).not.toHaveBeenCalled();
+    } finally {
+      await close.release();
+    }
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(elsewhere).toHaveFocus();
+    expect(h.selected).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("textbox", { name: "New task draft" }),
+    ).toBeNull();
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "runs selected %s Pin once from body and returns its non-navigation focus to the row",
+  async (surface) => {
+    const h = await deferredDestinationFixture();
+    const menu = await openDestinationActionMenu(h.user, surface, "pointer");
+    const close = holdDestinationMenuClose(menu);
+    try {
+      await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+      await waitFor(() => expect(close.observed).toHaveBeenCalled());
+      (document.activeElement as HTMLElement).blur();
+      expect(document.body).toHaveFocus();
+      expect(h.selected).not.toHaveBeenCalled();
+    } finally {
+      await close.release();
+    }
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+    expect(h.row).toHaveFocus();
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "keeps the %s row origin and visible error after a deferred contribution rejects",
+  async (surface) => {
+    const h = await deferredDestinationFixture("Pin", () =>
+      Promise.reject(new Error("no")),
+    );
+    const menu = await openDestinationActionMenu(h.user, surface, "pointer");
+    await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(await screen.findByText("The action could not run.")).toBeVisible();
+    expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+    expect(h.row).toHaveFocus();
+  },
+);
+
+it.each([
+  ["context", "ellipsis"],
+  ["ellipsis", "context"],
+] as const)(
+  "does not let late %s completion consume a new %s selection",
+  async (first, second) => {
+    const h = await deferredDestinationFixture();
+    const oldMenu = await openDestinationActionMenu(h.user, first, "pointer");
+    const oldClose = holdDestinationMenuClose(oldMenu);
+    let nextClose: ReturnType<typeof holdDestinationMenuClose> | undefined;
+    try {
+      await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+      await waitFor(() => expect(oldClose.observed).toHaveBeenCalled());
+      const nextMenu = await openDestinationActionMenu(
+        h.user,
+        second,
+        "pointer",
+      );
+      nextClose = holdDestinationMenuClose(nextMenu);
+      await h.user.click(
+        within(nextMenu).getByRole("menuitem", { name: "Pin" }),
+      );
+      await waitFor(() => expect(nextClose?.observed).toHaveBeenCalled());
+      await oldClose.release();
+      await waitFor(() => expect(oldMenu).not.toBeInTheDocument());
+      expect(h.selected).not.toHaveBeenCalled();
+      await nextClose.release();
+      await waitFor(() => expect(nextMenu).not.toBeInTheDocument());
+      expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+      expect(h.row).toHaveFocus();
+    } finally {
+      await oldClose.release();
+      await nextClose?.release();
+    }
+  },
+);
+
+it.each(["context", "ellipsis"] as const)(
+  "resets the chosen %s handoff on keyboard reopen before Escape",
+  async (surface) => {
+    const h = await deferredDestinationFixture();
+    const first = await openDestinationActionMenu(h.user, surface, "pointer");
+    await h.user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await waitFor(() => expect(first).not.toBeInTheDocument());
+    expect(h.selected).toHaveBeenCalledExactlyOnceWith(h.row);
+    const reopened = await openDestinationActionMenu(
+      h.user,
+      surface,
+      "keyboard",
+    );
+    await h.user.keyboard("{Escape}");
+    await waitFor(() => expect(reopened).not.toBeInTheDocument());
+    expect(h.row).toHaveFocus();
+    expect(h.selected).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([false, true])(
   "preserves muted Solo unread markers in source and recovery destinations (recovery=%s)",

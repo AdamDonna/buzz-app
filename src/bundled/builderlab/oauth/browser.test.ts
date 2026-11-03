@@ -30,6 +30,9 @@ function fixture() {
     complete: vi.fn(async () => {}),
   };
   const host: Host = {
+    repositoriesFolder: async () => {
+      throw new Error("Repositories folder is unavailable in this fixture");
+    },
     runCommand: vi.fn(),
     request: vi.fn(async ({ url }) => ({
       status: 200,

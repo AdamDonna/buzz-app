@@ -6,6 +6,7 @@ export type SoloDraft = Readonly<{
   project?: string;
   agent?: string;
   linked?: string;
+  task?: Readonly<{ region: string; draftId: string }>;
 }>;
 
 const agentKey = /^[0-9a-f]{64}$/;
@@ -22,11 +23,35 @@ export function soloDraft(
         key !== "kind" &&
         key !== "project" &&
         key !== "agent" &&
+        key !== "task" &&
         key !== "linked",
     )
   )
     return;
   const { project, agent, linked } = value;
+  let task: NonNullable<SoloDraft["task"]> | undefined;
+  if (value.task !== undefined) {
+    if (
+      !value.task ||
+      typeof value.task !== "object" ||
+      Array.isArray(value.task)
+    )
+      return;
+    const input = value.task as { readonly [key: string]: JsonValue };
+    if (
+      Object.keys(input).some((key) => key !== "region" && key !== "draftId") ||
+      typeof input.region !== "string" ||
+      !/^buzz\.region:[a-z0-9.-]+:[a-z0-9.-]+$/.test(input.region) ||
+      typeof input.draftId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+        input.draftId,
+      ) ||
+      project ||
+      linked
+    )
+      return;
+    task = { region: input.region, draftId: input.draftId };
+  }
   if (
     linked !== undefined &&
     (typeof linked !== "string" ||
@@ -49,6 +74,7 @@ export function soloDraft(
     ...(project ? { project } : {}),
     ...(agent ? { agent } : {}),
     ...(linked ? { linked } : {}),
+    ...(task ? { task } : {}),
   };
 }
 

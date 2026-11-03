@@ -15,6 +15,13 @@ export function useCompletionEditor(
   enabled: boolean,
 ) {
   const [observation, setObservation] = useState<ComposerObservation>();
+  const [composerSignal, setComposerSignal] = useState<AbortSignal>();
+  useLayoutEffect(() => {
+    // A fresh effect setup replaces a signal aborted by StrictMode replay.
+    const lifetime = new AbortController();
+    setComposerSignal(lifetime.signal);
+    return () => lifetime.abort();
+  }, []);
   const current = useRef<ComposerObservation | undefined>(undefined);
   const revision = useRef(0);
   const last = useRef<ComposerObservation | undefined>(undefined);
@@ -104,6 +111,14 @@ export function useCompletionEditor(
       ++revision.current;
     };
   }, [enabled, invalidate]);
-  return { observation, valid, observe, invalidate, keys, composing };
+  return {
+    observation,
+    valid,
+    observe,
+    invalidate,
+    keys,
+    composing,
+    composerSignal,
+  };
 }
 export type CompletionEditor = ReturnType<typeof useCompletionEditor>;

@@ -602,6 +602,20 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   pointer-events: none;
 }
 /* The existing editor owns text; this surface owns only composer layout. */
+.composer,
+.composerColumn {
+  width: min(calc(100% - 2 * var(--space-4)), 52rem);
+  margin-inline: auto;
+}
+.taskHeader {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: max-content;
+  overflow: auto;
+}
+.taskHeader:empty {
+  display: none;
+}
 .composer {
   --composer-gap: var(--space-4);
   box-sizing: border-box;
@@ -614,7 +628,6 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   border-radius: calc(var(--radius-icon-button) + var(--space-1h) + 1px);
   box-shadow: var(--shadow-xs);
   padding: var(--space-3) var(--space-1h) var(--space-1h);
-  width: min(calc(100% - 2 * var(--space-4)), 52rem);
   margin: 0 auto var(--space-4);
   display: flex;
   flex-shrink: 0;
@@ -648,8 +661,11 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   .emptyConversation {
     padding-block: var(--space-3);
   }
-  .composer {
+  .composer,
+  .composerColumn {
     width: min(calc(100% - 2 * var(--space-3)), 52rem);
+  }
+  .composer {
     margin: 0 auto var(--space-3);
   }
 }

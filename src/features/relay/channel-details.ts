@@ -1,4 +1,4 @@
-import { regionLabels } from "../solo/region-labels";
+import { managedSoloLabels } from "../solo/region-labels";
 import { getEventHash, verifyEvent } from "nostr-tools";
 import type { RelayReader } from "./reader";
 import { retryRead } from "./read-retry";
@@ -191,7 +191,10 @@ export function createChannelDetails({
         ...(input.labels !== undefined
           ? {
               labels: [
-                ...new Set([...input.labels, ...regionLabels(base.labels)]),
+                ...new Set([
+                  ...input.labels,
+                  ...managedSoloLabels(base.labels),
+                ]),
               ],
             }
           : {}),
@@ -200,7 +203,7 @@ export function createChannelDetails({
               labels: [
                 ...new Set([
                   ...(input.labels ?? base.labels ?? []),
-                  ...regionLabels(base.labels),
+                  ...managedSoloLabels(base.labels),
                   SOLO_NAMED_LABEL,
                 ]),
               ],
