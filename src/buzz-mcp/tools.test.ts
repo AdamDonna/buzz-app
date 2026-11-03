@@ -4142,3 +4142,20 @@ it("refuses to delete another author's message", async () => {
   ).rejects.toThrow("Only your own messages can be deleted.");
   expect(published).toEqual([]);
 });
+
+it("saves a canvas of exactly the live limit in UTF-8 bytes, and refuses one byte over", async () => {
+  const { client, published } = fake([
+    event({ kind: 39000, tags: [["d", "chan"]] }),
+  ]);
+  const exact = "é".repeat(LIVE_CANVAS_BYTES / 2);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", { content: exact }),
+  ).resolves.toBe("saved");
+  expect(published).toHaveLength(1);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", {
+      content: `${exact.slice(1)}xyz`,
+    }),
+  ).rejects.toThrow(`over its limit of ${LIVE_CANVAS_BYTES} bytes`);
+  expect(published).toHaveLength(1);
+});

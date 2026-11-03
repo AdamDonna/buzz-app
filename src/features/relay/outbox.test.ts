@@ -9,6 +9,7 @@ import {
 } from "./outbox";
 import type { EventTemplate } from "nostr-tools";
 import type { RelayEvent } from "./events";
+import { LIVE_CANVAS_BYTES } from "../channel-templates/canvas-limits.ts";
 import {
   bounds,
   flush,
@@ -1117,4 +1118,41 @@ it("does not replay a guarded addition through generic retry or after hydration"
   expect(restored.publish).not.toHaveBeenCalled();
   restored.outbox.retry(id, () => true); // Explicit renewed admission may reuse the exact event.
   await vi.waitFor(() => expect(restored.sign).toHaveBeenCalledOnce());
+});
+it("admits a live Canvas up to its own limits, persists it, and retries the same signed event", async () => {
+  const storage = memoryStorage();
+  const first = setup(storage);
+  const canvas = (content: string) =>
+    first.outbox.send({ kind: 40100, content, tags: [["h", "c"]] });
+  expect(() => canvas("a".repeat(LIVE_CANVAS_BYTES + 1))).toThrow(
+    "Message is empty or too large",
+  );
+  // Within the content limit, but escaping pushes the event past its bound.
+  expect(() => canvas('"'.repeat(LIVE_CANVAS_BYTES))).toThrow(
+    "Message is empty or too large",
+  );
+  // Other kinds keep the ordinary input budget.
+  expect(() => first.send("a".repeat(40 * 1024))).toThrow(
+    "Message is empty or too large",
+  );
+  expect(first.sign).not.toHaveBeenCalled();
+  const content = "é".repeat(LIVE_CANVAS_BYTES / 2);
+  const id = canvas(content);
+  const event = await first.signNext();
+  expect(event.content).toBe(content);
+  expect((await storage.load())[0]?.signed?.id).toBe(id);
+  first.dispose();
+  const second = setup(storage);
+  expect(second.outbox.snapshot()[0]).toMatchObject({
+    delivery: "unknown",
+    event: { id, content },
+  });
+  await second.open();
+  second.outbox.retry(id);
+  await flush();
+  // Canvas publication first refreshes channel membership.
+  second.next().respond([roster(relay, "c", [viewer.pubkey])]);
+  await flush();
+  expect(second.sign).not.toHaveBeenCalled();
+  expect(second.publications[0]?.event).toEqual(event);
 });

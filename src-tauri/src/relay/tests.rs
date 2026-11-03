@@ -3347,6 +3347,12 @@ fn canvas_limits_mirror_the_shared_policy() {
     assert!(policy.contains("export const CANVAS_MAX_EVENT_BYTES = CANVAS_FRAME_BYTES - 16;"));
     let model = include_str!("../../../src/features/channel-templates/model.ts");
     assert!(model.contains("export const TEMPLATE_CANVAS_BYTES = 24 * 1024;"));
+    // The agent signer keeps its own copy.
+    assert_eq!(buzz_agent_controller::LIVE_CANVAS_BYTES, LIVE_CANVAS_BYTES);
+    assert_eq!(
+        buzz_agent_controller::CANVAS_MAX_EVENT_BYTES,
+        CANVAS_MAX_EVENT_BYTES
+    );
 }
 
 #[tokio::test]

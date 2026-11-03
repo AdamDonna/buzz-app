@@ -469,6 +469,29 @@ fn signs_only_bounded_kinds_with_the_saved_attestation() {
 }
 
 #[test]
+fn signs_live_canvas_up_to_its_content_and_complete_event_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let credentials = Memory::default();
+    let (_, agent) = created(dir.path(), &credentials);
+    let key = agent.read_key(&credentials).unwrap();
+    let h = || vec![vec!["h".to_owned(), "channel".to_owned()]];
+    let event = agent
+        .sign(&key, 40100, "x".repeat(LIVE_CANVAS_BYTES), h())
+        .unwrap();
+    assert_eq!(event["content"].as_str().unwrap().len(), LIVE_CANVAS_BYTES);
+    assert!(serde_json::to_vec(&event).unwrap().len() <= CANVAS_MAX_EVENT_BYTES);
+    assert!(agent
+        .sign(&key, 40100, "x".repeat(LIVE_CANVAS_BYTES + 1), h())
+        .is_err());
+    // Within the content limit, but escaping doubles it past the event bound.
+    assert!(agent
+        .sign(&key, 40100, "\"".repeat(LIVE_CANVAS_BYTES), h())
+        .is_err());
+    // Other kinds keep the ordinary bound.
+    assert!(agent.sign(&key, 9, "x".repeat(64 * 1024 + 1), h()).is_err());
+}
+
+#[test]
 fn signs_artifact_revisions_without_a_timeline_ms_tag() {
     let dir = tempfile::tempdir().unwrap();
     let credentials = Memory::default();

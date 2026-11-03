@@ -1251,6 +1251,10 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const channel = text(args.channel) ?? context.channel;
     if (!channel) throw new Error("channel is required here.");
     const content = (await tools.body(args, true, "content")) as string;
+    if (new TextEncoder().encode(content).length > LIVE_CANVAS_BYTES)
+      throw new Error(
+        `The canvas is over its limit of ${LIVE_CANVAS_BYTES} bytes.`,
+      );
     const head = await canvas(tools, channel);
     // The newest canvas wins, so a write must be dated after the current one.
     const after = head ? (head.created_at + 1) * 1000 : 0;

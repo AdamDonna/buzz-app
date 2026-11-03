@@ -13,6 +13,10 @@ import {
   MAX_CONTENT_BYTES,
   MAX_EVENT_BYTES,
 } from "../agents/catalog-envelope";
+import {
+  CANVAS_MAX_EVENT_BYTES,
+  LIVE_CANVAS_BYTES,
+} from "../channel-templates/canvas-limits.ts";
 
 export type Delivery = "sending" | "accepted" | "unknown" | "failed" | "seen";
 /** Durable, caller-owned recovery state committed with the operation. */
@@ -739,7 +743,11 @@ export function createOutbox(
         (catalog
           ? bytes(input.content) > MAX_CONTENT_BYTES ||
             byteSize(input) > MAX_EVENT_BYTES
-          : byteSize(input) > OUTBOX_INPUT_MAX_BYTES)
+          : // A live Canvas carries up to its own content limit.
+            input.kind === 40100
+            ? bytes(input.content) > LIVE_CANVAS_BYTES ||
+              byteSize(input) > CANVAS_MAX_EVENT_BYTES
+            : byteSize(input) > OUTBOX_INPUT_MAX_BYTES)
       )
         throw new Error("Message is empty or too large");
       if (snapshot.length >= MAX_PENDING)
