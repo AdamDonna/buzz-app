@@ -38,7 +38,7 @@ it.each([
       />,
     );
     expect(
-      screen.getByRole("region", { name: "Read-only channel" }),
+      screen.getByRole("region", { name: `Read-only ${place}` }),
     ).toHaveTextContent(
       `This ${place} is read-only${guest ? "" : ". Join to keep it in your sidebar and appear as a viewer."}`,
     );

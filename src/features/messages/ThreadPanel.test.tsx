@@ -1558,8 +1558,10 @@ it.each([
             ? "Archived chat"
             : "Archived channel"
           : metadata.joinRole === "guest"
-            ? "Read-only channel"
-            : "Channel preview",
+            ? `Read-only ${metadata.channelType === "solo" ? "chat" : "channel"}`
+            : metadata.channelType === "solo"
+              ? "Chat preview"
+              : "Channel preview",
       }),
     ).toBeVisible();
     if (metadata.archived) {

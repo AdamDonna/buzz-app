@@ -72,7 +72,7 @@ export function ChannelJoinNotice({
               ? "Join may have taken effect, but it is not confirmed yet. Try again to check."
               : reason instanceof Error
                 ? reason.message
-                : "Couldn’t join this channel.",
+                : `Couldn’t join this ${place}.`,
         });
       },
     );
@@ -86,8 +86,10 @@ export function ChannelJoinNotice({
         archived
           ? `Archived ${place}`
           : readOnly
-            ? "Read-only channel"
-            : "Channel preview"
+            ? `Read-only ${place}`
+            : place === "chat"
+              ? "Chat preview"
+              : "Channel preview"
       }
       aria-hidden={!visible}
       inert={!visible}

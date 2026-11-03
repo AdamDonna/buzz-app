@@ -1038,8 +1038,8 @@ it.each([
       await screen.findByRole("region", {
         name:
           "joinRole" in preview && preview.joinRole === "guest"
-            ? "Read-only channel"
-            : "Channel preview",
+            ? "Read-only chat"
+            : "Chat preview",
       }),
     ).toBeVisible();
     expect(screen.queryByRole("textbox")).toBeNull();
