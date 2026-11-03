@@ -4,7 +4,52 @@ BUZZ-518 adds guidance from the host-specific `requires_nip_fi` discovery field.
 It does not reinterpret `limitation.federated_identity`: that remains capability
 advertisement, and the native client retains its existing attachment and denial
 behavior when the requirement field is absent. Malformed requirement discovery
-offers retry and administrator/build guidance rather than implying free access.
+offers administrator/build guidance rather than implying free access.
+An incompatible descriptor preserves `required=true` with compatibility reported
+separately. A non-FI build or incompatible descriptor shows supported-build guidance
+and does not offer a sign-in or join action it cannot complete.
+
+## Producer prerequisite and rollout
+
+[BUZZ-511](https://linear.app/squareup/issue/BUZZ-511) owns the discovery producer
+and specification. Its local, unvalidated checkpoint is
+`c7661f64302cad3208676deb6ed20fb43ea8208a`, pending the revised BUZZ-510 parent;
+it is not a published prerequisite release. The proposed contract text is
+`block/buzz/docs/community-auth-upgrades.md`, section **Request enforcement and
+discovery (BUZZ-511)**. It specifies the same host-specific boolean on root NIP-11
+and `/info`, `no-store`, generic 404 for a non-serving host, and 503 on policy lookup
+failure. `required=true` implies FI capability and a compatible descriptor, while
+optional hosts may still advertise FI capability. This is a Buzz extension to
+discovery, not a field already specified by NIP-FI itself.
+
+Pin the client fixtures to the final committed producer output after its handoff.
+Until that happens, the fixtures express the proposed contract and do not prove
+producer interoperability. This prerequisite and the live checks below block
+readiness; BUZZ-510's operator receipt alone is not a discovery producer.
+
+1. Finalize and publish the BUZZ-511 producer/specification on the revised parent,
+   then pin and validate fixtures from that exact head.
+2. Produce exact-host clients and verify discovery, signup/linking and recovery.
+   With the field absent, both shipped and new clients retain legacy discovery
+   and denial behavior. Shipped FI clients still use the existing capability
+   fields; new non-FI clients show upgrade/configuration guidance for required hosts.
+3. Verify free controls and supported-client access before enabling a durable
+   requirement. Old non-FI clients still need the separate BUZZ-517 upgrade path.
+   Publishing the new field does not grant membership or change issuer trust.
+
+Observe success using the exact build/descriptor and host, the unchanged device
+npub, successful admission to the original community, and renewal/reconnection
+through two actual assertion lifetimes. Record timestamps and results, never
+tokens or authentication headers. The procedure below is required live evidence;
+CI and component tests are not substitutes.
+
+Client rollback is a revert or replacement with a verified compatible build.
+It does not clear the relay's durable requirement, reverse an identity binding,
+erase the device key, or reset saved backup consent or the native FI session.
+Those remain in their existing stores and formats. Do not use a data wipe or
+automatic unlink as rollback. Restoring access after a bad client rollout still
+requires a client that can satisfy the active policy; reverting guidance alone
+does not make a required community free.
 
 The first-run Welcome component accepts the existing native FI service and uses
 the bundled Builderlab authority grant for account checks and explicit linking.

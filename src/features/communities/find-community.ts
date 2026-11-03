@@ -13,6 +13,8 @@ export type FoundCommunity = {
   policy: JoinPolicy | null;
   /** Host-specific requirement, distinct from legacy FI capability. */
   requiresNipFi?: boolean | undefined;
+  /** Whether this client's native FI contract understands a required descriptor. */
+  nipFiCompatible?: boolean | undefined;
 };
 
 export type FindFailure =
@@ -66,6 +68,8 @@ export async function findCommunity(
     icon: communityIcon(info.icon),
     self: relaySelf(info),
     requiresNipFi: info.requires_nip_fi as boolean | undefined,
+    nipFiCompatible:
+      info.requires_nip_fi === true ? compatibleFi(info) : undefined,
     policy: await policyAnswer(await policy),
   };
 }
@@ -90,23 +94,11 @@ async function relayInfo(response: Response) {
   if (!body || typeof body !== "object" || Array.isArray(body))
     throw new FindCommunityError("not-buzz");
   const info = body as Record<string, unknown>;
-  if (info.requires_nip_fi !== undefined) {
-    const descriptor = info.federated_identity as
-      | Record<string, unknown>
-      | undefined;
-    const limitation = info.limitation as Record<string, unknown> | undefined;
-    const freshness = descriptor?.assertion_freshness as
-      | Record<string, unknown>
-      | undefined;
-    if (
-      typeof info.requires_nip_fi !== "boolean" ||
-      (info.requires_nip_fi &&
-        (limitation?.federated_identity !== true ||
-          descriptor?.core !== "client-attached" ||
-          freshness?.class !== "offline-jwt"))
-    )
-      throw new FindCommunityError("unsupported-auth");
-  }
+  if (
+    info.requires_nip_fi !== undefined &&
+    typeof info.requires_nip_fi !== "boolean"
+  )
+    throw new FindCommunityError("unsupported-auth");
   // buzz-relay nip11.rs hard-codes both; either identifies the software.
   if (
     info.name !== "Buzz Relay" &&
@@ -124,4 +116,21 @@ async function relayInfo(response: Response) {
   )
     throw new FindCommunityError("no-community");
   return info;
+}
+
+/** Compatibility never waives the host's explicit requirement or chooses an issuer. */
+function compatibleFi(info: Record<string, unknown>) {
+  const descriptor = info.federated_identity as
+    | Record<string, unknown>
+    | undefined;
+  const limitation = info.limitation as Record<string, unknown> | undefined;
+  const freshness = descriptor?.assertion_freshness as
+    | Record<string, unknown>
+    | undefined;
+  return (
+    limitation?.federated_identity === true &&
+    descriptor?.core === "client-attached" &&
+    freshness?.class === "offline-jwt" &&
+    freshness.maximum_residual_upstream_revocation_seconds == null
+  );
 }

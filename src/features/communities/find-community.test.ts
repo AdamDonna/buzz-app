@@ -65,12 +65,7 @@ it.each([true, false, undefined])(
   },
 );
 
-it.each([
-  { requires_nip_fi: "true" },
-  { requires_nip_fi: null },
-  { requires_nip_fi: true },
-  { requires_nip_fi: true, limitation: { federated_identity: false } },
-])(
+it.each([{ requires_nip_fi: "true" }, { requires_nip_fi: null }])(
   "gives actionable discovery failure for an invalid requirement %j",
   async (info) => {
     expect(
@@ -79,6 +74,35 @@ it.each([
         "/api/join-policy": html(404),
       }),
     ).toBe("unsupported-auth");
+  },
+);
+
+it.each([
+  {},
+  { limitation: { federated_identity: false } },
+  {
+    limitation: { federated_identity: true },
+    federated_identity: {
+      core: "client-attached",
+      assertion_freshness: {
+        class: "offline-jwt",
+        maximum_residual_upstream_revocation_seconds: 60,
+      },
+    },
+  },
+  {
+    limitation: { federated_identity: true },
+    federated_identity: { core: "unknown" },
+  },
+])(
+  "preserves required policy separately from incompatible descriptor %j",
+  async (descriptor) => {
+    const found = await find({
+      "/": Response.json({ ...buzz, ...descriptor, requires_nip_fi: true }),
+      "/api/join-policy": html(404),
+    });
+    expect(found.requiresNipFi).toBe(true);
+    expect(found.nipFiCompatible).toBe(false);
   },
 );
 
