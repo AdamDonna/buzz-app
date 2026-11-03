@@ -457,6 +457,11 @@
   background: transparent;
   color: var(--reaction-ink, var(--text-standard));
 }
+.inlineReactionTool
+  :where([data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]))
+  svg {
+  opacity: 1;
+}
 .attachment {
   display: inline-block;
   padding: var(--space-1h) var(--space-2);
