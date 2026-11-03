@@ -108,6 +108,7 @@ function setup() {
     touch: vi.fn(async () => {}),
     send: vi.fn(async () => {}),
   };
+  const resolveRoom = vi.fn(async () => {});
   let snapshot = {
     status: "ready",
     scope: "scope",
@@ -117,7 +118,7 @@ function setup() {
         get: (id: string) =>
           id === "room" ? room : { id: "parent", members: ["a", "b", "owner"] },
         subscribeList: m.subscribe,
-        resolve: async () => {},
+        resolve: resolveRoom,
       },
     },
   } as unknown as RelaySnapshot;
@@ -155,6 +156,7 @@ function setup() {
     callbacks,
     report,
     listening,
+    resolveRoom,
     start,
     call: (patch: Partial<HuddleSnapshot>) => {
       call = { ...call, ...patch };
@@ -401,4 +403,33 @@ it("never marks an aborted pending adapter as listening", async () => {
   expect(f.listening).toHaveBeenLastCalledWith("human", "a", false);
   expect(f.listening).not.toHaveBeenCalledWith("human", "a", true);
   expect(connection.close).toHaveBeenCalledOnce();
+});
+
+it("reports a rejected harness close with the originating call id", async () => {
+  const f = setup();
+  f.agents([agent("a")]);
+  f.start();
+  await vi.waitFor(() => expect(f.connections.size).toBe(1));
+  required(f.connections.get("a")).close.mockRejectedValueOnce(
+    new Error("close failed"),
+  );
+  f.call({ phase: "idle" });
+  await vi.waitFor(() =>
+    expect(f.report).toHaveBeenCalledExactlyOnceWith(
+      "human",
+      "a: Error: close failed",
+    ),
+  );
+});
+
+it("reports a rejected room resolution with the originating call id", async () => {
+  const f = setup();
+  f.resolveRoom.mockRejectedValueOnce(new Error("resolve failed"));
+  f.start();
+  await vi.waitFor(() =>
+    expect(f.report).toHaveBeenCalledExactlyOnceWith(
+      "human",
+      "Error: resolve failed",
+    ),
+  );
 });
