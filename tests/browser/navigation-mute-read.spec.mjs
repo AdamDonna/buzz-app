@@ -366,3 +366,89 @@ async function captureActions(page, menu, path) {
     },
   });
 }
+
+// CSS color interpolation needs a real rendering engine; jsdom cannot detect a snap.
+test("muted bell eases into and out of channel selection", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const beta = sidebar.locator('[data-channel-id="beta"]');
+  await beta.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Mute", exact: true }).click();
+  await expect(
+    beta.getByRole("img", { name: "Muted", exact: true }),
+  ).toBeVisible();
+  for (const mode of ["light", "dark"]) {
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+    }, mode);
+    for (const id of ["beta", "alpha"]) {
+      const result = await sidebar.evaluate(async (nav, id) => {
+        for (const animation of nav.getAnimations({ subtree: true }))
+          animation.finish();
+        const button = nav.querySelector('[data-channel-id="beta"]');
+        const bell = button.querySelector('[aria-label="Muted"]');
+        const before = getComputedStyle(bell).color;
+        await new Promise((resolve) => {
+          const observer = new MutationObserver(() => {
+            observer.disconnect();
+            getComputedStyle(bell).color;
+            resolve();
+          });
+          observer.observe(button, {
+            attributes: true,
+            attributeFilter: ["aria-current"],
+          });
+          nav.querySelector(`[data-channel-id="${id}"]`).click();
+        });
+        const transition = bell
+          .getAnimations()
+          .find((animation) => animation.transitionProperty === "color");
+        if (!transition)
+          return {
+            animated: false,
+            before,
+            after: getComputedStyle(bell).color,
+          };
+        transition.pause();
+        const duration = transition.effect.getTiming().duration;
+        transition.currentTime = 0;
+        const start = getComputedStyle(bell).color;
+        transition.currentTime = duration / 2;
+        const middle = getComputedStyle(bell).color;
+        transition.finish();
+        const end = getComputedStyle(bell).color;
+        return {
+          animated: true,
+          connected: bell.isConnected,
+          before,
+          start,
+          middle,
+          end,
+        };
+      }, id);
+      expect(result.animated, JSON.stringify({ mode, id, result })).toBe(true);
+      expect(result.connected).toBe(true);
+      expect(result.start).toBe(result.before);
+      expect(result.middle).not.toBe(result.start);
+      expect(result.middle).not.toBe(result.end);
+    }
+  }
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await beta.focus();
+  await page.keyboard.press("Enter");
+  await expect(beta).toHaveAttribute("aria-current", "page");
+  await expect(beta.getByRole("img", { name: "Muted", exact: true })).toHaveCSS(
+    "transition-duration",
+    "0s",
+  );
+  const alpha = sidebar.locator('[data-channel-id="alpha"]');
+  await alpha.focus();
+  await page.keyboard.press("Enter");
+  await expect(alpha).toHaveAttribute("aria-current", "page");
+  await expect(
+    beta.getByRole("img", { name: "Muted", exact: true }),
+  ).toBeVisible();
+});
