@@ -95,8 +95,8 @@ ${body}
     SHELL: "/bin/false",
     BUZZ_PI_NPM: fake,
   };
-  const payload = (lock: string) =>
-    `${JSON.stringify({ host: HOST, package: PACKAGE, lock })}\nhello\n`;
+  const payload = (lock: string, session?: string) =>
+    `${JSON.stringify({ host: HOST, package: PACKAGE, lock, ...(session ? { session } : {}) })}\nhello\n`;
   /** Starts the host through pi.sh, as on Mac and Linux. */
   const step = async (extra: Record<string, string> = {}, lock = LOCK) =>
     run(
@@ -106,12 +106,12 @@ ${body}
       payload(lock),
     );
   /** Starts the host as `node -e`, as on Windows. */
-  const node = async (lock = LOCK) =>
+  const node = async (lock = LOCK, session?: string) =>
     run(
       process.execPath,
       ["--input-type=module", "-e", launch],
       env,
-      payload(lock),
+      payload(lock, session),
     );
   return {
     home,
@@ -200,3 +200,18 @@ it.skipIf(!existsSync("/bin/zsh"))(
     expect(existsSync(join(pi.home, "ran"))).toBe(true);
   },
 );
+
+it("keeps remote session data separate while sharing installed packages", async () => {
+  const pi = await disk();
+  const a = JSON.parse(await pi.node(LOCK, "session-a"));
+  const b = JSON.parse(await pi.node(LOCK, "session-b"));
+  const local = JSON.parse(await pi.node());
+  expect(a.data).toBe(join(pi.dir, "sessions", "session-a"));
+  expect(b.data).toBe(join(pi.dir, "sessions", "session-b"));
+  expect(local.data).toBe(pi.dir);
+  expect(a.cwd).toBe(b.cwd);
+  expect(await pi.installs()).toHaveLength(1);
+  await expect(pi.node(LOCK, "../other")).rejects.toThrow(
+    "Invalid Pi session key",
+  );
+});

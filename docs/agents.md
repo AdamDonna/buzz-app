@@ -82,41 +82,58 @@ Attention itself (the runtime, tools, storage and sources) is core, but it runs 
 
 A plugin can offer a process and file target to the native Pi or Codex harness. Declare
 `host.agentExecution: ["buzz.pi/pi", "buzz.codex/codex"]` and call `agents.registerExecution` with an
-ID, supported harness keys, and `connect(binding)`. The target supplies `spawn`,
-`readFile`, `resolveDirectory`, and idempotent `dispose`. Its process uses the
+ID, supported harness keys, and async `connect(binding, session)`. The target
+supplies an absolute `workspace`, `spawn`, `readFile`, `resolveDirectory`, and
+idempotent `dispose`. Its process uses the
 `HostProcess` contract. Pi starts `node --input-type=module -e <launcher>` and
 sends its pinned host and packages through stdin. The adapter owns transport,
 provider authentication, file access limits, and cleanup on its host.
 
-Create a dedicated Pi or Codex agent with `agents.create`. Before its first runtime use,
-call `agents.bindExecution(agent.key, { id, target, workspace })` from the plugin
-that registers the target. `target` pins the host; `workspace` is an absolute
-directory on that host. The binding belongs to the agent's membership, so it
-applies to every conversation for that agent. It is separate from provider
-settings and session IDs. A saved binding cannot be replaced. There is no move
-or release operation in this interface.
+Create a Pi or Codex agent with `agents.create`. Before its first runtime use, call
+`agents.bindExecution(agent.key, { id, config })` from the adapter plugin.
+The selection belongs to the agent's membership and names its execution
+provider. Optional `config` is adapter-owned JSON; it must contain no secrets.
+The selection is write-once. It does not name a fixed workstation or workspace.
 
-Each harness awaits `agents.execution(agent.key)` to open the target. Each
-bound agent has its own process. Buzz keeps identity keys, native context,
+The harness saves a unique session key before it calls
+`agents.execution(agent.key, { key, intent, signal })`. `intent` is `new` until
+the first open succeeds, then `existing`. Retries keep the same key. Later turns
+and app restarts use the saved key. Another conversation, or **Start a new
+session** in the same conversation, gets another key. Stop and Compact keep it.
+The adapter receives the trusted agent identity, key, intent, and abort signal.
+It owns target creation, saved mappings, expiry, replacement, and cleanup.
+Repeated opens with the same key must use the same allocation.
+
+Each remote Pi or Codex session has its own process and stored harness data. Buzz keeps identity keys, native context,
 memory, tools, hooks, and session controls in their existing owners. Tool and
 hook callbacks must name the current agent and conversation. Tool defaults must
 match that conversation's scope. Disabling the adapter stops its processes and
 rejects further work. The saved binding remains for recovery; Buzz never uses
-local execution for it. An unsupported provider change fails before it changes
-the agent or its binding.
+local execution for it. An unsupported harness change fails before it changes
+the agent or its selection. Aborting an open ends that session's shared execution
+lifetime. `dispose` stops owned processes; it preserves the adapter's saved target
+mapping. If an existing session cannot be restored, the adapter rejects with
+`code: "EXECUTION_SESSION_RESET_REQUIRED"`. Buzz shows the error and does not
+resume old harness state in an empty replacement workspace.
+
+Settings, model discovery, and session listings do not create targets. Remote
+Pi settings accept explicit provider and model IDs, or blank values for the
+target's settings. The adapter manages target credentials and workspaces.
 
 Codex starts a Node.js relay that runs `codex app-server` on the target.
 The target needs a configured Codex account. Its hook server listens on guest
-loopback. Hook requests share the process stdio connection and use the existing
-agent and session checks. No desktop endpoint or credentials go to the target.
-Codex saves session bindings per target. Guest history search is unavailable;
-saved sessions resume through the app-server. Settings read the target catalog
-and show its fixed workspace. Guest transcripts, usage, and media downloads are
+loopback. Hook requests share the process connection and use the existing
+agent and session checks. Codex saves its thread under the session key. Settings
+accept an explicit model ID or the target's default. The adapter selects the
+workspace. Remote Codex transcripts, usage totals, and media downloads are
 unavailable in this preview.
 
 This preview supports Pi and Codex on a target with Node.js. It does not supply native
-containment, an HTTP MCP tunnel, or media download to the target. Protected agents cannot use it. Pi's coding
-tools retain their [existing approval limits](../src/bundled/pi/README.md#limits).
+containment or an HTTP MCP tunnel. Buzz tools and hooks use callbacks over the
+process connection. A remote agent can attach a target file to Buzz; downloading
+Buzz media onto the target is unavailable. Protected agents cannot use this
+path. Pi's coding tools retain their
+[existing approval limits](../src/bundled/pi/README.md#limits).
 
 Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run

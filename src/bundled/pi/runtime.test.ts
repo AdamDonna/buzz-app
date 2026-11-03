@@ -384,11 +384,7 @@ it("disposes execution that resolves after the agent retires", async () => {
   const resolveExecution = vi.fn(() => pending.promise);
   const remote = fakeHost({ places: () => ({ places: [] }) });
   const execution: AgentExecution = {
-    binding: {
-      provider: "internal/remote",
-      target: "guest-1",
-      workspace: "/remote/task",
-    },
+    workspace: "/remote/task",
     signal: new AbortController().signal,
     spawn: remote.spawn,
     readFile: vi.fn(),
@@ -415,11 +411,7 @@ it("retires a remote target before Pi sends ready", async () => {
   const remote = fakeHost({}, { ready: false });
   const spawned = deferred();
   const execution: AgentExecution = {
-    binding: {
-      provider: "internal/remote",
-      target: "guest-1",
-      workspace: "/remote/task",
-    },
+    workspace: "/remote/task",
     signal: new AbortController().signal,
     spawn: async (program, options) => {
       const process = await remote.spawn(program, options);
@@ -481,11 +473,7 @@ it.each(["Stop", "adapter unload"] as const)(
     });
     const lifetime = new AbortController();
     const execution: AgentExecution = {
-      binding: {
-        provider: "internal/remote",
-        target: "guest-1",
-        workspace: "/remote/task",
-      },
+      workspace: "/remote/task",
       signal: lifetime.signal,
       spawn: remote.spawn,
       readFile: vi.fn(async () => new Uint8Array([42])),

@@ -1,11 +1,7 @@
-// Turns Agents deliveries into Pi turns. Every Pi agent here runs in the one
-// Pi host (pi.ts), each with its own Pi durable storage, where each Buzz
-// conversation is one Pi conversation. A delivery becomes a prompt in the
-// harness format, submitted to its conversation; one that arrives while Pi
-// works steers the run. A watch or timer runs as a standalone turn
-// (`runOnce`), in a one-off conversation. Pi acts in Buzz with the in-process
-// Buzz tools, signed by the agent's native-held key. The runtime reports a
-// turn that fails; what Pi writes without `send` stays in local activity.
+// PiRuntime owns turns in one Pi host. The local host serves local agents.
+// A remote runtime serves one durable session. Pi uses native Buzz tools.
+// A standalone turn uses a separate conversation. Responses without `send`
+// stay in activity. Failed turns report an error in their Buzz thread.
 import { isFinalMessage } from "../../buzz-mcp/session-tools";
 import { appClient, readFile } from "../../buzz-mcp/app-client";
 import type { Context } from "../../buzz-mcp/client";
@@ -178,6 +174,18 @@ type Entry = {
   closed: boolean;
 };
 
+export type PiRuntimeOptions = Readonly<{
+  route?: (delivery: Delivery, key: string) => Promise<boolean>;
+  resume?: () => { key: string; conversation: number } | undefined;
+  inspectExecution?: (agent: AgentKey) => Promise<unknown>;
+  sessionKey?: string;
+  recordPlace?: (
+    key: string,
+    conversation: number,
+    seen: number,
+  ) => Promise<void>;
+}>;
+
 export class PiRuntime {
   private readonly agents = new Map<AgentKey, Entry>();
   private readonly revisions = new Map<AgentKey, number>();
@@ -210,8 +218,13 @@ export class PiRuntime {
     let setup = this.scopedSetups.get(agent);
     if (!setup) {
       setup = new PiSetup({
-        request: async <T>(method: string, params: object = {}) =>
-          (await this.connection(agent)).pi.request<T>(method, params),
+        request: async <T>(method: string, params: object = {}) => {
+          if (await this.routing.inspectExecution?.(agent))
+            throw new Error(
+              "Configure Pi on the execution target. Settings do not open a session.",
+            );
+          return (await this.connection(agent)).pi.request<T>(method, params);
+        },
       });
       this.scopedSetups.set(agent, setup);
     }
@@ -247,6 +260,7 @@ export class PiRuntime {
     private readonly execution?: (
       key: AgentKey,
     ) => Promise<AgentExecution | undefined>,
+    private readonly routing: PiRuntimeOptions = {},
   ) {
     this.pi = this.createPi(() => this.spawn);
     this.setup = new PiSetup(this.pi);
@@ -323,7 +337,7 @@ export class PiRuntime {
           return (
             this.hook?.(
               call.agent,
-              String(call.conversation),
+              this.routing.sessionKey ?? String(call.conversation),
               call.event,
               call.input,
             ) ?? Promise.resolve(null)
@@ -359,6 +373,7 @@ export class PiRuntime {
           },
       undefined,
       !!bound,
+      bound ? this.routing.sessionKey : undefined,
     );
   }
 
@@ -382,7 +397,7 @@ export class PiRuntime {
         (_id, options = {}) =>
           execution.spawn("node", {
             ...options,
-            cwd: execution.binding.workspace,
+            cwd: execution.workspace,
             args: ["--input-type=module", "-e", ...(options.args ?? [])],
           }),
       { agent, execution },
@@ -470,6 +485,8 @@ export class PiRuntime {
 
   /** The agent's Buzz conversations, most recently active first. */
   async places(agent: AgentKey): Promise<Place[]> {
+    if (!this.execution && (await this.routing.inspectExecution?.(agent)))
+      return [];
     const { places } = await (await this.connection(agent)).pi.request<{
       places: { key: string; conversation: number; seen: number }[];
     }>("places", { agent });
@@ -664,24 +681,25 @@ export class PiRuntime {
     this.remote.clear();
   }
 
-  async run({
-    trigger,
-    agent,
-    config: raw,
-    channelId,
-    model,
-    effort,
-    team,
-    workingUntil,
-    current,
-    wakeText,
-    ignored,
-    signal,
-    step,
-    acknowledged,
-    superseded,
-    interruptible,
-  }: Delivery) {
+  async run(delivery: Delivery) {
+    const {
+      trigger,
+      agent,
+      config: raw,
+      channelId,
+      model,
+      effort,
+      team,
+      workingUntil,
+      current,
+      wakeText,
+      ignored,
+      signal,
+      step,
+      acknowledged,
+      superseded,
+      interruptible,
+    } = delivery;
     // Unaddressed watches and timers come as standalone turns (`runOnce`).
     if (
       trigger.type !== "mention" &&
@@ -722,6 +740,7 @@ export class PiRuntime {
     // Frozen with the policy: a scope change while this waits must not move
     // its prompt to another conversation than the one it is delivered to.
     const key = await this.key(entry, agent.key, event, channel, topLevel);
+    if (await this.routing.route?.(delivery, key)) return;
     const root = threadReference(event)?.rootId ?? event.id;
     const where = { channel, root, topLevel };
     // A turn keeps the posting policy it was admitted with: a request under
@@ -838,6 +857,11 @@ export class PiRuntime {
           throw new Error("Pi changed its admitted conversation");
         receipt.conversation = submitted.conversation;
       }
+      await this.routing.recordPlace?.(
+        key,
+        submitted.conversation,
+        event.created_at,
+      );
       if (
         this.remember(agent.key, key, submitted.conversation, event.created_at)
       )
@@ -1000,7 +1024,7 @@ export class PiRuntime {
         signingAuthority: this.reads(call.agent)?.workflowAuthority(),
         read: (path) =>
           execution
-            ? execution.readFile(path, { cwd: execution.binding.workspace })
+            ? execution.readFile(path, { cwd: execution.workspace })
             : entry.handle?.protection
               ? readFile(
                   this.spawn,
@@ -1352,7 +1376,27 @@ export class PiRuntime {
   }
 
   private async open(agent: AgentKey) {
-    await (await this.connection(agent)).pi.request("open", {
+    const { pi } = await this.connection(agent);
+    const resume = this.routing.resume?.();
+    if (resume) {
+      const { places } = await pi.request<{
+        places: { key: string; conversation: number }[];
+      }>("places", { agent });
+      const place = places.find(
+        (place) =>
+          place.key === resume.key &&
+          place.conversation === resume.conversation,
+      );
+      if (!place)
+        throw new Error(
+          "Pi could not restore this session. Start a new session.",
+        );
+      await pi.request("protectionContext", {
+        agent,
+        conversation: place.conversation,
+      });
+    }
+    await pi.request("open", {
       agent,
       tools: sessionTools(this.added()),
       hint: sessionHint(this.added()),
@@ -1408,7 +1452,7 @@ export class PiRuntime {
     const { instructions, scope } = entry.config;
     const execution = await this.execution?.(agent);
     const workspace = execution
-      ? await execution.resolveDirectory(execution.binding.workspace)
+      ? await execution.resolveDirectory(execution.workspace)
       : entry.config.workspace;
     const memory = await this.core(agent);
     return {

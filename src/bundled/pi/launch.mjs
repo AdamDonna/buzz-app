@@ -71,9 +71,15 @@ const {
   host,
   package: pkg,
   lock,
+  session,
 } = await firstLine()
   .then(JSON.parse)
   .catch((error) => fail(`Pi could not start: ${error.message}`));
+if (
+  session !== undefined &&
+  (typeof session !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(session))
+)
+  fail("Invalid Pi session key");
 const sha16 = (text) =>
   createHash("sha256").update(text).digest("hex").slice(0, 16);
 
@@ -205,5 +211,5 @@ if (!existsSync(file)) {
 }
 process.chdir(deps);
 process.env.BUZZ_PI_HOST = "1";
-process.argv[1] = dir;
+process.argv[1] = session ? join(dir, "sessions", session) : dir;
 await import(pathToFileURL(file).href);
