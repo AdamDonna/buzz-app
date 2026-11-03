@@ -123,6 +123,7 @@ export class Pi {
     ) => AgentProtection | undefined,
     private readonly protectedLaunch?: ProtectedLaunch,
     private readonly directNode = false,
+    private readonly session?: string,
   ) {}
 
   /** Asks the host, starting it first if it is not running. */
@@ -358,7 +359,7 @@ export class Pi {
     if (!protectedLaunch)
       void connection.process
         .write(
-          `${JSON.stringify({ host, package: packageJson, lock: packageLock })}\n`,
+          `${JSON.stringify({ host, package: packageJson, lock: packageLock, ...(this.session ? { session: this.session } : {}) })}\n`,
         )
         // A host that never has its source waits for it; it stops instead.
         .catch(() => void connection.process.kill().catch(() => undefined));
