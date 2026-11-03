@@ -734,6 +734,19 @@ export class AgentRunners {
     ]);
     return true;
   }
+  private assertProtected(
+    agent: Agent,
+    type: RegisteredAgentType,
+    handle: AgentHandle,
+  ) {
+    if (!agent.protection) return;
+    if (!type.protection || !handle.protection)
+      throw new Error(
+        type.protectionUnavailable ??
+          "This runtime does not support the agent's protection policy",
+      );
+    handle.protection.assertAvailable();
+  }
   /** Resolve voice exactly as a text launch; the owning plugin retains its handle. */
   async openVoice(
     seat: AgentVoicePipe,
@@ -746,14 +759,7 @@ export class AgentRunners {
     if (!agent || !handle || !type)
       throw new Error("This agent is no longer running");
     // Huddle seats close on protectionRevision changes, so this gate is reapplied.
-    if (agent.protection) {
-      if (!type.protection || !handle.protection)
-        throw new Error(
-          type.protectionUnavailable ??
-            "This runtime does not support the agent's protection policy",
-        );
-      handle.protection.assertAvailable();
-    }
+    this.assertProtected(agent, type, handle);
     const start = this.host.start(agent);
     if (!start.ok) throw new Error(start.reason);
     const team = this.host.team(agent.key);
@@ -2397,14 +2403,7 @@ export class AgentRunners {
       return run(delivery);
     };
     const completion = Promise.resolve().then(async () => {
-      if (agent.protection) {
-        if (!type.protection || !handle.protection)
-          throw new Error(
-            type.protectionUnavailable ??
-              "This runtime does not support the agent's protection policy",
-          );
-        handle.protection.assertAvailable();
-      }
+      this.assertProtected(agent, type, handle);
       const pick = await pickFor(job.trigger, agent, type);
       const start = this.host.start(agent);
       if (!start.ok) throw new Error(start.reason);
