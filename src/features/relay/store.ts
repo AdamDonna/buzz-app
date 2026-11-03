@@ -95,6 +95,7 @@ export type ChannelStoreOptions = {
   /** Warm every roster channel's head in the background before it is opened. */
   warm?: boolean;
   persistence?: HeadPersistence;
+  maxDiscoveryBytes?: number;
   maxHeadBytes?: number;
   maxHeads?: number;
   maxHistoryRows?: number;
@@ -115,6 +116,8 @@ const DISCOVERY_LIMIT = 500;
 // Public channel metadata for name search, read a page at a time up to a
 // bound; matches resolve exactly.
 const PUBLIC_CHANNEL_PAGE = 500;
+// One exact resolution can consume the reader's full response byte budget.
+const PUBLIC_CHANNEL_RESERVE_BYTES = 8 * 1024 * 1024;
 const PUBLIC_CHANNEL_DIRECTORY = 20_000;
 /** One creator's channels with one label: a small answer, within one `resolve`. */
 const LABELED_CHANNEL_PAGE = 100;
@@ -191,19 +194,39 @@ export function createChannelStore(
   directory: ProfileDirectory,
   options: ChannelStoreOptions = {},
 ) {
+  // A fold reads the profile directory only through attested agent owners.
+  // Keep the answers each fold received: a profile change that leaves them
+  // all alone cannot change its rows.
+  const foldOwners = new WeakMap<
+    readonly ChannelMessage[],
+    ReadonlyMap<string, string | undefined>
+  >();
   const foldChannelMessages = (
     channelId: string,
     author: string,
     events: readonly import("./events").EventData[],
   ) => {
     const started = performance.now();
+    const owners = new Map<string, string | undefined>();
     const rows = foldMessages(channelId, author, events, {
       signingAuthority: transport?.archiveAuthority,
-      agentOwner: directory.queries.owner,
+      agentOwner: (pubkey) => {
+        const owner = directory.queries.owner?.(pubkey);
+        owners.set(pubkey, owner);
+        return owner;
+      },
     });
+    foldOwners.set(rows, owners);
     clientMetrics.cpu("fold", performance.now() - started, events.length);
     return rows;
   };
+  const ownersChanged = (
+    owners: ReadonlyMap<string, string | undefined> | undefined,
+  ) =>
+    !owners ||
+    [...owners].some(
+      ([pubkey, owner]) => directory.queries.owner?.(pubkey) !== owner,
+    );
   const {
     maxWindows = 3,
     unavailableReason,
@@ -257,7 +280,11 @@ export function createChannelStore(
   let allowed: Set<string> | undefined;
   let coverage: "partial" | undefined;
   const discovery = transport
-    ? new DiscoveryState(transport.viewer, transport.relayAuthor)
+    ? new DiscoveryState(
+        transport.viewer,
+        transport.relayAuthor,
+        options.maxDiscoveryBytes,
+      )
     : null;
   // Restored metadata needs confirmation independently of roster progress/retries.
   const pendingMetadata = new Set<string>();
@@ -751,9 +778,6 @@ export function createChannelStore(
           loadingOlder: false,
         });
       }
-      // Profiles may be shared by several windows; clearing this bounded private projection
-      // is conservative, and prevents denied-channel-only names from surviving visibly.
-      directory.clear();
       setList(
         {
           ...list,
@@ -1123,7 +1147,6 @@ export function createChannelStore(
         saved.savedAt > now() ||
         now() - saved.savedAt > 86_400_000 ||
         !Array.isArray(saved.events) ||
-        saved.events.length > 3072 ||
         byteSize(saved) > 8 * 1024 * 1024
       )
         return;
@@ -1167,12 +1190,14 @@ export function createChannelStore(
     }
   }
   // Background reads deduplicate metadata versions; strong resolution revisits proof.
-  const creationReads = new Map<string, string>();
+  type CreationRead = { version: string; complete: boolean };
+  const creationReads = new Map<string, CreationRead>();
   async function readCreations(
     events: readonly RelayEvent[],
     settings?: ChannelReadOptions,
   ) {
     if (!transport || !discovery || options.cachedOnly) return;
+    const pending = new Map<string, CreationRead>();
     const filters = events.flatMap((event) => {
       const id = tag(event, "d");
       const identity = channelIdentity(event);
@@ -1185,10 +1210,12 @@ export function createChannelStore(
         discovery.get(id)?.parentChannelId ||
         !identity.creator ||
         (settings?.consistency !== "strong" &&
-          creationReads.get(id) === event.id)
+          creationReads.get(id)?.version === event.id)
       )
         return [];
-      creationReads.set(id, event.id);
+      const read = { version: event.id, complete: false };
+      creationReads.set(id, read);
+      pending.set(id, read);
       return [
         {
           kinds: [9007],
@@ -1221,17 +1248,21 @@ export function createChannelStore(
         settings?.signal?.throwIfAborted();
         if (disposed || generation !== epoch || controller.signal.aborted)
           throw new DOMException("Stale creation resolution", "AbortError");
+        for (const filter of filters.slice(offset, offset + 4)) {
+          const id = filter["#h"][0];
+          const read = id && pending.get(id);
+          if (id && read && creationReads.get(id) === read)
+            read.complete = true;
+        }
         applyDiscovery(receipts.filter((event) => event.kind === 9007));
       }
     })()
       .catch((error) => {
         // Unavailable proof leaves an ordinary channel. A later metadata refresh
         // may retry; never turn a failed proof read into loss of channel access.
-        for (const event of events) {
-          const id = tag(event, "d");
-          if (id && creationReads.get(id) === event.id)
+        for (const [id, read] of pending)
+          if (!read.complete && creationReads.get(id) === read)
             creationReads.delete(id);
-        }
         throw error;
       })
       .finally(() => controllers.delete(controller));
@@ -1448,6 +1479,7 @@ export function createChannelStore(
     let outcome: RosterRefresh = { state: "deferred" };
     try {
       const ids = new Set<string>();
+      let scannedBytes = 0;
       const named = new Set<string | undefined>();
       let cursor: RelayEvent | undefined;
       let complete: Set<string> | undefined;
@@ -1461,8 +1493,8 @@ export function createChannelStore(
       let system: RelayEvent[] = [];
       if (transport.channelIdentity) {
         let systemCursor: RelayEvent | undefined;
-        for (let page = 0; ; page++) {
-          if (page > discovery.capacity / DISCOVERY_LIMIT)
+        for (;;) {
+          if (scannedBytes >= discovery.maxBytes)
             throw new ReadError(
               "invalid-response",
               "System channel discovery exceeded its read budget",
@@ -1486,6 +1518,7 @@ export function createChannelStore(
             { signal: controller.signal },
           );
           if (disposed || generation !== epoch) return;
+          scannedBytes += listByteSize(rosters);
           const members = rosters
             .filter(
               (event) =>
@@ -1525,9 +1558,8 @@ export function createChannelStore(
           paged = true;
         }
       }
-      // At most the retained roster budget plus its final exhaustion read.
-      // This also bounds a relay returning repeated coordinates with new versions.
-      for (let page = 0; page <= discovery.capacity / DISCOVERY_LIMIT; page++) {
+      // Bound scanned bytes as well as retained evidence, including repeated versions.
+      for (;;) {
         const rosters = await transport.read(
           [
             {
@@ -1543,6 +1575,7 @@ export function createChannelStore(
           { signal: controller.signal },
         );
         if (disposed || generation !== epoch) return;
+        scannedBytes += listByteSize(rosters);
         const members = rosters
           .filter(
             (event) =>
@@ -1595,7 +1628,7 @@ export function createChannelStore(
           retainedComplete = !paged;
           break;
         }
-        if (overflowed) break;
+        if (overflowed || scannedBytes >= discovery.maxBytes) break;
         cursor = last;
         paged = true;
       }
@@ -1688,7 +1721,6 @@ export function createChannelStore(
           for (const state of [...windows.values()]) evict(state);
           heads.clear();
           tails.clear();
-          directory.clear();
           clearTimeout(discoverySave);
           discoverySave = undefined;
           void persistence?.clear().catch(() => {});
@@ -2273,7 +2305,7 @@ export function createChannelStore(
     // before granting a preview. The final answer re-reads every match; pages
     // in flight resolve at most `limit` channels in all and leave every
     // search in flight, and one that joins later (`in:team data` runs two),
-    // `limit` free discovery slots for its final answer, so a long read
+    // one response byte budget for its final answer, so a long read
     // cannot fill discovery or crowd out a better match on a later page.
     const answer = async (final: boolean, readSignal?: AbortSignal) => {
       // Saved names are candidates only: each match still resolves freshly.
@@ -2311,13 +2343,10 @@ export function createChannelStore(
             .filter((id) => !resolved.has(id))
             .slice(
               0,
-              Math.max(
-                0,
-                Math.min(
-                  limit - resolved.size,
-                  discovery.headroom() - publicSearchReserve - limit,
-                ),
-              ),
+              discovery.byteHeadroom() - publicSearchReserve >=
+                PUBLIC_CHANNEL_RESERVE_BYTES * 2
+                ? Math.max(0, limit - resolved.size)
+                : 0,
             );
       if (unresolved.length) {
         await resolve(
@@ -2387,7 +2416,7 @@ export function createChannelStore(
       entry.events.length || entry.previous?.size
         ? Promise.resolve()
         : entry.page;
-    publicSearchReserve += limit;
+    publicSearchReserve += PUBLIC_CHANNEL_RESERVE_BYTES;
     try {
       for (;;) {
         const result = await Promise.race([
@@ -2447,7 +2476,7 @@ export function createChannelStore(
       }
       throw error;
     } finally {
-      publicSearchReserve -= limit;
+      publicSearchReserve -= PUBLIC_CHANNEL_RESERVE_BYTES;
     }
   }
   /** NIP-CL lookup: the channels `creator` made with `label`, oldest first.
@@ -3129,26 +3158,49 @@ export function createChannelStore(
   let previousLocal = new Map(
     (local?.snapshot() ?? []).map((item) => [item.event.id, item]),
   );
+  // What each tail preview this listener computed depended on: its fold's
+  // owner answers and which head events it included. Marks, not the events,
+  // so a tail does not keep an evicted head alive.
+  const previewFolds = new WeakMap<
+    object,
+    {
+      owners: ReadonlyMap<string, string | undefined> | undefined;
+      head: number | undefined;
+    }
+  >();
+  const headMarks = new WeakMap<readonly RelayEvent[], number>();
+  let headMark = 0;
+  const markHead = (events: readonly RelayEvent[] | undefined) => {
+    if (!events) return;
+    const mark = headMarks.get(events) ?? ++headMark;
+    headMarks.set(events, mark);
+    return mark;
+  };
   const unsubscribeProfiles = directory.queries.subscribe(() => {
     if (disposed || !transport) return;
     for (const [id, head] of heads.entries())
-      heads.set(id, {
-        ...head,
-        rows: Object.freeze(
-          foldChannelMessages(id, transport.relayAuthor, head.events),
-        ),
-      });
+      if (ownersChanged(foldOwners.get(head.rows)))
+        heads.replace(id, {
+          ...head,
+          rows: Object.freeze(
+            foldChannelMessages(id, transport.relayAuthor, head.events),
+          ),
+        });
     for (const [id, tail] of tails.entries()) {
-      const next = {
-        ...tail,
-        preview: messagePreview(
-          foldChannelMessages(id, transport.relayAuthor, [
-            ...(heads.peek(id)?.events ?? []),
-            ...tail.events,
-          ]),
-        ),
-      };
-      tails.set(id, next, tailBytes(next));
+      const head = heads.peek(id)?.events;
+      const folded = previewFolds.get(tail);
+      if (folded?.head === markHead(head) && !ownersChanged(folded?.owners))
+        continue;
+      const rows = foldChannelMessages(id, transport.relayAuthor, [
+        ...(head ?? []),
+        ...tail.events,
+      ]);
+      const next = { ...tail, preview: messagePreview(rows) };
+      previewFolds.set(next, {
+        owners: foldOwners.get(rows),
+        head: markHead(head),
+      });
+      tails.replace(id, next, tailBytes(next));
     }
     for (const state of windows.values()) setWindow(state, {});
     setList(list);
@@ -3342,7 +3394,8 @@ export function createChannelStore(
   ) {
     const hadHydration = hydration !== undefined;
     epoch++;
-    creationReads.clear();
+    for (const [id, read] of creationReads)
+      if (!read.complete || !authorized(id)) creationReads.delete(id);
     revokedEpoch = epoch;
     hydration = undefined;
     revealHydration?.();
@@ -3446,6 +3499,9 @@ export function createChannelStore(
   return {
     queries,
     roster: () => rosterRefresh,
+    /** A full roster read is still due: the last one did not verify, or a
+     * retired exact confirmation left a strong read owed. */
+    rosterOwed: () => rosterRefresh.state !== "verified" || strongListAgain,
     /** Preserve a retired exact confirmation's routing without scheduling work.
      * The next refresh/Retry owns dispatch and the existing cooldown. */
     requireStrongListRead() {
@@ -3461,13 +3517,6 @@ export function createChannelStore(
     canWrite: (id: string) => discovery?.canWrite(id) ?? false,
     unlisted,
     purgeAccess,
-    /** After an access purge's commit, reread names for retained authorized rows.
-     * One ensure per window, so one window over the directory budget spares the others. */
-    refetchWindowProfiles() {
-      for (const state of windows.values())
-        if (authorized(state.channelId))
-          void fetchProfiles(state.snapshot.rows);
-    },
     denyChannel,
     suspendPreviews(ids: readonly string[]) {
       let changed = false;

@@ -260,7 +260,8 @@ it("renews an admitted socket at once without a reconnecting state", async () =>
     vi.mocked(invoke).mockClear();
     old?.({ type: "renew" });
     expect(connects()).toBe(1);
-    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connecting");
+    // A planned renewal is not an outage: the session stays connected.
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connected");
     await vi.advanceTimersByTimeAsync(0);
     expect(channels.at(-1)).not.toBe(old);
     // The retired socket's late frames no longer reach the live layer.
@@ -274,8 +275,8 @@ it("renews an admitted socket at once without a reconnecting state", async () =>
     await admit();
     expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connected");
     expect(
-      h.callbacks.state.mock.calls.map(([state]) => state.status),
-    ).not.toContain("retrying");
+      new Set(h.callbacks.state.mock.calls.map(([state]) => state.status)),
+    ).toEqual(new Set(["connected"]));
   } finally {
     h.owner.dispose();
   }
