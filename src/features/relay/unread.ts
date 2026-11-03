@@ -23,6 +23,7 @@ import type { Priority, RelayReader } from "./reader";
 import { foldMessages, deletionApplies, messageAuthor } from "./fold";
 import { eventMs } from "./message-order";
 import { threadReference } from "./thread-reference";
+import { channelRowKind } from "./membership";
 import {
   memoryThreadFollows,
   THREAD_FOLLOW_LIMIT,
@@ -970,6 +971,24 @@ export function createUnread({
     indexEvidence();
     const state = reads.state();
     const items: InboxItem[] = [];
+    // A channel's fold reads only its own rows, plus every overlay and summary
+    // (they are keyed by target, not channel). Partitioning once avoids
+    // folding every retained event for every channel.
+    const shared: RelayEvent[] = [];
+    const channelRows = new Map<string, RelayEvent[]>();
+    for (const event of events.values()) {
+      if (!channelRowKind(event.kind)) {
+        shared.push(event);
+        continue;
+      }
+      for (const channelId of new Set(
+        event.tags.flatMap(([name, value]) => (name === "h" ? [value] : [])),
+      )) {
+        const list = channelRows.get(channelId ?? "") ?? [];
+        list.push(event);
+        channelRows.set(channelId ?? "", list);
+      }
+    }
     if (!closed)
       for (const channel of channels.list().channels) {
         if (
@@ -984,7 +1003,11 @@ export function createUnread({
         const session = channel.channelType === "solo";
         const evidence = (byChannel.get(channel.id) ?? []).filter((entry) => {
           want(entry, dm);
-          return entry.event.pubkey !== viewer && !!category(entry, dm);
+          return (
+            entry.event.pubkey !== viewer &&
+            (!!category(entry, dm) ||
+              (session && !entry.parentId && !entry.quiet))
+          );
         });
         // A session's top-level timeline is one conversation; its threads,
         // roots included, stay separate.
@@ -1002,11 +1025,16 @@ export function createUnread({
           groups.set(id, group);
         }
         if (!groups.size) continue;
-        const rows = foldMessages(channel.id, "", [...events.values()], {
-          includeReplies: true,
-          signingAuthority,
-          agentOwner: profiles?.owner && agentOwner,
-        });
+        const rows = foldMessages(
+          channel.id,
+          "",
+          [...(channelRows.get(channel.id) ?? []), ...shared],
+          {
+            includeReplies: true,
+            signingAuthority,
+            agentOwner: profiles?.owner && agentOwner,
+          },
+        );
         const content = new Map(rows.map((row) => [row.id, row.content]));
         // A session's top-level row shows its newest message from someone
         // else to everyone, even one that is not Inbox evidence, unless that
@@ -2513,6 +2541,7 @@ export function createUnread({
   });
   return {
     capability,
+    threadChoices: choices,
     // Private session evidence lookup; never seeds timeline windows or grants access.
     // Reference-only auxiliaries inherit every owning channel through the same
     // bounded, fail-closed ancestry used for retention.
