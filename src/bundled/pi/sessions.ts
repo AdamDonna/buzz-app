@@ -11,6 +11,8 @@ import type { PiRuntime, Place, Config, PiRuntimeOptions } from "./runtime";
 import type { PiSetup } from "./setup";
 import { PiSessionStore, type PiSession } from "./session-store";
 
+const EMPTY_WORKING: readonly number[] = Object.freeze([]);
+
 type Factory = (
   execution?: () => Promise<AgentExecution | undefined>,
   options?: PiRuntimeOptions,
@@ -38,12 +40,14 @@ export class PiSessions {
   private readonly lifetimes = new Map<string, object>();
   private readonly generations = new Map<string, object>();
   private readonly changes = new Map<string, Promise<void>>();
+  private readonly selections = new Map<string, boolean>();
+  private readonly inspections = new Map<string, Promise<boolean>>();
   private current: readonly Agent[] = [];
 
   constructor(
     private readonly agents: Pick<
       Agents,
-      "storage" | "execution" | "executionBinding" | "inspectExecution"
+      "storage" | "execution" | "inspectExecution"
     >,
     private readonly factory: Factory,
   ) {
@@ -86,8 +90,35 @@ export class PiSessions {
     };
   }
 
+  private inspect(agent: string): Promise<boolean> {
+    const held = this.inspections.get(agent);
+    if (held) return held;
+    const pending = this.agents
+      .inspectExecution(agent)
+      .then((binding) => {
+        const remote = binding !== undefined;
+        if (this.selections.get(agent) !== remote) {
+          this.selections.set(agent, remote);
+          this.notify();
+        }
+        return remote;
+      })
+      .finally(() => this.inspections.delete(agent));
+    this.inspections.set(agent, pending);
+    return pending;
+  }
+
+  private selection(agent: string) {
+    const known = this.selections.get(agent);
+    if (known === undefined && !this.inspections.has(agent))
+      void this.inspect(agent).catch((error) =>
+        console.warn(`Pi agent ${agent} selection read failed`, error),
+      );
+    return known;
+  }
+
   private async selected(agent: string) {
-    if (await this.agents.inspectExecution(agent)) return true;
+    if (await this.inspect(agent)) return true;
     const execution = await this.agents.execution(agent, {
       key: crypto.randomUUID(),
       intent: "new",
@@ -210,12 +241,16 @@ export class PiSessions {
     turn.signal.throwIfAborted();
     live();
     const opened = this.runtime(turn.delivery.agent.key, session);
+    const abort = () => opened.lifetime.abort(turn.signal.reason);
+    turn.signal.addEventListener("abort", abort, { once: true });
+    if (turn.signal.aborted) abort();
     try {
       return await opened.runtime.runOnce({
         ...turn,
         prompt: async () => text,
       });
     } finally {
+      turn.signal.removeEventListener("abort", abort);
       await this.close(opened);
     }
   }
@@ -260,8 +295,7 @@ export class PiSessions {
   }
 
   async places(agent: string): Promise<Place[]> {
-    if (!(await this.agents.inspectExecution(agent)))
-      return this.local.places(agent);
+    if (!(await this.inspect(agent))) return this.local.places(agent);
     return this.store
       .list(agent)
       .filter((session) => session.conversation !== undefined)
@@ -278,7 +312,9 @@ export class PiSessions {
       .sort((a, b) => b.at - a.at);
   }
   sessions(agent: string) {
-    if (!this.agents.executionBinding(agent)) return this.local.sessions(agent);
+    const remote = this.selection(agent);
+    if (remote === undefined) return [];
+    if (!remote) return this.local.sessions(agent);
     return this.store
       .list(agent)
       .filter((session) => session.conversation !== undefined)
@@ -295,7 +331,9 @@ export class PiSessions {
       .sort((a, b) => b.at - a.at);
   }
   working(agent: string) {
-    if (!this.agents.executionBinding(agent)) return this.local.working(agent);
+    const remote = this.selection(agent);
+    if (remote === undefined) return EMPTY_WORKING;
+    if (!remote) return this.local.working(agent);
     let view = this.views.get(agent);
     if (!view) {
       view = [...this.opened.values()]
@@ -314,7 +352,7 @@ export class PiSessions {
     signal: AbortSignal,
   ) {
     const live = this.live(agent);
-    if (!(await this.agents.inspectExecution(agent)))
+    if (!(await this.inspect(agent)))
       return this.local.transcript(agent, place, working, signal);
     const session = await this.store.read(agent, place.key);
     if (session?.conversation === undefined)
@@ -330,27 +368,33 @@ export class PiSessions {
   async usage(agent: string, since: number, signal: AbortSignal) {
     if (!this.current.some((item) => item.key === agent)) return [];
     const live = this.live(agent);
-    if (!(await this.agents.inspectExecution(agent)))
+    if (!(await this.inspect(agent)))
       return this.local.usage(agent, since, signal);
     live();
     const usage = await Promise.all(
       this.store
         .list(agent)
         .filter((session) => session.conversation !== undefined)
-        .map((session) =>
-          this.runtime(agent, session).runtime.usage(agent, since, signal),
+        .map(async (session) =>
+          (
+            await this.runtime(agent, session).runtime.usage(
+              agent,
+              since,
+              signal,
+            )
+          ).map((usage) => ({ ...usage, id: `${session.key}/${usage.id}` })),
         ),
     );
     return usage.flat();
   }
   async models(agent: Agent<Config>) {
-    if (!(await this.agents.inspectExecution(agent.key)))
-      return this.local.models(agent);
+    if (!(await this.inspect(agent.key))) return this.local.models(agent);
     return { current: agent.config.model, models: [] };
   }
   sessionState(agent: Agent, place: SessionPlace) {
-    if (!this.agents.executionBinding(agent.key))
-      return this.local.sessionState(agent, place);
+    const remote = this.selection(agent.key);
+    if (remote === undefined) return "idle";
+    if (!remote) return this.local.sessionState(agent, place);
     const key = this.controlKey(agent, place);
     if (this.changes.has(`${agent.key}/${key}`)) return "active";
     return (

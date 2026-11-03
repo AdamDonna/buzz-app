@@ -26,7 +26,11 @@ afterEach(() => {
 
 function fixture(
   storage = memoryStorage(),
-  options: { pending?: boolean; holdOpen?: boolean } = {},
+  options: {
+    pending?: boolean;
+    holdOpen?: boolean;
+    staleSnapshot?: boolean;
+  } = {},
 ) {
   const local = fakeHost({
     unfinished: () => ({ submissions: [] }),
@@ -72,6 +76,24 @@ function fixture(
         });
         return { conversation: 1, submission: 1 };
       },
+      recorded: () => ({ models: {} }),
+      entries: () => ({
+        entries: [
+          {
+            id: 1,
+            kind: "pi.assistant",
+            model: [
+              {
+                role: "assistant",
+                content: "Done",
+                timestamp: 110000,
+                model: "test",
+                usage: { input: 1 },
+              },
+            ],
+          },
+        ],
+      }),
       once: () => ({ conversation: 1, submission: 1 }),
       wait: () => (options.pending ? wait.promise : { status: "done" }),
       session: ({ action }) => {
@@ -136,7 +158,8 @@ function fixture(
     storage,
     execution: execute,
     inspectExecution: inspect,
-    executionBinding: () => ({ provider: "test/remote" }),
+    executionBinding: () =>
+      options.staleSnapshot ? undefined : { provider: "test/remote" },
   };
   const runtime = new PiSessions(
     services as never,
@@ -493,4 +516,89 @@ it("holds deliveries until New saves its pointer and closes the old runtime", as
     release.resolve();
     await changing;
   }
+});
+
+it("cancels standalone adapter setup without retiring the agent", async () => {
+  const f = fixture();
+  const entered = deferred<AbortSignal>();
+  const allocation = deferred<AgentExecution>();
+  f.execute.mockImplementationOnce(async (_agent, session) => {
+    const signal = session.signal;
+    if (!signal) throw new Error("Missing setup signal");
+    entered.resolve(signal);
+    const stop = () => allocation.reject(signal.reason);
+    signal.addEventListener("abort", stop, { once: true });
+    try {
+      return await allocation.promise;
+    } finally {
+      signal.removeEventListener("abort", stop);
+    }
+  });
+  const lifetime = new AbortController();
+  const running = f.runtime.runOnce({
+    delivery: f.delivery(),
+    key: "watch",
+    signal: lifetime.signal,
+    prompt: async () => "Inspect",
+  } as unknown as StandaloneTurn);
+  try {
+    const signal = await entered.promise;
+    lifetime.abort(new Error("Stop standalone"));
+    expect(signal.aborted).toBe(true);
+    await expect(running).resolves.toMatchObject({
+      ok: false,
+      error: "Stop standalone",
+    });
+    const next = f.delivery();
+    await f.runtime.run(next);
+    await expect(f.result(next)).resolves.toMatchObject({ ok: true });
+    expect(f.targets.size).toBe(1);
+  } finally {
+    allocation.reject(new Error("Release setup"));
+    await running;
+  }
+});
+
+it("uses confirmed selection for stale-window listings and controls", async () => {
+  const f = fixture(undefined, { pending: true, staleSnapshot: true });
+  const inspection = deferred<AgentExecutionBinding | undefined>();
+  f.inspect.mockImplementationOnce(() => inspection.promise);
+  expect(f.runtime.sessions(self)).toEqual([]);
+  const pending = f.runtime.working(self);
+  expect(pending).toEqual([]);
+  expect(f.runtime.working(self)).toBe(pending);
+  expect(f.local.processes).toHaveLength(0);
+  inspection.resolve({ provider: "test/remote" });
+  await f.runtime.places(self);
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  const agent = { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent;
+  expect(f.runtime.sessions(self)).toMatchObject([
+    { channelId, root, status: "Working" },
+  ]);
+  expect(f.runtime.working(self)).toHaveLength(1);
+  expect(f.runtime.sessionState(agent, { channelId, root })).toBe("active");
+  await expect(
+    f.runtime.session(agent, { channelId, root }, "new"),
+  ).rejects.toThrow("active turn");
+  expect(f.local.processes).toHaveLength(0);
+  f.wait.resolve({ status: "done" });
+  await f.result(turn);
+});
+
+it("keeps equal conversation numbers distinct in usage from two targets", async () => {
+  const f = fixture();
+  const first = f.delivery();
+  const second = f.delivery("e".repeat(64));
+  await f.runtime.run(first);
+  await f.runtime.run(second);
+  await Promise.all([f.result(first), f.result(second)]);
+  const usage = await f.runtime.usage(self, 0, new AbortController().signal);
+  expect(usage.map((session) => session.id).sort()).toEqual(
+    [...f.targets.keys()].map((key) => `${key}/1`).sort(),
+  );
+  expect(usage).toHaveLength(2);
+  expect(
+    usage.every((session) => session.observations[0]?.tokens.input === 1),
+  ).toBe(true);
 });

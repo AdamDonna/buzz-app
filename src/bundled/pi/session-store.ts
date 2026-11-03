@@ -14,11 +14,19 @@ const state = (agent: string, key: string) =>
   `${PREFIX}${agent}:session:${key}`;
 
 export class PiSessionStore {
+  private readonly observed = new Map<
+    string,
+    Map<string, PiSession | undefined>
+  >();
   constructor(private readonly storage: AgentStore) {}
 
   async read(agent: string, place: string): Promise<PiSession | undefined> {
     const key = await this.storage.read(pointer(agent, place));
-    return key === null ? undefined : this.load(agent, key, place);
+    if (key === null) {
+      this.observe(agent, place, undefined);
+      return;
+    }
+    return this.load(agent, key, place);
   }
 
   async current(agent: string, place: string): Promise<PiSession> {
@@ -39,31 +47,56 @@ export class PiSessionStore {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(key))
       throw new Error("Invalid Pi session key");
     const text = await this.storage.read(state(agent, key));
-    return text ? this.parse(text, key, place) : { key, place, at: 0 };
+    const session = text ? this.parse(text, key, place) : { key, place, at: 0 };
+    this.observe(agent, place, session);
+    return session;
   }
 
   async save(agent: string, session: PiSession) {
     await this.storage.set(state(agent, session.key), JSON.stringify(session));
+    if (this.observed.get(agent)?.get(session.place)?.key === session.key)
+      this.observe(agent, session.place, session);
   }
 
   async replace(agent: string, place: string) {
     const key = crypto.randomUUID();
-    await this.save(agent, { key, place, at: 0 });
+    const session = { key, place, at: 0 };
+    await this.save(agent, session);
     await this.storage.set(pointer(agent, place), key);
+    this.observe(agent, place, session);
   }
 
   list(agent: string): PiSession[] {
     const prefix = `${PREFIX}${agent}:place:`;
-    return this.storage
-      .keys()
-      .filter((key) => key.startsWith(prefix))
-      .flatMap((key) => {
-        const id = this.storage.get(key);
-        const text = id && this.storage.get(state(agent, id));
-        return text
-          ? [this.parse(text, id as string, key.slice(prefix.length))]
-          : [];
-      });
+    const listed = new Map<string, PiSession>();
+    for (const key of this.storage.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const id = this.storage.get(key);
+      const text = id && this.storage.get(state(agent, id));
+      if (text)
+        listed.set(
+          key.slice(prefix.length),
+          this.parse(text, id as string, key.slice(prefix.length)),
+        );
+    }
+    for (const [place, session] of this.observed.get(agent) ?? []) {
+      if (session) listed.set(place, session);
+      else listed.delete(place);
+    }
+    return [...listed.values()];
+  }
+
+  private observe(
+    agent: string,
+    place: string,
+    session: PiSession | undefined,
+  ) {
+    let current = this.observed.get(agent);
+    if (!current) {
+      current = new Map();
+      this.observed.set(agent, current);
+    }
+    current.set(place, session);
   }
 
   private parse(text: string, key: string, place: string): PiSession {
