@@ -81,7 +81,7 @@ function session(
   const add = vi.fn(async (id: string) => {
     if (id === "id-beta") throw new Error("Not confirmed. Try again.");
   });
-  const run = vi.fn(async () => {});
+  const run = vi.fn(async (_channel: string, _change: unknown) => {});
   const list = { channels, ...read };
   const refreshList = vi.fn();
   const value = {
@@ -97,8 +97,8 @@ function session(
     memberAdministration: {
       refresh: vi.fn(async () => {}),
       run,
-      snapshot: vi.fn(() =>
-        run.mock.calls.length
+      snapshot: vi.fn((id: string) =>
+        run.mock.calls.some(([removed]) => removed === id)
           ? {
               status: "ready",
               authority: { roles: {} },
@@ -364,4 +364,34 @@ it("leaves focus where the person moved it when a row goes", () => {
   act(() => screen.getByRole("button", { name: "Elsewhere" }).focus());
   rerender(page(session([channel("alpha", [YOU]), beta]).value));
   expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+});
+
+it("lists a former Bestie's channels by name, to remove from one or all after asking", async () => {
+  const user = userEvent.setup();
+  const { value, run } = session([
+    channel("alpha", [YOU, BESTIE], { lastActivityAt: 5 }),
+    channel("beta", [YOU, BESTIE], { lastActivityAt: 9 }),
+    channel("gamma", [YOU]),
+  ]);
+  render(<PrivateChannels session={value} bestie={BESTIE} former="Ada" />);
+  expect(screen.getByText("Private channels Ada can read")).toBeVisible();
+  // Winding down offers no adds.
+  expect(screen.queryByRole("button", { name: "Choose…" })).toBeNull();
+  expect(screen.queryByRole("switch")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Remove Ada from #beta" }),
+  ).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "Remove from all" }));
+  const ask = await screen.findByRole("alertdialog", {
+    name: "Remove Ada from 2 private channels?",
+  });
+  expect(run).not.toHaveBeenCalled();
+  await user.click(
+    within(ask).getByRole("button", { name: "Remove from all" }),
+  );
+  await vi.waitFor(() =>
+    expect(run.mock.calls.map(([id]) => id)).toEqual(["id-beta", "id-alpha"]),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
 });

@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import {
   checkinHourly,
-  type Feature,
   featureState,
   hasFeature,
   memory,
@@ -9,8 +8,6 @@ import {
   withFeature,
 } from "./features";
 
-// Another feature, whose markers are not memory's.
-const another: Feature = { ...memory, id: "other", text: "other" };
 const OPEN = "<!-- buzz:bestie/memory v1 -->";
 const CLOSE = "<!-- /buzz:bestie/memory -->";
 
@@ -96,7 +93,9 @@ it("shows a section whose markers were edited, and adds no second one", () => {
   }
   expect(featureState("Be brief.", memory)).toBe("off");
   // Another feature's markers are not this one's.
-  expect(featureState(withFeature("", another, true), memory)).toBe("off");
+  expect(featureState(withFeature("", checkinHourly, true), memory)).toBe(
+    "off",
+  );
 });
 
 it("restores an edited section only where its markers show it was", () => {
@@ -127,7 +126,7 @@ it("restores an edited section only where its markers show it was", () => {
       memory,
     ),
   ).toBeUndefined();
-  const other = withFeature("", another, true);
+  const other = withFeature("", checkinHourly, true);
   expect(
     restoredFeature(
       `${OPEN.replace(" v1", "")}\nrules\n\n${other}\n${CLOSE.replace(" -->", "-->")}`,

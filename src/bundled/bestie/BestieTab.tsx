@@ -1,14 +1,9 @@
 import { useState } from "react";
-import type {
-  Agent,
-  AgentAddedTab,
-  Agents,
-} from "../../features/agents/service";
-import { relayOrigin } from "../../features/communities/destination";
-import { relayPartition } from "../../features/relay/partition";
+import { watchSlug } from "../../features/agents/attention";
+import type { Agent, AgentAddedTab } from "../../features/agents/service";
 import { useRelayConnection } from "../../features/relay/react";
-import type { RelayData, RelaySnapshot } from "../../features/relay/service";
-import { savedAgentStore } from "../../features/solo/default-agent";
+import type { RelayData } from "../../features/relay/service";
+import type { RelaySession } from "../../features/relay/session";
 import { BestieIcon } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
@@ -28,22 +23,25 @@ import {
   FEATURES,
   type Feature,
   featureState,
-  hasFeature,
   restoredFeature,
-  withFeature,
 } from "./features";
-import {
-  type AttentionValue,
-  interestSlug,
-  watchSlug,
-} from "../../features/agents/attention";
-import type { RelaySession } from "../../features/relay/session";
+import { formerWithSettings, subscribePrivateMembers } from "./former";
 import { PrivateChannels } from "./PrivateChannels";
-
-type TabAgents = Pick<Agents, "save" | "types">;
+import {
+  cannotEdit,
+  type FeatureAgents,
+  featureOn,
+  instructionsOf,
+  restoreFeature,
+  saveFeature,
+} from "./save";
+import { inCommunity, savedBestie } from "./saved";
 
 /** The Bestie tab, on the agent saved as Bestie in its community. */
-export function bestieTab(relay: RelayData, agents: TabAgents): AgentAddedTab {
+export function bestieTab(
+  relay: RelayData,
+  agents: FeatureAgents,
+): AgentAddedTab {
   const bestie = savedBestie(relay);
   return {
     id: "bestie",
@@ -58,72 +56,52 @@ export function bestieTab(relay: RelayData, agents: TabAgents): AgentAddedTab {
   };
 }
 
-/** The saved Bestie in the connected community, across reconnections. */
-function savedBestie(relay: RelayData) {
-  let current:
-    | Readonly<{
-        snapshot: RelaySnapshot;
-        store: ReturnType<typeof savedAgentStore>;
-      }>
-    | undefined;
-  const store = () => {
-    const snapshot = relay.snapshot();
-    if (
-      current?.snapshot.session !== snapshot.session ||
-      current.snapshot.scope !== snapshot.scope
-    )
-      current = {
-        snapshot,
-        store: savedAgentStore(snapshot.session, snapshot.scope ?? ""),
-      };
-    return current.store;
-  };
+/** The Former Bestie tab, on an agent that was Bestie and still has
+ * something on. It goes once the agent has nothing left on, and shows only
+ * against a Bestie saved to the account and read, as check-ins stop. */
+export function formerBestieTab(
+  relay: RelayData,
+  agents: FeatureAgents,
+): AgentAddedTab {
+  const bestie = savedBestie(relay);
   return {
-    snapshot: () => store().snapshot(),
-    subscribe(listener: () => void) {
-      // The saved choice's sources also change for unrelated view state, so
-      // only a different Bestie, or community, is passed on.
-      let following = store();
-      let last = following.snapshot();
-      const changed = () => {
-        const next = following.snapshot();
-        if (next === last) return;
-        last = next;
-        listener();
-      };
-      let stop = following.subscribe(changed);
-      const stopRelay = relay.subscribe(() => {
-        if (store() === following) return;
-        stop();
-        following = store();
-        last = following.snapshot();
-        stop = following.subscribe(changed);
-        listener();
-      });
+    id: "former-bestie",
+    title: "Former Bestie",
+    when: (agent) => {
+      const current = bestie.snapshot();
+      const snapshot = relay.snapshot();
+      return (
+        !!current &&
+        !!snapshot.session.mainAgent &&
+        agent.pubkey !== current &&
+        inCommunity(agent, snapshot) &&
+        formerWithSettings(agent, snapshot)
+      );
+    },
+    subscribe(listener) {
+      const stopBestie = bestie.subscribe(listener);
+      const stopMembers = subscribePrivateMembers(relay, listener);
       return () => {
-        stopRelay();
-        stop();
+        stopBestie();
+        stopMembers();
       };
     },
+    component: ({ agent }) => (
+      <BestieTab relay={relay} agents={agents} agent={agent} former />
+    ),
   };
-}
-
-function inCommunity(agent: Agent, { scope }: RelaySnapshot) {
-  try {
-    return relayPartition(relayOrigin(agent.relay), agent.owner) === scope;
-  } catch {
-    return false;
-  }
 }
 
 function BestieTab({
   relay,
   agents,
   agent,
+  former = false,
 }: {
   relay: RelayData;
-  agents: TabAgents;
+  agents: FeatureAgents;
   agent: Agent;
+  former?: boolean;
 }) {
   const { session, scope } = useRelayConnection(relay);
   const bestie = useBestieChoice(session, scope ?? "");
@@ -132,123 +110,121 @@ function BestieTab({
   const others = bestie.choices.selectable.filter(
     (choice) => choice.pubkey !== agent.pubkey,
   );
+  const name = agent.name || "This agent";
+  const switches = (features: readonly Feature[]) =>
+    features.map((feature) => (
+      <FeatureSwitch
+        key={feature.id}
+        agents={agents}
+        agent={agent}
+        session={session}
+        feature={feature}
+        former={former}
+        saving={saving}
+        setSaving={setSaving}
+      />
+    ));
   return (
     // Its own size container: rows wrap their buttons to the panel's width,
     // as each agent type's settings form does, and nothing widens the tab.
     <div className="grid gap-6 [container-type:inline-size]">
       <SettingsGroup>
-        <PreferenceRow
-          icon={<BestieIcon size="1rem" />}
-          title="This is your Bestie"
-          subtitle="It's pinned at the top of Buzz, with your DM as its home."
-          trailing={
-            <MenuRoot>
-              <MenuTrigger
-                disabled={!others.length}
-                render={<Button variant="outline">Change</Button>}
-              />
-              <MenuPopup align="end">
-                <MenuGroup>
-                  <MenuGroupLabel>Make your Bestie</MenuGroupLabel>
-                  {others.map((choice) => (
-                    <MenuItem
-                      key={choice.pubkey}
-                      onClick={() => bestie.make(choice.pubkey)}
-                    >
-                      {bestieName(choice)}
-                    </MenuItem>
-                  ))}
-                </MenuGroup>
-              </MenuPopup>
-            </MenuRoot>
-          }
-        />
+        {former ? (
+          <PreferenceRow
+            icon={<BestieIcon size="1rem" />}
+            title={`${name} is no longer your Bestie. These are still on.`}
+            trailing={
+              <Button
+                variant="outline"
+                disabled={
+                  !bestie.choices.selectable.some(
+                    (choice) => choice.pubkey === agent.pubkey,
+                  )
+                }
+                onClick={() => bestie.make(agent.pubkey)}
+              >
+                Make my Bestie again
+              </Button>
+            }
+          />
+        ) : (
+          <PreferenceRow
+            icon={<BestieIcon size="1rem" />}
+            title="This is your Bestie"
+            subtitle="It's pinned at the top of Buzz, with your DM as its home."
+            trailing={
+              <MenuRoot>
+                <MenuTrigger
+                  disabled={!others.length}
+                  render={<Button variant="outline">Change</Button>}
+                />
+                <MenuPopup align="end">
+                  <MenuGroup>
+                    <MenuGroupLabel>Make your Bestie</MenuGroupLabel>
+                    {others.map((choice) => (
+                      <MenuItem
+                        key={choice.pubkey}
+                        onClick={() => bestie.make(choice.pubkey)}
+                      >
+                        {bestieName(choice)}
+                      </MenuItem>
+                    ))}
+                  </MenuGroup>
+                </MenuPopup>
+              </MenuRoot>
+            }
+          />
+        )}
       </SettingsGroup>
       <InlineHeader title="Settings" />
       <SettingsGroup>
-        {FEATURES.filter((feature) => !feature.timer).map((feature) => (
-          <FeatureSwitch
-            key={feature.id}
-            agents={agents}
-            agent={agent}
-            session={session}
-            feature={feature}
-            saving={saving}
-            setSaving={setSaving}
-          />
-        ))}
+        {switches(FEATURES.filter((feature) => !feature.timer))}
       </SettingsGroup>
       <InlineHeader title="Check-ins" />
       <SettingsGroup>
-        {FEATURES.filter((feature) => feature.timer).map((feature) => (
-          <FeatureSwitch
-            key={feature.id}
-            agents={agents}
-            agent={agent}
-            session={session}
-            feature={feature}
-            saving={saving}
-            setSaving={setSaving}
-          />
-        ))}
+        {switches(FEATURES.filter((feature) => feature.timer))}
       </SettingsGroup>
-      <PrivateChannels session={session} bestie={agent.pubkey} />
+      <PrivateChannels
+        session={session}
+        bestie={agent.pubkey}
+        {...(former && { former: name })}
+      />
       {bestie.view}
     </div>
   );
 }
 
-/** Whether `agent` has `feature` on: its section, and its timer if it has
- * one. Half of one, such as a timer deleted in Watching, reads as off. */
-function featureOn(agent: Agent, instructions: string, feature: Feature) {
-  return (
-    hasFeature(instructions, feature) &&
-    (!feature.timer || !!agent.attention[watchSlug(feature.timer.id)])
-  );
-}
-
-/** A feature's switch. Saving revises the synced instructions the tab shows,
- * as their editor does, with the feature's timer in the same change. Off also
- * turns off the features that require this one. A section edited by hand
- * where it starts or ends shows that instead, with Restore when what is left
- * of its markers shows where it was. */
+/** A feature's switch. Off also turns off the features that require this
+ * one. On a former Bestie, check-ins can only be turned off. A section edited
+ * by hand where it starts or ends shows that instead, with Restore when what
+ * is left of its markers shows where it was. */
 function FeatureSwitch({
   agents,
   agent,
   session,
   feature,
+  former,
   saving,
   setSaving,
 }: {
-  agents: TabAgents;
+  agents: FeatureAgents;
   agent: Agent;
   session: RelaySession;
   feature: Feature;
+  former: boolean;
   saving: boolean;
   setSaving(saving: boolean): void;
 }) {
   const [error, setError] = useState<string>();
-  // A type without `adopt` has no instructions, as `updateKind` says.
-  if (!agents.types().find(({ key }) => key === agent.type)?.adopt)
-    return (
-      <PreferenceRow
-        title={feature.title}
-        subtitle="This agent's type has no instructions to add this to."
-      />
-    );
-  // Without a confirmed copy its instructions aren't shown, so a save here
-  // would replace them.
-  if (agent.configProblem)
-    return (
-      <PreferenceRow title={feature.title} subtitle={agent.configProblem} />
-    );
-  const config = (agent.config ?? {}) as { instructions?: unknown };
-  const instructions =
-    typeof config.instructions === "string" ? config.instructions : "";
+  const problem = cannotEdit(agents, agent);
+  if (problem)
+    return <PreferenceRow title={feature.title} subtitle={problem} />;
+  const instructions = instructionsOf(agent);
   const timer = feature.timer && agent.attention[watchSlug(feature.timer.id)];
   const required = FEATURES.find(({ id }) => id === feature.requires);
-  const blocked = !!required && !featureOn(agent, instructions, required);
-  const checked = featureOn(agent, instructions, feature);
+  const blocked = !!required && !featureOn(agent, required);
+  const checked = featureOn(agent, feature);
+  const formerCheckIn = former && !!feature.timer;
   const run = async (task: () => Promise<void>) => {
     setSaving(true);
     setError(undefined);
@@ -260,96 +236,19 @@ function FeatureSwitch({
       setSaving(false);
     }
   };
-  const saveInstructions = (next: string) =>
-    agents.save(agent.key, {
-      config: { ...config, instructions: next },
-      ...(agent.configBase && { base: agent.configBase }),
-    });
   const save = (on: boolean) =>
     run(async () => {
-      // On never adds a second section beside one edited by hand.
-      if (on && featureState(instructions, feature) === "edited")
-        throw new Error(
-          `${feature.title} was edited in Instructions; restore it first.`,
-        );
-      const off = on
-        ? []
-        : [
-            feature,
-            ...FEATURES.filter(({ requires }) => requires === feature.id),
-          ];
-      const attention: Record<string, AttentionValue | null> = {};
-      for (const { timer } of off)
-        for (const slug of timer
-          ? [interestSlug(timer.id), watchSlug(timer.id)]
-          : [])
-          if (agent.attention[slug]) attention[slug] = null;
-      const timer = on && feature.timer;
-      if (timer) {
-        // The owner's 1:1 DM with the agent: opening it is idempotent.
-        const channel = await session.directMessages.open(
-          [agent.pubkey],
-          AbortSignal.timeout(30_000),
-        );
-        attention[interestSlug(timer.id)] = {
-          type: "interest",
-          instructions: timer.interest,
-        };
-        attention[watchSlug(timer.id)] = {
-          type: "timer",
-          interest_id: timer.id,
-          prompt: timer.prompt,
-          enabled: true,
-          interval_secs: timer.everySecs,
-          armed_at: Math.floor(Date.now() / 1000),
-          max_occurrences: null,
-          expires_at: null,
-          channel,
-        };
-      }
-      // Attention first: if the instructions then fail to save, Off leaves
-      // a section without its timer, which reads as off.
-      if (Object.keys(attention).length)
-        await agents.save(agent.key, {
-          attention,
-          // Its timer runs only while the agent's Attention is on. Off leaves
-          // it on: the agent's other watches may need it.
-          ...(timer && { attentionEnabled: true }),
-        });
-      try {
-        await agents.save(agent.key, {
-          config: {
-            ...config,
-            instructions: on
-              ? withFeature(instructions, feature, true)
-              : off.reduce(
-                  (text, item) => withFeature(text, item, false),
-                  instructions,
-                ),
-          },
-          ...(agent.configBase && { base: agent.configBase }),
-        });
-      } catch (cause) {
-        // A failed On undoes what it saved, so no timer runs behind a switch
-        // that reads off. Attention goes back off only if this turned it on.
-        if (timer)
-          await agents
-            .save(agent.key, {
-              attention: Object.fromEntries(
-                Object.keys(attention).map((slug) => [
-                  slug,
-                  agent.attention[slug]?.value ?? null,
-                ]),
-              ),
-              ...(!agent.attentionEnabled && { attentionEnabled: false }),
-            })
-            .catch(() => {
-              throw new Error(
-                `${cause instanceof Error ? cause.message : String(cause)} Its timer may still be saved; remove it below.`,
-              );
-            });
-        throw cause;
-      }
+      // The owner's 1:1 DM with the agent: opening it is idempotent.
+      const channel =
+        on && feature.timer
+          ? await session.directMessages.open(
+              [agent.pubkey],
+              AbortSignal.timeout(30_000),
+            )
+          : undefined;
+      await saveFeature(agents, agent, feature, on, {
+        ...(channel && { channel }),
+      });
     });
   const alert = error && (
     <p role="alert" className="buzz-field-error">
@@ -357,22 +256,25 @@ function FeatureSwitch({
     </p>
   );
   if (featureState(instructions, feature) === "edited") {
-    const restored = restoredFeature(instructions, feature);
+    const restorable =
+      !formerCheckIn && restoredFeature(instructions, feature) !== undefined;
     return (
       <>
         <PreferenceRow
           title={feature.title}
           subtitle={
-            restored !== undefined
+            restorable
               ? "Its section in Instructions was edited where it starts or ends. Restore puts back the original section."
               : "Its section in Instructions was edited where it starts or ends. Fix its start and end lines there."
           }
           trailing={
-            restored !== undefined ? (
+            restorable ? (
               <Button
                 variant="outline"
                 disabled={saving}
-                onClick={() => void run(() => saveInstructions(restored))}
+                onClick={() =>
+                  void run(() => restoreFeature(agents, agent, feature))
+                }
               >
                 Restore
               </Button>
@@ -388,21 +290,23 @@ function FeatureSwitch({
       <SwitchPreferenceRow
         label={feature.title}
         description={
-          blocked && required && !checked
-            ? `Turn on ${required.title} first.`
-            : // Paused on its own in the Attention tab, which can't resume a
-              // timer: saving it again here does.
-              checked && timer?.value.type === "timer" && !timer.value.enabled
-              ? `Paused in Attention. Turn ${feature.title} off and on again to restart it.`
-              : // Attention reads off while no plugin shows it, as when the
-                // Watching plugin is off, or while the agent's switch is off.
-                checked && feature.timer && !agent.attentionEnabled
-                ? "Paused: watches aren't running on this device. Turn on the Watching plugin and its Run watches switch."
-                : feature.description
+          formerCheckIn
+            ? "Only your Bestie checks in."
+            : blocked && required && !checked
+              ? `Turn on ${required.title} first.`
+              : // Paused on its own in the Attention tab, which can't resume a
+                // timer: saving it again here does.
+                checked && timer?.value.type === "timer" && !timer.value.enabled
+                ? `Paused in Attention. Turn ${feature.title} off and on again to restart it.`
+                : // Attention reads off while no plugin shows it, as when the
+                  // Watching plugin is off, or while the agent's switch is off.
+                  checked && feature.timer && !agent.attentionEnabled
+                  ? "Paused: watches aren't running on this device. Turn on the Watching plugin and its Run watches switch."
+                  : feature.description
         }
         checked={checked}
-        // A check-in left on without memory can still be turned off.
-        disabled={saving || (blocked && !checked)}
+        // One left on can still be turned off.
+        disabled={saving || ((blocked || formerCheckIn) && !checked)}
         onCheckedChange={(on) => void save(on)}
       />
       {/* A timer left without its section, as when undoing a failed On
