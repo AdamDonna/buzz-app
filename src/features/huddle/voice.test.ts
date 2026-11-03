@@ -287,6 +287,33 @@ it("closes a late harness and waits for it before reseating", async () => {
   await vi.waitFor(() => expect(f.bridge.open).toHaveBeenCalledTimes(2));
   expect(connection.close).toHaveBeenCalledOnce();
 });
+it("reopens after a typed request releases close without another roster change", async () => {
+  const f = setup();
+  f.agents([agent("a")]);
+  // The adapter retains its thread until the surviving typed request finishes.
+  const typedRequest = deferred<void>();
+  const close = vi.fn(() => typedRequest.promise);
+  f.voice.mockImplementationOnce(async () => ({ input: vi.fn(), close }));
+  f.start();
+  try {
+    await vi.waitFor(() => expect(f.voice).toHaveBeenCalledOnce());
+    f.call({ phase: "idle", participants: [] });
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    f.call({
+      phase: "connected",
+      id: "rejoined-human",
+      participants: ["owner"],
+    });
+    // Native cleanup completed, but the harness still holds its reservation.
+    await vi.waitFor(() => expect(f.bridge.close).toHaveBeenCalledOnce());
+    expect(f.bridge.open).toHaveBeenCalledOnce();
+    typedRequest.resolve();
+    await vi.waitFor(() => expect(f.bridge.open).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(f.voice).toHaveBeenCalledTimes(2));
+  } finally {
+    typedRequest.resolve();
+  }
+});
 it("renews leases, closes on harness failure, and does not retry on roster noise", async () => {
   vi.useFakeTimers();
   const f = setup();
