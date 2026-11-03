@@ -3,7 +3,16 @@ export type { AgentHook, AgentHookContext } from "../features/agents/hooks";
 export type { PluginManifest, PluginModule } from "./api";
 export type { SettingsCard, SettingsCards } from "../features/settings/service";
 export type { Context } from "@deepseek-ai/cordis";
-export type { Host, HostRequest, HostResponse } from "../features/host/service";
+export type {
+  Host,
+  HostRequest,
+  HostByteUpload,
+  HostRequestOnceOptions,
+  HostResponse,
+  HostByteRequest,
+  HostByteResponse,
+  HostSavedBytes,
+} from "../features/host/service";
 export type {
   IdentityNames,
   NamingPolicy,
@@ -17,6 +26,11 @@ export type {
   SidebarSectionRow,
   SidebarSections,
 } from "../features/channel-navigation/sidebar-sections-service";
+export type {
+  PluginInstallOutcome,
+  PluginInstallSource,
+  PluginInstaller,
+} from "./installer";
 export type {
   Panel,
   Panels,
@@ -153,3 +167,6 @@ export type {
   SessionSnapshot,
   AuthenticatedRequest,
 } from "../features/federated-identity/service";
+
+export type { AddedTool } from "../buzz-mcp/session-tools";
+export type { BuzzClient, Media } from "../buzz-mcp/client";

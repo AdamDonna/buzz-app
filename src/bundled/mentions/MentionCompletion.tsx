@@ -1,3 +1,4 @@
+import { useProfileGeneration } from "../../features/relay/react";
 import { TeamMentionAvatars } from "./TeamMentionAvatars";
 import { useContext, useEffect, useRef, useState } from "react";
 import { useTeamMentions } from "./use-team-mentions";
@@ -7,7 +8,7 @@ import type { ComposerSession } from "../../features/messages/composer-session";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { outsideMentionDetail } from "./mention-candidates";
 import { matchesMentionQuery, pendingMentionQuery } from "./mention-query";
-import { continuedMention } from "./mention-ranking";
+import { continuedMention, matchingMentions } from "./mention-ranking";
 import { resolveSpaceMention } from "./resolve-space-mention";
 import { SelectedMentionContext } from "../../features/messages/selected-mention-context";
 import { DraftMentionRoster } from "../../features/messages/draft-mention-roster";
@@ -16,7 +17,10 @@ import { avatarMedia } from "../../shared/avatar-source";
 
 // Demand bookkeeping only, not another profile cache. Missing names do not issue
 // the same network request on every query keystroke; explicit retry remains available.
-const demands = new WeakMap<ComposerSession, Set<string>>();
+const demands = new WeakMap<
+  ComposerSession,
+  { generation: number; ids: Set<string> }
+>();
 export function MentionCompletion({
   session,
   scope,
@@ -59,11 +63,17 @@ export function MentionCompletion({
   }>(undefined);
   const [attempt, retry] = useState(0);
   const [error, setError] = useState(false);
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
     if (draftRoster) return;
     session.channels.ensureList();
-    const requested = demands.get(session) ?? new Set<string>();
-    demands.set(session, requested);
+    // An access purge drops loaded names, so its reads start a new budget.
+    let demand = demands.get(session);
+    if (demand?.generation !== profileGeneration) {
+      demand = { generation: profileGeneration, ids: new Set() };
+      demands.set(session, demand);
+    }
+    const requested = demand.ids;
     const ids = memberKey
       .split(":")
       .filter((id) => id && (attempt > 0 || !requested.has(id)))
@@ -71,22 +81,26 @@ export function MentionCompletion({
     if (!ids.length) return;
     for (const id of ids) requested.add(id);
     let live = true;
-    void session.profiles.ensure(ids, "background").catch(() => {
-      if (live) setError(true);
-    });
+    // Retry is explicit: a foreground read rereads known absences.
+    void session.profiles
+      .ensure(ids, attempt > 0 ? "foreground" : "background")
+      .catch(() => {
+        if (live) setError(true);
+      });
     return () => {
       live = false;
     };
-  }, [session, memberKey, attempt, draftRoster]);
+  }, [session, memberKey, attempt, draftRoster, profileGeneration]);
   useEffect(() => {
     const members = memberKey ? memberKey.split(":") : [];
     const admitted =
       matchesMentionQuery(
         query.query,
-        [...model.candidates, ...choices].flatMap((c) => [
-          ...c.aliases,
-          c.label,
-        ]),
+        // Both rules need a name that starts with the query.
+        [
+          ...matchingMentions(model.candidates, query.query),
+          ...choices,
+        ].flatMap((c) => [...c.aliases, c.label]),
       ) ||
       (teams.names.length > 0 && matchesMentionQuery(query.query, teams.names));
     const matching = admitted ? choices : [];
@@ -107,6 +121,11 @@ export function MentionCompletion({
         if (withdraw) withdraw();
       };
     }
+    // Each shown row asks both; one pass each instead of one scan per row.
+    const memberKeys = new Set(members);
+    const agentKeys = new Set(
+      model.candidates.flatMap((c) => (c.agent ? [c.recipient.pubkey] : [])),
+    );
     const available = [
       ...matching.map(({ recipient, label, elsewhere, disabled }) => ({
         disabled,
@@ -117,7 +136,7 @@ export function MentionCompletion({
         label,
         detail:
           disabled ??
-          (members.includes(recipient.pubkey)
+          (memberKeys.has(recipient.pubkey)
             ? recipient.pubkey
             : inviteAgents
               ? `${parentAdmission ? "Adds to channel" : "Adds to chat"} · ${recipient.pubkey}`
@@ -134,13 +153,7 @@ export function MentionCompletion({
               session.media,
             )}
             size="default"
-            shape={
-              model.candidates.some(
-                (c) => c.recipient.pubkey === recipient.pubkey && c.agent,
-              )
-                ? "squircle"
-                : "circle"
-            }
+            shape={agentKeys.has(recipient.pubkey) ? "squircle" : "circle"}
           />
         ),
         edit: { mention: recipient },
@@ -197,9 +210,13 @@ export function MentionCompletion({
       admitted &&
       model.spaceId === undefined &&
       !teams.blocksSpace &&
-      !continuedMention(model.candidates, query.query) &&
       (model.pending || model.directory.loading) &&
-      pendingMentionQuery(query.query);
+      pendingMentionQuery(query.query) &&
+      // A continuing name starts with the query: only indexed matches can have one.
+      !continuedMention(
+        matchingMentions(model.candidates, query.query),
+        query.query,
+      );
     const withdraw = publish({
       spaceId: teams.blocksSpace ? undefined : model.spaceId,
       ...(undecided

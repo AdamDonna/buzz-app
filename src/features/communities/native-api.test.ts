@@ -8,7 +8,7 @@ import {
   requestLeave,
   type CommunityInfo,
 } from "./api";
-import { keypair, signed } from "../relay/testing";
+import { keypair, nativeSignatureChecks, signed } from "../relay/testing";
 import { fetchCommunityPresentation } from "./community-icon";
 import { NOT_A_COMMUNITY_ERROR } from "../relay/native";
 
@@ -36,6 +36,8 @@ beforeEach(() => {
   respond = () => ({ body: {} });
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "identity_restore") return key.pubkey;
+    if (command === "relay_verify_signatures")
+      return nativeSignatureChecks(args);
     if (command === "relay_sign")
       return signed(key, (args as { event: EventTemplate }).event);
     if (command !== "relay_http")
@@ -419,3 +421,23 @@ it("projects native public community presentation without a join-policy read or 
   expect(requests).toEqual([{ path: "/", body: undefined }]);
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it.each([
+  [1, 42],
+  [1, 42, 43],
+])(
+  "projects membership enforcement from supported NIPs %j",
+  async (...nips) => {
+    vi.mocked(invoke).mockImplementation(async (_command, args) => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify(
+        (args as { path: string }).path === "/"
+          ? { self: key.pubkey, name: "Native community", supported_nips: nips }
+          : { policy: null },
+      ),
+    }));
+    const info = await communityRequest<CommunityInfo>(community, "info");
+    expect(info.membershipRequired).toBe(nips.includes(43));
+  },
+);

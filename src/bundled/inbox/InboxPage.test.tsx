@@ -2,7 +2,7 @@ const emptyPanels: never[] = [];
 import type { ConversationHostServices } from "../../features/conversation/ConversationHost";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { StrictMode } from "react";
+import { cloneElement, StrictMode, type ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -25,6 +25,8 @@ import type { ComposerInputElement } from "../../features/messages/composer-dom"
 import { createRelaySession } from "../../features/relay/session";
 import type { RelaySnapshot, RelayData } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
+import type { PageNavigation } from "../../features/navigation/service";
+import { inboxRouteTarget, type InboxRoute } from "./route";
 import type { ReadFilter, RelayEvent } from "../../features/relay/events";
 import { matchesEvent } from "../../features/relay/projection";
 import {
@@ -1591,12 +1593,11 @@ function fixture(
     late = keypair(),
     unknown = keypair(),
     relayKey = keypair();
-  let releaseProfiles = () => {};
-  const profilesGate = options.holdProfiles
-    ? new Promise<void>((resolve) => {
-        releaseProfiles = resolve;
-      })
-    : undefined;
+  // Held profiles are unpublished until release, then arrive live. Holding a
+  // read open instead would occupy the one background read slot for good.
+  let profilesHeld = options.holdProfiles ?? false;
+  const unheld = (found: RelayEvent[]) =>
+    profilesHeld ? found.filter((event) => event.kind !== 0) : found;
   let rosterFailure = options.failRoster ?? false;
   let rosterGate: Promise<void> | undefined;
   let rosterStarted = false;
@@ -1781,8 +1782,6 @@ function fixture(
           await auxGate;
           if (failAux) throw new Error("auxiliary history unavailable");
         }
-        if (profilesGate && filters.some((filter) => filter.kinds?.includes(0)))
-          await profilesGate;
         if (filters.some((filter) => filter.kinds?.includes(39002))) {
           rosterStarted = true;
           if (rosterGate) await rosterGate;
@@ -1804,7 +1803,7 @@ function fixture(
               throw new Error("history offline");
           }
         }
-        return filters.flatMap(answer);
+        return unheld(filters.flatMap(answer));
       },
       // The real sizing rewrite behind a pass-through proxy, so rows resolve
       // relay-hosted pictures to the variant they actually requested.
@@ -1895,7 +1894,7 @@ function fixture(
     },
   );
   owners.push(owner);
-  if (!options.failRoster) emit(events);
+  if (!options.failRoster) emit(unheld(events));
   const scope = {
     viewer: viewer.pubkey,
     communityOrigin: "https://relay.test",
@@ -2063,7 +2062,11 @@ function fixture(
       };
     },
     rosterStarted: () => rosterStarted,
-    releaseProfiles,
+    releaseProfiles() {
+      if (!profilesHeld) return;
+      profilesHeld = false;
+      emit(events.filter((event) => event.kind === 0));
+    },
     agent,
     unknown,
     late,
@@ -2198,6 +2201,150 @@ async function archiveOpened(h: { archive: ArchiveShortcut }) {
   await waitFor(() => expect(h.archive.current).toBeDefined());
   act(() => h.archive.current?.());
 }
+/** A visit's presentation: every open, even of the same address, is a new object. */
+function visit(params?: InboxRoute): PageNavigation {
+  return {
+    entryId: "entry",
+    target: params
+      ? inboxRouteTarget(params)
+      : {
+          version: 1,
+          kind: "page",
+          pluginId: "buzz.inbox",
+          pageId: "inbox",
+        },
+    signal: new AbortController().signal,
+  } as unknown as PageNavigation;
+}
+/** The fixture's page, handed a navigation like the host's PageView does. */
+function viewAt(h: ReturnType<typeof fixture>, navigation: PageNavigation) {
+  const page = (
+    h.view.props as {
+      children: ReactElement<{ navigation?: PageNavigation }>;
+    }
+  ).children;
+  return cloneElement(h.view, {}, cloneElement(page, { navigation }));
+}
+const savedFilters = (h: ReturnType<typeof fixture>) =>
+  JSON.parse(
+    localStorage.getItem(
+      `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    ) ?? "null",
+  );
+const filterSummary = () =>
+  screen.getByRole("button", { name: "Inbox filters" });
+const unreadToggle = () => screen.getByRole("button", { name: "Unread only" });
+
+it.each([
+  [{ activity: "all", attention: "unread" }, "All", "true"],
+  [{ activity: "threads" }, "Threads", "false"],
+  [{ activity: "mentions" }, "Mentions", "false"],
+  [{ activity: "dms" }, "DMs", "false"],
+] as const)(
+  "a shortcut open with %j applies and saves its filters, leaving the others",
+  async (params, label, unread) => {
+    const h = fixture({ withDm: true });
+    localStorage.setItem(
+      `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+      JSON.stringify({
+        show: "archived",
+        activity: "all",
+        sender: "agents",
+        attention: "all",
+      }),
+    );
+    render(viewAt(h, visit(params)));
+    await waitFor(() => expect(filterSummary()).toHaveTextContent(label));
+    expect(filterSummary()).not.toHaveTextContent("Archived");
+    expect(unreadToggle()).toHaveAttribute("aria-pressed", unread);
+    expect(savedFilters(h)).toEqual({
+      show: "inbox",
+      sender: "agents",
+      attention: unread === "true" ? "unread" : "all",
+      ...params,
+    });
+  },
+);
+
+it("keeps the saved attention when a shortcut names only an activity", async () => {
+  const h = fixture();
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify({ attention: "unread" }),
+  );
+  render(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  expect(unreadToggle()).toHaveAttribute("aria-pressed", "true");
+  expect(savedFilters(h)).toMatchObject({ attention: "unread" });
+});
+
+it("re-applies a repeated shortcut open after the filters were changed by hand", async () => {
+  const h = fixture({ withDm: true });
+  const view = render(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await chooseFilter("Mentions");
+  await chooseFilter("Unread only", "Attention");
+  expect(filterSummary()).toHaveTextContent("Mentions");
+  // A rerender of the same presentation is not a new visit.
+  const same = visit({ activity: "threads" });
+  view.rerender(viewAt(h, same));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await chooseFilter("DMs");
+  view.rerender(viewAt(h, same));
+  expect(filterSummary()).toHaveTextContent("DMs");
+  // The host presents a repeated open of an identical address as a new object.
+  view.rerender(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  expect(savedFilters(h)).toMatchObject({ activity: "threads" });
+});
+
+it("Back/Forward to a shortcut visit keeps the filters chosen since", async () => {
+  const h = fixture({ withDm: true });
+  const view = render(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await chooseFilter("Mentions");
+  // Traversal presents the visit as a new object carrying the same address.
+  view.rerender(
+    viewAt(h, { ...visit({ activity: "threads" }), traversal: true }),
+  );
+  expect(filterSummary()).toHaveTextContent("Mentions");
+  expect(savedFilters(h)).toMatchObject({ activity: "mentions" });
+});
+
+it("a shortcut open leaves the Drafts view", async () => {
+  const h = fixture();
+  const view = render(viewAt(h, visit()));
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  await chooseFilter("Drafts");
+  expect(filterSummary()).toHaveTextContent("Drafts");
+  view.rerender(viewAt(h, visit({ activity: "mentions" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
+  expect(filterSummary()).not.toHaveTextContent("Drafts");
+  expect(
+    screen.getByRole("list", { name: "Inbox conversations" }),
+  ).toBeVisible();
+});
+
+it("a plain open leaves saved filters alone", async () => {
+  const h = fixture();
+  const saved = {
+    show: "archived",
+    activity: "mentions",
+    sender: "humans",
+    attention: "unread",
+  };
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify(saved),
+  );
+  const view = render(viewAt(h, visit()));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
+  expect(unreadToggle()).toHaveAttribute("aria-pressed", "true");
+  view.rerender(viewAt(h, visit()));
+  expect(savedFilters(h)).toEqual(saved);
+  expect(filterSummary()).toHaveTextContent("Archived");
+});
+
 async function chooseFilter(label: string, control = "Activity type") {
   if (control === "Attention") {
     const toggle = screen.getByRole("button", { name: "Unread only" });
@@ -2215,12 +2362,13 @@ async function chooseFilter(label: string, control = "Activity type") {
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: "Inbox filters" });
   await user.click(trigger);
-  await screen.findByRole("menu", { name: "Inbox filters" });
+  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
+  const items = within(menu);
   if (control === "Show") {
-    await user.click(screen.getByRole("menuitemradio", { name: label }));
+    await user.click(items.getByRole("menuitemradio", { name: label }));
   } else if (control === "Sender") {
-    const people = screen.getByRole("menuitemcheckbox", { name: "People" });
-    const agents = screen.getByRole("menuitemcheckbox", { name: "Agents" });
+    const people = items.getByRole("menuitemcheckbox", { name: "People" });
+    const agents = items.getByRole("menuitemcheckbox", { name: "Agents" });
     // Enable the desired sender before disabling the other: never select none.
     if (label !== "Agents" && people.getAttribute("aria-checked") !== "true")
       await user.click(people);
@@ -2233,7 +2381,7 @@ async function chooseFilter(label: string, control = "Activity type") {
     await user.keyboard("{Escape}");
   } else {
     await user.click(
-      screen.getByRole("menuitemradio", {
+      items.getByRole("menuitemradio", {
         name: label === "All activity" ? "All" : label,
       }),
     );

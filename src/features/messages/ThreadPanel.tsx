@@ -1,6 +1,8 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The thread region supports keyboard scrolling and Escape.
 import { workflowLabel } from "../relay/workflow-attribution";
 import { usePanelTabHost } from "../panels/PanelWorkspace";
+import { moveMessageSelection } from "./message-selection";
+import { MessageSelection } from "./use-message-selection";
 import { MessageEditScope } from "./MessageEditScope";
 import { useMessageSelectionCopy } from "./selection-copy";
 import { ReplySummary } from "./ReplySummary";
@@ -28,7 +30,7 @@ import type { ConversationExtensions } from "../conversation/contracts";
 import type { ChannelMessage } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import type { ThreadRetarget, ThreadView } from "../relay/threads";
-import { useRowProfiles } from "../relay/react";
+import { useProfileGeneration, useRowProfiles } from "../relay/react";
 import { rowProfileIds } from "../relay/membership";
 import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
 import { continuesMessageGroup } from "./message-grouping";
@@ -125,6 +127,8 @@ export function ThreadPanel(props: ThreadPanelProps) {
         // Portalled viewers bubble here through React but own their Escape.
         if (
           event.key === "Escape" &&
+          !event.shiftKey &&
+          !event.defaultPrevented &&
           !tabbed &&
           close &&
           event.currentTarget.contains(event.target as Node)
@@ -653,12 +657,14 @@ function ThreadMessages({
     [snapshot.status, rows, session.viewer],
   );
   const authors = [...new Set(rows.flatMap(rowProfileIds))].sort().join(":");
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (authors)
       void session.profiles
         .ensure(authors.split(":"), "background")
         .catch(() => {});
-  }, [session.profiles, authors]);
+  }, [session.profiles, authors, profileGeneration]);
   const profiles = useRowProfiles(session.profiles, rows);
   const agentPubkeys = useKnownAgentPubkeys(session, profiles);
   const scroller = useRef<HTMLElement>(null);
@@ -1644,6 +1650,8 @@ function ThreadMessages({
         }}
         onPointerDown={keepReadingPosition}
         onKeyDown={(event) => {
+          moveMessageSelection(event);
+          if (event.defaultPrevented) return;
           if (
             [
               "ArrowUp",
@@ -1780,6 +1788,8 @@ function ThreadMessages({
           aria-hidden="true"
         />
       </section>
+      {/* After the scroller, so its ref is attached when this registers. */}
+      <MessageSelection list={scroller} rows={rows} session={session} />
       {preview && (
         <ChannelJoinNotice
           ready={

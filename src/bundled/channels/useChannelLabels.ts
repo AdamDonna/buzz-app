@@ -37,9 +37,11 @@ export function useChannelLabels(
     selection.snapshot,
     selection.snapshot,
   );
-  // Access loss can purge loaded names or abort a cold fetch without changing
-  // DM participants. Retry for missing names or changed channel membership,
-  // not for message previews/renders; keep enrichment in the background.
+  // A name read can come back empty or fail (offline), and a full cache clear
+  // empties the directory, without changing DM participants. Retry missing
+  // names when channel membership changes, not for message previews/renders;
+  // keep enrichment in the background, which skips names a read on this
+  // connection found absent.
   const membership = useMemo(
     () =>
       roster
