@@ -76,7 +76,6 @@ import {
 import { ChoiceRow } from "../../shared/design-system/ui/ChoiceRow";
 import { SearchField } from "../../shared/design-system/ui/SearchField";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
-import { Accordion } from "../../shared/design-system/ui/Accordion";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import {
   PopoverRoot,
@@ -89,7 +88,6 @@ import {
   Filter2Icon,
   InfoIcon,
   UsersIcon,
-  XIcon,
 } from "../../shared/design-system/icons";
 import {
   MemberRow,
@@ -102,11 +100,7 @@ import { useSoloShare } from "./useSoloShare";
 import { useReauthorizedRetry } from "../../features/relay/RecoveryNotice";
 import { ChannelGeneralAccess } from "./ChannelGeneralAccess";
 import { avatarMedia } from "../../shared/avatar-source";
-import {
-  type ChannelLabel,
-  channelIcon,
-  channelText,
-} from "../../features/channels/channel-icon";
+import { channelIcon, channelText } from "../../features/channels/channel-icon";
 import { writeClipboardText } from "../../shared/clipboard";
 
 const INVITATION_GROUP_SIZE = 4;
@@ -1624,36 +1618,8 @@ export function ChannelMembersDialog({
     selection?.expectedRole === "absent"
       ? additionRoles.find((option) => option.role === selection.role)
       : undefined;
-  /** A name in a channel share's audience; access actions stay on member rows. */
-  const audienceRow = (key: string) => (
-    <li key={key} className={styles.stagedRow}>
-      <Avatar
-        alt=""
-        fallback={share.names(key)}
-        src={avatarMedia(profiles.get(key)?.picture, session.media)}
-        size="small"
-        shape={
-          known.has(key) || profiles.get(key)?.isAgent ? "squircle" : "circle"
-        }
-      />
-      <span className={styles.stagedName}>{share.names(key)}</span>
-    </li>
-  );
-  const channelTitle = (channel: ChannelLabel, detail: string) => {
-    const Icon = channelIcon(channel);
-    return (
-      <span className={styles.choice}>
-        <Icon size={24} aria-hidden="true" />
-        <span className={styles.stagedName}>
-          <span>{channelText(channel)}</span>
-          <span className="text-body-sm text-subtle">{detail}</span>
-        </span>
-      </span>
-    );
-  };
-  const memberCount = (count: number) =>
-    `${count} member${count === 1 ? "" : "s"}`;
   const chosen = share.chosen;
+  const DestinationIcon = chosen ? channelIcon(chosen) : undefined;
   const searchFeedback = (
     <>
       {search.loading && (
@@ -1930,6 +1896,28 @@ export function ChannelMembersDialog({
       ) : (
         <div className={styles.layout}>
           <div className={styles.searchControls}>{searchField}</div>
+          {chosen && DestinationIcon && (
+            <section
+              aria-label="Selected channel"
+              className="space-y-2 px-control-inset"
+            >
+              <p className="text-caption text-subtle">Share link to</p>
+              <InlineHeader
+                title={chosen.name}
+                icon={<DestinationIcon size={20} aria-hidden="true" />}
+                actions={
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    disabled={share.busy}
+                    onClick={share.removeDestination}
+                  >
+                    Change
+                  </Button>
+                }
+              />
+            </section>
+          )}
           {(administrationError ||
             rosterError ||
             nameError ||
@@ -1985,63 +1973,6 @@ export function ChannelMembersDialog({
               >
                 {rosterError}
               </p>
-            )}
-            {chosen && (
-              <section
-                aria-label="Selected channel"
-                className={styles.stagedRow}
-              >
-                <div className={styles.stagedName}>
-                  <p className="text-body-sm text-subtle">
-                    Share a link. Private chats become View only.
-                  </p>
-                  <Accordion
-                    key={chosen.id}
-                    variant="form"
-                    onValueChange={(value) =>
-                      share.setExpandedChannel(value.length ? chosen.id : "")
-                    }
-                    items={[
-                      {
-                        value: "channel-participants",
-                        title: channelTitle(
-                          chosen,
-                          share.destinationMembers
-                            ? memberCount(share.destinationMembers.length)
-                            : share.destinationRoster?.id !== chosen.id ||
-                                share.destinationRoster.status === "loading"
-                              ? "Loading participants…"
-                              : "Participants unavailable",
-                        ),
-                        content: share.destinationMembers ? (
-                          <ul>{share.destinationMembers.map(audienceRow)}</ul>
-                        ) : (
-                          <div>
-                            <p role="status">
-                              {share.destinationRoster?.id !== chosen.id ||
-                              share.destinationRoster.status === "loading"
-                                ? "Loading participants…"
-                                : "Current participants are unavailable."}
-                            </p>
-                            {share.destinationRoster?.id === chosen.id &&
-                              share.destinationRoster.status === "error" && (
-                                <Button onClick={share.retryDestination}>
-                                  Retry participants
-                                </Button>
-                              )}
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
-                </div>
-                <IconButton
-                  aria-label={`Remove ${channelText(chosen)}`}
-                  disabled={share.busy}
-                  icon={<XIcon size={16} />}
-                  onClick={share.removeDestination}
-                />
-              </section>
             )}
             {initialLoading ? (
               !rosterError && (
@@ -2302,7 +2233,11 @@ export function ChannelMembersDialog({
                             size="xs"
                             aria-label={`Select ${channelText(item)}`}
                             disabled={share.busy}
-                            onClick={() => share.choose(item)}
+                            onClick={() => {
+                              share.choose(item);
+                              if (scrollport.current)
+                                scrollport.current.scrollTop = 0;
+                            }}
                           >
                             Select
                           </Button>

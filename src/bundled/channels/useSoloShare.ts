@@ -1,7 +1,6 @@
 import { useProfileGeneration } from "../../features/relay/react";
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -12,11 +11,6 @@ import type { Navigation } from "../../features/navigation/controller";
 import { buzzLinkTarget } from "../../features/navigation/buzz-links";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { useChatConversions } from "../../features/solo/conversion";
-import {
-  formatPublicKey,
-  publicKeyLabels,
-} from "../../shared/identity/public-key";
-import { useIdentityNames } from "../../features/identity-names/react";
 import {
   canShareConversation,
   checkShareDestination,
@@ -75,17 +69,7 @@ export function useSoloShare({
     session.channels.subscribeList,
     session.channels.list,
   );
-  const profiles = useSyncExternalStore(
-    session.profiles.subscribe,
-    session.profiles.snapshot,
-  );
   const [destination, setDestination] = useState("");
-  const [expandedChannel, setExpandedChannel] = useState("");
-  const [destinationRoster, setDestinationRoster] = useState<{
-    id: string;
-    status: "loading" | "ready" | "error";
-  }>();
-  const [destinationReload, setDestinationReload] = useState(0);
   const [rosterState, setRosterState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
@@ -109,17 +93,6 @@ export function useSoloShare({
   const eligible = canShareConversation(session, source);
   const chosen = list.channels.find(
     (item) => item.id === destination && item.id !== channelId,
-  );
-  const readyMembers =
-    chosen &&
-    destinationRoster?.id === chosen.id &&
-    destinationRoster.status === "ready" &&
-    !chosen.cached
-      ? chosen.members
-      : undefined;
-  const destinationMembers = useMemo(
-    () => (readyMembers ? [...new Set(readyMembers)] : undefined),
-    [readyMembers],
   );
   useEffect(() => {
     void rosterReload;
@@ -164,36 +137,6 @@ export function useSoloShare({
       signal?.removeEventListener("abort", cancelled);
     };
   }, [enabled, session, channelId, rosterReload, signal]);
-  const chosenChannelId = chosen?.id;
-  useEffect(() => {
-    void destinationReload;
-    if (!enabled || !chosenChannelId) return;
-    const controller = new AbortController();
-    const active = AbortSignal.any([
-      controller.signal,
-      ...(signal ? [signal] : []),
-    ]);
-    setDestinationRoster({ id: chosenChannelId, status: "loading" });
-    void (async () => {
-      try {
-        const fresh = await session.channels.refreshRoster?.(chosenChannelId, {
-          consistency: "strong",
-          signal: active,
-        });
-        const current = session.channels
-          .list()
-          .channels.find((item) => item.id === chosenChannelId);
-        if (!fresh || current?.cached || !current?.members)
-          throw new Error("Current participants are unavailable.");
-        if (!active.aborted)
-          setDestinationRoster({ id: chosenChannelId, status: "ready" });
-      } catch {
-        if (!active.aborted)
-          setDestinationRoster({ id: chosenChannelId, status: "error" });
-      }
-    })();
-    return () => controller.abort();
-  }, [enabled, chosenChannelId, session, signal, destinationReload]);
   const profileGeneration = useProfileGeneration(session.profiles);
   const memberKeys =
     enabled && rosterState === "ready" && !source?.cached
@@ -212,46 +155,6 @@ export function useSoloShare({
     // stays unlabeled rather than being represented as private.
     void session.memberAdministration.refresh(channelId).catch(() => {});
   }, [session, channelId, memberKeys]);
-  const destinationProfileKeys =
-    enabled && expandedChannel === chosen?.id
-      ? destinationMembers?.join(":")
-      : "";
-  useEffect(() => {
-    void profileGeneration;
-    if (destinationProfileKeys)
-      void session.profiles
-        .ensure(destinationProfileKeys.split(":"), "foreground")
-        .catch(() => {});
-  }, [session, destinationProfileKeys, profileGeneration]);
-  const resolveName = useIdentityNames(session.names);
-  const displayKeys = useMemo(
-    () => [
-      ...new Set([...(source?.members ?? []), ...(destinationMembers ?? [])]),
-    ],
-    [source?.members, destinationMembers],
-  );
-  const labels = new Map(
-    displayKeys.map((key) => [
-      key,
-      resolveName(
-        key,
-        profiles.get(key)?.name ?? formatPublicKey(key) ?? "Member",
-        displayKeys,
-      ).trim(),
-    ]),
-  );
-  // A naming policy is optional. Audience names must still be distinct before
-  // granting history access; unique names never need a key subtitle.
-  const groups = new Map<string, string[]>();
-  for (const [key, label] of labels)
-    groups.set(label, [...(groups.get(label) ?? []), key]);
-  for (const keys of groups.values()) {
-    if (keys.length < 2) continue;
-    const qualifiers = publicKeyLabels(keys);
-    for (const key of keys)
-      labels.set(key, `${labels.get(key)} · ${qualifiers.get(key)}`);
-  }
-  const names = (key: string) => labels.get(key) ?? "Member";
   const channels: ShareChannel[] = destination
     ? []
     : list.channels
@@ -384,23 +287,18 @@ export function useSoloShare({
     failed,
     destination,
     chosen,
-    destinationMembers,
-    destinationRoster,
-    retryDestination: () => setDestinationReload((value) => value + 1),
     removeDestination: () => {
       if (running.current) return;
       setDestination("");
       setConfirmation(undefined);
-      setExpandedChannel("");
       setError("");
       setFailed(false);
+      input.current?.focus();
     },
-    setExpandedChannel,
     source,
     rosterState,
     rosterError,
     reloadRoster: () => setRosterReload((value) => value + 1),
-    names,
     channels,
     choose,
     submit,

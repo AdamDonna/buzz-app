@@ -1047,7 +1047,7 @@ it("leaves agents to mentions and shares a view-only link without enrolling or w
 });
 
 it("shows loading and failed current access with refresh, never an empty roster", async () => {
-  const t = fixture();
+  const t = fixture(true);
   await t.ready();
   let release!: () => void;
   t.holdRoster(
@@ -1097,23 +1097,20 @@ it("shows loading and failed current access with refresh, never an empty roster"
     const selectedChannel = within(dialog).getByRole("region", {
       name: "Selected channel",
     });
-    const unavailable = await within(selectedChannel).findByRole("button", {
-      name: /^Planning.*Participants unavailable/,
-    });
-    expect(selectedChannel).not.toHaveTextContent("0 members");
-    await user.click(unavailable);
-    expect(within(selectedChannel).getByRole("status")).toHaveTextContent(
-      "unavailable",
+    expect(selectedChannel).toHaveTextContent("Share link to");
+    expect(selectedChannel).toHaveTextContent("Planning");
+    await user.click(within(dialog).getByRole("button", { name: "Share" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Roster unavailable",
     );
     t.failRoster(false);
     await user.click(
-      within(selectedChannel).getByRole("button", {
-        name: "Retry participants",
-      }),
+      within(dialog).getByRole("button", { name: "Retry share" }),
     );
-    await within(selectedChannel).findByRole("button", {
-      name: /^Planning.*1 member/,
-    });
+    const confirmation = await screen.findByRole("alertdialog");
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Cancel" }),
+    );
     expect(t.publish).not.toHaveBeenCalled();
   } finally {
     release();
@@ -1232,9 +1229,7 @@ it("offers matching people and channels as labelled results without public keys"
     within(dialog).getByRole("region", { name: "Selected channel" }),
   ).toHaveTextContent("Planning");
   expect(within(dialog).getByRole("button", { name: "Share" })).toBeEnabled();
-  await user.click(
-    within(dialog).getByRole("button", { name: "Remove Planning" }),
-  );
+  await user.click(within(dialog).getByRole("button", { name: "Change" }));
   expect(within(dialog).getByRole("button", { name: "Done" })).toBeEnabled();
   expect(t.publish).not.toHaveBeenCalled();
 });

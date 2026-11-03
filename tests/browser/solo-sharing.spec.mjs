@@ -249,20 +249,20 @@ test.describe("View only channel share", () => {
       .click();
     await expect(
       dialog.getByRole("region", { name: "Selected channel" }),
-    ).toContainText("#Alpha");
-    const participants = dialog.getByRole("button", {
-      name: /#Alpha.*members/,
+    ).toContainText("Alpha");
+    const selectedChannel = dialog.getByRole("region", {
+      name: "Selected channel",
     });
-    await expect(participants).toHaveAttribute("aria-expanded", "false");
-    await participants.click();
-    await expect(participants).toHaveAttribute("aria-expanded", "true");
-    await expect(
-      dialog
-        .getByRole("region", { name: "Selected channel" })
-        .getByText("Alice Fixture", { exact: true }),
-    ).toBeVisible();
-    await participants.press("Enter");
-    await expect(participants).toHaveAttribute("aria-expanded", "false");
+    await expect(selectedChannel).toContainText("Share link to");
+    await selectedChannel
+      .getByRole("button", { name: "Change", exact: true })
+      .click();
+    await expect(selectedChannel).not.toBeVisible();
+    await expect(search).toBeFocused();
+    await search.fill("Alpha");
+    await dialog
+      .getByRole("button", { name: "Select #Alpha", exact: true })
+      .click();
     const share = dialog.getByRole("button", {
       name: "Share",
       exact: true,
@@ -412,6 +412,14 @@ test.describe("View only channel share", () => {
       await dialog
         .getByRole("button", { name: "Select #Alpha", exact: true })
         .click();
+      await expect(
+        selectedChannel.getByRole("button", { name: "Change", exact: true }),
+      ).toBeVisible();
+      await expect(selectedChannel).toBeInViewport({ ratio: 1 });
+      if (info.project.name === "chromium")
+        await dialog.screenshot({
+          path: info.outputPath(`SOLO_SHARE_DESTINATION_${mode}_${width}.png`),
+        });
       await share.click();
       const cancel = confirmation.getByRole("button", {
         name: "Cancel",

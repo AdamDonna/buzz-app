@@ -59,9 +59,9 @@ Solo and channels intentionally share the device-local `channel-members` usage
 picks, so a choice in either surface can improve its order in the other.
 
 While searching, eligible stream/forum channels appear in a **Channels** group;
-**Select** chooses one. The selected channel shows **#name** with its **N members**,
-expandable to inspect participants. **Share** checks current access. If it is
-Private, the owner confirms that the community can read the full history and
+**Select** chooses one. **Share link to** names the destination; **Change** returns
+focus to search so you can choose another channel. **Share** checks current access.
+If it is Private, the owner confirms that the community can read the full history and
 Canvas before one signed edit makes it View only. Public (existing) and View only
 chats keep their current access; no confirmation or access write is needed. The
 flow then posts one link through the Outbox and closes; no one is mentioned.
