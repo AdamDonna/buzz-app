@@ -220,6 +220,11 @@ const test = base.extend({
     const errors = watchPageErrors(page);
     await page.addInitScript(
       ({ viewer }) => {
+        if (!localStorage.getItem("buzzodz.plugins.v1"))
+          localStorage.setItem(
+            "buzzodz.plugins.v1",
+            JSON.stringify({ version: 3, enabled: { "buzz.workflows": true } }),
+          );
         const key = `buzz-client.v1:${viewer}`;
         if (!localStorage.getItem(key))
           localStorage.setItem(

@@ -11,6 +11,7 @@ import { open } from "./timeline.mjs";
 import { createServer } from "./vite-server.mjs";
 const button = (page, name) => page.getByRole("button", { name, exact: true });
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   largeSidebar: true,
   historyCounts: { alpha: 1, beta: 1 },
 });

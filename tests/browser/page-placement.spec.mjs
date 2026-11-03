@@ -9,6 +9,15 @@ test("shared navigation preserves drafts and history across Solo and header page
   page,
   app,
 }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "buzzodz.plugins.v1",
+      JSON.stringify({
+        version: 3,
+        enabled: { "buzz.reminders": true, "buzz.workflows": true },
+      }),
+    );
+  });
   await page.goto(app.origin);
   await openPage(page, "Messages");
   const composer = page.getByRole("textbox", {
@@ -257,7 +266,11 @@ test("a page sidebar uses the shell slot, generic toggle, theme, and narrow draw
       "buzzodz.plugins.v1",
       JSON.stringify({
         version: 2,
-        enabled: { "fixture.page-placement": true },
+        enabled: {
+          "fixture.page-placement": true,
+          "buzz.reminders": true,
+          "buzz.workflows": true,
+        },
       }),
     );
   });
@@ -454,7 +467,11 @@ test.describe("failed page sidebar recovery", () => {
         "buzzodz.plugins.v1",
         JSON.stringify({
           version: 2,
-          enabled: { "fixture.page-placement": true },
+          enabled: {
+            "fixture.page-placement": true,
+            "buzz.reminders": true,
+            "buzz.workflows": true,
+          },
         }),
       );
     });
@@ -540,7 +557,11 @@ test("header pages remain reachable without overlap through scale and resize", a
       "buzzodz.plugins.v1",
       JSON.stringify({
         version: 2,
-        enabled: { "fixture.page-placement": true },
+        enabled: {
+          "fixture.page-placement": true,
+          "buzz.reminders": true,
+          "buzz.workflows": true,
+        },
       }),
     );
   });

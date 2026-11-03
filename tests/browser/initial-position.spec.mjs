@@ -3,6 +3,7 @@ import { test, expect } from "./fixture.mjs";
 import { wheel, open, settle, anchor, expectAnchor } from "./timeline.mjs";
 
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   productionBroker: true,
   developmentReact: true,
 });

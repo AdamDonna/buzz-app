@@ -5,6 +5,7 @@ import { open } from "./timeline.mjs";
 import { holdReadingFocus } from "./reading.mjs";
 
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   productionBroker: true,
   savedSidebar: true,
   developmentReact: true,
