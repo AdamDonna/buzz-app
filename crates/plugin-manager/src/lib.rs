@@ -600,6 +600,22 @@ impl Default for Registry {
         }
     }
 }
+// Freeze known defaults so later releases cannot silently withdraw a feature.
+fn pin_bundled_defaults(registry: &mut Registry, existing_profile: bool) -> bool {
+    let mut changed = false;
+    for manifest in bundled_manifests() {
+        registry
+            .bundled_overrides
+            .entry(manifest.id.clone())
+            .or_insert_with(|| {
+                changed = true;
+                enabled_by_default(&manifest.id)
+                    || (existing_profile
+                        && matches!(manifest.id.as_str(), "buzz.reminders" | "buzz.workflows"))
+            });
+    }
+    changed
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Artifact {
@@ -795,6 +811,7 @@ pub struct Manager {
     root: PathBuf,
     profile: String,
     safe_mode: bool,
+    existing_profile: bool,
 }
 impl Manager {
     /// Host control-plane location that protected workers must not modify.
@@ -811,11 +828,15 @@ impl Manager {
         if !home.is_absolute() {
             return Err("Plugin home must be an absolute path".into());
         }
+        let root = home.join("profiles").join(profile);
+        // Catalog reads created this folder even when no preferences were saved.
+        let existing_profile = root.try_exists().map_err(err)?;
         Ok(Self {
-            root: home.join("profiles").join(profile),
+            root,
             home,
             profile: profile.into(),
             safe_mode,
+            existing_profile,
         })
     }
     /// Opens the environment's plugin home, else `home`: the desktop passes its own app data folder.
@@ -847,15 +868,11 @@ impl Manager {
     }
     fn read(&self) -> Result<Registry> {
         let path = self.root.join("registry.json");
-        let file = match File::open(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Registry::default())
-            }
+        let mut r: Registry = match File::open(&path) {
+            Ok(file) => serde_json::from_str(&read_file_limited(file)?).map_err(err)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Registry::default(),
             Err(error) => return Err(err(error)),
         };
-        let text = read_file_limited(file)?;
-        let mut r: Registry = serde_json::from_str(&text).map_err(err)?;
         if r.version != 1 && r.version != 2 {
             return Err(
                 "Unsupported settings version; use a compatible Buzz or recover settings".into(),
@@ -880,7 +897,9 @@ impl Manager {
                 valid_hash(h)?;
             }
         }
-        if migrate_agent_flag::migrate(&mut r) {
+        let renamed = migrate_agent_flag::migrate(&mut r);
+        let pinned = pin_bundled_defaults(&mut r, self.existing_profile);
+        if renamed || pinned {
             self.save(&r)?;
         }
         Ok(r)
@@ -1311,7 +1330,9 @@ impl Manager {
                 backup.as_file().sync_all().map_err(err)?;
                 backup.keep().map_err(err)?;
             }
-            self.save(&Registry::default())?;
+            let mut defaults = Registry::default();
+            pin_bundled_defaults(&mut defaults, false);
+            self.save(&defaults)?;
         }
         self.catalog()
     }
@@ -2472,11 +2493,8 @@ mod tests {
             &fs::read(manager.storage_root().join("registry.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(
-            saved["bundledOverrides"],
-            serde_json::json!({ "buzz.agents": true }),
-            "the switch now uses the current plugin id"
-        );
+        assert_eq!(saved["bundledOverrides"]["buzz.agents"], true);
+        assert!(saved["bundledOverrides"].get("buzz.agents2").is_none());
     }
 
     #[test]

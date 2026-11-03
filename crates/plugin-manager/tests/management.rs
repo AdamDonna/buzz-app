@@ -1201,6 +1201,126 @@ fn bundled_defaults_preserve_saved_choices_and_only_channels_is_required() {
 }
 
 #[test]
+fn bundled_defaults_are_pinned_for_fresh_and_untouched_existing_profiles() {
+    for existing in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("profiles/test");
+        if existing {
+            // Older catalog reads made a lock file even without saved settings.
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("registry.lock"), "").unwrap();
+        }
+        for _launch in 0..2 {
+            let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+            let catalog = manager.catalog().unwrap();
+            for id in ["buzz.reminders", "buzz.workflows"] {
+                assert_eq!(
+                    catalog
+                        .plugins
+                        .iter()
+                        .find(|p| p.manifest.id == id)
+                        .unwrap()
+                        .enabled,
+                    existing,
+                    "{id}, existing={existing}"
+                );
+            }
+            let saved: serde_json::Value =
+                serde_json::from_slice(&fs::read(root.join("registry.json")).unwrap()).unwrap();
+            for plugin in &catalog.plugins {
+                assert_eq!(
+                    saved["bundledOverrides"][&plugin.manifest.id],
+                    plugin.enabled
+                );
+            }
+        }
+        let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        manager.change("disable", "buzz.workflows").unwrap();
+        assert!(
+            !manager
+                .catalog()
+                .unwrap()
+                .plugins
+                .iter()
+                .find(|p| p.manifest.id == "buzz.workflows")
+                .unwrap()
+                .enabled
+        );
+        manager.recover().unwrap();
+        let reopened = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        for id in ["buzz.reminders", "buzz.workflows"] {
+            assert!(
+                !reopened
+                    .catalog()
+                    .unwrap()
+                    .plugins
+                    .iter()
+                    .find(|p| p.manifest.id == id)
+                    .unwrap()
+                    .enabled,
+                "reset {id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_plugin_settings_preserve_choices_while_missing_flags_keep_old_defaults() {
+    for saved in [None, Some(true), Some(false)] {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("profiles/test");
+        fs::create_dir_all(&root).unwrap();
+        let mut flags = serde_json::json!({ "buzz.github": false });
+        if let Some(enabled) = saved {
+            for id in ["buzz.reminders", "buzz.workflows"] {
+                flags[id] = enabled.into();
+            }
+        }
+        fs::write(
+            root.join("registry.json"),
+            serde_json::json!({
+                "version": 2, "bundledEnabled": true,
+                "bundledOverrides": flags, "installed": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for _launch in 0..2 {
+            let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+            let catalog = manager.catalog().unwrap();
+            for id in ["buzz.reminders", "buzz.workflows"] {
+                assert_eq!(
+                    catalog
+                        .plugins
+                        .iter()
+                        .find(|p| p.manifest.id == id)
+                        .unwrap()
+                        .enabled,
+                    saved.unwrap_or(true),
+                    "{id}, saved={saved:?}"
+                );
+            }
+            assert!(
+                !catalog
+                    .plugins
+                    .iter()
+                    .find(|p| p.manifest.id == "buzz.github")
+                    .unwrap()
+                    .enabled
+            );
+            assert!(
+                !catalog
+                    .plugins
+                    .iter()
+                    .find(|p| p.manifest.id == "buzz.bestie")
+                    .unwrap()
+                    .enabled
+            );
+        }
+    }
+}
+
+#[test]
 fn built_in_conversation_features_are_absent_even_with_old_disabled_flags() {
     let (root, manager, _source) = fixture();
     fs::create_dir_all(manager.storage_root()).unwrap();

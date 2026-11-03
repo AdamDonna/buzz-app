@@ -20,7 +20,12 @@ test("the app runtime exposes ready bundled pages and removes them on disable", 
       "buzzodz.plugins.v1",
       JSON.stringify({
         version: 3,
-        enabled: { "buzz.emoji": false, "buzz.mentions": false },
+        enabled: {
+          "buzz.emoji": false,
+          "buzz.mentions": false,
+          "buzz.reminders": false,
+          "buzz.workflows": false,
+        },
       }),
     ],
   ]);

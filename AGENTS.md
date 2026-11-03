@@ -81,6 +81,10 @@ need no per-worktree setup; see [Git hooks](docs/contributing.md#git-hooks).
 
 ## Engineering standard
 
+When changing a shipped plugin to default-off, follow the
+[plugin-defaults decision](docs/plugin-defaults.md): apply it to fresh installs
+and preserve existing installs' effective states, including implicit defaults.
+
 When changing user-facing Buzz behavior, update [the agent help guide](docs/buzz-help.md)
 if the change affects how someone uses or understands the app. Keep it concise,
 describe implemented behavior, and distinguish optional or platform-dependent

@@ -15,6 +15,31 @@ async function plugins(page) {
   await selectSettingsSection(page, "Manage plugins");
 }
 
+// An unseeded page exercises startup ordering: plugin storage must commit its
+// fresh defaults before community initialization can create an install marker.
+test("cold app startup pins both plugins off across a second launch", async ({
+  context,
+  app,
+}) => {
+  const fresh = await context.newPage();
+  const choices = () =>
+    fresh.evaluate(() => {
+      const raw = localStorage.getItem("buzzodz.plugins.v1");
+      return raw ? JSON.parse(raw).enabled : null;
+    });
+  await fresh.goto(app.origin);
+  await expect.poll(choices).toMatchObject({
+    "buzz.reminders": false,
+    "buzz.workflows": false,
+  });
+  await fresh.reload();
+  await expect.poll(choices).toMatchObject({
+    "buzz.reminders": false,
+    "buzz.workflows": false,
+  });
+});
+
+// The shared fixture seeds fresh plugin decisions before community data.
 // Representative app wiring: real catalogs -> Settings actions -> sidebar page,
 // across reload. Choice permutations live in storage unit tests.
 test("Bestie opts in without changing the other bundled defaults and survives reload", async ({
@@ -64,6 +89,37 @@ test("Bestie opts in without changing the other bundled defaults and survives re
   // The workspace behind Settings is hidden from the accessibility tree.
   await closeSettings(page);
   await expect(button(page, "Bestie")).toHaveCount(0);
+});
+
+// Browser startup must migrate a pre-snapshot profile before activating plugins.
+// This also checks that a later deliberate disable survives the refresh loop.
+test("an existing profile keeps Reminders and Workflows until deliberately disabled", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await openPage(page, "Messages");
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "buzzodz.plugins.v1",
+      JSON.stringify({ version: 3, enabled: {} }),
+    );
+  });
+  await page.reload();
+  await plugins(page);
+  for (const name of ["Reminders", "Workflows"])
+    await expect(pluginAction(page, name)).toHaveAccessibleName(/^Disable /);
+  await closeSettings(page);
+  await openPage(page, "Workflows");
+  await expect(
+    page.getByRole("heading", { name: "Workflows", exact: true }),
+  ).toBeVisible();
+  await plugins(page);
+  for (const name of ["Reminders", "Workflows"])
+    await pluginAction(page, name).click();
+  await page.reload();
+  for (const name of ["Reminders", "Workflows"])
+    await expect(pluginAction(page, name)).toHaveAccessibleName(/^Enable /);
 });
 
 // Real App -> shell -> rail Settings-registry wiring, including the scoped

@@ -2404,18 +2404,18 @@ export const test = base.extend({
         });
       await page.addInitScript(
         ({ viewer, profilePicture, iconCongestion, enabledPlugins }) => {
+          // Model fresh plugin choices before seeding an existing community.
           // Feature journeys opt in once; reloads retain later user choices.
-          if (
-            enabledPlugins.length &&
-            !localStorage.getItem("buzzodz.plugins.v1")
-          )
+          if (!localStorage.getItem("buzzodz.plugins.v1"))
             localStorage.setItem(
               "buzzodz.plugins.v1",
               JSON.stringify({
                 version: 3,
-                enabled: Object.fromEntries(
-                  enabledPlugins.map((id) => [id, true]),
-                ),
+                enabled: {
+                  "buzz.reminders": false,
+                  "buzz.workflows": false,
+                  ...Object.fromEntries(enabledPlugins.map((id) => [id, true])),
+                },
               }),
             );
           const key = `buzz-client.v1:${viewer}`;
