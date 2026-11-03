@@ -335,7 +335,10 @@ it("renews leases, closes on harness failure, and does not retry on roster noise
   await vi.advanceTimersByTimeAsync(5000);
   expect(f.voice).toHaveBeenCalledTimes(2);
   expect(f.bridge.touch).toHaveBeenCalledTimes(3);
-  expect(f.report).toHaveBeenCalledOnce();
+  expect(f.report).toHaveBeenCalledExactlyOnceWith(
+    "human",
+    "a: unsupported. Leave and rejoin the Huddle to retry.",
+  );
 });
 
 it.each(["stop", "failure"])(

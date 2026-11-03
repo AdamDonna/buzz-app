@@ -473,3 +473,29 @@ it("accepts listening state only for the current connected call", async () => {
   expect(h.service.snapshot().listening).toBeUndefined();
   await h.service.dispose();
 });
+
+it("ignores voice errors and dismissals from a previous call", async () => {
+  const h = harness();
+  try {
+    await h.service.join(destination, "room");
+    h.receive({ type: "connected", room: "room", participants: [] });
+    const previous = h.service.snapshot().id;
+    if (!previous) throw new Error("Missing previous call id");
+    await h.service.leave();
+    await h.service.join(destination, "room");
+    h.receive({ type: "connected", room: "room", participants: [] });
+    const current = h.service.snapshot().id;
+    if (!current) throw new Error("Missing current call id");
+    expect(current).not.toBe(previous);
+    h.service.voiceError(previous, "Late close failure");
+    expect(h.service.snapshot().error).toBeUndefined();
+    h.service.voiceError(current, "Current voice failure");
+    expect(h.service.snapshot().error).toBe("Current voice failure");
+    h.service.voiceError(previous);
+    expect(h.service.snapshot().error).toBe("Current voice failure");
+    h.service.voiceError(current);
+    expect(h.service.snapshot().error).toBeUndefined();
+  } finally {
+    await h.dispose();
+  }
+});

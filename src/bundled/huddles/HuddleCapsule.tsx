@@ -188,7 +188,9 @@ function HuddleCapsuleContent({
           title="Agent voice stopped"
           description={call.error}
           closeLabel="Dismiss agent voice error"
-          onDismiss={() => huddles.voiceError()}
+          onDismiss={() => {
+            if (call.id) huddles.voiceError(call.id);
+          }}
         />
       )}
       {presentation.error && (

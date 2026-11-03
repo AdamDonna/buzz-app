@@ -22,8 +22,8 @@ connected Huddle when it is also a member of that Huddle's room. Membership of
 the parent conversation alone is insufficient. Several agents can participate.
 Your own active agents show “listening to you” in the Huddle. Remote participants
 see no listening badge: the agent’s own client enforces who it hears, and other
-clients cannot verify that. Each receives only your peer's audio and speaks to everyone; other people or
-speakers near your microphone can still be heard. Voice work uses the same
+clients cannot verify that. Each receives only your peer's audio and speaks to
+everyone; other people or speakers near your microphone can still be heard. Voice work uses the same
 permissions as your text requests. Joining on another device does not seat an
 agent running here. Leaving closes its voice connection. If agent voice stops,
 the Huddle shows the reason; leave and rejoin to retry. Final voice transcripts

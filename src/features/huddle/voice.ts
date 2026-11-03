@@ -23,7 +23,7 @@ export function createHuddleVoices(
   agents: Pick<Agents, "snapshot" | "subscribe" | "types">,
   relay: RelayData,
   bridge: HuddleBridge,
-  report: (error: string) => void,
+  report: (call: string, error: string) => void,
 ) {
   const seats = new Map<string, Seat>();
   let session = relay.snapshot().session;
@@ -49,6 +49,7 @@ export function createHuddleVoices(
       if (abort.signal.aborted) return;
       void stop();
       report(
+        call,
         `${agent.name}: ${error instanceof Error ? error.message : error || "Voice disconnected"}. Leave and rejoin the Huddle to retry.`,
       );
     };
@@ -65,7 +66,7 @@ export function createHuddleVoices(
       ]).then((results) => {
         for (const result of results)
           if (result.status === "rejected")
-            report(`${agent.name}: ${String(result.reason)}`);
+            report(call, `${agent.name}: ${String(result.reason)}`);
       });
       // Publishing re-enters sync: closing must already guard stop().
       huddles.voiceListening(call, agent.pubkey, false);
@@ -142,9 +143,9 @@ export function createHuddleVoices(
     const room = call.room;
     if (call.phase === "connected" && room && call.id !== resolvedCall) {
       resolvedCall = call.id;
-      void session.channels
-        .resolve?.([room])
-        .then(sync, (error: unknown) => report(String(error)));
+      void session.channels.resolve?.([room]).then(sync, (error: unknown) => {
+        if (call.id) report(call.id, String(error));
+      });
     }
     if (call.phase !== "connected") resolvedCall = undefined;
     // relay/discovery.ts projects members from verified relay-authored 39002 p tags.

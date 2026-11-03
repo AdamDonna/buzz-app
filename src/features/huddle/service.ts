@@ -426,7 +426,8 @@ export function createHuddles(
           : listening.filter((peer) => peer !== key),
       });
     },
-    voiceError(error?: string) {
+    voiceError(call: string, error?: string) {
+      if (snapshot.id !== call) return;
       const { error: _previous, ...rest } = snapshot;
       update(error ? { ...rest, error } : rest);
     },
