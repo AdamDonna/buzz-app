@@ -716,3 +716,38 @@ it("filters old sessions before restoring targets for usage", async () => {
   ).resolves.toEqual([]);
   expect(f.execute).not.toHaveBeenCalled();
 });
+
+it("rejects New during a current turn after usage restores session history", async () => {
+  const options = { pending: false };
+  const f = fixture(undefined, options);
+  const agent = { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent;
+  const first = f.delivery();
+  await f.runtime.run(first);
+  await f.result(first);
+  await f.runtime.session(agent, { channelId, root }, "new");
+  const next = f.delivery();
+  await f.runtime.run(next);
+  await f.result(next);
+  await f.runtime.retire(self);
+  const restored = fixture(f.storage);
+  const connect = f.execute.getMockImplementation();
+  if (!connect) throw new Error("Missing target adapter");
+  restored.execute.mockImplementation(connect);
+  expect(
+    await restored.runtime.usage(self, 0, new AbortController().signal),
+  ).toHaveLength(2);
+  options.pending = true;
+  const active = restored.delivery();
+  try {
+    await restored.runtime.run(active);
+    await expect(
+      restored.runtime.session(agent, { channelId, root }, "new"),
+    ).rejects.toThrow("active turn");
+    expect(restored.runtime.sessionState(agent, { channelId, root })).toBe(
+      "active",
+    );
+  } finally {
+    f.wait.resolve({ status: "done" });
+    await restored.result(active);
+  }
+});

@@ -398,11 +398,12 @@ export class PiSessions {
     if (!remote) return this.local.sessionState(agent, place);
     const key = this.controlKey(agent, place);
     if (this.changes.has(`${agent.key}/${key}`)) return "active";
-    return (
-      [...this.opened.values()]
-        .find((item) => item.agent === agent.key && item.session.place === key)
-        ?.runtime.sessionState(agent, place) ?? "idle"
-    );
+    for (const item of this.opened.values()) {
+      if (item.agent !== agent.key || item.session.place !== key) continue;
+      const state = item.runtime.sessionState(agent, place);
+      if (state !== "idle") return state;
+    }
+    return "idle";
   }
   async session(
     agent: Agent,
