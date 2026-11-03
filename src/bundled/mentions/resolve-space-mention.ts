@@ -28,6 +28,8 @@ export type SpaceMentionScope = {
   roster?: MentionRoster | undefined;
   /** Recipients already in the draft take part in naming. */
   selected: readonly MentionRecipient[];
+  /** Current saved names, also read after asynchronous directory resolution. */
+  teamNames?: (() => readonly string[]) | undefined;
   /** The owner's agents in their other communities, as the chooser offers them. */
   elsewhere?: readonly Pick<Agent, "pubkey" | "name" | "relay">[] | undefined;
 };
@@ -91,6 +93,7 @@ async function resolve(
     roster: draft,
     selected,
     elsewhere,
+    teamNames,
   }: SpaceMentionScope,
   name: string,
   signal: AbortSignal,
@@ -139,7 +142,8 @@ async function resolve(
     }
   }
   const kit = fullSession(session)?.channelKit;
-  if (kit && teamBlocksSpace(kit.snapshot(), name)) return null;
+  if (teamBlocksSpace(kit?.snapshot() ?? { entries: [] }, name, teamNames?.()))
+    return null;
   const local = new Set(
     mentionCandidates(
       session,
@@ -160,7 +164,10 @@ async function resolve(
     complete: boolean,
     query: string,
   ): SpaceMentionResolution => {
-    if (kit && teamBlocksSpace(kit.snapshot(), query)) return null;
+    if (
+      teamBlocksSpace(kit?.snapshot() ?? { entries: [] }, query, teamNames?.())
+    )
+      return null;
     const choices = namedCandidates(
       session,
       channelId,
