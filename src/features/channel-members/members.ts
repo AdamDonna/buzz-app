@@ -412,9 +412,12 @@ export async function addChannelMembersAtOnce(
               session.channelWrites.refreshMembership(channelId),
             );
           if (!roster || !allowed()) break;
-          const recipients = keys
-            .slice(start, start + batchLimit)
-            .filter((key) => !roster?.members?.includes(key));
+          const recipients = keys.slice(start, start + batchLimit).filter(
+            (key) =>
+              !roster?.members?.includes(key) &&
+              // Archives may refresh during any read, as the single addition rechecks.
+              !archiveHides(session.archives, key, session.viewer),
+          );
           if (!recipients.length) continue;
           dispatched = true;
           beforeDispatch?.();

@@ -1027,3 +1027,39 @@ it("reads the roster again after a write that couldn't be sent", async () => {
   expect(send).toHaveBeenCalledOnce();
   expect(added.size).toBe(0);
 });
+
+it("leaves out someone archived while the roster is read", async () => {
+  const t = batchSetup();
+  await t.ready();
+  const [first = "", second = "", archived = ""] = people(3);
+  let hidden: readonly string[] = [];
+  const channelWrites = t.session.channelWrites;
+  const session = Object.create(t.session, {
+    archives: {
+      value: { ...t.session.archives, snapshot: () => ({ archived: hidden }) },
+    },
+    channelWrites: {
+      value: Object.create(channelWrites, {
+        refreshMembership: {
+          value: async (id: string) => {
+            const roster = await channelWrites.refreshMembership(id);
+            hidden = [archived];
+            return roster;
+          },
+        },
+      }),
+    },
+  }) as RelaySession;
+  await addChannelMembersAtOnce(
+    session,
+    t.id,
+    [first, second, archived],
+    new Map(),
+    new AbortController().signal,
+  );
+  expect(
+    t.published.map((event) =>
+      event.tags.flatMap(([tag, value]) => (tag === "p" ? [value] : [])),
+    ),
+  ).toEqual([[first, second]]);
+});
