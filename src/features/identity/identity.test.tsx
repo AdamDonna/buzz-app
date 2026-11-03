@@ -77,38 +77,48 @@ const credential: Credential = {
 };
 const welcomeHeading = () => screen.getByRole("heading", { name: "Buzz" });
 
+function nativeFirstRunReplies(
+  account: () => { subject: string; email: string },
+  linked: () => string | null,
+) {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "identity_restore") return null;
+    if (command === "identity_legacy_available") return false;
+    if (command === "nsec_backup_state")
+      return { seq: 1, pass: 0, builderlab: false, status: "idle" };
+    if (
+      command === "nsec_backup_watch" ||
+      command === "federated_identity_register" ||
+      command === "federated_identity_unregister"
+    )
+      return;
+    if (command === "federated_identity_request") {
+      const path = (args as { request?: { path?: string } } | undefined)
+        ?.request?.path;
+      const key = linked();
+      const body = path?.endsWith("auth/me")
+        ? account()
+        : path?.endsWith("nostr-identities/current")
+          ? { identity: key ? { pubkey_hex: key } : null }
+          : path?.endsWith("known-communities/list")
+            ? { communities: [] }
+            : undefined;
+      if (body) return { status: 200, headers: {}, body: JSON.stringify(body) };
+    }
+    throw new Error(`Unexpected native command ${command}`);
+  });
+}
+
 it.each([null, owned.pubkey])(
   "FI first launch checks account binding %s before creating or importing a key",
   async (linked) => {
     vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
     const h = federatedFixture();
-    vi.mocked(invoke).mockImplementation(async (command, args) => {
-      if (command === "identity_restore") return null;
-      if (command === "identity_legacy_available") return false;
-      if (command === "nsec_backup_state")
-        return { seq: 1, pass: 0, builderlab: false, status: "idle" };
-      if (
-        command === "nsec_backup_watch" ||
-        command === "federated_identity_register" ||
-        command === "federated_identity_unregister"
-      )
-        return;
-      if (command === "federated_identity_request") {
-        const path = (args as { request?: { path?: string } } | undefined)
-          ?.request?.path;
-        const body = path?.endsWith("auth/me")
-          ? { subject: "account", email: "person@example.com" }
-          : path?.endsWith("nostr-identities/current")
-            ? { identity: linked ? { pubkey_hex: linked } : null }
-            : path?.endsWith("known-communities/list")
-              ? { communities: [] }
-              : undefined;
-        if (body)
-          return { status: 200, headers: {}, body: JSON.stringify(body) };
-      }
-      throw new Error(`Unexpected native command ${command}`);
-    });
+    nativeFirstRunReplies(
+      () => ({ subject: "account", email: "person@example.com" }),
+      () => linked,
+    );
     const identity = createIdentity();
     const view = render(
       <Welcome
@@ -151,9 +161,17 @@ it.each([null, owned.pubkey])(
       await userEvent
         .setup()
         .click(screen.getByRole("button", { name: "Use a different account" }));
-      expect(h.service.signOut).toHaveBeenCalledOnce();
       expect(
-        await screen.findByRole("button", { name: SIGN_IN }),
+        await screen.findByText(/The browser returned the same account/),
+      ).toBeVisible();
+      expect(h.service.signOut).not.toHaveBeenCalled();
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Back" }));
+      expect(
+        screen.getByRole("heading", {
+          name: linked ? "Welcome back" : "Set up your key",
+        }),
       ).toBeVisible();
     } finally {
       view.unmount();
@@ -6315,4 +6333,340 @@ it("shows a native refusal's message and offers a retry", async () => {
   expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   identity.dispose();
+});
+
+it.each(["cancel", "failure", "same-account", "different-account"])(
+  "FI first-run account replacement handles %s without global sign-out or key creation",
+  async (outcome) => {
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    const h = federatedFixture();
+    let subject = "original";
+    nativeFirstRunReplies(
+      () => ({ subject, email: `${subject}@example.com` }),
+      () => (subject === "original" ? owned.pubkey : null),
+    );
+    const identity = createIdentity();
+    const view = render(
+      <Welcome
+        identity={identity}
+        communities={noJoin}
+        invites={invites}
+        federatedIdentity={h.service}
+      >
+        <p>App open</p>
+      </Welcome>,
+    );
+    const user = userEvent.setup();
+    try {
+      await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+      await screen.findByRole("heading", { name: "Welcome back" });
+      const before = h.service.snapshot();
+      const gate = deferred<void>();
+      vi.mocked(h.service.cancelSignIn).mockResolvedValue();
+      vi.mocked(h.service.signIn).mockImplementation(async () => {
+        await gate.promise;
+        if (outcome === "failure") throw new Error("Browser unavailable");
+        if (outcome !== "cancel") {
+          if (outcome === "different-account") subject = "replacement";
+          h.publish({ status: "signed-in", revision: "replacement-session" });
+        }
+        return h.service.snapshot();
+      });
+      await user.click(
+        screen.getByRole("button", { name: "Use a different account" }),
+      );
+      expect(
+        screen.getByRole("heading", { name: "Finish sign-in in your browser" }),
+      ).toBeVisible();
+      expect(h.service.snapshot()).toBe(before);
+      expect(h.service.signOut).not.toHaveBeenCalled();
+      if (outcome === "cancel")
+        await user.click(
+          screen.getByRole("button", { name: "Cancel sign-in" }),
+        );
+      await act(async () => gate.resolve());
+      if (outcome === "different-account") {
+        expect(
+          await screen.findByRole("heading", { name: "Set up your key" }),
+        ).toBeVisible();
+        expect(
+          screen.getByText("Signed in as replacement@example.com."),
+        ).toBeVisible();
+      } else if (outcome === "cancel") {
+        expect(
+          await screen.findByRole("heading", { name: "Welcome back" }),
+        ).toBeVisible();
+        expect(h.service.snapshot()).toBe(before);
+      } else {
+        expect(
+          await screen.findByRole("heading", {
+            name: "Couldn’t change account",
+          }),
+        ).toBeVisible();
+        if (outcome === "same-account")
+          expect(
+            screen.getByText(/browser returned the same account/),
+          ).toBeVisible();
+        else expect(h.service.snapshot()).toBe(before);
+        await user.click(screen.getByRole("button", { name: "Back" }));
+        expect(
+          screen.getByRole("heading", { name: "Welcome back" }),
+        ).toBeVisible();
+      }
+      expect(h.service.signOut).not.toHaveBeenCalled();
+      expect(identity.snapshot().status).toBe("missing");
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command]) =>
+              command === "identity_create" || command === "identity_import",
+          ),
+      ).toBe(false);
+    } finally {
+      view.unmount();
+      identity.dispose();
+    }
+  },
+);
+
+it.each(["account-read-failure", "cancel-after-commit", "commit-after-cancel"])(
+  "FI replacement %s cannot expose the old account's key lane",
+  async (outcome) => {
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    const h = federatedFixture();
+    let subject = "original";
+    let refuse = false;
+    nativeFirstRunReplies(
+      () => {
+        if (refuse) throw new Error("Account read unavailable");
+        return { subject, email: `${subject}@example.com` };
+      },
+      () => (subject === "original" ? owned.pubkey : null),
+    );
+    const identity = createIdentity();
+    const view = render(
+      <Welcome
+        identity={identity}
+        communities={noJoin}
+        invites={invites}
+        federatedIdentity={h.service}
+      >
+        <p>App open</p>
+      </Welcome>,
+    );
+    const user = userEvent.setup();
+    const exchange = deferred<void>();
+    try {
+      await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+      await screen.findByRole("heading", { name: "Welcome back" });
+      vi.mocked(h.service.cancelSignIn).mockResolvedValue();
+      vi.mocked(h.service.signIn).mockImplementation(async () => {
+        if (outcome === "commit-after-cancel") await exchange.promise;
+        subject = "replacement";
+        refuse = true;
+        h.publish({ status: "signed-in", revision: "committed-replacement" });
+        if (outcome === "cancel-after-commit") await exchange.promise;
+        return h.service.snapshot();
+      });
+      await user.click(
+        screen.getByRole("button", { name: "Use a different account" }),
+      );
+      if (outcome !== "account-read-failure") {
+        await user.click(
+          screen.getByRole("button", { name: "Cancel sign-in" }),
+        );
+        if (outcome === "commit-after-cancel") {
+          await waitFor(() =>
+            expect(h.service.cancelSignIn).toHaveBeenCalledOnce(),
+          );
+          expect(
+            screen.getByRole("button", { name: "Cancel sign-in" }),
+          ).toBeDisabled();
+          expect(
+            screen.queryByRole("heading", { name: "Welcome back" }),
+          ).toBeNull();
+        }
+        await act(async () => exchange.resolve());
+      }
+      expect(
+        await screen.findByRole("heading", { name: "Couldn’t change account" }),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Enter your private key" }),
+      ).toBeNull();
+      expect(screen.queryByText(npubEncode(owned.pubkey))).toBeNull();
+      refuse = false;
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(
+        await screen.findByRole("heading", { name: "Set up your key" }),
+      ).toBeVisible();
+      expect(
+        screen.getByText("Signed in as replacement@example.com."),
+      ).toBeVisible();
+      expect(h.service.signIn).toHaveBeenCalledTimes(2);
+      expect(h.service.signOut).not.toHaveBeenCalled();
+      expect(identity.snapshot().status).toBe("missing");
+    } finally {
+      exchange.resolve();
+      view.unmount();
+      identity.dispose();
+    }
+  },
+);
+
+it("allows one cancellation per attempt and joins it before allowing another attempt", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  const h = federatedFixture();
+  nativeFirstRunReplies(
+    () => ({ subject: "original", email: "original@example.com" }),
+    () => owned.pubkey,
+  );
+  const identity = createIdentity();
+  const view = render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      federatedIdentity={h.service}
+    >
+      <p>App open</p>
+    </Welcome>,
+  );
+  const user = userEvent.setup();
+  const first = deferred<void>(),
+    second = deferred<void>(),
+    cancelFirst = deferred<void>(),
+    cancelSecond = deferred<void>();
+  try {
+    await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+    await screen.findByRole("heading", { name: "Welcome back" });
+    vi.mocked(h.service.signIn)
+      .mockImplementationOnce(async () => {
+        await first.promise;
+        return h.service.snapshot();
+      })
+      .mockImplementationOnce(async () => {
+        await second.promise;
+        return h.service.snapshot();
+      });
+    vi.mocked(h.service.cancelSignIn)
+      .mockImplementationOnce(() => cancelFirst.promise)
+      .mockImplementationOnce(() => cancelSecond.promise);
+    await user.click(
+      screen.getByRole("button", { name: "Use a different account" }),
+    );
+    const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
+    await user.click(cancel);
+    expect(cancel).toBeDisabled();
+    await user.click(cancel);
+    expect(h.service.cancelSignIn).toHaveBeenCalledOnce();
+    await act(async () => cancelFirst.resolve());
+    expect(
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toBeDisabled();
+    await act(async () => first.resolve());
+    await screen.findByRole("heading", { name: "Welcome back" });
+    await user.click(
+      screen.getByRole("button", { name: "Use a different account" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Finish sign-in in your browser" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    expect(h.service.cancelSignIn).toHaveBeenCalledTimes(2);
+    await act(async () => cancelSecond.resolve());
+    await act(async () => second.resolve());
+    expect(screen.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    expect(h.service.signOut).not.toHaveBeenCalled();
+  } finally {
+    first.resolve();
+    second.resolve();
+    cancelFirst.resolve();
+    cancelSecond.resolve();
+    view.unmount();
+    identity.dispose();
+  }
+});
+
+it("finishes same-account checks before offering another replacement attempt", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "1");
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  const h = federatedFixture();
+  let subject = "original";
+  nativeFirstRunReplies(
+    () => ({ subject, email: `${subject}@example.com` }),
+    () => (subject === "original" ? owned.pubkey : null),
+  );
+  const reply = vi.mocked(invoke).getMockImplementation();
+  if (!reply) throw new Error("Missing native reply fixture");
+  const read = deferred<void>();
+  let gated = false;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    const path = (args as { request?: { path?: string } } | undefined)?.request
+      ?.path;
+    if (gated && path?.endsWith("nostr-identities/current")) await read.promise;
+    return reply(command, args);
+  });
+  const identity = createIdentity();
+  const view = render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      federatedIdentity={h.service}
+    >
+      <p>App open</p>
+    </Welcome>,
+  );
+  const user = userEvent.setup();
+  try {
+    await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+    await screen.findByRole("heading", { name: "Welcome back" });
+    vi.mocked(h.service.signIn).mockImplementation(async () => {
+      h.publish({ status: "signed-in", revision: `${subject}-renewed` });
+      return h.service.snapshot();
+    });
+    gated = true;
+    await user.click(
+      screen.getByRole("button", { name: "Use a different account" }),
+    );
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(
+            ([command, args]) =>
+              command === "federated_identity_request" &&
+              (args as { request: { path: string } }).request.path.endsWith(
+                "nostr-identities/current",
+              ),
+          ),
+      ).toHaveLength(2),
+    );
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Finish sign-in in your browser" }),
+    ).toBeVisible();
+    await act(async () => read.resolve());
+    await screen.findByText(/browser returned the same account/);
+    subject = "replacement";
+    gated = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(
+      await screen.findByRole("heading", { name: "Set up your key" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Signed in as replacement@example.com."),
+    ).toBeVisible();
+    expect(h.service.signOut).not.toHaveBeenCalled();
+  } finally {
+    read.resolve();
+    view.unmount();
+    identity.dispose();
+  }
 });

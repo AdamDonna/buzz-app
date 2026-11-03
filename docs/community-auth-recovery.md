@@ -9,6 +9,25 @@ An incompatible descriptor preserves `required=true` with compatibility reported
 separately. A non-FI build or incompatible descriptor shows supported-build guidance
 and does not offer a sign-in or join action it cannot complete.
 
+Account recovery uses native sign-in renewal, which keeps an existing valid
+shared FI session until replacement succeeds. Cancel or browser failure does not
+first sign the user out globally. A successful account change applies to all
+communities and derived agent access. Welcome detects a browser returning the
+same account instead of pretending that it switched accounts.
+
+The traced adapter contract has no account-selection parameter:
+`EnterpriseAdapterLoginStartAction.start` accepts `return_to` and the handoff
+challenge fields; `BbidentityAuthService.startLogin` builds the Auth0 URL without
+an explicit chooser hint (cash-server main `51533fb7bd3d071f06f06484675f5d0d722609d2`). Changing the browser's provider
+account may therefore be required before **Sign in again**. No unsupported hint
+is added, and a real chooser/cancel run is still a readiness gate.
+
+First-run account requests obtain the latest credential for the same account
+subject on each request and reject a different subject, including a response
+arriving after an account change. Backup uses the latest public native revision.
+Registration retirement permits one re-registration before dispatch; it does not
+replay arbitrary failures or change the request's original session revision.
+
 ## Producer prerequisite and rollout
 
 [BUZZ-511](https://linear.app/squareup/issue/BUZZ-511) owns the discovery producer
@@ -96,6 +115,9 @@ and assertion lifetime without recording credentials or private keys.
    community, and confirm the npub is unchanged after restart.
 4. Conflict: retain the conflicting mapping and device key. Review the mapping
    or explicitly select another account. Never silently unbind or regenerate.
+   Verify provider account selection and cancellation/failure with an existing
+   shared session. Cancel/failure must leave that session usable; a provider
+   returning the same account must not be reported as an account switch.
 5. Keep a required-community connection active across at least two actual
    assertion lifetimes. Disconnect/reconnect and rediscover policy. Revoke the
    account, key, and agent separately; protected access must stop and recover only

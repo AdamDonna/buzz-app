@@ -53,21 +53,26 @@ function Action({
     identity.snapshot,
   );
   const [failure, setFailure] = useState("");
-  const [switching, setSwitching] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const refusal = error || state.failure || "";
-  const signIn = async (differentAccount = false) => {
+  const pending = signingIn || state.status === "signing-in";
+  const signIn = async () => {
+    const before = identity.snapshot();
     setFailure("");
-    setSwitching(differentAccount);
+    setSigningIn(true);
     try {
-      if (differentAccount) await identity.signOut();
       const next = await identity.signIn();
-      if (next.status === "signed-in") retry();
+      if (
+        next.status === "signed-in" &&
+        (before.status !== "signed-in" || next.revision !== before.revision)
+      )
+        retry();
     } catch (error) {
       setFailure(
         error instanceof Error ? error.message : "Sign-in unavailable",
       );
     } finally {
-      setSwitching(false);
+      setSigningIn(false);
     }
   };
   if (/not configured for this community/.test(refusal))
@@ -94,20 +99,24 @@ function Action({
           Builderlab hosting to review the existing identity link. Keep this key
           until you have reviewed the link.
         </p>
+        <p className="text-body-sm text-subtle">
+          To use another account, change accounts with your sign-in provider in
+          your browser, then sign in again. Buzz cannot force an account
+          chooser. An existing valid Buzz sign-in stays active until a
+          replacement succeeds. A successful account change applies to all your
+          communities and agents.
+        </p>
         {state.authority && (
           <Button
-            disabled={switching && state.status !== "signing-in"}
             onClick={() => {
-              if (state.status === "signing-in")
+              if (pending)
                 void identity
                   .cancelSignIn()
                   .catch(() => setFailure("sign-in-canceled"));
-              else void signIn(true);
+              else void signIn();
             }}
           >
-            {state.status === "signing-in"
-              ? "Cancel sign-in"
-              : "Sign in with another account"}
+            {pending ? "Cancel sign-in" : "Sign in again"}
           </Button>
         )}
         {failure && (
@@ -144,11 +153,9 @@ function Action({
   return (
     <>
       <Button
-        disabled={switching}
         onClick={() => {
           setFailure("");
-          const operation =
-            state.status === "signing-in" ? identity.cancelSignIn() : signIn();
+          const operation = pending ? identity.cancelSignIn() : signIn();
           void operation.catch((error: unknown) =>
             setFailure(
               error instanceof Error ? error.message : "Sign-in unavailable",
@@ -156,7 +163,7 @@ function Action({
           );
         }}
       >
-        {state.status === "signing-in" ? "Cancel sign-in" : "Sign in"}
+        {pending ? "Cancel sign-in" : "Sign in"}
       </Button>
       {(failure || state.failure) && (
         <p role="alert" className="text-body-sm text-danger">

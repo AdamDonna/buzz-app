@@ -122,10 +122,31 @@ export function Welcome({
   const [legacyLogin] = useState(() => createOAuthSession(connect));
   const [nativeLogin, setNativeLogin] =
     useState<ReturnType<typeof createFederatedFirstRun>>();
+  const [accountChange, setAccountChange] = useState<
+    | { status: "pending" | "canceling" }
+    | { status: "failed"; error: string; reload: boolean }
+    | { status: "cancel-failed" }
+  >();
+  const accountRequest = useRef<
+    | {
+        revision: string;
+        canceling: boolean;
+        settled: Promise<void>;
+      }
+    | undefined
+  >(undefined);
   const login = nativeLogin ?? legacyLogin;
-  // Counts canceled sign-ins: a sign-in continues only if none was canceled
-  // since it started, since the session may by then hold a later sign-in.
+  // Fences canceled or replaced sign-ins and their account-loading continuations.
   const cancels = useRef(0);
+  useEffect(
+    () => () => {
+      const pending = accountRequest.current;
+      accountRequest.current = undefined;
+      cancels.current++;
+      if (pending) void federatedIdentity?.cancelSignIn().catch(() => {});
+    },
+    [federatedIdentity],
+  );
   const auth = useSyncExternalStore(login.subscribe, login.snapshot);
   const [setup] = useState(createSetup);
   const progress = useSyncExternalStore(setup.subscribe, setup.snapshot);
@@ -211,8 +232,9 @@ export function Welcome({
    * the user's is shown — the gate lifted, or the key still being restored —
    * so launch never moves focus.
    */
-  const page =
-    state.status === "loading"
+  const page = accountChange
+    ? "account-change"
+    : state.status === "loading"
       ? undefined
       : state.status === "error"
         ? "error"
@@ -274,37 +296,140 @@ export function Welcome({
    * pauses on Welcome back, otherwise the key choice. The backed-up-key
    * lookup runs on both. Each choice below resumes setup with its own steps.
    */
-  const signIn = async () => {
-    const attempt = cancels.current;
-    // A canceled attempt still settles here, possibly after a later sign-in
-    // succeeded; it must not read that one's credential.
-    if (nativeLogin) {
-      // Native sign-in settles before its account read. Wait for the account,
-      // including restore already in flight, before choosing a key lane.
-      await nativeLogin
-        .ensureSignedIn(new AbortController().signal)
-        .catch(() => {});
-    } else await login.signIn();
-    if (attempt !== cancels.current || login.snapshot().status !== "signed-in")
-      return;
-    const current =
-      nativeLogin && federatedIdentity
-        ? builderlabSessionAccount(
-            nativeLogin,
-            identity,
-            federatedIdentity.snapshot().revision,
-          )
+  /** Once native replaces a session, no previous account's setup may be exposed. */
+  const discardAccountSetup = () => {
+    reads.current = undefined;
+    known.current = undefined;
+    setLinked(undefined);
+    setBackups(undefined);
+    setOwned(undefined);
+    setup.reset();
+  };
+  const signIn = async (changeAccount = false) => {
+    let settle = () => {};
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const request =
+      nativeLogin && federatedIdentity && (changeAccount || accountChange)
+        ? {
+            revision: federatedIdentity.snapshot().revision,
+            canceling: false,
+            settled,
+          }
+        : undefined;
+    const attempt = request ? ++cancels.current : cancels.current;
+    const reload = accountChange?.status === "failed" && accountChange.reload;
+    if (request) {
+      accountRequest.current = request;
+      setAccountChange({ status: "pending" });
+    }
+    const currentAttempt = () =>
+      mounted.current &&
+      attempt === cancels.current &&
+      (!request || accountRequest.current === request);
+    let previousSubject: string | undefined;
+    try {
+      if (changeAccount && nativeLogin && federatedIdentity && request) {
+        try {
+          previousSubject = nativeLogin.credential().account.subject;
+        } catch {
+          /* Expired session. */
+        }
+        const next = await federatedIdentity.signIn();
+        if (!currentAttempt()) return;
+        if (next.revision !== request.revision) discardAccountSetup();
+        if (next.status !== "signed-in")
+          throw new Error("Sign-in did not finish");
+        if (next.revision === request.revision) {
+          accountRequest.current = undefined;
+          setAccountChange(undefined);
+          return;
+        }
+      }
+      // Native exchange completes before its account read. Join that read,
+      // including a same-session retry; no second browser step is needed.
+      if (nativeLogin)
+        await nativeLogin.ensureSignedIn(new AbortController().signal);
+      else await login.signIn();
+      if (!currentAttempt() || login.snapshot().status !== "signed-in") return;
+      const current = nativeLogin
+        ? builderlabSessionAccount(nativeLogin, identity)
         : account(legacyLogin.credential(), identity);
-    reads.current = current;
-    void setup.start(
-      [
-        checkAccount(current, setLinked, (list) => {
-          known.current = list;
-        }),
-        checkBackup(current, setBackups),
-      ],
-      { status: "paused", at: "key-choice" },
-    );
+      const sameAccount =
+        changeAccount &&
+        nativeLogin?.credential().account.subject === previousSubject;
+      discardAccountSetup();
+      reads.current = current;
+      await setup.start(
+        [
+          checkAccount(current, setLinked, (list) => {
+            known.current = list;
+          }),
+          checkBackup(current, setBackups),
+        ],
+        { status: "paused", at: "key-choice" },
+      );
+      if (!currentAttempt()) return;
+      if (request) {
+        accountRequest.current = undefined;
+        setAccountChange(
+          sameAccount
+            ? {
+                status: "failed",
+                reload: false,
+                error:
+                  "The browser returned the same account. Change accounts with your sign-in provider in the browser, then try again.",
+              }
+            : undefined,
+        );
+      }
+    } catch {
+      if (!currentAttempt()) return;
+      if (request && federatedIdentity) {
+        const replaced =
+          federatedIdentity.snapshot().revision !== request.revision;
+        if (replaced) discardAccountSetup();
+        accountRequest.current = undefined;
+        setAccountChange({
+          status: "failed",
+          reload: !!reload || replaced,
+          error:
+            "Couldn’t finish account sign-in. Your key is kept. Try again.",
+        });
+      }
+      // The ordinary login's own snapshot supplies its classified failure.
+    } finally {
+      settle();
+    }
+  };
+  const cancelAccountChange = async () => {
+    const request = accountRequest.current;
+    if (!request || request.canceling || !federatedIdentity) return;
+    request.canceling = true;
+    cancels.current++;
+    setAccountChange({ status: "canceling" });
+    try {
+      await federatedIdentity.cancelSignIn();
+      // Native can cross its irreversible commit point before publishing the
+      // replacement. Join this attempt before deciding the old setup is safe.
+      await request.settled;
+      if (!mounted.current || accountRequest.current !== request) return;
+      accountRequest.current = undefined;
+      if (federatedIdentity.snapshot().revision !== request.revision) {
+        discardAccountSetup();
+        setAccountChange({
+          status: "failed",
+          reload: true,
+          error:
+            "Sign-in completed or changed before cancellation. Load the current account to continue. Your key is kept.",
+        });
+      } else setAccountChange(undefined);
+    } catch {
+      if (!mounted.current || accountRequest.current !== request) return;
+      request.canceling = false;
+      setAccountChange({ status: "cancel-failed" });
+    }
   };
   /** Between pauses nothing runs: no key exists until a choice resumes setup. */
   const pause = (at: SetupPause) =>
@@ -610,10 +735,9 @@ export function Welcome({
               ])
             }
             onImport={() => pause("key-import")}
-            onSwitchAccount={() => {
-              nativeLogin?.signOut();
-              backToLanding();
-            }}
+            onSwitchAccount={
+              nativeLogin ? () => void signIn(true) : backToLanding
+            }
           />
         );
       case "welcome-back":
@@ -636,10 +760,9 @@ export function Welcome({
                 at: "key-lost",
               })
             }
-            onSwitchAccount={() => {
-              nativeLogin?.signOut();
-              backToLanding();
-            }}
+            onSwitchAccount={
+              nativeLogin ? () => void signIn(true) : backToLanding
+            }
           />
         ) : null;
       case "key-restore":
@@ -718,6 +841,52 @@ export function Welcome({
       >
         {null}
       </OnboardingScreen>
+    );
+  if (accountChange)
+    return (
+      <WireframeScreen>
+        {accountChange.status === "failed" ? (
+          <Failure
+            title="Couldn’t change account"
+            error={accountChange.error}
+            onBack={
+              accountChange.reload
+                ? undefined
+                : () => setAccountChange(undefined)
+            }
+            onRetry={() => void signIn(!accountChange.reload)}
+          />
+        ) : accountChange.status === "cancel-failed" ? (
+          <Failure
+            title="Couldn’t cancel sign-in"
+            error="Try cancellation again before continuing."
+            onRetry={() => void cancelAccountChange()}
+          />
+        ) : (
+          <>
+            <h1
+              id="welcome-title"
+              tabIndex={-1}
+              className="text-heading text-standard"
+            >
+              Finish sign-in in your browser
+            </h1>
+            <p className="text-body text-subtle">
+              Buzz cannot force an account chooser. Your browser may reuse its
+              signed-in account; change accounts with your sign-in provider
+              there. An existing valid Buzz sign-in stays active until
+              replacement succeeds. A successful change applies to all your
+              communities and agents. Your key is kept.
+            </p>
+            <Button
+              disabled={accountChange.status === "canceling"}
+              onClick={() => void cancelAccountChange()}
+            >
+              Cancel sign-in
+            </Button>
+          </>
+        )}
+      </WireframeScreen>
     );
   // Discovery: the same unauthenticated lookup Join Community runs after
   // setup, so a bad address fails here, before sign-in and before a key
@@ -853,6 +1022,7 @@ export function Welcome({
           title="Couldn’t sign in"
           error={auth.error}
           onBack={backToLanding}
+          onRetry={nativeLogin ? () => void signIn() : undefined}
         />
       ) : finding ? (
         <FindCommunity

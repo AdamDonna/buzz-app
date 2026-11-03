@@ -339,32 +339,45 @@ export function builderlabAccount(
       },
       body: JSON.stringify(body),
     });
-  return accountFromRequests(portal, post, identity, credential.value);
+  return accountFromRequests(portal, post, identity, () => credential.value);
 }
 
 /** Same account contract through the existing native session, without a renderer token. */
 export function builderlabSessionAccount(
   session: BuilderlabSession,
   identity: BackupIdentity,
-  federated: string,
 ): FirstRunAccount {
-  const credential = session.credential();
+  const subject = session.credential().account.subject;
+  const current = () => {
+    const credential = session.credential();
+    if (credential.account.subject !== subject)
+      throw new DOMException("Builderlab account changed.", "AbortError");
+    return credential;
+  };
   const portal = new URL(oauthTarget()).origin;
-  const post = (path: string, body: object = {}) =>
-    session.request(credential, {
+  const post = async (path: string, body: object = {}) => {
+    const response = await session.request(current(), {
       path,
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: portal },
       body: JSON.stringify(body),
     });
-  return accountFromRequests(portal, post, identity, { federated });
+    current();
+    return response;
+  };
+  return accountFromRequests(portal, post, identity, () => {
+    current();
+    const viewer = session.viewerSession();
+    if (!("federated" in viewer)) throw new Error("Native session required");
+    return { federated: viewer.federated };
+  });
 }
 
 function accountFromRequests(
   portal: string,
   post: (path: string, body?: object) => Promise<HostResponse>,
   identity: BackupIdentity,
-  credential: string | Readonly<{ federated: string }>,
+  credential: () => string | Readonly<{ federated: string }>,
 ): FirstRunAccount {
   /**
    * One POST; `read` turns the parsed reply (null when not linked) into the
@@ -535,7 +548,7 @@ function accountFromRequests(
         { community_url: relayAddress(url) },
       );
     },
-    backUp: (pubkey) => backUpWith(identity, pubkey, credential),
+    backUp: async (pubkey) => backUpWith(identity, pubkey, credential),
     // Backup routes answer plain text, not the card's reply shape, so only
     // the status and a 2xx body are read.
     async backupStatus() {

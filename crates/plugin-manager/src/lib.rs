@@ -2302,6 +2302,7 @@ mod tests {
                 .map(|op| format!("{} {}", op.method, op.path))
                 .collect();
             assert!(operations.contains(&format!("GET {base}v1/auth/me")));
+            assert!(operations.contains(&format!("POST {base}v1/buzz/nsec-backups/status")));
             assert!(operations.contains(&format!("POST {base}v3/beekeeper/register-agent")));
             assert_eq!(operations.len(), super::BUILDERLAB_FI_ROUTES.len());
         }

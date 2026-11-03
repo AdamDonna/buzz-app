@@ -127,3 +127,89 @@ it("rejects account requests from a retired session before dispatch", async () =
     session.dispose();
   }
 });
+
+it.each(["once", "always", "network"])(
+  "handles registration failure %s without unbounded or arbitrary replay",
+  async (mode) => {
+    const h = federatedFixture();
+    let attempts = 0;
+    const revisions: unknown[] = [];
+    const registrations: unknown[] = [];
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "federated_identity_register")
+        registrations.push(
+          (args as Record<string, unknown> | undefined)?.registration,
+        );
+      if (command !== "federated_identity_request") return;
+      const input = args as { session: string; request: { path: string } };
+      if (input.request.path.endsWith("auth/me"))
+        return response({ subject: "account" });
+      revisions.push(input.session);
+      attempts++;
+      if (mode === "network") return Promise.reject("Network unavailable");
+      if (mode === "always" || attempts === 1)
+        return Promise.reject("Plugin registration retired");
+      return response({ identity: null });
+    });
+    const session = createFederatedFirstRun(h.service);
+    try {
+      await session.ensureSignedIn(new AbortController().signal);
+      const request = session.request(session.credential(), {
+        path: "/v1/buzz/nostr-identities/current",
+      });
+      if (mode === "once")
+        await expect(request).resolves.toMatchObject({ status: 200 });
+      else await expect(request).rejects.toThrow();
+      expect(attempts).toBe(mode === "network" ? 1 : 2);
+      expect(new Set(registrations).size).toBe(registrations.length);
+      expect(revisions).toEqual(Array(attempts).fill("user:1"));
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.filter(
+            ([command]) => command === "federated_identity_unregister",
+          ),
+      ).toHaveLength(registrations.length);
+    } finally {
+      session.dispose();
+    }
+  },
+);
+
+it("does not dispatch after disposal while native registration is pending", async () => {
+  const h = federatedFixture();
+  let hold = false;
+  let registered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    registered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "federated_identity_register" && hold) {
+      registered();
+      await gate;
+    }
+    if (command === "federated_identity_request")
+      return response({ subject: "account" });
+  });
+  const session = createFederatedFirstRun(h.service);
+  await session.ensureSignedIn(new AbortController().signal);
+  hold = true;
+  const request = session.request(session.credential(), {
+    path: "/v1/buzz/nostr-identities/challenge",
+  });
+  await started;
+  session.dispose();
+  release();
+  await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(
+        ([command]) => command === "federated_identity_request",
+      ),
+  ).toHaveLength(1);
+});

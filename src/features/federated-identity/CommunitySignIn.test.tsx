@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { afterEach, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { CommunitySignIn } from "./CommunitySignIn";
@@ -57,7 +57,7 @@ it.each(["binding-mismatch", "authorization-denied"])(
     );
     if (failure === "binding-mismatch")
       expect(
-        screen.getByRole("button", { name: "Sign in with another account" }),
+        screen.getByRole("button", { name: "Sign in again" }),
       ).toBeEnabled();
     else expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(h.service.signIn).not.toHaveBeenCalled();
@@ -65,7 +65,7 @@ it.each(["binding-mismatch", "authorization-denied"])(
   },
 );
 
-it("changes account only on explicit recovery, then resumes the refused connection", async () => {
+it("renews explicitly without global sign-out, then resumes the refused connection", async () => {
   const h = federatedFixture();
   h.publish({ status: "signed-in" });
   const retry = vi.fn();
@@ -79,10 +79,8 @@ it("changes account only on explicit recovery, then resumes the refused connecti
   expect(h.service.signOut).not.toHaveBeenCalled();
   await userEvent
     .setup()
-    .click(
-      screen.getByRole("button", { name: "Sign in with another account" }),
-    );
-  expect(h.service.signOut).toHaveBeenCalledOnce();
+    .click(screen.getByRole("button", { name: "Sign in again" }));
+  expect(h.service.signOut).not.toHaveBeenCalled();
   expect(h.service.signIn).toHaveBeenCalledOnce();
   expect(retry).toHaveBeenCalledOnce();
 });
@@ -128,3 +126,51 @@ it("keeps sign-in cancellable while the browser handoff is pending", async () =>
     finish();
   }
 });
+
+it.each(["cancel", "failure"])(
+  "binding recovery retains the existing shared session on browser %s",
+  async (outcome) => {
+    const h = federatedFixture();
+    h.publish({ status: "signed-in" });
+    const before = h.service.snapshot();
+    let finish!: () => void;
+    vi.mocked(h.service.signIn).mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      if (outcome === "failure") throw new Error("storage-unavailable");
+      return h.service.snapshot();
+    });
+    vi.mocked(h.service.cancelSignIn).mockResolvedValue();
+    const retry = vi.fn();
+    render(
+      <CommunitySignIn
+        identity={h.service}
+        error="binding-mismatch"
+        retry={retry}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Sign in again" }));
+    try {
+      expect(
+        screen.getByText(/existing valid Buzz sign-in stays active/),
+      ).toBeVisible();
+      expect(h.service.snapshot()).toBe(before);
+      if (outcome === "cancel")
+        await user.click(
+          screen.getByRole("button", { name: "Cancel sign-in" }),
+        );
+    } finally {
+      await act(async () => finish());
+    }
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Sign in again" }),
+      ).toBeEnabled(),
+    );
+    expect(h.service.snapshot()).toBe(before);
+    expect(h.service.signOut).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  },
+);

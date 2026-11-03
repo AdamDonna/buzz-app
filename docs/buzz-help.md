@@ -43,8 +43,10 @@ the interface unless an available tool actually supports that action.
   **Settings → Buzz → Identity → Organization sign-in**.
 - A community may require account sign-in even when you already have a key.
   Sign-in keeps that key. If the account is linked to another identity, review
-  the link or choose **Sign in with another account**; Buzz does not replace it
-  automatically. A build without authority configured for that exact community
+  the link or change accounts with your sign-in provider in your browser, then
+  choose **Sign in again**. Buzz cannot force a browser account chooser. Your
+  current sign-in remains active until replacement succeeds; a successful account
+  change applies to all your communities and agents. A build without authority configured for that exact community
   needs the administrator's supported build. Sign-in alone does not grant
   community membership or require joining a sponsor's billing workspace.
 - A community invite or address connects someone to a community; creating an

@@ -1,12 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Credential } from "../../bundled/builderlab/oauth/browser";
+import { createNativeSession } from "../../bundled/builderlab/session";
+import { federatedFixture } from "../federated-identity/testing";
 import type { HostRequest } from "../host/service";
 import { BackupError, type BackupStatus, createBackupStatus } from "./backup";
 import { BACKUP_FAILURES } from "./backup-failure";
 import {
   backupOfferedFor,
   builderlabAccount,
+  builderlabSessionAccount,
   seededAccount,
 } from "./builderlab-account";
 
@@ -91,6 +94,71 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.mocked(invoke).mockReset();
+});
+
+async function nativeAccountSession() {
+  const h = federatedFixture();
+  let subject = "original";
+  h.request.mockImplementation(async (request) =>
+    answer(
+      200,
+      request.path.endsWith("auth/me")
+        ? { subject, email: `${subject}@example.com` }
+        : { identity: null },
+    ),
+  );
+  const session = createNativeSession(h.service);
+  await session.ensureSignedIn(new AbortController().signal);
+  return {
+    h,
+    session,
+    async replace(nextSubject: string, revision: string) {
+      subject = nextSubject;
+      h.publish({ status: "signed-in", revision });
+      await vi.waitFor(() =>
+        expect(session.snapshot().status).toBe("signed-in"),
+      );
+    },
+  };
+}
+
+it("first-run requests follow same-account renewal but refuse a different account", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  const native = await nativeAccountSession();
+  try {
+    const account = builderlabSessionAccount(native.session, untouched);
+    expect(await account.linkedKey()).toBeNull();
+    await native.replace("original", "renewed-session");
+    expect(await account.linkedKey()).toBeNull();
+    await native.replace("different", "other-session");
+    const before = native.h.request.mock.calls.length;
+    await expect(account.linkedKey()).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(native.h.request).toHaveBeenCalledTimes(before);
+  } finally {
+    native.session.dispose();
+  }
+});
+
+it("refuses a first-run response after the account has been retired", async () => {
+  const native = await nativeAccountSession();
+  try {
+    const account = builderlabSessionAccount(native.session, untouched);
+    let finish!: (response: ReturnType<typeof answer>) => void;
+    native.h.request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const result = account.linkedKey();
+    native.h.publish({ status: "signed-out", revision: "retired" });
+    finish(answer(200, { identity: { pubkey_hex: pubkey } }));
+    await expect(result).rejects.toThrow();
+  } finally {
+    native.session.dispose();
+  }
 });
 
 describe("linkedKey", () => {
@@ -1069,6 +1137,93 @@ describe("backup", () => {
     };
     return { identity, send, setBackupChoice, watchers };
   }
+
+  it("uses the renewed native revision for first-run backup without clearing the shared slot", async () => {
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    const nativeSession = await nativeAccountSession();
+    const native = host(status(1, 0));
+    vi.mocked(invoke).mockResolvedValue(1);
+    try {
+      const account = builderlabSessionAccount(
+        nativeSession.session,
+        native.identity,
+      );
+      await nativeSession.replace("original", "renewed-native-revision");
+      const done = account.backUp(pubkey);
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith(
+          "nsec_backup_session",
+          expect.objectContaining({
+            credential: null,
+            federated: "renewed-native-revision",
+          }),
+        ),
+      );
+      native.watchers[0]?.onmessage(status(2, 1, true, "complete"));
+      await done;
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      nativeSession.session.dispose();
+    }
+  });
+
+  it.each(["status", "consent"])(
+    "resolves backup credentials after the pending %s preparation",
+    async (phase) => {
+      const owner = await nativeAccountSession();
+      const native = host(status(1, 0));
+      let started!: () => void, release!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const original = native.send.getMockImplementation();
+      if (!original) throw new Error("Missing backup host");
+      if (phase === "status")
+        native.send.mockImplementation(async (command, args) => {
+          if (command === "nsec_backup_state") {
+            started();
+            await gate;
+          }
+          return original(command, args);
+        });
+      else
+        native.setBackupChoice.mockImplementation(async () => {
+          started();
+          await gate;
+          return { available: true, pubkey, automatic: true } as never;
+        });
+      vi.mocked(invoke).mockResolvedValue(1);
+      try {
+        const account = builderlabSessionAccount(
+          owner.session,
+          native.identity,
+        );
+        const done = account.backUp(pubkey);
+        void done.catch(() => {});
+        await ready;
+        await owner.replace("original", "renewed-during-preparation");
+        release();
+        await vi.waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith(
+            "nsec_backup_session",
+            expect.objectContaining({
+              federated: "renewed-during-preparation",
+              credential: null,
+            }),
+          ),
+        );
+        native.watchers[0]?.onmessage(status(2, 1, true, "complete"));
+        await done;
+      } finally {
+        release();
+        native.watchers[0]?.onmessage(status(3, 1, true, "complete"));
+        owner.session.dispose();
+      }
+    },
+  );
 
   it("hands the session credential to the native uploader and waits for its pass", async () => {
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example/");

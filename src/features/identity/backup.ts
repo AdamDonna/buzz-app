@@ -3,6 +3,7 @@ import { BACKUP_FAILURES, type BackupFailureKind } from "./backup-failure";
 import type { Identity } from "./service";
 
 type Send = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type BackupCredential = string | Readonly<{ federated: string }>;
 
 // Shared by both login owners so re-enabling a plugin cannot reuse an old revision.
 let generation = 0;
@@ -162,7 +163,7 @@ function failure(status: BackupStatus): BackupFailureKind | undefined {
 export async function backUpWith(
   identity: Pick<Identity, "backup" | "setBackupChoice">,
   pubkey: string,
-  credential: string | Readonly<{ federated: string }>,
+  credential: BackupCredential | (() => BackupCredential),
   {
     timeout = 60_000,
     after = timer,
@@ -183,10 +184,13 @@ export async function backUpWith(
   });
   const settled = new AbortController();
   let unsubscribe = () => {};
+  let supplied: BackupCredential | undefined;
   try {
-    const ticket = await (typeof credential === "string"
-      ? handoffBackupSession("builderlab", credential, send)
-      : handoffFederatedBackupSession(credential.federated, send));
+    // Native revisions can change while readiness and consent are awaited.
+    supplied = typeof credential === "function" ? credential() : credential;
+    const ticket = await (typeof supplied === "string"
+      ? handoffBackupSession("builderlab", supplied, send)
+      : handoffFederatedBackupSession(supplied.federated, send));
     if (ticket === null) throw new BackupError("unavailable");
     const outcome = new Promise<BackupStatus>((resolve) => {
       const check = () => {
@@ -208,7 +212,7 @@ export async function backUpWith(
     settled.abort();
     // A legacy timeout also retires its pass. The FI owner remains responsible
     // for its bounded upload and session lifetime, including after this wait.
-    if (typeof credential === "string")
+    if (typeof supplied === "string")
       await handoffBackupSession("builderlab", null, send);
   }
 }
