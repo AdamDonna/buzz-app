@@ -3720,6 +3720,82 @@ it("archiving the open shared chat moves on before its reads finish saving", asy
   }
 });
 
+it("archiving the open shared chat reads the next conversation only as it was shown", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const shared = rows().find((row) => row.textContent?.includes("Design"));
+  if (!shared) throw new Error("Missing shared chat row");
+  fireEvent.click(within(shared).getByRole("button", { name: /^Open / }));
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  await act(() =>
+    h.owner.session.unread.markUnreadLocal({
+      kind: "message",
+      channelId: "room",
+      messageId: h.mention.id,
+    }),
+  );
+  const release = h.holdSave();
+  try {
+    await archiveOpened(h);
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    // A direct message arrives after the next conversation opened; reads cut
+    // at the clock, so it is stamped after it.
+    const later = Math.floor(Date.now() / 1000) + 60;
+    act(() => h.emit([message(h.alice, "dm-room", "Arrived later", later)]));
+  } finally {
+    await act(async () => release());
+  }
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers["dm-room"]).toBeDefined(),
+  );
+  expect(
+    h.owner.session.unread.snapshot({ kind: "channel", channelId: "dm-room" })
+      .observedCount,
+  ).toBe(1);
+});
+
+it("a failed read brings an archived shared chat back, through Retry cancellation and reload", async () => {
+  const h = fixture({ sharedSolo: true, withDm: true });
+  const view = render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const shared = () =>
+    rows().find((row) => row.textContent?.includes("Design")) ?? null;
+  h.failSave();
+  fireEvent.click(
+    within(shared() as HTMLElement).getByRole("button", { name: /^Archive / }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  await waitFor(() => expect(shared()).not.toBeNull());
+  const unread = () =>
+    h.owner.session.unread.snapshot({ kind: "channel", channelId: "room" })
+      .observedCount;
+  expect(unread()).toBe(1);
+  // Moving on cancels Retry; the chat stays listed with its unread tag.
+  const dm = rows().find((row) => row.textContent?.includes("A direct reply"));
+  fireEvent.click(
+    within(dm as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  expect(shared()).not.toBeNull();
+  view.unmount();
+  render(h.view);
+  await waitFor(() => expect(shared()).not.toBeNull());
+  expect(unread()).toBe(1);
+});
+
 it("archiving someone else's chat from Inbox also reads its tags", async () => {
   const h = fixture({ sharedSolo: true });
   render(h.view);

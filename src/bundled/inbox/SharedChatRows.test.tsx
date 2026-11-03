@@ -73,6 +73,11 @@ function fixture() {
       subscribeActivity: (_channelId: string, listener: () => void) =>
         subscribe(listener),
     },
+    // No muted chats: a tag shows the badge.
+    sidebarPreferences: {
+      snapshot: () => ({ data: { muted: [] } }),
+      subscribe,
+    },
   } as unknown as RelaySession;
   const relaySnapshot = {
     status: "ready",
