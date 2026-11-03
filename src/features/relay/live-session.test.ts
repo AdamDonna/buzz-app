@@ -1736,6 +1736,28 @@ describe("a reconnect whose replay was continuous", () => {
     }
   });
 
+  it("keeps a resumed window verified when a grant's re-send establishes it again", async () => {
+    const h = reconnectHarness();
+    try {
+      const seen = await verifiedThenDropped(h);
+      await resume(h, [], true);
+      expect(h.window().freshness).toBe("verified");
+      // The re-send overlapped this connection's route: nothing to read.
+      h.live.established("c", undefined, ["c"]);
+      await flush();
+      expect(channelReads(h)).toEqual([]);
+      expect(h.window().freshness).toBe("verified");
+      // A granted channel's re-send still catches up.
+      h.live.established("c");
+      await flush();
+      h.read().respond(h.page("head", [seen], seen));
+      await flush();
+      expect(h.window().freshness).toBe("verified");
+    } finally {
+      h.owner.dispose();
+    }
+  });
+
   it("clears a failed outage page read when a continuous replay verifies the window", async () => {
     const h = reconnectHarness();
     try {

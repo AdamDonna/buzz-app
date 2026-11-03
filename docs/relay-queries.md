@@ -963,7 +963,14 @@ session could not decode, or an event whose `h` tag names none of the route's
 channels. A reaction or edit to a message held before the drop, a new
 top-level message and a membership notice keep it continuous. The broker
 reports no channel of a batch continuous when one of its channels is no longer
-current, because it drops that batch's untagged traffic.
+current, because it drops that batch's untagged traffic. A batch re-sent for a
+grant overlaps its live predecessor until EOSE, so it reports every channel but
+the granted ones continuous, and the session keeps what that connection's
+earlier establishment of them decided. The granted channels still catch up:
+the relay may have checked the predecessor's REQ before their grant. The
+membership replay re-delivers grants from its last 16 minutes, so a channel
+granted that recently (created, joined, added, a DM opened) catches up at every
+reconnect.
 
 A retained window that was verified when the stream dropped, and a thread view
 that was settled then, skip the head, page and thread reads for such a

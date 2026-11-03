@@ -2388,6 +2388,50 @@ it("reports a channel continuous only when the session can apply its whole repla
   }
 });
 
+it("reports only the granted channels of a grant's re-send as owing a catch-up", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, 10, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await establish(h.first);
+    h.callbacks.established.mockClear();
+    // Live: the re-send overlaps the live batch until its EOSE.
+    await grant(h, "b");
+    const resent = h.first.requests().at(-1);
+    assert.exists(resent);
+    expect(filtersOf(resent)[0]?.limit).toBe(0);
+    await h.first.receive(["EOSE", resent[1]]);
+    expect(h.callbacks.established.mock.calls).toEqual([
+      [["a", "b"], undefined, ["a"]],
+    ]);
+    h.callbacks.established.mockClear();
+    // In flight on a reconnect: the replay establishes, then the re-send.
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    for (const r of second.requests())
+      if (!scopeOf(r).includes("a")) await second.receive(["EOSE", r[1]]);
+    await grant(h, "a", second);
+    const batch = second.requests().find((r) => scopeOf(r).includes("a"));
+    assert.exists(batch);
+    await second.receive(["EOSE", batch[1]]);
+    const again = second.requests().at(-1);
+    assert.exists(again);
+    expect(again).not.toBe(batch);
+    await second.receive(["EOSE", again[1]]);
+    expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+      [["a", "b"], undefined, ["a", "b"]],
+      [["a", "b"], undefined, ["b"]],
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
 it("reports no channel of a batch continuous after it dropped an undecodable replay event", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup([], undefined, 10, () => 0.5);

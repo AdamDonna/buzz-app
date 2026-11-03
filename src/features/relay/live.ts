@@ -358,6 +358,11 @@ type Route = {
   /** Its REQ was sent before a grant for one of its channels arrived, so the
    * relay may have left that channel out. Re-send at its EOSE. */
   regranted?: boolean;
+  /** The grants that re-send it, or will at its EOSE. A re-send overlaps its
+   * live predecessor until EOSE, so only these channels can have a gap: the
+   * relay may have checked the predecessor's REQ before their grant. */
+  grants?: Set<string>;
+  granted?: Set<string>;
   /** When its REQ was sent (ms), for the slow batch refresh. */
   sentAt?: number;
   /** Consecutive refusals that need action, and when the recover tick may retry. */
@@ -617,6 +622,8 @@ export function subscribeRelayTraffic(
     };
     delete next.repairs;
     delete next.targets;
+    delete next.grants;
+    delete next.granted;
     delete next.replayChannels;
     if (replayChannels?.length) next.replayChannels = replayChannels;
     delete next.wire;
@@ -641,10 +648,13 @@ export function subscribeRelayTraffic(
     for (const route of [...routes.values()]) {
       if (!route.channelIds?.includes(id)) continue;
       if (route.status === "live" && !route.previous) {
-        replace(route);
+        replace(route).granted = new Set([id]);
         sent = true;
-      } else if (route.status === "pending" && route.wire)
+      } else if (route.status === "pending" && route.wire) {
         route.regranted = true;
+        route.grants ??= new Set();
+        route.grants.add(id);
+      } else route.granted?.add(id);
     }
     if (!sent) return;
     pump();
@@ -1004,16 +1014,21 @@ export function subscribeRelayTraffic(
       );
     else if (route.id !== "observer" && route.id !== "presence") {
       // A live-only route sends no replay, so it closes no gap; nor does a
-      // channel outside a re-sent route's replay subset.
-      const continuous = route.liveOnly
-        ? []
-        : scope(route).filter(
-            (id) =>
-              route.resumedChannels?.has(id) &&
-              (!route.replayChannels || route.replayChannels.includes(id)) &&
-              (route.counts?.get(id) ?? 0) < LIVE_REPLAY_LIMIT &&
-              !route.repairs?.has(id),
-          );
+      // channel outside a re-sent route's replay subset. A re-send for a grant
+      // overlapped its live predecessor: only the granted channels can have
+      // one.
+      const { granted } = route;
+      const continuous = granted
+        ? scope(route).filter((id) => !granted.has(id))
+        : route.liveOnly
+          ? []
+          : scope(route).filter(
+              (id) =>
+                route.resumedChannels?.has(id) &&
+                (!route.replayChannels || route.replayChannels.includes(id)) &&
+                (route.counts?.get(id) ?? 0) < LIVE_REPLAY_LIMIT &&
+                !route.repairs?.has(id),
+            );
       const channels = route.channelIds ?? route.channelId;
       if (continuous.length)
         callbacks.established(channels, undefined, continuous);
@@ -1147,6 +1162,10 @@ export function subscribeRelayTraffic(
       const wire = `live-${++serial}`;
       route.wire = wire;
       delete route.regranted; // This REQ is sent after every earlier grant.
+      // Their channels still owe the history from before their grant.
+      if (route.grants && route.granted)
+        for (const id of route.grants) route.granted.add(id);
+      delete route.grants;
       route.sentAt = Date.now();
       wires.set(wire, route);
       route.deadline = setTimeout(() => {
@@ -1771,7 +1790,9 @@ export function subscribeRelayTraffic(
           routes.get(route.id) === route &&
           route.status === "live"
         ) {
-          replace(route);
+          const grants = route.grants;
+          delete route.grants;
+          replace(route).granted = grants ?? new Set();
           notify();
         }
         if (valid()) pump();
@@ -2011,6 +2032,8 @@ export function subscribeRelayTraffic(
           route.counts = new Map();
           delete route.repairs;
           delete route.targets;
+          // A failed re-send may have lost the predecessor it overlapped.
+          delete route.granted;
           route.quotaRetries = 0;
         }
         pump();
