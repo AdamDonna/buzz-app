@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
+import userEvent from "@testing-library/user-event";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +12,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keypair, signed } from "../../features/relay/testing";
+import type { RelayEvent } from "../../features/relay/events";
+import { clearView, readView } from "../../shared/view-state";
 import { MAX_MARKDOWN_DEPTH } from "../../features/relay/message-content";
 import type { ChannelCanvas } from "../../features/channel-templates/capability";
 import { CanvasEditor } from "./CanvasEditor";
@@ -20,6 +24,7 @@ const profiles = {
   load: async () => undefined,
   subscribe: () => () => {},
 } as never;
+const scope = "canvas-view-test";
 const channelId = "11111111-1111-4111-8111-111111111111";
 const key = keypair();
 const event = (content: string) =>
@@ -41,7 +46,7 @@ function mount(read: ChannelCanvas["read"], readOnly = false) {
     <CanvasEditor
       canvas={canvas}
       profiles={profiles}
-      scope="canvas-view-test"
+      scope={scope}
       channelId={channelId}
       readOnly={readOnly}
     />,
@@ -82,24 +87,155 @@ it("shows the saved head, not an unsaved draft", async () => {
   expect(view()).not.toHaveTextContent("Draft text");
 });
 
-it("shows loading, then a read failure with Retry, then the Canvas", async () => {
-  let fail = true;
+it("delays loading feedback, then shows a read failure with Retry, then the Canvas", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let fail = true;
+    let settle = () => {};
+    const canvas = mount(
+      () =>
+        new Promise((resolve, reject) => {
+          settle = () =>
+            fail
+              ? reject(new Error("Relay unavailable"))
+              : resolve(event("Recovered"));
+        }),
+    );
+    expect(screen.queryByText("Loading Canvas…")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByRole("status")).toHaveTextContent("Loading Canvas…");
+    await act(async () => settle());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Relay unavailable",
+    );
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
+    await act(async () => settle());
+    expect(await within(view()).findByText("Recovered")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(canvas.read).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+function retryable() {
+  const reads: Array<{ resolve(): void; reject(): void }> = [];
+  const canvas = mount(
+    () =>
+      new Promise((resolve, reject) =>
+        reads.push({
+          resolve: () => resolve(event("Recovered")),
+          reject: () => reject(new Error("Relay unavailable")),
+        }),
+      ),
+  );
+  return { canvas, reads };
+}
+const retryButton = () => screen.getByRole("button", { name: "Retry loading" });
+
+it("keeps keyboard focus on View's Retry while it is pending and after another failure", async () => {
+  const user = userEvent.setup();
+  const { reads } = retryable();
+  await act(async () => reads[0]?.reject());
+  await screen.findByRole("alert");
+  retryButton().focus();
+  await user.keyboard("{Enter}");
+  expect(reads).toHaveLength(2);
+  expect(retryButton()).toHaveFocus();
+  expect(retryButton()).toHaveAttribute("aria-busy", "true");
+  await act(async () => reads[1]?.reject());
+  expect(retryButton()).toHaveFocus();
+  expect(screen.getByRole("alert")).toHaveTextContent("Relay unavailable");
+});
+
+it("moves focus from a successful Retry into the rendered View", async () => {
+  const user = userEvent.setup();
+  const { reads } = retryable();
+  await act(async () => reads[0]?.reject());
+  await screen.findByRole("alert");
+  retryButton().focus();
+  await user.keyboard("{Enter}");
+  await act(async () => reads[1]?.resolve());
+  await within(view()).findByText("Recovered");
+  expect(view()).toHaveFocus();
+});
+
+it("leaves focus where the user moved it during Retry", async () => {
+  const user = userEvent.setup();
+  const { reads } = retryable();
+  await act(async () => reads[0]?.reject());
+  await screen.findByRole("alert");
+  retryButton().focus();
+  await user.keyboard("{Enter}");
+  screen.getByRole("tab", { name: "History" }).focus();
+  await act(async () => reads[1]?.resolve());
+  await within(view()).findByText("Recovered");
+  expect(screen.getByRole("tab", { name: "History" })).toHaveFocus();
+});
+
+it("keeps the saved content and the local draft when a later reread fails", async () => {
+  let fail = false;
   const canvas = mount(async () => {
     if (fail) throw new Error("Relay unavailable");
-    return event("Recovered");
+    return event("Saved text");
   });
-  expect(within(view()).getByRole("status")).toHaveTextContent(
-    "Loading Canvas…",
-  );
-  expect(await within(view()).findByRole("alert")).toHaveTextContent(
+  await within(view()).findByText("Saved text");
+  fireEvent.click(screen.getByRole("tab", { name: "Edit" }));
+  const editor = screen.getByRole("textbox", { name: "Canvas Markdown" });
+  fireEvent.change(editor, { target: { value: "Draft text" } });
+  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  // Another editor retiring the shared draft makes this one reread.
+  fail = true;
+  act(() => clearView(scope, `canvas-draft-v1:${channelId}`));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
     "Relay unavailable",
   );
+  expect(view()).toHaveTextContent("Saved text");
   fail = false;
-  fireEvent.click(
-    within(view()).getByRole("button", { name: "Retry loading" }),
+  fireEvent.click(retryButton());
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(view()).toHaveTextContent("Saved text");
+  expect(canvas.read).toHaveBeenCalledTimes(3);
+  fireEvent.click(screen.getByRole("tab", { name: "Edit" }));
+  expect(editor).toHaveValue("Draft text");
+  fireEvent.click(screen.getByRole("button", { name: "Save Canvas" }));
+  await waitFor(() =>
+    expect(canvas.save).toHaveBeenCalledWith(
+      channelId,
+      "Draft text",
+      event("Saved text").id,
+    ),
   );
-  expect(await within(view()).findByText("Recovered")).toBeInTheDocument();
-  expect(canvas.read).toHaveBeenCalledTimes(2);
+});
+
+it("settles a save in Edit after switching to View and back while it was in flight", async () => {
+  let land = (_: RelayEvent) => {};
+  const canvas = mount(async () => event("Saved text"));
+  canvas.save.mockImplementation(
+    () => new Promise<RelayEvent>((resolve) => (land = resolve)),
+  );
+  await within(view()).findByText("Saved text");
+  fireEvent.click(screen.getByRole("tab", { name: "Edit" }));
+  const editor = screen.getByRole("textbox", { name: "Canvas Markdown" });
+  fireEvent.change(editor, { target: { value: "New text" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save Canvas" }));
+  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  expect(view()).toHaveTextContent("Saved text");
+  fireEvent.click(screen.getByRole("tab", { name: "History" }));
+  expect(screen.getByRole("tab", { name: "View" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Edit" }));
+  expect(editor).toHaveAttribute("readonly");
+  await act(async () => land(event("New text")));
+  expect(editor).toHaveValue("New text");
+  expect(editor).not.toHaveAttribute("readonly");
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "View" }));
+  expect(view()).toHaveTextContent("New text");
+  expect(readView(scope, `canvas-draft-v1:${channelId}`, null)).toBeNull();
 });
 
 it("says when the Canvas is empty", async () => {

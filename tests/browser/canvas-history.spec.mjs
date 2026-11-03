@@ -81,6 +81,15 @@ test("Canvas history previews and restores without losing the editor draft", asy
     name: "Channel Canvas",
     exact: true,
   });
+  const view = dialog.getByRole("article", {
+    name: "Saved Canvas",
+    exact: true,
+  });
+  await expect(
+    view.getByRole("heading", { name: "Current notes", exact: true }),
+  ).toBeVisible();
+  await expect(view).toBeFocused();
+  await dialog.getByRole("tab", { name: "Edit", exact: true }).click();
   const editor = dialog.getByRole("textbox", {
     name: "Canvas Markdown",
     exact: true,
@@ -228,6 +237,14 @@ for (const outcome of ["saved", "failed after moving focus"]) {
         name: "Channel Canvas",
         exact: true,
       });
+      const view = canvas.getByRole("article", {
+        name: "Saved Canvas",
+        exact: true,
+      });
+      await expect(view).toHaveText("Saved");
+      await expect(view).toBeFocused();
+      const edit = canvas.getByRole("tab", { name: "Edit", exact: true });
+      await edit.click();
       const editor = canvas.getByRole("textbox", {
         name: "Canvas Markdown",
         exact: true,
@@ -243,6 +260,8 @@ for (const outcome of ["saved", "failed after moving focus"]) {
         .click();
       await expect(canvas).toHaveCount(0);
       await openCanvas();
+      await expect(view).toBeVisible();
+      await edit.click();
       await expect(editor).toBeEditable();
       await editor.focus();
       reconcile = true;

@@ -515,7 +515,11 @@ test("Canvas opens once beside Thread and retains its channel draft", async ({
   await viewCanvas();
   const canvas = workspace.getByRole("tab", { name: "Canvas", exact: true });
   const text = workspace.getByRole("textbox", { name: "Canvas Markdown" });
+  const view = workspace.getByRole("article", { name: "Saved Canvas" });
+  const edit = workspace.getByRole("tab", { name: "Edit", exact: true });
   await expect(canvas).toHaveAttribute("aria-selected", "true");
+  await expect(view).toBeVisible();
+  await edit.click();
   await expect(text).toBeEnabled();
   await text.fill("Channel-scoped draft");
   await thread.click();
@@ -523,12 +527,15 @@ test("Canvas opens once beside Thread and retains its channel draft", async ({
   await viewCanvas();
   await expect(canvas).toHaveCount(1);
   await expect(canvas).toHaveAttribute("aria-selected", "true");
+  // Returning to an open Canvas tab keeps its selected Edit tab.
   await expect(text).toHaveValue("Channel-scoped draft");
   await workspace
     .getByRole("button", { name: "Close Canvas tab", exact: true })
     .click();
   await expect(thread).toHaveAttribute("aria-selected", "true");
   await viewCanvas();
+  await expect(view).toBeVisible();
+  await edit.click();
   await expect(text).toHaveValue("Channel-scoped draft");
   // Leaving a channel retires its Canvas tab; reopening restores the draft.
   await page.locator('button[data-solo-channel-id="beta"]').click();
@@ -537,6 +544,8 @@ test("Canvas opens once beside Thread and retains its channel draft", async ({
   await expect(thread).toBeVisible();
   await expect(canvas).toHaveCount(0);
   await viewCanvas();
+  await expect(view).toBeVisible();
+  await edit.click();
   await expect(text).toHaveValue("Channel-scoped draft");
 });
 
@@ -584,6 +593,10 @@ test.describe("archived Canvas", () => {
       name: "Channel Canvas",
       exact: true,
     });
+    await expect(
+      canvas.getByRole("article", { name: "Saved Canvas" }),
+    ).toHaveText("Archived plan");
+    await canvas.getByRole("tab", { name: "Edit", exact: true }).click();
     const editor = canvas.getByRole("textbox", { name: "Canvas Markdown" });
     await expect(editor).toHaveValue("Archived plan");
     await expect(editor).toHaveAttribute("readonly", "");

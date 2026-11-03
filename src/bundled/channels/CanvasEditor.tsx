@@ -85,15 +85,17 @@ export function CanvasEditor({
   const [head, setHead] = useState<RelayEvent>();
   const [loaded, setLoaded] = useState(false),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [readError, setReadError] = useState("");
   const operation = useRef(0);
   const editor = useRef<HTMLTextAreaElement>(null);
   const view = useRef<HTMLElement>(null);
+  const viewRetry = useRef<HTMLButtonElement>(null);
   const recovery = useRef<HTMLButtonElement>(null);
   const [recovering, setRecovering] = useState(false);
   // The tab host places focus when Canvas opens, and a recovery button holds
-  // it while its read is pending. Take it into the editor once a read lands
-  // only if it is still there; never pull it back from elsewhere.
+  // it while its read is pending. Take it into the active tab's content once a
+  // read lands only if it is still there; never pull it back from elsewhere.
   const handoff = useRef<Element | null>(null);
   useEffect(() => {
     const host = view.current?.closest("[data-panel-workspace]");
@@ -131,6 +133,7 @@ export function CanvasEditor({
         if (generation !== operation.current) return;
         setHead(event);
         setLoaded(true);
+        setReadError("");
         if (replace || (!saved && !loaded)) {
           setDraft(event?.content ?? "");
           setAdopted(event?.content ?? "");
@@ -145,6 +148,7 @@ export function CanvasEditor({
           // Focus stays on the renewed recovery button.
           handoff.current = null;
           setError(String(reason));
+          setReadError(String(reason));
         }
       } finally {
         if (generation === operation.current) setBusy(false);
@@ -170,8 +174,11 @@ export function CanvasEditor({
     if (edited) replaceView(scope, key, null, { content: draft, base });
     void load(!edited);
   }, [draftRevision, loaded, busy, edited, load, scope, key, draft, base]);
-  const recover = (replace: boolean) => {
-    handoff.current = recovery.current;
+  const recover = (
+    replace: boolean,
+    control: HTMLElement | null = recovery.current,
+  ) => {
+    handoff.current = control;
     setRecovering(true);
     void load(replace, replace).finally(() => setRecovering(false));
   };
@@ -315,11 +322,12 @@ export function CanvasEditor({
             <CanvasView
               content={head?.content}
               loaded={loaded}
-              error={error}
+              readError={readError}
               busy={busy}
-              retry={() => recover(false)}
+              retry={() => recover(false, viewRetry.current)}
               openLink={openLink}
               focusRef={view}
+              retryRef={viewRetry}
             />
           )}
         </div>

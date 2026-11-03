@@ -9,6 +9,7 @@ import {
   scanMarkdown,
 } from "../../features/relay/message-content";
 import { Button } from "../../shared/design-system/ui/Button";
+import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import styles from "./Canvas.module.css";
 
 /**
@@ -75,44 +76,51 @@ export const CanvasMarkdown = memo(function CanvasMarkdown({
 export function CanvasView({
   content,
   loaded,
-  error,
+  readError,
   busy,
   retry,
   openLink,
   focusRef,
+  retryRef,
 }: {
   content: string | undefined;
   loaded: boolean;
-  error: string;
+  /** The latest read's failure; kept, with its Retry, until a read succeeds. */
+  readError: string;
   busy: boolean;
   retry(): void;
   openLink(url: string): boolean;
   focusRef: Ref<HTMLElement>;
+  retryRef: Ref<HTMLButtonElement>;
 }) {
   return (
-    <article
-      ref={focusRef}
-      tabIndex={-1}
-      data-tab-focus
-      aria-label="Saved Canvas"
-      className={styles.markdown}
-    >
-      {!loaded ? (
-        error ? (
-          <>
-            <p role="alert">{error}</p>
-            <Button loading={busy} onClick={retry}>
+    <LoadingRegion
+      pending={!loaded && !readError}
+      label="Loading Canvas…"
+      feedback={
+        readError ? (
+          <div className={styles.failure}>
+            <p role="alert">{readError}</p>
+            <Button ref={retryRef} loading={busy} onClick={retry}>
               Retry loading
             </Button>
-          </>
+          </div>
+        ) : undefined
+      }
+    >
+      <article
+        ref={focusRef}
+        tabIndex={-1}
+        data-tab-focus
+        aria-label="Saved Canvas"
+        className={styles.markdown}
+      >
+        {!loaded ? null : content ? (
+          <CanvasMarkdown content={content} openLink={openLink} />
         ) : (
-          <p role="status">Loading Canvas…</p>
-        )
-      ) : content ? (
-        <CanvasMarkdown content={content} openLink={openLink} />
-      ) : (
-        <p className="text-secondary">This Canvas is empty.</p>
-      )}
-    </article>
+          <p className="text-secondary">This Canvas is empty.</p>
+        )}
+      </article>
+    </LoadingRegion>
   );
 }
