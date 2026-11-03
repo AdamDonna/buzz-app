@@ -16,12 +16,21 @@ wireframes. When a page replaces another, focus moves to the new page's
 heading unless the page focuses a field itself, and **Back** returns focus to
 the choice that opened the page.
 
-Federated-identity builds (`BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG`) do not yet
-support this flow. **Sign in with email** runs under the bundled Builderlab
-plugin's own network grant, which an FI build does not have (its Builderlab
-calls go through the native FI session; #1461), so sign-in fails with
-*Couldn’t sign in* after the browser step. FI builds need their own first-run
-path before adopting this flow.
+In federated-identity builds (`BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG`) the
+bundled Builderlab plugin has no network grant of its own: its Builderlab calls
+go through the native FI session (#1461). There, **Sign in with email** is the
+native [organization sign-in](#native-federated-session-module), whose browser
+step, code exchange and token stay native. A session that already exists,
+including one saved by an earlier run, signs in again, so the browser can
+choose the account; if that sign-in is canceled, first run stops rather than
+continuing as the old account, and one that times out fails as *Sign-in did
+not finish*. Setup's account calls then go through the native forwarder as the
+bundled plugin's installation, fenced to that session, and a backup hands the
+uploader the session's revision. Native admission checks only that
+installation's grant, so this works whether or not the plugin has started. The
+forwarder grants no backup-status route, so Welcome back offers no restore and
+an imported key is offered the backup. The session outlives first run: sign-in
+at launch finds it signed in.
 
 A URL given on the welcome screen is looked up first, before sign-in and before
 any key exists: **Continue** opens the same **Finding community** page described
@@ -563,7 +572,11 @@ First run's **Backing up your key** is a pass of this uploader. It saves the
 automatic choice for the key, hands the first-run Builderlab sign-in to the
 uploader, waits up to 60 seconds for the pass that handoff starts, and then
 hands the sign-in back, whatever the outcome; an earlier pass's result never
-answers it. A pass that stops to wait for consent, a session or a key binding
+answers it. In an FI build the sign-in is the session the Builderlab plugin
+also hands the uploader, so after a completed backup it stays with the
+uploader, which runs one more pass; after a failure the uploader has no session
+until the plugin hands it over again, when that session changes or the app
+restarts. A pass that stops to wait for consent, a session or a key binding
 fails the step, since nothing would wake it again before first run ends. The
 failed page names the reason without any service response. The automatic choice
 stays on after a failure, Continue without backup included, so a later

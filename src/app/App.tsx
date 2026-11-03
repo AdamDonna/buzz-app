@@ -89,6 +89,7 @@ export function App({ services }: { services: AppServices }) {
             identity={services.identity}
             communities={services.communities}
             invites={services.invites}
+            federatedIdentity={services.firstRunFederatedIdentity}
           >
             <LaunchSignIn identity={services.federatedIdentity}>
               <ConnectedApp services={services} />
