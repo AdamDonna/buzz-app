@@ -17,6 +17,7 @@ const nonIconDependencies = new Set([
   "@earendil-works/chord", // The Pi host's packages, which pi.sh installs.
   "@earendil-works/pi-ai",
   "@earendil-works/pi-durable",
+  "@earendil-works/pi-schema",
   "@emoji-mart/data",
   "@fontsource-variable/inter",
   "@fontsource/jetbrains-mono",

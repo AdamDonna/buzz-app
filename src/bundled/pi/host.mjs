@@ -36,7 +36,6 @@ import {
   SessionFailed,
   section,
   UsageDoc,
-  watchEvents,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -46,7 +45,7 @@ import lockfile from "proper-lockfile";
 
 /** Protected Pi uses the same snapshots for review and execution. The model
  * barrier is inside Models.applyAuth, before every provider dispatch, including
- * compaction and retry/recovery paths. Unsupported payload hooks fail closed. */
+ * compaction and retry/recovery paths. Payload hooks that change a request fail closed. */
 export function protectModels(models, inspect, conversationFor) {
   const requests = new Set([
     "stream",
@@ -74,7 +73,6 @@ export function protectModels(models, inspect, conversationFor) {
         return typeof method === "function" ? method.bind(target) : method;
       return (model, input, options = {}) => {
         if (
-          options.onPayload ||
           options.transformHeaders ||
           options.samplingParams ||
           options.deferred ||
@@ -87,12 +85,24 @@ export function protectModels(models, inspect, conversationFor) {
         const selected = structuredClone(model),
           content = structuredClone(input);
         // Telemetry spans hold functions and only observe the request.
-        const { signal, apiKey, headers, env, telemetry, ...data } = options;
+        const { signal, apiKey, headers, env, telemetry, onPayload, ...data } =
+          options;
         const settings = structuredClone(data);
         return method.call(target, selected, content, {
           ...settings,
           signal,
           telemetry,
+          // Pi passes its payload hooks to every request: one that changes
+          // the reviewed request fails it.
+          ...(onPayload && {
+            onPayload: async (payload, model) => {
+              const replaced = await onPayload(payload, model);
+              if (replaced !== undefined && replaced !== payload)
+                throw new Error(
+                  "Protected Pi cannot review this provider payload override",
+                );
+            },
+          }),
           apiKey,
           headers: structuredClone(headers),
           env: structuredClone(env),
@@ -251,11 +261,9 @@ const Replies = defineDoc({
   initial: () => ({}),
   checkpointWhen,
 });
-/** Why a request in a conversation Pi parked a task of is unanswered. */
-const PARKED = {
-  status: "unanswered",
-  reason: "restart_limit",
-  detail:
+/** Why a run Pi cut off is unanswered, in words: Pi's detail is technical. */
+const CUT_OFF = {
+  restart_limit:
     "Pi stopped this turn because it crashed partway through it several times in a row.",
 };
 /** Messages that arrive while Pi works join its run at the next boundary. */
@@ -578,6 +586,15 @@ const targetOf = (args) => {
     : value;
 };
 
+/** The arguments the model gave a tool call, from its answer in `entries`. */
+const argumentsOf = (entries, callId) => {
+  for (const entry of entries.toReversed())
+    for (const message of entry.model ?? [])
+      for (const part of Array.isArray(message.content) ? message.content : [])
+        if (part.type === "toolCall" && part.id === callId)
+          return part.arguments;
+};
+
 /** Serves the plugin on `input` and `output` until `input` closes. */
 export function serve({
   data,
@@ -761,8 +778,6 @@ export function serve({
       // Loads the Buzz tools that are deferred when the model asks for them.
       install(createToolSearchExtension());
       for (const extension of packages.extensions) install(extension);
-      /** Conversations with a task Pi parked, which the next wait stops. */
-      const parked = new Set();
       harness = await Harness.open(
         await openNodeSqliteStorage(path),
         {
@@ -772,13 +787,8 @@ export function serve({
           registry,
           settings: SETTINGS,
           env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? homedir() }),
-          onReport: (error, info) => {
-            console.error(`Pi reported ${info.type}`, error);
-            // Cut off by crashes too often, a task waits for a retry that
-            // Buzz has no way to ask for, and its run would never end.
-            if (info.type === "task_parked")
-              parked.add(info.task.conversationId);
-          },
+          onReport: ({ kind, error }) =>
+            console.error(`Pi reported ${kind}`, error),
         },
         context,
       );
@@ -802,7 +812,6 @@ export function serve({
         queues: new Map(),
         /** Why each request withdrawn with a failed run is unanswered. */
         failed: new Map(),
-        parked,
         closing: false,
       };
       const places = (await harness.snapshot(Places, context)) ?? {};
@@ -847,7 +856,7 @@ export function serve({
       void opened.then(
         (ready) =>
           ready.harness.closed.then((end) => {
-            if (end.reason !== "failed") return;
+            if (end.kind !== "failed") return;
             console.error("Pi's storage failed for an agent", end.error);
             if (agents.get(agent) === opened) failed.add(agent);
             forget();
@@ -965,39 +974,59 @@ export function serve({
   async function watch(opened, conversation) {
     const watched = opened.watched.get(conversation);
     if (watched) return watched;
-    const stream = await watchEvents(opened.harness, conversation, context);
-    const state = { busy: Boolean(stream.snapshot.run), stream };
+    const handle = await (
+      await opened.harness.conversation(conversation, context)
+    ).watch(context);
+    // What was there before the watch is not sent again: the run's inputs,
+    // its tool calls, and the parts of the reply in progress.
+    const first = handle.value.docs["pi.live"] ?? {};
+    const inputs = new Set(first.run?.inputs);
+    const calls = new Set(first.tools?.map(({ callId }) => callId));
+    let attempt = first.generation?.attempt;
+    let parts = first.generation?.message?.content?.length ?? 0;
+    const state = { busy: Boolean(first.run), handle };
     opened.watched.set(conversation, state);
     const send = (event) =>
       notify("event", { agent: opened.agent, conversation, ...event });
-    stream.start(async (events) => {
-      for (const event of events)
-        if (event.type === "run_start") state.busy = true;
-        else if (event.type === "run_end") state.busy = false;
-        else if (
-          event.type === "submission" &&
-          event.record.status === "placed" &&
-          event.record.requestId
-        )
+    handle.start(async ({ value: view }) => {
+      const live = view.docs["pi.live"] ?? {};
+      state.busy = Boolean(live.run);
+      if (!live.run) {
+        inputs.clear();
+        calls.clear();
+      }
+      for (const id of live.run?.inputs ?? []) {
+        if (inputs.has(id)) continue;
+        inputs.add(id);
+        const submission = await opened.harness.submission(id, context);
+        const record = await submission?.status(context);
+        if (record?.requestId && record.entry)
           send({
             type: "placed",
-            request: event.record.requestId,
-            entry: event.record.entry,
+            request: record.requestId,
+            entry: record.entry,
           });
-        else if (event.type === "tool_execution_start")
-          send({
-            type: "step",
-            tool: event.toolName.startsWith(PREFIX)
-              ? event.toolName.slice(PREFIX.length)
-              : event.toolName,
-            target: targetOf(event.args),
-          });
-        else if (event.type === "message_update")
-          for (const change of event.changes)
-            if (change.type === "thinking_start")
-              send({ type: "step", tool: "Thinking" });
-            else if (change.type === "text_start")
-              send({ type: "step", tool: "Writing reply" });
+      }
+      for (const { callId, name, status } of live.tools ?? []) {
+        if (status === "pending" || calls.has(callId)) continue;
+        calls.add(callId);
+        send({
+          type: "step",
+          tool: name.startsWith(PREFIX) ? name.slice(PREFIX.length) : name,
+          target: targetOf(argumentsOf(view.entries, callId)),
+        });
+      }
+      const generation = live.generation;
+      const content = generation?.message?.content ?? [];
+      if (generation?.attempt !== attempt || content.length < parts) {
+        attempt = generation?.attempt;
+        parts = 0;
+      }
+      for (; parts < content.length; parts++)
+        if (content[parts].type === "thinking")
+          send({ type: "step", tool: "Thinking" });
+        else if (content[parts].type === "text")
+          send({ type: "step", tool: "Writing reply" });
     });
     return state;
   }
@@ -1005,7 +1034,6 @@ export function serve({
   async function settle(opened, id) {
     let record;
     try {
-      await unpark(opened);
       const submission = await opened.harness.submission(id, context);
       if (!submission) throw new Error("Pi has no record of this request");
       record = await submission.wait(context);
@@ -1023,10 +1051,11 @@ export function serve({
     if (!opened.contexts.has(record.conversationId))
       opened.cores.delete(record.conversationId);
     if (record.status !== "done") {
+      const detail = CUT_OFF[record.reason] ?? record.detail;
       const failed = opened.failed.get(id) ?? {
         status: "unanswered",
         reason: record.reason,
-        ...(record.detail ? { detail: String(record.detail) } : {}),
+        ...(detail ? { detail: String(detail) } : {}),
       };
       opened.failed.delete(id);
       if (record.reason !== "aborted")
@@ -1042,27 +1071,6 @@ export function serve({
       answer: record.answer,
       text: textOf(entry?.model?.at(-1)),
     };
-  }
-
-  /** Stops the conversations Pi parked a task of: each of their requests
-   * fails, saying why. Not waited for, as their tasks run only once a wait
-   * asks Pi for progress. */
-  async function unpark(opened) {
-    if (!opened.parked.size) return;
-    const conversations = [...opened.parked];
-    opened.parked.clear();
-    const { submissions } = await opened.harness.inspect(context);
-    for (const { id, conversationId } of submissions)
-      if (conversations.includes(conversationId)) opened.failed.set(id, PARKED);
-    for (const id of conversations)
-      void opened.harness
-        .conversation(id, context)
-        .then((conversation) =>
-          conversation?.abort(context, { background: true }),
-        )
-        .catch((error) =>
-          console.error("Pi could not stop a parked run", error),
-        );
   }
 
   /** A failed run leaves what was queued for it waiting for a later request:
@@ -1536,7 +1544,7 @@ export function serve({
     if (!opened) return;
     if (!opened.closing)
       opened.closing = (async () => {
-        for (const { stream } of opened.watched.values()) await stream.stop();
+        for (const { handle } of opened.watched.values()) await handle.stop();
         await opened.harness.close(context);
         // A compromised lock may already be released. Native execution has
         // ended above; releasing ownership is cleanup, not its acknowledgement.

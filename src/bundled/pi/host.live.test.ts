@@ -32,10 +32,9 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import lockfile from "proper-lockfile";
 import { AuthFile, serve } from "./host.mjs";
 import { Harness } from "@earendil-works/pi-durable";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 const originalOpen = Harness.open;
-let openedHarness, report;
-Harness.open = async (...args) => { report = args[1].onReport; openedHarness = await originalOpen(...args); return openedHarness; };
+let openedHarness;
+Harness.open = async (...args) => { openedHarness = await originalOpen(...args); return openedHarness; };
 const data = process.argv[2];
 const faux = fauxProvider();
 const models = createModels();
@@ -172,17 +171,6 @@ const g1 = await pi.rpc("deliver", turn("G", "ninth"));
 await asking.gate;
 await pi.rpc("abort", { agent, conversation: g1.conversation });
 out.aborted = await pi.rpc("wait", { agent, submission: g1.submission });
-// A run whose task Pi parked, as crashes cut it off too often, ends at the
-// next wait, with what is queued for it: each fails, saying why.
-const pk = held(), parking = held();
-faux.setResponses([async (_context, options) => { parking.release(); await abortable(pk.gate, options?.signal); return fauxAssistantMessage("never"); }]);
-const pk1 = await pi.rpc("deliver", turn("PK1", "parked"));
-await parking.gate;
-const pk2 = await pi.rpc("deliver", turn("PK2", "queued"));
-const { tasks } = await openedHarness.inspect(BACKGROUND_CONTEXT);
-const parkedTask = tasks.find(({ record }) => record.conversationId === pk1.conversation && !record.owner).record;
-report(new Error("Parked"), { type: "task_parked", task: { id: parkedTask.id, kind: parkedTask.kind, conversationId: pk1.conversation } });
-out.parked = await Promise.all([pk1, pk2].map((x) => pi.rpc("wait", { agent, submission: x.submission })));
 // Session controls act on a conversation key's Pi conversation.
 const s = held(), running = held();
 faux.setResponses([async (_context, options) => { running.release(); await abortable(s.gate, options?.signal); return fauxAssistantMessage("never"); }]);
@@ -195,7 +183,7 @@ faux.setResponses([() => fauxAssistantMessage(fauxToolCall("bash", { command: "s
 const t1 = await pi.rpc("deliver", turn("T", "tool"));
 await new Promise((resolve) => { const check = () => pi.events.some((event) => event.type === "step" && event.tool === "bash") ? resolve() : setTimeout(check, 5); check(); });
 await pi.rpc("session", { agent, key: "chan/root", action: "interrupt" });
-out.toolStop = { wait: await pi.rpc("wait", { agent, submission: t1.submission }), last: (await pi.rpc("entries", { agent, conversation: t1.conversation })).entries[0] };
+out.toolStop = { step: pi.events.find((event) => event.type === "step" && event.tool === "bash"), wait: await pi.rpc("wait", { agent, submission: t1.submission }), last: (await pi.rpc("entries", { agent, conversation: t1.conversation })).entries[0] };
 // Past what Pi keeps verbatim, so compacting summarizes the older turn.
 faux.setResponses([() => fauxAssistantMessage("Read it"), () => fauxAssistantMessage("Read it too"), () => fauxAssistantMessage("Summary of the chat")]);
 for (const request of ["S2", "S3"]) {
@@ -488,15 +476,15 @@ export default () => ({
       '{ "type": "module", "pi": { "durable": ["./durable.ts"] } }',
     // TypeScript, which Node strips itself outside node_modules.
     "durable.ts": `
-import { Type } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, defineTool, hook, section, ToolTask } from "@earendil-works/pi-durable";
+import { obj, str } from "@earendil-works/pi-schema";
 import { shout } from "shout";
 export const faux = fauxProvider({ provider: "pkg" });
 const tool = defineTool({
   name: "shout",
   description: "Shout a text",
-  parameters: Type.Object({ text: Type.String() }),
+  parameters: obj({ text: str() }),
   execute: async (args: { text: string }) => ({ output: [{ type: "text", text: shout(args.text) }] }),
 });
 export default async () => ({
@@ -652,16 +640,11 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       status: "unanswered",
       reason: "aborted",
     });
-    const parked = {
-      status: "unanswered",
-      reason: "restart_limit",
-      detail: expect.stringContaining("crashed"),
-    };
-    expect(out.parked).toEqual([parked, parked]);
     expect(out.interrupted).toMatchObject({
       status: "unanswered",
       reason: "aborted",
     });
+    expect(out.toolStop.step).toMatchObject({ target: "sleep 30" });
     expect(out.toolStop.wait).toMatchObject({
       status: "unanswered",
       reason: "aborted",
