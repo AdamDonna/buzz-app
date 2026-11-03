@@ -39,8 +39,14 @@ plugin saved the denial, each of those turns is refused at once. To continue,
 start a new session in that conversation, or have the plugin forget its saved
 denials (the security plugin's **Forget denied messages**, which clears them for
 every agent) so the input is checked again. An input too large to check is
-refused the same way, by Codex or by Claude, which resumes its saved session;
-forgetting does not help, and a new session clears it.
+refused the same way, and forgetting does not help. Codex refuses it on each
+later turn in that thread. Claude resumes its saved session and is refused
+again. When that refusal comes before Claude reports its start, as it does in
+the Claude versions checked, Buzz retries the turn in a new session, as starting
+one yourself would. Either way, a new session recovers only once the oversized
+text is no longer in what it is shown. Claude is shown the last 12 messages,
+each cut to 4,000 characters, and any Canvas, so an oversized Canvas is refused
+until it shrinks.
 
 Protected Codex runs in Buzz's Codex home, like unprotected Codex. Its security
 reviews run in a separate Buzz review home, which the security plugin keeps
