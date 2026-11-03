@@ -554,9 +554,11 @@ reaction choosers and message markers get no opener.
 
 ### Resolution order
 
-Panels and link renderers share one rule when several match the same target.
-It covers only those two: message renderers (`registerMessage`, rendered by
-`MessageBody`) keep first-active-match semantics and accept no `order`.
+Panels, link renderers and attachment renderers (`registerAttachment`) share
+one rule when several match the same target; for an attachment renderer the
+target is the `Attachment`, and an `order` function receives it. Message
+renderers (`registerMessage`, rendered by `MessageBody`) keep first-active-match
+semantics and accept no `order`.
 `order` is optional and defaults to `0`; lower wins, and equal orders fall to
 ascending contribution key (`pluginId/contributionId`), so activation, load
 latency and disable/re-enable never decide the winner. `matches` stays boolean,
