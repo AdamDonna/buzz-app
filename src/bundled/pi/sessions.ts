@@ -376,15 +376,32 @@ export class PiSessions {
           (session) =>
             session.conversation !== undefined && session.at >= since,
         )
-        .map(async (session) =>
-          (
-            await this.runtime(agent, session).runtime.usage(
-              agent,
-              since,
-              signal,
-            )
-          ).map((usage) => ({ ...usage, id: `${session.key}/${usage.id}` })),
-        ),
+        .map(async (session) => {
+          try {
+            return (
+              await this.runtime(agent, session).runtime.usage(
+                agent,
+                since,
+                signal,
+              )
+            ).map((usage) => ({ ...usage, id: `${session.key}/${usage.id}` }));
+          } catch (error) {
+            signal.throwIfAborted();
+            live();
+            if (
+              error !== null &&
+              typeof error === "object" &&
+              "code" in error &&
+              error.code === "EXECUTION_SESSION_RESET_REQUIRED"
+            ) {
+              const current = await this.store.read(agent, session.place);
+              signal.throwIfAborted();
+              live();
+              if (current && current.key !== session.key) return [];
+            }
+            throw error;
+          }
+        }),
     );
     return usage.flat();
   }

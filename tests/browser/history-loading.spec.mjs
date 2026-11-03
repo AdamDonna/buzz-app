@@ -102,7 +102,11 @@ test("saved top resumes automatic history on an upward gesture after remount", a
     }),
   ).toHaveCount(0);
   await history(page).hover();
-  await page.mouse.wheel(0, -100000);
+  await wheel(page, -250);
+  // Set the saved position before remount. Row measurements can stop a native scroll.
+  await history(page).evaluate((element) =>
+    element.scrollTo({ top: 0, behavior: "instant" }),
+  );
   await expect.poll(() => app.pending.length).toBe(1);
   await settle(page);
   await expect.poll(() => history(page).evaluate((e) => e.scrollTop)).toBe(0);
@@ -306,7 +310,8 @@ test.describe("pages inside one second", () => {
     page,
     app,
   }) => {
-    const pending = await reading(page, app, 1400);
+    // Leave room above the reader for the drag, even with short same-second pages.
+    const pending = await reading(page, app, 250);
     const box = await history(page).boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();

@@ -751,3 +751,94 @@ it("rejects New during a current turn after usage restores session history", asy
     await restored.result(active);
   }
 });
+
+it.each([
+  {
+    failure: "expired replaced target",
+    code: "EXECUTION_SESSION_RESET_REQUIRED",
+    omit: true,
+    cancel: false,
+  },
+  {
+    failure: "other replaced target error",
+    code: "EXECUTION_UNAVAILABLE",
+    omit: false,
+    cancel: false,
+  },
+  {
+    failure: "cancelled history read",
+    code: "EXECUTION_SESSION_RESET_REQUIRED",
+    omit: false,
+    cancel: true,
+  },
+])("keeps healthy usage with $failure", async ({ code, omit, cancel }) => {
+  const f = fixture();
+  const first = f.delivery();
+  await f.runtime.run(first);
+  await f.result(first);
+  const oldKey = [...f.targets.keys()][0];
+  await f.runtime.session(
+    { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent,
+    { channelId, root },
+    "new",
+  );
+  const next = f.delivery();
+  await f.runtime.run(next);
+  await f.result(next);
+  const currentKey = [...f.targets.keys()][1];
+  await f.runtime.retire(self);
+  const connect = f.execute.getMockImplementation();
+  if (!connect) throw new Error("Missing target adapter");
+  const lifetime = new AbortController();
+  const failure = Object.assign(new Error("Target unavailable"), { code });
+  const stopped = new Error("Usage cancelled");
+  f.execute.mockImplementation(async (agent, session) => {
+    if (session.key === oldKey) {
+      if (cancel) lifetime.abort(stopped);
+      throw failure;
+    }
+    return connect(agent, session);
+  });
+  const usage = f.runtime.usage(self, 0, lifetime.signal);
+  if (omit) {
+    expect((await usage).map((session) => session.id)).toEqual([
+      `${currentKey}/1`,
+    ]);
+  } else {
+    await expect(usage).rejects.toBe(cancel ? stopped : failure);
+  }
+});
+
+it("keeps reset errors visible for current usage and resume", async () => {
+  const f = fixture();
+  const first = f.delivery();
+  await f.runtime.run(first);
+  await f.result(first);
+  const key = [...f.targets.keys()][0];
+  await f.runtime.retire(self);
+  const failure = Object.assign(new Error("Start a new session"), {
+    code: "EXECUTION_SESSION_RESET_REQUIRED",
+  });
+  f.execute.mockRejectedValue(failure);
+  await expect(
+    f.runtime.usage(self, 0, new AbortController().signal),
+  ).rejects.toBe(failure);
+  await expect(
+    f.runtime.transcript(
+      self,
+      { key: `${channelId}/${root}`, channelId, root, at: 0, conversation: 1 },
+      false,
+      new AbortController().signal,
+    ),
+  ).rejects.toBe(failure);
+  const resumed = f.delivery();
+  await f.runtime.run(resumed);
+  await expect(f.result(resumed)).resolves.toMatchObject({
+    ok: false,
+    error: failure.message,
+  });
+  expect(f.execute.mock.calls.every(([, session]) => session.key === key)).toBe(
+    true,
+  );
+  expect(f.execute.mock.calls.at(-1)?.[1].intent).toBe("existing");
+});
