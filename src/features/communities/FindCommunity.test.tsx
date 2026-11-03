@@ -30,7 +30,62 @@ const policy = {
   privacy_markdown: "# Privacy",
   age_attestation_required: true,
 };
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs();
+});
+
+it.each([
+  [true, true, true],
+  [false, true, true],
+  [true, true, false],
+  [false, false, true],
+])(
+  "renders required-host guidance for FI build=%s, required=%s, compatible=%s",
+  async (fi, required, compatible) => {
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", fi ? "1" : "0");
+    const request = relay(() => ({
+      "/": Response.json({
+        ...buzz,
+        requires_nip_fi: required,
+        limitation: { federated_identity: true },
+        federated_identity: {
+          core: compatible ? "client-attached" : "unsupported",
+          assertion_freshness: { class: "offline-jwt" },
+          identityOrigin: "https://untrusted.invalid",
+        },
+      }),
+      "/api/join-policy": new Response(null, { status: 404 }),
+    }));
+    render(
+      <FindCommunity
+        url={url}
+        onCancel={vi.fn()}
+        onJoin={vi.fn()}
+        request={request}
+      />,
+    );
+    await screen.findByRole("heading", { name: "Join Community" });
+    if (required && (!fi || !compatible)) {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "supported Buzz build configured for this host",
+      );
+      expect(screen.getByRole("button", { name: "Join" })).toBeDisabled();
+    } else {
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("button", { name: "Join" })).toBeEnabled();
+      if (required)
+        expect(
+          screen.getByText(/account sign-in and a linked Buzz identity/),
+        ).toBeVisible();
+      else
+        expect(
+          screen.queryByText(/account sign-in and a linked Buzz identity/),
+        ).toBeNull();
+    }
+    expect(document.body).not.toHaveTextContent("untrusted.invalid");
+  },
+);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

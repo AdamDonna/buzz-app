@@ -1166,6 +1166,7 @@ it("after Sign out, the next launch offers old Buzz's identity again while its f
 function landingRelay(
   origin = "https://relay.example.com:8443",
   created: Promise<string> = Promise.resolve(viewer),
+  infoFields: Record<string, unknown> = {},
 ) {
   const relayCalls: unknown[] = [];
   const info = deferred<void>();
@@ -1189,6 +1190,7 @@ function landingRelay(
       JSON.stringify({
         name: "Buzz Relay",
         icon: "https://cdn.example.com/icon.png",
+        ...infoFields,
       }),
     );
   });
@@ -1321,6 +1323,120 @@ async function connectChoicePage(
   expect(connectChoiceHeading()).toBeVisible();
   expect(connectChoiceHost()).toBeVisible();
 }
+
+it.each([
+  [true, true],
+  [false, true],
+  [true, false],
+])(
+  "required Welcome discovery reaches ConnectChoice with FI build=%s and compatible=%s",
+  async (fi, compatible) => {
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", fi ? "1" : "0");
+    const relay = landingRelay(undefined, undefined, {
+      requires_nip_fi: true,
+      limitation: { federated_identity: true },
+      federated_identity: {
+        core: compatible ? "client-attached" : "unsupported",
+        assertion_freshness: { class: "offline-jwt" },
+        identityOrigin: "https://untrusted.invalid",
+      },
+    });
+    const h = federatedFixture();
+    const identity = createIdentity();
+    const connect = vi.fn();
+    render(
+      <Welcome
+        identity={identity}
+        communities={noJoin}
+        invites={invites}
+        connect={connect}
+        federatedIdentity={h.service}
+      >
+        <p>App open</p>
+      </Welcome>,
+    );
+    try {
+      await connectChoicePage(userEvent.setup(), relay);
+      if (fi && compatible) {
+        expect(
+          screen.getByText(
+            /This community requires account sign-in, including when you use an existing key/,
+          ),
+        ).toBeVisible();
+        expect(
+          screen.getByText("Sign in at https://builderlab.example."),
+        ).toBeVisible();
+        expect(screen.getByRole("button", { name: SIGN_IN })).toBeEnabled();
+      } else {
+        expect(
+          screen.getByText(/supported Buzz build configured for this host/),
+        ).toBeVisible();
+        expect(screen.queryByRole("button", { name: SIGN_IN })).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "I already have a key" }),
+        ).toBeNull();
+      }
+      expect(document.body).not.toHaveTextContent("untrusted.invalid");
+      expect(h.service.signIn).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+      expect(identity.snapshot().status).toBe("missing");
+      if (fi && compatible) {
+        vi.mocked(h.service.signIn).mockImplementation(async () => {
+          h.publish({ status: "signing-in" });
+          return h.service.snapshot();
+        });
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: SIGN_IN }));
+        expect(h.service.signIn).toHaveBeenCalledOnce();
+        expect(connect).not.toHaveBeenCalled();
+        await user.click(
+          screen.getByRole("button", { name: "Cancel sign-in" }),
+        );
+        expect(h.service.cancelSignIn).toHaveBeenCalled();
+      }
+    } finally {
+      identity.dispose();
+    }
+  },
+);
+
+it("a required hosted community does not automatically start legacy OAuth in a non-FI build", async () => {
+  vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "0");
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
+  const relay = landingRelay("https://team.communities.buzz.xyz", undefined, {
+    requires_nip_fi: true,
+    limitation: { federated_identity: true },
+    federated_identity: {
+      core: "client-attached",
+      assertion_freshness: { class: "offline-jwt" },
+    },
+  });
+  const identity = createIdentity();
+  const connect = vi.fn();
+  render(
+    <Welcome
+      identity={identity}
+      communities={noJoin}
+      invites={invites}
+      connect={connect}
+    >
+      <p>App open</p>
+    </Welcome>,
+  );
+  try {
+    await screen.findByRole("button", { name: SIGN_IN });
+    await userEvent
+      .setup()
+      .type(urlField(), "team.communities.buzz.xyz{Enter}");
+    await act(async () => relay.info.resolve());
+    expect(
+      await screen.findByText(/supported Buzz build configured for this host/),
+    ).toBeVisible();
+    expect(connect).not.toHaveBeenCalled();
+  } finally {
+    identity.dispose();
+  }
+});
 
 it("a found landing URL pauses on Connect to {host} with no sign-in and no key, and Back keeps the address", async () => {
   const relay = landingRelay();
