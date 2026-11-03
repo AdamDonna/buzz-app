@@ -128,6 +128,69 @@ async fn its_buzz_credential_is_revoked_once_it_exits() {
     assert_eq!(error(&reply), (StatusCode::UNAUTHORIZED, "revoked"));
 }
 
+/// A descendant that left the process group keeps the output pipes open, so
+/// the entry outlives the process; its token must not.
+#[cfg(unix)]
+#[tokio::test]
+async fn its_buzz_credential_is_revoked_while_a_detached_descendant_holds_its_output() {
+    use crate::credential_service::tests::{ask, error, fixture, issued, RELAY};
+    use hyper::StatusCode;
+    let fixture = fixture();
+    let (credential, token) = issued(&fixture).await;
+    let processes = HostProcesses::default();
+    let (channel, _events) = channel();
+    let handle = processes
+        .start(
+            0,
+            "p".into(),
+            "sh",
+            command(
+                "sh",
+                // The pause lets the descendant leave the group before `sh` exits.
+                &[
+                    "-c",
+                    "perl -e 'setpgrp(0, 0); sleep 3' & sleep 0.5; read line",
+                ],
+            ),
+            Some(credential),
+            channel,
+        )
+        .unwrap();
+    let held = processes
+        .owned("p", handle, |entry| entry.credential.clone())
+        .unwrap()
+        .unwrap();
+    fixture
+        .service
+        .bind(&held, "p", fixture.agent.pubkey.clone(), RELAY.into())
+        .await
+        .unwrap();
+    assert_eq!(
+        ask(&fixture, &token, "get_public_key", &[]).await.0,
+        StatusCode::OK
+    );
+    processes
+        .write("p", handle, "\n".into(), false)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while ask(&fixture, &token, "get_public_key", &[]).await.0 == StatusCode::OK {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the token outlived its process");
+    // The output is still held open, so the entry has not gone yet.
+    assert!(processes.registry().entries.contains_key(&handle));
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply), (StatusCode::UNAUTHORIZED, "revoked"));
+    assert!(fixture
+        .service
+        .bind(&held, "p", fixture.agent.pubkey.clone(), RELAY.into())
+        .await
+        .is_err());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn reports_stderr_and_exit_code() {

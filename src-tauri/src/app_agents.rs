@@ -183,6 +183,11 @@ impl AppAgentHost {
     pub(crate) fn caller_retirements(&self) -> u64 {
         self.tokens.retirements()
     }
+    /// Whether the owner's identity was closed for good, so no local caller
+    /// may be issued, bound or act again.
+    pub(crate) fn caller_closed(&self) -> bool {
+        self.tokens.identity_closed()
+    }
     /// The agent and its current incarnation, for a local caller's token that
     /// acts as it from now on.
     pub(crate) async fn caller_stamp(
@@ -203,7 +208,9 @@ impl AppAgentHost {
         incarnation: Stamp,
         retirements: u64,
     ) -> bool {
-        self.tokens.retirements() == retirements && self.tokens.admits(pubkey, relay, incarnation)
+        !self.tokens.identity_closed()
+            && self.tokens.retirements() == retirements
+            && self.tokens.admits(pubkey, relay, incarnation)
     }
     /// The agent and its key, for a local caller's operation that sends nothing.
     pub(crate) async fn caller_key(

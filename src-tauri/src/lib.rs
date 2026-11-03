@@ -803,6 +803,9 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
 }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // A token this app was itself launched with belongs to another app's agent;
+    // dropped before any thread starts, so no process it spawns inherits it.
+    std::env::remove_var(credential_service::ENV);
     let context = app_context();
     // Reject unsafe test launch settings before any identity or pending erase work.
     let native_mcp = native_mcp::plugin(

@@ -337,6 +337,10 @@ impl FederatedIdentity {
     pub(crate) fn retirements(&self) -> u64 {
         self.state().retirements
     }
+    /// Whether the identity was closed for good; nothing derived acts again.
+    pub(crate) fn closed(&self) -> bool {
+        self.state().closed
+    }
     pub(crate) fn current(&self, revision: &str) -> bool {
         let state = self.state();
         !state.closed && state.snapshot.revision == revision

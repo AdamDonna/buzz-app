@@ -271,7 +271,7 @@ async fn revocation_while_a_key_is_read_withholds_the_result() {
                 respond(&service, Some(&waiting), Some(1), body.as_bytes()).await
             });
             // Admitted: it spent one request of its rate, and now waits for the key.
-            while fixture.service.callers()[&key].tokens >= BURST {
+            while !fixture.service.callers()[&key].spent() {
                 tokio::task::yield_now().await;
             }
             assert!(!request.is_finished());
@@ -312,7 +312,7 @@ async fn deletion_while_the_agent_is_read_answers_revoked() {
         let body = json!({ "id": "1", "method": "auth_tag", "params": [] }).to_string();
         respond(&service, Some(&waiting), Some(1), body.as_bytes()).await
     });
-    while fixture.service.callers()[&key].tokens >= BURST {
+    while !fixture.service.callers()[&key].spent() {
         tokio::task::yield_now().await;
     }
     assert!(!request.is_finished());
@@ -687,6 +687,42 @@ async fn a_token_is_rate_limited_and_recovers() {
         ask(&fixture, &token, "get_public_key", &[]).await.0,
         StatusCode::OK
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_method_has_its_own_rate_budget() {
+    let fixture = fixture();
+    let (_issued, token) = bound(&fixture).await;
+    for _ in 0..BURST as usize {
+        ask(&fixture, &token, "get_public_key", &[]).await;
+    }
+    assert_eq!(
+        error(&ask(&fixture, &token, "get_public_key", &[]).await),
+        (StatusCode::TOO_MANY_REQUESTS, "rate_limited")
+    );
+    assert_eq!(
+        ask(&fixture, &token, "auth_tag", &[]).await.0,
+        StatusCode::OK
+    );
+}
+
+/// After the identity closes for good, a spawn that reaches `issue` gets no
+/// token, and a token issued or bound before it never acts again.
+#[tokio::test]
+async fn a_closed_identity_issues_binds_and_acts_for_nobody() {
+    let fixture = fixture();
+    let (acting, acting_token) = bound(&fixture).await;
+    let (spare, _) = issued(&fixture).await;
+    fixture.identity.close();
+    assert!(fixture.service.issue().await.is_err());
+    assert!(fixture
+        .service
+        .bind(&spare, "p", fixture.agent.pubkey.clone(), RELAY.into())
+        .await
+        .is_err());
+    let reply = ask(&fixture, &acting_token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply), (StatusCode::UNAUTHORIZED, "revoked"));
+    drop(acting);
 }
 
 #[tokio::test]

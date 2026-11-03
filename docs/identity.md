@@ -919,11 +919,13 @@ native code.
 - **Evidence.** `federated_identity` goes through the same agent grant and
   assertion checks as the app's own requests and answers no header on relays
   without NIP-FI. `auth_tag` answers the agent's NIP-OA tag.
-- **Limits and revocation.** Each token has its own request budget and answers
-  `rate_limited` with a retry delay. It is revoked when its process exits, and
-  for good once its agent is deleted or the owner signs out or changes account:
-  each request rechecks the agent's incarnation and the owner's retirement count
-  recorded at binding.
+- **Limits and revocation.** Each token has a request budget per method and
+  answers `rate_limited` with a retry delay. It is revoked as soon as its
+  process exits, even while a descendant still holds its output or
+  environment, and for good once its agent is deleted, the owner signs out or
+  changes account, or the identity closes: each request rechecks the agent's
+  incarnation and the owner's retirement count recorded at binding, and a
+  closed identity issues no token.
 - **Callers.** Requests must name the bound address in `Host` and carry no
   `Origin`, so a web page cannot use it. Only harnesses with one process per
   agent get a token (Claude Code); goose, Pi and Codex host every agent in one

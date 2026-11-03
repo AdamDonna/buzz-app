@@ -135,6 +135,7 @@ impl HostProcesses {
         read_lease: Option<crate::host_files::FileReadLease>,
     ) -> Result<u64, String> {
         let state = self.clone();
+        let credential = credential.map(Arc::new);
         let mut registry = self.registry();
         if registry.page != page {
             return Err("The page reloaded".into());
@@ -167,7 +168,7 @@ impl HostProcesses {
                     .take()
                     .map(|stdin| Arc::new(tokio::sync::Mutex::new(stdin))),
                 stop: Some(stop),
-                credential: credential.map(Arc::new),
+                credential: credential.clone(),
             },
         );
         drop(registry);
@@ -215,6 +216,11 @@ impl HostProcesses {
                     }
                 }
             };
+            // Its token dies with it, even while a descendant that left its
+            // group still holds the pipes or the environment.
+            if let Some(credential) = &credential {
+                credential.revoke();
+            }
             // Descendants that outlived it go with it.
             #[cfg(unix)]
             if let Some(group) = group {
@@ -475,8 +481,6 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
         Some(true) => app.state::<CredentialService>().issue().await?,
         _ => None,
     };
-    // Only native code names one; never one this app was itself started with.
-    command.env_remove(crate::credential_service::ENV);
     let credential = credential.map(|(issued, env)| {
         command.env(crate::credential_service::ENV, &*env);
         issued

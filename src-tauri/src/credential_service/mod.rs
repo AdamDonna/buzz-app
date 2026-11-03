@@ -50,7 +50,8 @@ const HEAD_TIMEOUT: Duration = Duration::from_secs(5);
 /// An agent event is at most 64 KiB of content and 256 tags of 4 KiB.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 const BODY_TIMEOUT: Duration = Duration::from_secs(30);
-/// Requests a token may make at once, and how many it regains each second.
+/// Requests a token may make of each method at once, and how many it regains
+/// each second.
 const BURST: f64 = 120.0;
 const REFILL: f64 = 20.0;
 /// Evidence handed out stays valid at least this long, for the caller's request.
@@ -83,8 +84,21 @@ struct Caller {
     retirements: u64,
     /// Its agent was deleted or its owner signed out: it never acts again.
     revoked: bool,
+    /// One budget per method, and one shared by names it doesn't know, so a
+    /// burst of one method never starves another.
+    budgets: [Budget; METHODS.len() + 1],
+}
+#[derive(Clone, Copy)]
+struct Budget {
     tokens: f64,
     at: Instant,
+}
+impl Caller {
+    /// Whether any request has spent from its budgets.
+    #[cfg(test)]
+    fn spent(&self) -> bool {
+        self.budgets.iter().any(|budget| budget.tokens < BURST)
+    }
 }
 #[derive(Clone)]
 struct Bound {
@@ -98,6 +112,14 @@ struct Bound {
 pub(crate) struct Issued {
     service: CredentialService,
     key: [u8; 32],
+}
+impl Issued {
+    /// Stops it acting, for good, whoever still holds it.
+    pub(crate) fn revoke(&self) {
+        if let Some(caller) = self.service.callers().get_mut(&self.key) {
+            caller.revoked = true;
+        }
+    }
 }
 impl Drop for Issued {
     fn drop(&mut self) {
@@ -127,6 +149,9 @@ impl CredentialService {
         if cfg!(windows) {
             return Ok(None);
         }
+        if self.0.agents.caller_closed() {
+            return Err("Buzz has signed out for good".into());
+        }
         let url = self
             .0
             .endpoint
@@ -144,8 +169,10 @@ impl CredentialService {
                 agent: None,
                 retirements: self.0.agents.caller_retirements(),
                 revoked: false,
-                tokens: BURST,
-                at: Instant::now(),
+                budgets: [Budget {
+                    tokens: BURST,
+                    at: Instant::now(),
+                }; METHODS.len() + 1],
             },
         );
         let env = Zeroizing::new(json!({ "url": url, "token": &*token }).to_string());
@@ -230,8 +257,10 @@ impl CredentialService {
             .get_mut(&digest(token))
             .filter(|caller| !caller.revoked)
             .ok_or(Failure::revoked())?;
-        // A spare issued before its owner signed out is revoked, bound or not.
-        if self.0.agents.caller_retirements() != caller.retirements {
+        // A spare issued before its owner signed out, or before the identity
+        // closed for good, is revoked, bound or not.
+        if self.0.agents.caller_closed() || self.0.agents.caller_retirements() != caller.retirements
+        {
             caller.revoked = true;
             return Err(Failure::revoked());
         }
@@ -256,22 +285,26 @@ impl CredentialService {
 
     /// The caller `token` names, once it is bound and still acts, after one
     /// request of its rate.
-    fn admit(&self, token: &str) -> Result<Bound, Failure> {
+    fn admit(&self, token: &str, method: &str) -> Result<Bound, Failure> {
         let mut callers = self.callers();
         let (caller, bound) = self.acting(&mut callers, token)?;
+        let budget = &mut caller.budgets[METHODS
+            .iter()
+            .position(|known| *known == method)
+            .unwrap_or(METHODS.len())];
         let now = Instant::now();
-        caller.tokens =
-            (caller.tokens + now.duration_since(caller.at).as_secs_f64() * REFILL).min(BURST);
-        caller.at = now;
-        if caller.tokens < 1.0 {
-            let wait = ((1.0 - caller.tokens) / REFILL).ceil().max(1.0) as u64;
+        budget.tokens =
+            (budget.tokens + now.duration_since(budget.at).as_secs_f64() * REFILL).min(BURST);
+        budget.at = now;
+        if budget.tokens < 1.0 {
+            let wait = ((1.0 - budget.tokens) / REFILL).ceil().max(1.0) as u64;
             return Err(Failure {
                 code: "rate_limited",
                 message: "Too many requests".into(),
                 retry_after: Some(wait),
             });
         }
-        caller.tokens -= 1.0;
+        budget.tokens -= 1.0;
         Ok(bound)
     }
 
@@ -548,7 +581,7 @@ async fn respond(
             return Err(Failure::new("unknown_method", "pair is not supported"));
         }
         let token = token.ok_or(Failure::revoked())?;
-        let caller = service.admit(token)?;
+        let caller = service.admit(token, &message.method)?;
         let result = service
             .call(&caller, &message.method, &message.params)
             .await;

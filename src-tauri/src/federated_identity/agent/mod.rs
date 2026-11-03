@@ -374,6 +374,10 @@ impl AgentTokens {
     pub(crate) fn retirements(&self) -> u64 {
         self.0.identity.retirements()
     }
+    /// Whether the owner's identity was closed for good.
+    pub(crate) fn identity_closed(&self) -> bool {
+        self.0.identity.closed()
+    }
     pub(crate) fn stamp(&self, agent: &str, relay: &str) -> Result<Stamp, String> {
         let row = row_key(agent, relay)?;
         let at = lock(&self.0.incarnations);
