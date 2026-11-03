@@ -1,6 +1,6 @@
 /** Selected discovery fields emitted for a required host by BUZZ-511.
  * Producer: https://github.com/block/buzz/pull/8988
- * Pinned head: d3ae4935b11e207f0736833cd5220f207be359fd
+ * Pinned head: 82c64ce008171855606511c1340cddaa949196fe
  * Spec: docs/nips/NIP-FI.md, Discovery (line 891).
  * Source: crates/buzz-relay/src/nip11.rs, nip11_document/RelayInfo::build.
  * Producer test: nip_fi_policy/tests.rs,

@@ -33,11 +33,11 @@ replay arbitrary failures or change the request's original session revision.
 [BUZZ-511](https://linear.app/squareup/issue/BUZZ-511) owns the discovery producer
 and specification, published as draft [block/buzz#8988](https://github.com/block/buzz/pull/8988).
 The consumer fixture `src/features/communities/discovery-fixture.ts` pins selected
-emitted fields to producer head `d3ae4935b11e207f0736833cd5220f207be359fd`:
+emitted fields to producer head `82c64ce008171855606511c1340cddaa949196fe`:
 
-- [Normative Discovery contract](https://github.com/block/buzz/blob/d3ae4935b11e207f0736833cd5220f207be359fd/docs/nips/NIP-FI.md#L891).
-- [Executable host/mode matrix](https://github.com/block/buzz/blob/d3ae4935b11e207f0736833cd5220f207be359fd/crates/buzz-relay/src/nip_fi_policy/tests.rs#L247).
-- [Producer response](https://github.com/block/buzz/blob/d3ae4935b11e207f0736833cd5220f207be359fd/crates/buzz-relay/src/nip11.rs#L400).
+- [Normative Discovery contract](https://github.com/block/buzz/blob/82c64ce008171855606511c1340cddaa949196fe/docs/nips/NIP-FI.md#L891).
+- [Executable host/mode matrix](https://github.com/block/buzz/blob/82c64ce008171855606511c1340cddaa949196fe/crates/buzz-relay/src/nip_fi_policy/tests.rs#L247).
+- [Producer response](https://github.com/block/buzz/blob/82c64ce008171855606511c1340cddaa949196fe/crates/buzz-relay/src/nip11.rs#L400).
 
 The top-level boolean is stored requirement OR global Enforce. Capability remains
 mode.evaluates OR effective requirement: a free Shadow host advertises capability
@@ -45,11 +45,15 @@ without requiring FI; a free Off host omits FI capability. Required output inclu
 `core: "client-attached"`, freshness class `offline-jwt`, and a null residual upstream
 revocation bound. Neither capability nor policy grants issuer/account-origin trust.
 Root NIP-11 and `/info` agree and return `no-store`; unknown/non-serving hosts return
-404 and unavailable policy returns 503. Client policy remains separate from descriptor
-compatibility, including unsupported descriptors in negative fixtures.
+404. For a required host, unavailable policy or missing verifier, deny map or
+finite lifetime returns 503.
+Buzz treats 503 as a recoverable discovery failure, never as optional/free access.
+Client policy remains separate from descriptor compatibility, including
+unsupported descriptors in negative fixtures.
 
-This pins a published draft, not a deployed producer. Producer review remains
-pending; update the pin if its contract changes. Production baseline verification
+This pins a published draft, not a deployed producer. Its exact-head source recheck
+resolved the prior findings with no new blockers; hosted CI and human acceptance
+remain gates. Update the pin if its contract changes. Production baseline verification
 and activation/live-fleet gates remain unresolved.
 Static fixtures do not establish live interoperability or completed activation.
 
