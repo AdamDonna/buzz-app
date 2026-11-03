@@ -194,6 +194,10 @@ that agent in Buzz; they do not notify the external app through this connection.
   before allowing a fresh participation invitation; failed checks keep the original.
   If the original invitation was applied and the person was later removed, Retry
   clears the old row without re-adding them. Use **Add** in People to invite them again.
+- **Open links in your browser**: on desktop, ⌘-click (Ctrl-click on Windows
+  and Linux) an HTTP(S) link in a message to open it in your default browser
+  instead of a side panel. You can also right-click the link and choose
+  **Open in browser**.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
