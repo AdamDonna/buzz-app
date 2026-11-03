@@ -232,7 +232,26 @@ export type SoloDisclosureProps = Readonly<{
 }>;
 export type SoloNavigation = Readonly<{
   version: 2;
+  workspaces: SoloWorkspaces;
   registerSource(source: SoloRegionSource): SoloRegionHandle;
+}>;
+
+export type SoloWorkspaceSnapshot = Readonly<{
+  status: "loading" | "ready" | "unavailable";
+  workspaces: readonly Readonly<{ id: string; name: string }>[];
+  canCreate: boolean;
+  error?: string;
+}>;
+/** Personal Solo workspaces. Region task filing stays with the region owner. */
+export type SoloWorkspaces = Readonly<{
+  snapshot(binding: SoloRegionBinding): SoloWorkspaceSnapshot;
+  subscribe(binding: SoloRegionBinding, listener: () => void): () => void;
+  refresh(binding: SoloRegionBinding): Promise<void>;
+  /** Retain the same id/name after an uncertain outcome; refresh before retrying. */
+  create(
+    binding: SoloRegionBinding,
+    input: Readonly<{ id: string; name: string }>,
+  ): Promise<void>;
 }>;
 
 declare module "@deepseek-ai/cordis" {

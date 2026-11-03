@@ -15,6 +15,7 @@ import { relayPartition } from "../relay/partition";
 import { ownSolo, soloLabels } from "../solo/labels";
 import { regionLabels, soloRegionLabel } from "../solo/region-labels";
 import { soloDraftTarget } from "./routes";
+import { createSoloWorkspaces } from "./solo-workspaces";
 import {
   projectSoloRegions,
   type RegisteredSoloSource,
@@ -48,6 +49,7 @@ const sameBinding = (a: SoloRegionBinding | undefined, b: SoloRegionBinding) =>
 /** The connection owns source binding even while the sidebar is unmounted. */
 export class SoloNavigationService extends Service implements SoloNavigation {
   readonly version = 2 as const;
+  readonly workspaces;
   private readonly contributions;
   private readonly listeners = new Set<() => void>();
   private readonly runtimes = new Map<RegisteredSoloSource, Runtime>();
@@ -72,6 +74,13 @@ export class SoloNavigationService extends Service implements SoloNavigation {
     private readonly plugins?: Pick<PluginManager, "snapshot" | "subscribe">,
   ) {
     super(ctx, "soloNavigation");
+    this.workspaces = createSoloWorkspaces(
+      (binding) =>
+        sameBinding(this.binding, binding)
+          ? this.session?.soloPreferences
+          : undefined,
+      relay.subscribe,
+    );
     this.contributions = createContributions<
       SoloRegionSource & { identity: object }
     >(ctx);

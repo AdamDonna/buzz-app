@@ -63,3 +63,17 @@ then the region heading; removing the region restores focus to the Solo heading.
 Focused tests live beside `solo-navigation.ts` and `SoloRegions.tsx`. Browser and
 native app checks must still cover geometry, both themes, enlarged text, keyboard
 focus, hidden sections, and relay signing. DOM checks do not establish those facts.
+
+## Personal workspaces
+
+`ctx.soloNavigation.workspaces` exposes the bound user's Solo workspace catalog.
+Pass the current region binding to `snapshot`, `subscribe`, `refresh`, and
+`create({id, name})`. The snapshot contains IDs, names, status, creation
+availability, and any read error. Ordinary chat assignments remain host-owned.
+Refresh before retrying uncertain creation and keep the same ID and name.
+Ended bindings cannot read or write a new community. The existing Solo writer
+enforces authorization, record capacity, and revision checks.
+
+Regions own their task filing; they do not add an ordinary Solo assignment for
+each task. Workspace selection in a task draft is personal metadata and is
+excluded from new signed task-token tags. Previously signed tags remain readable.
