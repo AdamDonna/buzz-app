@@ -69,10 +69,12 @@ export function createNotifications(): NotificationPlatform {
         // Native code restores/focuses the main window before returning the click.
         // No destination or account data crosses this boundary.
         const retired = await invoke<string | null>("notification_show", {
-          id: item.id,
-          title: item.title,
-          body: item.body,
-          foregroundBanner: item.foregroundBanner ?? false,
+          presentation: {
+            id: item.id,
+            title: item.title,
+            body: item.body,
+            foregroundBanner: item.foregroundBanner ?? false,
+          },
           onEvent: channel,
         });
         if (retired) {
