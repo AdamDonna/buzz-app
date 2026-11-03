@@ -47,7 +47,7 @@ export class PiSessions {
   constructor(
     private readonly agents: Pick<
       Agents,
-      "storage" | "execution" | "inspectExecution"
+      "storage" | "execution" | "inspectExecution" | "executionBinding"
     >,
     private readonly factory: Factory,
   ) {
@@ -109,25 +109,13 @@ export class PiSessions {
   }
 
   private selection(agent: string) {
+    if (this.agents.executionBinding(agent)) return true;
     const known = this.selections.get(agent);
     if (known === undefined && !this.inspections.has(agent))
       void this.inspect(agent).catch((error) =>
         console.warn(`Pi agent ${agent} selection read failed`, error),
       );
     return known;
-  }
-
-  private async selected(agent: string) {
-    if (await this.inspect(agent)) return true;
-    const execution = await this.agents.execution(agent, {
-      key: crypto.randomUUID(),
-      intent: "new",
-    });
-    if (execution) {
-      await execution.dispose();
-      throw new Error("The execution selection changed. Try again.");
-    }
-    return false;
   }
 
   private runtime(agent: string, session: PiSession): Open {
@@ -210,7 +198,7 @@ export class PiSessions {
     const scope = `${agent}/${place}`;
     const generation = this.generations.get(scope) ?? {};
     this.generations.set(scope, generation);
-    if (!(await this.selected(delivery.agent.key))) return false;
+    if (!(await this.inspect(delivery.agent.key))) return false;
     await this.changes.get(scope);
     delivery.signal.throwIfAborted();
     const session = await this.store.current(delivery.agent.key, place);
@@ -227,7 +215,7 @@ export class PiSessions {
 
   async runOnce(turn: StandaloneTurn) {
     const live = this.live(turn.delivery.agent.key);
-    if (!(await this.selected(turn.delivery.agent.key)))
+    if (!(await this.inspect(turn.delivery.agent.key)))
       return this.local.runOnce(turn);
     turn.signal.throwIfAborted();
     const text = await turn.prompt();
@@ -409,7 +397,7 @@ export class PiSessions {
     action: SessionControlAction,
   ) {
     const live = this.live(agent.key);
-    if (!(await this.selected(agent.key)))
+    if (!(await this.inspect(agent.key)))
       return this.local.session(agent, place, action);
     live();
     const key = this.controlKey(agent, place);

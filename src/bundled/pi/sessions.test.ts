@@ -35,7 +35,11 @@ function fixture(
   const local = fakeHost({
     unfinished: () => ({ submissions: [] }),
     place: () => ({ seen: 0 }),
+    places: () => ({
+      places: [{ key: `${channelId}/${root}`, conversation: 1, seen: 100 }],
+    }),
     deliver: () => ({ submission: 1, conversation: 1 }),
+    once: () => ({ submission: 1, conversation: 1 }),
     wait: () => ({ status: "done" }),
   });
   const wait = deferred<object>();
@@ -158,8 +162,9 @@ function fixture(
     storage,
     execution: execute,
     inspectExecution: inspect,
-    executionBinding: () =>
+    executionBinding: vi.fn((): AgentExecutionBinding | undefined =>
       options.staleSnapshot ? undefined : { provider: "test/remote" },
+    ),
   };
   const runtime = new PiSessions(
     services as never,
@@ -447,17 +452,26 @@ it("New invalidates a pending route before the adapter opens", async () => {
   }
 });
 
-it("keeps local Pi turns local after the atomic execution claim", async () => {
-  const f = fixture();
+it("keeps default local Pi turns free of session writes and adapter calls", async () => {
+  const f = fixture(undefined, { staleSnapshot: true });
+  const add = vi.spyOn(f.storage, "add");
+  const set = vi.spyOn(f.storage, "set");
   f.inspect.mockResolvedValue(undefined);
   f.execute.mockResolvedValue(undefined);
   const turn = f.delivery();
   await f.runtime.run(turn);
   await expect(f.result(turn)).resolves.toMatchObject({ ok: true });
-  expect(f.execute).toHaveBeenCalledWith(self, {
-    key: expect.any(String),
-    intent: "new",
-  });
+  await expect(
+    f.runtime.runOnce({
+      delivery: f.delivery(),
+      key: "watch",
+      signal: new AbortController().signal,
+      prompt: async () => "Inspect",
+    } as unknown as StandaloneTurn),
+  ).resolves.toEqual({ ok: true });
+  expect(f.execute).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
+  expect(set).not.toHaveBeenCalled();
   expect(f.targets.size).toBe(0);
   expect(f.local.processes).toHaveLength(1);
 });
@@ -601,4 +615,21 @@ it("keeps equal conversation numbers distinct in usage from two targets", async 
   expect(
     usage.every((session) => session.observations[0]?.tokens.input === 1),
   ).toBe(true);
+});
+
+it("shows a later remote selection after confirmed local use", async () => {
+  const f = fixture(undefined, { staleSnapshot: true });
+  f.inspect.mockResolvedValue(undefined);
+  f.execute.mockResolvedValue(undefined);
+  const turn = f.delivery();
+  await f.runtime.run(turn);
+  await f.result(turn);
+  await f.runtime.places(self);
+  expect(f.runtime.sessions(self)).toHaveLength(1);
+  f.services.executionBinding.mockReturnValue({ provider: "test/remote" });
+  expect(f.runtime.sessions(self)).toEqual([]);
+  expect(f.runtime.working(self)).toEqual([]);
+  const agent = { ...f.agent, config: DEFAULT_CONFIG } as unknown as Agent;
+  expect(f.runtime.sessionState(agent, { channelId, root })).toBe("idle");
+  expect(f.execute).not.toHaveBeenCalled();
 });
