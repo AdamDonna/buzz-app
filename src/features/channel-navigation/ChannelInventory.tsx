@@ -77,6 +77,7 @@ import {
   isChannelDropSectionKey,
   orderContributedSidebarSections,
 } from "../../bundled/channels/sidebar-sections";
+import { activityTranscript } from "../../bundled/channels/working-agents";
 import { SidebarContributionSection } from "./SidebarContributionSection";
 import {
   ContributionBoundary,
@@ -441,8 +442,13 @@ export function ChannelInventory({
     [queries, openActivityMessage],
   );
   const openAgentActivity = useCallback(
-    (channelId: string, agent: string) => {
+    (channelId: string, agent: string, messageId: string | undefined) => {
       if (!viewer || relay.snapshot().session !== queries) return;
+      const transcript = activityTranscript(
+        queries.channels,
+        channelId,
+        messageId,
+      );
       const intent = {
         channelId,
         agent,
@@ -450,6 +456,7 @@ export function ChannelInventory({
           sidebar.list.current?.querySelector<HTMLElement>(
             `[data-channel-id="${CSS.escape(channelId)}"]`,
           ) ?? null,
+        ...(transcript && { transcript }),
       };
       if (handoff) handoff.activityAgent.current = intent;
       void navigator

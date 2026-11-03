@@ -96,6 +96,8 @@ type ActivityAgent = {
   channelId: string;
   agent: string;
   trigger: HTMLElement | null;
+  /** The one conversation the agent works in, whose transcript to open. */
+  transcript?: { rootId?: string };
 };
 type Handoff = State & {
   menuActions: ReturnType<typeof createMenuActions>;

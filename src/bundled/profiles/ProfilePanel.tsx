@@ -88,6 +88,20 @@ function panelCommunity(scope: string | undefined, viewer: string | undefined) {
   }
 }
 
+/** The conversation the profile was opened from. Agents keep a Solo chat or
+ * a DM as one conversation, so a message's thread there is not its own. */
+function openedFrom(session: RelaySession, context: PanelProps["context"]) {
+  if (!context) return undefined;
+  const kind = session.channels
+    .list()
+    .channels.find((item) => item.id === context.channelId)?.channelType;
+  const whole = kind === "solo" || kind === "dm";
+  return {
+    channelId: context.channelId,
+    ...(context.rootId && !whole && { rootId: context.rootId }),
+  };
+}
+
 export function ProfilePanel({
   relay,
   target,
@@ -229,12 +243,7 @@ function OwnedAgentProfile({
       initialTranscript={initialTranscript}
       close={close}
       openConversation={openConversation}
-      conversation={
-        context && {
-          channelId: context.channelId,
-          ...(context.rootId && { rootId: context.rootId }),
-        }
-      }
+      conversation={openedFrom(session, context)}
       messageAction={(variant) => (
         <AgentMessageButton
           variant={variant}
@@ -331,10 +340,7 @@ function ProfileDetails({
           type: settings.type,
           memories: session.agentMemories,
           communities,
-          conversation: context && {
-            channelId: context.channelId,
-            ...(context.rootId && { rootId: context.rootId }),
-          },
+          conversation: openedFrom(session, context),
           initialTranscript,
           close,
           ...(openConversation && { openConversation }),

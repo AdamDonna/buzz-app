@@ -147,7 +147,9 @@ the interface unless an available tool actually supports that action.
   depend on the type. Do not assume a provider is configured or signed in.
 - **Activity**, where the agent type provides it, shows sessions and their
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label
-  opens that conversation. Working indicators describe current work,
+  opens that conversation. Choosing an agent in the activity under a message,
+  or a Working now agent whose conversation is known, opens that
+  conversation's transcript. Working indicators describe current work,
   not a guarantee that an agent is available or that a message was delivered.
 - When a request to an agent running on this device fails, the activity under
   the message offers **Retry**, which asks the agent again, and **Dismiss**,

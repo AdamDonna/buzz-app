@@ -1312,7 +1312,7 @@ function MessageRowContent({
                   : undefined
               }
               canOpen={canOpenLink ?? (() => false)}
-              open={onOpenLink}
+              open={openLink}
             />
           )}
           {!(active && session && scope && extensions?.accessories) &&

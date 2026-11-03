@@ -12,7 +12,10 @@ import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
 import type { ComposerAccessoryProps } from "../../features/conversation/contracts";
 import { useChannelIdentityNames } from "../../features/identity-names/react";
 import type { activityRecords } from "../../features/agents/activity-records";
-import { profileActivityViewTarget } from "../../features/profiles/target";
+import {
+  openProfileTranscript,
+  profileActivityViewTarget,
+} from "../../features/profiles/target";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -520,8 +523,10 @@ function ActivityBubble({
         {expanded && (
           <div className={styles.previews}>
             {entries.map((entry) => {
-              // Opens the agent's profile on its Activity tab.
-              const target = profileActivityViewTarget(entry.agent);
+              // Opens the agent's Activity on this message's transcript.
+              const target = profileActivityViewTarget(entry.agent, {
+                transcript: true,
+              });
               const preview = entry.working
                 ? currentActivity(entry.records, entry.turns)
                 : undefined;
@@ -533,7 +538,11 @@ function ActivityBubble({
                     aria-label={`View activity for ${entry.name}`}
                     disabled={!target || !props.canOpen(target)}
                     onClick={() => {
-                      if (target && props.canOpen(target) && props.open(target))
+                      if (
+                        target &&
+                        props.canOpen(target) &&
+                        openProfileTranscript(target, props.open)
+                      )
                         setExpanded(false);
                     }}
                     icon={

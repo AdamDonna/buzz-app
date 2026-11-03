@@ -367,12 +367,24 @@ function renderAgentActivity(
   rootId?: string,
   transcript: "opened" | "shown again" | false = false,
   navigation?: Navigation,
+  channelType?: "solo" | "dm" | "stream",
 ) {
   const owner = createRelaySession(null);
+  // The originating channel, as the community lists it.
+  const listed = channelType && {
+    ...owner.session.channels.list(),
+    channels: [{ id: "originating-channel", name: "Originating", channelType }],
+  };
+  const session = listed
+    ? {
+        ...owner.session,
+        channels: { ...owner.session.channels, list: () => listed },
+      }
+    : owner.session;
   const snapshot = {
     status: "ready" as const,
     generation: 1,
-    session: owner.session,
+    session,
     ...(navigation && { scope: `https://relay.test:${viewer}`, viewer }),
   };
   const relay: RelayData = {
@@ -517,6 +529,30 @@ it("opens an agent's activity on its type's Activity tab, the profile's only one
     dispose();
   }
 });
+
+it.each([
+  ["solo", "channel"],
+  ["dm", "channel"],
+  ["stream", "thread-root"],
+] as const)(
+  "gives the Activity tab a %s's message as its %s, as agents keep it",
+  (channelType, place) => {
+    const dispose = renderAgentActivity(
+      [{ title: "Activity", role: "activity" }],
+      "thread-root",
+      false,
+      undefined,
+      channelType,
+    );
+    try {
+      expect(
+        screen.getByText(`Opened from originating-channel/${place}`),
+      ).toBeVisible();
+    } finally {
+      dispose();
+    }
+  },
+);
 
 it("lets the Activity tab open a turn's channel or thread in this community, only with navigation", () => {
   const navigate = vi.fn(async () => ({ status: "opened" as const }));

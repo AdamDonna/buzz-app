@@ -256,7 +256,7 @@ it("previews only live scoped actions and retains profile navigation", () => {
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
     expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity`,
+      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
     );
   } finally {
     view.unmount();
@@ -321,7 +321,7 @@ it("makes the compact avatar and tool preview one action, retaining the popup wh
     expect(row.querySelector(".buzz-avatar")).not.toBeNull();
     fireEvent.click(popup.getByText("file.ts"));
     expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity`,
+      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     view.rerender(
@@ -425,7 +425,7 @@ it("shows local receipt and failure without requiring an ACP transcript, and ope
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
     expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity`,
+      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
     );
   } finally {
     view.unmount();

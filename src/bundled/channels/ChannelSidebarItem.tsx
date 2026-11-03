@@ -43,7 +43,11 @@ type ItemProps = {
     agent: string,
     messageId: string | undefined,
   ) => void;
-  onOpenAgentActivity?: (channelId: string, agent: string) => void;
+  onOpenAgentActivity?: (
+    channelId: string,
+    agent: string,
+    messageId: string | undefined,
+  ) => void;
   onHideDm?: (id: string) => void;
   menuEnabled?: boolean;
   sectionKey?: string | undefined;

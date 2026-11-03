@@ -265,7 +265,11 @@ test("working agents open their thread when linked, otherwise the conversation",
   });
   expect(activityAction.closest(".navigation-item")).toBeNull();
   await user.click(activityAction);
-  expect(openAgentActivity).toHaveBeenCalledExactlyOnceWith("studio", first);
+  expect(openAgentActivity).toHaveBeenCalledExactlyOnceWith(
+    "studio",
+    first,
+    messageId,
+  );
   expect(openWorkingAgent).not.toHaveBeenCalled();
   screen.getByRole("button", { name: "Activity" }).focus();
   await user.keyboard("{Enter}");
@@ -324,7 +328,11 @@ test("a typing agent still opens its profile activity while Agent Activity is of
   screen.getByRole("button", { name: "Activity" }).focus();
   await user.keyboard("{Enter}");
   await user.click(screen.getByRole("button", { name: "View Buzzy activity" }));
-  expect(openAgentActivity).toHaveBeenCalledExactlyOnceWith("studio", agent);
+  expect(openAgentActivity).toHaveBeenCalledExactlyOnceWith(
+    "studio",
+    agent,
+    undefined,
+  );
   screen.getByRole("button", { name: "Activity" }).focus();
   await user.keyboard("{Enter}");
   await user.click(
