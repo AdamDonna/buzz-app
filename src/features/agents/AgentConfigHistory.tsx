@@ -302,7 +302,10 @@ export function AgentConfigHistory({
             ? `${artifactOp(event)} · ${new Date(event.created_at * 1000).toLocaleString()}`
             : undefined
         }
-        size="wide"
+        size="default"
+        headerGap="compact"
+        footerGap="compact"
+        chromeSpacing="padded"
         preventClose={reverting !== undefined}
         actions={
           restorable && (
@@ -318,7 +321,7 @@ export function AgentConfigHistory({
           )
         }
       >
-        <div className="grid gap-3">
+        <div className="grid gap-2">
           {current && (
             <p className="m-0 text-body-sm text-secondary">
               This is the current version.
