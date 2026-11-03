@@ -204,6 +204,9 @@ it("lets a preset and note be chosen before saving, and keeps the draft after fa
   );
   await user.keyboard("{Enter}");
   await screen.findByRole("option", { name: "In 1 hour" });
+  await vi.waitFor(() =>
+    expect(screen.getByRole("option", { selected: true })).toHaveFocus(),
+  );
   await user.keyboard("{ArrowDown}{Enter}");
   expect(screen.getByRole("combobox", { name: "When" })).toHaveTextContent(
     "In 1 hour",
