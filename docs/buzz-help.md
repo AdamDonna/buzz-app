@@ -96,6 +96,10 @@ the interface unless an available tool actually supports that action.
 - **Sharing a Solo chat** grants access to its conversation history, not only
   the next message. Copying its link alone does not grant access. Check the
   intended people and destination before changing access.
+- **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
+  and use the Left/Right arrow keys. Double-click the handle to reset the width.
+  Messages and plugin pages share the saved width within the same community
+  and identity; narrow windows use a navigation drawer instead.
 
 ## Choosing and customizing agents
 
