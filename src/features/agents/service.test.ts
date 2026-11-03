@@ -9847,7 +9847,7 @@ it("uses one listening policy for watch admission and event delivery", async () 
   await service.create({ type: "example/echo", name: "Echo" });
   await service.save(bot, { attentionEnabled: true });
   const { attention } = await handleOf(run, emit);
-  // Model the broader access policy of PR1854 without changing destination membership.
+  // Listening access may be broader than destination membership; admission and delivery share the policy.
   vi.spyOn(
     service as unknown as {
       reads(agent: Agent, event: Pick<RelayEvent, "tags">): boolean;
