@@ -950,7 +950,12 @@ the same source but obey the existing cooldown and three-retry limit. Exhausted
 or unsupported quota retries require manual Retry, not a reset each minute.
 
 One 60-second recovery timer renews established joined batches and hints the
-existing roster and unread owners to repair finite evidence. It does not renew
+existing roster and unread owners to repair finite evidence. The roster hint
+starts a full channel-list read only when the last one is still owed or failed,
+or when no full read, from any trigger, has completed for 15 minutes
+(`ROSTER_BACKSTOP_INTERVAL`). Membership notices carry joins and removals live;
+the read backs up the changes the relay sends no notice for: a channel delete,
+a moderation kick or DM, and a dropped fan-out frame. It does not renew
 singleton previews or add per-channel background history reads. When the socket
 delivered no frame for a whole interval, the timer also sends one empty probe
 REQ; if no frame arrives within the setup timeout, the socket is replaced through

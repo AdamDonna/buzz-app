@@ -140,6 +140,12 @@ export type EventViewSnapshot = Readonly<{
   error?: string | undefined;
 }>;
 
+/** The live recovery tick re-reads the full channel list at most this often.
+ * Membership notices carry joins and removals live; this read only backs up
+ * changes the relay sends no notice for, such as a channel delete, a moderation
+ * kick or DM, or a dropped fan-out. Any completed full read restarts it. */
+export const ROSTER_BACKSTOP_INTERVAL = 15 * 60_000;
+
 /** A read of named authors' profiles only. Profiles do not depend on channels,
  * so no channel access change, including a denied channel list, can stale it. */
 function isProfileFilter(filter: ReadFilter) {
@@ -996,6 +1002,8 @@ export function createRelaySession(
       : undefined,
     notify,
   );
+  /** When the last full channel-list read completed, whatever started it. */
+  let rosterReadAt = 0;
   const channels = createChannelStore(
     transport
       ? {
@@ -1011,6 +1019,8 @@ export function createRelaySession(
           restored: (events) => unread.accept(events),
           demand: (channelId) => demandChannel(channelId),
           rosterChanged: (strong) => {
+            if (channels.roster().state === "verified")
+              rosterReadAt = Date.now();
             settleHintConfirmations(strong);
             publishLive();
           },
@@ -3484,7 +3494,11 @@ export function createRelaySession(
     },
     recover() {
       if (closed) return;
-      refreshRoster();
+      if (
+        channels.rosterOwed() ||
+        Date.now() - rosterReadAt >= ROSTER_BACKSTOP_INTERVAL
+      )
+        refreshRoster();
       unread.reconnect();
     },
     denied(channelId, reason) {
