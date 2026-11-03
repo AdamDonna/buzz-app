@@ -413,6 +413,9 @@ function InboxList({
     | undefined
   >(undefined);
   const intentRevision = useRef(0);
+  // While an archive's failed read of the next conversation awaits Retry,
+  // this watches that conversation for a newer read or unread choice.
+  const successorWatch = useRef<() => void>(undefined);
   function cancelRetry() {
     intentRevision.current++;
     failedMutation.current = undefined;
@@ -422,6 +425,7 @@ function InboxList({
     active.current = true;
     return () => {
       active.current = false;
+      successorWatch.current?.();
     };
   }, []);
   useEffect(() => {
@@ -715,8 +719,7 @@ function InboxList({
     // a later Mark as unread is never overridden by it.
     let readNext: (() => Promise<unknown>) | undefined;
     let reading: Promise<unknown> | undefined;
-    // A failed read retries only while no newer read or unread has been saved.
-    let failedAt: number | undefined;
+    let readTarget: InboxItem["target"] | undefined;
     // Archiving the open conversation closes its tab and opens the next;
     // restoring it keeps its tab.
     const navigate = () => {
@@ -764,6 +767,7 @@ function InboxList({
                           ),
                         ),
                       );
+              readTarget = next.target;
               reading = readNext();
             } catch {
               // A conversation that can no longer be read stays as it is.
@@ -806,8 +810,8 @@ function InboxList({
     };
     void run(async () => {
       navigate();
-      if (!reading && failedAt !== session.unread.revision())
-        readNext = undefined;
+      successorWatch.current?.();
+      successorWatch.current = undefined;
       const following = reading ?? readNext?.();
       reading = undefined;
       try {
@@ -818,7 +822,18 @@ function InboxList({
           }),
         ]);
       } catch (cause) {
-        failedAt = session.unread.revision();
+        // A failed read retries only until the conversation is marked read or
+        // unread again: that newer choice is the one to keep.
+        const target = readTarget;
+        if (readNext && target) {
+          const manual = session.unread.snapshot(target).manual;
+          const stop = session.unread.subscribe(target, () => {
+            if (session.unread.snapshot(target).manual === manual) return;
+            readNext = undefined;
+            stop();
+          });
+          successorWatch.current = stop;
+        }
         throw cause;
       }
     }, valid);
