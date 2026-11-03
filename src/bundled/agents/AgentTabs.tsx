@@ -1,4 +1,11 @@
-import { useCallback, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { ChannelChoice } from "../../features/agents/attention";
 import type {
   Agent,
@@ -19,6 +26,7 @@ import { AgentSaveState } from "../../features/agents/AgentSaveButton";
 
 /** An agent's sections as tabs, opening on the first. */
 export function AgentTabs(props: {
+  showSettings?: boolean | undefined;
   agents: Agents;
   agent: Agent;
   type: RegisteredAgentType | undefined;
@@ -59,6 +67,9 @@ export function AgentTabs(props: {
   const [tab, setTab] = useState<string>(
     props.initialActivity ? "agent:activity" : (sections[0]?.value ?? ""),
   );
+  useEffect(() => {
+    if (props.showSettings) setTab("agent:management");
+  }, [props.showSettings]);
   const [draft, setDraft] = useState({ dirty: false, saving: false });
   const drafts = useRef(new Map<string, { dirty: boolean; saving: boolean }>());
   const reportDraft = useCallback(

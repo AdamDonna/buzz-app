@@ -65,6 +65,7 @@ import { AgentPortrait, useAgentPortraitSource } from "./AgentCard";
 import { AgentIdentityDialog } from "./AgentIdentityDialog";
 import { useNamePrompt, useShake } from "./useNamePrompt";
 import { AgentTabs } from "./AgentTabs";
+import type { HistoryPresentation } from "../../features/agents/history-presentation";
 import { AgentConfigHistoryRow } from "../../features/agents/AgentConfigHistoryRow";
 import { useAgentSettingsHost } from "./AgentSettingsHost";
 import styles from "./AgentsPage.module.css";
@@ -90,7 +91,9 @@ export function AgentDetails({
   openConversation,
   communities,
   openSettings,
+  historyPresentation,
 }: {
+  historyPresentation?: HistoryPresentation | undefined;
   agents: Agents;
   agent: Agent;
   type: RegisteredAgentType | undefined;
@@ -481,6 +484,7 @@ export function AgentDetails({
               </p>
             )}
             <AgentTabs
+              showSettings={historyPresentation?.active}
               agents={agents}
               agent={settings.agent}
               type={settings.type}
@@ -530,6 +534,7 @@ export function AgentDetails({
                       <AgentConfigHistoryRow
                         agents={agents}
                         pubkey={agent.pubkey}
+                        presentation={historyPresentation}
                       />
                     )}
                     <AgentArchiveRetry agents={agents} agent={agent} />

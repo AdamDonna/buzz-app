@@ -1,3 +1,4 @@
+import { profileHistoryTarget, profileHistoryRoute } from "./target";
 import { expect, it } from "vitest";
 import {
   claimProfileTranscript,
@@ -100,4 +101,26 @@ it("asks for a transcript once per opening until its profile claims it", () => {
   // Opening the same target again is a new opening.
   openProfileTranscript(transcript, () => true);
   expect(claimProfileTranscript(transcript)).toBeGreaterThan(first ?? 0);
+});
+
+it("restores version addresses only for a recognized underlying profile", () => {
+  const pubkey = "a".repeat(64);
+  const selected = { side: "instructions", id: "b".repeat(64) } as const;
+  for (const base of [
+    profileTarget(pubkey),
+    profileTarget(pubkey, { agent: true }),
+    profileActivityViewTarget(pubkey),
+  ]) {
+    const opened = profileHistoryTarget(base as string, selected);
+    expect(profileHistoryRoute(opened)).toEqual(selected);
+    expect(profilePanelKey(opened)).toBe(pubkey);
+    expect(profileHistoryTarget(opened)).toBe(`${base}#versions`);
+    expect(profilePanelKey(`${base}#versions`)).toBe(pubkey);
+    expect(profilePanelKey(`${opened}#extra`)).toBeUndefined();
+  }
+  expect(
+    profilePanelKey(
+      `https://example.com#version=instructions/${"b".repeat(64)}`,
+    ),
+  ).toBeUndefined();
 });

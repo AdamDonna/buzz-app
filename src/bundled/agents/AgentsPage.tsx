@@ -1,3 +1,10 @@
+import type { OpenTarget } from "../../features/navigation/targets";
+import {
+  agentHistoryActive,
+  agentHistoryRoute,
+  agentHistoryTarget,
+} from "./routes";
+import { historyPresentation } from "../../features/agents/history-presentation";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import { AgentDetails } from "./AgentDetails";
 import { communityDestination } from "../../features/communities/destination";
@@ -499,6 +506,25 @@ export function AgentsPage({
       />
     ) : (
       <AgentDetails
+        historyPresentation={
+          navigation &&
+          navigator &&
+          !navigation.signal.aborted &&
+          navigator.snapshot().entry.id === navigation.entryId &&
+          navigation.target.kind === "page"
+            ? historyPresentation(
+                navigator,
+                agentHistoryRoute(navigation.target.route?.params),
+                (selection) =>
+                  agentHistoryTarget(
+                    navigation.target as Extract<OpenTarget, { kind: "page" }>,
+                    selected.pubkey,
+                    selection,
+                  ),
+                agentHistoryActive(navigation.target.route?.params),
+              )
+            : undefined
+        }
         communities={communities}
         messageAction={(variant) => (
           <AgentMessageButton

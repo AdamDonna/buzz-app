@@ -1,3 +1,8 @@
+import {
+  historySelection,
+  historySelectionKey,
+  type HistorySelection,
+} from "../agents/history-presentation";
 import { npubEncode, decode } from "nostr-tools/nip19";
 
 /** Public identity locator, not a relay hint or an authority claim. */
@@ -18,6 +23,10 @@ export function profileAgentHint(target: string): boolean {
 }
 
 export function profilePanelKey(target: string): string | undefined {
+  if (profileHistoryActive(target)) {
+    const base = target.split("#")[0] as string;
+    return profilePanelKey(base) ?? profileActivityViewKey(base);
+  }
   return profileAgentHint(target)
     ? target.slice("buzz:agent-profile:".length)
     : profileKey(target);
@@ -101,5 +110,31 @@ export function profileActivityTranscript(target: string): boolean {
   const agent = profileActivityViewKey(target);
   return (
     !!agent && target === profileActivityViewTarget(agent, { transcript: true })
+  );
+}
+
+/** A config version inspector within the existing owned-agent profile. */
+export function profileHistoryRoute(target: string) {
+  const [base, fragment, extra] = target.split("#");
+  return base && fragment?.startsWith("version=") && extra === undefined
+    ? historySelection(fragment.slice("version=".length))
+    : undefined;
+}
+export function profileHistoryTarget(
+  target: string,
+  selected?: HistorySelection,
+) {
+  const base = profileHistoryActive(target)
+    ? (target.split("#")[0] as string)
+    : target;
+  return selected
+    ? `${base}#version=${historySelectionKey(selected)}`
+    : `${base}#versions`;
+}
+
+export function profileHistoryActive(target: string) {
+  return (
+    (target.split("#").length === 2 && target.endsWith("#versions")) ||
+    !!profileHistoryRoute(target)
   );
 }

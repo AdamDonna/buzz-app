@@ -266,9 +266,11 @@ available rather than silently discarding it.
   depend on the type. Do not assume a provider is configured or signed in.
 - **Settings → Agent details → Previous versions** expands saved revisions for
   agents whose configuration syncs here. Settings and instructions have separate
-  histories, kept automatically when changes are saved. **Show changes** compares
-  versions and **Load older** fetches more.
-  Reverting one track saves a new revision without changing the other track.
+  histories, kept automatically when changes are saved. Click a version to open
+  its changes in a dialog; older valid versions offer **Revert to this** (or
+  **Restore this** after deletion). The current version is labelled and has no
+  restore action. **Load older** fetches more history. Reverting one track saves
+  a new revision without changing the other track.
 - **Activity**, where the agent type provides it, shows sessions and their
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label
   opens that conversation. Working indicators describe current work,

@@ -682,6 +682,9 @@ it("links an owned agent whose type's plugin is off to Manage plugins", async ()
     addedTabs: () => [],
   } as unknown as Agents;
   const navigation = {
+    snapshot: () => ({
+      entry: { id: "profile", target: { version: 1, kind: "home" } },
+    }),
     open: vi.fn(async () => ({ status: "opened" as const })),
   } as unknown as Navigation;
   try {

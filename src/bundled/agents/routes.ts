@@ -6,6 +6,12 @@ import type {
   OpenTarget,
 } from "../../features/navigation/targets";
 
+import {
+  historySelection,
+  historySelectionKey,
+  type HistorySelection,
+} from "../../features/agents/history-presentation";
+
 type PageTarget = Extract<OpenTarget, { kind: "page" }>;
 const providerKey = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 
@@ -26,8 +32,11 @@ export function agentRoute(value: JsonValue | undefined) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const keys = Object.keys(value);
   const agent = (value as Readonly<Record<string, JsonValue>>).agent;
-  return keys.length === 1 &&
-    keys[0] === "agent" &&
+  return (keys.length === 1 ||
+    (keys.length === 2 &&
+      ((value as Record<string, JsonValue>).revision === "" ||
+        !!historySelection((value as Record<string, JsonValue>).revision)))) &&
+    keys.includes("agent") &&
     typeof agent === "string" &&
     /^[0-9a-f]{64}$/.test(agent)
     ? agent
@@ -72,4 +81,39 @@ export function conversationOpener(
       channelId,
       ...(threadRootId ? { messageId: threadRootId, threadRootId } : {}),
     });
+}
+
+/** A version address preserves the agent and the page's account/community scope. */
+export function agentHistoryTarget(
+  target: PageTarget,
+  agent: string,
+  selected?: HistorySelection,
+): PageTarget {
+  return {
+    ...target,
+    route: {
+      version: 1,
+      params: {
+        agent,
+        revision: selected ? historySelectionKey(selected) : "",
+      },
+    },
+  };
+}
+export function agentHistoryRoute(value: JsonValue | undefined) {
+  return agentRoute(value) &&
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+    ? historySelection((value as Record<string, JsonValue>).revision)
+    : undefined;
+}
+
+export function agentHistoryActive(value: JsonValue | undefined) {
+  return (
+    !!agentRoute(value) &&
+    value !== null &&
+    typeof value === "object" &&
+    "revision" in value
+  );
 }

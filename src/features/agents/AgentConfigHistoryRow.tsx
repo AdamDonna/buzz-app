@@ -1,6 +1,10 @@
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Accordion } from "../../shared/design-system/ui/Accordion";
 import { AgentConfigHistory } from "./AgentConfigHistory";
+import type {
+  HistoryPresentation,
+  HistorySelection,
+} from "./history-presentation";
 import type { History } from "./agent-config-history";
 import type { Agents, ConfigHistory } from "./service";
 
@@ -8,16 +12,35 @@ import type { Agents, ConfigHistory } from "./service";
 export function AgentConfigHistoryRow({
   agents,
   pubkey,
+  presentation,
 }: {
   agents: Pick<Agents, "configHistory" | "snapshot" | "subscribe">;
   pubkey: string;
+  presentation?: HistoryPresentation | undefined;
 }) {
   useSyncExternalStore(agents.subscribe, agents.snapshot);
   const history = agents.configHistory(pubkey);
-  return history ? <HistoryRow key={pubkey} history={history} /> : null;
+  return history ? (
+    <HistoryRow key={pubkey} history={history} presentation={presentation} />
+  ) : null;
 }
 
-function HistoryRow({ history }: { history: ConfigHistory }) {
+function HistoryRow({
+  history,
+  presentation,
+}: {
+  history: ConfigHistory;
+  presentation?: HistoryPresentation | undefined;
+}) {
+  const [localSelection, select] = useState<HistorySelection>();
+  const selected = presentation ? presentation.selected : localSelection;
+  const setSelected = presentation?.select ?? select;
+  const [expanded, setExpanded] = useState<string[]>([]);
+  const selectionId = selected?.id;
+  const active = presentation?.active;
+  useEffect(() => {
+    if (selectionId || active) setExpanded(["Previous versions"]);
+  }, [selectionId, active]);
   const [counts, setCounts] = useState<
     Partial<Record<"settings" | "instructions", History>>
   >({});
@@ -43,6 +66,8 @@ function HistoryRow({ history }: { history: ConfigHistory }) {
     <Accordion
       variant="settings"
       keepMounted
+      value={expanded}
+      onValueChange={setExpanded}
       items={[
         {
           value: "Previous versions",
@@ -60,6 +85,8 @@ function HistoryRow({ history }: { history: ConfigHistory }) {
               {history.sides.map(({ side, expected, head, version }) => (
                 <AgentConfigHistory
                   key={`${expected.channel}/${expected.d}`}
+                  selected={selected?.side === side ? selected.id : undefined}
+                  onSelect={(id) => setSelected(id ? { side, id } : undefined)}
                   title={side === "settings" ? "Settings" : "Instructions"}
                   expected={expected}
                   head={head}

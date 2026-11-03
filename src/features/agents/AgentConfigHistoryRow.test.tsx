@@ -85,18 +85,15 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
   const instructions = within(
     screen.getByRole("region", { name: "Instructions" }),
   );
-  await user.click(
-    instructions.getAllByRole("button", {
-      name: "Show changes",
-    })[0] as HTMLElement,
+  await user.click(instructions.getByRole("button", { name: /^create / }));
+  const dialog = within(
+    screen.getByRole("dialog", { name: "Instructions version" }),
   );
-  expect(
-    instructions.getByRole("region", { name: "Changes" }),
-  ).toHaveTextContent("+ Instruction 1");
-  await user.click(
-    instructions.getByRole("button", { name: "Revert to this" }),
+  expect(dialog.getByRole("region", { name: "Changes" })).toHaveTextContent(
+    "+ Instruction 0",
   );
-  expect(await instructions.findByRole("alert")).toHaveTextContent(
+  await user.click(dialog.getByRole("button", { name: "Revert to this" }));
+  expect(await dialog.findByRole("alert")).toHaveTextContent(
     "Not reverted: Config changed.",
   );
   expect(revise).toHaveBeenCalledWith(
@@ -105,10 +102,12 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
       tags: expect.arrayContaining([["prev", "instructions-1"]]),
     }),
   );
+  await user.click(dialog.getByRole("button", { name: "Close" }));
   await user.click(row);
   await user.click(row);
-  expect(instructions.getByRole("region", { name: "Changes" })).toBeVisible();
-  expect(instructions.getByRole("alert")).toBeVisible();
+  await user.click(instructions.getByRole("button", { name: /^create / }));
+  expect(screen.getByRole("region", { name: "Changes" })).toBeVisible();
+  expect(screen.getByRole("alert")).toBeVisible();
   expect(read).toHaveBeenCalledTimes(2);
 });
 

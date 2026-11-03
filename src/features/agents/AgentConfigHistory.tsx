@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelayEvent } from "../relay/events";
+import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import {
@@ -11,6 +12,7 @@ import {
   emptyHistory,
   type Gap,
   HISTORY_LIMIT,
+  HISTORY_MAX_OFFSET,
   type History,
   lineDiff,
   loadOlder,
@@ -59,7 +61,11 @@ export function AgentConfigHistory({
   onRevert,
   title = "History",
   onHistoryChange,
+  selected,
+  onSelect,
 }: {
+  selected?: string | undefined;
+  onSelect?: ((id?: string) => void) | undefined;
   expected: Expected;
   /** The current head from the config store; revert builds on it. */
   head: RelayEvent | undefined;
@@ -78,7 +84,9 @@ export function AgentConfigHistory({
 }) {
   const [history, setHistory] = useState<History>(emptyHistory);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState<string>();
+  const [localSelection, setLocalSelection] = useState<string>();
+  const open = onSelect ? selected : localSelection;
+  const setOpen = onSelect ?? setLocalSelection;
   const [reverting, setReverting] = useState<string>();
   const [failure, setFailure] = useState<{ id: string; text: string }>();
   useEffect(() => onHistoryChange?.(history), [history, onHistoryChange]);
@@ -133,6 +141,7 @@ export function AgentConfigHistory({
         fail(`Not reverted: ${delivery.message}`);
       else if (delivery.status === "uncertain")
         fail(unconfirmed(delivery.message));
+      else setOpen(undefined);
     } catch (error) {
       fail(unconfirmed(message(error)));
     } finally {
@@ -220,6 +229,19 @@ export function AgentConfigHistory({
   };
 
   const all = segments(history);
+  const segment = all.find((part) =>
+    part.revisions.some(({ id }) => id === open),
+  );
+  const index = segment?.revisions.findIndex(({ id }) => id === open) ?? -1;
+  const event = segment?.revisions[index];
+  const current = event?.id === head?.id;
+  const deleted = event && artifactOp(event) === "delete";
+  const restorable =
+    event &&
+    head &&
+    !current &&
+    !deleted &&
+    !revisionProblem(expected, event, settings);
   return (
     <section className={styles.history} aria-label={title}>
       <InlineHeader title={title} />
@@ -236,55 +258,28 @@ export function AgentConfigHistory({
       )}
       {all.map((segment) => (
         <ol className={styles.list} key={segment.revisions[0]?.id}>
-          {segment.revisions.map((event, index) => {
-            const deleted = artifactOp(event) === "delete";
-            const current = event.id === head?.id;
+          {segment.revisions.map((event) => {
             const invalid =
-              !deleted && revisionProblem(expected, event, settings);
+              artifactOp(event) !== "delete" &&
+              revisionProblem(expected, event, settings);
             return (
               <li className={styles.row} key={event.id}>
-                <span className={`text-caption ${styles.label}`}>
-                  <span>
+                <Button
+                  size="inline"
+                  variant="plain"
+                  style={{ width: "100%", justifyContent: "flex-start" }}
+                  aria-haspopup="dialog"
+                  onClick={() => setOpen(event.id)}
+                >
+                  <span className="text-caption text-left">
                     {artifactOp(event)}
-                    {current ? " · Current" : ""}
-                    {invalid ? " · Not valid" : ""}
-                  </span>{" "}
-                  <span className="text-secondary">
-                    {new Date(event.created_at * 1000).toLocaleString()}
+                    {event.id === head?.id ? " · Current" : ""}
+                    {invalid ? " · Not valid" : ""}{" "}
+                    <span className="text-secondary">
+                      {new Date(event.created_at * 1000).toLocaleString()}
+                    </span>
                   </span>
-                </span>
-                {!deleted && (
-                  <Button
-                    size="inline"
-                    variant="plain"
-                    aria-expanded={open === event.id}
-                    onClick={() =>
-                      setOpen(open === event.id ? undefined : event.id)
-                    }
-                  >
-                    {open === event.id ? "Hide changes" : "Show changes"}
-                  </Button>
-                )}
-                {!deleted && !invalid && !current && head && (
-                  <Button
-                    size="inline"
-                    variant="subtle"
-                    loading={reverting === event.id}
-                    disabled={reverting !== undefined && reverting !== event.id}
-                    onClick={() => revert(event)}
-                  >
-                    {artifactOp(head) === "delete"
-                      ? "Restore this"
-                      : "Revert to this"}
-                  </Button>
-                )}
-                {failure?.id === event.id && (
-                  <p className={`text-body-sm ${styles.failure}`} role="alert">
-                    {failure.text}
-                  </p>
-                )}
-                {open === event.id &&
-                  changes(event, segment.revisions[index + 1])}
+                </Button>
               </li>
             );
           })}
@@ -296,6 +291,68 @@ export function AgentConfigHistory({
           )}
         </ol>
       ))}
+      <Dialog
+        open={!!open}
+        onOpenChange={(next) => {
+          if (!next) setOpen(undefined);
+        }}
+        title={`${title} version`}
+        description={
+          event
+            ? `${artifactOp(event)} · ${new Date(event.created_at * 1000).toLocaleString()}`
+            : undefined
+        }
+        size="wide"
+        preventClose={reverting !== undefined}
+        actions={
+          restorable && (
+            <Button
+              variant="prominent"
+              loading={reverting !== undefined}
+              onClick={() => void revert(event)}
+            >
+              {artifactOp(head) === "delete"
+                ? "Restore this"
+                : "Revert to this"}
+            </Button>
+          )
+        }
+      >
+        <div className="grid gap-3">
+          {current && (
+            <p className="m-0 text-body-sm text-secondary">
+              This is the current version.
+            </p>
+          )}
+          {event ? (
+            deleted ? (
+              <p className="m-0 text-body-sm">
+                This version removed this configuration.
+              </p>
+            ) : (
+              changes(event, segment?.revisions[index + 1])
+            )
+          ) : (
+            <p className="m-0 text-body-sm">
+              {loading
+                ? "Loading version…"
+                : "This version isn't in the loaded history."}
+            </p>
+          )}
+          {!event &&
+            !loading &&
+            (history.failed
+              ? gapAction("failed")
+              : !history.done && history.next <= HISTORY_MAX_OFFSET
+                ? gapAction("unloaded")
+                : null)}
+          {event && failure?.id === event.id && (
+            <p className={`text-body-sm ${styles.failure}`} role="alert">
+              {failure.text}
+            </p>
+          )}
+        </div>
+      </Dialog>
     </section>
   );
 }

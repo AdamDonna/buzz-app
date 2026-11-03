@@ -6,7 +6,9 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RelayEvent } from "../relay/events";
 import {
@@ -83,15 +85,18 @@ it("pages older history, labels the gap, shows a diff and reverts on the head", 
   expect(await screen.findAllByText(/^create/)).toHaveLength(1);
   expect(screen.queryByText(/aren't loaded|Couldn't load/)).toBeNull();
 
-  const [first] = screen.getAllByText("Show changes");
-  fireEvent.click(first as HTMLElement);
+  fireEvent.click(screen.getByRole("button", { name: /^update · Current/ }));
+  expect(screen.getByText("This is the current version.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   const diff = screen.getByRole("region", { name: "Changes" });
   expect(diff).toHaveTextContent(`− line ${HISTORY_PAGE - 1}`);
   expect(diff).toHaveTextContent(`+ line ${HISTORY_PAGE}`);
 
-  const reverts = screen.getAllByText("Revert to this");
-  expect(reverts).toHaveLength(HISTORY_PAGE);
-  fireEvent.click(reverts[0] as HTMLElement);
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(
+    screen.getAllByRole("button", { name: /^update / })[1] as HTMLElement,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Revert to this" }));
   expect(onRevert).toHaveBeenCalledOnce();
   const [template] = onRevert.mock.calls[0] as unknown as [
     { content: string; tags: string[][] },
@@ -139,10 +144,8 @@ it("shows an invalid revision honestly and never offers to revert to it", async 
     />,
   );
   expect(await screen.findByText(/^update · Not valid/)).toBeInTheDocument();
-  // Only r0 can be reverted to: r2 is current, r1 is malformed.
-  expect(screen.getAllByText("Revert to this")).toHaveLength(1);
-  const [, invalid] = screen.getAllByText("Show changes");
-  fireEvent.click(invalid as HTMLElement);
+  fireEvent.click(screen.getByRole("button", { name: /^update · Not valid/ }));
+  expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   expect(
     screen.getByText(
       /This revision isn't valid config \(Artifact content is not JSON\)/,
@@ -169,8 +172,12 @@ it("shows a failed revert beside the revision, keeps history and allows retry", 
     />,
   );
   const button = () => screen.getByRole("button", { name: "Revert to this" });
-  fireEvent.click(await screen.findByText("Revert to this"));
+  fireEvent.click(await screen.findByRole("button", { name: /^create / }));
+  fireEvent.click(button());
   await waitFor(() => expect(button()).toHaveAttribute("aria-busy", "true"));
+  expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(screen.getByRole("dialog")).toBeVisible();
   settle({
     status: "refused",
     event: head,
@@ -181,7 +188,7 @@ it("shows a failed revert beside the revision, keeps history and allows retry", 
     "Not reverted: restricted: no longer allowed",
   );
   expect(button()).not.toHaveAttribute("aria-busy", "true");
-  expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  expect(screen.getAllByRole("listitem", { hidden: true })).toHaveLength(2);
 
   fireEvent.click(button());
   settle({ status: "uncertain", event: head, message: "connection lost" });
@@ -198,6 +205,86 @@ it("shows a failed revert beside the revision, keeps history and allows retry", 
 
   fireEvent.click(button());
   settle({ status: "accepted", event: head });
-  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(onRevert).toHaveBeenCalledTimes(4);
+});
+
+it("opens a version by keyboard, shows a missing predecessor honestly, and restores focus on Escape", async () => {
+  const user = userEvent.setup();
+  const head = rev("r2", "r1", "new");
+  render(
+    <AgentConfigHistory
+      expected={expected}
+      head={head}
+      read={async () => [head]}
+      onRevert={vi.fn()}
+    />,
+  );
+  const row = await screen.findByRole("button", { name: /^update · Current/ });
+  row.focus();
+  await user.keyboard("{Enter}");
+  const dialog = screen.getByRole("dialog", { name: "History version" });
+  expect(
+    within(dialog).getByText(/previous revision isn't loaded/),
+  ).toBeVisible();
+  expect(screen.queryByText("Show changes")).toBeNull();
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(row).toHaveFocus());
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("shows deletion details without offering to restore the deletion itself", async () => {
+  const deleted = {
+    ...rev("r1", "r0", ""),
+    content: "",
+    tags: [
+      ...rev("r1", "r0", "").tags.filter(([key]) => key !== "op"),
+      ["op", "delete"],
+    ],
+  };
+  render(
+    <AgentConfigHistory
+      expected={expected}
+      head={deleted}
+      read={async () => [deleted, rev("r0", undefined, "old")]}
+      onRevert={vi.fn()}
+    />,
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: /^delete · Current/ }),
+  );
+  expect(
+    screen.getByText("This version removed this configuration."),
+  ).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Restore this" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByRole("button", { name: /^create / }));
+  expect(screen.getByRole("button", { name: "Restore this" })).toBeVisible();
+});
+
+it("loads an older page from a cold version dialog before offering its restore action", async () => {
+  const revisions = Array.from({ length: HISTORY_PAGE + 1 }, (_, i) =>
+    rev(`r${i}`, i ? `r${i - 1}` : undefined, `line ${i}`),
+  ).reverse();
+  const read: SnapshotRead = async ([filter]) =>
+    revisions.slice(
+      filter?.offset ?? 0,
+      (filter?.offset ?? 0) + (filter?.limit ?? 0),
+    );
+  render(
+    <AgentConfigHistory
+      expected={expected}
+      head={revisions[0]}
+      read={read}
+      onRevert={vi.fn()}
+      selected="r0"
+      onSelect={vi.fn()}
+    />,
+  );
+  const dialog = within(screen.getByRole("dialog"));
+  fireEvent.click(await dialog.findByRole("button", { name: "Load older" }));
+  expect(
+    await dialog.findByRole("region", { name: "Changes" }),
+  ).toHaveTextContent("+ line 0");
+  expect(dialog.getByRole("button", { name: "Revert to this" })).toBeVisible();
 });
