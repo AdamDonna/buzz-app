@@ -56,6 +56,7 @@ export function localSoloAgentReply(
 export function notificationAuthorized(
   communities: Communities,
   target: OpenTarget,
+  category?: string,
 ) {
   if (!("scope" in target) || !target.scope) return true;
   const client = communities.snapshot();
@@ -67,6 +68,10 @@ export function notificationAuthorized(
     )
   )
     return false;
+  // Local Solo work remains live across joined communities. Completion alerts
+  // need only the account's current membership; exact access is revalidated by
+  // navigation if the person opens the notification.
+  if (category === "agent") return true;
   if (target.kind !== "conversation") return true;
   const relay = communities.relay.snapshot();
   return (

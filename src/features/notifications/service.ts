@@ -98,8 +98,10 @@ export class NotificationsService extends Service implements Notifications {
     private readonly navigation: Navigation,
     private readonly platform: NotificationPlatform = createNotifications(),
     private readonly preferences = createNotificationPreferences(),
-    private readonly authorized: (target: OpenTarget) => boolean = (target) =>
-      !("scope" in target && target.scope),
+    private readonly authorized: (
+      target: OpenTarget,
+      category: string,
+    ) => boolean = (target) => !("scope" in target && target.scope),
     private readonly playSound: (name: SoundName) => void = (name) =>
       void playNotificationSound(name),
   ) {
@@ -238,7 +240,7 @@ export class NotificationsService extends Service implements Notifications {
       item.viewer === this.state.viewer &&
       item.expires > Date.now() &&
       item.valid() &&
-      this.authorized(item.target) &&
+      this.authorized(item.target, item.category) &&
       this.state.preferences.enabled &&
       this.state.preferences.categories[item.category] !== false
     );

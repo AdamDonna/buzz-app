@@ -1,5 +1,7 @@
 import { huddleDescription } from "../huddle/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
+import type { Communities } from "../communities/service";
+import type { OpenTarget } from "../navigation/targets";
 import type {
   SidebarDecoder,
   SidebarMuteMutator,
@@ -14,10 +16,35 @@ import {
   flush,
 } from "../relay/testing";
 import { cleanups, setup } from "./messages-testing";
+import { notificationAuthorized } from "./messages";
 
 afterEach(async () => {
   for (const stop of cleanups.splice(0)) await stop();
   vi.restoreAllMocks();
+});
+
+it("authorizes agent completions in another joined community", () => {
+  const viewer = "a".repeat(64);
+  const other = "https://other.example";
+  const target: OpenTarget = {
+    version: 1,
+    kind: "conversation",
+    scope: { viewer, communityOrigin: other },
+    channelId: "solo-chat",
+  };
+  const communities = {
+    snapshot: () => ({
+      viewer,
+      selected: "https://selected.example",
+      memberships: [{ id: other }],
+    }),
+    relay: {
+      snapshot: () => ({ status: "connecting" }),
+    },
+  } as unknown as Communities;
+
+  expect(notificationAuthorized(communities, target, "agent")).toBe(true);
+  expect(notificationAuthorized(communities, target, "mention")).toBe(false);
 });
 it("does not notify workflow owners for another recipient, but still notifies explicit owner mentions", async () => {
   vi.spyOn(Date, "now").mockReturnValue(1_780_000_000_000);

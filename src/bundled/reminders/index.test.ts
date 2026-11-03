@@ -590,7 +590,8 @@ async function launch(options: Launch) {
       dispose() {},
     },
     preferences,
-    (item) => notificationAuthorized(communities as never, item),
+    (item, category) =>
+      notificationAuthorized(communities as never, item, category),
     () => {},
   ).selectViewer(key.pubkey);
   preferences.update({
