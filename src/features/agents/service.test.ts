@@ -5233,6 +5233,39 @@ it("preserves blocked agents' settings and teams without binding or publishing t
   }
 });
 
+it("refuses Delete before saving anything when its config's home is blocked", async () => {
+  const resolve = destinations.communityDestination;
+  const policy = destinations.parseRelayPolicy(
+    JSON.stringify({ pinned: "relay.example.test", allowlist: [] }),
+  );
+  const gate = vi
+    .spyOn(destinations, "communityDestination")
+    .mockImplementation((value) => resolve(value, undefined, policy));
+  const fixture = await setup({
+    identities: [
+      {
+        pubkey: bot,
+        relay: "wss://relay.example.test",
+        home: "wss://blocked.example",
+        owner: viewer,
+        type: "example/echo",
+        name: "Away",
+        deleted: false,
+      },
+    ],
+  });
+  try {
+    await fixture.service.refresh();
+    await expect(fixture.service.remove(bot)).rejects.toThrow(
+      "Away can't be deleted here: its home community's relay is not allowed by this build's relay policy.",
+    );
+    expect(fixture.native.beginDelete).not.toHaveBeenCalled();
+  } finally {
+    await fixture.ctx.fiber.dispose();
+    gate.mockRestore();
+  }
+});
+
 it("starts with the old shared records when a full store refuses their move", async () => {
   const storage = memoryStorage();
   const shared = JSON.stringify({
