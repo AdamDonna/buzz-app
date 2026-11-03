@@ -57,12 +57,22 @@ export function useChannelDirectory(
     return () => controller.abort();
   }, [active, readDirectory, attempt]);
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  // An access change drops a finished read's directory without ending this
+  // session; read the new one rather than show its absence as no channels.
+  const stale =
+    active &&
+    read.status === "ready" &&
+    channels.directoryComplete?.() === false;
+  useEffect(() => {
+    if (stale) retry();
+  }, [stale, retry]);
   return {
     directory,
     // A refresh keeps the finished read's rows whole: nothing more to wait for.
     loading:
-      active && read.status === "loading" && !channels.directoryComplete?.(),
-    partial: read.status === "ready" && read.partial,
+      stale ||
+      (active && read.status === "loading" && !channels.directoryComplete?.()),
+    partial: !stale && read.status === "ready" && read.partial,
     error: read.status === "error",
     retry,
   };

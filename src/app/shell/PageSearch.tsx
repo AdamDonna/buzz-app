@@ -63,8 +63,8 @@ type SearchView = "all" | "channels";
 /** How long a closed search keeps its place for the next opening. */
 const SEARCH_MEMORY = 5 * 60_000;
 const SEARCH_VIEWS = [
-  { value: "all", label: "All" },
-  { value: "channels", label: "Channels" },
+  { value: "all", label: "All", panelId: "search-view-all" },
+  { value: "channels", label: "Channels", panelId: "search-view-channels" },
 ] as const;
 
 export function PageSearch({
@@ -519,6 +519,7 @@ function CommunitySearch({
     !scopedChannelId && connection.session.channels.readDirectory
       ? {
           resultsLabel: view === "channels" ? "Channels" : "Search results",
+          panelId: `search-view-${view}`,
           onSwitch: switchView,
           place,
           tabs: (

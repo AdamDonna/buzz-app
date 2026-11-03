@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { type Filter, matchFilter } from "nostr-tools";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RegisteredPage } from "../../features/pages/service";
+import type { LiveCallbacks } from "../../features/relay/live";
 import { createRelaySession } from "../../features/relay/session";
 import {
   keypair,
@@ -136,9 +137,14 @@ function connected(
   let countReads = 0;
   /** Paged reads of the whole open directory, as opposed to exact lookups. */
   let directoryReads = 0;
+  let live: LiveCallbacks | undefined;
   const owner = createRelaySession(
     {
       ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
       query(filters) {
         const directory = filters.some(
           (filter) =>
@@ -223,6 +229,11 @@ function connected(
     recover: () => {
       failing = false;
     },
+    /** The relay drops the viewer from `channelId`, live, in this session. */
+    revoke(channelId: string) {
+      live?.state({ status: "connected", routes: [] });
+      live?.receive([roster(relay, channelId, [], 1700000200)]);
+    },
     render: () =>
       render(
         <PageSearch pages={pages} onSelect={vi.fn()} services={services} />,
@@ -269,6 +280,15 @@ it("opens on All, and the Channels tab browses open channels to join A–Z", asy
     );
     // A pointer switch returns to the field, ready for typing.
     expect(field()).toHaveFocus();
+    // The selected tab names and controls the panel holding its results.
+    const panel = screen.getByRole("tabpanel", { name: "Channels" });
+    expect(within(tabs).getByRole("tab", { name: "Channels" })).toHaveAttribute(
+      "aria-controls",
+      panel.id,
+    );
+    expect(
+      within(panel).getByRole("listbox", { name: "Channels" }),
+    ).toBeVisible();
     expect(
       screen.getByRole("group", { name: "Channels you can join" }),
     ).toBeVisible();
@@ -382,6 +402,29 @@ it("shows a failed directory read with a retry", async () => {
       expect(rows()).toContainEqual(expect.stringContaining("buzz-community")),
     );
     expect(screen.queryByText("Couldn’t load channels.")).toBeNull();
+  } finally {
+    await t.dispose();
+  }
+});
+
+it("reads the directory again when access changes while Channels shows it", async () => {
+  const t = connected();
+  try {
+    t.render();
+    await openSearch();
+    await userEvent.click(screen.getByRole("tab", { name: "Channels" }));
+    const offered = [
+      expect.stringContaining("buzz-community"),
+      expect.stringContaining("design-crit"),
+      expect.stringContaining("release-notes"),
+    ];
+    await waitFor(() => expect(rows()).toEqual(offered));
+    const reads = t.directoryReads();
+    // Losing another channel drops this session's directory, not the session.
+    t.revoke("guest-private");
+    await waitFor(() => expect(t.directoryReads()).toBe(reads + 1));
+    await waitFor(() => expect(rows()).toEqual(offered));
+    expect(screen.queryByText("You’ve joined every open channel.")).toBeNull();
   } finally {
     await t.dispose();
   }

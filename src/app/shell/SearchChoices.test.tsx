@@ -68,6 +68,7 @@ const choices = (place: SearchViews["place"], rows = destinations) => (
     views={{
       tabs: null,
       resultsLabel: "Channels",
+      panelId: "search-view-channels",
       onSwitch: () => {},
       place,
     }}

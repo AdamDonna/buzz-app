@@ -70,6 +70,8 @@ export type SearchViews = {
   tabs: ReactNode;
   /** Names the results list for the view shown. */
   resultsLabel: string;
+  /** The shown view's tab panel, which its tab controls. */
+  panelId: string;
   onSwitch: (delta: 1 | -1) => void;
   /** Where the results were: their scroll position and highlighted row,
    * restored as the view mounts and kept as they change. */
@@ -420,7 +422,17 @@ export function SearchChoices({
         }}
       />
       {views && <div className="search-palette-views">{views.tabs}</div>}
-      <div ref={resultsViewport} className="search-palette-height">
+      <div
+        ref={resultsViewport}
+        className="search-palette-height"
+        {...(views
+          ? {
+              role: "tabpanel",
+              id: views.panelId,
+              "aria-labelledby": `${views.panelId}-tab`,
+            }
+          : {})}
+      >
         <div
           ref={resultsContent}
           className="search-palette-scroll"

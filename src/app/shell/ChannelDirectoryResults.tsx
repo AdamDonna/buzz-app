@@ -4,7 +4,7 @@ import {
   useChannelDirectory,
   useMemberCounts,
 } from "../../features/channels/useChannelDirectory";
-import { useChannelList } from "../../features/relay/react";
+import { useChannelRoster } from "../../features/relay/react";
 import type { RelaySession } from "../../features/relay/session";
 import { matchName } from "../../features/search/match";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -42,7 +42,7 @@ export function ChannelDirectoryResults({
   /** Opens an open channel's read-only preview, where Join lives. */
   openPreview: (channelId: string) => void;
 }) {
-  const list = useChannelList(session.channels);
+  const list = useChannelRoster(session.channels);
   const ready = list.status === "ready";
   const directory = useChannelDirectory(session.channels, ready);
   const members = useMemberCounts(session.channels);
