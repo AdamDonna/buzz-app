@@ -555,7 +555,7 @@ function AppShellContent({
                 className="min-h-0 min-w-0 flex-1"
               >
                 <Panel as="div" joined>
-                  <PanelFrame companion={companion}>
+                  <PanelFrame scope={connection.scope} companion={companion}>
                     <div
                       id={`shell-page-${panelKey}`}
                       {...(!compactPages && selectedTopbarPage

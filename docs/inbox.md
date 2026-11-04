@@ -249,8 +249,9 @@ centered draft-delete dialog. The list/detail divider reuses `usePanelSplit` and
 `ResizeHandle`: drag, arrows (Shift for larger steps), Home/End and double-click
 reset. The list defaults to 420px where space allows and can resize from 320px
 up to a 50/50 split with the conversation, which keeps at least 316px.
-Its chosen width is in memory across detail close/reopen and Inbox/Drafts switching,
-not persisted across restarts. At ≤700px available width, detail replaces the list
+Its chosen width is saved per community and viewer workspace, so it survives
+detail close/reopen, Inbox/Drafts switching, visiting other pages, and restarts;
+reset clears it. At ≤700px available width, detail replaces the list
 and the divider is hidden.
 
 All matching **already-loaded** Inbox rows render without Show more. Optional

@@ -858,12 +858,45 @@ companionTest(
     await expect(launch).toBeVisible();
     await expect(companion).toHaveCount(0);
     await launch.click();
-    await openPage(page, "Messages");
+    // The companion keeps one default, minimum, saved width and reset as it
+    // moves between PanelFrame and Messages' dock.
+    await openPage(page, "Inbox");
+    await expect(companion).toBeVisible();
+    const resize = page.getByRole("separator", {
+      name: "Resize main and secondary panels",
+    });
+    const resizedWidth = async () =>
+      Number(await resize.getAttribute("aria-valuenow"));
+    const defaultWidth = await resizedWidth();
     const composer = page.getByRole("textbox", {
       name: "Message #Alpha",
       exact: true,
     });
-    await expect(composer).toBeVisible();
+    const visitMessages = async () => {
+      await openPage(page, "Messages");
+      await expect(composer).toBeVisible();
+    };
+    await visitMessages();
+    await expect.poll(resizedWidth).toBe(defaultWidth);
+    await openPage(page, "Inbox");
+    await resize.focus();
+    await resize.press("Home");
+    await expect.poll(resizedWidth).toBeLessThan(defaultWidth);
+    const minimumWidth = await resizedWidth();
+    await visitMessages();
+    await expect.poll(resizedWidth).toBe(minimumWidth);
+    await openPage(page, "Inbox");
+    await resize.focus();
+    await resize.press("Shift+ArrowLeft");
+    await expect.poll(resizedWidth).toBeGreaterThan(minimumWidth + 40);
+    const companionWidth = await resizedWidth();
+    await visitMessages();
+    await expect.poll(resizedWidth).toBe(companionWidth);
+    await resize.dblclick();
+    await expect.poll(resizedWidth).toBe(defaultWidth);
+    await openPage(page, "Inbox");
+    await expect.poll(resizedWidth).toBe(defaultWidth);
+    await visitMessages();
     await composer.fill("Companion draft");
     const conversation = page.getByRole("article", {
       name: "Conversation",

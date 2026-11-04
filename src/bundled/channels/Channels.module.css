@@ -23,8 +23,16 @@
 .board:has(> [data-panel-dock]:not([hidden], [data-closing])) {
   grid-template-columns: minmax(20rem, 1fr) minmax(
       0,
-      max(19.75rem, var(--secondary-panel-width, calc(100% / 2.1)))
+      max(
+        var(--split-floor, 19.75rem),
+        var(--secondary-panel-width, var(--split-default, calc(100% / 2.1)))
+      )
     );
+}
+/* An open companion keeps PanelFrame's floor and default (Panels .frame/.dock). */
+.board[data-companion] {
+  --split-floor: 18.75rem;
+  --split-default: 26.25rem;
 }
 /* Only the board and its dock read the split width. Reset it below them so a
    resize frame restyles those readers, not the timeline and panels inside. */
@@ -542,7 +550,10 @@ html[data-keyboard-navigation]
   flex: 1;
 }
 .panelStack {
-  width: max(19.75rem, var(--secondary-panel-width, calc(100cqw / 2.1)));
+  width: max(
+    var(--split-floor, 19.75rem),
+    var(--secondary-panel-width, var(--split-default, calc(100cqw / 2.1)))
+  );
   position: relative;
   border-inline-start: 1px solid var(--border-standard);
   grid-column: 2;

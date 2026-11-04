@@ -94,7 +94,7 @@ import {
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import { PanelDock } from "../../features/panels/PanelDock";
-import { PanelFrame } from "../../features/panels/PanelFrame";
+import { COMPANION_SPLIT, PanelFrame } from "../../features/panels/PanelFrame";
 import { OutboxStatus } from "./OutboxStatus";
 import { RelayTimings } from "./RelayTimings";
 import { LiveStatus } from "./LiveStatus";
@@ -212,7 +212,7 @@ export function ChannelsPage({
   return (
     <section className={styles.root} aria-label="Channels">
       {session.status !== "ready" && !session.cached ? (
-        <PanelFrame companion={companion}>
+        <PanelFrame scope={session.scope} companion={companion}>
           {session.status === "disconnected" ? (
             <div className={styles.connect}>
               <div className={styles.connectIcon}>
@@ -1698,7 +1698,14 @@ function ChannelWorkspace({
         tab.id === selectedTab &&
         tab.channelId === currentId,
     );
-  const split = usePanelSplit();
+  // While the companion is in the dock it keeps its width and bounds from
+  // other pages; threads alone keep their own split.
+  const split = usePanelSplit(
+    scope,
+    companion ? COMPANION_SPLIT.name : "channels",
+    companion ? COMPANION_SPLIT.defaultWidth : undefined,
+    companion ? COMPANION_SPLIT.min : undefined,
+  );
   // A routed thread can mount behind a collapsed pane, where it cannot take
   // focus, or already be selected, so its pane does not move focus. Once its
   // tab shows, hand it focus nothing else took.
@@ -1956,6 +1963,7 @@ function ChannelWorkspace({
     <div
       data-channel-workspace={currentId ?? ""}
       data-reading-thread={readingThread ? "" : undefined}
+      data-companion={companion ? "" : undefined}
       ref={split.ref}
       style={split.style}
       className={`${styles.board} ${panelStyles.splitMotion}`}

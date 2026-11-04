@@ -227,6 +227,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
   and identity; narrow windows use a navigation drawer instead.
+- **Panel dividers**: the divider between a page and its side panel (such as
+  the Inbox list and a conversation) works the same way. Each page remembers
+  its own width within the same community and identity; double-click to reset.
 
 ## Saved Solo follow-ups
 

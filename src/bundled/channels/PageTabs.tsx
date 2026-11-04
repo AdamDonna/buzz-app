@@ -272,7 +272,7 @@ export function PageTabs({
       fallbackFocus.current
     )?.focus({ preventScroll: true });
   });
-  const split = usePanelSplit();
+  const split = usePanelSplit(scope, `page:${id}`);
   const hasTabs = secondary.items.length > 0;
   const showingPanel = tabState.paneOpen && hasTabs;
   const tabMenu = {

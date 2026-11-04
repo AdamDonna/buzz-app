@@ -300,10 +300,11 @@ for (const destination of ["Messages", "Workflows"]) {
     await expect
       .poll(async () => (await dock.boundingBox()).width)
       .toBeCloseTo(adjusted, 0);
+    // The companion keeps one minimum on every host.
     await handle.press("Home");
     await expect
       .poll(async () => (await dock.boundingBox()).width)
-      .toBeCloseTo(destination === "Workflows" ? 300 : 316, 0);
+      .toBeCloseTo(300, 0);
     await handle.press("End");
     expect(
       await dock.evaluate(

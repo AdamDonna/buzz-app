@@ -498,9 +498,14 @@ immediately; the shared navigation selection background identifies the active ta
 Joined header separators meet the vertical dividers. The sidebar resize grip stays
 visible throughout a drag while its tooltip stays hidden. Desktop main/secondary
 dividers share that grip and support dragging, arrow keys (Shift for larger
-steps), Home/End, and double-click to reset. Each page retains its chosen split
-while the panel closes and reopens; widths clamp to the available space. Narrow
-overlay layouts hide this divider and keep their normal responsive sizing.
+steps), Home/End, and double-click to reset. Each page saves its chosen split on
+this device, per community and viewer workspace like the sidebar width, so it
+survives the panel closing, page switches, and restarts. While a companion is
+open, the right column keeps the companion's one width, default, and minimum on
+every page, including Messages; otherwise Messages keeps its own thread-panel
+width. Reset clears the saved width. Widths clamp to the
+available space. Narrow overlay layouts hide this divider and keep their normal
+responsive sizing.
 
 Pointer-opened secondary panels fade and slide in over 180ms with the shared
 strong ease-out curve. Desktop panels travel 12px on entry and close immediately,

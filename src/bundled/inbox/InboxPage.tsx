@@ -306,7 +306,7 @@ function InboxList({
   close(target: PageTabTarget): boolean;
   isOpen(target: PageTabTarget): boolean;
 }) {
-  const split = usePanelSplit(undefined, 316, {
+  const split = usePanelSplit(session.scope, "inbox", undefined, 316, {
     defaultWidth: 420,
     maxRatio: 0.5,
   });
