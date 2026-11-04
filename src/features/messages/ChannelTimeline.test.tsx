@@ -24,6 +24,11 @@ import type { ChannelMessage, ChannelWindow } from "../relay/contracts";
 // metrics reproduce the event ordering measured separately in Chromium/WebKit.
 // Reading geometry/dwell has its own real-hook boundary suite. This fixture
 // deliberately supplies only the DOM shape needed for positioning.
+// Activity rendering/subscriptions have their own mounted integration suite.
+vi.mock("./TypingIndicator", () => ({
+  TypingIndicator: () => null,
+  useConversationAgents: () => ({ agents: [] }),
+}));
 vi.mock("./use-reading", () => ({
   useReading: vi.fn(),
   readingPositioned: vi.fn(),
@@ -181,12 +186,15 @@ function setup({
     for (const [callback, targets] of observers)
       if (targets.has(target)) callback();
   };
-  const mutations = new Map<() => void, Map<unknown, MutationObserverInit>>();
+  const mutations = new Map<
+    (records: MutationRecord[]) => void,
+    Map<unknown, MutationObserverInit>
+  >();
   vi.stubGlobal(
     "MutationObserver",
     class {
       targets = new Map<unknown, MutationObserverInit>();
-      constructor(callback: () => void) {
+      constructor(callback: (records: MutationRecord[]) => void) {
         mutations.set(callback, this.targets);
       }
       observe(target: unknown, options: MutationObserverInit) {
@@ -202,7 +210,9 @@ function setup({
     for (const [callback, targets] of mutations) {
       const options = targets.get(list);
       if (options?.attributes && options.attributeFilter?.includes("style"))
-        callback();
+        callback([
+          { type: "attributes", attributeName: "style" } as MutationRecord,
+        ]);
     }
   };
   const element = {

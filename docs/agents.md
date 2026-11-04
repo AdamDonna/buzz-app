@@ -1074,6 +1074,25 @@ beyond 30 seconds or disconnect makes work unknown, not stopped. Terminal state
 retains a monotonic evidence timestamp through clock rollback and bounded eviction.
 There is no agent-global sequence gate: producer sequences reset, skip and interleave.
 
+### Activity updates in the conversation
+
+Conversation visibility is separate from execution status. Activity updates use
+explicit immediate reply IDs and activity message IDs to select request lifecycle
+evidence; a nearby human message or a shared thread root is not proof of a turn.
+Consecutive updates from different requests or threads remain separate groups.
+Known waiting, working, failed, or uncertain work stays visible even after a public
+reply. Once every represented agent has settled successfully, stopped, or been
+superseded, the updates leave the conversation flow. History and exact message
+links remain available.
+
+When lifecycle evidence is missing (including historical conversations after a
+reload), the next public reply can retire older updates from the same request
+if its author participated in the exchange or received the helper's last update.
+This is a display fallback, not a claim that execution completed. It never
+overrides available pending, failed, or uncertain lifecycle evidence. Durable
+cross-host completion would require retained request/turn relationships and
+terminal events; the current live-only feed does not provide that guarantee.
+
 ### Try with an existing owner account
 
 Use the [public-pin/Keychain setup](contributing.md#live-relay-development) and run

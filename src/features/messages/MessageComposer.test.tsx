@@ -562,6 +562,48 @@ function mount(
   };
 }
 
+it.each([undefined, "thread-root"])(
+  "shows only human typing above the composer in scope %s",
+  (threadRootId) => {
+    const scope = threadRootId ? { threadRootId } : {};
+    const h = mount(scope);
+    const human = "c".repeat(64);
+    h.setProfiles(
+      new Map([
+        [human, { name: "Sam" }],
+        [first.pubkey, { name: "Assistant", isAgent: true }],
+      ]),
+    );
+    const entries = [
+      { pubkey: human, channelId: "channel", ...scope },
+      { pubkey: first.pubkey, channelId: "channel", ...scope },
+      {
+        pubkey: second.pubkey,
+        channelId: "channel",
+        threadRootId: "another-thread",
+      },
+    ];
+    h.retarget({
+      session: {
+        ...h.session,
+        typing: { ...h.session.typing, snapshot: () => entries },
+      },
+    });
+    const status = within(h.container).getByRole("status", {
+      name: "Conversation activity",
+    });
+    expect(status).toHaveTextContent(/^Assistant is working\. Sam is typing$/);
+    expect(
+      within(h.container).getByText("Sam is typing", {
+        selector: "span[aria-hidden] span",
+      }),
+    ).toBeVisible();
+    expect(
+      within(h.container).queryByRole("button", { name: /Activity:/ }),
+    ).toBeNull();
+  },
+);
+
 it("publishes typing for text edits but not caret-driven token expansion", () => {
   const text = `[Honey](${profileTarget(first.pubkey)})`;
   writeView("scope", "draft:channel", text);
@@ -6885,6 +6927,7 @@ it.each([
   "disables nonmember channel/thread/media composers and follows membership changes: %j",
   (destination) => {
     const h = mount(destination);
+    const rows: readonly never[] = [];
     const listeners = new Set<() => void>();
     let list: ReturnType<RelaySession["channels"]["list"]> = {
       status: "ready",
@@ -6897,7 +6940,7 @@ it.each([
           window: () => ({
             channelId: "channel",
             status: "idle",
-            rows: [],
+            rows,
             hasMore: true,
             loadingOlder: false,
             error: undefined,

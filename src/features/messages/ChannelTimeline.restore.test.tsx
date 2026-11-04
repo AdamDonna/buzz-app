@@ -193,6 +193,30 @@ function mount(bottom = false, revealOnMount = false, anchorLoaded = true) {
         tree({ ...window, rows: [first, { ...first, id: target.id }] }),
       );
     },
+    loadActivityAnchor() {
+      result.rerender(
+        tree({
+          ...window,
+          rows: [
+            first,
+            {
+              ...first,
+              id: target.id,
+              audience: "agents",
+              agentEnvelope: true,
+              content: "Saved work step",
+            },
+            {
+              ...first,
+              id: "last-step",
+              audience: "agents",
+              agentEnvelope: true,
+              content: "Later work step",
+            },
+          ],
+        }),
+      );
+    },
     replaceAnchor() {
       const first = window.rows[0];
       if (!first) throw new Error("Missing fixture row");
@@ -1374,8 +1398,19 @@ async function pendingReader() {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(600);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
-    new DOMRect(0, 0, 800, 500),
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return new DOMRect(
+        0,
+        0,
+        800,
+        this.getAttribute("aria-label") === "Channel message history"
+          ? 500
+          : this.dataset.messageId
+            ? 80
+            : 0,
+      );
+    },
   );
   vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([
     new DOMRect(0, 0, 800, 500),
@@ -1500,3 +1535,24 @@ it("a wheel at the bottom that cannot scroll still retires a loading saved row, 
     vi.useRealTimers();
   }
 });
+
+it.each([false, true])(
+  "retains delayed activity expansion until arrival unless the reader moves: %s",
+  async (readerMoves) => {
+    const h = mount(false, false, false);
+    await frame();
+    const region = screen.getByRole("region", {
+      name: "Channel message history",
+    });
+    if (readerMoves) fireEvent.wheel(region, { deltaY: -100 });
+    h.loadActivityAnchor();
+    await frame();
+    expect(
+      screen
+        .getByRole("button", { name: /activity history/ })
+        .getAttribute("aria-expanded"),
+    ).toBe(String(!readerMoves));
+    if (!readerMoves)
+      expect(screen.getByText("Saved work step")).not.toBeNull();
+  },
+);

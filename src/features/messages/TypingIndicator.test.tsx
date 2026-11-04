@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -12,78 +11,32 @@ import {
 import userEvent from "@testing-library/user-event";
 import { Profiler } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { RelaySession } from "../relay/session";
-import type { TypingEntry } from "../relay/typing";
 import {
   profileActivityViewTarget,
   claimProfileTranscript,
   profileTranscriptRequest,
 } from "../profiles/target";
+import { ActivityIndicatorPresentation } from "../conversation/typing-presentation";
+import { ActivityGroupPreview } from "./ActivityGroupPreview";
+import { activityPresentation } from "./activity-presentation";
+import type { ChannelMessage } from "../relay/contracts";
 import { TypingIndicator } from "./TypingIndicator";
 
+import { stubAvatarBrowserApis } from "../agents/avatar-testing";
+stubAvatarBrowserApis();
 afterEach(cleanup);
-const agent = "a".repeat(64),
-  human = "b".repeat(64),
-  other = "c".repeat(64);
-const root = "d".repeat(64),
-  secondRoot = "e".repeat(64);
-type Snapshot = ReturnType<RelaySession["agentActivity"]["snapshot"]>;
-function fixture() {
-  const listeners = new Set<() => void>();
-  let typing: readonly TypingEntry[] = [];
-  let activity: Snapshot = {
-    status: "listening",
-    typing: [],
-    records: [],
-    turns: [],
-    trimmed: 0,
-  };
-  const subscribe = (listener: () => void) => {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  };
-  const profiles = new Map([
-    [agent, { name: "Agent" }],
-    [human, { name: "Human", isAgent: true }],
-    [other, { name: "Other" }],
-  ]);
-  const library = { identities: [{ pubkey: agent }, { pubkey: other }] };
-  const rows = [
-    { id: root, content: "First task" },
-    { id: secondRoot, content: "Second task" },
-  ];
-  const ensure = vi.fn();
-  const session = {
-    typing: { snapshot: () => typing, subscribe },
-    agentActivity: { snapshot: () => activity, subscribe },
-    profiles: { snapshot: () => profiles, subscribe, ensure },
-    agentChoices: { snapshot: () => library, subscribe },
-    channels: {
-      window: () => ({ rows }),
-      subscribeWindow: (_id: string, fn: () => void) => subscribe(fn),
-      ensure,
-    },
-  } as unknown as RelaySession;
-  return {
-    session,
-    ensure,
-    update(entries: readonly TypingEntry[], patch: Partial<Snapshot> = {}) {
-      act(() => {
-        typing = entries;
-        activity = { ...activity, ...patch };
-        for (const listener of listeners) listener();
-      });
-    },
-  };
-}
-const entry = (
-  pubkey = agent,
-  threadRootId: string | undefined = root,
-): TypingEntry => ({ pubkey, channelId: "channel", threadRootId });
+import {
+  agent,
+  human,
+  other,
+  root,
+  secondRoot,
+  fixture,
+  entry,
+  type Snapshot,
+} from "./typing-indicator-testing";
 
-it("opens one avatar by hover, with separate thread and activity actions and keyboard focus return", async () => {
+it("shows an incoming typing preview without invented details, retaining navigation and focus return", async () => {
   const f = fixture(),
     user = userEvent.setup(),
     open = vi.fn(() => true);
@@ -99,13 +52,29 @@ it("opens one avatar by hover, with separate thread and activity actions and key
   const trigger = screen.getByRole("button", {
     name: "Activity: Agent working",
   });
-  expect(trigger).toHaveTextContent("A");
+  expect(screen.getByRole("img", { name: "Agent" })).toBeVisible();
+  expect(trigger.querySelector('[data-state="working"]')).not.toBeNull();
   expect(trigger).not.toHaveTextContent("Working");
   await user.hover(trigger);
   let dialog = await screen.findByRole("dialog", { name: "Working now" });
+  expect(
+    within(dialog).getByText("Only typing updates are reaching this app."),
+  ).toBeVisible();
+  f.update([entry()], { status: "connecting" });
+  expect(
+    within(dialog).getByText("Only typing updates are reaching this app."),
+  ).toBeVisible();
+  f.update([entry()], { status: "interrupted" });
+  expect(
+    within(dialog).getByText("Only typing updates are reaching this app."),
+  ).toBeVisible();
+  f.update([entry()], { status: "listening" });
   expect(within(dialog).getByText("Thread · First task")).toBeVisible();
+  expect(
+    within(dialog).queryByRole("button", { name: "View Agent activity" }),
+  ).toBeNull();
   await user.click(
-    within(dialog).getByRole("button", { name: "View Agent activity" }),
+    within(dialog).getByRole("button", { name: "View full activity" }),
   );
   const transcript = profileActivityViewTarget(agent, { transcript: true });
   expect(open).toHaveBeenLastCalledWith(transcript, {
@@ -183,11 +152,12 @@ it.each([
       ],
     });
     render(<TypingIndicator session={f.session} channelId="channel" />);
-    await user.click(
-      screen.getByRole("button", { name: "Activity: Agent working" }),
-    );
+    await user.click(screen.getByRole("button", { name: label }));
     const dialog = await screen.findByRole("dialog", { name: "Working now" });
     expect(within(dialog).getByText(label, { exact: true })).toBeVisible();
+    expect(
+      within(dialog).queryByText("Only typing updates are reaching this app."),
+    ).toBeNull();
     expect(dialog).not.toHaveTextContent("report.txt");
   },
 );
@@ -221,8 +191,16 @@ it("shows stable agent ordering, scopes humans exactly, and clears after work st
   expect(
     screen.getByRole("button", { name: "Activity: Agent working" }),
   ).toBeVisible();
+  view.rerender(
+    <TypingIndicator {...props} threadRootId={root} audience="agents" inFlow />,
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText("Human is typing")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Activity: Agent working" }),
+  ).toBeVisible();
   f.update([]);
-  expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -239,8 +217,12 @@ it("keeps a non-navigable status when the plugin is unavailable and does not clo
   });
   await user.click(trigger);
   let dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByText("Working")).toBeVisible();
-  expect(within(dialog).queryByRole("button")).toBeNull();
+  expect(
+    within(dialog).getByText("Only typing updates are reaching this app."),
+  ).toBeVisible();
+  expect(
+    within(dialog).getByRole("button", { name: "View full activity" }),
+  ).toBeDisabled();
   view.rerender(
     <TypingIndicator
       session={f.session}
@@ -287,7 +269,7 @@ it("never chooses one thread from simultaneous work and deduplicates public and 
   );
   const dialog = await screen.findByRole("dialog");
   // The channel conversation is already shown, so the one row opens activity.
-  expect(within(dialog).getAllByRole("button")).toHaveLength(1);
+  expect(within(dialog).getAllByRole("button")).toHaveLength(2);
   await user.click(
     within(dialog).getByRole("button", { name: "View Agent activity" }),
   );
@@ -317,7 +299,7 @@ it("opens activity for the composer's explicit thread", async () => {
   expect(
     screen.queryByRole("button", { name: "Open thread for Agent" }),
   ).toBeNull();
-  await user.click(screen.getByRole("button", { name: "View Agent activity" }));
+  await user.click(screen.getByRole("button", { name: "View full activity" }));
   expect(open).toHaveBeenLastCalledWith(
     profileActivityViewTarget(agent, { transcript: true }),
     {
@@ -442,8 +424,17 @@ it("opens the sole known conversation without attributing unknown telemetry to t
   await user.click(
     screen.getByRole("button", { name: "Activity: Agent working" }),
   );
-  expect(screen.getByText(/Work with unconfirmed thread/)).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "View Agent activity" }));
+  expect(
+    within(screen.getByRole("dialog", { name: "Working now" })).getByText(
+      /Work with unconfirmed thread/,
+    ),
+  ).toBeVisible();
+  expect(
+    within(screen.getByRole("dialog")).getByText(
+      "No current step details received.",
+    ),
+  ).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "View full activity" }));
   expect(open).toHaveBeenLastCalledWith(
     profileActivityViewTarget(agent),
     undefined,
@@ -517,13 +508,13 @@ it("hands navigation a retained trigger instead of the disposable popup action",
     name: "Activity: Agent working",
   });
   await user.click(trigger);
-  await user.click(screen.getByRole("button", { name: "View Agent activity" }));
+  await user.click(screen.getByRole("button", { name: "View full activity" }));
   expect(captured).toEqual([trigger]);
   expect(captured[0]).toBeInTheDocument();
 });
 
 it.each(["click", "Enter", "Space"])(
-  "Solo chat single-agent %s opens Activity directly while hover retains its preview",
+  "Solo chat single-agent %s opens the popover before full Activity",
   async (activation) => {
     const f = fixture(),
       user = userEvent.setup(),
@@ -533,7 +524,6 @@ it.each(["click", "Enter", "Space"])(
       <TypingIndicator
         session={f.session}
         channelId="channel"
-        clickOpensPanel
         canOpenActivity={() => true}
         openActivity={open}
       />,
@@ -551,6 +541,10 @@ it.each(["click", "Enter", "Space"])(
       trigger.focus();
       await user.keyboard(activation === "Enter" ? "{Enter}" : " ");
     }
+    expect(open).not.toHaveBeenCalled();
+    await user.click(
+      screen.getByRole("button", { name: "View full activity" }),
+    );
     expect(open).toHaveBeenCalledExactlyOnceWith(
       profileActivityViewTarget(agent, { transcript: true }),
       { rootId: root },
@@ -571,7 +565,6 @@ it("Solo chat multiple-agent activation keeps the chooser and unavailable Activi
     <TypingIndicator
       session={f.session}
       channelId="channel"
-      clickOpensPanel
       canOpenActivity={() => true}
       openActivity={open}
     />,
@@ -589,7 +582,6 @@ it("Solo chat multiple-agent activation keeps the chooser and unavailable Activi
     <TypingIndicator
       session={f.session}
       channelId="channel"
-      clickOpensPanel
       canOpenActivity={() => false}
       openActivity={open}
     />,
@@ -612,7 +604,6 @@ it("Solo chat ArrowDown exposes retained thread navigation without opening Activ
     <TypingIndicator
       session={f.session}
       channelId="channel"
-      clickOpensPanel
       canOpenActivity={() => true}
       openActivity={open}
     />,
@@ -629,6 +620,10 @@ it("Solo chat ArrowDown exposes retained thread navigation without opening Activ
   expect(open).not.toHaveBeenCalled();
   await user.tab();
   expect(
+    within(dialog).getByRole("button", { name: "View full activity" }),
+  ).toHaveFocus();
+  await user.tab();
+  expect(
     within(dialog).getByRole("button", { name: "Open thread for Agent" }),
   ).toHaveFocus();
   await user.keyboard("{Enter}");
@@ -637,6 +632,300 @@ it("Solo chat ArrowDown exposes retained thread navigation without opening Activ
     undefined,
   );
   expect(trigger).toHaveFocus();
+});
+
+it.each([
+  { team: false, local: false },
+  { team: true, local: false },
+  { team: false, local: true },
+  { team: true, local: true },
+])(
+  "hands live signals to visible activity and restores dots when it leaves (team=$team, local=$local)",
+  ({ team, local }) => {
+    const f = fixture();
+    const row: ChannelMessage = {
+      id: "step",
+      channelId: "channel",
+      authorId: agent,
+      audience: "agents",
+      createdAt: 100,
+      content: "Checking the fix",
+      mentions: [],
+      attachments: [],
+      reactions: [],
+      participants: [],
+      replyCount: 0,
+    };
+    const { audience: _audience, ...request } = row;
+    const group = activityPresentation(
+      [
+        { ...request, id: root, authorId: human },
+        { ...row, id: "first", authorId: team ? other : agent },
+        row,
+      ],
+      undefined,
+      new Set([agent]),
+    ).groups[0];
+    if (!group) throw new Error("Missing activity group");
+    const renderFlow = (show: boolean) => (
+      <ActivityIndicatorPresentation>
+        {show && (
+          <ActivityGroupPreview
+            session={f.session}
+            group={group}
+            profiles={new Map()}
+            media={() => undefined}
+            expanded={false}
+            onToggle={() => {}}
+          />
+        )}
+        <TypingIndicator session={f.session} channelId="channel" />
+      </ActivityIndicatorPresentation>
+    );
+    const pulses = [
+      { pubkey: agent, channelId: "channel" },
+      ...(team ? [{ pubkey: other, channelId: "channel" }] : []),
+    ];
+    const work: NonNullable<Snapshot["local"]> = local
+      ? pulses.map(({ pubkey }) => ({
+          scope: "test",
+          agent: pubkey,
+          channelId: "channel",
+          messageId: root,
+          threadRootId: root,
+          state: "working",
+          startedAt: 1,
+        }))
+      : [];
+    f.update(pulses, { local: work });
+    const view = render(renderFlow(false));
+    expect(
+      screen.getByRole("button", {
+        name: team ? "Activity: 2 agents working" : "Activity: Agent working",
+      }),
+    ).toBeVisible();
+    view.rerender(renderFlow(true));
+    expect(
+      screen.queryByRole("button", { name: /Activity: .*working/ }),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        team ? `${agent.slice(0, 10)}: Checking the fix` : "Checking the fix",
+      ),
+    ).toHaveAttribute("data-active", "true");
+    if (!local) {
+      f.update([...pulses, entry(agent, secondRoot)]);
+      expect(
+        screen.getByRole("button", { name: "Activity: Agent working" }),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          team ? `${agent.slice(0, 10)}: Checking the fix` : "Checking the fix",
+        ),
+      ).toHaveAttribute("data-active", "true");
+    }
+    f.update(
+      [{ pubkey: agent, channelId: "channel", threadRootId: secondRoot }],
+      {
+        local: work
+          .filter((entry) => entry.agent === agent)
+          .map((entry) => ({
+            ...entry,
+            messageId: secondRoot,
+            threadRootId: secondRoot,
+          })),
+      },
+    );
+    expect(
+      screen.getByRole("button", { name: "Activity: Agent working" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        team ? `${agent.slice(0, 10)}: Checking the fix` : "Checking the fix",
+      ),
+    ).not.toHaveAttribute("data-active");
+    f.update([{ pubkey: agent, channelId: "channel" }], { local: [] });
+    view.rerender(renderFlow(false));
+    expect(
+      screen.getByRole("button", { name: "Activity: Agent working" }),
+    ).toBeVisible();
+  },
+);
+
+it("groups an in-flow typing preview without repeating the preceding agent's byline", () => {
+  const f = fixture();
+  f.update([{ pubkey: agent, channelId: "channel" }]);
+  const view = render(
+    <TypingIndicator
+      inFlow
+      previousAuthor={agent}
+      session={f.session}
+      channelId="channel"
+    />,
+  );
+  expect(screen.getByRole("img", { name: "Agent" })).toBeVisible();
+  expect(screen.queryByText("Agent", { exact: true })).toBeNull();
+  expect(
+    view.container.querySelector("[data-agent-response-preview]"),
+  ).toHaveAttribute("data-stack-previous", "true");
+});
+
+it("uses the agent typing bubble for a public agent outside the viewer’s choices", async () => {
+  const f = fixture();
+  f.update([entry("public-agent")]);
+  render(
+    <TypingIndicator
+      session={f.session}
+      channelId="channel"
+      threadRootId={root}
+    />,
+  );
+  const trigger = screen.getByRole("button", {
+    name: "Activity: Sam’s assistant working",
+  });
+  expect(screen.getByRole("img", { name: "Sam’s assistant" })).toBeVisible();
+  expect(trigger.querySelector('[data-state="working"]')).not.toBeNull();
+  await userEvent.setup().click(trigger);
+  expect(
+    within(await screen.findByRole("dialog")).getByText(
+      "Only typing updates are reaching this app.",
+    ),
+  ).toBeVisible();
+  for (const status of [
+    "connecting",
+    "interrupted",
+    "disabled",
+    "unavailable",
+  ] as const) {
+    f.update([entry("public-agent")], { status });
+    expect(
+      within(screen.getByRole("dialog")).getByText(
+        "Only typing updates are reaching this app.",
+      ),
+    ).toBeVisible();
+  }
+  f.update([]);
+  expect(
+    screen.queryByRole("button", { name: "Activity: Sam’s assistant working" }),
+  ).toBeNull();
+});
+
+it.each(["done", "error", "stopped", "superseded"] as const)(
+  "keeps a public agent’s %s local work terminal despite stale typing",
+  (state) => {
+    const f = fixture();
+    const entries = [entry("public-agent"), entry(human)];
+    const local = {
+      agent: "public-agent",
+      scope: "scope",
+      channelId: "channel",
+      messageId: "request",
+      threadRootId: root,
+      startedAt: 1,
+      state: "working" as const,
+    };
+    f.update(entries, { local: [local] });
+    render(
+      <TypingIndicator
+        session={f.session}
+        channelId="channel"
+        threadRootId={root}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Sam’s assistant is working",
+    );
+    f.update(entries, { local: [{ ...local, state }] });
+    expect(
+      screen.queryByRole("button", { name: /Sam’s assistant working/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Human is typing");
+    expect(screen.getByRole("status")).not.toHaveTextContent("Sam’s assistant");
+  },
+);
+
+it("announces split human and agent activity once from the composer", () => {
+  const f = fixture();
+  f.update([entry(), entry(human)]);
+  render(
+    <>
+      <TypingIndicator
+        session={f.session}
+        channelId="channel"
+        threadRootId={root}
+        audience="agents"
+        inFlow
+      />
+      <TypingIndicator
+        session={f.session}
+        channelId="channel"
+        threadRootId={root}
+        audience="humans"
+      />
+    </>,
+  );
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Agent is working. Human is typing",
+  );
+});
+
+it("keeps one live indicator when a public progress reply follows working activity", () => {
+  const f = fixture();
+  f.update([{ pubkey: agent, channelId: "channel" }], {
+    local: [
+      {
+        scope: "test",
+        agent,
+        channelId: "channel",
+        messageId: root,
+        threadRootId: root,
+        state: "working",
+        startedAt: 1,
+      },
+    ],
+  });
+  const row: ChannelMessage = {
+    id: "step",
+    channelId: "channel",
+    authorId: agent,
+    audience: "agents",
+    replyParentId: root,
+    createdAt: 100,
+    content: "Checking the fix",
+    mentions: [],
+    attachments: [],
+    reactions: [],
+    participants: [],
+    replyCount: 0,
+  };
+  const { audience: _audience, ...reply } = row;
+  const group = activityPresentation(
+    [row, { ...reply, id: "reply", content: "Still checking" }],
+    f.session.agentActivity.snapshot(),
+    new Set([agent]),
+  ).groups[0];
+  if (!group) throw new Error("Missing activity group");
+  render(
+    <ActivityIndicatorPresentation>
+      <ActivityGroupPreview
+        session={f.session}
+        group={group}
+        profiles={new Map()}
+        media={() => undefined}
+        expanded={false}
+        onToggle={() => {}}
+      />
+      <TypingIndicator session={f.session} channelId="channel" />
+    </ActivityIndicatorPresentation>,
+  );
+  expect(screen.getByText("Checking the fix")).toHaveAttribute(
+    "data-active",
+    "true",
+  );
+  expect(
+    screen.queryByRole("button", { name: /Activity: .*working/ }),
+  ).toBeNull();
 });
 
 it("does not re-render for activity updates that leave its agents unchanged", () => {

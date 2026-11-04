@@ -12,7 +12,6 @@ import {
 import { StrictMode } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
-import { useActivityLanePublisher } from "./activity-lane";
 import { ThreadPanel, type ThreadPanelProps } from "./ThreadPanel";
 import { selectNewestMessage } from "./message-selection";
 import type { MessageRowProps } from "./MessageRow";
@@ -33,6 +32,11 @@ import { formatPublicKey } from "../../shared/identity/public-key";
 
 // Real React owns effects, refs and subscriptions. Only independent child UI is
 // reduced here; MessageRow/MessageComposer retain their own mounted suites.
+// Activity rendering/subscriptions have their own mounted integration suite.
+vi.mock("./TypingIndicator", () => ({
+  TypingIndicator: () => null,
+  useConversationAgents: () => ({ agents: [] }),
+}));
 vi.mock("../relay/react", () => {
   const profiles = new Map();
   return { useProfileGeneration: () => 0, useRowProfiles: () => profiles };
@@ -87,7 +91,6 @@ vi.mock("./MessageComposer", () => ({
     scope,
     onSend,
     ownSoloConversation,
-    activityClickOpensPanel,
     disabled,
     placeholder,
     focusRequest,
@@ -100,7 +103,6 @@ vi.mock("./MessageComposer", () => ({
       data-channel={channelId}
       data-scope={scope}
       data-own-solo={ownSoloConversation}
-      data-direct-activity={activityClickOpensPanel}
       data-disabled={disabled}
       data-placeholder={placeholder}
       data-focus-request={focusRequest}
@@ -889,55 +891,6 @@ it("counts replies recovered after a completed traversal, not initial history pa
   expect(screen.getByRole("button", { name: "2 new messages" })).toBeVisible();
 });
 
-it("reserves the jump button's activity lane only for this thread's composer in a live channel", () => {
-  const h = messagesHarness();
-  const listeners = new Set<() => void>();
-  const subscribe = (listener: () => void) => {
-    listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
-  };
-  let list: ChannelList = {
-    status: "ready",
-    channels: [{ id: "channel", name: "General" }],
-  };
-  Object.assign(h.session, {
-    channels: { list: () => list, subscribeList: subscribe },
-  });
-  // The composer is mocked here; publish what its TypingIndicator would.
-  function Shown({ threadRootId }: { threadRootId: string | undefined }) {
-    useActivityLanePublisher(h.session, "channel", threadRootId, true);
-    return null;
-  }
-  h.render();
-  h.scroll(500);
-  const lane = () =>
-    screen
-      .getByRole("button", { name: "Jump to latest" })
-      .closest("[data-visible]");
-  const live = lane();
-  expect(live).not.toHaveAttribute("data-activity-lane");
-  // Channel-level activity shows in the channel composer, not this thread's.
-  const channelLevel = render(<Shown threadRootId={undefined} />);
-  expect(live).not.toHaveAttribute("data-activity-lane");
-  channelLevel.unmount();
-  const thread = render(<Shown threadRootId={row.id} />);
-  expect(live).toHaveAttribute("data-activity-lane");
-  // A cached channel's composer mounts no TypingIndicator, so no lane; the
-  // gate flip keeps the same button mounted.
-  list = {
-    status: "ready",
-    channels: [{ id: "channel", name: "General", cached: true }],
-  };
-  act(() => {
-    for (const listener of listeners) listener();
-  });
-  expect(lane()).toBe(live);
-  expect(live).not.toHaveAttribute("data-activity-lane");
-  thread.unmount();
-});
-
 it("transfers keyboard focus to the thread history before removing the jump button", () => {
   const h = messagesHarness();
   h.render();
@@ -1487,20 +1440,14 @@ it("names the conversation a thread lives in as a link, only when its host can o
   expect(within(thread).queryByText("#Alpha")).toBeNull();
 });
 
-it("passes readiness and direct Activity through to thread composition, and gives a Solo thread none", () => {
+it("passes readiness through to thread composition, and gives a Solo thread none", () => {
   const h = messagesHarness();
-  const view = render(
-    <ThreadPanel {...h.props} activityClickOpensPanel disabled />,
-  );
+  const view = render(<ThreadPanel {...h.props} disabled />);
   const composer = screen.getByRole("region", { name: "Composer" });
-  expect(composer).toHaveAttribute("data-direct-activity", "true");
   expect(composer).toHaveAttribute("data-disabled", "true");
-  view.rerender(
-    <ThreadPanel {...h.props} activityClickOpensPanel disabled={false} />,
-  );
+  view.rerender(<ThreadPanel {...h.props} disabled={false} />);
   expect(composer).toHaveAttribute("data-disabled", "false");
   view.rerender(<ThreadPanel {...h.props} />);
-  expect(composer).not.toHaveAttribute("data-direct-activity");
   // Solo agents answer at top level: its threads are read-only.
   view.rerender(<ThreadPanel {...h.props} soloConversation />);
   expect(
@@ -1920,6 +1867,45 @@ it("a retained reader reveals its exact selected message, again for each new req
   expect(revealedReply()).toBe(false);
 });
 
+it("reopens collapsed activity for a new reveal of the same step", async () => {
+  const h = messagesHarness();
+  const replies = ["d", "e"].map((id, index) => ({
+    ...row,
+    id: id.repeat(64),
+    content: `Agent step ${index}`,
+    audience: "agents" as const,
+    threadRootId: row.id,
+    replyToId: row.id,
+    createdAt: 2 + index,
+  }));
+  const target = replies[1];
+  if (!target) throw new Error("Missing activity fixture target");
+  h.snapshot.replies = replies;
+  h.snapshot.target = target;
+  h.snapshot.targetStatus = "ready";
+  const props = h.props as ThreadPanelProps;
+  Object.assign(props, {
+    messageId: target.id,
+    retainThread: true,
+    revealSelected: true,
+    revealRequest: 1,
+  });
+  h.render();
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Collapse activity history/ }),
+  );
+  expect(
+    screen.getByRole("button", { name: /Show activity history/ }),
+  ).toHaveAttribute("aria-expanded", "false");
+  props.revealRequest = 2;
+  h.rerenderProps();
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /Collapse activity history/ }),
+    ).toHaveAttribute("aria-expanded", "true"),
+  );
+});
+
 it("a new reveal request reopens a branch the reader collapsed, and live updates leave it closed", async () => {
   const h = messagesHarness();
   const reply = (id: string, content: string, replyParentId: string) => ({
@@ -2323,4 +2309,39 @@ it("releases bottom following after a jump that included child-only resizing", (
   h.snapshot.replies = [{ ...row, id: "new", content: "new" }];
   h.render();
   expect(h.element.scrollTop).toBe(2000);
+});
+
+it("reveals a completed step selected by an exact thread link", async () => {
+  const h = messagesHarness();
+  const target = {
+    ...row,
+    id: "d".repeat(64),
+    content: "Completed tool result",
+    audience: "agents" as const,
+    threadRootId: row.id,
+    replyParentId: row.id,
+    createdAt: 2,
+  };
+  h.snapshot.replies = [
+    target,
+    {
+      ...row,
+      id: "e".repeat(64),
+      content: "Final response",
+      threadRootId: row.id,
+      replyParentId: row.id,
+      createdAt: 3,
+    },
+  ];
+  h.snapshot.target = target;
+  h.snapshot.targetStatus = "ready";
+  Object.assign(h.props, {
+    messageId: target.id,
+    retainThread: true,
+    revealSelected: true,
+    revealRequest: 1,
+  });
+  h.render();
+  expect(await screen.findByText("Completed tool result")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /activity history/ })).toBeNull();
 });

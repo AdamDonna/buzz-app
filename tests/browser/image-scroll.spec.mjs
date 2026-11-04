@@ -26,9 +26,30 @@ async function navigate(page, direction) {
   while (true) {
     const before = await remaining();
     if (before < 4) break;
+    // Virtual measurements change the estimated extent. Compare the reader's
+    // position in these numbered fixture messages instead of scrollTop.
+    const position = () =>
+      feed.evaluate((element) => {
+        const top = element.getBoundingClientRect().top;
+        const row = [...element.querySelectorAll("[data-message-id]")].find(
+          (row) => row.getBoundingClientRect().bottom > top,
+        );
+        if (!row) return { index: 0, offset: element.scrollTop };
+        const number = row.textContent.match(/Message (\d+)\./);
+        if (!number) throw new Error("Missing numbered image fixture message");
+        return {
+          index: Number(number[1]),
+          offset: top - row.getBoundingClientRect().top,
+        };
+      });
+    const start = await position();
     await wheel(page, direction * Math.min(2000, before));
+    const end = await position();
     expect(
-      before - (await remaining()),
+      direction *
+        (end.index === start.index
+          ? end.offset - start.offset
+          : end.index - start.index),
       "image navigation retains progress after settling",
     ).toBeGreaterThan(0);
   }

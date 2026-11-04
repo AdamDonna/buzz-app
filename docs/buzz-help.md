@@ -268,6 +268,12 @@ available rather than silently discarding it.
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label
   opens that conversation. Working indicators describe current work,
   not a guarantee that an agent is available or that a message was delivered.
+  Expand grouped work updates to read each message; the collapsed excerpt names
+  its speaker. Thread work appears inside its thread; the channel’s reply summary
+  still shows when an agent is working there. Expand recorded work to
+  open its transcript or **Stop** the running request; before any work updates
+  arrive, those controls appear on the live indicator. Stop availability depends
+  on the agent type.
 - When a request to an agent running on this device fails, the activity under
   the message offers **Retry**, which asks the agent again, and **Dismiss**,
   which hides the failure.

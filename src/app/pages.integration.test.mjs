@@ -287,7 +287,7 @@ test("the app runtime exposes ready bundled pages and removes them on disable", 
         .snapshot()
         .map(({ id, placement }) => [id, placement]),
       [
-        ["activity", "message"],
+        ["activity", "response"],
         ["typing-presentation", undefined],
       ],
     );

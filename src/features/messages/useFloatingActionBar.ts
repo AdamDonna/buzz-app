@@ -57,7 +57,11 @@ export function useMessageActionBarReady(
       document.documentElement.hasAttribute("data-keyboard-navigation"),
   );
   useEffect(() => {
-    const row = rowRef?.current;
+    // Response activity is a sibling of the painted message. Interaction with
+    // either belongs to the same message and must prepare its focus destination.
+    const row =
+      rowRef?.current?.closest<HTMLElement>("[data-message-id]") ??
+      rowRef?.current;
     if (ready || !row) return;
     const activate = () => setReady(true);
     const query = floating();

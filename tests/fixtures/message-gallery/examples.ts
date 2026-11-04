@@ -83,21 +83,27 @@ export const groups: Group[] = [
   {
     id: "agent-coordination",
     title: "Agent coordination",
-    description: "Every compact entry keeps its author's avatar visible.",
+    description:
+      "Compact activity rows use author avatars, inline mentions, and expandable text.",
     examples: [
       {
         id: "repeated-agent",
         title: "Consecutive agent updates",
         description:
-          "Author icons remain visible before and after expanding a row.",
+          "Individual rows keep previews within the message width. Timeline group folding is exercised separately.",
         rows: [
+          message(
+            "coordination-intro",
+            "I’ll investigate the missing icons and check the rendered result.",
+            { authorId: agent },
+          ),
           message("coordination-first", "Investigating the missing icons.", {
             authorId: agent,
             audience: "agents",
           }),
           message(
             "coordination-next",
-            "Found the cause.\n\nThe fix is ready to try.",
+            "Found the cause. The activity rows were rendering their own avatars rather than using the conversation’s message grouping. I’m updating the shared grouping and matching the width of these previews to the surrounding messages.\n\nThe fix is ready to try.",
             {
               authorId: agent,
               audience: "agents",

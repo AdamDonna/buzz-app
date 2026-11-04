@@ -1621,6 +1621,8 @@ need their own values in each mode.
 Received message bubbles use `bubble-received`, slightly stronger than quiet
 control fills. Reply connectors and thread spines use `border-message-thread`
 to remain visible on conversation surfaces in both modes.
+Agent activity bubbles use a transparent fill with a 1px inset `border-standard`
+stroke, keeping their dimensions consistent with filled message bubbles.
 
 ### Accent color
 
@@ -1678,7 +1680,8 @@ that adds no useful information.
 
 ### Activity dots
 
-`TypingDots` owns the shared decorative activity motion. `state="waiting"`
+`TypingDots` owns the shared decorative activity motion. Use `size="message"`
+for 4px dots with 4px gaps inside a message line; compact indicators retain their existing sizes. `state="waiting"`
 breathes all three dots together over 2.4 seconds for a received request waiting
 to start. `state="working"` (the default) preserves the 1.4-second staggered fade.
 Switching state keeps the same footprint. These named component rhythms are
@@ -1718,7 +1721,8 @@ Existing palette utilities and older role names are compatibility APIs while
 callers migrate, not the default for new UI. Tailwind's stock palette is removed.
 
 `ShimmerText` gives a short live-work label (an agent's current step) a slow
-sheen between the subtle and standard text roles. Use it only while that work is
+sheen from metadata text to standard text, with a distinct 1.8s sweep.
+Use it only while that work is
 live, never on finished, failed or waiting text. Reduced motion shows plain text.
 
 Activity indicators that appear while work is live (the message activity pill,

@@ -1545,13 +1545,20 @@ it.each([true, false])(
   },
 );
 
-it.each([
-  { startsThreads: true, replyCount: 0, thread: true },
-  { startsThreads: false, replyCount: 0, thread: false },
-  { startsThreads: false, replyCount: 23, thread: true },
-])(
+it.each(
+  [
+    { startsThreads: true, replyCount: 0, thread: true },
+    { startsThreads: false, replyCount: 0, thread: false },
+    { startsThreads: false, replyCount: 23, thread: true },
+  ].flatMap((scenario) =>
+    (["message", "response"] as const).map((placement) => ({
+      ...scenario,
+      placement,
+    })),
+  ),
+)(
   "gives message accessories a thread only where the row has one to open (%o)",
-  ({ startsThreads, replyCount, thread }) => {
+  ({ startsThreads, replyCount, thread, placement }) => {
     const subscribe = () => () => {};
     const channels = { channels: [], status: "ready" };
     const noTyping: never[] = [];
@@ -1576,7 +1583,7 @@ it.each([
         pluginId: "test",
         revision: "1",
         title: "Agent activity",
-        placement: "message" as const,
+        placement,
         decoratesMessageSummary: true,
         component: ({
           renderMessageSummary,
@@ -1598,6 +1605,7 @@ it.each([
       row: { ...row, replyCount },
       session,
       scope: "test",
+      viewer: row.authorId,
       onOpenThread: () => {},
       startsThreads,
       extensions: {
@@ -1609,10 +1617,16 @@ it.each([
       },
     });
     try {
-      expect(seen).toHaveBeenLastCalledWith(thread, thread);
+      expect(seen).toHaveBeenLastCalledWith(
+        placement === "message" && thread,
+        thread,
+      );
+      expect(
+        !!screen.getByText("Brain working").closest("[data-viewer-message]"),
+      ).toBe(placement === "message");
       expect(screen.getByText("Brain working")).toBeInTheDocument();
       expect(!!screen.queryByRole("button", { name: /^View thread/ })).toBe(
-        thread,
+        placement === "message" ? thread : replyCount > 0,
       );
     } finally {
       view.unmount();
@@ -1734,7 +1748,31 @@ it("shows unbadged working-agent avatars and shared dots only while a known agen
     },
   } as unknown as RelaySession;
   const media = vi.fn(() => "https://proxy/brain");
-  let view = renderMessage({ session, media, onOpenThread: () => {} });
+  const emptyEntries: readonly never[] = [];
+  const empty = { snapshot: () => emptyEntries, subscribe: () => () => {} };
+  const accessories = [
+    {
+      key: "activity",
+      pluginId: "activity",
+      revision: "1",
+      id: "activity",
+      title: "Activity",
+      placement: "response" as const,
+      component: () => null,
+    },
+  ];
+  let view = renderMessage({
+    session,
+    media,
+    onOpenThread: () => {},
+    extensions: {
+      inline: empty,
+      links: empty,
+      messages: empty,
+      tools: empty,
+      accessories: { snapshot: () => accessories, subscribe: () => () => {} },
+    },
+  });
   try {
     const working = screen.getByRole("button", {
       name: "View thread: 23 replies. Brain working",
@@ -2822,6 +2860,56 @@ it("keeps the timestamp seek action beside a detached session card", () => {
   }
 });
 
+it("identifies the author on each activity summary in a message group", () => {
+  const props = {
+    row: { ...row, audience: "agents" as const },
+    profile: { name: "Activity author" },
+    media: () => undefined,
+    onOpenLink: () => false,
+    day: false,
+    retry: undefined,
+  };
+  try {
+    const { rerender } = renderDom(<MessageRow {...props} stackNext />);
+    expect(screen.getByTitle("Activity author")).toBeVisible();
+    rerender(<MessageRow {...props} stackPrevious />);
+    expect(screen.getByTitle("Activity author")).toBeVisible();
+  } finally {
+    cleanup();
+  }
+});
+
+it.each([280, 281])(
+  "caps activity previews at 280 characters (%s input)",
+  (length) => {
+    const content = "🙂".repeat(length);
+    try {
+      renderDom(
+        <MessageRow
+          row={{ ...row, audience: "agents", content }}
+          profile={{ name: "author" }}
+          media={() => undefined}
+          onOpenLink={() => false}
+          day={false}
+          retry={undefined}
+        />,
+      );
+      const preview = length === 280 ? content : `${"🙂".repeat(279)}…`;
+      const trigger = screen.getByRole("button", {
+        name: `author: ${preview}`,
+      });
+      expect(trigger).toHaveTextContent(preview);
+      fireEvent.click(trigger);
+      expect(screen.getByText(content)).toBeVisible();
+      expect(trigger).not.toHaveTextContent(preview);
+      fireEvent.click(trigger);
+      expect(trigger).toHaveTextContent(preview);
+    } finally {
+      cleanup();
+    }
+  },
+);
+
 it("shows a message for agents as one line from its author to whom it addresses", () => {
   const agent = keypair();
   const rivet = "b".repeat(64);
@@ -2865,43 +2953,18 @@ it("shows a message for agents as one line from its author to whom it addresses"
       name: "Morgarita to Rivet: **run** the suite…",
     });
     expect(line).toHaveAttribute("aria-expanded", "false");
-    const timestamp = line.parentElement?.querySelector("time");
-    const timestampSlot = timestamp?.parentElement;
-    expect(timestamp).toBeVisible();
-    expect(
-      screen.getByText(/(?:1969|1970) at /, {
-        selector: 'time > span[aria-hidden="true"]',
-      }),
-    ).toBeVisible();
+    expect(line.parentElement?.querySelector("time")).toBeNull();
     // Reveal focuses the scroll anchor with tabIndex -1; on the button, that
     // would take the only toggle out of the Tab order.
     expect(line).not.toHaveAttribute("data-message-id");
     expect(line.parentElement).toHaveAttribute("data-message-id");
     expect(screen.queryByText(/Then report back/)).toBeNull();
-    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBe(
-      timestamp,
-    );
+    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBeNull();
     fireEvent.pointerEnter(line);
-    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBe(
-      timestamp,
-    );
+    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBeNull();
     fireEvent.click(line);
     expect(line).toHaveAttribute("aria-expanded", "true");
-    // Expanding preserves the timestamp node and its trailing slot, rather
-    // than remounting it above the body and moving it to the opposite edge.
-    expect(
-      line.parentElement?.querySelectorAll("time:not(.sr-only)"),
-    ).toHaveLength(1);
-    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBe(
-      timestamp,
-    );
-    expect(timestamp?.parentElement).toBe(timestampSlot);
-    expect(line.parentElement?.lastElementChild).toBe(timestampSlot);
-    expect(
-      screen.getByText(/(?:1969|1970) at /, {
-        selector: 'time > span[aria-hidden="true"]',
-      }),
-    ).toBeVisible();
+    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBeNull();
     expect(
       screen.queryByRole("button", { name: "View Morgarita profile" }),
     ).toBeNull();
@@ -2910,13 +2973,9 @@ it("shows a message for agents as one line from its author to whom it addresses"
     expect(expanded?.querySelector('[class*="messageBubble"]')).toBeNull();
     expect(expanded?.querySelector("[data-own]")).toBeNull();
 
-    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBe(
-      timestamp,
-    );
+    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBeNull();
     fireEvent.pointerEnter(expanded ?? line);
-    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBe(
-      timestamp,
-    );
+    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBeNull();
     // Base UI binds the trigger to its panel. One stable message anchor stays
     // outside the animated content, including while that content is retiring.
     const panelId = line.getAttribute("aria-controls");
@@ -2935,9 +2994,7 @@ it("shows a message for agents as one line from its author to whom it addresses"
     // Anywhere in the open box folds it back.
     fireEvent.click(screen.getByText(/Then report back/));
     expect(line).toHaveAttribute("aria-expanded", "false");
-    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBe(
-      timestamp,
-    );
+    expect(line.parentElement?.querySelector("time:not(.sr-only)")).toBeNull();
   } finally {
     cleanup();
   }
@@ -3358,7 +3415,7 @@ it.each([0, 23])(
       });
       expect(summary).toHaveTextContent("1 failed");
       expect(summary).not.toHaveTextContent("View thread");
-      if (replyCount) expect(summary).toHaveTextContent("23 replies");
+      if (replyCount) expect(summary).not.toHaveTextContent("23 replies");
       expect(
         summary.querySelector('[data-thread-working] [data-state="working"]'),
       ).not.toBeNull();

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import "../../../tests/sonner-dom";
+import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
@@ -23,6 +24,7 @@ import {
   scriptedTransport,
   signed,
 } from "../relay/testing";
+import { ThreadPanel } from "./ThreadPanel";
 import { ChannelTimeline } from "./ChannelTimeline";
 
 // Virtualizer boundary: render only "visible" indices plus `keepMounted`,
@@ -94,11 +96,17 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function mount(publish: (event: RelayEvent) => Promise<void>) {
+function mount(
+  publish: (event: RelayEvent) => Promise<void>,
+  targetEvent = target,
+  initial = [targetEvent, neighbor],
+  threadRoot?: string,
+) {
   let live: LiveCallbacks | undefined;
   const owner = createRelaySession(
     {
       ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+      ...(threadRoot ? { query: async () => initial } : {}),
       writer: { sign: async (template) => signed(viewer, template), publish },
       subscribe(callbacks) {
         live = callbacks;
@@ -109,26 +117,45 @@ function mount(publish: (event: RelayEvent) => Promise<void>) {
   );
   owners.push(owner);
   owner.session.channels.ensure("c");
-  live?.receive([roster(relay, "c", [viewer.pubkey], 1), target, neighbor]);
+  live?.receive([roster(relay, "c", [viewer.pubkey], 1), ...initial]);
   const tree = () => (
     <StrictMode>
       <ToastProvider>
-        <ChannelTimeline
-          channelId="c"
-          scope="viewer"
-          queries={owner.session}
-          window={owner.session.channels.window("c")}
-          onOpenLink={() => false}
-        />
+        {threadRoot ? (
+          <ThreadPanel
+            session={owner.session}
+            scope="viewer"
+            channelName="C"
+            channelId="c"
+            messageId={threadRoot}
+            onOpenLink={() => false}
+          />
+        ) : (
+          <ChannelTimeline
+            channelId="c"
+            scope="viewer"
+            queries={owner.session}
+            window={owner.session.channels.window("c")}
+            onOpenLink={() => false}
+          />
+        )}
       </ToastProvider>
     </StrictMode>
   );
   const result = render(tree());
   const row = () =>
-    document.querySelector<HTMLElement>(`[data-message-id="${target.id}"]`);
+    document.querySelector<HTMLElement>(
+      `[data-message-id="${targetEvent.id}"]`,
+    );
   const neighborRow = () =>
     document.querySelector(`[data-message-id="${neighbor.id}"]`);
   return {
+    receive(event: RelayEvent) {
+      act(() => {
+        live?.receive([event]);
+        result.rerender(tree());
+      });
+    },
     row,
     neighborRow,
     // Scroll the target out of the virtualizer buffer.
@@ -149,10 +176,13 @@ function mount(publish: (event: RelayEvent) => Promise<void>) {
 
 async function openReport(row: HTMLElement) {
   const user = userEvent.setup();
-  const trigger = within(row).getByRole("button", {
+  const more = within(row).queryByRole("button", {
     name: "More message actions",
   });
-  await user.click(trigger);
+  const trigger =
+    more ?? within(row).getByRole("button", { name: /Working on the report/ });
+  if (more) await user.click(trigger);
+  else fireEvent.contextMenu(trigger);
   await user.click(await screen.findByRole("menuitem", { name: "Report" }));
   await screen.findByRole("dialog", { name: "Report message" });
   return { user, trigger };
@@ -322,3 +352,74 @@ it("closing the image viewer before the report notice ends keeps the row pinned 
   await waitFor(() => expect(h.row()).toBeNull());
   expect(h.neighborRow()).not.toBeNull();
 });
+
+it.each([
+  ["channel", "draft"],
+  ["channel", "pending"],
+  ["thread", "draft"],
+  ["thread", "pending"],
+] as const)(
+  "retains the %s report owner through completion with a %s report",
+  async (host, phase) => {
+    let release!: () => void;
+    const publish = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const root = message(viewer, "c", "Request", 1);
+    const tags =
+      host === "thread"
+        ? [
+            ["e", root.id, "", "root"],
+            ["e", root.id, "", "reply"],
+          ]
+        : [];
+    const step = message(other, "c", "Working on the report", 2, [
+      ["audience", "agents"],
+      ...tags,
+    ]);
+    const h = mount(
+      publish,
+      step,
+      [root, step],
+      host === "thread" ? root.id : undefined,
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Show activity history/ }),
+    );
+    const original = h.row();
+    if (!original) throw new Error("Missing contained activity");
+    const { user } = await openReport(original);
+    await user.click(screen.getByRole("radio", { name: "Spam" }));
+    const context = screen.getByRole("textbox", {
+      name: "Additional context (optional)",
+    });
+    await user.type(context, "Keep this draft");
+    try {
+      if (phase === "pending") {
+        await user.click(screen.getByRole("button", { name: "Submit report" }));
+        await waitFor(() => expect(publish).toHaveBeenCalledOnce());
+      }
+      h.receive(message(other, "c", "Finished the work", 3, tags));
+      expect(h.row()).toBe(original);
+      expect(
+        screen.getByRole("dialog", { name: "Report message" }),
+      ).toBeTruthy();
+      expect(context).toHaveValue("Keep this draft");
+    } finally {
+      if (phase === "pending") await act(async () => release());
+    }
+    if (phase === "pending") {
+      expect(
+        await screen.findByText("Report submitted to community moderators"),
+      ).toBeTruthy();
+      expect(h.row()).toBe(original);
+      await user.click(screen.getByRole("button", { name: /dismiss/i }));
+    } else {
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+    }
+    await waitFor(() => expect(h.row()).toBeNull());
+  },
+);

@@ -428,7 +428,6 @@ function BestieConversation({
             <ChannelBody
               viewer={session.viewer}
               cached={!!channel.cached}
-              activityLane={!channel.cached}
               revealMessageId={sent}
               marksRead
               onOpenThread={openThread}

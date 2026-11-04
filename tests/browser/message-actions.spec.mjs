@@ -37,6 +37,7 @@ test("coordination keeps its first line visible throughout expansion and collaps
     undefined,
     [["audience", "agents"]],
   );
+  await thread.getByRole("button", { name: /^Show activity history:/ }).click();
   const row = thread.locator(`[data-message-id="${event.id}"]`);
   const toggle = row.getByRole("button", { name: /Three café names:/ });
   await expect(toggle).toBeVisible();

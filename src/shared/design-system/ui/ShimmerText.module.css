@@ -6,15 +6,15 @@
   .text[data-active] {
     background: linear-gradient(
       100deg,
-      var(--text-subtle) 20%,
-      var(--text-standard) 45%,
-      var(--text-subtle) 70%
+      var(--text-metadata) 30%,
+      var(--text-standard) 50%,
+      var(--text-metadata) 70%
     );
-    background-size: 240% 100%;
+    background-size: 200% 100%;
     background-clip: text;
     -webkit-background-clip: text;
     color: transparent;
-    animation: text-shimmer 2.4s linear infinite;
+    animation: text-shimmer 1.8s linear infinite;
   }
 }
 

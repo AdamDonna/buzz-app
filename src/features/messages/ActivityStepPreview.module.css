@@ -1,0 +1,16 @@
+.stepPreview {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  height: calc(var(--text-message) * var(--text-message--line-height));
+}
+.stepText {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -4,6 +4,7 @@ import {
 } from "./ConversationHost";
 import { ConversationPresentation } from "./ConversationPresentation";
 // @vitest-environment jsdom
+const emptyTyping: never[] = [];
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -171,6 +172,7 @@ function fixture(
       snapshot: () => profiles,
       subscribe: () => () => {},
     },
+    typing: { subscribe: () => () => {}, snapshot: () => emptyTyping },
     agentChoices: createAgentLibrary(undefined).queries,
     messages: { retry() {}, canRetry: () => true },
     media: () => undefined,
@@ -365,9 +367,9 @@ it("offers recovery for a failed edit left in the outbox", () => {
     } as unknown as OutgoingEvent,
   ]);
   render(<EmbeddedThread {...h.props} />);
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Message edit: Relay refused the edit.",
-  );
+  expect(
+    screen.getByText("Message edit: Relay refused the edit."),
+  ).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Retry message update" }));
   expect(h.outbox.retry).toHaveBeenCalledExactlyOnceWith("edit");
 });

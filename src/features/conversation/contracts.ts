@@ -168,6 +168,10 @@ export type ComposerAccessoryProps = Readonly<{
   threadRootId?: string | undefined;
   /** Present only for message-placed accessories; the exact triggering row. */
   message?: ChannelMessage;
+  /** Agents already represented by subsequent content in this request's visible run. */
+  representedAgents?: readonly string[] | undefined;
+  /** Host geometry for response-side accessories. */
+  messageLayout?: "timeline" | "thread" | "continuation" | undefined;
   /** A single selected decorator may wrap the host summary with its preview.
    * Render without activity when idle; the host owns reply counts/navigation. */
   renderMessageSummary?:
@@ -184,8 +188,9 @@ export type ComposerAccessoryProps = Readonly<{
   open(target: string): boolean;
 }>;
 export type ComposerAccessory = Readonly<{
-  /** Defaults to the composer. Message accessories render beside reactions. */
-  placement?: "composer" | "message";
+  /** Defaults to the composer. Message accessories sit beside reactions;
+   * response accessories occupy an incoming row after the triggering message. */
+  placement?: "composer" | "message" | "response";
   /** Opt into decorating the message summary; only the first ordered owner wins. */
   decoratesMessageSummary?: boolean;
   id: string;

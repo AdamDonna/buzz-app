@@ -494,6 +494,13 @@ test("branch hooks land on each reply's avatar across sides and row shapes", asy
     if (await summary.count()) await summary.click();
   }
   await expect(row(startReply)).toBeVisible();
+  for (const event of [agentPeerReply, ownAgentsLeft, ownAgents]) {
+    await panel
+      .getByRole("button", {
+        name: new RegExp(`^Show activity history: .*: ${event.content}$`),
+      })
+      .click();
+  }
 
   // Peer- and viewer-started branches hook on their own side; a reply on the
   // other side gets a straight line past it.

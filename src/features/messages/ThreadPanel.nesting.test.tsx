@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+const emptyTyping: never[] = [];
+const emptyProfiles = new Map();
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -138,7 +140,12 @@ function setup(messageId = "root") {
   };
   const session = {
     thread: () => view,
-    profiles: { ensure: async () => {} },
+    profiles: {
+      ensure: async () => {},
+      subscribe: () => () => {},
+      snapshot: () => emptyProfiles,
+    },
+    typing: { subscribe: () => () => {}, snapshot: () => emptyTyping },
     agentChoices: createAgentLibrary(undefined).queries,
     messages: { retry: () => {} },
     media: () => undefined,

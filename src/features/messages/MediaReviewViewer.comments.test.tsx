@@ -37,6 +37,7 @@ afterEach(() => {
 type MediaKind = "image" | "video";
 type ReviewFixtureOptions = {
   kind: MediaKind;
+  typingAgent?: ReturnType<typeof keypair>;
   openComments?: boolean;
   replies?: (
     viewer: ReturnType<typeof keypair>,
@@ -55,6 +56,7 @@ function mime(kind: MediaKind) {
 
 async function setupReview({
   kind,
+  typingAgent,
   openComments = true,
   replies: buildReplies = () => [],
   extraRootTags = [],
@@ -102,7 +104,20 @@ async function setupReview({
     signed(viewer, template),
   );
   const publish = vi.fn(async () => {});
-  const events = [root, ...replies];
+  const events = [
+    root,
+    ...replies,
+    ...(typingAgent
+      ? [
+          signed(typingAgent, {
+            kind: 0,
+            content: JSON.stringify({ name: "Comment agent", is_agent: true }),
+            tags: [],
+            created_at: 1,
+          }),
+        ]
+      : []),
+  ];
   const owner = createRelaySession(
     {
       viewer: viewer.pubkey,
@@ -111,6 +126,8 @@ async function setupReview({
       writer: { sign, publish },
       async query(filters) {
         return filters.flatMap((filter) => {
+          if (filter.kinds?.includes(0))
+            return events.filter((event) => event.kind === 0);
           if (filter.kinds?.includes(39002) || filter.kinds?.includes(39000))
             return [
               roster(relay, "one", [viewer.pubkey]),
@@ -791,3 +808,24 @@ it("opens image comments by default when the thread contains replies", async () 
     screen.getByRole("button", { name: "Hide comments" }),
   ).toBeInTheDocument();
 });
+
+it.each(["image", "video"] as const)(
+  "shows incoming agent typing in %s comments before any reply arrives",
+  async (kind) => {
+    const typingAgent = keypair();
+    const { owner, root } = await setupReview({ kind, typingAgent });
+    const agent = typingAgent.pubkey;
+    await owner.session.profiles.ensure([agent], "background");
+    const typing = [{ pubkey: agent, channelId: "one", threadRootId: root.id }];
+    vi.spyOn(owner.session.typing, "snapshot").mockReturnValue(typing);
+    // Closing and reopening the comments mounts the real host with the new signal.
+    fireEvent.click(screen.getByRole("button", { name: "Hide comments" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show comments" }));
+    const comments = await screen.findByRole("region", {
+      name: "Media comments",
+    });
+    expect(
+      within(comments).getByRole("button", { name: /Activity:.*working/ }),
+    ).toBeVisible();
+  },
+);

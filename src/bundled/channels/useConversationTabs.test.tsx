@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+const emptyTyping: never[] = [];
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -1805,6 +1806,7 @@ it("a hidden retained thread tab's rows re-render for new panels, not channel-li
       snapshot: () => profiles,
       subscribe: () => () => {},
     },
+    typing: { subscribe: () => () => {}, snapshot: () => emptyTyping },
     agentChoices: createAgentLibrary(undefined).queries,
     messages: { retry: () => {} },
     media: () => undefined,

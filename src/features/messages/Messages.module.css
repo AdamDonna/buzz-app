@@ -832,7 +832,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   font-weight: var(--type-weight-regular);
   margin-top: var(--space-1);
 }
-.messageBody [data-thread-summary]:not([data-activity-summary]) {
+.messageBody [data-thread-summary] {
   padding: var(--space-1);
   padding-right: var(--space-1h);
 }
@@ -1399,7 +1399,7 @@ button.mediaPreview {
 }
 /* Media comments have frame controls above the composer, not scrollback to
    float over. Give active typing/agents their own row; idle still takes no space. */
-.mediaReviewComposer [data-conversation-activity] {
+.mediaReviewComposer [data-conversation-activity][data-audience="humans"] {
   position: static;
   margin: var(--space-2) var(--space-4);
 }
@@ -2857,16 +2857,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
     var(--channel-preview-inset, 0px)
   );
 }
-/* Leave a separate floating lane when the composer has an activity pill. */
-.jumpToLatest[data-activity-lane] {
-  top: calc(
-    100% +
-    var(--history-bottom-inset) -
-    var(--space-3) -
-    2 *
-    var(--space-6)
-  );
-}
+
 .jumpToLatestSurface {
   @apply glass-secondary;
   display: flex;
@@ -3276,18 +3267,11 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   display: none;
 }
 
-/* Agent coordination shares the conversation's measure. Avatars and quiet
-   type distinguish it without a second rail or a full message bubble. */
+/* Agent activity shares the conversation measure with compact, content-sized rows. */
 .activityDisclosure {
   width: min(100%, var(--timeline-measure));
   margin-inline: auto;
-  padding-block: var(--space-1);
-}
-.activityChevron {
-  transform: rotate(-90deg);
-}
-.activityDisclosure [aria-expanded="true"] .activityChevron {
-  transform: rotate(0deg);
+  padding-block: 0;
 }
 .activityExpansionRoot {
   display: contents;
@@ -3307,100 +3291,127 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   .activityExpansion {
     transition: grid-template-rows var(--duration-settle) var(--easing-enter);
   }
-  .activityChevron {
-    transition: transform var(--duration-state) var(--easing-enter);
-  }
 }
 .audienceRow {
+  position: relative;
+  --activity-avatar-size: var(--size-control-sm);
+  --activity-gap: var(--space-2);
+  --message-side-space: calc(var(--activity-avatar-size) + var(--activity-gap));
   container: audience-row / inline-size;
   width: min(100%, var(--timeline-measure));
   margin-inline: auto;
-  padding-block: var(--space-1);
+  padding-block: var(--space-half) 0;
+}
+.audienceRow[data-layout="timeline"],
+.feed .audienceRow[data-layout="continuation"] {
+  --activity-avatar-size: var(--size-control);
+  --activity-gap: var(--space-3);
+}
+.audienceRow[data-stack-next] {
+  padding-block-end: 0;
+}
+.audienceRow[data-stack-previous] {
+  padding-block-start: var(--space-half);
 }
 .audienceLine {
+  position: relative;
   display: flex;
-  flex: 1;
   align-items: center;
-  gap: var(--space-1h);
-  inline-size: 100%;
+  gap: var(--space-2);
+  inline-size: fit-content;
+  max-inline-size: calc(100% - var(--space-3));
+  align-self: flex-start;
+  margin-inline-start: var(--space-3);
   min-inline-size: 0;
-  padding: var(--space-1);
+  padding: var(--space-1) var(--space-1h) var(--space-1) var(--space-1);
   border: 0;
   border-radius: var(--radius-control);
   background: none;
   cursor: pointer;
-  color: var(--text-subtle);
-  font: inherit;
+  color: var(--text-standard);
   font-size: var(--text-caption);
   line-height: var(--text-caption--line-height);
   letter-spacing: var(--text-caption--letter-spacing);
+  font-weight: var(--type-weight-regular);
   text-align: start;
 }
-.audienceEntry:has(.audienceLine:hover) {
-  background: var(--affordance-subtle-hover);
-}
-html[data-keyboard-navigation] .audienceLine:focus-visible {
+html[data-keyboard-navigation] .audienceEntry:has(.audienceLine:focus-visible) {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
 }
 .audienceEntry {
   position: relative;
+  font-size: var(--text-body-sm);
+  box-sizing: border-box;
+  padding-inline-start: var(--message-side-space);
+  /* Match the message body reservation and its prose bubble's reading measure. */
+  max-inline-size: min(
+    100%,
+    calc(
+      var(--message-side-space) +
+      min(
+        85%,
+        46rem,
+        max(60%, calc(100% - 2 * var(--message-side-space) - var(--space-4))),
+        calc(60ch + 2 * var(--space-4))
+      )
+    )
+  );
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
   border-radius: var(--radius-control);
 }
-.audienceTime {
-  flex: none;
-  padding: var(--space-2) var(--space-1);
-  color: var(--text-subtle);
-  font-size: var(--text-caption);
-  line-height: var(--text-caption--line-height);
-  letter-spacing: var(--text-caption--letter-spacing);
-  white-space: nowrap;
-}
+/* The detail replaces the preview in the same text column, with the avatar
+   aligned to the parent bubble's text inset throughout expansion. */
 .audienceRow:has(.audienceBody) .audienceEntry {
+  display: grid;
+  grid-template-columns: calc(
+      var(--space-3) +
+      var(--space-1) +
+      1.5rem +
+      var(--space-2)
+    ) minmax(0, 1fr);
+  align-items: start;
   cursor: pointer;
-  background: var(--affordance-subtle);
-}
-.audienceRow:has(.audienceBody) .audienceEntry:hover {
-  background: var(--affordance-subtle-hover);
 }
 .audienceRow:has(.audienceBody) .audienceLine {
-  flex: none;
-  inline-size: auto;
-  padding-inline-end: var(--space-1h);
-  background: none;
+  grid-area: 1 / 1;
+  inline-size: calc(1.5rem + var(--space-1) + var(--space-1h));
 }
-/* Open, the text keeps the line's size and colour and starts where its
-   preview was, so expanding only lets it run on. */
 .audiencePanel {
-  flex: 1;
+  grid-area: 1 / 2;
   min-inline-size: 0;
 }
+/* Base UI measures the full text; the collapsed endpoint is one avatar row. */
 .audienceBody {
-  --activity-content-inset: calc(
-    (
-      var(--size-control-sm) *
-      0.75 -
-      var(--text-caption) *
-      var(--text-caption--line-height)
-    ) /
-    2 +
-    var(--space-1)
-  );
-  /* The preview hands off to a readable first line immediately. Only the
-     additional space expands, avoiding a blank frame at either endpoint. */
-  --activity-reveal-min: calc(
-    var(--activity-content-inset) +
-    var(--text-caption) *
-    var(--text-caption--line-height)
-  );
-  color: var(--text-subtle);
+  box-sizing: border-box;
+  height: var(--collapsible-panel-height);
+  min-height: calc(var(--space-6) + 2 * var(--space-1));
+  overflow: clip;
+  color: var(--text-standard);
+}
+.audienceBody:is([data-starting-style], [data-ending-style]) {
+  height: calc(var(--space-6) + 2 * var(--space-1));
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-keyboard-navigation]) .audienceBody {
+    transition: height var(--duration-state) var(--easing-enter);
+  }
 }
 .audienceContent {
-  padding-block-end: var(--space-2);
-  padding-block-start: var(--activity-content-inset);
-  color: var(--text-subtle);
+  /* Preserve the preview baseline: its line is centered in a 24px avatar. */
+  padding: calc(
+      var(--space-1) +
+      (
+        var(--space-6) -
+        var(--text-caption) *
+        var(--text-caption--line-height)
+      ) /
+      2
+    )
+    var(--space-1h) var(--space-1) 0;
+  color: var(--text-standard);
 }
 .audienceBody .message[data-layout="continuation"] {
   width: 100%;
@@ -3428,41 +3439,17 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   inline-size: var(--space-4);
   block-size: var(--space-4);
 }
-.audienceArrow {
-  flex: none;
-  color: var(--text-subtle);
-}
-.audiencePreview {
-  flex: 1;
+.audiencePreviewText {
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* Retain the expanded columns during exit, so wrapping and the preview do
-   not replace the closing details before their space has folded away. */
-.audienceRow:has(.audienceBody) .audiencePreview {
+.audienceRow:has(.audienceBody) .audiencePreviewText {
   display: none;
 }
-
-/* At narrow widths or enlarged text, give the details the full reading width
-   while keeping the avatars and clock on their original header line. */
-@container audience-row (max-width: 28rem) {
-  .audienceRow:has(.audienceBody) .audienceEntry {
-    flex-wrap: wrap;
-  }
-  .audienceBody {
-    --activity-content-inset: var(--space-1);
-    order: 1;
-    flex-basis: 100%;
-  }
-  .audienceContent {
-    padding: var(--space-1) var(--space-1) var(--space-2);
-  }
-  .audienceTime {
-    margin-inline-start: auto;
-  }
+.audienceLine:hover {
+  background: var(--affordance-subtle-hover);
 }
 
 /* Arriving at a message, by link, search or returning from its thread,
@@ -3493,6 +3480,16 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   pointer-events: none;
   animation: message-highlight calc(var(--duration-settle) * 10) ease-out both;
 }
+/* The pending response and a recorded step share a normal message line box. */
+.message[data-agent-response-preview] .messageBubble {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-standard);
+  font-size: var(--text-message);
+  line-height: var(--text-message--line-height);
+  letter-spacing: var(--text-message--letter-spacing);
+  font-weight: var(--text-message--font-weight);
+}
+
 .messageHighlight > .messageBody > .messageContent .messageBubble {
   isolation: isolate;
 }
@@ -3662,4 +3659,222 @@ html[data-keyboard-navigation]
 .composerSoloCardContent {
   min-width: 0;
   max-width: calc(100% - var(--size-control));
+}
+
+html[data-keyboard-navigation] .activityExpansion {
+  transition: none;
+}
+
+.audienceLine[data-collapse] {
+  color: var(--text-subtle);
+}
+
+/* Extend the native button hit target, keeping its painted surface content-sized. */
+.audienceRow[data-collapse] > .audienceEntry,
+.audienceLine[data-collapse] {
+  position: static;
+}
+.audienceLine[data-collapse]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+
+/* Standalone activity uses the normal incoming identity and bubble geometry. */
+.standaloneActivity .audienceRow {
+  container-type: normal;
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+.standaloneActivity .audienceRow .audienceEntry {
+  padding-inline-start: 0;
+  max-inline-size: 100%;
+  display: block;
+}
+.standaloneActivity .audienceRow .audienceLine {
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  min-height: calc(var(--text-message) * var(--text-message--line-height));
+}
+.standaloneActivity .audienceRow .audiencePreviewText {
+  display: block;
+}
+.containedActivityHistory .audienceRow .audienceEntry {
+  max-inline-size: 100%;
+  padding-inline-start: 0;
+}
+.standaloneActivity .audienceRow[data-open] .audienceEntry {
+  display: flex;
+}
+.containedActivityHistory .audienceRow .audienceLine {
+  margin: 0;
+  padding: 0;
+  align-items: flex-start;
+}
+.standaloneActivity .audienceRow[data-open] .audienceLine {
+  order: 1;
+  color: var(--text-subtle);
+}
+.standaloneActivity .audienceBody .message[data-layout="continuation"] {
+  container-type: normal;
+  padding-inline-end: 0;
+}
+
+.standaloneActivity .audienceBody {
+  min-height: calc(var(--text-message) * var(--text-message--line-height));
+}
+.standaloneActivity
+  .audienceBody:is([data-starting-style], [data-ending-style]) {
+  height: calc(var(--text-message) * var(--text-message--line-height));
+}
+.standaloneActivity .audienceContent {
+  padding: 0;
+}
+.standaloneActivity .audienceBody .message[data-layout="continuation"] .text {
+  font-size: var(--text-message);
+  line-height: var(--text-message--line-height);
+  letter-spacing: var(--text-message--letter-spacing);
+  font-weight: var(--text-message--font-weight);
+}
+
+/* Keep a working team inside the same footprint as one message avatar. */
+.agentAvatarGroup {
+  position: relative;
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.message:not([data-layout="timeline"]) .agentAvatarGroup {
+  width: 2rem;
+  height: 2rem;
+}
+.agentAvatarGroupItem {
+  position: absolute;
+  inset: 0;
+  transform-origin: top left;
+  transform: scale(1);
+  opacity: 1;
+  transition:
+    transform var(--duration-state) var(--easing-settle),
+    opacity var(--duration-state) var(--easing-enter);
+}
+.agentAvatarGroup[data-count="2"] .agentAvatarGroupItem:first-child {
+  transform: scale(0.62);
+}
+.agentAvatarGroup[data-count="2"] .agentAvatarGroupItem:nth-child(2) {
+  transform: translate(38%, 38%) scale(0.62);
+}
+.agentAvatarGroup[data-count="3"] .agentAvatarGroupItem:first-child {
+  transform: translateX(22%) scale(0.56);
+}
+.agentAvatarGroup[data-count="3"] .agentAvatarGroupItem:nth-child(2) {
+  transform: translateY(44%) scale(0.56);
+}
+.agentAvatarGroup[data-count="3"] .agentAvatarGroupItem:nth-child(3) {
+  transform: translate(44%, 44%) scale(0.56);
+}
+@starting-style {
+  .agentAvatarGroup[data-count] .agentAvatarGroupItem:not(:first-child) {
+    opacity: 0;
+    transform: translate(22%, 22%) scale(0.52);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agentAvatarGroupItem {
+    transition: none;
+  }
+}
+
+.activityDisclosureIcon {
+  flex: none;
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--text-subtle);
+}
+.standaloneActivity[data-contained-history]
+  .audienceLine[data-collapse]::after {
+  display: none;
+}
+.containedActivityHistory {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block-start: var(--space-3);
+}
+.containedActivityHistory .audienceRow .audiencePreviewText {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.containedActivityHistory .audienceRow:has(.audienceBody) .audienceEntry {
+  display: grid;
+  grid-template-columns: calc(var(--space-6) + var(--space-2)) minmax(0, 1fr);
+}
+
+/* A message interaction uses the bubble's type and inset, not control sizing. */
+.activityBubbleTrigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+/* The painted bubble and its interactive area must have the same bounds. */
+.messageBubble:has(> .activityBubbleTrigger) {
+  padding: 0;
+}
+.messageBubble > .activityBubbleTrigger {
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border-radius: inherit;
+}
+
+/* Activity interactions paint their shared bubble, never a second pill inside it. */
+.message[data-agent-response-preview] .audienceLine:hover {
+  background: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .message[data-agent-response-preview] .messageBubble:hover {
+    background: var(--affordance-subtle-hover);
+  }
+}
+
+/* Activity bubbles retain their aligned 24px identity column. */
+.standaloneActivity .audienceAvatar {
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
+}
+
+.activityGroupHeader[data-expanded] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.messageBubble:has(
+  > .standaloneActivity > .activityGroupHeader[data-expanded]
+) {
+  padding: var(--space-4);
+}
+.standaloneActivity .activityGroupHeader[data-expanded] .audienceLine {
+  min-height: var(--size-control-sm);
+}
+.activityGroupHeader[data-expanded] > .audienceRow {
+  flex: 1;
+  min-width: 0;
+}
+.activityGroupHeader[data-expanded] > div:last-child {
+  flex-shrink: 0;
 }

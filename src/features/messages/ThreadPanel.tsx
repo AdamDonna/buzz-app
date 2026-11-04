@@ -1,4 +1,14 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The thread region supports keyboard scrolling and Escape.
+import { TypingIndicator, useConversationAgents } from "./TypingIndicator";
+import { ActivityExpansion } from "./ActivityExpansion";
+import { ActivityGroupPreview } from "./ActivityGroupPreview";
+import {
+  activityPresentation,
+  activityDisplayRows,
+  useActivitySnapshot,
+} from "./activity-presentation";
+import { activityRuns } from "./activity-groups";
+import { DayDivider } from "./MessageTimestamp";
 import { workflowLabel } from "../relay/workflow-attribution";
 import { usePanelTabHost } from "../panels/PanelWorkspace";
 import { moveMessageSelection } from "./message-selection";
@@ -33,7 +43,10 @@ import type { ThreadRetarget, ThreadView } from "../relay/threads";
 import { useProfileGeneration, useRowProfiles } from "../relay/react";
 import { rowProfileIds } from "../relay/membership";
 import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
-import { continuesMessageGroup } from "./message-grouping";
+import {
+  continuesMessageGroup,
+  publicMessageNeighbor,
+} from "./message-grouping";
 import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
 import { ChannelJoinNotice } from "./ChannelJoinNotice";
 import { useListedChannel } from "../relay/listed-channel";
@@ -56,7 +69,6 @@ export type ThreadPanelProps = {
   channelId: string;
   /** Solo agents answer at top level, so a Solo thread is read-only. */
   soloConversation?: boolean | undefined;
-  activityClickOpensPanel?: boolean | undefined;
   disabled?: boolean | undefined;
   messageId: string;
   /** Channel workspaces retain the editor across same-thread link navigation. */
@@ -396,7 +408,6 @@ function OwnedThreadPanel({
   onOpenMediaReview,
   canOpenLink,
   soloConversation,
-  activityClickOpensPanel,
   disabled,
   replyRequest,
   focusRequest,
@@ -461,7 +472,6 @@ function OwnedThreadPanel({
   ) : view ? (
     <ThreadMessages
       soloConversation={soloConversation}
-      activityClickOpensPanel={activityClickOpensPanel}
       disabled={disabled}
       extensions={extensions}
       session={session}
@@ -499,7 +509,6 @@ function ThreadMessages({
   onOpenMediaReview,
   canOpenLink,
   soloConversation,
-  activityClickOpensPanel,
   disabled,
   replyRequest,
   focusRequest,
@@ -522,7 +531,6 @@ function ThreadMessages({
   selectionFailure?: SelectionFailure | undefined;
   /** Solo agents answer at top level, so a Solo thread is read-only. */
   soloConversation?: boolean | undefined;
-  activityClickOpensPanel?: boolean | undefined;
   disabled?: boolean | undefined;
   extensions?: ConversationExtensions | undefined;
   session: RelaySession;
@@ -570,11 +578,6 @@ function ThreadMessages({
     channelId,
     (listed) => (listed ?? session.channels?.get?.(channelId))?.joinRole,
   );
-  const cached = useListedChannel(
-    session.channels,
-    channelId,
-    (listed) => !!listed?.cached,
-  );
   const [joinNoticeHeight, setJoinNoticeHeight] = useState(0);
   const [joining, setJoining] = useState(false);
   const snapshot = useSyncExternalStore(
@@ -582,6 +585,7 @@ function ThreadMessages({
     view.snapshot,
     view.snapshot,
   );
+  const activitySnapshot = useActivitySnapshot(session.agentActivity);
   const resolvedRoot = snapshot.root?.id;
   const reportRoot = useRef(onResolvedRoot);
   reportRoot.current = onResolvedRoot;
@@ -626,6 +630,39 @@ function ThreadMessages({
     [session.unread, channelId, snapshot.root?.id, messageId],
   );
   useSyncExternalStore(subscribeUnread, unreadSnapshot, unreadSnapshot);
+  const [expandedActivity, setExpandedActivity] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [pinnedActivity, setPinnedActivity] = useState<
+    ReadonlyMap<string, number>
+  >(() => new Map());
+  const keepActivityMounted = useCallback((id: string) => {
+    setPinnedActivity((ids) => new Map(ids).set(id, (ids.get(id) ?? 0) + 1));
+    return () =>
+      setPinnedActivity((ids) => {
+        const next = new Map(ids);
+        const count = (ids.get(id) ?? 0) - 1;
+        if (count > 0) next.set(id, count);
+        else next.delete(id);
+        return next;
+      });
+  }, []);
+  const activityVisit = useRef<unknown[]>([]);
+  useLayoutEffect(() => {
+    const request = [messageId, navigation?.signal, revealRequest];
+    if (
+      !messageId ||
+      request.every((part, index) => part === activityVisit.current[index]) ||
+      !snapshot.replies.some((row) => row.id === messageId)
+    )
+      return;
+    activityVisit.current = request;
+    const group = [...tree.children.values()]
+      .flatMap((rows) => activityRuns(rows))
+      .find((group) => group.some((row) => row.id === messageId));
+    const first = group?.[0]?.id;
+    if (first) setExpandedActivity((current) => new Set([...current, first]));
+  }, [messageId, navigation?.signal, revealRequest, snapshot.replies, tree]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [replyParent, setReplyParent] = useState<string>();
   const resolveName = useChannelIdentityNames(session, channelId);
@@ -755,7 +792,7 @@ function ThreadMessages({
   // within this commit/layout expansion; a later user expansion must not restore it.
   const selectedBranchRef = useMemo(() => {
     let restore = false;
-    return (branch: HTMLLIElement | null) => {
+    return (branch: HTMLElement | null) => {
       if (!branch) return;
       const row = branch.querySelector<HTMLElement>("[data-message-id]");
       if (
@@ -1005,6 +1042,26 @@ function ThreadMessages({
     request: number;
   }>();
   const rootId = snapshot.root?.id;
+  const rootPresentation = activityPresentation(
+    snapshot.root?.audience === "agents"
+      ? [snapshot.root, ...snapshot.replies]
+      : snapshot.replies,
+    activitySnapshot,
+    agentPubkeys,
+    rootId,
+  );
+  const rootActivity = rootId ? rootPresentation.byRow.get(rootId) : undefined;
+  const { agents: liveAgents } = useConversationAgents(
+    session,
+    channelId,
+    rootId,
+  );
+  const lastMessage = publicMessageNeighbor(rows, rows.length, -1);
+  const joinsLive =
+    !!lastMessage &&
+    !lastMessage.membership &&
+    lastMessage.audience !== "agents" &&
+    lastMessage.authorId === liveAgents[0];
   const hasMediaComments =
     (snapshot.root?.replyCount ?? 0) > 0 ||
     snapshot.replies.length > 0 ||
@@ -1399,14 +1456,52 @@ function ThreadMessages({
     ? new Date(snapshot.root.createdAt * 1000).toDateString()
     : undefined;
   function renderReplies(parent: string | undefined, depth = 0): ReactNode {
-    const siblings = tree.children.get(parent) ?? [];
+    const chronologicalSiblings = tree.children.get(parent) ?? [];
+    const presentation = activityPresentation(
+      chronologicalSiblings,
+      activitySnapshot,
+      agentPubkeys,
+      parent ?? rootId,
+      pinnedActivity,
+    );
+    const groups = presentation.groups.filter((group) =>
+      group.ids.every((id) => !tree.children.get(id)?.length),
+    );
+    const siblings = activityDisplayRows(
+      chronologicalSiblings,
+      groups,
+      messageId,
+    );
+    const activeGroups = groups.filter(
+      (group) => !group.hidden || group.retained,
+    );
+    const groupsByFirst = new Map(
+      activeGroups.map((group) => [group.ids[0], group]),
+    );
+    const groupedIds = new Set(activeGroups.flatMap((group) => group.ids));
+    const hidden = new Set(
+      activeGroups.flatMap((group) =>
+        expandedActivity.has(group.ids[0] ?? "") ? [] : group.ids,
+      ),
+    );
     return siblings.map((row, index) => {
-      const nextRow = siblings[index + 1];
+      const group = groupsByFirst.get(row.id);
+      if (hidden.has(row.id) && !group) return null;
+      const nextRow =
+        row.audience === "agents"
+          ? siblings[index + 1]
+          : publicMessageNeighbor(siblings, index, 1);
       const children = tree.children.get(row.id);
       const continuation =
+        !!previousReply &&
         previousReply !== snapshot.root &&
         previousParent === parent &&
-        continuesMessageGroup(previousReply, row);
+        continuesMessageGroup(
+          row.audience === "agents"
+            ? previousReply
+            : publicMessageNeighbor(siblings, index, -1),
+          row,
+        );
       // A collapsed branch breaks bubble grouping, not calendar continuity.
       const currentDay = new Date(row.createdAt * 1000).toDateString();
       const day = previousDay !== currentDay;
@@ -1421,41 +1516,71 @@ function ThreadMessages({
       const unreadLabel = unreadCount
         ? `${unreadCount} new in available replies`
         : undefined;
+      const renderMessage = (row: ChannelMessage, inside = false) => {
+        const recordedActivity = presentation.byRow.get(row.id);
+        return (
+          <MessageRow
+            keepMounted={keepActivityMounted}
+            representedAgents={presentation.representedAgents.get(row.id)}
+            recordedActivity={
+              recordedActivity && {
+                ...recordedActivity,
+                container: groupedIds.has(row.id)
+                  ? "history"
+                  : recordedActivity.container,
+              }
+            }
+            viewer={session.viewer}
+            extensions={extensions}
+            session={session}
+            scope={scope}
+            onReply={
+              snapshot.root && !soloConversation ? targetReply : undefined
+            }
+            row={row}
+            getThreadRoot={getThreadRoot}
+            stackPrevious={inside || continuation}
+            stackNext={
+              inside ||
+              presentation.bubbleAnchors.has(row.id) ||
+              (joinsLive && row.id === lastMessage?.id) ||
+              (!!nextRow &&
+                continuesMessageGroup(row, nextRow) &&
+                !children?.length)
+            }
+            profile={profiles.get(row.authorId)}
+            participantProfiles={profiles}
+            agentPubkeys={agentPubkeys}
+            media={session.media}
+            onOpenLink={onOpenLink}
+            canOpenLink={canOpenLink}
+            day={!inside && day}
+            layout={continuation ? "continuation" : "thread"}
+            compactAvatar={depth > 0}
+            retry={session.messages.retry}
+            {...(canSeekVideo ? { onMediaTime: handleMediaTime } : {})}
+            {...(onOpenMediaReview && rootId
+              ? { onOpenMediaReview: openRootMedia }
+              : {})}
+          />
+        );
+      };
       const message = (
-        <MessageRow
-          viewer={session.viewer}
-          extensions={extensions}
-          session={session}
-          scope={scope}
-          onReply={snapshot.root && !soloConversation ? targetReply : undefined}
-          row={row}
-          getThreadRoot={getThreadRoot}
-          stackPrevious={continuation}
-          stackNext={
-            !!nextRow &&
-            continuesMessageGroup(row, nextRow) &&
-            !children?.length
-          }
-          profile={profiles.get(row.authorId)}
-          participantProfiles={profiles}
-          agentPubkeys={agentPubkeys}
-          media={session.media}
-          onOpenLink={onOpenLink}
-          canOpenLink={canOpenLink}
-          day={day}
-          layout={continuation ? "continuation" : "thread"}
-          compactAvatar={depth > 0}
-          retry={session.messages.retry}
-          {...(canSeekVideo ? { onMediaTime: handleMediaTime } : {})}
-          {...(onOpenMediaReview && rootId
-            ? { onOpenMediaReview: openRootMedia }
-            : {})}
-        />
+        <ActivityExpansion
+          open={!hidden.has(row.id) && !groupedIds.has(row.id)}
+          enabled={row.audience === "agents"}
+        >
+          {renderMessage(row)}
+        </ActivityExpansion>
       );
       return (
         <li
           key={row.id}
-          ref={row.id === messageId ? selectedBranchRef : undefined}
+          ref={
+            row.id === messageId && !groupedIds.has(row.id)
+              ? selectedBranchRef
+              : undefined
+          }
           className={styles.replyItem}
           data-layout={continuation ? "continuation" : "thread"}
         >
@@ -1465,6 +1590,41 @@ function ThreadMessages({
             </p>
           )}
 
+          {group && (
+            <>
+              {day && hidden.has(row.id) && (
+                <DayDivider createdAt={row.createdAt} />
+              )}
+              <ActivityGroupPreview
+                session={session}
+                group={group}
+                openActivity={onOpenLink}
+                canOpenActivity={canOpenLink}
+                renderHistory={(entry) => (
+                  <div
+                    ref={entry.id === messageId ? selectedBranchRef : undefined}
+                  >
+                    {renderMessage(entry, true)}
+                  </div>
+                )}
+                profiles={profiles}
+                media={session.media}
+                layout="thread"
+                expanded={expandedActivity.has(group.ids[0] ?? "")}
+                onToggle={() => {
+                  follow.current = false;
+                  targetAnchor.current = undefined;
+                  setExpandedActivity((current) => {
+                    const next = new Set(current);
+                    const first = group.ids[0] ?? row.id;
+                    if (next.has(first)) next.delete(first);
+                    else next.add(first);
+                    return next;
+                  });
+                }}
+              />
+            </>
+          )}
           <ReplyBranch
             message={message}
             hasReplies={!!children?.length}
@@ -1677,13 +1837,12 @@ function ThreadMessages({
           visible={showJumpToLatest}
           newMessageCount={newMessageCount}
           onClick={jumpToLatest}
-          activityLane={
-            composerRoot && !cached
-              ? { session, channelId, threadRootId: composerRoot.id }
-              : undefined
-          }
         />
-        <div data-thread-rows="" inert={positioning}>
+        <div
+          data-thread-rows=""
+          data-activity-history-scope=""
+          inert={positioning}
+        >
           {snapshot.root ? (
             <MessageRow
               viewer={session.viewer}
@@ -1691,7 +1850,14 @@ function ThreadMessages({
               session={session}
               scope={scope}
               onReply={soloConversation ? undefined : focusReply}
+              stackNext={joinsLive && snapshot.root.id === lastMessage?.id}
               row={snapshot.root}
+              representedAgents={rootPresentation.representedAgents.get(
+                snapshot.root.id,
+              )}
+              recordedActivity={
+                rootActivity && { ...rootActivity, container: "history" }
+              }
               profile={profiles.get(snapshot.root.authorId)}
               participantProfiles={profiles}
               agentPubkeys={agentPubkeys}
@@ -1738,6 +1904,18 @@ function ThreadMessages({
             )}
             {renderReplies(undefined)}
           </ol>
+          {!positioning && rootId && (
+            <TypingIndicator
+              audience="agents"
+              inFlow
+              session={session}
+              channelId={channelId}
+              threadRootId={rootId}
+              previousAuthor={joinsLive ? lastMessage?.authorId : undefined}
+              openActivity={onOpenLink}
+              canOpenActivity={canOpenLink}
+            />
+          )}
         </div>
         {requireReadyRoot &&
           snapshot.root &&
@@ -1811,7 +1989,6 @@ function ThreadMessages({
       )}
       {composerRoot && (
         <MessageComposer
-          activityClickOpensPanel={activityClickOpensPanel}
           onFocusedRemoval={focusArchivedHistory}
           key={`${scope}:${channelId}:${composerRoot.id}`}
           extensions={extensions}

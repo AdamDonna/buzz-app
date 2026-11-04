@@ -1,8 +1,19 @@
+import { cloneElement } from "react";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { stubAvatarBrowserApis } from "../agents/avatar-testing";
+stubAvatarBrowserApis();
 import { ChannelTimeline } from "./ChannelTimeline";
+import styles from "./Messages.module.css";
 import { createRelaySession } from "../relay/session";
 import { writeView } from "../../shared/view-state";
 import { foldMessages } from "../relay/fold";
@@ -13,6 +24,7 @@ const viewport = vi.hoisted(() => ({
   size: 0,
   start: 0,
   caches: [] as unknown[],
+  scrollToIndex: vi.fn(),
 }));
 // Control the independent virtualizer's public measurement/shift contract.
 // React itself owns the real timeline's refs, render and effect ordering.
@@ -42,7 +54,7 @@ vi.mock("virtua", async () => {
           findItemIndex: () => viewport.start,
           getItemOffset: () => 0,
           scrollTo: vi.fn(),
-          scrollToIndex: vi.fn(),
+          scrollToIndex: viewport.scrollToIndex,
         }),
         [],
       );
@@ -66,7 +78,11 @@ vi.mock("./MessageRow", () => ({
     stackNext: boolean;
     keepMounted: (id: string) => () => void;
   }) => (
-    <li data-stacked={stackPrevious} data-stack-next={stackNext}>
+    <li
+      data-message-id={row.id}
+      data-stacked={stackPrevious}
+      data-stack-next={stackNext}
+    >
       {row.content}
       <button type="button" onClick={() => keepMounted(row.id)}>
         Retain {row.id}
@@ -121,11 +137,12 @@ function activityFixture() {
     rows: ChannelMessage[],
     inlineTarget?: { messageId: string; signal: AbortSignal },
     chatPresentation = true,
+    queries = owner.session,
   ) => (
     <ChannelTimeline
       channelId="alpha"
       scope="activity-folding"
-      queries={owner.session}
+      queries={queries}
       chatPresentation={chatPresentation}
       inlineTarget={inlineTarget}
       window={{
@@ -143,27 +160,99 @@ function activityFixture() {
   return { owner, updates, content };
 }
 
-it("keeps the last five updates, retains expanded history through appends, and folds back", () => {
+it("shows one latest-agent preview, retains expanded history through appends, and folds back", () => {
   const { owner, updates, content } = activityFixture();
   try {
     const view = render(content(updates(9)));
     expect(screen.queryByText("Update 3")).toBeNull();
-    expect(screen.getByText("Update 4")).toBeVisible();
-    const toggle = screen.getByRole("button", {
-      name: "Show 4 previous steps",
+    expect(screen.getByText("Update 8")).toBeVisible();
+    let toggle = screen.getByRole("button", {
+      name: /Show activity history/,
     });
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Update 0")).toBeVisible();
     view.rerender(content(updates(11)));
-    expect(screen.getByRole("button", { name: "Show fewer" })).toBe(toggle);
+    toggle = screen.getByRole("button", { name: /Collapse activity history/ });
+    expect(toggle).toHaveFocus();
     expect(screen.getByText("Update 0")).toBeVisible();
-    expect(screen.getByText("Update 10")).toBeVisible();
+    expect(screen.getAllByText("Update 10")).toHaveLength(1);
+    expect(
+      screen.getByText("Update 0").compareDocumentPosition(toggle) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
     fireEvent.click(toggle);
     expect(screen.queryByText("Update 5")).toBeNull();
-    expect(screen.getByText("Update 6")).toBeVisible();
-    expect(toggle).toHaveTextContent("Show 6 previous steps");
+    expect(screen.getByText("Update 10")).toBeVisible();
+    expect(toggle).toHaveTextContent("Update 10");
     expect(toggle).toHaveFocus();
+    view.rerender(
+      content(
+        updates(12).map((row, index) =>
+          index === 11 ? { ...row, authorId: "reviewer" } : row,
+        ),
+      ),
+    );
+    toggle = screen.getByRole("button", { name: /Show activity history/ });
+    expect(toggle).toHaveFocus();
+    expect(toggle).toHaveTextContent("Update 11");
+    expect(
+      within(screen.getByRole("img", { name: "agent, reviewer" })).getByTitle(
+        "reviewer",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Update 10")).toBeNull();
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("shows the first three distinct agents in the visible identity cluster while retaining its full label", () => {
+  const { owner, updates, content } = activityFixture();
+  try {
+    const authors = ["one", "two", "three", "four"];
+    render(
+      content(
+        updates(9).map((row, index) => ({
+          ...row,
+          authorId: authors[index % authors.length] ?? "one",
+        })),
+      ),
+    );
+    const compact = within(
+      screen.getByRole("img", { name: "one, two, three, four" }),
+    );
+    expect(compact.queryByText("+1")).toBeNull();
+    expect(compact.getAllByTitle("one")).toHaveLength(1);
+    expect(compact.getByTitle("two")).toBeVisible();
+    expect(compact.getByTitle("three")).toBeVisible();
+    expect(compact.queryByTitle("four")).toBeNull();
+    const compactAvatar = compact.getAllByTitle("one")[0];
+    if (!compactAvatar) throw new Error("Missing compact agent avatar");
+    expect(
+      compactAvatar.compareDocumentPosition(compact.getByTitle("two")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      compact
+        .getByTitle("two")
+        .compareDocumentPosition(compact.getByTitle("three")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show activity history/ }),
+    );
+    expect(screen.queryByText("+1")).toBeNull();
+    expect(screen.getByText("Update 8")).toBeVisible();
+    const collapse = screen.getByRole("button", {
+      name: /Collapse activity history/,
+    });
+    expect(collapse).toHaveTextContent("Collapse");
+    expect(
+      screen.getByText("Update 8").compareDocumentPosition(collapse) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    expect(screen.getByText("Update 0")).toBeVisible();
   } finally {
     owner.dispose();
   }
@@ -182,44 +271,109 @@ it("reveals an older folded message for an exact visit, then permits folding it 
       }),
     );
     expect(screen.getByText("Update 0")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Collapse activity history/ }),
+    );
     expect(screen.queryByText("Update 0")).toBeNull();
   } finally {
     owner.dispose();
   }
 });
 
-it("does not fold short runs, normal replies, or non-Solo timelines", () => {
+it.each([1, 4])(
+  "hides a %i-step completed run while keeping subsequent work in channels",
+  (count) => {
+    const { owner, updates, content } = activityFixture();
+    try {
+      const rows = updates(count * 2 + 1);
+      const view = render(content(rows, undefined, false));
+      expect(screen.queryByText("Update 0")).toBeNull();
+      expect(screen.getByText(`Update ${count * 2}`)).toBeVisible();
+      const middle = rows[count];
+      if (!middle) throw new Error("Missing fixture reply");
+      const { audience: _audience, ...publicReply } = middle;
+      view.rerender(
+        content([
+          ...rows.slice(0, count),
+          { ...publicReply, content: "Main reply" },
+          ...rows.slice(count + 1),
+        ]),
+      );
+      expect(screen.queryByText("Update 0")).toBeNull();
+      const label = `${count} completed ${count === 1 ? "step" : "steps"}`;
+      expect(screen.queryByText(label)).toBeNull();
+      const reply = screen.getByText("Main reply");
+      expect(reply).toBeVisible();
+      expect(screen.getByText(`Update ${count * 2}`)).toBeVisible();
+      expect(
+        screen.getAllByRole("button", { name: /Show activity history/ }),
+      ).toHaveLength(1);
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+
+it("keeps ongoing typing in the reply group after completed history", () => {
   const { owner, updates, content } = activityFixture();
   try {
-    const rows = updates(9);
-    const view = render(content(rows, undefined, false));
-    expect(screen.getByText("Update 0")).toBeVisible();
-    expect(screen.queryByRole("button", { name: /previous steps/ })).toBeNull();
-    const middle = rows[4];
-    if (!middle) throw new Error("Missing fixture reply");
-    const { audience: _audience, ...publicReply } = middle;
-    view.rerender(
-      content([
-        ...rows.slice(0, 4),
-        { ...publicReply, content: "Main reply" },
-        ...rows.slice(5),
-      ]),
+    const history = updates(2);
+    const last = history.at(-1);
+    if (!last) throw new Error("Missing activity");
+    const { audience: _audience, ...reply } = last;
+    const activity = owner.session.agentActivity.snapshot();
+    const snapshot = {
+      ...activity,
+      local: [
+        {
+          scope: "test",
+          agent: reply.authorId,
+          channelId: "alpha",
+          messageId: "request",
+          threadRootId: "request",
+          state: "working" as const,
+          startedAt: 1,
+        },
+      ],
+    };
+    const queries = {
+      ...owner.session,
+      agentActivity: {
+        ...owner.session.agentActivity,
+        snapshot: () => snapshot,
+      },
+    };
+    const view = render(
+      content(
+        [...history, { ...reply, id: "reply", content: "Main reply" }],
+        undefined,
+        true,
+        queries,
+      ),
     );
-    expect(screen.getByText("Update 0")).toBeVisible();
-    expect(screen.getByText("Main reply")).toBeVisible();
-    expect(screen.getByText("Update 5")).toBeVisible();
-    expect(screen.queryByRole("button", { name: /previous steps/ })).toBeNull();
+    expect(screen.queryByText("2 completed steps")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Activity: .*working/ }),
+    ).toBeVisible();
+    expect(
+      view.container.querySelector(
+        "[data-conversation-activity] [data-agent-response-preview]",
+      ),
+    ).toHaveAttribute("data-stack-previous", "true");
+    expect(screen.getByText("Main reply").closest("li")).toHaveAttribute(
+      "data-stack-next",
+      "true",
+    );
   } finally {
     owner.dispose();
   }
 });
 
 it.each([
-  { anchor: "activity-8", expanded: false },
+  { anchor: "activity-8", expanded: true },
   { anchor: "activity-0", expanded: true },
 ])(
-  "restores $anchor without unnecessarily expanding recent activity",
+  "restores exact activity $anchor by revealing its history",
   ({ anchor, expanded }) => {
     const { owner, updates, content } = activityFixture();
     writeView("activity-folding", "scroll:alpha", {
@@ -230,7 +384,7 @@ it.each([
     try {
       render(content(updates(9)));
       const toggle = screen.getByRole("button", {
-        name: expanded ? "Show fewer" : "Show 4 previous steps",
+        name: expanded ? /Collapse activity history/ : /Show activity history/,
       });
       expect(toggle).toHaveAttribute("aria-expanded", String(expanded));
       if (expanded) expect(screen.getByText("Update 0")).toBeVisible();
@@ -245,19 +399,14 @@ it("starts visible and retained steps with author artwork after a hidden predece
   const { owner, updates, content } = activityFixture();
   try {
     render(content(updates(9)));
-    expect(screen.getByText("Update 4")).toHaveAttribute(
-      "data-stacked",
-      "false",
-    );
-    expect(screen.getByText("Update 5")).toHaveAttribute(
-      "data-stacked",
-      "true",
-    );
+    expect(screen.queryByText("Update 4")).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "Show 4 previous steps" }),
+      screen.getByRole("button", { name: /Show activity history/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Retain activity-2" }));
-    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Collapse activity history/ }),
+    );
     expect(screen.getByText("Update 2")).toHaveAttribute(
       "data-stacked",
       "false",
@@ -271,7 +420,7 @@ it("starts visible and retained steps with author artwork after a hidden predece
   }
 });
 
-it("consumes a visit to a visible step without expanding it later on append", () => {
+it("retains an explicitly revealed step through later appends", () => {
   const { owner, updates, content } = activityFixture();
   try {
     const target = {
@@ -280,12 +429,12 @@ it("consumes a visit to a visible step without expanding it later on append", ()
     };
     const view = render(content(updates(9), target));
     expect(
-      screen.getByRole("button", { name: /previous steps/ }),
-    ).toHaveAttribute("aria-expanded", "false");
+      screen.getByRole("button", { name: /activity history/ }),
+    ).toHaveAttribute("aria-expanded", "true");
     view.rerender(content(updates(10), target));
     expect(
-      screen.getByRole("button", { name: /previous steps/ }),
-    ).toHaveAttribute("aria-expanded", "false");
+      screen.getByRole("button", { name: /activity history/ }),
+    ).toHaveAttribute("aria-expanded", "true");
   } finally {
     owner.dispose();
   }
@@ -297,10 +446,12 @@ it("does not expand history when visiting a retained visible step", () => {
     const rows = updates(9);
     const view = render(content(rows));
     fireEvent.click(
-      screen.getByRole("button", { name: "Show 4 previous steps" }),
+      screen.getByRole("button", { name: /Show activity history/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Retain activity-2" }));
-    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Collapse activity history/ }),
+    );
     expect(screen.getByText("Update 2")).toBeVisible();
     view.rerender(
       content(rows, {
@@ -309,7 +460,7 @@ it("does not expand history when visiting a retained visible step", () => {
       }),
     );
     expect(
-      screen.getByRole("button", { name: /previous steps/ }),
+      screen.getByRole("button", { name: /activity history/ }),
     ).toHaveAttribute("aria-expanded", "false");
   } finally {
     owner.dispose();
@@ -317,7 +468,7 @@ it("does not expand history when visiting a retained visible step", () => {
 });
 
 it.each([false, true])(
-  "does not expand a previously visible restore anchor after append (bottom: %s)",
+  "preserves the initial restore expansion decision after append (bottom: %s)",
   (bottom) => {
     const { owner, updates, content } = activityFixture();
     writeView("activity-folding", "scroll:alpha", {
@@ -329,13 +480,55 @@ it.each([false, true])(
       const view = render(content(updates(9)));
       view.rerender(content(updates(10)));
       expect(
-        screen.getByRole("button", { name: /previous steps/ }),
-      ).toHaveAttribute("aria-expanded", "false");
+        screen.getByRole("button", { name: /activity history/ }),
+      ).toHaveAttribute("aria-expanded", String(!bottom));
     } finally {
       owner.dispose();
     }
   },
 );
+
+it("restores a contained activity step at its saved offset rather than the group start", () => {
+  const { owner, updates, content } = activityFixture();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return {
+        top: this.dataset.messageId === "activity-4" ? 240 : 0,
+        left: 0,
+        right: 800,
+        bottom: 0,
+        width: 800,
+        height: 0,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      };
+    },
+  );
+  writeView("activity-folding", "scroll:alpha", {
+    offset: 220,
+    bottom: false,
+    anchor: { id: "activity-4", y: 20 },
+  });
+  try {
+    render(content(updates(9)));
+    viewport.scrollToIndex.mockClear();
+    act(() => {
+      for (const callback of frames.splice(0)) callback(0);
+    });
+    expect(viewport.scrollToIndex).toHaveBeenCalledWith(0, {
+      align: "start",
+      offset: 220,
+    });
+  } finally {
+    owner.dispose();
+  }
+});
 
 it("waits for the first non-empty window to resolve a hidden saved activity anchor", () => {
   const { owner, updates, content } = activityFixture();
@@ -347,10 +540,9 @@ it("waits for the first non-empty window to resolve a hidden saved activity anch
   try {
     const view = render(content([]));
     view.rerender(content(updates(9)));
-    expect(screen.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: /Collapse activity history/ }),
+    ).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Update 0")).toBeVisible();
   } finally {
     owner.dispose();
@@ -371,9 +563,11 @@ it.each(["collapse", "wheel"])(
       const view = render(content(rows.slice(5)));
       if (intent === "collapse") {
         fireEvent.click(
-          screen.getByRole("button", { name: "Show 4 previous steps" }),
+          screen.getByRole("button", { name: /Show activity history/ }),
         );
-        fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+        fireEvent.click(
+          screen.getByRole("button", { name: /Collapse activity history/ }),
+        );
       } else {
         const timeline = view.container.querySelector(
           "[data-channel-timeline]",
@@ -383,7 +577,7 @@ it.each(["collapse", "wheel"])(
       }
       view.rerender(content(rows));
       expect(
-        screen.getByRole("button", { name: "Show 9 previous steps" }),
+        screen.getByRole("button", { name: /Show activity history/ }),
       ).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByText("Update 0")).toBeNull();
     } finally {
@@ -402,7 +596,7 @@ it("ignores a hidden reading anchor when restoring the bottom", () => {
   try {
     render(content(updates(9)));
     expect(
-      screen.getByRole("button", { name: /previous steps/ }),
+      screen.getByRole("button", { name: /activity history/ }),
     ).toHaveAttribute("aria-expanded", "false");
   } finally {
     owner.dispose();
@@ -751,3 +945,103 @@ it.each([
     owner.dispose();
   }
 });
+
+it("hides historical steps after the agent returns to a public reply without live completion state", () => {
+  const { owner, updates, content } = activityFixture();
+  try {
+    const rows = updates(3);
+    const last = rows[2];
+    if (!last) throw new Error("Missing fixture activity");
+    const { audience: _audience, ...base } = last;
+    const response = {
+      ...base,
+      id: "public-response",
+      createdAt: 110,
+      content: "Here is the result.",
+    };
+    const view = render(content([...rows, { ...response, authorId: "human" }]));
+    expect(screen.queryByText("3 completed steps")).toBeNull();
+    view.rerender(content([...rows, response]));
+    expect(screen.queryByText("3 completed steps")).toBeNull();
+    expect(screen.queryByText("Update 2")).toBeNull();
+    expect(screen.getByText("Here is the result.")).toBeVisible();
+  } finally {
+    owner.dispose();
+  }
+});
+
+it("reveals a directly linked completed step without restoring the completed summary", () => {
+  const f = activityFixture();
+  const steps = f.updates(2);
+  const first = steps[0];
+  if (!first) throw new Error("Missing step");
+  const { audience: _audience, ...publicRow } = first;
+  const rows = [
+    ...steps,
+    {
+      ...publicRow,
+      id: "reply",
+      content: "Finished",
+      createdAt: 110,
+    },
+  ];
+  const view = render(f.content(rows));
+  expect(screen.queryByText("Update 1")).toBeNull();
+  view.rerender(
+    f.content(rows, {
+      messageId: "activity-1",
+      signal: new AbortController().signal,
+    }),
+  );
+  expect(screen.getByText("Update 1")).toBeVisible();
+  expect(screen.queryByText("Update 0")).toBeNull();
+  expect(screen.queryByRole("button", { name: /activity history/ })).toBeNull();
+  view.unmount();
+  f.owner.dispose();
+});
+
+it.each([0, 1])(
+  "includes the measured activity tail only when sent row %s is last",
+  (sentIndex) => {
+    const { owner, updates, content } = activityFixture();
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const height = this.querySelector(`:scope > .${styles.timelineEnd}`)
+          ? 75
+          : 0;
+        return {
+          top: 0,
+          left: 0,
+          right: 800,
+          bottom: height,
+          width: 800,
+          height,
+          x: 0,
+          y: 0,
+          toJSON() {},
+        };
+      },
+    );
+    const rows = updates(2).map(({ audience: _audience, ...row }) => row);
+    try {
+      render(
+        cloneElement(content(rows), { revealMessageId: rows[sentIndex]?.id }),
+      );
+      viewport.scrollToIndex.mockClear();
+      act(() => {
+        for (const frame of frames.splice(0)) frame(0);
+      });
+      expect(viewport.scrollToIndex).toHaveBeenCalledWith(sentIndex, {
+        align: "end",
+        ...(sentIndex === 1 ? { offset: 75 } : {}),
+      });
+    } finally {
+      owner.dispose();
+    }
+  },
+);
