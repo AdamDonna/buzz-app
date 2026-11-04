@@ -12,6 +12,10 @@ import type { RelaySession } from "../relay/session";
 import type { JsonValue } from "../navigation/targets";
 import type { PluginManager } from "../../plugins/manager";
 import { relayPartition } from "../relay/partition";
+import { channelIdentity } from "../relay/channel-labels";
+import { soloChannelMetadata } from "../relay/discovery";
+import { lifecycleChannelId } from "../relay/channel-lifecycle-protocol";
+import { hasTag, tag } from "../relay/events";
 import { ownSolo, soloLabels } from "../solo/labels";
 import { regionLabels, soloRegionLabel } from "../solo/region-labels";
 import { soloDraftTarget } from "./routes";
@@ -433,9 +437,120 @@ export class SoloNavigationService extends Service implements SoloNavigation {
         throw new Error("This Solo region binding has ended");
       return host.session;
     };
+    const readLead = async (binding: SoloRegionBinding, channelId: string) => {
+      lifecycleChannelId(channelId);
+      const session = current(binding);
+      const runtime = [...host.runtimes.values()].find(
+        (item) => item.source.identity === identity,
+      );
+      const signal = runtime?.controller.signal;
+      if (!signal || !session.snapshotRead || !session.relayAuthor)
+        throw new Error("Workspace leads are unavailable.");
+      const events = await session.snapshotRead(
+        [
+          {
+            kinds: [39000],
+            authors: [session.relayAuthor],
+            "#d": [channelId],
+            consistency: "strong",
+            limit: 1,
+          },
+        ],
+        { signal },
+      );
+      current(binding);
+      signal.throwIfAborted();
+      if (
+        events.length > 1 ||
+        events.some(
+          (event) =>
+            event.kind !== 39000 ||
+            event.pubkey !== session.relayAuthor ||
+            !hasTag(event, "d", channelId),
+        )
+      )
+        throw new Error("The workspace lead read could not be confirmed.");
+      const metadata = events[0];
+      if (!metadata) return;
+      const facts = channelIdentity(metadata);
+      if (
+        !soloChannelMetadata(metadata) ||
+        facts.creator !== binding.viewer ||
+        regionLabels(facts.labels).sort()[0] !== label
+      )
+        throw new Error(
+          "Only your own task in this region can lead a workspace.",
+        );
+      return metadata;
+    };
     this.contributions.register(this.ctx, { ...source, identity });
     return Object.freeze({
       label,
+      async workspaceLead(binding, workspaceId) {
+        const session = current(binding);
+        await session.soloPreferences.refresh();
+        current(binding);
+        const catalog = host.workspaces.snapshot(binding);
+        if (catalog.status !== "ready")
+          throw new Error("Workspaces are unavailable. Refresh and try again.");
+        const workspace = catalog.workspaces.find(
+          ({ id }) => id === workspaceId,
+        );
+        if (!workspace) throw new Error("The workspace is unavailable.");
+        if (!workspace.lead) return;
+        if (workspace.lead.region !== label)
+          throw new Error(
+            "This workspace's lead belongs to another task source.",
+          );
+        return (await readLead(binding, workspace.lead.channelId))
+          ? workspace.lead.channelId
+          : undefined;
+      },
+      async setWorkspaceLead(binding, workspaceId, channelId) {
+        const session = current(binding);
+        const runtime = [...host.runtimes.values()].find(
+          (item) => item.source.identity === identity,
+        );
+        const signal = runtime?.controller.signal;
+        if (!signal || !source.task)
+          throw new Error("Workspace leads require an active task source.");
+        const channel = await readLead(binding, channelId);
+        current(binding);
+        signal.throwIfAborted();
+        if (!channel || tag(channel, "archived") === "true")
+          throw new Error(
+            "Only your own task in this region can lead a workspace.",
+          );
+        await session.soloPreferences.refresh();
+        current(binding);
+        const catalog = host.workspaces.snapshot(binding);
+        if (catalog.status !== "ready")
+          throw new Error("Workspaces are unavailable. Refresh and try again.");
+        const workspace = catalog.workspaces.find(
+          ({ id }) => id === workspaceId,
+        );
+        if (!workspace) return;
+        const previous = workspace.lead;
+        if (previous && previous.channelId !== channelId) {
+          if (previous.region !== label)
+            throw new Error(
+              "This workspace's lead belongs to another task source.",
+            );
+          if (await readLead(binding, previous.channelId))
+            return previous.channelId;
+          current(binding);
+        }
+        const saved = await session.soloPreferences.setWorkspaceLead(
+          {
+            workspaceId,
+            lead: { region: label, channelId },
+            ...(previous ? { expected: previous.channelId } : {}),
+          },
+          signal,
+        );
+        current(binding);
+        return saved ? channelId : undefined;
+      },
       openDraft(binding, input) {
         current(binding);
         if (input.mode !== "task" || !host.taskSource(label))
@@ -454,10 +569,19 @@ export class SoloNavigationService extends Service implements SoloNavigation {
             label: project.label,
           });
         if (project !== undefined && !draft) throw new Error("Invalid project");
-        const draftId = crypto.randomUUID();
+        const pendingKey = project?.lead
+          ? `solo:workspace-lead:${label}:${project.id}`
+          : undefined;
+        const pendingId = pendingKey
+          ? readView<string | null>(binding.scope, pendingKey, null)
+          : null;
+        const restored =
+          typeof pendingId === "string" && /^[0-9a-f-]{36}$/.test(pendingId);
+        const draftId = restored ? pendingId : crypto.randomUUID();
         current(binding);
         if (
           draft &&
+          !restored &&
           replaceView(
             binding.scope,
             `solo:task:${draftId}:new-draft`,
@@ -466,10 +590,20 @@ export class SoloNavigationService extends Service implements SoloNavigation {
           ) !== "saved"
         )
           throw new Error("The task draft could not be saved. Try again.");
+        if (
+          pendingKey &&
+          !restored &&
+          !writeView(binding.scope, pendingKey, draftId)
+        )
+          throw new Error("The workspace draft could not be saved. Try again.");
         current(binding);
         void host.ctx.navigation?.open(
           soloDraftTarget(binding.scope, {
-            task: { region: label, draftId },
+            task: {
+              region: label,
+              draftId,
+              ...(project?.lead ? { workspaceLead: project.id } : {}),
+            },
             ...(primary ? { agent: primary } : {}),
           }),
         );

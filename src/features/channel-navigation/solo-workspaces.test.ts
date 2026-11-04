@@ -1,5 +1,8 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createSidebarPreferencesStore } from "../relay/sidebar-preferences-store";
+import { createSoloRegionFixture } from "./solo-navigation-testing";
+import { keypair, signed } from "../relay/testing";
+import { SOLO_LABEL } from "../solo/labels";
 import { createSoloWorkspaces } from "./solo-workspaces";
 
 it("projects the existing Solo catalog and writer, preserving uncertainty and fencing ended bindings", async () => {
@@ -30,8 +33,15 @@ it("projects the existing Solo catalog and writer, preserving uncertainty and fe
       return { sections, assignments: {}, starred: [], muted: [] };
     },
   });
+  const preferences = Object.assign(
+    Object.defineProperties(
+      {},
+      Object.getOwnPropertyDescriptors(store.queries),
+    ) as typeof store.queries,
+    { setWorkspaceLead: async () => true },
+  );
   const api = createSoloWorkspaces(
-    (current) => (connected && current === binding ? store.queries : undefined),
+    (current) => (connected && current === binding ? preferences : undefined),
     (listener) => {
       connectionListeners.add(listener);
       return () => {
@@ -79,4 +89,125 @@ it("projects the existing Solo catalog and writer, preserving uncertainty and fe
     store.dispose();
   }
   expect(connectionListeners.size).toBe(0);
+});
+
+it("resolves archived lead history and replaces only an authoritatively absent lead, fencing source ownership and binding", async () => {
+  const h = createSoloRegionFixture();
+  const relay = keypair();
+  const first = "11111111-1111-4111-8111-111111111111";
+  const second = "22222222-2222-4222-8222-222222222222";
+  const label = "buzz.region:example:work";
+  let lead = { region: label, channelId: first };
+  const snapshot = () => ({
+    status: "ready" as const,
+    data: {
+      sections: [{ id: "work", name: "Work", order: 0, lead }],
+      assignments: {},
+      starred: [],
+      muted: [],
+    },
+  });
+  const save = vi.fn(async (input: { lead: typeof lead }) => {
+    lead = input.lead;
+  });
+  let archived = false;
+  let absent = false;
+  let creator = h.session.viewer;
+  let fail = false;
+  const read = vi.fn(
+    async (filters: readonly { "#d"?: readonly string[] }[]) => {
+      if (fail) throw new Error("Network unavailable");
+      const id = filters[0]?.["#d"]?.[0];
+      if (absent && id === first) return [];
+      return [
+        signed(relay, {
+          kind: 39000,
+          tags: [
+            ["d", id ?? ""],
+            ["t", "stream"],
+            ["t", SOLO_LABEL],
+            ["t", label],
+            ["P", creator],
+            ["private"],
+            ...(archived ? [["archived", "true"]] : []),
+          ],
+          content: "",
+        }),
+      ];
+    },
+  );
+  Object.assign(h.session, {
+    relayAuthor: relay.pubkey,
+    snapshotRead: read,
+    soloPreferences: {
+      ...h.session.soloPreferences,
+      snapshot,
+      refresh: async () => {},
+      setWorkspaceLead: save,
+    },
+  });
+  const source = await h.register({
+    task: {
+      prepare: async () => ({ ok: false, reason: "Unused" }),
+      markChannelStarted: async () => "start",
+      recordFirstEvent: async () => {},
+      participants: {
+        eligible: () => false,
+        defaultRecipient: () => undefined,
+        makePrimary: async () => {},
+      },
+    },
+  });
+  try {
+    expect(await source.handle.workspaceLead(source.binding(), "work")).toBe(
+      first,
+    );
+    archived = true;
+    expect(await source.handle.workspaceLead(source.binding(), "work")).toBe(
+      first,
+    );
+    archived = false;
+    expect(
+      await source.handle.setWorkspaceLead(source.binding(), "work", second),
+    ).toBe(first);
+    expect(save).not.toHaveBeenCalled();
+    fail = true;
+    await expect(
+      source.handle.workspaceLead(source.binding(), "work"),
+    ).rejects.toThrow("Network unavailable");
+    expect(save).not.toHaveBeenCalled();
+    fail = false;
+    absent = true;
+    expect(
+      await source.handle.workspaceLead(source.binding(), "work"),
+    ).toBeUndefined();
+    await source.handle.setWorkspaceLead(source.binding(), "work", second);
+    expect(save).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: "work",
+        lead: { region: label, channelId: second },
+        expected: first,
+      },
+      expect.any(AbortSignal),
+    );
+    creator = "b".repeat(64);
+    await expect(
+      source.handle.workspaceLead(source.binding(), "work"),
+    ).rejects.toThrow("your own task");
+    expect(read.mock.calls[0]?.[0]).toEqual([
+      {
+        kinds: [39000],
+        authors: [relay.pubkey],
+        "#d": [first],
+        consistency: "strong",
+        limit: 1,
+      },
+    ]);
+    h.loseCoordinates();
+    await expect(
+      source.handle.workspaceLead(source.binding(), "work"),
+    ).rejects.toThrow("ended");
+  } finally {
+    await h.dispose();
+  }
 });

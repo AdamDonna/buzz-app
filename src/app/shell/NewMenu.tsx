@@ -11,9 +11,7 @@ import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { splitPartition } from "../../features/relay/partition";
 import { NewWorkspace } from "../../features/solo/NewWorkspace";
-import { resetNewChatProject } from "../../features/solo/SoloDraft";
-import { soloDraftTarget } from "../../features/channel-navigation/routes";
-import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { Button } from "../../shared/design-system/ui/Button";
 import {
   MenuRoot,
   MenuTrigger,
@@ -23,8 +21,6 @@ import {
   MenuGroupLabel,
   MenuSeparator,
 } from "../../shared/design-system/ui/Menu";
-import styles from "./NewMenu.module.css";
-import { PlusIcon } from "../../shared/design-system/icons";
 
 type Props = {
   relay: RelayData;
@@ -71,17 +67,16 @@ function ReadyNewMenu({
   const menuTrigger = (
     <MenuTrigger
       render={
-        <IconButton
-          hint="familiar"
+        <Button
           ref={trigger}
           disabled={!available}
           aria-label="New"
           title="New"
-          variant="inset"
-          shape="round"
+          variant="ghost"
           size="sm"
-          icon={<PlusIcon className={styles.createIcon} size={16} />}
-        />
+        >
+          New
+        </Button>
       }
     />
   );
@@ -94,14 +89,6 @@ function ReadyNewMenu({
         <MenuPopup>
           <MenuGroup>
             <MenuGroupLabel emphasis="quiet">Solo</MenuGroupLabel>
-            <MenuItem
-              onClick={() => {
-                if (current())
-                  void navigator.open(soloDraftTarget(session.scope));
-              }}
-            >
-              New chat
-            </MenuItem>
             <MenuItem
               disabled={!session.soloPreferences.sectionCreationWritable}
               onClick={() => {
@@ -188,13 +175,7 @@ function ReadyNewMenu({
           create={(section) => session.soloPreferences.createSection(section)}
           close={() => setCreatingProject(false)}
           finalFocus={trigger}
-          onCreated={(id) => {
-            if (!current()) return;
-            resetNewChatProject(session.scope, id);
-            void navigator.open(
-              soloDraftTarget(session.scope, { project: id }),
-            );
-          }}
+          onCreated={() => {}}
         />
       )}
     </>

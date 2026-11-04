@@ -631,3 +631,37 @@ test.describe("plugin-owned Solo lifecycle", () => {
     expect(app.report.unexpected).toEqual([]);
   });
 });
+
+// This protects real DOM focus/selection when the source changes an ordinary
+// row's placement; React/jsdom can prove retained state but not native blur.
+test("task-source recovery retains an ordinary chat editor, caret and unsaved name", async ({
+  page,
+  app,
+}) => {
+  await page.goto(`${app.origin}/?solo-region-fixture&compose-workspaces`);
+  await newChat(page);
+  await row(page, alpha).dblclick();
+  await expect(input(page)).toHaveAttribute("aria-disabled", "false");
+  await input(page).fill("Keep this unsaved name");
+  await input(page).evaluate((field) => field.setSelectionRange(4, 4));
+  for (const status of ["loading", "ready"]) {
+    await page.evaluate(
+      (status) => window.fixtureSoloRegion.status(status),
+      status,
+    );
+    await expect(input(page)).toBeVisible();
+    await expect(input(page)).toBeFocused();
+    await expect(input(page)).toHaveValue("Keep this unsaved name");
+    await expect
+      .poll(() =>
+        input(page).evaluate((field) => [
+          field.selectionStart,
+          field.selectionEnd,
+        ]),
+      )
+      .toEqual([4, 4]);
+  }
+  await input(page).press("Escape");
+  await expect(input(page)).toHaveCount(0);
+  expect(app.report.detailsPublications ?? []).toHaveLength(0);
+});

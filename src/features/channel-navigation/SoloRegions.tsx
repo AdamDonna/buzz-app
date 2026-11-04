@@ -1,5 +1,11 @@
 import { SoloDisclosure } from "./SoloDisclosure";
 import {
+  WorkspaceCompositionContext,
+  RegionWorkspace,
+  RegionChats,
+  type ComposeWorkspaces,
+} from "./WorkspaceComposition";
+import {
   RegionDestinationContext,
   RegionCard,
   RegionConversation,
@@ -23,7 +29,7 @@ import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Button } from "../../shared/design-system/ui/Button";
 import {
   SlidersHorizontalIcon,
-  PlusIcon,
+  DotsThreeIcon,
 } from "../../shared/design-system/icons";
 import {
   MenuRoot,
@@ -58,6 +64,7 @@ export function SoloRegions({
   sidebar,
   scope,
   ordinary,
+  composeOrdinary,
   ordinaryActions,
   creationTrigger,
   fallback,
@@ -69,6 +76,7 @@ export function SoloRegions({
   scope: string;
   sidebar: ReturnType<typeof useSidebarView>;
   ordinary?: ReactNode;
+  composeOrdinary?: ((compose: ComposeWorkspaces) => ReactNode) | undefined;
   ordinaryActions?: ReactNode;
   creationTrigger?: RefObject<HTMLButtonElement | null> | undefined;
   fallback?: ReactNode;
@@ -114,6 +122,7 @@ export function SoloRegions({
           first={index === 0}
           last={index === regions.length - 1}
           ordinary={index === primary ? ordinary : undefined}
+          composeOrdinary={index === primary ? composeOrdinary : undefined}
           ordinaryActions={index === primary ? ordinaryActions : undefined}
           creationTrigger={index === primary ? creationTrigger : undefined}
         />
@@ -135,6 +144,7 @@ function RegionFrame({
   first,
   last,
   ordinary,
+  composeOrdinary,
   ordinaryActions,
   creationTrigger,
   pendingClick,
@@ -151,6 +161,7 @@ function RegionFrame({
   first: boolean;
   last: boolean;
   ordinary?: ReactNode;
+  composeOrdinary?: ((compose: ComposeWorkspaces) => ReactNode) | undefined;
   ordinaryActions?: ReactNode;
   creationTrigger?: RefObject<HTMLButtonElement | null> | undefined;
 }) {
@@ -299,6 +310,48 @@ function RegionFrame({
       ))}
     </>
   );
+  const composing = !!source?.composeWorkspaces && !!composeOrdinary;
+  const body =
+    source &&
+    binding &&
+    presentation &&
+    region.snapshot?.status === "ready" &&
+    !region.reason ? (
+      <OwnedContribution
+        entry={source}
+        registry={{ snapshot: service.sources }}
+        fallback={
+          <>
+            {recovery}
+            {composing && <RegionChats all />}
+          </>
+        }
+      >
+        {(entry) => (
+          <entry.component
+            binding={binding}
+            snapshot={region.snapshot as SoloRegionProps["snapshot"]}
+            live={region.live}
+            {...(current ? { current } : {})}
+            {...presentation}
+            ui={
+              composing
+                ? {
+                    ...destinationUi,
+                    Workspace: RegionWorkspace,
+                    Chats: RegionChats,
+                  }
+                : destinationUi
+            }
+          />
+        )}
+      </OwnedContribution>
+    ) : (
+      <>
+        {recovery}
+        {composing && <RegionChats all />}
+      </>
+    );
   return (
     <RegionDestinationContext.Provider
       value={{
@@ -358,32 +411,15 @@ function RegionFrame({
             )
           }
         >
-          {source &&
-          binding &&
-          presentation &&
-          region.snapshot?.status === "ready" &&
-          !region.reason ? (
-            <OwnedContribution
-              entry={source}
-              registry={{ snapshot: service.sources }}
-              fallback={recovery}
-            >
-              {(entry) => (
-                <entry.component
-                  binding={binding}
-                  snapshot={region.snapshot as SoloRegionProps["snapshot"]}
-                  live={region.live}
-                  {...(current ? { current } : {})}
-                  {...presentation}
-                  ui={destinationUi}
-                />
-              )}
-            </OwnedContribution>
-          ) : (
-            recovery
-          )}
+          {composing
+            ? composeOrdinary?.((parts) => (
+                <WorkspaceCompositionContext value={parts}>
+                  {body}
+                </WorkspaceCompositionContext>
+              ))
+            : body}
         </SidebarSection>
-        {ordinary}
+        {!composing && ordinary}
       </div>
     </RegionDestinationContext.Provider>
   );
@@ -427,7 +463,7 @@ function RegionAction({
   }
   const icon =
     action.icon === "plus" ? (
-      <PlusIcon size={15} strokeWidth={2.5} />
+      <DotsThreeIcon size={15} strokeWidth={2.5} />
     ) : action.icon === "view" ? (
       <SlidersHorizontalIcon size={15} />
     ) : (

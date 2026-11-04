@@ -13,6 +13,8 @@ export type TaskDraft = Readonly<{
   primary?: string;
   tokens: readonly ComposerToken[];
   attachments: readonly UploadedAttachment[];
+  /** Present only while the draft still targets this workspace's optional lead. */
+  workspaceLead?: string;
 }>;
 export type TaskPrepareResult =
   | Readonly<{
@@ -138,6 +140,8 @@ export type SoloRegionSource = Readonly<{
   subscribe(listener: () => void): () => void;
   read(binding: SoloRegionBinding): SoloRegionSnapshot;
   component: ComponentType<SoloRegionProps>;
+  /** Compose tasks with ordinary chats in the host's existing workspace inventory. */
+  composeWorkspaces?: true;
   actions?: (binding: SoloRegionBinding) => readonly SoloRegionAction[];
 }>;
 export type SoloChatInput = Readonly<{
@@ -149,13 +153,28 @@ export type SoloChatInput = Readonly<{
 }>;
 export type SoloRegionHandle = Readonly<{
   label: string;
+  /** Freshly resolve this source’s optional lead. Unreadable leads return no channel; archived leads retain their link. */
+  workspaceLead(
+    binding: SoloRegionBinding,
+    workspaceId: string,
+  ): Promise<string | undefined>;
+  /** Save the optional lead with the existing workspace revision checks and readback. Concurrent devices retain the workspace writer’s conflict policy. */
+  setWorkspaceLead(
+    binding: SoloRegionBinding,
+    workspaceId: string,
+    channelId: string,
+  ): Promise<string | undefined>;
+
   openDraft(
     binding: SoloRegionBinding,
     input: Readonly<{
       mode: "task";
       seed?: Readonly<
         | { primary?: string; project?: never }
-        | { primary?: never; project: Readonly<{ id: string; label: string }> }
+        | {
+            primary?: never;
+            project: Readonly<{ id: string; label: string; lead?: true }>;
+          }
       >;
     }>,
   ): void;
@@ -178,7 +197,21 @@ export type SoloRegionProps = Readonly<{
     Conversation: ComponentType<SoloConversationProps>;
     Card: ComponentType<SoloCardProps>;
     Disclosure: ComponentType<SoloDisclosureProps>;
+    Workspace?: ComponentType<SoloWorkspaceProps>;
+    Chats?: ComponentType<Readonly<{ all?: boolean }>>;
   }>;
+}>;
+export type SoloWorkspaceProps = Readonly<{
+  id: string;
+  /** Opaque project token identifying this workspace’s lead composer. */
+  leadTokenId?: string;
+  selected?: boolean;
+  onSelect?(): void;
+  onNewTask?(): void;
+  /** Reveal a moved or externally opened child; selecting the lead does not expand. */
+  reveal?: string;
+  dropTarget?: boolean;
+  children?: ReactNode;
 }>;
 /** Host conversation behavior. The source composes the presentation from its parts. */
 export type SoloConversationProps = Readonly<{
@@ -238,7 +271,11 @@ export type SoloNavigation = Readonly<{
 
 export type SoloWorkspaceSnapshot = Readonly<{
   status: "loading" | "ready" | "unavailable";
-  workspaces: readonly Readonly<{ id: string; name: string }>[];
+  workspaces: readonly Readonly<{
+    id: string;
+    name: string;
+    lead?: Readonly<{ region: string; channelId: string }>;
+  }>[];
   canCreate: boolean;
   error?: string;
 }>;

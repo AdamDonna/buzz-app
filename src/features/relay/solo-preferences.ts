@@ -19,7 +19,12 @@ export function soloGroups(entries: readonly KitEntry[]) {
 }
 function project(groups: Groups): SidebarGroups {
   return {
-    sections: groups.groups.map(({ id, name }, order) => ({ id, name, order })),
+    sections: groups.groups.map(({ id, name, lead }, order) => ({
+      id,
+      name,
+      order,
+      ...(lead ? { lead } : {}),
+    })),
     assignments: groups.assignments,
   };
 }
@@ -35,10 +40,12 @@ const empty = (): Groups => ({
 function comparable(value: Groups) {
   return JSON.stringify([
     value.id,
-    value.groups.map(({ id, name, defaultTemplateId }) => [
+    value.groups.map(({ id, name, defaultTemplateId, lead }) => [
       id,
       name,
       defaultTemplateId,
+      lead?.region,
+      lead?.channelId,
     ]),
     Object.entries(value.assignments).sort(([a], [b]) => a.localeCompare(b)),
   ]);
@@ -191,6 +198,57 @@ export function createSoloPreferences(kit: ChannelKit, lifetime: AbortSignal) {
   });
   return {
     ...store,
+    // Preserve the preference owner’s live writable getters.
+    queries: Object.freeze(
+      Object.assign(
+        Object.defineProperties(
+          {},
+          Object.getOwnPropertyDescriptors(store.queries),
+        ) as typeof store.queries,
+        {
+          setWorkspaceLead: async (
+            input: {
+              workspaceId: string;
+              lead: { region: string; channelId: string };
+              expected?: string;
+            },
+            signal: AbortSignal,
+          ) => {
+            const saved = await serialize(async () => {
+              const { value, entry, active } = await current(signal);
+              const group = value.groups.find(
+                ({ id }) => id === input.workspaceId,
+              );
+              if (!group) return false;
+              if (
+                group.lead?.region === input.lead.region &&
+                group.lead.channelId === input.lead.channelId
+              )
+                return true;
+              if (group.lead && group.lead.channelId !== input.expected)
+                throw new Error(
+                  "This workspace already has a lead. Open it from the workspace title; your draft is kept.",
+                );
+              await save(
+                {
+                  ...value,
+                  groups: value.groups.map((group) =>
+                    group.id === input.workspaceId
+                      ? { ...group, lead: input.lead }
+                      : group,
+                  ),
+                },
+                entry,
+                active,
+              );
+              return true;
+            });
+            await store.queries.refresh();
+            return saved;
+          },
+        },
+      ),
+    ),
     clear() {
       generation.abort();
       generation = new AbortController();

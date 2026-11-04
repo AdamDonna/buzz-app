@@ -2289,7 +2289,7 @@ it.each(["remove", "change"] as const)(
     try {
       source.handle.openDraft(source.binding(), {
         mode: "task",
-        seed: { project },
+        seed: { project: { ...project, lead: true } },
       });
       const target = region.navigator.snapshot().entry.target;
       if (target.kind !== "page") throw new Error("Missing task route");
@@ -2325,6 +2325,7 @@ it.each(["remove", "change"] as const)(
       await user.keyboard("{Enter}");
       await waitFor(() => expect(prepare).toHaveBeenCalledOnce());
       expect(prepare.mock.calls[0]?.[0]).toMatchObject({
+        workspaceLead: project.id,
         primary: agent,
         recipients: [agent],
         tokens: [{ kind: "nexus.project", ...project }],
@@ -2351,7 +2352,7 @@ it.each(["remove", "change"] as const)(
         ).not.toBeInTheDocument(),
       );
       view.unmount();
-      mount();
+      view = mount();
       expect(
         screen.queryByLabelText("Project Selected project"),
       ).not.toBeInTheDocument();
@@ -2365,6 +2366,27 @@ it.each(["remove", "change"] as const)(
       expect(saved.tokens).toBeUndefined();
       expect(saved.recipients.map((item) => item.pubkey)).toEqual([agent]);
       expect(screen.getByRole("textbox")).toHaveTextContent("Do the task");
+      const restored = screen.getByRole(
+        "textbox",
+      ) as import("../messages/composer-dom").ComposerInputElement;
+      act(() => {
+        expect(
+          restored.insertToken(
+            { kind: "nexus.project", ...project },
+            { start: 0, end: 0 },
+          ),
+        ).toBe(true);
+      });
+      view.unmount();
+      view = mount();
+      await user.click(screen.getByRole("textbox"));
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+      expect(prepare.mock.calls[1]?.[0].tokens).toContainEqual({
+        kind: "nexus.project",
+        ...project,
+      });
+      expect(prepare.mock.calls[1]?.[0].workspaceLead).toBeUndefined();
     } finally {
       cleanup();
       lookup.mockRestore();

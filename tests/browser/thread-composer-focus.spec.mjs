@@ -140,7 +140,10 @@ for (const owner of [undefined, "page draft", "menu", "dialog"]) {
         await page.keyboard.type("Keep my main draft");
       } else if (owner === "menu") {
         await page.getByRole("button", { name: "New", exact: true }).click();
-        target = page.getByRole("menuitem", { name: "New chat", exact: true });
+        target = page.getByRole("menuitem", {
+          name: "New workspace",
+          exact: true,
+        });
         await target.focus();
       } else if (owner === "dialog") {
         await page

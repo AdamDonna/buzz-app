@@ -1,6 +1,9 @@
+import { readView, subscribeView, viewRevision } from "../../shared/view-state";
 import { useSoloRowActivation } from "./useSoloRowActivation";
+import type { ComposeWorkspaces } from "./WorkspaceComposition";
 import { useSoloNavigation } from "./solo-navigation-react";
 import {
+  useCallback,
   useRef,
   useState,
   useSyncExternalStore,
@@ -41,7 +44,10 @@ import {
   MenuItem,
 } from "../../shared/design-system/ui/Menu";
 import creationStyles from "./SoloInventory.module.css";
-import { PlusIcon, ChatCircleIcon } from "../../shared/design-system/icons";
+import {
+  DotsThreeIcon,
+  ChatCircleIcon,
+} from "../../shared/design-system/icons";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import type { ContributionReader } from "../conversation/contracts";
 import type { ChatIcon, ChatMenu } from "../conversation/service";
@@ -78,6 +84,7 @@ export function SoloInventory({
     header: ReactNode,
     trigger: RefObject<HTMLButtonElement | null>,
     pendingClick: RefObject<ReturnType<typeof setTimeout> | undefined>,
+    compose: (composition: ComposeWorkspaces) => ReactNode,
   ) => ReactNode;
 }) {
   const list = useChannelList(session.channels);
@@ -85,7 +92,7 @@ export function SoloInventory({
   const pendingClick = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
-  const preferences = useSyncExternalStore(
+  useSyncExternalStore(
     session.soloPreferences.subscribe,
     session.soloPreferences.snapshot,
   );
@@ -102,6 +109,23 @@ export function SoloInventory({
     target.pluginId === "buzz.channels" &&
     target.pageId === "channels"
       ? soloDraft(target.route?.params)
+      : undefined;
+  const draftIdentity = draft?.task
+    ? `solo:task:${draft.task.draftId}:identity`
+    : undefined;
+  const subscribeDraft = useCallback(
+    (listener: () => void) => subscribeView(scope, listener),
+    [scope],
+  );
+  useSyncExternalStore(subscribeDraft, () =>
+    draftIdentity ? viewRevision(scope, draftIdentity) : null,
+  );
+  const leadDraft =
+    draft?.task?.workspaceLead &&
+    draftIdentity &&
+    readView<{ workspaceLead?: string | null }>(scope, draftIdentity, {})
+      .workspaceLead !== null
+      ? draft.task.workspaceLead
       : undefined;
   const handoff = useChannelNavigation();
   const workingIds = useSyncExternalStore(
@@ -166,11 +190,6 @@ export function SoloInventory({
     session.unread,
     JSON.stringify(conversations.map((item) => item.id)),
   );
-  const empty =
-    list.status === "ready" &&
-    preferences.status === "ready" &&
-    !conversations.length &&
-    !preferences.data?.sections.length;
   const current = () => !handoff || handoff.session === session;
   const newChat = (project?: string) => {
     if (!current()) return;
@@ -179,7 +198,6 @@ export function SoloInventory({
   };
   const creationItems = (
     <>
-      <MenuItem onClick={() => newChat()}>New chat</MenuItem>
       <MenuItem
         disabled={!session.soloPreferences.sectionCreationWritable}
         onClick={() => {
@@ -198,9 +216,9 @@ export function SoloInventory({
             <IconButton
               ref={trigger}
               size="compact"
-              aria-label="New chat or workspace"
-              title="New chat or workspace"
-              icon={<PlusIcon size={15} strokeWidth={2.5} />}
+              aria-label="Workspace actions"
+              title="Workspace actions"
+              icon={<DotsThreeIcon size={15} strokeWidth={2.5} />}
             />
           }
         />
@@ -223,28 +241,23 @@ export function SoloInventory({
       />
     </div>
   );
-  const content = (
+  const content = (compose?: ComposeWorkspaces) => (
     <>
-      {empty && (
-        <NavigationItem
-          variant="row"
-          label="New chat"
-          icon={<PlusIcon size={16} />}
-          onClick={() => newChat()}
-        />
-      )}
       {creatingProject && (
         <NewWorkspace
           session={session}
           create={(section) => session.soloPreferences.createSection(section)}
           close={() => setCreatingProject(false)}
           finalFocus={trigger}
-          onCreated={(id) => {
-            if (trigger.current?.isConnected) newChat(id);
-          }}
+          onCreated={() => {}}
         />
       )}
       <SoloWorkspaces
+        compose={
+          compose &&
+          ((parts) =>
+            compose({ ...parts, ...(leadDraft ? { leadDraft } : {}) }))
+        }
         renderChatMenu={(channelId) =>
           menus?.map(({ key, component: Menu }) => (
             <Menu key={key} session={session} channelId={channelId} />
@@ -252,7 +265,7 @@ export function SoloInventory({
         }
         navigator={navigator}
         draft={
-          draft
+          draft && !draft.task
             ? {
                 projectId: draft.project,
                 content: (
@@ -335,11 +348,18 @@ export function SoloInventory({
       aria-label={`${regions.regions.find((region) => region.source)?.title ?? "Solo"} conversations`}
     >
       {renderContents ? (
-        renderContents(content, creationItems, header, trigger, pendingClick)
+        renderContents(
+          content(),
+          creationItems,
+          header,
+          trigger,
+          pendingClick,
+          content,
+        )
       ) : (
         <>
           {header}
-          {content}
+          {content()}
         </>
       )}
     </nav>

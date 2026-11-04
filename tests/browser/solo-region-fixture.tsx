@@ -9,6 +9,7 @@ declare global {
     fixtureSoloRegion?: {
       classify(id: string): Promise<void>;
       present(removed: string[], hidden: string[]): void;
+      status(status: "ready" | "loading"): void;
       addTransientRegion(): Promise<void>;
       removeTransientRegion(): Promise<void>;
     };
@@ -32,7 +33,11 @@ export const soloRegionFixture: BundledPlugin = {
         hidden: string[] = [];
       let notify = () => {};
       if (!ctx.soloNavigation) throw new Error("Solo navigation unavailable");
+      const composing = new URL(location.href).searchParams.has(
+        "compose-workspaces",
+      );
       const handle = ctx.soloNavigation.registerSource({
+        ...(composing ? { composeWorkspaces: true } : {}),
         id: "work",
         title: "Solo",
         icon: null,
@@ -68,6 +73,7 @@ export const soloRegionFixture: BundledPlugin = {
                   </ui.Conversation>
                 </div>
               ))}
+            {composing && ui.Chats && <ui.Chats all />}
           </>
         ),
       });
@@ -101,6 +107,10 @@ export const soloRegionFixture: BundledPlugin = {
         },
         removeTransientRegion: () => disposeTransient(),
         classify: (id) => handle.classify(binding, id),
+        status(status) {
+          snapshot = { ...snapshot, status, revision: snapshot.revision + 1 };
+          notify();
+        },
         present(nextRemoved, nextHidden) {
           removed = nextRemoved;
           hidden = nextHidden;

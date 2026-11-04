@@ -393,3 +393,66 @@ it("checks the exact project capacity before saving and reclaims a removed filin
     f.dispose();
   }
 });
+
+it("keeps the optional workspace lead through filing and reload, fencing conflicting replacements", async () => {
+  const f = fixture();
+  const preferences = f.session.soloPreferences;
+  const lead = { region: "buzz.region:nexus:tasks", channelId: channel };
+  try {
+    f.install(groups);
+    await preferences.refresh();
+    await preferences.setWorkspaceLead(
+      { workspaceId: "work", lead },
+      new AbortController().signal,
+    );
+    expect(preferences.snapshot().data?.sections[0]?.lead).toEqual(lead);
+    await preferences.assign(other, undefined);
+    await preferences.refresh();
+    expect(preferences.snapshot().data?.sections[0]?.lead).toEqual(lead);
+    const writes = f.publish.mock.calls.length;
+    await preferences.setWorkspaceLead(
+      { workspaceId: "work", lead },
+      new AbortController().signal,
+    );
+    expect(f.publish).toHaveBeenCalledTimes(writes);
+    await expect(
+      preferences.setWorkspaceLead(
+        { workspaceId: "work", lead: { ...lead, channelId: other } },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("already has a lead");
+    expect(f.publish).toHaveBeenCalledTimes(writes);
+    expect(
+      await preferences.setWorkspaceLead(
+        { workspaceId: "missing", lead },
+        new AbortController().signal,
+      ),
+    ).toBe(false);
+    await expect(
+      preferences.setWorkspaceLead(
+        {
+          workspaceId: "work",
+          lead: { ...lead, channelId: other },
+          expected: "stale",
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("already has a lead");
+    await preferences.setWorkspaceLead(
+      {
+        workspaceId: "work",
+        lead: { ...lead, channelId: other },
+        expected: channel,
+      },
+      new AbortController().signal,
+    );
+    expect(preferences.snapshot().data?.sections[0]?.lead?.channelId).toBe(
+      other,
+    );
+    await preferences.removeSection("work");
+    expect(preferences.snapshot().data?.sections).toEqual([]);
+    expect(f.assignment).not.toHaveBeenCalled();
+  } finally {
+    f.dispose();
+  }
+});

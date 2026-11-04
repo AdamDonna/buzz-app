@@ -83,13 +83,16 @@ export function TaskSoloDraft({
   const context = taskDraftContext(session, route.region);
   const key = `solo:task:${route.draftId}`;
   const [state, setState] = useState(() => {
-    const identity = readView<{ revision?: number; primary?: string | null }>(
-      scope,
-      `${key}:identity`,
-      {},
-    );
+    const identity = readView<{
+      revision?: number;
+      primary?: string | null;
+      workspaceLead?: string | null;
+    }>(scope, `${key}:identity`, {});
+    const draft = mentionDraft(readView(scope, `${key}:new-draft`, ""));
     return {
-      draft: mentionDraft(readView(scope, `${key}:new-draft`, "")),
+      draft,
+      workspaceLead:
+        identity.workspaceLead === null ? undefined : route.workspaceLead,
       revision: Number.isSafeInteger(identity?.revision)
         ? (identity.revision ?? 0)
         : 0,
@@ -117,11 +120,26 @@ export function TaskSoloDraft({
         primary === previous.primary
       )
         return;
-      const next = { draft, primary, revision: previous.revision + 1 };
+      const workspaceLead =
+        previous.workspaceLead &&
+        draft.tokens?.some(
+          ({ token }) =>
+            token.kind === "nexus.project" &&
+            token.id === previous.workspaceLead,
+        )
+          ? previous.workspaceLead
+          : undefined;
+      const next = {
+        draft,
+        primary,
+        workspaceLead,
+        revision: previous.revision + 1,
+      };
       if (
         !writeView(scope, `${key}:identity`, {
           revision: next.revision,
           primary: primary ?? null,
+          workspaceLead: workspaceLead ?? null,
         })
       )
         throw new Error("The task draft could not be saved. Try again.");
@@ -169,6 +187,14 @@ export function TaskSoloDraft({
           ...(primary ? { primary } : {}),
           tokens: draft.tokens?.map((item) => item.token) ?? [],
           attachments,
+          ...(current.current.workspaceLead &&
+          draft.tokens?.some(
+            ({ token }) =>
+              token.kind === "nexus.project" &&
+              token.id === current.current.workspaceLead,
+          )
+            ? { workspaceLead: current.current.workspaceLead }
+            : {}),
         }
       : undefined;
   };
@@ -362,6 +388,12 @@ export function TaskSoloDraft({
           files.clear();
           writeView(scope, `${key}:new-draft`, "");
         }
+        if (route.workspaceLead)
+          writeView(
+            scope,
+            `solo:workspace-lead:${route.region}:${route.workspaceLead}`,
+            null,
+          );
         onStarted(recovery.channelId);
         return;
       }
@@ -489,6 +521,12 @@ export function TaskSoloDraft({
       signal.throwIfAborted();
       files.clear();
       writeView(scope, `${key}:new-draft`, "");
+      if (route.workspaceLead)
+        writeView(
+          scope,
+          `solo:workspace-lead:${route.region}:${route.workspaceLead}`,
+          null,
+        );
       onStarted(prepared.channelId);
     } catch (reason) {
       if (!controller.signal.aborted)

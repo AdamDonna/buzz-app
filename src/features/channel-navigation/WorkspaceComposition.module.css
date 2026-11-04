@@ -1,0 +1,10 @@
+.heading {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+.heading > :first-child {
+  flex: 1;
+  min-width: 0;
+}

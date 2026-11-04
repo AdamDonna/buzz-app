@@ -20,12 +20,17 @@ export async function openPage(page, name, { connected = true } = {}) {
   await selectPage(page, name, { connected });
 }
 
-// A Solo chat is not a page: New → New chat opens a Solo draft in Messages.
+// Ordinary chat creation lives in Chats; task drafts have their own selection.
 export async function newChat(page) {
   // The community switcher appears after local startup has replaced the launch view.
   await expect(
     page.getByRole("button", { name: /^Community switcher:/ }),
   ).toBeVisible();
+  await openPage(page, "Messages");
+  // The narrow drawer retains its startup owner while hidden from the AX tree.
+  const sidebar = page.locator('aside[aria-label="Sidebar"]');
+  await expect(sidebar).not.toHaveAttribute("data-buzz-launch-pending");
+  await expect(sidebar).not.toHaveAttribute("aria-busy", "true");
   if (page.viewportSize().width <= 650) {
     await settleShellToggle(page);
     const show = page.getByRole("button", {
@@ -34,8 +39,13 @@ export async function newChat(page) {
     });
     if (await show.isVisible()) await show.click();
   }
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await page.getByRole("menuitem", { name: "New chat", exact: true }).click();
+  await page.getByRole("tab", { name: "Solo", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "Solo", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page
+    .getByRole("button", { name: "New chat in Chats", exact: true })
+    .click();
 }
 
 // The agents-only composer pill's menu adds and removes agents, never the

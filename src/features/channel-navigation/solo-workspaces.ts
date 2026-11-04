@@ -49,8 +49,12 @@ export function createSoloWorkspaces(
               ? "ready"
               : "loading",
         workspaces: Object.freeze(
-          (source.data?.sections ?? []).map(({ id, name }) =>
-            Object.freeze({ id, name }),
+          (source.data?.sections ?? []).map(({ id, name, lead }) =>
+            Object.freeze({
+              id,
+              name,
+              ...(lead ? { lead: Object.freeze({ ...lead }) } : {}),
+            }),
           ),
         ),
         canCreate,

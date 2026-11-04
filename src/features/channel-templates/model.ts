@@ -30,7 +30,12 @@ export type Template = Lineup & {
   name: string;
   description: string;
 };
-export type Group = { id: string; name: string; defaultTemplateId: string };
+export type Group = {
+  id: string;
+  name: string;
+  defaultTemplateId: string;
+  lead?: { region: string; channelId: string };
+};
 export type Groups = {
   type: "groups";
   id: "me";
@@ -162,7 +167,24 @@ export function parseKitRecord(raw: unknown, community: string): KitRecord {
       throw new Error("Too many Solo groups");
     const groups = v.groups.map((raw) => {
       const g = object(raw);
+      const lead = g.lead === undefined ? undefined : object(g.lead);
+      if (
+        lead &&
+        (typeof lead.region !== "string" ||
+          !/^buzz\.region:[a-z0-9][a-z0-9.:-]{0,200}$/.test(lead.region) ||
+          typeof lead.channelId !== "string" ||
+          !/^[0-9a-f-]{36}$/.test(lead.channelId))
+      )
+        throw new Error("Invalid workspace lead");
       return {
+        ...(lead
+          ? {
+              lead: {
+                region: lead.region as string,
+                channelId: lead.channelId as string,
+              },
+            }
+          : {}),
         id: id(g.id),
         name: text(g.name, 120, true),
         defaultTemplateId:

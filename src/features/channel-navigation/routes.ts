@@ -6,7 +6,7 @@ export type SoloDraft = Readonly<{
   project?: string;
   agent?: string;
   linked?: string;
-  task?: Readonly<{ region: string; draftId: string }>;
+  task?: Readonly<{ region: string; draftId: string; workspaceLead?: string }>;
 }>;
 
 const agentKey = /^[0-9a-f]{64}$/;
@@ -39,18 +39,31 @@ export function soloDraft(
       return;
     const input = value.task as { readonly [key: string]: JsonValue };
     if (
-      Object.keys(input).some((key) => key !== "region" && key !== "draftId") ||
+      Object.keys(input).some(
+        (key) =>
+          key !== "region" && key !== "draftId" && key !== "workspaceLead",
+      ) ||
       typeof input.region !== "string" ||
       !/^buzz\.region:[a-z0-9.-]+:[a-z0-9.-]+$/.test(input.region) ||
       typeof input.draftId !== "string" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
         input.draftId,
       ) ||
+      (input.workspaceLead !== undefined &&
+        (typeof input.workspaceLead !== "string" ||
+          !input.workspaceLead ||
+          input.workspaceLead.length > 256)) ||
       project ||
       linked
     )
       return;
-    task = { region: input.region, draftId: input.draftId };
+    task = {
+      region: input.region,
+      draftId: input.draftId,
+      ...(typeof input.workspaceLead === "string"
+        ? { workspaceLead: input.workspaceLead }
+        : {}),
+    };
   }
   if (
     linked !== undefined &&

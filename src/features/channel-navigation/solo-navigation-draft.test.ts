@@ -43,7 +43,7 @@ async function fixture() {
 
 it("persists one copied semantic project on separate new draft identities before navigating", async () => {
   const h = await fixture();
-  const selected = { ...project };
+  const selected = { ...project, lead: true as const };
   h.source.handle.openDraft(h.source.binding(), {
     mode: "task",
     seed: { project: selected },
@@ -53,7 +53,7 @@ it("persists one copied semantic project on separate new draft identities before
   if (target?.kind !== "page") throw new Error("Missing draft target");
   const route = soloDraft(target.route?.params);
   expect(route).toMatchObject({
-    task: { region: h.source.handle.label },
+    task: { region: h.source.handle.label, workspaceLead: project.id },
   });
   expect(route?.agent).toBeUndefined();
   const key = `solo:task:${route?.task?.draftId}:new-draft`;
@@ -70,6 +70,11 @@ it("persists one copied semantic project on separate new draft identities before
   });
   const next = h.open.mock.calls[1]?.[0];
   expect(next).not.toEqual(target);
+  h.source.handle.openDraft(h.source.binding(), {
+    mode: "task",
+    seed: { project: { ...project, lead: true } },
+  });
+  expect(h.navigator.snapshot().entry.target).toEqual(target);
   expect(mentionDraft(readView(h.scope, key, null))).toEqual(stored);
 });
 

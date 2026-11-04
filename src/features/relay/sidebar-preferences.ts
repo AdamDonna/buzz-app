@@ -47,6 +47,7 @@ export type SidebarGroups = Readonly<{
     id: string;
     name: string;
     icon?: string;
+    lead?: { region: string; channelId: string };
     order: number;
   }>[];
   assignments: Readonly<Record<string, string>>;
