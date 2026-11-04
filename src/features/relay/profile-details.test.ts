@@ -588,6 +588,8 @@ it("holds an open channel's roster on top of the base and shrinks back when rele
     expect(snapshot.size).toBe(1024);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(directory.queries.evictions?.()).toBe(500);
+    // Nothing was pending, so nothing was cancelled.
+    expect(directory.queries.cancellations?.()).toBe(0);
     // The least recently used go first: P0 was just ensured, P1..P500 were not.
     expect(snapshot.get(ids[0] as string)?.name).toBe("P0");
     expect(snapshot.has(ids[1] as string)).toBe(false);
@@ -638,6 +640,7 @@ it("cancels background reads still in flight when it shrinks, but not foreground
     // The menu's two pages were cancelled quietly; its requester asks again.
     await expect(menu).resolves.toBeUndefined();
     expect(directory.queries.evictions?.()).toBe(before + 2);
+    expect(directory.queries.cancellations?.()).toBe(2);
     for (const answer of answers.slice(0, 2))
       answer.resolve(
         roster.filter((event) => answer.authors.includes(event.pubkey)),

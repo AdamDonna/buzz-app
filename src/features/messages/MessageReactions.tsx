@@ -199,14 +199,14 @@ function ReactorItems({
   people: readonly string[];
   session: RelaySession;
 }) {
-  // Evictions also count background reads a shrink cancelled without rejecting.
-  const readEvictions = () => session.profiles.evictions?.() ?? 0;
-  const evictions = useSyncExternalStore(
+  // A shrink cancels pending background reads without rejecting them.
+  const readCancellations = () => session.profiles.cancellations?.() ?? 0;
+  const cancellations = useSyncExternalStore(
     session.profiles.subscribe,
-    readEvictions,
-    readEvictions,
+    readCancellations,
+    readCancellations,
   );
-  const requested = useRef({ evictions, ids: new Set<string>() });
+  const requested = useRef({ cancellations, ids: new Set<string>() });
   const [failed, setFailed] = useState(false);
   const [released, setReleased] = useState(0);
   // Show any names already loaded; request only the rows that come into view.
@@ -224,10 +224,12 @@ function ReactorItems({
   useEffect(() => {
     const root = popup.current;
     if (!root) return;
-    // An eviction drops names and a shrink quietly cancels pending pages, so
-    // rows in view ask again. Names still loaded cost no read.
-    if (requested.current.evictions !== evictions)
-      requested.current = { evictions, ids: new Set() };
+    // A shrink quietly cancels pending pages, so rows in view ask again. Names
+    // still loaded cost no read. An eviction does not ask again: when the rows'
+    // profiles outgrow the byte budget, each read evicts names another row
+    // asked for, and asking again would never settle.
+    if (requested.current.cancellations !== cancellations)
+      requested.current = { cancellations, ids: new Set() };
     const observer = new IntersectionObserver(
       (entries) => {
         const page = entries.flatMap(({ isIntersecting, target }) => {
@@ -255,7 +257,7 @@ function ReactorItems({
       if (!requested.current.ids.has(row.dataset.reactor ?? ""))
         observer.observe(row);
     return () => observer.disconnect();
-  }, [popup, people, session, released, evictions]);
+  }, [popup, people, session, released, cancellations]);
   return (
     <>
       {people.map((authorId) => {

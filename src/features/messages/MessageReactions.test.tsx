@@ -610,6 +610,51 @@ it("asks again for names a cache shrink quietly cancels while the list stays ope
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+it("stops asking for names once the rows in view outgrow the cache's byte budget", async () => {
+  // Twelve profiles with long about fields; the cache's bytes hold eight.
+  const people = Array.from({ length: 12 }, () => keypair());
+  const about = "a".repeat(240 * 1024);
+  const profiles = people.map((person, index) =>
+    profile(person, { name: `Person ${index}`, about }),
+  );
+  const h = harness(people.map((person, index) => react(person, 2 + index)));
+  render(<h.Controls />);
+  act(() => screen.getByRole("button", { name: "👍: 12 people" }).focus());
+  const preview = await screen.findByRole("dialog", { name: "👍 reactions" });
+  fireEvent.click(
+    within(preview).getByRole("button", { name: "and 9 others" }),
+  );
+  const list = await screen.findByRole("menu");
+  const answered = new Set<(typeof h.wire.pending)[number]>();
+  // The list never moves: rows in view report to any observer watching them,
+  // as a browser's does on observe, and every profile read is answered.
+  const settle = async () => {
+    reveal(within(list).getAllByRole("menuitem"));
+    let reads = 0;
+    // Profile reads run one at a time.
+    for (let step = 0; step < 10; step++)
+      await act(async () => {
+        for (const entry of h.wire.pending)
+          if (entry.filters[0]?.kinds?.includes(0) && !answered.has(entry)) {
+            answered.add(entry);
+            reads++;
+            entry.respond(
+              profiles.filter((event) =>
+                entry.filters[0]?.authors?.includes(event.pubkey),
+              ),
+            );
+          }
+        await flush();
+      });
+    return reads;
+  };
+  expect(await settle()).toBeGreaterThan(0);
+  // The list's own reads evicted some of its names.
+  expect(h.session.profiles.evictions?.()).toBeGreaterThan(0);
+  expect(await settle()).toBe(0);
+  expect(await settle()).toBe(0);
+});
+
 it("reaches the full list by keyboard and returns to the emoji on Escape", async () => {
   // jsdom lays nothing out, so the preview would treat its emoji as scrolled
   // out of view and leave Tab to document order.
