@@ -3,6 +3,7 @@
 // session pays for them in context. Each tool answers in plain text.
 import { decode, npubEncode } from "nostr-tools/nip19";
 import buzzHelp from "../../docs/buzz-help.md?raw";
+import { CANVAS_HISTORY_PAGE } from "../features/channel-templates/canvas-limits";
 import {
   canonicalDetailsName,
   detailsDraftErrors,
@@ -28,7 +29,7 @@ import {
 } from "../features/relay/emoji";
 import { newer } from "../features/relay/events";
 import { imageType } from "../features/relay/attachment-limits";
-import { CANVAS_BYTES } from "../features/channel-templates/model";
+import { LIVE_CANVAS_BYTES } from "../features/channel-templates/model";
 import { threadReference } from "../features/relay/thread-reference";
 import { parseBuzzLink } from "../features/navigation/buzz-links";
 import { soloChannelMetadata } from "../features/relay/discovery";
@@ -337,11 +338,15 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool("notes_rm", "Delete your note.", { name: str }, ["name"]),
   tool("canvas_get", "Read a channel's canvas.", { channel: str }),
-  tool("canvas_set", "Replace a channel's canvas.", {
-    channel: str,
-    content: str,
-    path: str,
-  }),
+  tool(
+    "canvas_set",
+    `Replace a channel's canvas (at most ${LIVE_CANVAS_BYTES / 1024} KiB).`,
+    {
+      channel: str,
+      content: str,
+      path: str,
+    },
+  ),
   tool(
     "canvas_history",
     "A channel's canvas revisions, newest first: each one's id, time, author, size and first line. The first page starts with the canvas's version.",
@@ -394,8 +399,6 @@ const MESSAGES = [9, 40002, 40008, 45001, 45003];
 const THREAD = [9, 40002, 40008, 45003];
 const SEARCH = [9, 40002, 45001, 45003];
 const HEX = /^[0-9a-f]{64}$/;
-/** Canvas revisions per history page, as the app shows them. */
-const CANVAS_PAGE = 25;
 /** A NIP-23 long-form note, as `buzz notes` writes it. */
 const NOTE = 30023;
 /** A repository name the community accepts. */
@@ -1258,6 +1261,10 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const channel = text(args.channel) ?? context.channel;
     if (!channel) throw new Error("channel is required here.");
     const content = (await tools.body(args, true, "content")) as string;
+    if (new TextEncoder().encode(content).length > LIVE_CANVAS_BYTES)
+      throw new Error(
+        `The canvas is over its limit of ${LIVE_CANVAS_BYTES} bytes.`,
+      );
     const head = await canvas(tools, channel);
     // The newest canvas wins, so a write must be dated after the current one.
     const after = head ? (head.created_at + 1) * 1000 : 0;
@@ -1286,7 +1293,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       {
         kinds: [40100],
         "#h": [channel],
-        limit: CANVAS_PAGE,
+        limit: CANVAS_HISTORY_PAGE,
         ...(before === undefined
           ? { consistency: "strong" as const }
           : { until: before }),
@@ -1304,7 +1311,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       return `${row.id} ${time(row.created_at)} ${row.pubkey} ${bytes}B ${first.slice(0, 80)}`;
     });
     const last = rows.at(-1);
-    if (last && rows.length >= CANVAS_PAGE)
+    if (last && rows.length >= CANVAS_HISTORY_PAGE)
       lines.push(
         `Older revisions may remain; continue with ${JSON.stringify({ channel, before: last.created_at, before_id: last.id })}`,
       );
@@ -1334,9 +1341,9 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
       throw new Error(
         `No canvas revision ${id} in ${channel}; canvas_history lists them.`,
       );
-    if (new TextEncoder().encode(revision.content).length > CANVAS_BYTES)
+    if (new TextEncoder().encode(revision.content).length > LIVE_CANVAS_BYTES)
       throw new Error(
-        `Revision ${id} is over the canvas limit of ${CANVAS_BYTES} bytes, so it cannot be restored.`,
+        `Revision ${id} is over the canvas limit of ${LIVE_CANVAS_BYTES} bytes, so it cannot be restored.`,
       );
     const current = await head();
     // Guard the version the agent saw, never one that replaced it since.

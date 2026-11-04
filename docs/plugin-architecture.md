@@ -929,7 +929,8 @@ its text when the save finishes. If the loaded Canvas was written in the current
 a single cancellable wait respects its timestamp ordering; there is no background
 retry loop. Failures and recovered drafts expose Retry rather than silently publishing
 on reopen. Save uses the existing session Canvas/outbox contract, including its
-24 KiB limit, fresh membership check, writer-backed Canvas head/editor-confirmation
+256 KiB content limit (the complete signed event must also fit the relay's
+512 KiB frame), fresh membership check, writer-backed Canvas head/editor-confirmation
 reads and exact signed-event recovery. Canvas reads default to strong consistency
 for editor/Todos bases and setup preconditions. Setup delivery and its separate
 exact-ID confirmation both use writer-backed reads; unknown seed outcomes are
@@ -959,13 +960,31 @@ storage is unavailable they survive only while the editor stays open. Save never
 promotes local recovery storage to shared state. Already accepted outbox operations
 remain session-owned if the drawer closes or plugin is disabled.
 
+**Canvas view:** Channel actions → View canvas opens on View, which renders the
+saved head (never a local draft) as GitHub-flavored Markdown with its own loading,
+read-failure retry and empty states. Raw HTML shows as text, inline images show
+their alt text, and only credential-free HTTP(S) and validated Buzz links are
+active. Rendering has its own budget of 128 KiB of text, independent of the save
+limit: larger Canvases, and Canvases nested past the shared Markdown depth limit,
+show a labelled source view even when saving them is allowed. History compares
+versions against the same saved head (below); read-only viewers keep Edit so recovered drafts stay visible, with
+Save and Restore disabled. Restoring does not switch tabs.
+
 **Canvas history:** Channel actions → View canvas → History lazily reads retained
-kind-40100 revisions in pages of 25, ordered by `created_at DESC, id ASC` with
+kind-40100 revisions in pages of 16 (as many full-size signed revisions as one 8 MiB read holds), ordered by `created_at DESC, id ASC` with
 `until`/`before_id` keyset cursors. The first page is writer-backed so a just-restored
 revision is visible; older pages remain replica-eligible. The current marker uses
 the editor's strong-read head, not list position. Refresh history rechecks the
 head without replacing the editor draft. Author labels use the shared profile
-directory, with public-key fallbacks; previews are read-only Markdown source.
+directory, with public-key fallbacks. The selected revision shows a line diff
+(`diff` package `diffLines(current, revision)`) against the editor's strong-read
+head, as old Buzz did: added lines are the revision's lines the current Canvas
+lacks, removed lines are current lines the revision drops. Lines carry +/−
+markers alongside colour and unchanged runs collapse to 3 lines of context. The
+head, or a revision with identical content, shows "Same as current version".
+Comparisons over 5,000 lines or past the library's edit-length or time bound
+show the full content with a label, and "Show full content" switches to the
+read-only Markdown source at any time.
 
 Restore requires explicit confirmation and publishes the selected content as a
 new signed revision through the existing Canvas save/outbox owner. Its precondition
@@ -977,9 +996,9 @@ which may automatically replay the exact signed event with its original
 `expected-revision`. It never creates a fresh event or substitutes a newer
 precondition to retry. If confirmation ultimately fails or remains uncertain,
 the dialog retains drafts and shows the error without starting another restore.
-Empty revisions can be restored; revisions exceeding the existing 24 KiB save
-limit remain previewable but cannot be restored here. No diff viewer or new
-delivery owner is introduced.
+Empty revisions can be restored; revisions exceeding the 256 KiB live Canvas
+limit remain previewable but cannot be restored here. No new delivery owner is
+introduced.
 
 ### Top-bar launchers and the companion slot
 

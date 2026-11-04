@@ -22,6 +22,10 @@ import {
   generateSecretKey,
 } from "nostr-tools";
 import { relayBrokerPlugin } from "./relay-broker.mjs";
+import {
+  CANVAS_MAX_EVENT_BYTES,
+  LIVE_CANVAS_BYTES,
+} from "../src/features/channel-templates/canvas-limits.ts";
 import { connectBrokerTransport } from "../src/features/relay/transport.ts";
 import { createOutbox, PublishRejected } from "../src/features/relay/outbox.ts";
 import { createRelaySession } from "../src/features/relay/session.ts";
@@ -1418,6 +1422,58 @@ test("query keeps relay 403 refusals but turns an edge 403 page into a gateway f
     const page = await h.post("query", filters);
     expect(page.status).toBe(502);
     expect(await page.json()).toEqual({ error: "Relay request failed (502)" });
+  } finally {
+    await h.close();
+  }
+});
+
+test("Canvas sign and publish bound content and the complete signed event", async () => {
+  const h = await harness((call) =>
+    Response.json({ accepted: true, event_id: call.body.id }),
+  );
+  try {
+    await h.start();
+    const template = {
+      kind: 40100,
+      created_at: 1700000000,
+      tags: [["h", "11111111-1111-4111-8111-111111111111"]],
+    };
+    const sign = (content) => h.post("sign", { ...template, content });
+    const size = (event) => Buffer.byteLength(JSON.stringify(event));
+    const largest = await sign("x".repeat(LIVE_CANVAS_BYTES));
+    expect(largest.status).toBe(200);
+    const event = await largest.json();
+    expect(verifyEvent(event)).toBe(true);
+    expect((await h.post("publish", event)).status).toBe(200);
+    expect(h.publications).toHaveLength(1);
+    expect((await sign("x".repeat(LIVE_CANVAS_BYTES + 1))).status).toBe(400);
+
+    // Quotes escape to two bytes, so in-limit content can make a complete
+    // event exactly at, then one byte over, the relay's bound.
+    const overhead = size(await (await sign("")).json());
+    const quotes = CANVAS_MAX_EVENT_BYTES - overhead - LIVE_CANVAS_BYTES;
+    const escaped = (extra) =>
+      `${'"'.repeat(quotes + extra)}${"x".repeat(LIVE_CANVAS_BYTES - quotes - extra)}`;
+    const atBound = await sign(escaped(0));
+    expect(atBound.status).toBe(200);
+    const boundary = await atBound.json();
+    expect(size(boundary)).toBe(CANVAS_MAX_EVENT_BYTES);
+    expect((await h.post("publish", boundary)).status).toBe(200);
+    const over = await sign(escaped(1));
+    expect(over.status).toBe(400);
+    expect(await over.json()).toEqual({
+      error: "Relay event is too large",
+      sent: false,
+    });
+    // An event signed elsewhere is held to the same bound before publication;
+    // its request body is the event, so the body bound refuses it first.
+    const outside = finalizeEvent(
+      { ...template, content: escaped(1) },
+      generateSecretKey(),
+    );
+    expect(size(outside)).toBe(CANVAS_MAX_EVENT_BYTES + 1);
+    expect((await h.post("publish", outside)).status).toBe(413);
+    expect(h.publications).toHaveLength(2);
   } finally {
     await h.close();
   }

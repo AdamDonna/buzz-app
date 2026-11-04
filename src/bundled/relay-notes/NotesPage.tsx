@@ -9,15 +9,11 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useAgentChoices } from "../../features/agents/use-choices";
-import { MessageLink } from "../../features/conversation/MessageLink";
-import { labelText } from "../../features/messages/label-text";
+import { SafeMarkdown } from "../../features/messages/SafeMarkdown";
 import { useIdentityNames } from "../../features/identity-names/react";
 import {
   MAX_MARKDOWN_LENGTH,
-  safeLinkUrl,
   scanMarkdown,
 } from "../../features/relay/message-content";
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
@@ -65,10 +61,7 @@ import styles from "./NotesPage.module.css";
 import { formatPublicKey } from "../../shared/identity/public-key";
 import type { PageProps } from "../../features/pages/service";
 import type { Navigation } from "../../features/navigation/controller";
-import {
-  buzzLinkTarget,
-  parseBuzzLink,
-} from "../../features/navigation/buzz-links";
+import { buzzLinkTarget } from "../../features/navigation/buzz-links";
 import type { NavigationScope } from "../../features/navigation/targets";
 import { notesRoute, notesTarget, type NotesRoute } from "./routes";
 import type { Panels, RegisteredPanel } from "../../features/panels/service";
@@ -998,34 +991,11 @@ function NoteBody({
         {plain ? (
           <pre>{note.content}</pre>
         ) : (
-          <Markdown
-            remarkPlugins={[remarkGfm]}
-            urlTransform={(url) =>
-              parseBuzzLink(url) ? url : (safeLinkUrl(url) ?? null)
-            }
-            components={{
-              img: ({ alt }) => alt ?? null,
-              a: ({ children, href }) => {
-                if (!href) return children;
-                // A raw autolink shows its destination's name, as in messages.
-                const label = labelText(children);
-                const raw = label === href;
-                return (
-                  <MessageLink
-                    url={href}
-                    label={raw ? undefined : label}
-                    registry={undefined}
-                    session={session}
-                    onOpenLink={openLink}
-                  >
-                    {raw ? undefined : children}
-                  </MessageLink>
-                );
-              },
-            }}
-          >
-            {note.content}
-          </Markdown>
+          <SafeMarkdown
+            content={note.content}
+            openLink={openLink}
+            session={session}
+          />
         )}
       </div>
     </article>

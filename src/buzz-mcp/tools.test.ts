@@ -1,3 +1,9 @@
+import { LIVE_CANVAS_BYTES } from "../features/channel-templates/model";
+import {
+  CANVAS_HISTORY_PAGE,
+  CANVAS_MAX_EVENT_BYTES,
+  CANVAS_READ_BYTES,
+} from "../features/channel-templates/canvas-limits";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { npubEncode } from "nostr-tools/nip19";
 import { bytesToHex } from "nostr-tools/utils";
@@ -2060,7 +2066,7 @@ it("publishes the first canvas only after finding visible channel metadata", asy
 });
 
 it("lists canvas revisions newest first, a page at a time", async () => {
-  const rows = Array.from({ length: 26 }, (_, i) =>
+  const rows = Array.from({ length: CANVAS_HISTORY_PAGE + 1 }, (_, i) =>
     event({
       kind: 40100,
       id: `${i}`.padStart(64, "0"),
@@ -2076,12 +2082,12 @@ it("lists canvas revisions newest first, a page at a time", async () => {
     {},
   );
   const lines = (page as string).split("\n");
-  expect(lines).toHaveLength(28);
-  expect(lines[0]).toBe(`version: ${rows[25]?.id}`);
+  expect(lines).toHaveLength(CANVAS_HISTORY_PAGE + 3);
+  expect(lines[0]).toBe(`version: ${rows[CANVAS_HISTORY_PAGE]?.id}`);
   expect(lines[2]).toBe(
-    `${rows[25]?.id} 1970-01-01T00:02Z ${alice} 14B # Plan 25`,
+    `${rows[CANVAS_HISTORY_PAGE]?.id} 1970-01-01T00:01Z ${alice} 14B # Plan ${CANVAS_HISTORY_PAGE}`,
   );
-  expect(lines[27]).toBe(
+  expect(lines[CANVAS_HISTORY_PAGE + 2]).toBe(
     `Older revisions may remain; continue with ${JSON.stringify({ channel: "chan", before: 101, before_id: rows[1]?.id })}`,
   );
   await expect(
@@ -2107,7 +2113,7 @@ it("lists canvas revisions newest first, a page at a time", async () => {
   expect(filters[0]).toEqual({
     kinds: [40100],
     "#h": ["chan"],
-    limit: 25,
+    limit: CANVAS_HISTORY_PAGE,
     consistency: "strong",
   });
   expect(filters[1]).not.toHaveProperty("consistency");
@@ -2133,10 +2139,61 @@ it("pages canvas revisions that share a timestamp without gaps", async () => {
     "canvas_history",
     cursor,
   )) as string;
-  const ids = [...first.split("\n").slice(2, 27), ...second.split("\n")].map(
-    (line) => line.split(" ")[0],
-  );
+  const ids = [
+    ...first.split("\n").slice(2, 2 + CANVAS_HISTORY_PAGE),
+    ...second.split("\n"),
+  ].map((line) => line.split(" ")[0]);
   expect(ids).toEqual(rows.map((row) => row.id));
+});
+
+it("reads a full canvas_history page of the largest escaped revisions within the agent read cap", async () => {
+  const size = (row: BuzzEvent) =>
+    new TextEncoder().encode(JSON.stringify(row)).length;
+  const largest = (i: number) => {
+    const base = event({
+      kind: 40100,
+      id: `${i}`.padStart(64, "0"),
+      pubkey: alice,
+      created_at: 1700000000 - i,
+      sig: "e".repeat(128),
+    });
+    // Each quote serializes as two bytes.
+    const quotes = Math.floor((CANVAS_MAX_EVENT_BYTES - size(base)) / 2);
+    return { ...base, content: '"'.repeat(quotes) };
+  };
+  const rows = Array.from({ length: CANVAS_HISTORY_PAGE + 1 }, (_, i) =>
+    largest(i),
+  );
+  const [biggest] = rows;
+  if (!biggest) throw new Error("no rows");
+  expect(size(biggest)).toBeGreaterThan(CANVAS_MAX_EVENT_BYTES - 2);
+  expect(size(biggest)).toBeLessThanOrEqual(CANVAS_MAX_EVENT_BYTES);
+  const { client } = fake(rows);
+  const query = client.query;
+  client.query = vi.fn(async (filters: Filter[]) => {
+    const page = await query(filters);
+    // The bare event array app_agents.rs bounds.
+    expect(
+      new TextEncoder().encode(JSON.stringify(page)).length,
+    ).toBeLessThanOrEqual(CANVAS_READ_BYTES);
+    return page;
+  });
+  const first = (await callTool(client, {}, "canvas_history", {
+    channel: "chan",
+  })) as string;
+  const page = rows.slice(0, CANVAS_HISTORY_PAGE);
+  expect(
+    first
+      .split("\n")
+      .slice(2, -1)
+      .map((line) => line.split(" ")[0]),
+  ).toEqual(page.map((row) => row.id));
+  const last = page.at(-1);
+  expect(JSON.parse(first.split("continue with ")[1] ?? "")).toEqual({
+    channel: "chan",
+    before: last?.created_at,
+    before_id: last?.id,
+  });
 });
 
 it("restores a canvas revision guarded by the head it read", async () => {
@@ -2222,8 +2279,8 @@ it("restores only revisions within the canvas size limit", async () => {
     const head = event({ kind: 40100, id: nested, created_at: 200 });
     for (const [content, ok] of [
       ["", true],
-      ["x".repeat(24 * 1024), true],
-      ["x".repeat(24 * 1024 + 1), false],
+      ["x".repeat(LIVE_CANVAS_BYTES), true],
+      ["x".repeat(LIVE_CANVAS_BYTES + 1), false],
     ] as const) {
       const old = event({ kind: 40100, id: root, content });
       const { client, published } = fake([old, head], { keep: true });
@@ -4225,4 +4282,21 @@ it("refuses to delete another author's message", async () => {
     callTool(client, { channel: "chan" }, "delete", { id: root }),
   ).rejects.toThrow("Only your own messages can be deleted.");
   expect(published).toEqual([]);
+});
+
+it("saves a canvas of exactly the live limit in UTF-8 bytes, and refuses one byte over", async () => {
+  const { client, published } = fake([
+    event({ kind: 39000, tags: [["d", "chan"]] }),
+  ]);
+  const exact = "é".repeat(LIVE_CANVAS_BYTES / 2);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", { content: exact }),
+  ).resolves.toBe("saved");
+  expect(published).toHaveLength(1);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_set", {
+      content: `${exact.slice(1)}xyz`,
+    }),
+  ).rejects.toThrow(`over its limit of ${LIVE_CANVAS_BYTES} bytes`);
+  expect(published).toHaveLength(1);
 });

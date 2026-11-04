@@ -1007,7 +1007,7 @@ async fn signed_read(
         .await
         .map_err(|_| "Agent read failed")?;
     let status = response.status();
-    Ok((status, bounded(response, 8 * 1024 * 1024).await?))
+    Ok((status, bounded(response, READ_LIMIT).await?))
 }
 
 /// Searches the agent's community for profiles whose `name` or `display_name`
@@ -1370,6 +1370,10 @@ fn client() -> Result<&'static reqwest::Client, String> {
         .as_ref()
         .map_err(|_| "Agent client unavailable".into())
 }
+
+/// The most an agent read returns. Mirrors `CANVAS_READ_BYTES` in
+/// `canvas-limits.ts`, which sizes Canvas history pages to fit it.
+const READ_LIMIT: usize = 8 * 1024 * 1024;
 
 async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
     let mut body = Vec::new();
@@ -2540,5 +2544,33 @@ mod tests {
         let (result, ()) = tokio::join!(query, retire);
         assert!(result.is_err(), "a retired query returned its parsed body");
         assert!(server.await.unwrap().contains("nostr-federated-identity:"));
+    }
+    #[test]
+    fn read_limit_mirrors_the_canvas_read_budget() {
+        let policy = include_str!("../../src/features/channel-templates/canvas-limits.ts");
+        assert_eq!(READ_LIMIT, 8 * 1024 * 1024);
+        assert!(policy.contains("export const CANVAS_READ_BYTES = 8 * 1024 * 1024;"));
+    }
+    #[tokio::test]
+    async fn bounded_admits_the_limit_and_refuses_one_byte_over() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (size, admitted) in [(READ_LIMIT, true), (READ_LIMIT + 1, false)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\n\r\n");
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(&vec![b'x'; size]).await;
+            });
+            let response = reqwest::get(&url).await.unwrap();
+            let body = bounded(response, READ_LIMIT).await;
+            assert_eq!(body.map(|b| b.len()).ok(), admitted.then_some(size));
+            server.abort();
+        }
     }
 }

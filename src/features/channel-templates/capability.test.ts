@@ -3,6 +3,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../relay/session";
 import { createChannelKit } from "./capability";
 import {
+  CANVAS_HISTORY_PAGE,
+  CANVAS_MAX_EVENT_BYTES,
+  CANVAS_READ_BYTES,
+} from "./canvas-limits";
+import { byteSize } from "../relay/budget";
+import { createRelayReader, RELAY_READ_BYTES } from "../relay/reader";
+import {
   coordinate,
   KIT_TAG,
   type KitRecord,
@@ -723,7 +730,8 @@ it("retains an uncertain Canvas after lost ACK and CAS-refused exact retry, bloc
 
 it("pages retained Canvas history across equal timestamps without changing the strong head contract", async () => {
   const f = fixture();
-  for (let i = 0; i < 52; i++)
+  const total = 2 * CANVAS_HISTORY_PAGE + 2;
+  for (let i = 0; i < total; i++)
     f.events.push(
       signed(viewer, {
         kind: 40100,
@@ -747,13 +755,13 @@ it("pages retained Canvas history across equal timestamps without changing the s
     first.revisions.length,
     second.revisions.length,
     third.revisions.length,
-  ]).toEqual([25, 25, 2]);
+  ]).toEqual([CANVAS_HISTORY_PAGE, CANVAS_HISTORY_PAGE, 2]);
   const revisions = [
     ...first.revisions,
     ...second.revisions,
     ...third.revisions,
   ];
-  expect(new Set(revisions.map((row) => row.id)).size).toBe(52);
+  expect(new Set(revisions.map((row) => row.id)).size).toBe(total);
   expect(revisions).toEqual(
     [...f.events].sort(
       (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
@@ -763,7 +771,14 @@ it("pages retained Canvas history across equal timestamps without changing the s
   expect(third.next).toBeUndefined();
   expect(f.reader.read).toHaveBeenNthCalledWith(
     1,
-    [{ kinds: [40100], "#h": [channel], limit: 25, consistency: "strong" }],
+    [
+      {
+        kinds: [40100],
+        "#h": [channel],
+        limit: CANVAS_HISTORY_PAGE,
+        consistency: "strong",
+      },
+    ],
     { signal: f.controller.signal, fresh: true },
   );
   expect(f.reader.read).toHaveBeenNthCalledWith(
@@ -772,15 +787,52 @@ it("pages retained Canvas history across equal timestamps without changing the s
       {
         kinds: [40100],
         "#h": [channel],
-        limit: 25,
-        until: first.revisions[24]?.created_at,
-        before_id: first.revisions[24]?.id,
+        limit: CANVAS_HISTORY_PAGE,
+        until: first.revisions.at(-1)?.created_at,
+        before_id: first.revisions.at(-1)?.id,
       },
     ],
     { signal: f.controller.signal, fresh: true },
   );
   expect(await f.canvas.read(channel)).toEqual(first.revisions[0]);
   expect(f.outbox.send).not.toHaveBeenCalled();
+});
+it("reads a full History page of the largest escaped Canvas events within the read budget", async () => {
+  const f = fixture();
+  const largest = (i: number) => {
+    const base = {
+      kind: 40100,
+      tags: [["h", channel]],
+      created_at: 1700000000 - i,
+    };
+    const overhead = byteSize(signed(viewer, { ...base, content: "" }));
+    // Each quote serializes as two bytes.
+    const quotes = Math.floor((CANVAS_MAX_EVENT_BYTES - overhead) / 2);
+    return signed(viewer, { ...base, content: '"'.repeat(quotes) });
+  };
+  const page = Array.from({ length: CANVAS_HISTORY_PAGE }, (_, i) =>
+    largest(i),
+  );
+  expect(byteSize(page[0])).toBeGreaterThan(CANVAS_MAX_EVENT_BYTES - 2);
+  expect(byteSize(page[0])).toBeLessThanOrEqual(CANVAS_MAX_EVENT_BYTES);
+  expect(CANVAS_READ_BYTES).toBe(RELAY_READ_BYTES);
+  const relay = createRelayReader({
+    viewer: viewer.pubkey,
+    relayAuthor: keypair().pubkey,
+    media: () => undefined,
+    query: async () => page,
+  });
+  vi.mocked(f.reader.read).mockImplementation(relay.reader.read);
+  try {
+    const history = await f.canvas.history(channel);
+    expect(history.revisions).toHaveLength(CANVAS_HISTORY_PAGE);
+    expect(history.next).toEqual({
+      until: page.at(-1)?.created_at,
+      before_id: page.at(-1)?.id,
+    });
+  } finally {
+    relay.dispose();
+  }
 });
 it.each(["repeated cursor", "newer timestamp"])(
   "rejects %s history rows without exposing them",

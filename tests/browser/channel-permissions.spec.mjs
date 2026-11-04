@@ -245,6 +245,10 @@ test("a joined guest can read and leave without receiving a composer or Join pro
     name: "Canvas Markdown",
     exact: true,
   });
+  await expect(
+    canvas.getByRole("article", { name: "Saved Canvas" }),
+  ).toBeVisible();
+  await canvas.getByRole("tab", { name: "Edit", exact: true }).click();
   await expect(editor).toBeEnabled();
   await expect(editor).toHaveJSProperty("readOnly", true);
   await expect(

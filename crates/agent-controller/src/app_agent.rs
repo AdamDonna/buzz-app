@@ -24,6 +24,13 @@ const KINDS: [u16; 17] = [
     45010,
 ];
 
+/// Content of a live channel Canvas (40100), in UTF-8 bytes. Mirrors
+/// `LIVE_CANVAS_BYTES` in `canvas-limits.ts`.
+pub const LIVE_CANVAS_BYTES: usize = 256 * 1024;
+/// The largest complete signed Canvas event: the relay's 512 KiB frame less
+/// the `["EVENT",…]` wrapper. Mirrors `CANVAS_MAX_EVENT_BYTES`.
+pub const CANVAS_MAX_EVENT_BYTES: usize = 512 * 1024 - 16;
+
 /// One saved identity. The key itself stays in the OS credential store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -176,7 +183,12 @@ impl AppAgent {
                     .into(),
             );
         }
-        if content.len() > 64 * 1024
+        let content_limit = if kind == 40100 {
+            LIVE_CANVAS_BYTES
+        } else {
+            64 * 1024
+        };
+        if content.len() > content_limit
             || tags.len() > 256
             || tags
                 .iter()
@@ -185,7 +197,18 @@ impl AppAgent {
             return Err("Agent event is too large".into());
         }
         let tags = self.attested(key, tags)?;
-        key.signed(kind, content, tags)
+        let event = key.signed(kind, content, tags)?;
+        // Escaping can carry Canvas content within its limit past the relay's
+        // frame, so check the complete event once every tag is present.
+        if kind == 40100
+            && serde_json::to_vec(&event)
+                .map_err(|_| "Invalid agent event")?
+                .len()
+                > CANVAS_MAX_EVENT_BYTES
+        {
+            return Err("Agent event is too large".into());
+        }
+        Ok(event)
     }
     /// Whether the community accepted this row's current public metadata.
     pub fn profile_is_current(&self) -> bool {

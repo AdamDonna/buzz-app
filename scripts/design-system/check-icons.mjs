@@ -46,6 +46,7 @@ const nonIconDependencies = new Set([
   "blurhash",
   "consola", // Runtime logging, not an icon catalog.
   "d3-scale", // Chart scales and ticks; marks are Buzz-rendered SVG.
+  "diff", // Text line diffs for Canvas history, not an icon library.
   "dockview-react",
   "emoji-mart",
   "flexlayout-react",

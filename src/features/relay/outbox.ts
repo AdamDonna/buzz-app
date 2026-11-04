@@ -13,6 +13,10 @@ import {
   MAX_CONTENT_BYTES,
   MAX_EVENT_BYTES,
 } from "../agents/catalog-envelope";
+import {
+  CANVAS_MAX_EVENT_BYTES,
+  LIVE_CANVAS_BYTES,
+} from "../channel-templates/canvas-limits.ts";
 
 export type Delivery = "sending" | "accepted" | "unknown" | "failed" | "seen";
 /** Durable, caller-owned recovery state committed with the operation. */
@@ -124,6 +128,28 @@ export { browserOutboxStorage } from "./outbox-storage";
 const abortError = () => new DOMException("Relay session closed", "AbortError");
 const MAX_PENDING = 256;
 const MAX_CONFIRMED = 2048;
+/** Unresolved Canvas saves have their own allowance, so a few large canvases
+ * never use up the room that ordinary messages need. */
+const PENDING_MESSAGE_BYTES = 2 * 1024 * 1024;
+const PENDING_CANVAS_BYTES = 4 * 1024 * 1024;
+const CONFIRMED_BYTES = 8 * 1024 * 1024;
+/** Stored delivery diagnostics are clipped to this many characters. */
+const ERROR_CHARS = 256;
+/** Everything a pending record can gain after admission besides its signed
+ * copy: two signatures, `signed`, delivery state and flags, and an error of
+ * at most `ERROR_CHARS` characters, each escaped to at most 6 bytes. */
+const LIFECYCLE_BYTES = 512 + 6 * ERROR_CHARS;
+const clip = (error: string) => error.slice(0, ERROR_CHARS);
+const unsigned = ({ sig: _, ...event }: EventData & { sig?: string }) => event;
+/** Any journal save accepts: the `[…]` list, confirmed records with their
+ * commas, and both pending allowances, whose records never outgrow their
+ * charges and which already count their own `[]` and commas. */
+const SAVED_BYTES =
+  2 +
+  CONFIRMED_BYTES +
+  MAX_CONFIRMED +
+  PENDING_MESSAGE_BYTES +
+  PENDING_CANVAS_BYTES;
 
 /** One journal owns pending delivery and bounded confirmed retention. Views receive one change stream. */
 export function createOutbox(
@@ -176,9 +202,35 @@ export function createOutbox(
   let visible: readonly OutgoingEvent[] = snapshot;
   let finalSnapshot: readonly OutgoingEvent[] | undefined;
   let finalVisible: readonly OutgoingEvent[] | undefined;
-  const completed = new ByteLru<OutgoingEvent>(MAX_CONFIRMED, 8 * 1024 * 1024);
+  const completed = new ByteLru<OutgoingEvent>(MAX_CONFIRMED, CONFIRMED_BYTES);
   const sizes = new WeakMap<OutgoingEvent, number>();
-  let pendingBytes = 0;
+  /** Pending charges, split by allowance. A record is charged its largest
+   * size over its delivery lifecycle, so it never outgrows its admission. */
+  const pendingSize = (items: readonly OutgoingEvent[]) => {
+    const total = { messages: 2, canvases: 2 };
+    for (const item of items) {
+      let size = sizes.get(item);
+      if (size === undefined) {
+        size =
+          2 * byteSize(unsigned(item.event)) +
+          (item.recovery ? byteSize(item.recovery) + 16 : 0) +
+          LIFECYCLE_BYTES;
+        sizes.set(item, size);
+      }
+      total[item.event.kind === 40100 ? "canvases" : "messages"] += size + 1;
+    }
+    return total;
+  };
+  /** Refuse what an allowance cannot hold, before it joins the outbox. */
+  const admit = (items: readonly OutgoingEvent[], kind: number) => {
+    const charged = pendingSize(items);
+    if (
+      kind === 40100
+        ? charged.canvases > PENDING_CANVAS_BYTES
+        : charged.messages > PENDING_MESSAGE_BYTES
+    )
+      throw new Error("Outbox storage is full");
+  };
   const listeners = new Set<() => void>();
   const localListeners = new Set<() => void>();
   const dismissListeners = new Set<(item: OutgoingEvent) => void>();
@@ -260,17 +312,6 @@ export function createOutbox(
   let hydrated = false;
   let durable = Promise.resolve();
   const notify = () => {
-    pendingBytes = snapshot.reduce(
-      (sum, item) => {
-        let size = sizes.get(item);
-        if (size === undefined) {
-          size = byteSize(item);
-          sizes.set(item, size);
-        }
-        return sum + size;
-      },
-      2 + Math.max(0, snapshot.length - 1),
-    );
     visible = Object.freeze([
       ...completed.entries().map(([, item]) => item),
       ...snapshot,
@@ -311,13 +352,7 @@ export function createOutbox(
               : visible),
           ...(addition ? [addition] : []),
         ];
-        const bytes =
-          action === "dismiss"
-            ? byteSize(snapshot.filter((item) => item.event.id !== id))
-            : pendingBytes + (addition ? byteSize(addition) : 0);
         return profiling.measureAsync("outbox.persist", id, async () => {
-          if (bytes > 2 * 1024 * 1024)
-            throw new Error("Outbox storage is full");
           if (action === "recover") await storage.save(records, { force: id });
           else await storage.save(records);
           // The replacement joins visible intent only with durable retirement.
@@ -383,7 +418,7 @@ export function createOutbox(
     if (
       !Array.isArray(loaded) ||
       loaded.length > MAX_PENDING + MAX_CONFIRMED ||
-      byteSize(loaded) > 10 * 1024 * 1024
+      byteSize(loaded) > SAVED_BYTES
     )
       throw new Error("Saved outbox exceeds its budget");
   }
@@ -391,7 +426,13 @@ export function createOutbox(
     const signed = item.signed
       ? eventDto(JSON.parse(JSON.stringify(item.signed)))
       : undefined;
-    const event = signed ?? item.event;
+    // Trust the verified copy, in the stored row's own shape, so restoring
+    // never changes a row's size.
+    const event = signed
+      ? item.event && "sig" in item.event
+        ? signed
+        : unsigned(signed)
+      : item.event;
     if (!event || event.pubkey !== viewer || getEventHash(event) !== event.id)
       throw new Error("Saved outbox event is invalid");
     return Object.freeze({
@@ -411,7 +452,7 @@ export function createOutbox(
           : item.delivery === "failed"
             ? "failed"
             : "unknown",
-      ...(item.error ? { error: item.error } : {}),
+      ...(item.error ? { error: clip(item.error) } : {}),
     });
   }
   function restore(restored: readonly OutgoingEvent[]) {
@@ -626,18 +667,20 @@ export function createOutbox(
             !(error instanceof PublishNotSent)
               ? true
               : undefined,
-          error: awaitsReceipt(latest.event)
-            ? publishing && !(error instanceof PublishRejected)
-              ? "Workflow delivery could not be confirmed; inspect recent activity before submitting another command."
-              : "Workflow command rejected; retain the draft and refresh the saved configuration."
-            : `${
-                attempt.previousDelivery === "unknown" ||
-                attempt.previousDelivery === "accepted"
-                  ? error instanceof PublishRejected
-                    ? "Retry blocked: "
-                    : "Retry failed: "
-                  : ""
-              }${error instanceof Error ? error.message : String(error)}`,
+          error: clip(
+            awaitsReceipt(latest.event)
+              ? publishing && !(error instanceof PublishRejected)
+                ? "Workflow delivery could not be confirmed; inspect recent activity before submitting another command."
+                : "Workflow command rejected; retain the draft and refresh the saved configuration."
+              : `${
+                  attempt.previousDelivery === "unknown" ||
+                  attempt.previousDelivery === "accepted"
+                    ? error instanceof PublishRejected
+                      ? "Retry blocked: "
+                      : "Retry failed: "
+                    : ""
+                }${error instanceof Error ? error.message : String(error)}`,
+          ),
         });
       if (publishing && latest?.signed && !(error instanceof PublishRejected))
         onAccepted(latest.signed, delivery !== "unknown");
@@ -713,7 +756,11 @@ export function createOutbox(
       (catalog
         ? bytes(input.content) > MAX_CONTENT_BYTES ||
           byteSize(input) > MAX_EVENT_BYTES
-        : byteSize(input) > OUTBOX_INPUT_MAX_BYTES)
+        : // A live Canvas carries up to its own content limit.
+          input.kind === 40100
+          ? bytes(input.content) > LIVE_CANVAS_BYTES ||
+            byteSize(input) > CANVAS_MAX_EVENT_BYTES
+          : byteSize(input) > OUTBOX_INPUT_MAX_BYTES)
     )
       throw new Error("Message is empty or too large");
     if (snapshot.length >= MAX_PENDING)
@@ -786,14 +833,15 @@ export function createOutbox(
       ) as unknown as string[][],
       id: getEventHash(template),
     });
-    if (active) admissionGates.set(event.id, active);
-    captureSend(event);
     const operation = Object.freeze({
       event,
       delivery: "sending" as const,
       ...(savedRecovery ? { recovery: savedRecovery } : {}),
       ...(active ? { guarded: true } : {}),
     });
+    admit([...snapshot, operation], event.kind);
+    if (active) admissionGates.set(event.id, active);
+    captureSend(event);
     if (!replacing)
       profiling.measure("send.local", event.id, () => {
         snapshot = Object.freeze([...snapshot, operation]);
@@ -899,6 +947,10 @@ export function createOutbox(
         // that protection; a later recovery attempt must persist it again before use.
         if (!item.recovery) restoredReceipts.delete(id);
         const retained = Object.freeze({ ...item, recovery: saved });
+        admit(
+          [...snapshot.filter((entry) => entry.event.id !== id), retained],
+          item.event.kind,
+        );
         completed.delete(id);
         snapshot = Object.freeze([
           ...snapshot.filter((entry) => entry.event.id !== id),

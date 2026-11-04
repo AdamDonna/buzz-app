@@ -57,6 +57,9 @@ type Job = {
 };
 const cancelled = () => new DOMException("Relay read cancelled", "AbortError");
 
+/** The most serialized events one read may return. */
+export const RELAY_READ_BYTES = 8 * 1024 * 1024;
+
 /** Session-owned scheduling and cancellation. Equal concurrent reads share work;
  * cancelling one consumer never cancels another. Completion releases all request state. */
 export function createRelayReader(
@@ -193,7 +196,7 @@ export function createRelayReader(
                 );
         void query
           .then(async (events) => {
-            if (byteSize(events) > 8 * 1024 * 1024)
+            if (byteSize(events) > RELAY_READ_BYTES)
               throw new ReadError(
                 "invalid-response",
                 "Relay response exceeds the read budget",

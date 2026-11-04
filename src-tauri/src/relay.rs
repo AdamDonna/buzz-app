@@ -253,12 +253,23 @@ pub(crate) async fn git_authorization(host: &IdentityHost, url: &Url) -> Result<
 /// `agent-config-artifacts.ts`.
 const ARTIFACT_MAX_EVENT_BYTES: usize = 512 * 1024 - 16;
 
+/// Content of a live channel Canvas, in UTF-8 bytes. Mirrors
+/// `LIVE_CANVAS_BYTES` in `canvas-limits.ts`.
+pub(crate) const LIVE_CANVAS_BYTES: usize = 256 * 1024;
+
+/// The largest complete signed Canvas event: the relay's default 512 KiB frame
+/// less the `["EVENT",…]` wrapper. Content within `LIVE_CANVAS_BYTES` can still
+/// escape past it. Mirrors `CANVAS_MAX_EVENT_BYTES` in `canvas-limits.ts`.
+pub(crate) const CANVAS_MAX_EVENT_BYTES: usize = 512 * 1024 - 16;
+
 /// Kinds whose events may exceed the default 64 KiB signing bound.
 fn signing_limit(kind: u16) -> Option<usize> {
     if catalog::is_catalog(kind) {
         Some(catalog::MAX_EVENT_BYTES)
     } else if kind == 45010 {
         Some(ARTIFACT_MAX_EVENT_BYTES)
+    } else if kind == 40100 {
+        Some(CANVAS_MAX_EVENT_BYTES)
     } else {
         None
     }
@@ -286,14 +297,19 @@ pub(crate) async fn relay_sign(
     } else {
         None
     };
-    let artifact = event.kind == 45010;
+    let complete_limit = match event.kind {
+        45010 => Some(ARTIFACT_MAX_EVENT_BYTES),
+        40100 => Some(CANVAS_MAX_EVENT_BYTES),
+        _ => None,
+    };
     let signed = match signing_limit(event.kind) {
         Some(limit) => host.sign_bounded(event, limit).await?,
         None => host.sign(event).await?,
     };
     // The commitment bound above omits id, pubkey key and sig; the relay
     // limits the whole event.
-    if artifact && serde_json::to_vec(&signed).map_or(true, |b| b.len() > ARTIFACT_MAX_EVENT_BYTES)
+    if complete_limit
+        .is_some_and(|limit| serde_json::to_vec(&signed).map_or(true, |bytes| bytes.len() > limit))
     {
         return Err("Relay event is too large".into());
     }
@@ -414,7 +430,7 @@ fn valid_member_command(event: &EventTemplate) -> bool {
 
 // Match the broker's purpose-bound Canvas admission, including legacy untagged retries.
 fn valid_canvas(event: &EventTemplate) -> bool {
-    event.content.len() <= 24 * 1024
+    event.content.len() <= LIVE_CANVAS_BYTES
         && event
             .tags
             .iter()

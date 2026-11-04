@@ -4,6 +4,10 @@ import { SOLO_LABEL } from "./labels";
 import { PublishRejected } from "../relay/outbox";
 import { readView } from "../../shared/view-state";
 import { createChannelKit } from "../channel-templates/capability";
+import {
+  LIVE_CANVAS_BYTES,
+  LIVE_CANVAS_LIMIT,
+} from "../channel-templates/model";
 import type { EventTemplate } from "nostr-tools";
 import { keypair, signed } from "../relay/testing";
 import { matchesEvent } from "../relay/projection";
@@ -546,10 +550,10 @@ it("validates the complete Canvas byte budget before either write", async () => 
   const h = combined();
   await editBoth();
   fireEvent.change(screen.getByRole("textbox", { name: /^Instructions/ }), {
-    target: { value: "🙂".repeat(7000) },
+    target: { value: "🙂".repeat(LIVE_CANVAS_BYTES / 4 + 1) },
   });
   fireEvent.click(saveChanges());
-  expect(await screen.findByRole("alert")).toHaveTextContent("24 KiB");
+  expect(await screen.findByRole("alert")).toHaveTextContent(LIVE_CANVAS_LIMIT);
   expect(h.canvas.save).not.toHaveBeenCalled();
   expect(h.sign).not.toHaveBeenCalled();
 });
