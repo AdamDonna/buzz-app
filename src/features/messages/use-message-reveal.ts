@@ -115,7 +115,12 @@ export function useMessageReveal({
       frame = requestAnimationFrame(() => {
         if (signal?.aborted || !row.isConnected || !container.contains(row))
           return;
-        if (focus && (focusPending || row.closest("[inert]"))) return;
+        // Neither focus nor the arrival cue reaches a row behind a cover.
+        if (
+          (focus && focusPending) ||
+          ((focus || mark) && row.closest("[inert]"))
+        )
+          return;
         holding.current?.();
         holding.current = hold
           ? keep(container, target, signal, hold, position)

@@ -204,6 +204,26 @@ it("marks a reveal beside the reader that owns focus, without taking it", async 
   expect(document.activeElement).toBe(outside);
 });
 
+it("marks a reveal beside the reader only once its row is uncovered", async () => {
+  const { row, outside, complete } = mount(undefined, {
+    focus: false,
+    mark: true,
+  });
+  outside.focus();
+  await frame(); // Attach observers.
+  await frame(); // Reveal, but do not verify yet.
+  row.setAttribute("inert", "");
+  await idle();
+  expect(complete).not.toHaveBeenCalled();
+  expect(highlighted(row)).toBe(false);
+  row.removeAttribute("inert");
+  await mutate(row);
+  await idle();
+  expect(complete).toHaveBeenCalledOnce();
+  expect(highlighted(row)).toBe(true);
+  expect(document.activeElement).toBe(outside);
+});
+
 it.each([false, true])(
   "preserves moved focus before verification (mutation: %s)",
   async (mutation) => {

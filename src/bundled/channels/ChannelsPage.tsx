@@ -954,29 +954,41 @@ function ChannelWorkspace({
   );
   // Open in channel also shows the thread's root in the timeline, reading
   // older pages to find it. The thread keeps focus; Members covers both.
+  // The target alone decides, so the list is held from the visit's start.
   const contextRoot =
-    routedThread &&
+    current &&
     !membersRequested &&
+    !exact?.inTimeline &&
     navigation?.target.kind === "conversation" &&
     navigation.target.context === "channel"
       ? requestedThread
       : undefined;
+  // Each visit seeks again, Back and Forward included: the channel may have
+  // dropped the older pages an earlier visit read.
+  const contextVisit = useRef({ navigation, request: 0 });
+  if (contextVisit.current.navigation !== navigation)
+    contextVisit.current = {
+      navigation,
+      request: contextVisit.current.request + 1,
+    };
   const contextInTimeline = useMessageOpening(
     queries.channels,
-    routedThread?.channelId ?? "",
+    currentId ?? "",
     contextRoot,
+    contextVisit.current.request,
   );
+  const contextRouted = !!routedThread;
   const contextSignal = navigation?.signal;
   const contextTarget = useMemo(
     () =>
-      contextRoot && contextInTimeline && contextSignal
+      contextRouted && contextRoot && contextInTimeline && contextSignal
         ? {
             messageId: contextRoot,
             signal: contextSignal,
             focus: false as const,
           }
         : undefined,
-    [contextRoot, contextInTimeline, contextSignal],
+    [contextRouted, contextRoot, contextInTimeline, contextSignal],
   );
   const conversationIcon = (item: (typeof channels)[number]) => {
     const person = item.participants?.[0];
