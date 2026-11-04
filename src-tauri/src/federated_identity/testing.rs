@@ -35,6 +35,11 @@ impl FederatedIdentity {
     pub(crate) fn sign_out_for_test(&self) {
         self.retire(Status::SignedOut, None);
     }
+    /// A sign-out after which the same account came back: the account is
+    /// unchanged, but derived credentials are retired.
+    pub(crate) fn same_account_again_for_test(&self) {
+        self.state().retirements += 1;
+    }
     /// Retires the current account and installs another in its place.
     pub(crate) fn switch_account_for_test(&self) {
         self.retire(Status::SignedOut, None);

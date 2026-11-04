@@ -37,7 +37,7 @@ pub(crate) struct Record {
     pub(crate) relay: String,
     pub(crate) created: u64,
     pub(crate) last_used: u64,
-    approved_by: Approver,
+    pub(crate) approved_by: Approver,
 }
 
 /// One row of the paired-tools list.
@@ -98,6 +98,13 @@ struct State {
     flushed: u64,
     pending: Option<(String, oneshot::Sender<bool>)>,
     asked: VecDeque<Instant>,
+    /// Bumped by every revoke-all; a token admitted, or an approval begun,
+    /// under an earlier one never acts or is saved.
+    generation: u64,
+    /// A revoke-all is not yet saved: nothing acts until it is.
+    owed: bool,
+    /// The NIP-FI retirements already revoked for (see [`Pairings::follow`]).
+    retirements: u64,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -127,24 +134,50 @@ impl Pairings {
             return Ok(records.clone());
         }
         let keychain = self.keychain.clone();
-        let read = tokio::task::spawn_blocking(move || keychain.read())
-            .await
-            .unwrap_or_else(|_| Err("Paired tools could not be read".into()))
-            .and_then(|value| match value {
+        let read = tokio::task::spawn_blocking(move || {
+            // A revoke-all an earlier run could not save is still owed.
+            let owed = keychain.owed();
+            keychain.read().map(|value| (owed, value))
+        })
+        .await
+        .unwrap_or_else(|_| Err("Paired tools could not be read".into()))
+        .and_then(|(owed, value)| {
+            if owed {
+                self.state().owed = true;
+            }
+            match value {
                 None => Ok(Vec::new()),
                 Some(bytes) => serde_json::from_slice::<Vec<Record>>(&bytes)
                     .map_err(|_| "Saved paired tools are unreadable".into()),
-            });
+            }
+        });
         self.state().records = Some(read.clone());
         read
     }
 
+    /// Finishes an owed revoke-all first; while it cannot be saved, nothing
+    /// is admitted or issued.
+    pub(crate) async fn settled(&self) -> Result<(), String> {
+        let _write = self.write.lock().await;
+        self.loaded_locked().await?;
+        if self.state().owed {
+            self.clear_locked().await?;
+        }
+        Ok(())
+    }
+
     /// Applies `change` to the current records and saves them durably; the
-    /// in-memory records change only once the keychain has.
-    async fn mutate<T>(&self, change: impl FnOnce(&mut Vec<Record>) -> T) -> Result<T, String> {
+    /// in-memory records change only once the keychain has. A `None` change
+    /// saves nothing.
+    async fn mutate<T>(
+        &self,
+        change: impl FnOnce(&mut Vec<Record>) -> Option<T>,
+    ) -> Result<Option<T>, String> {
         let _write = self.write.lock().await;
         let mut records = self.loaded_locked().await?;
-        let out = change(&mut records);
+        let Some(out) = change(&mut records) else {
+            return Ok(None);
+        };
         let value = (!records.is_empty())
             .then(|| serde_json::to_vec(&records))
             .transpose()
@@ -158,13 +191,22 @@ impl Pairings {
         state.flushed = unix_now().unwrap_or(0);
         drop(state);
         (self.notify)(Notice::Changed);
-        Ok(out)
+        Ok(Some(out))
+    }
+
+    /// The current revoke-all generation, while none is owed.
+    fn generation(&self) -> Option<u64> {
+        let state = self.state();
+        (!state.owed).then_some(state.generation)
     }
 
     /// The pairing `token` names, if it still acts as `human`: an expired
     /// one, or one approved by anyone else, is deleted and answers `revoked`.
-    pub(crate) async fn admit(&self, token: &str, human: Human) -> Result<Record, Failure> {
+    /// Also returns the generation it was admitted under, for [`Self::holds`].
+    pub(crate) async fn admit(&self, token: &str, human: Human) -> Result<(Record, u64), Failure> {
         let key = hex(&digest(token));
+        self.settled().await.map_err(Failure::unavailable)?;
+        let generation = self.generation().ok_or_else(Failure::revoked)?;
         let records = self.loaded().await.map_err(Failure::unavailable)?;
         let record = records
             .into_iter()
@@ -182,18 +224,25 @@ impl Pairings {
             Human::Ready(approver) => *approver == record.approved_by,
         };
         if !acts || now.saturating_sub(record.last_used) > DISUSE {
-            self.mutate(|records| records.retain(|r| r.id != record.id))
-                .await
-                .map_err(Failure::unavailable)?;
+            self.mutate(|records| {
+                records.retain(|r| r.id != record.id);
+                Some(())
+            })
+            .await
+            .map_err(Failure::unavailable)?;
             return Err(Failure::revoked());
         }
         self.touch(&record.id, now).await;
-        Ok(record)
+        Ok((record, generation))
     }
 
-    /// Whether the pairing still exists, for a result about to be returned.
-    pub(crate) fn holds(&self, id: &str) -> bool {
-        matches!(&self.state().records, Some(Ok(records)) if records.iter().any(|r| r.id == id))
+    /// Whether the pairing still exists and no revoke-all has begun since
+    /// `generation`, for a result about to be returned.
+    pub(crate) fn holds(&self, id: &str, generation: u64) -> bool {
+        let state = self.state();
+        !state.owed
+            && state.generation == generation
+            && matches!(&state.records, Some(Ok(records)) if records.iter().any(|r| r.id == id))
     }
 
     /// Records a use; it is saved with the next write, or now if the last
@@ -209,7 +258,7 @@ impl Pairings {
             now.saturating_sub(state.flushed) >= TOUCH_EVERY
         };
         if due {
-            let _ = self.mutate(|_| ()).await;
+            let _ = self.mutate(|_| Some(())).await;
         }
     }
 
@@ -245,7 +294,10 @@ impl Pairings {
                 ))
             }
         };
-        self.loaded().await.map_err(Failure::unavailable)?;
+        self.settled().await.map_err(Failure::unavailable)?;
+        let generation = self
+            .generation()
+            .ok_or_else(|| Failure::new("unavailable", "Paired tools are being revoked"))?;
         let id = uuid::Uuid::new_v4().to_string();
         let answer = {
             let mut state = self.state();
@@ -314,9 +366,18 @@ impl Pairings {
             last_used: now,
             approved_by: approver.clone(),
         };
-        self.mutate(|records| records.push(record))
-            .await
-            .map_err(Failure::unavailable)?;
+        let account_changed = || Failure::new("denied", "Your Buzz account changed");
+        // Saved only under the generation it was approved in, and returned
+        // only if no revoke-all began while it was saved: that one removes it.
+        self.mutate(|records| {
+            (self.generation() == Some(generation)).then(|| records.push(record))
+        })
+        .await
+        .map_err(Failure::unavailable)?
+        .ok_or_else(account_changed)?;
+        if self.generation() != Some(generation) {
+            return Err(account_changed());
+        }
         Ok((token.to_string(), approver))
     }
 
@@ -335,6 +396,7 @@ impl Pairings {
     }
 
     pub(crate) async fn list(&self) -> Result<Vec<Listed>, String> {
+        self.settled().await?;
         Ok(self
             .loaded()
             .await?
@@ -352,15 +414,66 @@ impl Pairings {
 
     /// Revokes one pairing, once its deletion is saved.
     pub(crate) async fn revoke(&self, id: &str) -> Result<(), String> {
-        self.mutate(|records| records.retain(|record| record.id != id))
-            .await
+        self.mutate(|records| {
+            records.retain(|record| record.id != id);
+            Some(())
+        })
+        .await
+        .map(drop)
     }
 
-    /// Revokes every pairing, on sign-out or a change of account.
-    pub(crate) async fn clear(&self) -> Result<(), String> {
-        let pending = self.state().pending.take();
-        drop(pending);
-        self.mutate(Vec::clear).await
+    /// Revokes every pairing, on sign-out or a change of account. Nothing
+    /// admitted or approved before this call acts or is saved from the moment
+    /// it is made, before its future runs; until the revocation is saved, none
+    /// acts at all, in this run or, through the owed marker, the next.
+    pub(crate) fn clear(&self) -> impl std::future::Future<Output = Result<(), String>> + '_ {
+        self.fence(&mut self.state());
+        async move {
+            let _write = self.write.lock().await;
+            self.clear_locked().await
+        }
+    }
+
+    fn fence(&self, state: &mut State) {
+        state.generation += 1;
+        state.owed = true;
+        // Dropping the sender declines the open prompt.
+        state.pending = None;
+    }
+
+    /// Revokes every pairing, from now, once the NIP-FI session reports a
+    /// sign-out, close or change of account it has not yet revoked for.
+    /// Every request calls it with the session's current count, so revoking
+    /// never waits on a watcher, and a sign-out followed by the same account
+    /// returning still counts.
+    pub(crate) fn follow(&self, retirements: u64) {
+        let mut state = self.state();
+        if state.retirements != retirements {
+            state.retirements = retirements;
+            self.fence(&mut state);
+        }
+    }
+
+    /// Saves an owed revoke-all: the marker first, so a refused clear is
+    /// still owed next launch, then the records, then the marker's removal.
+    async fn clear_locked(&self) -> Result<(), String> {
+        let keychain = self.keychain.clone();
+        tokio::task::spawn_blocking(move || {
+            // Once the records are cleared, the marker no longer matters: one
+            // that cannot be removed only revokes again next launch.
+            let _ = keychain.set_owed(true);
+            keychain.write(None)?;
+            let _ = keychain.set_owed(false);
+            Ok::<(), String>(())
+        })
+        .await
+        .unwrap_or_else(|_| Err("Paired tools could not be revoked".into()))?;
+        let mut state = self.state();
+        state.records = Some(Ok(Vec::new()));
+        state.owed = false;
+        drop(state);
+        (self.notify)(Notice::Changed);
+        Ok(())
     }
 }
 

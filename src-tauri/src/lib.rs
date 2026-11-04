@@ -1008,7 +1008,12 @@ pub fn run() {
                 app.state::<federated_identity::FederatedIdentity>()
                     .inner()
                     .clone(),
-                credential_service::CredentialService::keychain(&app.config().identifier),
+                credential_service::CredentialService::keychain(
+                    &app.config().identifier,
+                    &app.path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir()),
+                ),
                 std::sync::Arc::new(move |notice| credential_notice(&notices, notice)),
             );
             credentials.watch_account();

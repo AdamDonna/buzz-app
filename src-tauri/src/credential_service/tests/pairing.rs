@@ -362,3 +362,87 @@ async fn the_listener_and_its_advertisement_start_without_agents() {
     super::super::advertise::remove(home.path(), "xyz.block.buzz.test");
     assert!(!file.exists());
 }
+
+/// A sign-out the keychain refuses to save, after which the same account
+/// returns: the pairing stays revoked in this run and the next, and its
+/// rows go once the keychain works.
+#[tokio::test]
+async fn a_failed_revoke_all_keeps_pairings_revoked_until_it_is_saved() {
+    let mut fixture = fixture();
+    let token = paired(&fixture).await;
+    fixture.keychain.fail_write.store(true, Ordering::SeqCst);
+    assert!(fixture.service.clear_pairings().await.is_err());
+    fixture.identity.same_account_again_for_test();
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "unavailable");
+    assert!(fixture.keychain.value.lock().unwrap().is_some());
+
+    // The next run, under the same human and account, still owes it.
+    fixture.service = service_over(
+        &fixture.host,
+        &fixture.identity,
+        &fixture.keychain,
+        &fixture.notices,
+        IdentityHost::fixture(),
+    );
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "unavailable");
+    fixture.keychain.fail_write.store(false, Ordering::SeqCst);
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "revoked");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+    assert!(!fixture.keychain.owed.load(Ordering::SeqCst));
+}
+
+/// The session's retirement count fences a request on its own, with no
+/// watcher: a sign-out and the same account returning revokes.
+#[tokio::test]
+async fn a_sign_out_revokes_even_when_the_same_account_returns() {
+    let fixture = fixture();
+    let token = paired(&fixture).await;
+    fixture.identity.same_account_again_for_test();
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "revoked");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}
+
+/// Approved, then a revoke-all begins while its record is being saved: the
+/// revoke-all removes it and the token is never returned.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approval_saved_during_a_revoke_all_returns_no_token() {
+    let fixture = fixture();
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    *fixture.keychain.gate.lock().unwrap() = Some(super::super::keychain::Gate {
+        entered,
+        release: release_rx,
+    });
+    let service = fixture.service.clone();
+    let pairing = tokio::spawn(async move { pair_request(&service, &[CLIENT, RELAY]).await });
+    let id = asked(&fixture.notices).await;
+    fixture.service.0.pairings.answer(&id, true);
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    // Fences at the call; its save waits behind the approval's.
+    let clearing = fixture.service.clear_pairings();
+    release.send(()).unwrap();
+    let reply = pairing.await.unwrap();
+    assert_eq!(error(&reply).1, "denied");
+    assert!(reply.1["result"].is_null() || reply.1["result"].as_str().unwrap().is_empty());
+    clearing.await.unwrap();
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}
+
+/// Approved after a revoke-all has been saved: nothing is saved.
+#[tokio::test]
+async fn an_approval_after_a_revoke_all_saves_nothing() {
+    let fixture = fixture();
+    let service = fixture.service.clone();
+    let pairing = tokio::spawn(async move { pair_request(&service, &[CLIENT, RELAY]).await });
+    let id = asked(&fixture.notices).await;
+    fixture.service.clear_pairings().await.unwrap();
+    fixture.service.0.pairings.answer(&id, true);
+    assert_eq!(error(&pairing.await.unwrap()).1, "denied");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}

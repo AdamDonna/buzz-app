@@ -7,6 +7,33 @@ pub(crate) trait Keychain: Send + Sync {
     fn read(&self) -> Result<Option<Zeroizing<Vec<u8>>>, String>;
     /// Replaces the saved records; `None` deletes them.
     fn write(&self, value: Option<&[u8]>) -> Result<(), String>;
+    /// Whether a revoke-all is owed: set before the records are cleared and
+    /// unset once they are, so a clear that fails is finished next launch.
+    fn owed(&self) -> bool;
+    fn set_owed(&self, owed: bool) -> Result<(), String>;
+}
+
+/// The owed-clear marker, a file beside the app's data: kept apart from the
+/// keychain so a keychain that refuses the clear can still record it.
+#[cfg_attr(test, allow(dead_code))]
+fn marker_owed(path: &std::path::Path) -> bool {
+    // Unreadable counts as owed: a refusal is safe, a reused pairing is not.
+    !matches!(std::fs::metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+#[cfg_attr(test, allow(dead_code))]
+fn set_marker(path: &std::path::Path, owed: bool) -> Result<(), String> {
+    let failed = |_| "Paired tools could not be revoked".to_string();
+    if owed {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(failed)?;
+        }
+        std::fs::write(path, b"").map_err(failed)
+    } else {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(failed(e)),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -14,8 +41,27 @@ pub(crate) fn account(instance: &str) -> String {
     format!("credential-pairings.v1.{instance}")
 }
 
+/// Saves `value`, or deletes on `None`. Saved records are updated in place,
+/// never deleted first, so a failed write keeps them.
+#[cfg_attr(test, allow(dead_code))]
+fn save(
+    value: Option<&[u8]>,
+    replace: impl FnOnce(&[u8]) -> Result<(), buzz_credential_store::Error>,
+    delete: impl FnOnce() -> Result<(), buzz_credential_store::Error>,
+) -> Result<(), String> {
+    let failed = |_| "Paired tools could not be saved to secure storage".to_string();
+    match value {
+        Some(value) => replace(value).map_err(failed),
+        None => match delete() {
+            Ok(()) | Err(buzz_credential_store::Error::Absent) => Ok(()),
+            Err(error) => Err(failed(error)),
+        },
+    }
+}
+
+/// The keychain account, and the owed-clear marker's path.
 #[cfg(not(test))]
-pub(crate) struct Os(pub(crate) String);
+pub(crate) struct Os(pub(crate) String, pub(crate) std::path::PathBuf);
 
 #[cfg(all(
     not(test),
@@ -32,15 +78,17 @@ impl Keychain for Os {
     }
     fn write(&self, value: Option<&[u8]>) -> Result<(), String> {
         use buzz_credential_store as store;
-        let failed = |_| "Paired tools could not be saved to secure storage".to_string();
-        match store::delete(store::HUMAN_SERVICE, &self.0) {
-            Ok(()) | Err(store::Error::Absent) => {}
-            Err(error) => return Err(failed(error)),
-        }
-        match value {
-            Some(value) => store::add(store::HUMAN_SERVICE, &self.0, value).map_err(failed),
-            None => Ok(()),
-        }
+        save(
+            value,
+            |value| store::replace(store::HUMAN_SERVICE, &self.0, value),
+            || store::delete(store::HUMAN_SERVICE, &self.0),
+        )
+    }
+    fn owed(&self) -> bool {
+        marker_owed(&self.1)
+    }
+    fn set_owed(&self, owed: bool) -> Result<(), String> {
+        set_marker(&self.1, owed)
     }
 }
 
@@ -55,15 +103,31 @@ impl Keychain for Os {
     fn write(&self, _: Option<&[u8]>) -> Result<(), String> {
         Err("Secure storage is not available on this platform".into())
     }
+    fn owed(&self) -> bool {
+        marker_owed(&self.1)
+    }
+    fn set_owed(&self, owed: bool) -> Result<(), String> {
+        set_marker(&self.1, owed)
+    }
 }
 
-/// An in-memory keychain whose reads and writes can be made to fail.
+/// An in-memory keychain whose reads and writes can be made to fail, and
+/// whose next write can be held at a gate.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Memory {
     pub(crate) value: std::sync::Mutex<Option<Vec<u8>>>,
+    pub(crate) owed: std::sync::atomic::AtomicBool,
     pub(crate) fail_read: std::sync::atomic::AtomicBool,
     pub(crate) fail_write: std::sync::atomic::AtomicBool,
+    pub(crate) fail_owed: std::sync::atomic::AtomicBool,
+    /// Taken by the next write: it reports entering, then waits for release.
+    pub(crate) gate: std::sync::Mutex<Option<Gate>>,
+}
+#[cfg(test)]
+pub(crate) struct Gate {
+    pub(crate) entered: std::sync::mpsc::Sender<()>,
+    pub(crate) release: std::sync::mpsc::Receiver<()>,
 }
 #[cfg(test)]
 impl Keychain for std::sync::Arc<Memory> {
@@ -74,10 +138,54 @@ impl Keychain for std::sync::Arc<Memory> {
         Ok(self.value.lock().unwrap().clone().map(Zeroizing::new))
     }
     fn write(&self, value: Option<&[u8]>) -> Result<(), String> {
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap();
+            gate.release.recv().unwrap();
+        }
         if self.fail_write.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("write failed".into());
         }
         *self.value.lock().unwrap() = value.map(<[u8]>::to_vec);
         Ok(())
+    }
+    fn owed(&self) -> bool {
+        self.owed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn set_owed(&self, owed: bool) -> Result<(), String> {
+        if self.fail_owed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("marker failed".into());
+        }
+        self.owed.store(owed, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use buzz_credential_store::Error;
+    use std::cell::RefCell;
+
+    /// A store whose update fails after the old item is found: the old
+    /// records must survive, so nothing may delete them first.
+    #[test]
+    fn a_failed_update_keeps_the_saved_records() {
+        let saved = RefCell::new(Some(b"old".to_vec()));
+        let result = super::save(
+            Some(b"new"),
+            |_| Err(Error::Unavailable),
+            || {
+                *saved.borrow_mut() = None;
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(saved.borrow().as_deref(), Some(&b"old"[..]));
+    }
+
+    #[test]
+    fn none_deletes_and_absent_is_fine() {
+        assert!(super::save(None, |_| unreachable!(), || Err(Error::Absent)).is_ok());
+        assert!(super::save(None, |_| unreachable!(), || Err(Error::Unavailable)).is_err());
     }
 }

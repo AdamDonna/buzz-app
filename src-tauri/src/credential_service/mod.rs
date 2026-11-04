@@ -168,12 +168,16 @@ impl CredentialService {
         }))
     }
     /// The OS keychain item this instance's pairings live in.
-    pub(crate) fn keychain(instance: &str) -> Arc<dyn keychain::Keychain> {
+    /// `data` holds the marker for a revoke-all still owed.
+    pub(crate) fn keychain(instance: &str, data: &std::path::Path) -> Arc<dyn keychain::Keychain> {
         #[cfg(not(test))]
-        return Arc::new(keychain::Os(keychain::account(instance)));
+        return Arc::new(keychain::Os(
+            keychain::account(instance),
+            data.join(format!("{}.revoke-owed", keychain::account(instance))),
+        ));
         #[cfg(test)]
         {
-            let _ = instance;
+            let _ = (instance, data);
             Arc::new(Arc::new(keychain::Memory::default()))
         }
     }
@@ -304,30 +308,28 @@ impl CredentialService {
             advertise::remove(&home, &self.0.instance);
         }
     }
-    /// Revokes every pairing when the human signs out of NIP-FI or changes
-    /// account. A restart under another human or account revokes them too,
-    /// since each is bound to who approved it.
+    /// Saves the revocation of every pairing promptly when the human signs
+    /// out of NIP-FI or changes account. Requests fence on their own (see
+    /// `Pairings::follow`); a restart under another human or account revokes
+    /// them too, since each is bound to who approved it.
     pub(crate) fn watch_account(&self) {
         let service = self.clone();
         let mut changes = self.0.session.account_changes();
         tauri::async_runtime::spawn(async move {
             while changes.changed().await.is_ok() {
-                let change = changes.borrow_and_update().clone();
-                if matches!(
-                    change,
-                    Some(crate::federated_identity::SessionChange::SignedOut)
-                        | Some(crate::federated_identity::SessionChange::AccountChanged)
-                ) {
-                    if let Err(error) = service.0.pairings.clear().await {
-                        eprintln!("Paired tools were not revoked: {error}");
-                    }
+                service.0.pairings.follow(service.0.session.retirements());
+                if let Err(error) = service.0.pairings.settled().await {
+                    eprintln!("Paired tools were not revoked: {error}");
                 }
             }
         });
     }
-    /// Revokes every pairing, durably, before Buzz signs out.
-    pub(crate) async fn clear_pairings(&self) -> Result<(), String> {
-        self.0.pairings.clear().await
+    /// Revokes every pairing, before Buzz signs out: from the call, and
+    /// durably once the returned future succeeds.
+    pub(crate) fn clear_pairings(
+        &self,
+    ) -> impl std::future::Future<Output = Result<(), String>> + '_ {
+        self.0.pairings.clear()
     }
 
     async fn listen(&self) -> Result<String, String> {

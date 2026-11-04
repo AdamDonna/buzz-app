@@ -85,11 +85,16 @@ it("closes when native ends the request, and when its time runs out", async () =
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
-it("matches only a saved community's own origin", () => {
+it("matches a saved community by its whole normalized URL", () => {
   const saved = ["wss://relay.example"];
   expect(isSavedCommunity("wss://relay.example/", saved)).toBe(true);
   expect(isSavedCommunity("wss://relay.example", saved)).toBe(true);
+  expect(isSavedCommunity("WSS://Relay.Example:443/", saved)).toBe(true);
+  // Path and query are part of the community a tool binds.
   expect(isSavedCommunity("wss://relay.example/team/", saved)).toBe(false);
+  expect(isSavedCommunity("wss://relay.example/?team=a", saved)).toBe(false);
+  expect(isSavedCommunity("ws://relay.example/", saved)).toBe(false);
+  expect(isSavedCommunity("wss://user@relay.example/", saved)).toBe(false);
   expect(isSavedCommunity("wss://relay.example.evil/", saved)).toBe(false);
   expect(isSavedCommunity("not a url", saved)).toBe(false);
 });

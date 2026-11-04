@@ -9,6 +9,7 @@ use serde_json::json;
 impl CredentialService {
     /// The human paired tools act as, once the key and NIP-FI are settled.
     pub(super) async fn human(&self) -> Human {
+        self.0.pairings.follow(self.0.session.retirements());
         if self.0.agents.caller_closed() {
             return Human::Absent;
         }
@@ -51,7 +52,7 @@ impl CredentialService {
         method: &str,
         params: &[String],
     ) -> Result<String, Failure> {
-        let record = self.0.pairings.admit(token, self.human().await).await?;
+        let (record, generation) = self.0.pairings.admit(token, self.human().await).await?;
         {
             let mut budgets = self
                 .0
@@ -69,8 +70,8 @@ impl CredentialService {
         };
         let result = self.owner_call(&record, &pubkey, method, params).await;
         // Revoked, or the human changed, while it ran: whatever it made stays here.
-        let still = matches!(self.human().await, Human::Ready(now) if now.pubkey == pubkey);
-        if !still || !self.0.pairings.holds(&record.id) {
+        let still = matches!(self.human().await, Human::Ready(now) if now == record.approved_by);
+        if !still || !self.0.pairings.holds(&record.id, generation) {
             return Err(Failure::revoked());
         }
         result
