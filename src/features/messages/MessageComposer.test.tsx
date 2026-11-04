@@ -3111,7 +3111,9 @@ it.each([
       name: `Upload to ${threadRootId ? "thread in " : ""}#General failed`,
     });
     // The restored chip is already in view; dismissing is all that is left.
-    expect(within(h.form()).getByText("notes.txt")).toBeVisible();
+    await waitFor(() =>
+      expect(within(h.form()).getByText("notes.txt")).toBeVisible(),
+    );
     expect(within(notice).queryByRole("button", { name: /^Open/ })).toBeNull();
     expect(
       within(notice).getByRole("button", { name: "Dismiss notification" }),
