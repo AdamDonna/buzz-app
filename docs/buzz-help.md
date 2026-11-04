@@ -177,7 +177,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   you. Unmute restores ordinary unread emphasis and dots. Manual **Mark as unread**
   can still make the name bold. Muted rows show no unread dots, including thread
   dots, and do not contribute to the sidebar’s floating **N unread** buttons or
-  their avatar previews. Muting does not mark messages or threads as read.
+  their avatar previews. Muted activity does not light the macOS Dock unread dot.
+  Muting does not mark messages or threads as read.
 - **Message link previews** appear when you hover or focus a Buzz message link.
   When the message can't be shown, the card says why: the channel is private,
   gone or in another community; the message isn't available, and may have
