@@ -340,6 +340,9 @@ appTest.describe("warm relaunch", () => {
         expect(unreadReads(from)).toEqual([delta(mark)]);
       };
 
+      // The renderer's clock, flowing in real time, is installed before the
+      // app loads so it can later move without replacing timers already set.
+      await page.clock.install();
       // A fresh launch reads in full, and saves a record caught up to now.
       await page.goto(app.origin);
       await openPage(page, "Inbox");
@@ -354,14 +357,20 @@ appTest.describe("warm relaunch", () => {
       for (const text of saved) await expect(row(text)).toBeVisible();
 
       // The broker's recovery tick comes a minute after its socket
-      // authenticated, and catches up with the delta alone.
+      // authenticated, and catches up with the delta alone. The relaunch's
+      // repair was healthy, so the tick repairs unread only once the
+      // 15-minute backstop (UNREAD_BACKSTOP_INTERVAL) has passed: the
+      // renderer's clock jumps past it, while the tick arrives in real time.
       const { mark } = await record();
       const from = app.report.queries.length;
+      await page.clock.setSystemTime(Date.now() + 15 * 60_000);
       await expect
         .poll(() => unreadReads(from).length, { timeout: 75_000 })
         .toBeGreaterThan(0);
       await settled();
       expect(unreadReads(from)).toEqual([delta(mark)]);
+      // Back to real time, so the next launch starts as the first did.
+      await page.clock.setSystemTime(Date.now());
 
       // Deleted on the relay while the device was closed: the record still
       // shows it until the delta returns its deletion.
