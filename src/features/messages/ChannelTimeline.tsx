@@ -667,17 +667,51 @@ function Timeline({
         : virtualizer.getItemOffset(index) - element.scrollTop;
     };
     let logical = logicalTop();
-    let offset = element.scrollTop;
+    let lastScrollTop = element.scrollTop;
+    let readerMoved = false;
+    const consumeMovement = (offset = element.scrollTop) => {
+      // Browser clamping after shrink is layout, not reader movement.
+      const baseline = Math.min(
+        lastScrollTop,
+        Math.max(0, element.scrollHeight - element.clientHeight, offset),
+      );
+      const delta = offset - baseline;
+      if (delta) readerMoved = true;
+      anchor.y -= delta;
+      if (logical !== undefined) logical -= delta;
+      lastScrollTop = offset;
+    };
+    const corrected = (event: Event) => {
+      const { before, after } = (
+        event as CustomEvent<{ before: number; after: number }>
+      ).detail;
+      consumeMovement(before);
+      // Native scroll events can coalesce this correction with reader input.
+      lastScrollTop = after;
+    };
     // A drag can carry the reader away from that row, and Virtua unmounts
     // rows the reader leaves. Hold the row they read instead, or correcting
     // for the old one would move the rows in view.
     const read = () => {
+      consumeMovement();
+      if (!readerMoved) return;
+      // A virtualizer correction can scroll before its new height reaches the
+      // DOM or this observer. Reconcile that resize before accepting a new Y.
+      const measuredHeight = handle.current?.scrollSize;
+      // CSSOM can round fractional heights (e.g. 5940.734375 to 5940.73px).
+      if (
+        measuredHeight === undefined ||
+        list.style.height !== height ||
+        Math.abs(measuredHeight - Number.parseFloat(list.style.height)) >= 1
+      )
+        return;
       const position = positionAt(element, anchor.id).anchor;
-      // Keep the ideal Y through integer scrollTop rounding; only a handover
-      // adopts rendered geometry. Our own corrections contribute no user delta.
-      if (position?.id === anchor.id) anchor.y += offset - element.scrollTop;
-      else if (position) Object.assign(anchor, position);
-      offset = element.scrollTop;
+      // consumeMovement keeps the ideal Y through scrollTop rounding. Only a
+      // handover to another row adopts rendered geometry.
+      if (position) {
+        if (position.id !== anchor.id) Object.assign(anchor, position);
+        readerMoved = false;
+      }
       logical = logicalTop();
     };
     let height = list.style.height;
@@ -694,6 +728,7 @@ function Timeline({
       });
     });
     const hold = new MutationObserver((mutations) => {
+      consumeMovement();
       // Ignore list-only pointer-events changes during input. A row's offsets
       // can change even when the sum of its siblings' heights does not.
       if (
@@ -714,8 +749,8 @@ function Timeline({
         if (row === undefined && next !== undefined && logical !== undefined)
           delta = next - logical;
         correctScrollTop(element, delta);
+        lastScrollTop = element.scrollTop;
       }
-      offset = element.scrollTop;
       logical = logicalTop();
     });
     const release = (keepAnchor = false) => {
@@ -724,6 +759,7 @@ function Timeline({
       cancelAnimationFrame(frame);
       hold.disconnect();
       element.removeEventListener("scroll", read);
+      element.removeEventListener("virtua-scroll-correction", corrected);
       element.removeEventListener("scrollend", end);
       element.ownerDocument.removeEventListener("pointerup", done);
       element.ownerDocument.removeEventListener("pointercancel", done);
@@ -743,6 +779,7 @@ function Timeline({
       subtree: true,
     });
     element.addEventListener("scroll", read);
+    element.addEventListener("virtua-scroll-correction", corrected);
     element.addEventListener("scrollend", end);
     // A drag can end outside the scroller.
     element.ownerDocument.addEventListener("pointerup", done);

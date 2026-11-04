@@ -165,8 +165,9 @@ export interface ReadTransport {
   readonly renameSidebarSection?: SidebarSectionRenameMutator;
   readonly writeSidebarStar?: SidebarStarMutator;
   /** Host-only private account record of the main agent the viewer chose:
-   * undefined when never saved or explicitly cleared. */
-  readMainAgent?(signal: AbortSignal): Promise<string | undefined>;
+   * null when they saved none or it was cleared, undefined when there is no
+   * record. */
+  readMainAgent?(signal: AbortSignal): Promise<string | null | undefined>;
   /** Null saves that this account has no main agent. */
   writeMainAgent?(agent: string | null, signal: AbortSignal): Promise<void>;
   /** Clears only the expected choice and returns the resulting choice. */

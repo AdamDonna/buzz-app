@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import type { Agent, Agents } from "../../features/agents/service";
+import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData, RelaySnapshot } from "../../features/relay/service";
+import type { RelaySession } from "../../features/relay/session";
+import { chooseDefaultAgent } from "../../features/solo/default-agent";
 import { checkinHourly, memory, withFeature } from "./features";
 import {
   formerWithSettings,
@@ -39,17 +41,19 @@ const agent = (digit: string, instructions = "", attention = {}): Agent =>
 const ada = agent("a", checkingIn, TIMER);
 const bea = agent("b");
 
-/** A community whose account read of the saved Bestie waits until `settle`. */
+/** A community whose account read of the saved Bestie waits until `settle`,
+ * or `fail`. */
 function community(channels: readonly ChannelSummary[] = [], account = true) {
-  let settle: (pubkey: string | undefined) => void = () => {};
-  const read = new Promise<string | undefined>((resolve) => {
+  let settle: (pubkey: string | null | undefined) => void = () => {};
+  let fail: (error: Error) => void = () => {};
+  const read = new Promise<string | null | undefined>((resolve, reject) => {
     settle = resolve;
+    fail = reject;
   });
+  const write = vi.fn(async (_agent: string | null) => {});
   const session = {
     viewer: OWNER,
-    ...(account && {
-      mainAgent: { read: () => read, write: vi.fn(async () => {}) },
-    }),
+    ...(account && { mainAgent: { read: () => read, write } }),
     channels: {
       list: () => ({ channels }),
       subscribeList: () => () => {},
@@ -63,10 +67,17 @@ function community(channels: readonly ChannelSummary[] = [], account = true) {
   } as unknown as RelayData;
   return {
     relay,
+    write,
     snapshot: snapshot as unknown as RelaySnapshot,
-    settle: async (pubkey: string | undefined) => {
+    /** Settles the read with a Bestie, a saved none (null), or no record. */
+    settle: async (pubkey: string | null | undefined) => {
       settle(pubkey);
       await read;
+      await Promise.resolve();
+    },
+    fail: async () => {
+      fail(new Error("offline"));
+      await read.catch(() => {});
       await Promise.resolve();
     },
   };
@@ -144,12 +155,96 @@ it("stops a former Bestie's check-ins once the Bestie is known, and leaves its m
   stop();
 });
 
+it("stops every agent's check-ins once the account is read to have no Bestie", async () => {
+  const none = community();
+  const cara = agent("c", checkingIn, TIMER);
+  const { agents, save } = host([ada, bea, cara]);
+  const stop = stopFormerCheckIns(none.relay, agents);
+  // Not while it is read.
+  await Promise.resolve();
+  expect(save).not.toHaveBeenCalled();
+  await none.settle(null);
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(4));
+  expect(new Set(save.mock.calls.map(([key]) => key))).toEqual(
+    new Set([ada.key, cara.key]),
+  );
+  // Memory stays.
+  expect(save).toHaveBeenCalledWith(cara.key, {
+    config: { instructions: withFeature("Be brief.\n", memory, true) },
+  });
+  stop();
+});
+
+it("leaves every agent's check-ins alone on an account with no record", async () => {
+  const never = community();
+  const cara = agent("c", checkingIn, TIMER);
+  const { agents, save } = host([ada, cara]);
+  const stop = stopFormerCheckIns(never.relay, agents);
+  // Nobody ever chose a Bestie here; either agent may be Bestie in another
+  // community, which shares its instructions.
+  await never.settle(undefined);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(save).not.toHaveBeenCalled();
+  stop();
+});
+
+it("keeps the check-ins of an agent made Bestie while the account is read, or while none is stopped", async () => {
+  const none = community();
+  const cara = agent("c", checkingIn, TIMER);
+  const dara = agent("d");
+  const { agents, save } = host([ada, bea, cara, dara]);
+  const session = none.relay.snapshot().session as unknown as RelaySession;
+  const stop = stopFormerCheckIns(none.relay, agents);
+  // Chosen before the read settles: the read's none isn't known.
+  void none.settle(null);
+  await chooseDefaultAgent(session, SCOPE, cara.pubkey);
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(new Set(save.mock.calls.map(([key]) => key))).toEqual(
+    new Set([ada.key]),
+  );
+
+  // Chosen as Dara's check-in is about to be stopped.
+  save.mockClear();
+  void agents.save(dara.key, {
+    config: { instructions: checkingIn },
+    attention: TIMER,
+  } as unknown as AgentChange);
+  await chooseDefaultAgent(session, SCOPE, dara.pubkey);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Only Cara, now former, is stopped; Dara keeps its check-in.
+  expect(save.mock.calls.map(([key]) => key)).toEqual([
+    dara.key,
+    cara.key,
+    cara.key,
+  ]);
+
+  // Made Bestie again as Cara's check-in is about to be stopped, then not:
+  // Cara is stopped once the choice is known.
+  save.mockClear();
+  void agents.save(cara.key, {
+    config: { instructions: withFeature("Be brief.\n", checkinHourly, true) },
+    attention: TIMER,
+  } as unknown as AgentChange);
+  none.write.mockRejectedValueOnce(new Error("offline"));
+  await expect(
+    chooseDefaultAgent(session, SCOPE, cara.pubkey),
+  ).rejects.toThrow();
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+  expect(save.mock.calls.map(([key]) => key)).toEqual([
+    cara.key,
+    cara.key,
+    cara.key,
+  ]);
+  stop();
+});
+
 it("does nothing while the saved Bestie is unknown, or to the Bestie itself", async () => {
   const unknown = community();
   const first = host([ada]);
   const stopUnknown = stopFormerCheckIns(unknown.relay, first.agents);
-  // An account with no saved Bestie, or a read that failed, isn't "none".
-  await unknown.settle(undefined);
+  // A read that failed isn't "none".
+  await unknown.fail();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(first.save).not.toHaveBeenCalled();
   stopUnknown();
@@ -231,6 +326,30 @@ it("turns memory on for a local agent made Bestie here, unless it has it", async
   ]);
   await rememberNewBestie(relay, edited.agents, bea.pubkey);
   expect(edited.save).not.toHaveBeenCalled();
+});
+
+it("turns memory on for no remote agent made Bestie, as its instructions aren't here", async () => {
+  const { relay } = community();
+  const hosted = { ...bea, place: "hosted" } as Agent;
+  const elsewhere = { ...agent("c"), place: "elsewhere" } as Agent;
+  const { agents, save } = host([hosted, elsewhere]);
+  await rememberNewBestie(relay, agents, hosted.pubkey);
+  await rememberNewBestie(relay, agents, elsewhere.pubkey);
+  expect(save).not.toHaveBeenCalled();
+});
+
+it("stops a local former Bestie's check-ins when a remote agent is Bestie, and leaves the remote one alone", async () => {
+  const { relay, settle } = community();
+  const remote = { ...agent("c", checkingIn, TIMER), place: "hosted" } as Agent;
+  const sky = { ...agent("d"), place: "elsewhere" } as Agent;
+  const { agents, save } = host([ada, remote, sky]);
+  const stop = stopFormerCheckIns(relay, agents);
+  await settle(sky.pubkey);
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  // Only Ada, on this device, is stopped; the remote agent's timers are its
+  // own.
+  expect(save.mock.calls.map(([key]) => key)).toEqual([ada.key, ada.key]);
+  stop();
 });
 
 it("counts a former Bestie as on while it has a section, or a private channel once seen as Bestie", async () => {

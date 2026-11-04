@@ -83,6 +83,9 @@ const relay = {
 const agents = {
   save: async () => {},
   types: () => [{ key: "claude-code", adopt: () => ({}) }],
+  // Both are on this device, so neither is asked about as remote.
+  find: (pubkey: string) =>
+    [ADA, BEA].includes(pubkey) ? { pubkey, place: "here" } : undefined,
 };
 const agent = {
   key: ADA,

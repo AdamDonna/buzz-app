@@ -241,6 +241,34 @@ it("rejects a link renderer order that is neither a number nor a function", asyn
   expect(h.runtime.snapshot()[h.plugin.manifest.id]?.status).toBe("active");
 });
 
+it("rejects an attachment renderer order that is neither a number nor a function", async () => {
+  const h = harness({
+    inject: ["conversation"],
+    apply(ctx) {
+      const base = { id: "file", title: "File", matches: () => true };
+      for (const order of [null, "100", {}, true]) {
+        expect(() =>
+          ctx.conversation.registerAttachment({
+            ...base,
+            order,
+            component: Component,
+          } as never),
+        ).toThrow("order");
+      }
+      ctx.conversation.registerAttachment({
+        ...base,
+        order: (attachment) => (attachment.kind === "file" ? -10 : 0),
+        component: Component,
+      });
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() =>
+    expect(h.service.attachments.snapshot()).toHaveLength(1),
+  );
+  expect(h.runtime.snapshot()[h.plugin.manifest.id]?.status).toBe("active");
+});
+
 it("withdraws link presentation when plugin activation fails", async () => {
   const h = harness({
     inject: ["conversation"],

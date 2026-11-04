@@ -463,14 +463,17 @@ it.each(["actor", "p"])(
       relay = keypair();
     const wire = scriptedTransport(owner.pubkey, relay.pubkey);
     let live!: LiveCallbacks;
-    const connection = createRelaySession({
-      ...wire.transport,
-      archiveAuthority: relay.pubkey,
-      subscribe(callbacks) {
-        live = callbacks;
-        return { update() {}, retry() {}, dispose() {} };
+    const connection = createRelaySession(
+      {
+        ...wire.transport,
+        archiveAuthority: relay.pubkey,
+        subscribe(callbacks) {
+          live = callbacks;
+          return { update() {}, retry() {}, dispose() {} };
+        },
       },
-    });
+      { readStateFloor: () => 0 },
+    );
     const root = message(owner, "c", "Question", 10);
     const original = signed(relay, {
       kind: 9,
@@ -554,13 +557,16 @@ it("uses the same verified owner edit in the conversation, prompt history and un
     relay = keypair();
   const wire = scriptedTransport(owner.pubkey, relay.pubkey);
   let live!: LiveCallbacks;
-  const connection = createRelaySession({
-    ...wire.transport,
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, retry() {}, dispose() {} };
+  const connection = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
     },
-  });
+    { readStateFloor: () => 0 },
+  );
   const root = message(owner, "c", "Question", 10);
   const original = signed(agent, {
     kind: 9,

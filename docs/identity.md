@@ -494,7 +494,9 @@ Desktop builds configured with `BUZZ_NSEC_BACKUP_SERVICE_URL` and
 automatic-backup choice, Builderlab login, and matching key
 binding. Unset, self-managed, corrupt or mismatched consent prevents all backup
 requests, including retries. These are paired
-native build-process inputs; unset leaves the feature disabled. The service URL
+native build-process inputs; unset or empty leaves the feature disabled. Preview
+releases that sign in to `app.builderlab.xyz` set them to that origin's
+`/api/goose` service and the `backup/bb-public/production` namespace. The service URL
 includes its API prefix and must use HTTPS. Existing login credentials are accepted
 only for the matching trusted build origin. Without a qualifying login, backup
 defers without opening a browser or delaying identity readiness.
@@ -1012,8 +1014,10 @@ message/event writes use this identity. [Join recovery](communities.md#packaged-
 records public progress before remote changes. The existing durable outbox retains
 uncertain delivery across restart; retry uses the same signed event with fresh HTTP
 authentication. Events older than 15 minutes get a strong ID readback instead of
-being republished or silently re-dated. Missing/failed readback retains uncertainty;
-the user must inspect the conversation before explicitly sending a new message.
+being republished or silently re-dated. For ordinary messages, missing/failed
+readback retains uncertainty; inspect the conversation before explicitly sending
+another. Expired no-role Solo invitations have a narrower verified retirement
+path through [Outbox Retry](solo/sharing.md).
 
 Protected media and uploads are native, because the webview cannot attach Blossom
 (kind 24242) authentication itself: `<img>`, `<video>` and `<audio>` send no custom

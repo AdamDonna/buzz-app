@@ -631,9 +631,9 @@ it.each([
     act(() => state.unread(2));
     expect(row()).toHaveAttribute("data-ordinary");
     act(() => state.mute(true));
-    expect(row()?.hasAttribute("data-ordinary")).toBe(channelType === "dm");
+    expect(row()).not.toHaveAttribute("data-ordinary");
     act(() => state.unread(3, 0));
-    expect(row()?.hasAttribute("data-ordinary")).toBe(channelType === "dm");
+    expect(row()).not.toHaveAttribute("data-ordinary");
     expect(
       view.container.querySelectorAll("[data-channel-unread]"),
     ).toHaveLength(mutedIndicators);
@@ -651,7 +651,7 @@ it.each([
     ).toHaveLength(mutedIndicators);
     act(() => state.mute(true));
     act(() => state.unread(4, 1));
-    expect(row()?.hasAttribute("data-ordinary")).toBe(channelType === "dm");
+    expect(row()).not.toHaveAttribute("data-ordinary");
     expect(view.container.querySelector("[data-channel-priority]")).toBeNull();
     expect(
       screen.getByRole("img", { name: /4 observed unread messages/ }),

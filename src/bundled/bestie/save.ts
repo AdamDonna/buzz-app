@@ -23,6 +23,9 @@ export function instructionsOf(agent: Agent) {
 
 /** Why the agent's instructions can't take a feature here, if they can't. */
 export function cannotEdit(agents: FeatureAgents, agent: Agent) {
+  // A remote agent's instructions and timers aren't on this device: its
+  // provider, or the device it runs on, holds them.
+  if (agent.place !== "here") return "Not available with remote agents yet.";
   // A type without `adopt` has no instructions, as `updateKind` says.
   if (!agents.types().find(({ key }) => key === agent.type)?.adopt)
     return "This agent's type has no instructions to add this to.";

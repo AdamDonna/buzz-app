@@ -57,6 +57,7 @@ it("releases unsent files on close while retaining the saved panel text draft", 
       send: () => {
         throw new Error("No send expected");
       },
+      recovery: async () => undefined,
       recover: async () => {},
       acknowledge: async () => {},
       retry: () => {},

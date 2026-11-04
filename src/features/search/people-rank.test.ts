@@ -113,3 +113,14 @@ it("keeps the given order for ties, as New message keeps the directory's", () =>
   expect(order(people, "z")).toEqual(["Zed Agent"]);
   expect(order([...people].reverse(), "kim")).toEqual(["Kim Lee", "Kim Park"]);
 });
+
+it("matches a verified full name like the label", () => {
+  const people = [
+    person("a", "fname", { fullName: "Fake Name" }),
+    person("b", "Fake"),
+  ];
+  expect(order(people, "name")).toEqual(["fname"]);
+  expect(order(people, "fake n")).toEqual(["fname"]);
+  // An exact shown name still comes first.
+  expect(order(people, "fake")).toEqual(["Fake", "fname"]);
+});

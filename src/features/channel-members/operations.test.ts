@@ -85,3 +85,31 @@ it("joins an addition under way only when it asks for the same role", async () =
   expect(add).toHaveBeenCalledOnce();
   expect(roles).toEqual([undefined]);
 });
+
+it("keeps Retry separate from a concurrent explicit Add and clears its flag afterward", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const add = vi.fn(
+    async (_channel: string, _person: string, intent: { retry?: true }) => {
+      if (add.mock.calls.length === 1) {
+        expect(intent).toMatchObject({ retry: true });
+        await gate;
+      } else expect(intent.retry).toBeUndefined();
+    },
+  );
+  const owner = createMemberAdditions(new AbortController().signal, add);
+  const retry = owner.add("channel", "person", { retry: true });
+  try {
+    expect(owner.add("channel", "person", { retry: true })).toBe(retry);
+    const explicit = owner.add("channel", "person");
+    expect(explicit).not.toBe(retry);
+    await expect(explicit).rejects.toThrow(/already.*running/);
+  } finally {
+    release();
+    await retry;
+  }
+  await owner.add("channel", "person");
+  expect(add).toHaveBeenCalledTimes(2);
+});

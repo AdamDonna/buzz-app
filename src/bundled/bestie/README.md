@@ -38,8 +38,17 @@ and use readable owner labels before abbreviated-key fallbacks.
 ### The Bestie tab
 
 The agent you made your Bestie (with **Make my bestie** in Agents) gets a
-**Bestie** tab on its agent page while it runs on this device. **Change** picks
-another agent and asks before replacing your Bestie.
+**Bestie** tab on its agent page. **Change** picks
+another agent and asks before replacing your Bestie. A remote agent, hosted or
+on another device, can be your Bestie too. Change, **Make my bestie** and **Make
+my Bestie again** offer it, and say before saving that some bestie features
+aren't available with remote agents, as **Choosing a Bestie** does: one
+question, the replacement's, when it replaces your Bestie. A remote Bestie's
+switches show as unavailable, as its instructions and timers aren't on this
+device, and it doesn't start with Remembers you on. **Remove as Bestie** asks,
+then saves no Bestie to your account: the agent stays, its check-ins stop, and
+its memory section and private channels stay, which its Former Bestie tab can
+turn off.
 
 **Remembers you** adds memory rules to the agent's instructions, in a section
 marked `<!-- buzz:bestie/memory v1 -->` … `<!-- /buzz:bestie/memory -->`, and
@@ -93,15 +102,19 @@ check-in is a feature in `features.ts`, so another kind is one more entry.
 
 **Changing your Bestie.** Only your Bestie checks in: whenever the saved Bestie
 is known, chosen here or read from your account, any other agent here has its
-check-ins removed. A choice made on another device reaches this one when it next
-reads your account, once per connection. Turning the Bestie plugin off stops a
-removal under way before its next save. Its memory section and channels stay. An
-agent this device makes Bestie starts with Remembers you on; a choice synced
-from elsewhere changes nothing, so memory turned off stays off. A former Bestie
-keeps a **Former Bestie** tab while it has a Bestie section, or, if this device
-saw it as Bestie, while it is in one of your private channels. The tab has the
-same switches, **Remove from all** for its channels, and **Make my Bestie
-again**.
+check-ins removed. Once your account is read to have saved no Bestie, as
+**Remove as Bestie** does, every agent here has them removed. An account where
+no Bestie was ever chosen changes nothing, as an agent here may be Bestie in
+another community that shares its instructions. While the account is being read,
+or can't be, nothing is removed either. A choice made on another device reaches
+this one when it next reads your account, once per connection. Turning the
+Bestie plugin off stops a removal under way before its next save. Its memory
+section and channels stay. An agent this device makes Bestie starts with
+Remembers you on; a choice synced from elsewhere changes nothing, so memory
+turned off stays off. A former Bestie keeps a **Former Bestie** tab while it has
+a Bestie section, or, if this device saw it as Bestie, while it is in one of
+your private channels. The tab has the same switches, **Remove from all** for
+its channels, and **Make my Bestie again**.
 
 ### Choosing a Bestie
 

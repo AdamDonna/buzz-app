@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { Agents } from "../../features/agents/service";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import { useAgents } from "../../features/agents/react";
@@ -9,13 +9,13 @@ import { publicKeyLabels } from "../../shared/identity/public-key";
 import type { RelaySession } from "../../features/relay/session";
 import { chooseDefaultAgent } from "../../features/solo/default-agent";
 import { BestieIcon } from "../../shared/design-system/icons";
-import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { ChoiceRow } from "../../shared/design-system/ui/ChoiceRow";
 import { Combobox } from "../../shared/design-system/ui/Combobox";
 import { AgentCreateDialog } from "../agents/AgentCreateDialog";
+import { RemoteBestieConfirm, remoteAgent } from "../agents/BestieChoice";
 
 const message = (reason: unknown) =>
   reason instanceof Error ? reason.message : String(reason);
@@ -51,7 +51,6 @@ export function BestieChooser({
     pubkey: string;
     keepsCreated: boolean;
   }>();
-  const cancel = useRef<HTMLButtonElement>(null);
   const dismissRemote = () => {
     setRemote(undefined);
     setSelected("");
@@ -74,8 +73,7 @@ export function BestieChooser({
       setError("That agent is no longer available. Choose another.");
       return;
     }
-    const place = agents.find(pubkey)?.place;
-    if (!confirmedRemote && (place === "hosted" || place === "elsewhere")) {
+    if (!confirmedRemote && remoteAgent(agents.find(pubkey)?.place)) {
       setError("");
       setRemote({ pubkey, keepsCreated });
       return;
@@ -235,28 +233,16 @@ export function BestieChooser({
         }
       />
       {remote && (
-        <AlertDialog
-          title={`Use ${items.find((agent) => agent.pubkey === remote.pubkey)?.label ?? "this agent"} as your bestie?`}
-          description="Some bestie features aren’t available with remote agents."
-          initialFocus={cancel}
+        <RemoteBestieConfirm
+          name={
+            items.find((agent) => agent.pubkey === remote.pubkey)?.label ??
+            "this agent"
+          }
           pending={saving}
+          error={error}
           onClose={dismissRemote}
-          {...(error && { children: <p role="alert">{error}</p> })}
-          actions={
-            <>
-              <Button ref={cancel} disabled={saving} onClick={dismissRemote}>
-                Cancel
-              </Button>
-              <Button
-                variant="prominent"
-                loading={saving}
-                onClick={() =>
-                  void choose(remote.pubkey, remote.keepsCreated, true)
-                }
-              >
-                Use as bestie
-              </Button>
-            </>
+          onConfirm={() =>
+            void choose(remote.pubkey, remote.keepsCreated, true)
           }
         />
       )}
