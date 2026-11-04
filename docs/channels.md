@@ -559,11 +559,11 @@ the returned command, and confirms relay-owned state before removing a row. Arch
 confirmed Delete/Leave use the existing access-loss purge. Commands use narrow
 development-broker routes or the packaged native `relay_channel_sign` and
 `relay_channel_publish` commands, never the message outbox or automatic replay.
-A dispatched Leave keeps its bounded, fresh, strong viewer-roster confirmation
-when membership loss retires access-dependent work. Retired confirmation reads
+A published lifecycle command keeps its bounded, fresh, strong confirmation
+when access loss retires access-dependent work. Retired confirmation reads
 are reread; caller cancellation, session clear/disposal and the original deadline
 still abort its signal. A rejected publication or definitive confirmation-read
-failure still fails Leave; an aborted read alone never confirms it. These signals
+failure still fails the command; an aborted read alone never confirms it. These signals
 do not forcibly interrupt an in-flight native publication IPC.
 Both hosts admit only the exact two-tag `9002` shape with `archived=true` (Archive)
 or `archived=false` (Unarchive); other values, extra tags, cross-route commands and
