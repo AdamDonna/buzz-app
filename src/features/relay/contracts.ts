@@ -212,11 +212,14 @@ export type PublicChannelSearch = Readonly<{
   partial: boolean;
 }>;
 /** What a channel-only link may show about a channel the reader may not have
- * joined. `withheld` means a completed lookup found nothing it may show: the
- * relay withholds a private channel's metadata from non-members, so private,
- * deleted and never-valid channels look the same. */
+ * joined. `looking` means a lookup is queued or in flight; `unknown` means
+ * none is, as before the list is ready, during a failure's backoff or in a
+ * cached-only store. `withheld` means a completed lookup found nothing it may
+ * show: the relay withholds a private channel's metadata from non-members, so
+ * private, deleted and never-valid channels look the same. */
 export type ChannelReference =
   | Readonly<{ state: "unknown" }>
+  | Readonly<{ state: "looking" }>
   | Readonly<{ state: "withheld" }>
   | Readonly<{
       state: "found";
@@ -229,6 +232,11 @@ export type ChannelReference =
       joined: boolean;
       /** Only when the viewer may see the roster. */
       members?: number;
+      /** A public channel the viewer left is named by its open metadata, but
+       * its messages stay unreadable until a lookup confirms it is still
+       * open; `looking` while that lookup is queued or in flight. */
+      readable?: false;
+      looking?: true;
     }>;
 /** Reads are side-effect-free; snapshots retain identity until their value changes.
  * Commands are idempotent requests; the store decides whether network work is needed. */
@@ -276,11 +284,13 @@ export interface ChannelQueries {
   >[];
   /** Current reference state from local evidence; never reads. */
   describe?(channelId: string): ChannelReference;
-  /** Demand a background lookup for a reference that isn't `found`, until the
-   * returned release. The store coalesces requests into bounded reads, keeps
+  /** Demand a background lookup for a reference that isn't `found`, or is
+   * found but not `readable`, until the returned release. The store coalesces requests into bounded reads, keeps
    * a `withheld` answer for a few minutes, backs off after failures,
    * rechecks demanded references when either ends, and notifies list
-   * subscribers. */
+   * subscribers once per batch as a lookup starts (unless it only rechecks
+   * withheld answers) and when it ends. Absent when no lookup can run, as in
+   * a cached-only store. */
   refer?(channelId: string): () => void;
   /** Exact re-read of one already-listed channel's roster, merged into the
    * ready list. `resolve` admits channels the list lacks; this confirms a

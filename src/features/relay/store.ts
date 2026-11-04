@@ -2622,8 +2622,10 @@ export function createChannelStore(
       warming = false;
     }
   }
-  /** Channel-link lookups. `withheld` answers are kept for a while (and
-   * shown while rechecked); failures back off. Both reset with the epoch.
+  /** Channel-link lookups. `withheld` keeps a lookup that admitted nothing (a
+   * withheld answer, or a left channel still unreadable) for a while, and its
+   * answer is shown while rechecked; failures back off. Both reset with the
+   * epoch.
    * `demand` counts mounted links per channel; a timer rechecks them when
    * their answer expires or their backoff ends. */
   const references = {
@@ -2677,8 +2679,11 @@ export function createChannelStore(
         ...(channel.members?.length ? { members: channel.members.length } : {}),
       };
     }
+    const state = currentReferences();
+    const looking = state.queue.has(id) || state.pending.has(id);
     // A public channel the viewer has left: its signed open metadata stays
-    // public even while discovery denies reading it as a member.
+    // public even while discovery denies reading it as a member, until a
+    // lookup confirms it is still open.
     const event = discovery?.metadataVersion(id);
     const name = event && openMetadata(event) && metadataName(event);
     if (event && name) {
@@ -2693,11 +2698,15 @@ export function createChannelStore(
         hidden: false,
         archived: hasTag(event, "archived", "true"),
         joined: false,
+        readable: false,
+        ...(looking ? { looking: true as const } : {}),
       };
     }
-    return currentReferences().withheld.has(id)
+    return state.withheld.has(id)
       ? { state: "withheld" }
-      : { state: "unknown" };
+      : looking
+        ? { state: "looking" }
+        : { state: "unknown" };
   }
   /** When a demanded reference may be looked up again: its withheld answer
    * expires, or its backoff ends. */
@@ -2732,8 +2741,9 @@ export function createChannelStore(
   }
   function lookUpReference(id: string) {
     if (disposed || !transport || !discovery || options.cachedOnly) return;
-    if (list.status !== "ready" || describeReference(id).state === "found")
-      return;
+    // Discovery's admission, not a found name, decides: a left channel's
+    // messages need a fresh lookup.
+    if (list.status !== "ready" || discovery.get(id)) return;
     const state = currentReferences();
     if (
       state.queue.has(id) ||
@@ -2761,8 +2771,7 @@ export function createChannelStore(
             for (const id of batch) {
               state.pending.delete(id);
               state.retryAt.delete(id);
-              if (describeReference(id).state === "found")
-                state.withheld.delete(id);
+              if (discovery?.get(id)) state.withheld.delete(id);
               else state.withheld.set(id, now());
             }
             setList(list, true);
@@ -2778,10 +2787,16 @@ export function createChannelStore(
               state.pending.delete(id);
               state.retryAt.set(id, now() + wait);
             }
+            // Arm the retry first, so a throwing listener can't skip it.
             wakeReferences();
+            // Its links stop waiting through the backoff.
+            notify(listListeners);
           },
         );
       }
+      // Their links now wait for these answers, once per batch and after the
+      // reads start. A withheld answer stays on screen while it is rechecked.
+      if (ids.some((id) => !state.withheld.has(id))) notify(listListeners);
     });
   }
   function referChannel(id: string) {
@@ -2845,7 +2860,8 @@ export function createChannelStore(
         ? (publicDirectory.open ?? noOpenDirectory)
         : noOpenDirectory,
     describe: describeReference,
-    refer: referChannel,
+    // A cached-only store never looks a reference up, so it offers no lookup.
+    ...(options.cachedOnly ? {} : { refer: referChannel }),
     refreshRoster,
     subscribeList: (listener: Listener) => subscribe(listListeners, listener),
     window: (channelId: string) =>

@@ -192,11 +192,25 @@ export function useFloatingActionBar(
       (row.matches(":has(:focus-visible)") ||
         (document.documentElement.hasAttribute("data-keyboard-navigation") &&
           row.contains(document.activeElement)));
+    // A preview card joins the top layer after a toolbar that is already
+    // shown. Hiding that toolbar while the card is open would show it again
+    // above the card on the next hover, so this row's open preview keeps it.
+    // The card's close releases it. The selector finds a preview trigger with
+    // any popup open, not only its card: MessageLink's context menu shares
+    // the link, so that menu holds the toolbar too, hidden behind the menu.
+    let shown = false;
     const update = (focused = keyboardFocus()) => {
       const ownsPopup = !!bar.querySelector(
         '[aria-haspopup][aria-expanded="true"]',
       );
-      const next = hovered || focused || open || ownsPopup;
+      const next =
+        hovered ||
+        focused ||
+        open ||
+        ownsPopup ||
+        (shown &&
+          !!row.querySelector("[data-preview-card-trigger][data-popup-open]"));
+      shown = next;
       if (!next) row.removeAttribute("data-actions-revealed");
       setRevealed(next);
     };
@@ -236,7 +250,7 @@ export function useFloatingActionBar(
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["aria-expanded"],
+      attributeFilter: ["aria-expanded", "data-popup-open"],
     });
     update();
     return () => {
@@ -531,6 +545,9 @@ export function useFloatingActionBar(
       siblings.disconnect();
       unobserveOverlays();
       hide();
+      // An overlay or positioning update can restore this attribute between a
+      // hover update removing it and React committing the hidden bar.
+      row.removeAttribute("data-actions-revealed");
     };
   }, [floating, revealed, rowRef, barRef, slotRef]);
 
