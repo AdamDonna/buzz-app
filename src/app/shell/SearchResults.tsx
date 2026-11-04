@@ -258,11 +258,16 @@ export function SearchResults({
           };
         })
       : [];
-  const names = new Map(
-    channels.map((channel) => [
-      channel.id,
-      conversationName(channel, profiles, resolveName),
-    ]),
+  // Every keystroke renders; DM names only change with their inputs.
+  const names = useMemo(
+    () =>
+      new Map(
+        channels.map((channel) => [
+          channel.id,
+          conversationName(channel, profiles, resolveName),
+        ]),
+      ),
+    [channels, profiles, resolveName],
   );
   const operatorChannel = parsed.in ? normalizeInChannel(parsed.in) : "";
   const localChannel = operatorChannel
