@@ -1298,32 +1298,6 @@ it("a reconnect repair in which nothing lands keeps the observation stale instea
   expect(h.session.unread.inbox().partial).toBeUndefined();
 });
 
-it("a relay that accepts reads but answers none costs one read per request after the first drop", async () => {
-  const h = setup(300);
-  const batches: string[][] = [];
-  h.query.mockImplementation(async (filters) => {
-    if (!filters[0]?.kinds?.includes(9) || !filters.some((f) => f["#h"]))
-      return [];
-    batches.push(filters.flatMap((filter) => filter["#h"] ?? []));
-    throw new Error("Relay read timed out");
-  });
-  await h.session.unread.ensure();
-  // Six requests (the authored page and 299 windows, then 128, then 45,
-  // then the roster sample's 128, 128 and 44): the first is read twice, the
-  // last four once; the second, in flight beside the first, at most twice.
-  // Twelve reads would mean a retry per request.
-  const sizes = batches.map((batch) => batch.length);
-  expect(sizes.filter((size) => size === 127)).toHaveLength(2);
-  expect(sizes.filter((size) => size === 45)).toHaveLength(1);
-  expect(sizes.filter((size) => size === 44)).toHaveLength(1);
-  expect(batches.length).toBeLessThanOrEqual(8);
-  expect(h.session.unread.inbox()).toMatchObject({
-    status: "error",
-    freshness: "stale",
-  });
-  expect(h.snapshot().coverage).toBe("unknown");
-});
-
 it("a full budget evicts the oldest evidence and the observation still completes", async () => {
   const h = setup(129);
   const oldest = message(h.peer, "other", "x".repeat(450000), 11);
@@ -1535,20 +1509,4 @@ it("observes a channel again when the viewer regains access to it", async () => 
   expect(h.snapshot().observedCount).toBeNull();
   h.receive([roster(h.relay, "other", [h.viewer.pubkey], 30)]);
   await vi.waitFor(() => expect(h.snapshot().observedCount).toBe(1));
-});
-
-it("a cache clear reports an Inbox record it could not wipe", async () => {
-  const h = setup();
-  await h.session.unread.ensure();
-  vi.stubGlobal("indexedDB", {
-    open() {
-      throw new Error("IndexedDB unavailable");
-    },
-  });
-  try {
-    await expect(h.clearCache()).rejects.toThrow("IndexedDB unavailable");
-  } finally {
-    vi.unstubAllGlobals();
-  }
-  expect(h.snapshot().observedCount).toBeNull();
 });

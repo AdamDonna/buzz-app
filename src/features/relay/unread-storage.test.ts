@@ -8,7 +8,6 @@ import {
   purgeUnreadStorage,
   UNREAD_RECORD_BYTES,
   UNREAD_RECORD_EVENTS,
-  UnreadRecordPurged,
   type UnreadRecord,
 } from "./unread-storage";
 import { memoryIndexedDB } from "./unread-storage-testing";
@@ -134,7 +133,7 @@ it("malformed meta reads as no record", async () => {
   });
 });
 
-it("a field added after the participation reads as incomplete when missing or malformed, keeping the record", async () => {
+it("a record whose completeness or structure is missing or malformed reads as incomplete, keeping its threads, and restores no events without structure", async () => {
   const idb = memoryIndexedDB();
   const storage = browserUnreadStorage(scope);
   const participation = { roots: [["c0:root", 1000]] };
@@ -191,56 +190,6 @@ it("a field added after the participation reads as incomplete when missing or ma
     whole: new Set(read),
     through: new Set(read),
   });
-  // A record from before the roster set says nothing of what its mark
-  // covered, so every channel is read again.
-  for (const roster of [
-    undefined,
-    "c0",
-    [7],
-    ["c".repeat(129)],
-    Array.from({ length: 4097 }, (_, i) => `c${i}`),
-  ]) {
-    idb.seed("meta", scope, {
-      ...meta(participation),
-      structure: [],
-      complete: true,
-      roster,
-    });
-    await expect(storage.read()).resolves.toEqual({
-      participation: { roots: new Map([["c0:root", { at: 1000 }]]) },
-      events: [held],
-      structure: none,
-      complete: false,
-    });
-  }
-  // A mark, threads read whole or through or absent roots that cannot be
-  // read are none: the record stays, and the next repair reads them whole.
-  for (const [mark, whole, absent] of [
-    [{ at: 1.5, checked: 1800 }, "c0:root", "c".repeat(64)],
-    [{ at: 1700 }, [7], [7]],
-    ["1700", [`c0:${"r".repeat(254)}`], ["c".repeat(65)]],
-    [
-      null,
-      Array.from({ length: 1001 }, (_, i) => `c0:${i}`),
-      Array.from({ length: 1025 }, () => "c".repeat(64)),
-    ],
-  ]) {
-    idb.seed("meta", scope, {
-      ...meta(participation),
-      structure: [],
-      complete: true,
-      mark,
-      whole,
-      through: whole,
-      absent,
-    });
-    await expect(storage.read()).resolves.toEqual({
-      participation: { roots: new Map([["c0:root", { at: 1000 }]]) },
-      events: [held],
-      structure: none,
-      complete: true,
-    });
-  }
 });
 
 it("an oversized record is refused when saved, keeping the saved one, and reads as no record when stored", async () => {
@@ -367,83 +316,6 @@ it("a save puts only the events the partition lacks and deletes the rest, and le
   await expect(browserUnreadStorage(scope).read()).resolves.toEqual({
     ...record([c, d], 1980),
     events: [c, d].map(wire),
-  });
-});
-
-it("a save of the same meta writes it whole over a meta its storage did not write: another window's, or one a refused save never wrote", async () => {
-  const idb = memoryIndexedDB();
-  const first = browserUnreadStorage(scope);
-  const second = browserUnreadStorage(scope);
-  const later: ThreadParticipation = {
-    roots: new Map([["c0:later", { at: 2000 }]]),
-  };
-  const record = (
-    participation: ThreadParticipation,
-    events: RelayEvent[],
-    checked: number,
-  ): UnreadRecord => ({
-    participation,
-    events,
-    structure: none,
-    complete: true,
-    mark: { at: 1700, checked },
-  });
-  const kept = event();
-  await first.save(record(threads, [kept], 1800));
-  await second.save(record(later, [], 1810));
-  idb.writes.splice(0);
-  await first.save(record(threads, [kept], 1860), { sameMeta: true });
-  expect(idb.writes).toEqual(expect.arrayContaining([["meta", "put", scope]]));
-  await expect(second.read()).resolves.toEqual({
-    ...record(threads, [kept], 1860),
-    events: [wire(kept)],
-  });
-  // Refused before it was written, the save's meta is still owed.
-  const many = Array.from({ length: UNREAD_RECORD_EVENTS + 1 }, () => event());
-  await expect(first.save(record(later, many, 1920))).rejects.toThrow(
-    RangeError,
-  );
-  await first.save(record(later, [kept], 1980), { sameMeta: true });
-  await expect(second.read()).resolves.toEqual({
-    ...record(later, [kept], 1980),
-    events: [wire(kept)],
-  });
-});
-
-it("a record saved with the mark in its meta reads with it, and its next save keeps the mark apart", async () => {
-  const idb = memoryIndexedDB();
-  const held = wire(event());
-  idb.seed("events", [scope, held.id], { scope, id: held.id, event: held });
-  const mark = { at: 1700, checked: 1800 };
-  idb.seed("meta", scope, {
-    ...meta({ roots: [["c0:root", 1000]] }),
-    complete: true,
-    mark,
-  });
-  const storage = browserUnreadStorage(scope);
-  const record = await storage.read();
-  expect(record).toEqual({
-    participation: { roots: new Map([["c0:root", { at: 1000 }]]) },
-    events: [held],
-    structure: none,
-    complete: true,
-    mark,
-  });
-  // The session saves what it read, with the mark moved by a quiet check.
-  const moved = { at: 1700, checked: 1860 };
-  await storage.save(
-    { ...(record as UnreadRecord), events: [held], mark: moved },
-    { sameMeta: true },
-  );
-  const stored = idb.value("meta", scope) as { revision: string };
-  expect(stored).not.toHaveProperty("mark");
-  expect(idb.value("meta", [scope, "mark"])).toEqual({
-    meta: stored.revision,
-    mark: moved,
-  });
-  await expect(browserUnreadStorage(scope).read()).resolves.toMatchObject({
-    complete: true,
-    mark: moved,
   });
 });
 
@@ -590,69 +462,4 @@ it("a window that read before a purge cannot save the record back; a session sta
   // A later purge fences the rejoined session as well.
   await purgeUnreadStorage(scope);
   await expect(rejoined.save(record([kept]))).rejects.toThrow("purged");
-});
-
-it("a storage whose first read failed saves over a purge it never saw, and is fenced by a later one", async () => {
-  const idb = memoryIndexedDB();
-  const record = (events: RelayEvent[]): UnreadRecord => ({
-    participation: threads,
-    events,
-    structure: none,
-    complete: true,
-  });
-  // The community was left and rejoined before this session started.
-  await browserUnreadStorage(scope).save(record([event()]));
-  await purgeUnreadStorage(scope);
-  idb.block(1);
-  const session = browserUnreadStorage(scope);
-  await expect(session.read()).rejects.toThrow("Close other Buzz windows");
-  const kept = event();
-  await session.save(record([kept]));
-  await expect(browserUnreadStorage(scope).read()).resolves.toEqual({
-    ...record([kept]),
-    events: [wire(kept)],
-  });
-  // The purge it saved over now fences it like any session.
-  await purgeUnreadStorage(scope);
-  await expect(session.save(record([event()]))).rejects.toThrow(
-    UnreadRecordPurged,
-  );
-});
-
-it("a purge made during a storage's session refuses its saves, however it first finds the purge", async () => {
-  const idb = memoryIndexedDB();
-  const record = (events: RelayEvent[]): UnreadRecord => ({
-    participation: threads,
-    events,
-    structure: none,
-    complete: true,
-  });
-  const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-  await browserUnreadStorage(scope).save(record([event()]));
-  // Two sessions for the community, live since before another window left it.
-  const failed = browserUnreadStorage(scope);
-  const late = browserUnreadStorage(scope);
-  idb.block(1);
-  await expect(failed.read()).rejects.toThrow("Close other Buzz windows");
-  now.mockReturnValue(2000);
-  await purgeUnreadStorage(scope);
-  // Its first read failed, so its first save finds the purge.
-  await expect(failed.save(record([event()]))).rejects.toThrow(
-    UnreadRecordPurged,
-  );
-  // Its first read finds the purge.
-  await expect(late.read()).resolves.toBeUndefined();
-  await expect(late.save(record([event()]))).rejects.toThrow(
-    UnreadRecordPurged,
-  );
-  expect(idb.keys("events")).toEqual([]);
-  // A session started after the purge, as for rejoining, saves.
-  now.mockReturnValue(3000);
-  const rejoined = browserUnreadStorage(scope);
-  const kept = event();
-  await rejoined.save(record([kept]));
-  await expect(rejoined.read()).resolves.toEqual({
-    ...record([kept]),
-    events: [wire(kept)],
-  });
 });

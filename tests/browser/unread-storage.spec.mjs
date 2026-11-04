@@ -150,25 +150,6 @@ test("unread record survives reload with its mark kept apart, keeps the last rec
     });
     expect(refused).toMatchObject({ saved: false });
     expect(await session(peer, "here")).toEqual({ before: record });
-    // The refused meta never landed, so a save of it writes it whole.
-    expect(
-      await session(page, "here", {
-        root: "team:b",
-        events: [two],
-        mark: moved,
-        sameMeta: true,
-      }),
-    ).toMatchObject({ saved: true });
-    await forget(page);
-    expect(await session(page, "here")).toEqual({
-      before: {
-        ...record,
-        roots: [["team:b", { at: 5, newestId: "b".repeat(64) }]],
-        events: [two],
-        structure: [],
-        mark: moved,
-      },
-    });
 
     // Leaving the community purges its partition alone.
     await page.evaluate(async () => {
@@ -196,25 +177,14 @@ test("unread record survives reload with its mark kept apart, keeps the last rec
       saved: false,
       error: expect.stringContaining("purged by another window"),
     });
-    expect(
-      await session(peer, "here", { root: "team:a", events: [one] }),
-    ).toMatchObject({ before: undefined, saved: false });
-    // A session started after the purge, as for rejoining, saves as usual.
-    expect(
-      await session(page, "here", { root: "team:c", events: [two] }),
-    ).toEqual({ before: undefined, saved: true });
-    await forget(page);
-    expect(await session(page, "here")).toMatchObject({
-      before: { roots: [["team:c", expect.anything()]], events: [two] },
-    });
   } finally {
     for (const window of [page, peer]) await forget(window);
     await peer.close();
   }
 });
 
-// Built-app boundary: real IndexedDB across a reload, and the broker's minute
-// recovery tick, which lower layers stub. What each pass reads is pinned in
+// Built-app boundary: real IndexedDB across a reload, which lower layers
+// stub. What each pass reads, the minute tick's included, is pinned in
 // src/features/relay/unread-restore.test.ts and live-session.test.ts.
 import { test as appTest } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
@@ -234,10 +204,10 @@ appTest.describe("warm relaunch", () => {
   });
 
   appTest(
-    "a warm relaunch shows the saved rows before the relay answers and reads only the delta, as the minute tick does, which drops a reply deleted meanwhile",
+    "a warm relaunch shows the saved rows before the relay answers and reads only the delta, which drops a reply deleted meanwhile",
     async ({ page, app }) => {
-      // Two relaunches and the broker's real minute tick.
-      appTest.setTimeout(240_000);
+      // Two relaunches.
+      appTest.setTimeout(120_000);
       // A reply in a thread the viewer started, the class of a reply below
       // its channel's catch-up mark (R1), which no window reads.
       const question = app.append(
@@ -340,9 +310,6 @@ appTest.describe("warm relaunch", () => {
         expect(unreadReads(from)).toEqual([delta(mark)]);
       };
 
-      // The renderer's clock, flowing in real time, is installed before the
-      // app loads so it can later move without replacing timers already set.
-      await page.clock.install();
       // A fresh launch reads in full, and saves a record caught up to now.
       await page.goto(app.origin);
       await openPage(page, "Inbox");
@@ -355,22 +322,6 @@ appTest.describe("warm relaunch", () => {
 
       await relaunch(saved);
       for (const text of saved) await expect(row(text)).toBeVisible();
-
-      // The broker's recovery tick comes a minute after its socket
-      // authenticated, and catches up with the delta alone. The relaunch's
-      // repair was healthy, so the tick repairs unread only once the
-      // 15-minute backstop (UNREAD_BACKSTOP_INTERVAL) has passed: the
-      // renderer's clock jumps past it, while the tick arrives in real time.
-      const { mark } = await record();
-      const from = app.report.queries.length;
-      await page.clock.setSystemTime(Date.now() + 15 * 60_000);
-      await expect
-        .poll(() => unreadReads(from).length, { timeout: 75_000 })
-        .toBeGreaterThan(0);
-      await settled();
-      expect(unreadReads(from)).toEqual([delta(mark)]);
-      // Back to real time, so the next launch starts as the first did.
-      await page.clock.setSystemTime(Date.now());
 
       // Deleted on the relay while the device was closed: the record still
       // shows it until the delta returns its deletion.

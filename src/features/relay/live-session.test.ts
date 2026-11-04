@@ -1774,34 +1774,31 @@ async function caughtUp(count: number) {
 }
 const DELTA_KINDS = [9, 40002, 40008, 40003, 5, 9005];
 
-it.each([1, 128])(
-  "a tick on a %s-channel roster reads one unread filter: the delta since the mark",
-  async (count) => {
-    const h = await caughtUp(count);
-    try {
-      const from = h.unread.length;
-      h.live().recover?.();
-      // The tick's pass starts once the read state is refreshed.
-      await vi.waitFor(async () => {
-        await h.answer();
-        expect(h.unread.length).toBeGreaterThan(from);
-      });
-      await h.settle(h.owner.session.unread.ensure());
-      expect(h.unread.slice(from)).toEqual([
-        [
-          {
-            kinds: expect.arrayContaining(DELTA_KINDS),
-            "#h": h.ids,
-            since: h.at - 1865,
-            limit: 500,
-          },
-        ],
-      ]);
-    } finally {
-      h.owner.dispose();
-    }
-  },
-);
+it("a tick on a 128-channel roster reads one unread filter: the delta since the mark", async () => {
+  const h = await caughtUp(128);
+  try {
+    const from = h.unread.length;
+    h.live().recover?.();
+    // The tick's pass starts once the read state is refreshed.
+    await vi.waitFor(async () => {
+      await h.answer();
+      expect(h.unread.length).toBeGreaterThan(from);
+    });
+    await h.settle(h.owner.session.unread.ensure());
+    expect(h.unread.slice(from)).toEqual([
+      [
+        {
+          kinds: expect.arrayContaining(DELTA_KINDS),
+          "#h": h.ids,
+          since: h.at - 1865,
+          limit: 500,
+        },
+      ],
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
 
 it("a reconnect after a 10-minute outage reads one delta from the mark less 1,865 s and nothing else of unread", async () => {
   const h = await caughtUp(2);

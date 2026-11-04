@@ -8,15 +8,11 @@ import {
   readJournal,
   type ReadJournal,
 } from "./read-state-storage";
-import { flush } from "./testing";
 import { createUnread } from "./unread";
 
-// What the unread owner hands `foldMessages` for each channel. With
-// `previous` set, every call folds those events instead: all retained
-// evidence, as each call did before the owner folded a channel's own.
+// What the unread owner hands `foldMessages` for each channel.
 const folds = vi.hoisted(() => ({
   calls: [] as { channelId: string; events: readonly EventData[] }[],
-  previous: undefined as readonly EventData[] | undefined,
 }));
 vi.mock("./fold", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./fold")>();
@@ -28,12 +24,7 @@ vi.mock("./fold", async (importOriginal) => {
       >
     ) => {
       folds.calls.push({ channelId, events });
-      return actual.foldMessages(
-        channelId,
-        relayAuthor,
-        folds.previous ?? events,
-        options,
-      );
+      return actual.foldMessages(channelId, relayAuthor, events, options);
     },
   };
 });
@@ -59,8 +50,7 @@ function event(
   };
 }
 const viewer = "a".repeat(64),
-  alice = "b".repeat(64),
-  bob = "c".repeat(64);
+  alice = "b".repeat(64);
 const post = (
   channelId: string,
   pubkey: string,
@@ -78,19 +68,16 @@ const reply = (
   tags: string[][] = [],
 ) =>
   post(channelId, alice, at, content, [["e", root.id, "", "reply"], ...tags]);
-const edit = (
-  pubkey: string,
-  target: RelayEvent,
-  at: number,
-  content: string,
-  channelId?: string,
-) =>
+const edit = (channelId: string, target: RelayEvent, at: number) =>
   event(
     40003,
-    pubkey,
+    alice,
     at,
-    [...(channelId ? [["h", channelId]] : []), ["e", target.id]],
-    content,
+    [
+      ["h", channelId],
+      ["e", target.id],
+    ],
+    "edited",
   );
 // With no `h`, as a deletion may be sent; the relay files it under its target.
 const deletion = (target: RelayEvent, at: number) =>
@@ -100,7 +87,6 @@ const owners: ReturnType<typeof createUnread>[] = [];
 afterEach(() => {
   for (const owner of owners.splice(0)) owner.dispose();
   folds.calls = [];
-  folds.previous = undefined;
 });
 
 async function setup(
@@ -147,124 +133,6 @@ async function setup(
   return owner;
 }
 
-it("folding each channel's own evidence with the edits and deletions on it shows what folding every retained event did", async () => {
-  const list = [
-    { id: "room" },
-    { id: "other" },
-    { id: "dm", channelType: "dm" as const },
-    { id: "solo", channelType: "solo" as const },
-  ];
-  const edited = mention("room", 100, "m1");
-  const foreign = mention("room", 101, "m2");
-  const gone = mention("room", 102, "m3");
-  const restored = mention("room", 103, "m4");
-  const restoredEdit = edit(alice, restored, 113, "m4 edit, deleted", "room");
-  const elsewhere = mention("room", 104, "m5");
-  const reacted = mention("room", 105, "m6");
-  const root = post("room", viewer, 106, "my thread");
-  const answers = [107, 108].map((at) => reply("room", root, at, `a${at}`));
-  const last = answers[1] as RelayEvent;
-  // A reply in another channel naming this thread's root.
-  const crossing = reply("other", root, 200, "crossing", [["p", viewer]]);
-  const direct = [
-    post("dm", alice, 300, "hi", [["p", viewer]]),
-    post("dm", alice, 301, "there"),
-  ];
-  const session = [
-    post("solo", alice, 400, "s1"),
-    mention("solo", 401, "s2"),
-    // Not Inbox evidence, but the session row shows it as its newest.
-    post("solo", alice, 402, "s3"),
-  ];
-  const reaction = event(7, bob, 120, [
-    ["h", "room"],
-    ["e", reacted.id],
-  ]);
-  const fixture = [
-    edited,
-    foreign,
-    gone,
-    restored,
-    elsewhere,
-    reacted,
-    root,
-    ...answers,
-    crossing,
-    ...direct,
-    ...session,
-    edit(alice, edited, 110, "m1 edited", "room"),
-    // Another sender's edit, which the fold does not apply.
-    edit(bob, foreign, 111, "m2 edited by bob", "room"),
-    deletion(gone, 112),
-    restoredEdit,
-    deletion(restoredEdit, 114),
-    // An edit naming another channel than its target's.
-    edit(alice, elsewhere, 115, "m5 edited from other", "other"),
-    edit(alice, last, 116, "a108 edited", "room"),
-    edit(alice, crossing, 210, "crossing edited", "other"),
-    edit(alice, direct[1] as RelayEvent, 310, "there!", "dm"),
-    edit(alice, session[2] as RelayEvent, 410, "s3 edited", "solo"),
-    reaction,
-  ];
-  const current = await setup(list),
-    previous = await setup(list);
-  current.accept(fixture);
-  previous.accept(fixture);
-  // Retained in admission order, which is what each call used to fold;
-  // reactions are not unread evidence.
-  const retained = fixture.filter((item) => previous.event(item.id));
-  expect(retained).toEqual(fixture.filter((item) => item !== reaction));
-  const look = (
-    owner: ReturnType<typeof createUnread>,
-    everything?: readonly RelayEvent[],
-  ) => {
-    folds.previous = everything;
-    try {
-      const { capability } = owner;
-      return {
-        inbox: capability.inbox(),
-        channels: list.map(({ id }) => ({
-          activity: capability.activity(id),
-          snapshot: capability.snapshot({ kind: "channel", channelId: id }),
-        })),
-      };
-    } finally {
-      folds.previous = undefined;
-    }
-  };
-  const shown = look(current);
-  expect(
-    Object.fromEntries(
-      shown.inbox.items.map((item) => [item.previewMessageId, item.preview]),
-    ),
-  ).toEqual({
-    [edited.id]: "m1 edited",
-    [foreign.id]: "m2",
-    [restored.id]: "m4",
-    [elsewhere.id]: "m5 edited from other",
-    [reacted.id]: "m6",
-    [last.id]: "a108 edited",
-    [crossing.id]: "crossing edited",
-    [direct[1]?.id ?? ""]: "there!",
-    [session[2]?.id ?? ""]: "s3 edited",
-  });
-  expect(shown.channels[0]?.activity.items).toEqual([
-    expect.objectContaining({
-      rootId: root.id,
-      latestMessageId: last.id,
-      preview: "a108 edited",
-      unreadCount: 2,
-    }),
-  ]);
-  expect(shown.channels.map(({ snapshot }) => snapshot.observedCount)).toEqual([
-    7, 1, 2, 3,
-  ]);
-  expect(look(previous, retained)).toEqual(shown);
-  // Again once the lookups the reads asked for have been answered.
-  await flush();
-  expect(look(previous, retained)).toEqual(look(current));
-});
-
 it("with 2,000 retained events across 80 channels, the Inbox folds each channel's own events and the edits and deletions on them", async () => {
   const ids = Array.from({ length: 80 }, (_, index) => `c${index}`);
   const owner = await setup(ids.map((id) => ({ id })));
@@ -288,7 +156,7 @@ it("with 2,000 retained events across 80 channels, the Inbox folds each channel'
       RelayEvent,
     ];
     const edits = [first, second, third].map((target, index) =>
-      edit(alice, target, 1200 + index, "edited", id),
+      edit(id, target, 1200 + index),
     );
     const overlays = [
       ...edits,

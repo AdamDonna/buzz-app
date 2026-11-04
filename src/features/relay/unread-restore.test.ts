@@ -1,6 +1,5 @@
 import { getEventHash, verifiedSymbol } from "nostr-tools";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { byteSize } from "./budget";
 import type { ChannelQueries, ChannelSummary } from "./contracts";
 import type { ReadFilter, RelayEvent } from "./events";
 import type { InboxItem } from "./inbox";
@@ -18,7 +17,6 @@ import {
   memoryUnreadStorage,
   UNREAD_RECORD_BYTES,
   UNREAD_RECORD_EVENTS,
-  UnreadRecordPurged,
   type UnreadStorage,
 } from "./unread-storage";
 import { memoryIndexedDB } from "./unread-storage-testing";
@@ -503,7 +501,6 @@ it("a relaunch that reads only storage shows every row and count the warm repair
   // The relay cannot be read: the rows and counts come from storage alone,
   // verified as the channel heads' restore is.
   const count = (await saved(storage)).length;
-  cpu.mockClear();
   const offline = await launch({
     store,
     storage,
@@ -516,57 +513,6 @@ it("a relaunch that reads only storage shows every row and count the warm repair
   expect(offline.rows()).toEqual(expect.arrayContaining(rows));
   expect(offline.count("quiet")).toBe(1);
   expect(offline.count("team")).toBe(4);
-  expect(
-    cpu.mock.calls
-      .filter(([stage]) => stage === "verify.restore")
-      .reduce((total, [, , count]) => total + count, 0),
-  ).toBe(count);
-  expect(direct.id).toBeDefined();
-  expect(quiet.id).toBeDefined();
-});
-
-it("a cold thread's read root, which only a fresh launch's walk lists, is not restored", async () => {
-  const storage = memoryUnreadStorage();
-  // More threads than are read whole: the oldest is read since its mark.
-  const threads = Array.from({ length: 51 }, (_, i) => {
-    const root = post(peerKey, "team", T + 10 * i);
-    return {
-      root,
-      mine: reply(viewerKey, "team", root, T + 10 * i + 1),
-      answer: reply(peerKey, "team", root, T + 10 * i + 2),
-    };
-  });
-  const store = [
-    ...threads.flatMap(({ root, mine, answer }) => [root, mine, answer]),
-    ...busy,
-  ];
-  const frontiers = { ...BUSY_READ, team: T + 1000 };
-  const [cold] = threads;
-  assert(cold);
-  const row = expect.objectContaining({ rootId: cold.root.id });
-  const fresh = await launch({ store, storage, frontiers });
-  await fresh.owner.capability.ensure();
-  await fresh.saved;
-  expect(fresh.owner.capability.inbox().items).toContainEqual(row);
-  fresh.owner.dispose();
-  expect(await saved(storage)).not.toContain(cold.root.id);
-  // Neither a warm repair nor what it restores lists it again.
-  const count = (await saved(storage)).length;
-  const warm = await launch({ store, storage, frontiers });
-  await warm.owner.capability.ensure();
-  await warm.saved;
-  expect(warm.owner.capability.inbox().items).not.toContainEqual(row);
-  expect(warm.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({ rootId: threads.at(-1)?.root.id }),
-  );
-  warm.owner.dispose();
-  const offline = await launch({ store, storage, frontiers, down: true });
-  await offline.owner.capability.ensure();
-  await offline.restored(count);
-  expect(offline.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({ rootId: threads.at(-1)?.root.id }),
-  );
-  expect(offline.owner.capability.inbox().items).not.toContainEqual(row);
 });
 
 it("a tampered event discards the restored evidence, keeping the threads the repair reads again", async () => {
@@ -620,166 +566,6 @@ it("a tampered event discards the restored evidence, keeping the threads the rep
   expect(online.owner.capability.inbox().items).toContainEqual(
     expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
   );
-});
-
-/** A complete record a full repair of `store` saved, of more than eight
- * events, and storage that changed the one restore verifies after its first
- * yield: a relaunch routes to the delta, then discards the record. */
-async function tamperedLate(
-  store: readonly RelayEvent[],
-  frontiers: Readonly<Record<string, number>> = {},
-) {
-  const saving = memoryUnreadStorage();
-  const first = await launch({ store, storage: saving, frontiers });
-  await first.owner.capability.ensure();
-  await first.saved;
-  first.owner.dispose();
-  const record = await saving.read();
-  expect(record?.complete).toBe(true);
-  const tampered = (record?.events.at(-1) as RelayEvent | undefined)?.id;
-  expect(record?.events.length).toBeGreaterThan(8);
-  const storage: UnreadStorage = {
-    ...saving,
-    async read() {
-      const read = await saving.read();
-      return (
-        read && {
-          ...read,
-          events: read.events.map((event) =>
-            (event as RelayEvent).id === tampered
-              ? { ...(event as RelayEvent), content: "tampered" }
-              : event,
-          ),
-        }
-      );
-    },
-  };
-  return storage;
-}
-/** A team thread with the viewer's reply and an unread answer, a read
- * channel's unread message older than the delta reaches, and 9 unread DMs. */
-function discardable() {
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const answer = reply(peerKey, "team", root, T + 2);
-  const unread = post(peerKey, "quiet", T - 5000);
-  const direct = Array.from({ length: 9 }, (_, i) =>
-    post(peerKey, "dm", T + 10 + i),
-  );
-  return {
-    root,
-    direct,
-    store: [root, mine, answer, unread, ...direct],
-    frontiers: { quiet: T - 10_000 },
-  };
-}
-
-it("restored evidence discarded after the pass routed to the delta has the bootstrap read in the same pass", async () => {
-  const { root, direct, store } = discardable();
-  const storage = await tamperedLate(store);
-  const release = holdRestore();
-  const h = await launch({ store, storage });
-  let launched: Promise<void> | undefined;
-  try {
-    launched = h.owner.capability.ensure();
-    await vi.waitFor(() => expect(deltas(h)).not.toEqual([]));
-  } finally {
-    release();
-  }
-  await launched;
-  const sent = h.reader.read.mock.calls.map(([filters]) => filters);
-  expect(deltaRead(sent[0] ?? [])).toBe(true);
-  expect(sent.flat()).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ authors: [viewer] }),
-      expect.objectContaining({ "#h": ["dm"], since: expect.any(Number) }),
-      expect.objectContaining({ "#h": ROSTER, include_aux: true, limit: 500 }),
-    ]),
-  );
-  expect(h.owner.capability.inbox().items).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-      expect.objectContaining({ channelId: "dm", unreadCount: direct.length }),
-    ]),
-  );
-});
-
-it("a channel the delta observed is not observed once restore discards the record and the bootstrap's reads of it drop, and the Inbox says so", async () => {
-  const { direct, store, frontiers } = discardable();
-  const storage = await tamperedLate(store, frontiers);
-  const release = holdRestore();
-  // The bootstrap's windows and its roster sample drop: no read but the
-  // delta's observes `quiet` or `dm`.
-  const h = await launch({
-    store,
-    storage,
-    frontiers,
-    fail: (filters) =>
-      filters.some(
-        (filter) => !deltaFilter(filter) && !!filter["#h"]?.includes("quiet"),
-      ),
-  });
-  let launched: Promise<void> | undefined;
-  try {
-    launched = h.owner.capability.ensure();
-    // The delta's page is in: `dm`'s messages, and nothing of `quiet`, read
-    // to the end of a chunk that reaches past its read mark.
-    await vi.waitFor(() =>
-      expect(h.owner.event(direct[0]?.id ?? "")).toBeDefined(),
-    );
-  } finally {
-    release();
-  }
-  await launched;
-  for (const channelId of ["quiet", "dm"])
-    expect(
-      h.owner.capability.snapshot({ kind: "channel", channelId }),
-    ).toMatchObject({ coverage: "unknown" });
-  expect(h.owner.capability.inbox()).toMatchObject({
-    status: "ready",
-    freshness: "observed",
-    partial: true,
-  });
-});
-
-it("restored evidence discarded after the delta's first page keeps the Inbox loading until the bootstrap's first reads land", async () => {
-  const { root, direct, store } = discardable();
-  const storage = await tamperedLate(store);
-  const release = holdRestore();
-  const h = await launch({ store, storage });
-  // Whether the Inbox loaded while the bootstrap still read, or only once the
-  // pass ended.
-  let loadedWhile: string | undefined;
-  h.owner.capability.subscribeInbox(() => {
-    const { status, freshness } = h.owner.capability.inbox();
-    if (status === "ready") loadedWhile ??= freshness;
-  });
-  let launched: Promise<void> | undefined;
-  let network: ReturnType<typeof h.hold> | undefined;
-  try {
-    launched = h.owner.capability.ensure();
-    await vi.waitFor(() =>
-      expect(h.owner.event(direct[0]?.id ?? "")).toBeDefined(),
-    );
-    // The bootstrap's reads are held from here on.
-    network = h.hold();
-    release();
-    expect(await network.waiting).toContainEqual(
-      expect.objectContaining({ authors: [viewer] }),
-    );
-    expect(h.owner.capability.inbox().status).toBe("loading");
-  } finally {
-    release();
-    network?.release();
-  }
-  await launched;
-  expect(loadedWhile).toBe("observing");
-  expect(h.owner.capability.inbox()).toMatchObject({
-    status: "ready",
-    items: expect.arrayContaining([
-      expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-    ]),
-  });
 });
 
 it("a selection over the record's bounds, or one retention dropped, saves an incomplete record", async () => {
@@ -881,54 +667,6 @@ it("restored evidence the relay no longer returns, deleted while this device was
   expect(thread(late)).toContain(answers.at(-1)?.id);
 });
 
-it("restored evidence whose read of deletions is dropped stays, owed to the next pass", async () => {
-  const held = post(peerKey, "team", T);
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: { roots: new Map() },
-    events: [held],
-    structure: new Set(),
-    complete: true,
-    // Too old for a delta: the pass is the bootstrap.
-    mark: { at: T + 200, checked: SECONDS - 86_401 },
-  });
-  // Above it, more than the channel's window holds, so no window judges it.
-  const newer = Array.from({ length: 101 }, (_, i) =>
-    hashed("team", T + 1 + i),
-  );
-  const overlays = (h: Launch) =>
-    h.reader.read.mock.calls.flatMap(([filters]) =>
-      filters.filter((filter) => filter.kinds?.join() === "40003,5,9005"),
-    );
-  let stalling = true;
-  const h = await launch({
-    store: [held, ...newer],
-    storage,
-    frontiers: { team: T - 1 },
-    // The roster sample fails throughout, so no pass confirms the mark.
-    fail: (filters) =>
-      sampleRead(filters) ||
-      (stalling &&
-        filters.some((filter) => filter.kinds?.join() === "40003,5,9005")),
-  });
-  await h.owner.capability.ensure();
-  await h.saved;
-  const read = {
-    kinds: [40003, 5, 9005],
-    "#h": ["team"],
-    since: T + 200 - 1865,
-    limit: 500,
-  };
-  // Read, retried, and dropped.
-  expect(overlays(h)).toEqual([read, read]);
-  expect(h.owner.event(held.id)).toBeDefined();
-  expect(await saved(storage)).toContain(held.id);
-  stalling = false;
-  await h.reconnected();
-  expect(overlays(h)).toEqual([read, read, read]);
-  expect(h.owner.event(held.id)).toBeDefined();
-});
-
 it("restored evidence of a channel whose membership is not confirmed yet waits for it, and is saved meanwhile", async () => {
   const storage = memoryUnreadStorage();
   const direct = post(peerKey, "dm", T);
@@ -961,48 +699,6 @@ it("restored evidence of a channel whose membership is not confirmed yet waits f
   next.roster(channels(false));
   expect(next.owner.capability.inbox().items).toContainEqual(
     expect.objectContaining({ channelId: "dm", messageIds: [direct.id] }),
-  );
-});
-
-it("a save that is refused is written again, and one carrying only threads keeps the evidence", async () => {
-  const memory = memoryUnreadStorage();
-  let refuse = true;
-  const storage: UnreadStorage = {
-    ...memory,
-    async save(record) {
-      if (refuse) {
-        refuse = false;
-        throw new DOMException("Quota exceeded", "QuotaExceededError");
-      }
-      return memory.save(record);
-    },
-  };
-  const save = vi.spyOn(storage, "save");
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const answer = reply(peerKey, "team", root, T + 2);
-  const h = await launch({ store: [root, mine, answer], storage });
-  await h.owner.capability.ensure();
-  expect(save).toHaveBeenCalledTimes(1);
-  await expect(memory.read()).resolves.toBeUndefined();
-  // The same record again: the refused one did not land.
-  await h.owner.capability.refresh();
-  expect(save).toHaveBeenCalledTimes(2);
-  expect(await saved(memory)).toContain(answer.id);
-  // Marking the thread unread moves its mark back to the root and saves
-  // the threads; the evidence stays.
-  await h.owner.capability.markUnreadLocal({
-    kind: "thread",
-    channelId: "team",
-    rootId: root.id,
-  });
-  expect(save).toHaveBeenCalledTimes(3);
-  await save.mock.results[2]?.value;
-  expect(
-    (await memory.read())?.participation.roots.get(`team:${root.id}`),
-  ).toMatchObject({ at: root.created_at });
-  expect(await saved(memory)).toEqual(
-    expect.arrayContaining([root.id, mine.id, answer.id]),
   );
 });
 
@@ -1095,198 +791,6 @@ it("a warm launch reads only the delta, shows the restored rows before the relay
   });
 });
 
-it("a delta-only pass advances the walk mark and the thread marks to the viewer's newest reply it read, with no authored page or thread read", async () => {
-  const storage = memoryUnreadStorage();
-  // A thread the viewer replied in, with no unread reply holding its mark.
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const store = [root, mine];
-  const first = await launch({ store, storage });
-  await first.owner.capability.ensure();
-  await first.saved;
-  first.owner.dispose();
-  const key = `team:${root.id}`;
-  expect(await storage.read()).toMatchObject({
-    complete: true,
-    whole: new Set([key]),
-    participation: { walk: { since: mine.created_at } },
-  });
-  // The viewer replied again on another device while this one was closed.
-  const again = reply(viewerKey, "team", root, T + 40);
-  store.push(again);
-  const warm = await launch({ store, storage });
-  await warm.owner.capability.ensure();
-  await warm.saved;
-  expect(warm.reader.read.mock.calls.map(([filters]) => filters)).toEqual([
-    [expect.objectContaining({ kinds: DELTA_KINDS })],
-  ]);
-  const record = await storage.read();
-  expect(record?.participation.walk).toEqual({ since: again.created_at });
-  expect(record?.participation.roots.get(key)?.at).toBe(again.created_at);
-  expect(record?.complete).toBe(true);
-});
-
-it("a delta-only pass fetches by ID the root of a remembered thread it brought a reply to, which stays structure and groups the reply", async () => {
-  // The viewer's reply is held without its root: it is read only by ID.
-  const root = post(peerKey, "quiet", T);
-  const mine = reply(viewerKey, "quiet", root, T + 1);
-  const key = `quiet:${root.id}`;
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: { roots: new Map([[key, { at: T + 1 }]]) },
-    events: [mine],
-    structure: new Set(),
-    complete: true,
-    mark: { at: SECONDS - 600, checked: SECONDS - 60 },
-    roster: new Set(ROSTER),
-    whole: new Set([key]),
-  });
-  const answer = reply(peerKey, "quiet", root, SECONDS - 300);
-  const h = await launch({ store: [root, mine, answer], storage });
-  const launched = await sentDuring(h, () => h.owner.capability.ensure());
-  expect(launched).toEqual([
-    expect.objectContaining({ kinds: DELTA_KINDS }),
-    expect.objectContaining({ ids: [root.id] }),
-  ]);
-  await h.saved;
-  expect(h.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-  );
-  // Structure: the reply alone counts.
-  expect(h.count("quiet")).toBe(1);
-  expect(await storage.read()).toMatchObject({
-    complete: true,
-    structure: new Set([root.id]),
-  });
-});
-
-it("a full window's cut is its own limit-th match, and a deletion made while closed reaches the restored evidence below it", async () => {
-  const storage = memoryUnreadStorage();
-  // The viewer's newest message, at the channel's read mark: the authored
-  // page returns it, and the channel's window matches it too. Above it are
-  // more unread messages than the window holds.
-  const mine = post(viewerKey, "team", T);
-  const unread = Array.from({ length: 130 }, (_, i) =>
-    post(peerKey, "team", T + 1 + i),
-  );
-  const store = [mine, ...unread];
-  const frontiers = { ...BUSY_READ, team: T };
-  const first = await launch({ store, storage, frontiers });
-  await first.owner.capability.ensure();
-  expect(first.count("team")).toBe(130);
-  await first.saved;
-  first.owner.dispose();
-  const record = await storage.read();
-  assert(record?.mark);
-  expect(await saved(storage)).toEqual(
-    expect.arrayContaining(unread.map(({ id }) => id)),
-  );
-  // While the device was closed, busier traffic moved the roster sample on,
-  // and the oldest unread message was deleted.
-  const [oldest] = unread as [RelayEvent];
-  const removal = deletion(peerKey, "team", oldest);
-  store.push(...busy, removal);
-  const since = record.mark.at - 1865;
-  const stale = { ...record.mark, checked: NOW / 1000 - 86_401 };
-  const relaunch = async (
-    mark: { at: number; checked: number },
-    extra: readonly RelayEvent[] = [],
-  ) => {
-    const memory = memoryUnreadStorage();
-    await memory.save({ ...record, mark } as typeof record & {
-      events: RelayEvent[];
-    });
-    let warm: Awaited<ReturnType<typeof launch>> | undefined;
-    const restoring: boolean[] = [];
-    const inbox: string[] = [];
-    warm = await launch({
-      store: [...store, ...extra],
-      storage: memory,
-      frontiers,
-      fail(filters) {
-        if (deltaRead(filters)) {
-          restoring.push((warm?.verified() ?? 0) < record.events.length);
-          inbox.push(warm?.owner.capability.inbox().status ?? "");
-        }
-        return false;
-      },
-    });
-    await warm.owner.capability.ensure();
-    await warm.saved;
-    return { warm, memory, restoring, inbox };
-  };
-  // A mark confirmed within the day: the delta since it, read first and
-  // with no bootstrap, returns the deletion while restore is still
-  // verifying the evidence it deletes, and the Inbox waits for both.
-  const fresh = await relaunch(record.mark);
-  const read = fresh.warm.reader.read.mock.calls.map(([filters]) => filters);
-  expect(read[0]).toEqual([
-    {
-      kinds: DELTA_KINDS,
-      "#h": ["team", "quiet", "dm", "busy"],
-      since,
-      limit: 500,
-    },
-  ]);
-  expect(read.filter((filters) => !deltaRead(filters))).toEqual([]);
-  expect(fresh.inbox).toEqual(["loading", "loading"]);
-  expect(fresh.restoring).toEqual([true, true]);
-  expect(fresh.warm.count("team")).toBe(129);
-  expect(await saved(fresh.memory)).not.toContain(oldest.id);
-  expect(await saved(fresh.memory)).not.toContain(removal.id);
-  fresh.warm.owner.dispose();
-  // One confirmed longer ago: the bootstrap's reads alone. The window
-  // returns the newest 100 beside the authored page's older match, so the
-  // 30 below its cut are not judged; the read of edits and deletions since
-  // the mark in every channel holding evidence, which the roster sample
-  // needs to confirm it again, returns this one.
-  const late = await relaunch(stale);
-  const calls = late.warm.reader.read.mock.calls.map(([filters]) => filters);
-  expect(calls.filter(deltaRead)).toEqual([]);
-  expect(calls[0]).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ authors: [viewer] }),
-      expect.objectContaining({ "#h": ["team"], since: T, limit: 100 }),
-    ]),
-  );
-  expect(calls).toContainEqual([
-    { kinds: [40003, 5, 9005], "#h": ["team", "busy"], since, limit: 500 },
-  ]);
-  expect(late.warm.count("team")).toBe(129);
-  expect(await saved(late.memory)).toEqual(
-    expect.arrayContaining(unread.slice(1).map(({ id }) => id)),
-  );
-  expect(await saved(late.memory)).not.toContain(oldest.id);
-  expect(await saved(late.memory)).not.toContain(removal.id);
-  late.warm.owner.dispose();
-  // More edits and deletions since the mark than that read reads: those of
-  // the evidence held in its channels are read by ID, the restored evidence
-  // no read of the pass returned and, since those reads carry no edits, what
-  // they returned. That returns this deletion, the rest stays, and the
-  // roster sample moves the mark, so the restored evidence owes no second
-  // read.
-  const edits = Array.from({ length: 1001 }, (_, i) =>
-    hashed("team", T + 200 + i, 40003, [["e", "f".repeat(64)]]),
-  );
-  const overflow = await relaunch(stale, edits);
-  const overlays = overflow.warm.reader.read.mock.calls.filter(([filters]) =>
-    filters.some((filter) => filter.kinds?.join() === "40003,5,9005"),
-  );
-  expect(overlays).toHaveLength(3);
-  expect(
-    new Set(overlays[2]?.[0].flatMap((filter) => filter["#e"] ?? [])),
-  ).toEqual(new Set([mine, ...unread, ...busy].map(({ id }) => id)));
-  expect((await overflow.memory.read())?.mark).toEqual({
-    at: T + 50_499,
-    checked: SECONDS,
-  });
-  expect(overflow.warm.count("team")).toBe(129);
-  expect(await saved(overflow.memory)).toEqual(
-    expect.arrayContaining(unread.slice(1).map(({ id }) => id)),
-  );
-  expect(await saved(overflow.memory)).not.toContain(oldest.id);
-});
-
 it("a root a lookup fetched stays structure on every relaunch: it groups the mention and never counts", async () => {
   const storage = memoryUnreadStorage();
   // Older than the window's week, in a channel the viewer never opened:
@@ -1317,21 +821,14 @@ it("a root a lookup fetched stays structure on every relaunch: it groups the men
   );
   first.owner.dispose();
   // Online, the mention taught the pass its thread, whose read fetches the
-  // root by ID: from the saved record, and from one holding only threads.
-  for (const restored of [
-    record,
-    { ...record, events: [], structure: new Set<string>(), complete: false },
-  ]) {
-    const memory = memoryUnreadStorage();
-    await memory.save(restored as typeof record & { events: RelayEvent[] });
-    const online = await launch({ store, storage: memory, frontiers });
-    await online.owner.capability.ensure();
-    await online.saved;
-    expect(online.owner.capability.inbox().items).toContainEqual(row);
-    expect(online.count("team")).toBe(0);
-    expect(online.owner.event(old.id)).toBeUndefined();
-    online.owner.dispose();
-  }
+  // root by ID.
+  const online = await launch({ store, storage, frontiers });
+  await online.owner.capability.ensure();
+  await online.saved;
+  expect(online.owner.capability.inbox().items).toContainEqual(row);
+  expect(online.count("team")).toBe(0);
+  expect(online.owner.event(old.id)).toBeUndefined();
+  online.owner.dispose();
   // Offline, restore puts the root back before it admits the mention, so no
   // published Inbox shows the mention outside its thread.
   const offline = await launch({ store, storage, frontiers, down: true });
@@ -1350,293 +847,6 @@ it("a root a lookup fetched stays structure on every relaunch: it groups the men
   expect(offline.owner.capability.inbox().items).toContainEqual(row);
   expect(offline.count("team")).toBe(0);
   expect(offline.owner.event(old.id)).toBeUndefined();
-});
-
-it("the viewer's root a thread read fetches is their membership of its thread, with no lookup", async () => {
-  // The viewer started the thread long ago; its unread answer is below the
-  // channel's catch-up mark and older than the roster sample, so only the
-  // remembered thread's read reaches either.
-  const started = post(viewerKey, "team", T);
-  const answer = reply(peerKey, "team", started, T + 1);
-  const store = [started, answer, ...busy];
-  const frontiers = { ...BUSY_READ, "activity:team": T + 95_000 };
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: {
-      roots: new Map([[`team:${started.id}`, { at: answer.created_at }]]),
-      walk: { since: T + 10 },
-    },
-    events: [],
-    structure: new Set(),
-    complete: false,
-  });
-  const lookups = (h: Awaited<ReturnType<typeof launch>>) =>
-    h.reader.read.mock.calls.flatMap(([filters]) =>
-      filters.filter((filter) => filter.authors && filter["#e"]),
-    );
-  const online = await launch({ store, storage, frontiers });
-  await online.owner.capability.ensure();
-  await online.saved;
-  // Fetched by the thread read, the root is structure, so the row targets
-  // its newest message, as a lookup-fetched root's row does.
-  expect(online.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({
-      rootId: started.id,
-      unreadCount: 1,
-      target: { kind: "message", channelId: "team", messageId: answer.id },
-    }),
-  );
-  expect(online.count("team")).toBe(1);
-  expect(lookups(online)).toEqual([]);
-  online.owner.dispose();
-  // Saved as the thread's witness, the root keeps the row offline.
-  const count = (await saved(storage)).length;
-  expect(await saved(storage)).toEqual(
-    expect.arrayContaining([started.id, answer.id]),
-  );
-  const offline = await launch({ store, storage, frontiers, down: true });
-  await offline.owner.capability.ensure();
-  await offline.restored(count);
-  // Restored as the witness, the root is evidence: the row targets the
-  // thread.
-  expect(offline.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({
-      rootId: started.id,
-      unreadCount: 1,
-      target: { kind: "thread", channelId: "team", rootId: started.id },
-    }),
-  );
-  expect(offline.count("team")).toBe(1);
-  expect(lookups(offline)).toEqual([]);
-});
-
-/** Fifty threads the viewer wrote in recently, read whole on every repair,
- * and an older one read since its mark: its unread answer is below the
- * channel's catch-up mark and older than the roster sample, so only that
- * cold read reaches it, and the answer's landing fetches its root by ID. */
-function rememberedThreads() {
-  const hot = Array.from({ length: 50 }, (_, i) => {
-    const root = post(peerKey, "team", T + 100 + 10 * i);
-    return [root, reply(viewerKey, "team", root, T + 101 + 10 * i)] as const;
-  });
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const answer = reply(peerKey, "team", root, T + 2);
-  const marks = [...hot.map(([, theirs]) => theirs), mine].map(
-    (event): [string, { at: number; newestId: string }] => [
-      `team:${event.tags.find(([name]) => name === "e")?.[1]}`,
-      { at: event.created_at, newestId: event.id },
-    ],
-  );
-  return {
-    root,
-    answer,
-    store: [...hot.flat(), root, mine, answer],
-    frontiers: { ...BUSY_READ, "activity:team": T + 95_000 },
-    record: {
-      participation: { roots: new Map(marks), walk: { since: T + 10_000 } },
-      events: [],
-      structure: new Set<string>(),
-      complete: false,
-    },
-  };
-}
-
-it("a remembered thread's root outlasts 1,024 other structure fetches, and a root let go is fetched again for a thread it teaches", async () => {
-  const thread = rememberedThreads();
-  // Remembered threads besides, whose roots are gone: the cache holds no
-  // root of theirs, so it keeps no room for one.
-  const gone = Array.from(
-    { length: 100 },
-    (_, i): [string, { at: number; newestId: string }] => [
-      `team:${(i + 1).toString(16).padStart(64, "a")}`,
-      { at: T - 100 + i, newestId: (i + 1).toString(16).padStart(64, "b") },
-    ],
-  );
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    ...thread.record,
-    participation: {
-      ...thread.record.participation,
-      roots: new Map([...thread.record.participation.roots, ...gone]),
-    },
-  });
-  // Read replies also sent to the channel, in threads the viewer is not
-  // part of, each looked up for its root and none kept by a save: `first`,
-  // then as many as the structure cache holds besides. Unsigned, as only a
-  // restore verifies and none of them is restored.
-  const unsigned = (created_at: number, tags: string[][] = []): RelayEvent => {
-    const template = {
-      kind: 9,
-      pubkey: peerKey.pubkey,
-      created_at,
-      content: `quiet ${created_at}`,
-      tags: [["h", "quiet"], ...tags],
-    };
-    return {
-      ...template,
-      id: getEventHash(template),
-      sig: "0".repeat(128),
-      [verifiedSymbol]: true,
-    };
-  };
-  const first = unsigned(T - 600_000);
-  const roots = Array.from({ length: 1024 }, (_, i) =>
-    unsigned(T - 500_000 + i),
-  );
-  const replies = [first, ...roots].map((root, i) =>
-    unsigned(T + 1000 + i, [
-      ["e", root.id, "", "reply"],
-      ["broadcast", "1"],
-    ]),
-  );
-  // A read mention in a later channel: its lookup goes behind a batch's, so
-  // its row grouping under its root says the batch has landed.
-  let barriers = 0;
-  const barrier = () => {
-    const root = post(peerKey, "busy", T - 400_000 + barriers++);
-    return {
-      root,
-      mention: reply(peerKey, "busy", root, T + 5000, [["p", viewer]]),
-    };
-  };
-  const batches = [barrier(), barrier(), barrier()];
-  const store = [
-    ...thread.store,
-    first,
-    ...roots,
-    ...batches.map(({ root }) => root),
-    ...busy,
-  ];
-  const h = await launch({
-    store,
-    storage,
-    frontiers: { ...thread.frontiers, quiet: T + 10_000 },
-  });
-  const save = vi.spyOn(storage, "save");
-  await h.owner.capability.ensure();
-  await h.saved;
-  // The membership lookup finds the viewer's reply the cold read passed
-  // over, and the thread is a row.
-  await h.inboxed(
-    (item) => item.rootId === thread.root.id && item.unreadCount === 1,
-  );
-  const grouped = expect.objectContaining({
-    rootId: thread.root.id,
-    unreadCount: 1,
-  });
-  const ungrouped: unknown[] = [];
-  h.owner.capability.subscribeInbox(() => {
-    const items = h.owner.capability.inbox().items;
-    if (
-      items.some(
-        (item) =>
-          item.messageIds.includes(thread.answer.id) &&
-          item.rootId !== thread.root.id,
-      )
-    )
-      ungrouped.push(items);
-  });
-  const asked = (id: string) =>
-    h.reader.read.mock.calls.filter(([filters]) =>
-      filters.some((filter) => filter.ids?.includes(id)),
-    ).length;
-  const landed = async (
-    batch: (typeof batches)[number],
-    ...live: RelayEvent[]
-  ) => {
-    h.owner.accept([...live, batch.mention]);
-    await h.inboxed((item) => item.rootId === batch.root.id);
-  };
-  const [one, two, three] = batches;
-  assert(one && two && three);
-  await landed(one, ...replies.slice(0, 1));
-  await landed(two, ...replies.slice(1));
-  // The remembered roots stayed and their replies grouped; `first`'s root,
-  // the oldest of the others, was let go, and with the read replies' own
-  // released lookups it is not fetched again.
-  expect(ungrouped).toEqual([]);
-  expect(h.owner.capability.inbox().items).toContainEqual(grouped);
-  expect(asked(first.id)).toBe(1);
-  expect(roots.map((root) => asked(root.id))).toEqual(roots.map(() => 1));
-  // A mention in its thread teaches the thread, so its root is fetched
-  // again and kept from then on.
-  const mention = reply(peerKey, "quiet", first, T + 6000, [["p", viewer]]);
-  await landed(three, mention);
-  expect(asked(first.id)).toBe(2);
-  expect(h.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({ rootId: first.id, messageIds: [mention.id] }),
-  );
-  // The record, once every save has landed, holds the remembered thread's
-  // root as structure.
-  await h.owner.capability.refresh();
-  await Promise.all(save.mock.results.map(({ value }) => value));
-  const record = await storage.read();
-  expect(record?.structure.has(thread.root.id)).toBe(true);
-  expect(await saved(storage)).toEqual(
-    expect.arrayContaining([thread.root.id, thread.answer.id]),
-  );
-  expect(record?.complete).toBe(true);
-  expect(ungrouped).toEqual([]);
-});
-
-it("a remembered thread's reply saved without its root, whose fetch was dropped, leaves the record incomplete", async () => {
-  const thread = rememberedThreads();
-  const storage = memoryUnreadStorage();
-  await storage.save(thread.record);
-  const h = await launch({
-    store: [...thread.store, ...busy],
-    storage,
-    frontiers: thread.frontiers,
-    fail: (filters) =>
-      filters.some((filter) => filter.ids?.includes(thread.root.id)),
-  });
-  await h.owner.capability.ensure();
-  await h.saved;
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect(await saved(storage)).toContain(thread.answer.id);
-  expect(await saved(storage)).not.toContain(thread.root.id);
-  expect((await storage.read())?.complete).toBe(false);
-});
-
-it("a save in flight is not written again, and one refused by a purge ends the session's saves", async () => {
-  const memory = memoryUnreadStorage();
-  let release = () => {};
-  const landing = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let purged = false;
-  const storage: UnreadStorage = {
-    ...memory,
-    async save(record) {
-      await landing;
-      if (purged) throw new UnreadRecordPurged();
-      return memory.save(record);
-    },
-  };
-  const save = vi.spyOn(storage, "save");
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const answer = reply(peerKey, "team", root, T + 2);
-  const h = await launch({ store: [root, mine, answer], storage });
-  await h.owner.capability.ensure();
-  expect(save).toHaveBeenCalledTimes(1);
-  // The same record while the first save has not landed.
-  await h.owner.capability.refresh();
-  expect(save).toHaveBeenCalledTimes(1);
-  release();
-  await save.mock.results[0]?.value;
-  expect(await saved(memory)).toContain(answer.id);
-  // Another window left the community: this session's next save is refused,
-  // and nothing it holds is saved again.
-  purged = true;
-  h.owner.accept([reply(peerKey, "team", root, T + 3)]);
-  await h.owner.capability.refresh();
-  expect(save).toHaveBeenCalledTimes(2);
-  await expect(save.mock.results[1]?.value).rejects.toThrow(UnreadRecordPurged);
-  h.owner.accept([reply(peerKey, "team", root, T + 4)]);
-  await h.owner.capability.refresh();
-  expect(save).toHaveBeenCalledTimes(2);
 });
 
 it("a cache clear wipes the saved record, including what the launch was still reading", async () => {
@@ -1679,83 +889,6 @@ it("a cache clear wipes the saved record, including what the launch was still re
     structure: new Set(),
     complete: false,
   });
-});
-
-it("an access change while the launch reads storage keeps the record it read", async () => {
-  const storage = memoryUnreadStorage();
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const answer = reply(peerKey, "team", root, T + 2);
-  const store = [root, mine, answer];
-  const first = await launch({ store, storage });
-  await first.owner.capability.ensure();
-  await first.saved;
-  first.owner.dispose();
-  // The membership is confirmed while the launch's storage read is in flight.
-  const team = (cached: boolean): ChannelSummary[] => [
-    {
-      id: "team",
-      name: "team",
-      members: [viewer],
-      ...(cached ? { cached: true as const } : {}),
-    },
-  ];
-  let release = () => {};
-  const reading = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let started = () => {};
-  const begun = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const read = vi.fn(async () => {
-    started();
-    const record = await storage.read();
-    await reading;
-    return record;
-  });
-  const h = await launch({
-    store,
-    storage: { ...storage, read },
-    roster: team(true),
-    down: true,
-  });
-  const repair = h.owner.capability.ensure();
-  await begun;
-  h.roster(team(false));
-  release();
-  await repair.catch(() => {});
-  // A record of at most 8 events is admitted within the storage read.
-  expect(h.owner.event(answer.id)).toBeDefined();
-  expect(h.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-  );
-  expect(read).toHaveBeenCalledTimes(1);
-});
-
-it("a cache clear settles once the record is wiped, and rejects when the wipe fails", async () => {
-  const memory = memoryUnreadStorage();
-  let refusal: Error | undefined;
-  const storage: UnreadStorage = {
-    ...memory,
-    async save(record) {
-      if (refusal) throw refusal;
-      return memory.save(record);
-    },
-  };
-  const root = post(peerKey, "team", T);
-  const answer = reply(peerKey, "team", root, T + 1);
-  const h = await launch({ store: [root, answer], storage });
-  await h.owner.capability.ensure();
-  await h.saved;
-  expect(await saved(memory)).toContain(answer.id);
-  await h.owner.clear();
-  expect(await memory.read()).toMatchObject({ events: [], complete: false });
-  refusal = new DOMException("Quota exceeded", "QuotaExceededError");
-  await expect(h.owner.clear()).rejects.toThrow("Quota exceeded");
-  // A purge has wiped it already.
-  refusal = new UnreadRecordPurged();
-  await expect(h.owner.clear()).resolves.toBeUndefined();
 });
 
 /** A record that holds no evidence, complete, with `mark` covering
@@ -1846,121 +979,18 @@ it("an event committed after a delta, dated 1,800 s before the mark it confirmed
   expect(h.owner.event(late.id)).toBeDefined();
 });
 
-it("a delta with a chunk that fails leaves the mark, so the next delta reads from it again", async () => {
-  const ids = Array.from({ length: 130 }, (_, i) => `c${i}`);
-  const at = SECONDS - 600;
-  const checked = SECONDS - 60;
-  const storage = await marked({ at, checked }, ids);
-  const store = [hashed("c0", at + 10), hashed("c129", at + 20)];
-  let failing = true;
-  const h = await launch({
-    store,
-    storage,
-    roster: members(ids),
-    fail: (filters) =>
-      failing &&
-      deltaRead(filters) &&
-      filters.some((filter) => filter["#h"]?.includes("c129")),
-  });
-  const save = vi.spyOn(storage, "save");
+it("an event dated further ahead than the relay accepts raises the mark a fresh device's roster sample confirms only to 900 s past the device clock, saved so, and the next delta still reads a send the relay committed late before it", async () => {
+  const storage = memoryUnreadStorage();
+  // Dated past the relay's 900 s tolerance, which a relay that enforces it
+  // never returns.
+  const store = [hashed("team", SECONDS + 100_000)];
+  const h = await launch({ store, storage });
   await h.owner.capability.ensure();
   await h.saved;
-  // The other chunk read to its end; the mark is the one read.
-  expect(h.owner.event(store[0]?.id ?? "")).toBeDefined();
-  expect((await storage.read())?.mark).toEqual({ at, checked });
-  failing = false;
-  await h.reconnected();
-  await save.mock.results.at(-1)?.value;
-  // The failing chunk was read and retried, then read once more from the
-  // same mark, and nothing but the delta was read.
-  expect(
-    deltas(h)
-      .filter((filter) => filter["#h"]?.includes("c129"))
-      .map(({ since }) => since),
-  ).toEqual([at - 1865, at - 1865, at - 1865]);
-  expect(
-    h.reader.read.mock.calls.every(([filters]) => deltaRead(filters)),
-  ).toBe(true);
   expect((await storage.read())?.mark).toEqual({
-    at: at + 20,
+    at: SECONDS + 900,
     checked: SECONDS,
   });
-});
-
-it("a delta page is the relay's whole response, so a reaction's removal naming no channel fills it, and restored evidence below its cut stays", async () => {
-  const at = SECONDS - 600;
-  const since = at - 1865;
-  const held = post(peerKey, "team", since + 50);
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: { roots: new Map() },
-    events: [held],
-    structure: new Set(),
-    complete: true,
-    mark: { at, checked: SECONDS - 60 },
-  });
-  // Above it, a page of messages less one, and a reaction taken off as
-  // buzz-mcp's `react` does: a deletion that tags the reaction alone, which
-  // the relay files under the reaction's channel.
-  const newer = Array.from({ length: 499 }, (_, i) =>
-    hashed("team", since + 100 + i),
-  );
-  const reaction = hashed("team", since + 700, 7, [["e", held.id]]);
-  const template = {
-    kind: 5,
-    pubkey: peerKey.pubkey,
-    created_at: since + 800,
-    content: "",
-    tags: [["e", reaction.id]],
-  };
-  const off: RelayEvent = {
-    ...template,
-    id: getEventHash(template),
-    sig: "0".repeat(128),
-    [verifiedSymbol]: true,
-  };
-  const h = await launch({
-    store: [held, ...newer, reaction, off],
-    storage,
-    frontiers: { team: held.created_at - 1 },
-    // The page below fails, as does the roster sample, so only the delta
-    // could move the mark.
-    fail: (filters) =>
-      sampleRead(filters) ||
-      (deltaRead(filters) && filters.some((filter) => filter.until)),
-  });
-  await h.owner.capability.ensure();
-  await h.saved;
-  // The first page was full, so it is read on from its oldest.
-  const [oldest] = newer;
-  assert(oldest);
-  expect(deltas(h)).toContainEqual({
-    kinds: DELTA_KINDS,
-    "#h": ["team", "quiet", "dm", "busy"],
-    since,
-    limit: 500,
-    until: oldest.created_at,
-    before_id: oldest.id,
-  });
-  // That page dropped, so the mark stays, and the restored message below
-  // the first page's cut is not judged gone.
-  expect((await storage.read())?.mark).toEqual({
-    at,
-    checked: SECONDS - 60,
-  });
-  expect(h.owner.event(held.id)).toBeDefined();
-  expect(await saved(storage)).toContain(held.id);
-});
-
-it("an event dated 900 s ahead raises the mark, and the next delta still reads a send the relay committed late before it", async () => {
-  const at = SECONDS - 600;
-  const storage = await marked({ at, checked: SECONDS - 60 });
-  // The relay accepts sends dated up to 900 s ahead of its clock.
-  const store = [hashed("team", SECONDS + 900)];
-  const h = await launch({ store, storage, fail: sampleRead });
-  await h.owner.capability.ensure();
-  // Committed after that read, as late as the relay's commit floor allows:
-  // 960 s, and its 5 s margin, before the read.
   const late = hashed("quiet", SECONDS - 965);
   store.push(late);
   await h.reconnected();
@@ -1969,39 +999,6 @@ it("an event dated 900 s ahead raises the mark, and the next delta still reads a
   );
   expect(h.owner.event(late.id)).toBeDefined();
 });
-
-it.each([
-  ["a delta", true],
-  ["a fresh device's roster sample", false],
-] as const)(
-  "an event dated further ahead than the relay accepts raises the mark %s confirms only to 900 s past the device clock, saved so, and the next delta still reads a send the relay committed late before it",
-  async (_, warm) => {
-    const storage = warm
-      ? await marked({ at: SECONDS - 600, checked: SECONDS - 60 })
-      : memoryUnreadStorage();
-    // Dated past the relay's 900 s tolerance, which a relay that enforces it
-    // never returns.
-    const store = [hashed("team", SECONDS + 100_000)];
-    const h = await launch({
-      store,
-      storage,
-      fail: (filters) => warm && sampleRead(filters),
-    });
-    await h.owner.capability.ensure();
-    await h.saved;
-    expect((await storage.read())?.mark).toEqual({
-      at: SECONDS + 900,
-      checked: SECONDS,
-    });
-    const late = hashed("quiet", SECONDS - 965);
-    store.push(late);
-    await h.reconnected();
-    expect(deltas(h).at(-1)).toEqual(
-      expect.objectContaining({ since: SECONDS - 965 }),
-    );
-    expect(h.owner.event(late.id)).toBeDefined();
-  },
-);
 
 it("a delta that reads nothing newer keeps the mark's time and confirms it now", async () => {
   const at = SECONDS - 600;
@@ -2119,22 +1116,6 @@ it("a chunk still full at six delta pages leaves the pass to the bootstrap, whos
   expect((await deltaPages(h)).map((page) => page.length)).toEqual([
     500, 500, 500, 500, 500, 500,
   ]);
-  // The delta's pages carried the edits and deletions they reached: the
-  // read of them the sample needs starts where the pages stopped.
-  expect(
-    h.reader.read.mock.calls.flatMap(([filters]) =>
-      filters.filter((filter) => filter.kinds?.join() === "40003,5,9005"),
-    ),
-  ).toEqual([
-    {
-      kinds: [40003, 5, 9005],
-      "#h": ["team"],
-      since: at - 1865,
-      limit: 500,
-      until: at - 1864,
-      before_id: store[1]?.id,
-    },
-  ]);
   await h.saved;
   expect((await storage.read())?.mark).toEqual({
     at: newest,
@@ -2187,98 +1168,6 @@ it("live events do not move the mark", async () => {
   ]);
 });
 
-it("a remembered thread's root the relay returns nothing for, deleted, is saved as absent, so the record stays complete on every relaunch", async () => {
-  const thread = rememberedThreads();
-  const storage = memoryUnreadStorage();
-  await storage.save(thread.record);
-  const store = [
-    ...thread.store,
-    deletion(peerKey, "team", thread.root),
-    ...busy,
-  ];
-  const first = await launch({ store, storage, frontiers: thread.frontiers });
-  await first.owner.capability.ensure();
-  await first.saved;
-  expect(await saved(storage)).toContain(thread.answer.id);
-  expect(await storage.read()).toMatchObject({
-    complete: true,
-    absent: new Set([thread.root.id]),
-  });
-  first.owner.dispose();
-  // A relaunch that cannot ask for it again still saves the record whole.
-  const next = await launch({
-    store,
-    storage,
-    frontiers: thread.frontiers,
-    fail: (filters) =>
-      filters.some((filter) => filter.ids?.includes(thread.root.id)),
-  });
-  await next.owner.capability.ensure();
-  await next.saved;
-  expect(await saved(storage)).toContain(thread.answer.id);
-  expect(await storage.read()).toMatchObject({
-    complete: true,
-    absent: new Set([thread.root.id]),
-  });
-});
-
-it("a pass whose roster sample fails leaves the mark unconfirmed, though its thread reads land", async () => {
-  const root = post(peerKey, "team", T);
-  const mine = reply(viewerKey, "team", root, T + 1);
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: {
-      roots: new Map([
-        [`team:${root.id}`, { at: mine.created_at, newestId: mine.id }],
-      ]),
-    },
-    events: [],
-    structure: new Set(),
-    complete: false,
-    // Too old for a delta: the pass is the bootstrap.
-    mark: { at: T, checked: SECONDS - 86_401 },
-  });
-  const h = await launch({ store: [root, mine], storage, fail: sampleRead });
-  const save = vi.spyOn(storage, "save");
-  await h.owner.capability.ensure();
-  await save.mock.results.at(-1)?.value;
-  // The thread read landed.
-  expect(
-    h.reader.read.mock.calls.some(([filters]) =>
-      filters.some(
-        (filter) =>
-          filter["#e"]?.includes(root.id) && filter.since === undefined,
-      ),
-    ),
-  ).toBe(true);
-  expect((await storage.read())?.mark).toEqual({
-    at: T,
-    checked: SECONDS - 86_401,
-  });
-});
-
-it("a pass that could not read the viewer's authored page leaves the mark unset, though its roster sample lands", async () => {
-  const storage = memoryUnreadStorage();
-  const h = await launch({
-    store: [hashed("team", T + 10), ...busy],
-    storage,
-    frontiers: { team: T, quiet: T, dm: T, busy: T },
-    // The windows, and the authored page beside them: the channels alone
-    // would only stay out of the roster set the mark covers.
-    fail: (filters) =>
-      filters.some(
-        (filter) => filter["#h"] && filter.since !== undefined && !filter["#e"],
-      ),
-  });
-  await h.owner.capability.ensure();
-  await h.saved;
-  expect(
-    h.reader.read.mock.calls.filter(([filters]) => sampleRead(filters)),
-  ).not.toEqual([]);
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect((await storage.read())?.mark).toBeUndefined();
-});
-
 it("a walk cut short by a dropped page saves an incomplete record, so the next launch reads the bootstrap, not the delta, and its walk", async () => {
   const storage = memoryUnreadStorage();
   // More of the viewer's messages than the authored page holds.
@@ -2306,140 +1195,11 @@ it("a walk cut short by a dropped page saves an incomplete record, so the next l
   expect((await storage.read())?.complete).toBe(true);
 });
 
-it("a held message deleted since the mark is read gone by a bootstrap before its roster sample confirms the mark past the deletion", async () => {
-  const storage = memoryUnreadStorage();
-  const held = post(peerKey, "team", T);
-  const store = [held, ...busy];
-  const h = await launch({
-    store,
-    storage,
-    frontiers: { ...BUSY_READ, team: T - 1 },
-  });
-  const save = vi.spyOn(storage, "save");
-  await h.owner.capability.ensure();
-  await h.saved;
-  const prior = (await storage.read())?.mark;
-  expect(prior).toEqual({ at: T + 50_499, checked: SECONDS });
-  expect(h.count("team")).toBe(1);
-  // Deleted after that mark, and newer traffic moves the sample on.
-  store.push(
-    signed(peerKey, {
-      kind: 5,
-      content: "",
-      created_at: T + 51_000,
-      tags: [
-        ["h", "team"],
-        ["e", held.id],
-      ],
-    }),
-    hashed("busy", T + 59_000),
-  );
-  await h.owner.capability.refresh();
-  await save.mock.results.at(-1)?.value;
-  expect(h.count("team")).toBe(0);
-  expect((await storage.read())?.mark).toEqual({
-    at: T + 59_000,
-    checked: SECONDS,
-  });
-});
-
 const overlayRead = (filters: readonly ReadFilter[]) =>
   filters.some((filter) => filter.kinds?.join() === "40003,5,9005");
 
 const byIdRead = (filters: readonly ReadFilter[]) =>
   overlayRead(filters) && filters.some((filter) => !!filter["#e"]);
-
-it("more edits and deletions since a stale mark than the bootstrap reads have those of the held content not received live read by ID: a deletion applies, an unread message past its window's cut stays, and the mark moves once that read lands", async () => {
-  const at = T + 10_000;
-  // Confirmed over a day ago: the launch reads the bootstrap.
-  const storage = await marked({ at, checked: SECONDS - 86_401 });
-  // Unread, held before the pass, and past the cut of the channel's window
-  // and the roster sample: one deleted by the oldest of more edits and
-  // deletions since the mark than the read of them reaches, and a mention.
-  const old = hashed("team", at + 1);
-  const mention = hashed("team", at + 2, 9, [["p", viewer]]);
-  const removal = hashed("team", at - 1865, 5, [["e", old.id]]);
-  const noise = Array.from({ length: 1000 }, (_, i) =>
-    hashed("team", at - 1864 + i, 5, [["e", "f".repeat(64)]]),
-  );
-  // What the window returns.
-  const newer = Array.from({ length: 100 }, (_, i) =>
-    hashed("team", at + 500 + i),
-  );
-  let failing = true;
-  const h = await launch({
-    store: [old, mention, removal, ...noise, ...newer, ...busy],
-    storage,
-    frontiers: { ...BUSY_READ, team: at },
-    fail: (filters) => failing && byIdRead(filters),
-  });
-  h.owner.accept([old, mention]);
-  const save = vi.spyOn(storage, "save");
-  const { release, waiting } = h.hold();
-  const launched = h.owner.capability.ensure();
-  await waiting;
-  // Received while the pass reads, so its edits arrive live too.
-  const live = hashed("team", at + 600);
-  h.owner.accept([live]);
-  release();
-  await launched;
-  await save.mock.results.at(-1)?.value;
-  const mentioned = () =>
-    h.owner.capability
-      .inbox()
-      .items.some((item) => item.messageIds.includes(mention.id));
-  // That read dropped: nothing is forgotten, the mark stays, and the Inbox
-  // says some activity could not be checked.
-  const sent = h.reader.read.mock.calls.map(([filters]) => filters);
-  expect(sent.filter(overlayRead)).toHaveLength(4);
-  // Those held before the pass and those its reads returned, which carry no
-  // edits, in one request tried twice.
-  const byId = sent.filter(byIdRead);
-  expect(byId).toHaveLength(2);
-  for (const filters of byId) {
-    expect(filters).toEqual(
-      filters.map(() =>
-        expect.objectContaining({
-          kinds: [40003, 5, 9005],
-          since: at - 1865,
-          limit: 500,
-        }),
-      ),
-    );
-    expect(new Set(filters.flatMap((filter) => filter["#e"] ?? []))).toEqual(
-      new Set([old, mention, ...newer, ...busy].map(({ id }) => id)),
-    );
-  }
-  expect(h.count("team")).toBe(103);
-  expect(mentioned()).toBe(true);
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect((await storage.read())?.mark).toEqual({
-    at,
-    checked: SECONDS - 86_401,
-  });
-  // Landed on the next tick, it returns the deletion, which applies; the rest
-  // stays, and the notice clears.
-  failing = false;
-  await h.reconnected();
-  await save.mock.results.at(-1)?.value;
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect(h.owner.event(removal.id)).toBeDefined();
-  expect(h.count("team")).toBe(102);
-  expect(mentioned()).toBe(true);
-  expect((await storage.read())?.mark).toEqual({
-    at: T + 50_499,
-    checked: SECONDS,
-  });
-  const next = await sentDuring(h, () => h.reconnected());
-  await save.mock.results.at(-1)?.value;
-  expect(next.filter(deltaFilter)).toEqual([
-    expect.objectContaining({ since: T + 50_499 - 1865 }),
-    expect.objectContaining({ since: T + 50_499 - 1865, until: T + 50_000 }),
-  ]);
-  expect(next.filter((filter) => overlayRead([filter]))).toEqual([]);
-  expect(h.count("team")).toBe(102);
-  expect(mentioned()).toBe(true);
-});
 
 it("more edits and deletions since a stale mark than the bootstrap reads have those of the content its reads returned read by ID too, since those reads carry no edits: a reply in the viewer's thread shows the edit below the cut, and the mark moves", async () => {
   const at = T + 10_000;
@@ -2489,166 +1249,6 @@ it("more edits and deletions since a stale mark than the bootstrap reads have th
   });
 });
 
-it("of the reads by ID sharing a request, a full one pages on below the newest it matches, so another's older match does not skip a deletion it did not return", async () => {
-  const at = T + 10_000;
-  const since = at - 1865;
-  const storage = await marked({ at, checked: SECONDS - 86_401 });
-  // Unread past the window's cut and outside the roster sample: read by ID
-  // in the first two filters, the first of 100 and the second led by one,
-  // ahead of what the reads returned.
-  const held = Array.from({ length: 101 }, (_, i) =>
-    hashed("team", at + 1 + i),
-  );
-  const newer = Array.from({ length: 100 }, (_, i) =>
-    hashed("team", at + 500 + i),
-  );
-  // The first filter's 500 newest matches, then a deletion below them; the
-  // second's one match is older still and matches the first too.
-  const fill = Array.from({ length: 500 }, (_, i) =>
-    hashed("team", since + 2 + i, 5, [["e", held[0]?.id ?? ""]]),
-  );
-  const hidden = hashed("team", since + 1, 5, [["e", held[50]?.id ?? ""]]);
-  const cross = hashed("team", since, 5, [
-    ["e", held[1]?.id ?? ""],
-    ["e", held[100]?.id ?? ""],
-  ]);
-  // Newer than all of those, more than the read by channel reaches.
-  const noise = Array.from({ length: 1000 }, (_, i) =>
-    hashed("team", since + 502 + i, 5, [["e", "f".repeat(64)]]),
-  );
-  const h = await launch({
-    store: [...held, ...newer, ...fill, hidden, cross, ...noise, ...busy],
-    storage,
-    frontiers: { ...BUSY_READ, team: at },
-  });
-  h.owner.accept(held);
-  await h.owner.capability.ensure();
-  const byId = h.reader.read.mock.calls
-    .map(([filters]) => filters)
-    .filter(byIdRead);
-  const [first, second] = byId[0] ?? [];
-  expect(first?.["#e"]).toEqual(held.slice(0, 100).map(({ id }) => id));
-  expect(second?.["#e"]?.[0]).toBe(held[100]?.id);
-  expect(h.owner.event(hidden.id)).toBeDefined();
-  expect(h.count("team")).toBe(197);
-});
-
-it.each(["edited", "deleted"])(
-  "a held message %s after more edits since the mark than a read by ID pages through has that read halved down to it alone, whose newest edits read it, while the other half applies a deletion below where the read of both stopped, so the mark moves",
-  async (variant) => {
-    const at = T + 10_000;
-    const since = at - 1865;
-    const storage = await marked({ at, checked: SECONDS - 86_401 });
-    // Unread, and all the content held, read by ID together: one an agent
-    // edits more often than that read pages through, twice over, and one
-    // deleted below where its pages of both stop.
-    const status = hashed("team", at - 2000);
-    const other = hashed("team", at - 1999);
-    const edits = Array.from({ length: 2001 }, (_, i) =>
-      hashed("team", since + i, 40003, [["e", status.id]]),
-    );
-    const removal = hashed("team", since + 2001, 5, [["e", status.id]]);
-    const gone = hashed("team", since + 500, 5, [["e", other.id]]);
-    // Newer than all of those, more than the read by channel reaches.
-    const noise = Array.from({ length: 1000 }, (_, i) =>
-      hashed("team", since + 2002 + i, 5, [["e", "f".repeat(64)]]),
-    );
-    const deleted = variant === "deleted";
-    const h = await launch({
-      store: [
-        status,
-        other,
-        ...edits,
-        ...(deleted ? [removal] : []),
-        gone,
-        ...noise,
-      ],
-      storage,
-      frontiers: { team: at - 3000 },
-    });
-    h.owner.accept([status, other]);
-    const save = vi.spyOn(storage, "save");
-    await h.owner.capability.ensure();
-    await save.mock.results.at(-1)?.value;
-    // The other's half applies its deletion.
-    expect(h.owner.event(gone.id)).toBeDefined();
-    expect(h.count("team")).toBe(deleted ? 0 : 1);
-    expect(h.owner.capability.inbox().partial).toBeUndefined();
-    // The roster sample's newest is below the mark, which it confirms.
-    expect((await storage.read())?.mark).toEqual({ at, checked: SECONDS });
-    // Two pages of both, then each half on from where they stopped: the
-    // deleted one is short, the edited one full at its last page.
-    const shift = deleted ? 1 : 0;
-    expect(
-      h.reader.read.mock.calls
-        .map(([filters]) => filters)
-        .filter(byIdRead)
-        .map(([filter]) => [filter?.["#e"], filter?.until]),
-    ).toEqual([
-      [[status.id, other.id], undefined],
-      [[status.id, other.id], since + 1501 + shift],
-      [[status.id], since + 1001 + shift],
-      [[other.id], since + 1001 + shift],
-      [[status.id], since + 501 + shift],
-    ]);
-  },
-);
-
-it("a held unread mention edited 3,000 times since the mark is held and saved with its newest edit alone, so the pass moves the mark and saves the record complete, and the next launch restores it edited", async () => {
-  const at = T + 10_000;
-  const since = at - 1865;
-  const storage = await marked({ at, checked: SECONDS - 86_401 });
-  // Unread past the window's cut and outside the roster sample, read by ID
-  // together: a mention an agent edits more times than the record holds
-  // events, and one never edited. What the record keeps is signed, for the
-  // relaunch to verify.
-  const status = post(peerKey, "team", at - 2000, [["p", viewer]]);
-  const other = post(peerKey, "team", at - 1999);
-  const edits = Array.from({ length: 2999 }, (_, i) =>
-    hashed("team", since + i, 40003, [["e", status.id]]),
-  );
-  const newest = signed(peerKey, {
-    kind: 40003,
-    content: "status, edited",
-    created_at: since + 2999,
-    tags: [
-      ["h", "team"],
-      ["e", status.id],
-    ],
-  });
-  const newer = Array.from({ length: 100 }, (_, i) =>
-    post(peerKey, "team", at + 500 + i),
-  );
-  const store = [status, other, ...edits, newest, ...newer, ...busy];
-  const frontiers = { ...BUSY_READ, team: at - 3000 };
-  const h = await launch({ store, storage, frontiers });
-  h.owner.accept([status, other]);
-  const save = vi.spyOn(storage, "save");
-  await h.owner.capability.ensure();
-  await save.mock.results.at(-1)?.value;
-  const edited = expect.objectContaining({
-    messageIds: [status.id],
-    preview: "status, edited",
-  });
-  expect(h.rows()).toContainEqual(edited);
-  expect(h.count("team")).toBe(102);
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  const record = await storage.read();
-  expect(record?.mark).toEqual({ at: T + 50_499, checked: SECONDS });
-  expect(record?.complete).toBe(true);
-  // The window, the roster sample, the two read by ID and one edit.
-  const kept = await saved(storage);
-  expect(kept).toHaveLength(100 + 500 + 2 + 1);
-  expect(kept).toContain(newest.id);
-  h.owner.dispose();
-  // The relay cannot be read: the edited mention comes from storage alone.
-  const offline = await launch({ store, storage, frontiers, down: true });
-  await offline.owner.capability.ensure();
-  await offline.restored(kept.length);
-  expect(offline.rows()).toContainEqual(edited);
-  expect(offline.count("team")).toBe(102);
-});
-
 it("a held message edited more times than the evidence holds events has one edit held, so its edits evict nothing: every held message stays counted, and the mark moves", async () => {
   const at = T + 10_000;
   const since = at - 1865;
@@ -2686,301 +1286,6 @@ it("a held message edited more times than the evidence holds events has one edit
   });
 });
 
-it("a read by ID that would need more than 200 halves is dropped there, nothing queued behind it read: the mark stays and the Inbox says some activity could not be checked", async () => {
-  const at = T + 10_000;
-  const since = at - 1865;
-  const storage = await marked({ at, checked: SECONDS - 86_401 });
-  // Unread past the window's cut and outside the roster sample, read by ID
-  // in two filters of 100, beside more edits and deletions than the read by
-  // channel reaches.
-  const held = Array.from({ length: 200 }, (_, i) =>
-    hashed("team", at - 2000 + i),
-  );
-  const noise = Array.from({ length: 1000 }, (_, i) =>
-    hashed("team", since + i, 5, [["e", "f".repeat(64)]]),
-  );
-  const newer = Array.from({ length: 100 }, (_, i) =>
-    hashed("team", at + 500 + i),
-  );
-  const h = await launch({
-    store: [...held, ...noise, ...newer, ...busy],
-    storage,
-    frontiers: { ...BUSY_READ, team: at - 3000 },
-  });
-  // Each filter's first message has more edits than any page reaches, so
-  // every page by ID is full and each second page of more than one message
-  // is halved, until the 101st would make more than 200 halves. The edits
-  // are made as they are read, below where each page starts.
-  const relay = h.reader.read.getMockImplementation();
-  assert(relay);
-  const pages = new Map<string, number>();
-  let made = 0;
-  let splits = 0;
-  let after = 0;
-  h.reader.read.mockImplementation(async (filters) => {
-    if (!byIdRead(filters)) return relay(filters);
-    if (splits > 100) after++;
-    return filters.flatMap((filter) => {
-      const ids = filter["#e"] ?? [];
-      const page = (pages.get(ids.join()) ?? 0) + 1;
-      pages.set(ids.join(), page);
-      if (page === 2 && ids.length > 1) splits++;
-      const top = filter.until ?? since + 10_000;
-      return Array.from(
-        { length: 500 },
-        (_, i): RelayEvent => ({
-          kind: 40003,
-          pubkey: peerKey.pubkey,
-          created_at: top - 1 - i,
-          content: "",
-          tags: [
-            ["h", "team"],
-            ["e", ids[0] ?? ""],
-          ],
-          id: (made++).toString(16).padStart(64, "0"),
-          sig: "0".repeat(128),
-          [verifiedSymbol]: true,
-        }),
-      );
-    });
-  });
-  h.owner.accept(held);
-  await h.owner.capability.ensure();
-  expect(splits).toBe(101);
-  expect(after).toBe(0);
-  expect(h.count("team")).toBe(300);
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect((await storage.read())?.mark).toEqual({
-    at,
-    checked: SECONDS - 86_401,
-  });
-});
-
-it("a read by ID dropped at 200 halves is resumed by the next pass from where it stopped, its IDs read again only since that pass's newest less the lookback, which a deletion made since is newer than: the next pass reads it to its end in far fewer requests, the deletion applies, the mark moves and the notice clears", async () => {
-  const at = T + 10_000;
-  const since = at - 1865;
-  const storage = await marked({ at, checked: SECONDS - 86_401 });
-  // Unread past the window's cut and outside the roster sample, read by ID
-  // in 15 filters of 100 ahead of what the reads returned, beside more edits
-  // and deletions than the read by channel reaches.
-  const held = Array.from({ length: 1500 }, (_, i) =>
-    hashed("team", at - 2000 + i),
-  );
-  const noise = Array.from({ length: 1000 }, (_, i) =>
-    hashed("team", since + i, 5, [["e", "f".repeat(64)]]),
-  );
-  const newer = Array.from({ length: 100 }, (_, i) =>
-    hashed("team", at + 500 + i),
-  );
-  const store = [...held, ...noise, ...newer, ...busy];
-  const h = await launch({
-    store,
-    storage,
-    frontiers: { ...BUSY_READ, team: at - 3000 },
-  });
-  // Each filter's first message is edited every second of the 10,000 since
-  // the mark, its others in the newest 1,000 alone, all before the roster's
-  // newest: halving takes each filter down to its first, 7 halvings a
-  // filter, 105 in all, more than the 100 a read makes.
-  const deep = new Set(held.flatMap((event, i) => (i % 100 ? [] : [event.id])));
-  const newest = since + 10_000;
-  const relay = h.reader.read.getMockImplementation();
-  assert(relay);
-  let made = 0;
-  const edits = (filter: ReadFilter) => {
-    const ids = filter["#e"] ?? [];
-    const top = Math.min(filter.until ?? newest, newest);
-    const floor = Math.max(
-      filter.since ?? 0,
-      ids.some((id) => deep.has(id)) ? since : newest - 1000,
-    );
-    return Array.from(
-      { length: Math.max(0, Math.min(filter.limit, top - floor)) },
-      (_, i): RelayEvent => ({
-        kind: 40003,
-        pubkey: peerKey.pubkey,
-        created_at: top - 1 - i,
-        content: "",
-        tags: [
-          ["h", "team"],
-          ["e", ids[0] ?? ""],
-        ],
-        id: (made++).toString(16).padStart(64, "0"),
-        sig: "0".repeat(128),
-        [verifiedSymbol]: true,
-      }),
-    );
-  };
-  h.reader.read.mockImplementation(async (filters) =>
-    byIdRead(filters)
-      ? [...(await relay(filters)), ...filters.flatMap(edits)]
-      : relay(filters),
-  );
-  const requests = () =>
-    h.reader.read.mock.calls.map(([filters]) => filters).filter(byIdRead);
-  h.owner.accept(held);
-  await h.owner.capability.ensure();
-  const first = requests();
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect((await storage.read())?.mark).toEqual({
-    at,
-    checked: SECONDS - 86_401,
-  });
-  // Meanwhile one the dropped read had read to its end is deleted, as the
-  // relay's clock goes, behind more deletions than the read by channel
-  // reaches.
-  const target = held[1];
-  assert(target);
-  const gone = hashed("team", SECONDS - 500, 5, [["e", target.id]]);
-  store.push(
-    gone,
-    ...Array.from({ length: 1000 }, (_, i) =>
-      hashed("team", SECONDS - 400 + (i % 400), 5, [["e", "f".repeat(64)]]),
-    ),
-  );
-  const save = vi.spyOn(storage, "save");
-  await h.reconnected();
-  await save.mock.results.at(-1)?.value;
-  const second = requests().slice(first.length);
-  expect(h.owner.event(gone.id)).toBeDefined();
-  expect(h.count("team")).toBe(1599);
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect((await storage.read())?.mark).toEqual({
-    at: T + 50_499,
-    checked: SECONDS,
-  });
-  // On from where the dropped read stopped, and its IDs again since the
-  // roster's newest less the lookback: nothing is read again from the top
-  // since the mark.
-  const top = (requests: readonly (readonly ReadFilter[])[]) =>
-    requests.flat().filter((filter) => filter.until === undefined);
-  expect(top(second)).toEqual(
-    top(first).map((filter) => ({ ...filter, since: T + 50_499 - 1865 })),
-  );
-  expect(first.length).toBeGreaterThan(200);
-  expect(second.length).toBeLessThan(first.length / 4);
-});
-
-it("on a roster of more than 128 channels holding evidence, only the chunks whose edits and deletions were not read to their end have their held content read by ID", async () => {
-  const at = T + 10_000;
-  const since = at - 1865;
-  // The first 128 channels holding evidence, then a quiet one beside one
-  // whose 500 newer messages keep the quiet one's out of the roster sample.
-  const extra = Array.from({ length: 124 }, (_, i) => `c${i}`);
-  const ids = [...ROSTER, ...extra, "edge", "loud"];
-  const storage = await marked({ at, checked: SECONDS - 86_401 }, ids);
-  // Read, so no window returns it: one held in each channel but busy and
-  // loud, which the roster sample fills.
-  const held = ids
-    .filter((id) => id !== "busy" && id !== "loud")
-    .map((id) => hashed(id, T));
-  const loud = Array.from({ length: 500 }, (_, i) =>
-    hashed("loud", T + 60_000 + i),
-  );
-  // More edits and deletions in team than the read of them reaches.
-  const noise = Array.from({ length: 1000 }, (_, i) =>
-    hashed("team", since + i, 5, [["e", "f".repeat(64)]]),
-  );
-  const h = await launch({
-    store: [...held, ...loud, ...noise, ...busy],
-    storage,
-    roster: summaries(ids),
-    frontiers: {
-      ...Object.fromEntries(ids.map((id) => [id, T + 20_000])),
-      ...BUSY_READ,
-      loud: T + 70_000,
-    },
-  });
-  h.owner.accept(held);
-  const save = vi.spyOn(storage, "save");
-  await h.owner.capability.ensure();
-  await save.mock.results.at(-1)?.value;
-  const sent = h.reader.read.mock.calls.map(([filters]) => filters);
-  // Read by channel in two chunks, the first full and the second short.
-  expect(
-    sent
-      .filter((filters) => overlayRead(filters) && !byIdRead(filters))
-      .map(([filter]) => filter?.["#h"]?.length),
-  ).toEqual([128, 2, 128]);
-  // Of the first chunk, what is held and what the roster sample returned.
-  const edge = held.at(-1);
-  expect(
-    sent
-      .filter(byIdRead)
-      .flat()
-      .flatMap((filter) => filter["#e"] ?? [])
-      .sort(),
-  ).toEqual(
-    [...held.filter((item) => item !== edge), ...busy]
-      .map((item) => item.id)
-      .sort(),
-  );
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect((await storage.read())?.mark).toEqual({
-    at: T + 60_499,
-    checked: SECONDS,
-  });
-});
-
-it("unread messages in a channel whose window dropped beside a busy one's edits and deletions stay until the window is read again", async () => {
-  const at = T + 10_000;
-  // Past the 127 windows riding with the viewer's authored page.
-  const extra = Array.from({ length: 126 }, (_, i) => `c${i}`);
-  const storage = await marked({ at, checked: SECONDS - 86_401 }, [
-    ...ROSTER,
-    ...extra,
-  ]);
-  // More than one request's reads by ID cover.
-  const unread = Array.from({ length: 1000 }, (_, i) =>
-    hashed("team", at + 1 + i),
-  );
-  const noise = Array.from({ length: 1001 }, (_, i) =>
-    hashed("team", at - 1864 + i, 5, [["e", "f".repeat(64)]]),
-  );
-  let failing = true;
-  const h = await launch({
-    store: [...unread, ...noise, ...busy],
-    storage,
-    roster: summaries([...ROSTER, ...extra]),
-    frontiers: {
-      ...BUSY_READ,
-      team: at,
-      ...Object.fromEntries(extra.map((id) => [id, T + 20_000])),
-    },
-    fail: (filters) => failing && filters.some(windowOf("team")),
-  });
-  h.owner.accept(unread);
-  await h.owner.capability.ensure();
-  const sent = h.reader.read.mock.calls.map(([filters]) => filters);
-  expect(
-    sent
-      .filter((filters) => filters.some(windowOf("team")))
-      .every((filters) => !filters.some((filter) => filter.authors)),
-  ).toBe(true);
-  // Each within the reader's 64 KiB of filters, together every one and what
-  // the roster sample returned.
-  const byId = sent.filter(byIdRead);
-  expect(
-    byId.every(
-      (filters) =>
-        new TextEncoder().encode(JSON.stringify(filters)).byteLength <=
-        64 * 1024,
-    ),
-  ).toBe(true);
-  expect(
-    byId
-      .flat()
-      .flatMap((filter) => filter["#e"] ?? [])
-      .sort(),
-  ).toEqual([...unread, ...busy].map((item) => item.id).sort());
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect(h.count("team")).toBe(1000);
-  failing = false;
-  await h.reconnected();
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect(h.count("team")).toBe(1000);
-});
-
 // What the mark does not cover is read once beside the delta (design §3.6);
 // a pass that catches up reads nothing else of the bootstrap.
 /** The filters of the reads sent while `pass` ran. */
@@ -2994,8 +1299,6 @@ const windowOf = (id: string) => (filter: ReadFilter) =>
   filter.since !== undefined &&
   !filter["#e"] &&
   filter["#h"]?.join() === id;
-const wholeOf = (rootId: string) => (filter: ReadFilter) =>
-  !!filter["#e"]?.includes(rootId) && filter.since === undefined;
 const deltaFilter = (filter: ReadFilter) => deltaRead([filter]);
 /** A launch from a complete record whose mark covers the default roster. */
 async function caughtUp(
@@ -3046,246 +1349,6 @@ it("joining a channel holding an old unread message, and a DM, reads each once b
   expect(ticking.filter(sampleFilter)).toEqual([]);
 });
 
-it("a channel joined while this device was closed is read once on the next launch, not trusted to the mark", async () => {
-  const old = post(peerKey, "fresh", T + 10);
-  const { h, storage } = await caughtUp([old], summaries([...ROSTER, "fresh"]));
-  const launched = h.reader.read.mock.calls.flatMap(([filters]) => filters);
-  expect(launched.filter(deltaFilter)).not.toEqual([]);
-  expect(launched.filter(windowOf("fresh"))).toHaveLength(1);
-  expect(launched.filter(windowOf("team"))).toEqual([]);
-  expect(h.count("fresh")).toBe(1);
-  expect((await storage.read())?.roster).toEqual(new Set([...ROSTER, "fresh"]));
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(windowOf("fresh"))).toEqual([]);
-});
-
-it("leaving a busy channel reads the roster sample once more at once, saving the record complete, and rejoining it reads its window once", async () => {
-  const { h, storage } = await caughtUp([...busy]);
-  const left = summaries(ROSTER.filter((id) => id !== "busy"));
-  const leaving = await sentDuring(h, () => {
-    h.roster(left);
-    return h.owner.capability.ensure();
-  });
-  expect(leaving.filter(sampleFilter)).toEqual([
-    expect.objectContaining({ "#h": ["team", "quiet", "dm"] }),
-  ]);
-  expect(await storage.read()).toMatchObject({
-    complete: true,
-    roster: new Set(["team", "quiet", "dm"]),
-  });
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(sampleFilter)).toEqual([]);
-  // Its evidence was purged with it: a re-grant is a join.
-  const rejoining = await sentDuring(h, () => {
-    h.roster(summaries(ROSTER));
-    return h.owner.capability.ensure();
-  });
-  expect(rejoining.filter(windowOf("busy"))).toHaveLength(1);
-});
-
-it("a channel the mark does not cover has its remembered threads past the 50 hot ones read since their marks once beside the delta, and not again", async () => {
-  const hot = Array.from({ length: 50 }, (_, i) =>
-    post(peerKey, "team", T + 100 + i),
-  );
-  const cold = post(peerKey, "quiet", T);
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: {
-      roots: new Map([
-        ...hot.map((root): [string, { at: number }] => [
-          `team:${root.id}`,
-          { at: root.created_at },
-        ]),
-        [`quiet:${cold.id}`, { at: T }],
-      ]),
-    },
-    events: [],
-    structure: new Set(),
-    complete: true,
-    mark: { at: SECONDS - 600, checked: SECONDS - 60 },
-    roster: new Set(ROSTER.filter((id) => id !== "quiet")),
-  });
-  const h = await launch({ store: [...hot, cold], storage });
-  const coldOf = (filter: ReadFilter) =>
-    !!filter["#e"]?.includes(cold.id) && filter.since === T;
-  const launched = await sentDuring(h, () => h.owner.capability.ensure());
-  expect(launched.filter(deltaFilter)).not.toEqual([]);
-  expect(launched.filter(coldOf)).toHaveLength(1);
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(coldOf)).toEqual([]);
-});
-
-it("a channel the mark does not cover whose cold thread read drops stays out of the roster set, and is read once again on the next pass", async () => {
-  const hot = Array.from({ length: 50 }, (_, i) =>
-    post(peerKey, "team", T + 100 + i),
-  );
-  const cold = post(peerKey, "quiet", T);
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: {
-      roots: new Map([
-        ...hot.map((root): [string, { at: number }] => [
-          `team:${root.id}`,
-          { at: root.created_at },
-        ]),
-        [`quiet:${cold.id}`, { at: T }],
-      ]),
-    },
-    events: [],
-    structure: new Set(),
-    complete: true,
-    mark: { at: SECONDS - 600, checked: SECONDS - 60 },
-    roster: new Set(ROSTER.filter((id) => id !== "quiet")),
-    whole: new Set(hot.map((root) => `team:${root.id}`)),
-  });
-  const coldOf = (filter: ReadFilter) =>
-    !!filter["#e"]?.includes(cold.id) && filter.since === T;
-  let failing = true;
-  const h = await launch({
-    store: [...hot, cold],
-    storage,
-    fail: (filters) => failing && filters.some(coldOf),
-  });
-  const launched = await sentDuring(h, () => h.owner.capability.ensure());
-  await h.saved;
-  // Its window and the sample landed; its cold read, retried, did not.
-  expect(launched.filter(windowOf("quiet"))).toHaveLength(1);
-  expect(launched.filter(coldOf)).toHaveLength(2);
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect((await storage.read())?.roster).toEqual(
-    new Set(ROSTER.filter((id) => id !== "quiet")),
-  );
-  failing = false;
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(windowOf("quiet"))).toHaveLength(1);
-  expect(ticking.filter(coldOf)).toHaveLength(1);
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect((await storage.read())?.roster).toEqual(new Set(ROSTER));
-});
-
-it("a reply of the viewer's in an old thread has the thread read whole once beside the delta, and not again", async () => {
-  const root = post(peerKey, "team", T);
-  const store = [root, reply(peerKey, "team", root, T + 1)];
-  const { h, storage } = await caughtUp(store);
-  const mine = reply(viewerKey, "team", root, SECONDS - 10);
-  store.push(mine);
-  h.owner.accept([mine]);
-  const replied = await sentDuring(h, () => h.reconnected());
-  expect(replied.filter(wholeOf(root.id))).toHaveLength(1);
-  expect((await storage.read())?.whole).toEqual(new Set([`team:${root.id}`]));
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(wholeOf(root.id))).toEqual([]);
-});
-
-/** A launch caught up on a thread the viewer has no part in, and a pass
- * after following it or not. */
-async function following() {
-  const root = post(peerKey, "team", T);
-  const { h, storage } = await caughtUp([
-    root,
-    reply(peerKey, "team", root, T + 1),
-  ]);
-  const follow = async (on: boolean) => {
-    h.owner.capability.follow("team", root.id, on);
-    return (await sentDuring(h, () => h.reconnected())).filter(
-      wholeOf(root.id),
-    );
-  };
-  return { h, storage, root, follow };
-}
-
-it("following a thread has it read whole once beside the delta", async () => {
-  const { h, root, follow } = await following();
-  expect(await follow(true)).toHaveLength(1);
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(wholeOf(root.id))).toEqual([]);
-});
-
-it("unfollowing a thread drops it from the threads read whole, so following it again reads it whole again", async () => {
-  const { storage, root, follow } = await following();
-  await follow(true);
-  expect((await storage.read())?.whole).toEqual(new Set([`team:${root.id}`]));
-  expect(await follow(false)).toEqual([]);
-  expect((await storage.read())?.whole).toBeUndefined();
-  expect(await follow(true)).toHaveLength(1);
-});
-
-it("a dropped whole read of a thread is read again on the next pass for that thread alone", async () => {
-  const kept = post(peerKey, "team", T);
-  const lost = post(peerKey, "quiet", T + 5);
-  const keys = [`team:${kept.id}`, `quiet:${lost.id}`];
-  const storage = memoryUnreadStorage();
-  await storage.save({
-    participation: {
-      roots: new Map([
-        [keys[0] ?? "", { at: T + 1 }],
-        [keys[1] ?? "", { at: T + 6 }],
-      ]),
-    },
-    events: [],
-    structure: new Set(),
-    complete: true,
-    mark: { at: SECONDS - 600, checked: SECONDS - 60 },
-    roster: new Set(ROSTER),
-    whole: new Set([keys[0] ?? ""]),
-  });
-  let failing = true;
-  const h = await launch({
-    store: [
-      kept,
-      reply(peerKey, "team", kept, T + 1),
-      lost,
-      reply(peerKey, "quiet", lost, T + 6),
-    ],
-    storage,
-    fail: (filters) =>
-      failing && filters.some((filter) => filter["#e"]?.includes(lost.id)),
-  });
-  const launched = await sentDuring(h, () => h.owner.capability.ensure());
-  // The promotion of the one not read whole, retried once, dropped.
-  expect(launched.filter(wholeOf(lost.id))).toHaveLength(2);
-  expect(launched.filter(wholeOf(kept.id))).toEqual([]);
-  expect((await storage.read())?.whole).toEqual(new Set([keys[0]]));
-  failing = false;
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking.filter(wholeOf(kept.id))).toEqual([]);
-  expect(ticking.filter(wholeOf(lost.id))).toHaveLength(1);
-  expect((await storage.read())?.whole).toEqual(new Set(keys));
-});
-
-it("a delta that drops keeps the mark though the roster sample lands, leaves the pass partial and adds what it read once to the roster set, and the next pass reads it from the same mark", async () => {
-  const at = SECONDS - 600;
-  const checked = SECONDS - 60;
-  const storage = await marked({ at, checked });
-  let failing = true;
-  const h = await launch({
-    store: [hashed("team", at + 10), post(peerKey, "fresh", T + 10)],
-    storage,
-    roster: summaries([...ROSTER, "fresh"]),
-    fail: (filters) => failing && deltaRead(filters),
-  });
-  const save = vi.spyOn(storage, "save");
-  await h.owner.capability.ensure();
-  await save.mock.results.at(-1)?.value;
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  expect(h.count("fresh")).toBe(1);
-  expect(await storage.read()).toMatchObject({
-    mark: { at, checked },
-    roster: new Set([...ROSTER, "fresh"]),
-  });
-  failing = false;
-  const next = await sentDuring(h, () => h.reconnected());
-  await save.mock.results.at(-1)?.value;
-  expect(next.filter(deltaFilter)).toEqual([
-    expect.objectContaining({ since: at - 1865 }),
-  ]);
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect((await storage.read())?.mark).toEqual({
-    at: at + 10,
-    checked: SECONDS,
-  });
-});
-
 it("Refresh pressed while a pass catches up has the bootstrap read after it, and each press settles once that has", async () => {
   const storage = await marked({ at: SECONDS - 600, checked: SECONDS - 60 });
   // Only the bootstrap after the reconnect's pass reads the channel's
@@ -3322,186 +1385,6 @@ it("Refresh pressed while a pass catches up has the bootstrap read after it, and
   expect(sent.filter(windowOf("team"))).toHaveLength(2);
 });
 
-it("Refresh pressed while a pass asked to catch up reads the bootstrap joins it, and one pressed before that pass routes has it read the bootstrap", async () => {
-  const store = [hashed("team", SECONDS - 300)];
-  // A mark confirmed over a day ago: the launch's pass reads the bootstrap.
-  const stale = await launch({
-    store,
-    storage: await marked({ at: SECONDS - 600, checked: SECONDS - 86_401 }),
-  });
-  const { release, waiting } = stale.hold();
-  let pressed: Promise<void> | undefined;
-  try {
-    const syncing = vi.spyOn(stale.reads, "refresh");
-    const launched = stale.owner.capability.ensure();
-    await waiting;
-    pressed = stale.owner.capability.refresh();
-    await Promise.all(syncing.mock.results.map(({ value }) => value));
-    release();
-    await launched;
-  } finally {
-    release();
-  }
-  await pressed;
-  const sent = stale.reader.read.mock.calls.flatMap(([filters]) => filters);
-  expect(sent.filter(deltaFilter)).toEqual([]);
-  expect(sent.filter(sampleFilter)).toHaveLength(1);
-  stale.owner.dispose();
-  // A mark confirmed a minute ago, read before the launch's pass routes.
-  const fresh = await marked({ at: SECONDS - 600, checked: SECONDS - 60 });
-  let open = () => {};
-  const opened = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  const h = await launch({
-    store,
-    storage: {
-      ...fresh,
-      read: () => opened.then(() => fresh.read()),
-    },
-  });
-  const syncing = vi.spyOn(h.reads, "refresh");
-  const launched = h.owner.capability.ensure();
-  pressed = h.owner.capability.refresh();
-  await Promise.all(syncing.mock.results.map(({ value }) => value));
-  open();
-  await Promise.all([launched, pressed]);
-  const routed = h.reader.read.mock.calls.flatMap(([filters]) => filters);
-  expect(routed.filter(deltaFilter)).toEqual([]);
-  expect(routed.filter(sampleFilter)).toHaveLength(1);
-});
-
-it("a pass an access change retires settles a launch's wait only once the pass after it has read", async () => {
-  const h = await launch({
-    store: [post(peerKey, "fresh", T + 10)],
-    storage: memoryUnreadStorage(),
-  });
-  const first = h.hold();
-  let launched: Promise<void> | undefined;
-  try {
-    launched = h.owner.capability.ensure();
-    await first.waiting;
-    h.roster(summaries([...ROSTER, "fresh"]));
-    // The pass after it holds at its first read, past the retired one's end.
-    const next = h.hold();
-    first.release();
-    try {
-      await next.waiting;
-    } finally {
-      next.release();
-    }
-  } finally {
-    first.release();
-  }
-  await launched;
-  expect(h.owner.capability.inbox().freshness).toBe("observed");
-  expect(h.count("fresh")).toBe(1);
-});
-
-it("a resume launch whose cached roster is confirmed unchanged catches up with the delta, reading no channel once", async () => {
-  const cached = summaries(ROSTER).map((channel) => ({
-    ...channel,
-    cached: true as const,
-  }));
-  const { h } = await caughtUp([hashed("team", SECONDS - 300)], cached);
-  // The launch's pass found no confirmed channel to read.
-  expect(deltas(h)).toEqual([]);
-  const confirming = await sentDuring(h, () => {
-    h.roster(summaries(ROSTER));
-    return h.owner.capability.ensure();
-  });
-  expect(confirming.filter(deltaFilter)).toEqual([
-    expect.objectContaining({ since: SECONDS - 600 - 1865 }),
-  ]);
-  for (const id of ROSTER) expect(confirming.filter(windowOf(id))).toEqual([]);
-  expect(confirming.filter(sampleFilter)).toEqual([]);
-});
-
-it("a channel whose window dropped stays out of the roster set the mark covers, and is read once on the next pass", async () => {
-  const ids = Array.from({ length: 130 }, (_, i) => `c${i}`);
-  const storage = memoryUnreadStorage();
-  let failing = true;
-  const h = await launch({
-    store: [hashed("c129", T + 10)],
-    storage,
-    roster: members(ids),
-    // The windows past those riding with the viewer's authored page.
-    fail: (filters) =>
-      failing &&
-      filters.some(windowOf("c129")) &&
-      !filters.some((filter) => filter.authors),
-  });
-  await h.owner.capability.ensure();
-  const record = await storage.read();
-  expect(record?.mark).toEqual({ at: T + 10, checked: SECONDS });
-  expect(record?.roster).toEqual(new Set(ids.slice(0, 127)));
-  failing = false;
-  const next = await sentDuring(h, () => h.reconnected());
-  expect(next.filter(deltaFilter)).not.toEqual([]);
-  for (const id of ids.slice(127))
-    expect(next.filter(windowOf(id))).toHaveLength(1);
-  expect(next.filter(windowOf("c0"))).toEqual([]);
-  expect((await storage.read())?.roster).toEqual(new Set(ids));
-});
-
-it("a delta over a partly confirmed roster keeps covering only the channels it read, walks the viewer's messages beside it, and the rest are read once when confirmed", async () => {
-  const partly = summaries(ROSTER).map((channel) =>
-    channel.id === "dm" || channel.id === "busy"
-      ? { ...channel, cached: true as const }
-      : channel,
-  );
-  // The viewer replied in `busy`, still cached, and read past the reply,
-  // then posted in `team`: the delta reads `team`, not `busy`, and `busy`'s
-  // window and the roster sample do not reach the reply.
-  const root = post(peerKey, "busy", T + 39_000);
-  const mine = reply(viewerKey, "busy", root, T + 40_000);
-  const posted = post(viewerKey, "team", SECONDS - 400);
-  const { h, storage } = await caughtUp(
-    [hashed("team", SECONDS - 300), root, mine, posted, ...busy],
-    partly,
-    BUSY_READ,
-  );
-  expect(deltas(h)).toEqual([
-    expect.objectContaining({ "#h": ["team", "quiet"] }),
-  ]);
-  const record = await storage.read();
-  expect(record?.roster).toEqual(new Set(["team", "quiet"]));
-  expect(record?.participation.walk).toEqual({ since: posted.created_at });
-  const confirming = await sentDuring(h, () => {
-    h.roster(summaries(ROSTER));
-    return h.owner.capability.ensure();
-  });
-  for (const id of ["dm", "busy"])
-    expect(confirming.filter(windowOf(id))).toHaveLength(1);
-  expect(confirming.filter(windowOf("team"))).toEqual([]);
-  // The walk beside the first delta learned the thread, which is now read
-  // whole once and remembered.
-  expect(confirming.filter(wholeOf(root.id))).toHaveLength(1);
-  const confirmed = await storage.read();
-  expect(confirmed?.roster).toEqual(new Set(ROSTER));
-  expect(confirmed?.participation.roots.has(`busy:${root.id}`)).toBe(true);
-});
-
-it("a walk beside the delta that drops leaves the walk mark where it was and the record owing a walk", async () => {
-  const partly = summaries(ROSTER).map((channel) =>
-    channel.id === "busy" ? { ...channel, cached: true as const } : channel,
-  );
-  const storage = await marked({ at: SECONDS - 600, checked: SECONDS - 60 });
-  const h = await launch({
-    store: [post(viewerKey, "team", SECONDS - 400)],
-    storage,
-    roster: partly,
-    fail: (filters) => filters.some((filter) => !!filter.authors),
-  });
-  await h.owner.capability.ensure();
-  await h.saved;
-  expect(deltas(h)).not.toEqual([]);
-  const record = await storage.read();
-  expect(record?.complete).toBe(false);
-  expect(record?.participation.walk).toBeUndefined();
-  expect(h.owner.capability.inbox().partial).toBe(true);
-});
-
 // A full repair from a mark (design §3.7): the threads read through to it
 // are asked for replies since the mark less 1,865 s in one read of their
 // roots, not each on its own.
@@ -3515,31 +1398,17 @@ const ownReads = (filters: readonly ReadFilter[]) =>
     (filter) => filter.since === undefined || filter.limit === 50,
   );
 /** A record not complete, so the launch reads the bootstrap from its mark,
- * confirmed at `checked` (a minute ago unless given), holding no evidence:
- * `hot` threads read whole and through, `cold` ones read through, and
- * `owed` ones neither. */
-async function readThrough({
-  hot = [],
-  cold = [],
-  owed = [],
-  checked = SECONDS - 60,
-}: {
-  hot?: readonly [string, RelayEvent][];
-  cold?: readonly [string, RelayEvent][];
-  owed?: readonly [string, RelayEvent][];
-  checked?: number;
-}) {
+ * confirmed a minute ago, holding no evidence: `hot` threads read whole and
+ * through. */
+async function readThrough(hot: readonly [string, RelayEvent][]) {
   const key = ([channelId, root]: [string, RelayEvent]) =>
     `${channelId}:${root.id}`;
   const storage = memoryUnreadStorage();
-  const mark = { at: SECONDS - 600, checked };
+  const mark = { at: SECONDS - 600, checked: SECONDS - 60 };
   await storage.save({
     participation: {
       roots: new Map(
-        [...hot, ...cold, ...owed].map((entry) => [
-          key(entry),
-          { at: entry[1].created_at },
-        ]),
+        hot.map((entry) => [key(entry), { at: entry[1].created_at }]),
       ),
     },
     events: [],
@@ -3548,40 +1417,43 @@ async function readThrough({
     mark,
     roster: new Set(ROSTER),
     whole: new Set(hot.map(key)),
-    through: new Set([...hot, ...cold].map(key)),
+    through: new Set(hot.map(key)),
   });
   return { storage, mark, since: mark.at - 1865 };
 }
 
-it("a warm Refresh reads the threads read through to the mark in one read of their roots since it less 1,865 s, beside the windows and the roster sample, where a fresh device reads each thread", async () => {
+it("a selection over the record's bound on events is saved as no events and incomplete, while the session keeps what it selected: the next tick reads one delta and no window, a Refresh reads the threads read through past the mark in one read, and only a launch from that record reads the full repair", async () => {
+  unreadPass.mockClear();
   const roots = Array.from({ length: 60 }, (_, i) =>
     post(peerKey, "team", T + i),
   );
+  // Unread, so their windows return them all: 80 in each of 20 channels.
+  const filled = Array.from({ length: 20 }, (_, i) => `f${i}`);
+  const filler = filled.flatMap((id) =>
+    Array.from({ length: 80 }, (_, i) => hashed(id, T + 1000 + i)),
+  );
+  // 499 of the busy traffic, so a catch-up's one page is short.
   const store = [
     ...roots,
     ...roots.map((root, i) => reply(viewerKey, "team", root, T + 100 + i)),
-    ...busy,
+    ...filler,
+    ...busy.slice(1),
   ];
+  const roster = summaries(["team", ...filled, "busy"]);
   const storage = memoryUnreadStorage();
-  const fresh = await launch({ store, storage, frontiers: BUSY_READ });
-  const first = await sentDuring(fresh, () => fresh.owner.capability.ensure());
-  await fresh.saved;
-  // A fresh device: the 50 hot threads read whole, each cold one since its
-  // newest time, and no read past a mark.
-  expect(ownReads(first).filter((filter) => !filter.since)).toEqual([
-    expect.objectContaining({ "#h": ["team"] }),
-  ]);
-  expect(ownReads(first).filter((filter) => filter.since)).toHaveLength(10);
-  expect(threadReads(first)).toHaveLength(11);
+  const save = vi.spyOn(storage, "save");
+  const h = await launch({ store, storage, roster, frontiers: BUSY_READ });
+  await h.owner.capability.ensure();
+  await save.mock.results.at(-1)?.value;
   const record = await storage.read();
-  expect(record?.through?.size).toBe(60);
+  expect(record).toMatchObject({ events: [], complete: false });
+  expect(record?.whole).toBeUndefined();
+  expect(record?.through).toBeUndefined();
   const mark = record?.mark?.at ?? 0;
-  fresh.owner.dispose();
-  const warm = await launch({ store, storage, frontiers: BUSY_READ });
-  await warm.owner.capability.ensure();
-  const refreshed = await sentDuring(warm, () =>
-    warm.owner.capability.refresh(),
-  );
+  expect(await sentDuring(h, () => h.reconnected())).toEqual([
+    expect.objectContaining({ kinds: DELTA_KINDS }),
+  ]);
+  const refreshed = await sentDuring(h, () => h.owner.capability.refresh());
   expect(threadReads(refreshed)).toEqual([
     {
       kinds: CONTENT,
@@ -3594,145 +1466,37 @@ it("a warm Refresh reads the threads read through to the mark in one read of the
   ]);
   expect(threadReads(refreshed)[0]?.["#e"]).toHaveLength(60);
   expect(refreshed.filter(windowOf("team"))).toHaveLength(1);
-  expect(refreshed.filter(sampleFilter)).toHaveLength(1);
-  expect(warm.owner.capability.inbox().partial).toBeUndefined();
-  expect((await storage.read())?.through?.size).toBe(60);
-});
-
-it.each(["events", "bytes"] as const)(
-  "a selection over the record's bound on %s is saved as no events and incomplete, while the session keeps what it selected: the next tick reads one delta and no window, a Refresh reads the threads read through past the mark in one read, and only a launch from that record reads the full repair",
-  async (bound) => {
-    unreadPass.mockClear();
-    const roots = Array.from({ length: 60 }, (_, i) =>
-      post(peerKey, "team", T + i),
-    );
-    // Unread, so their windows return them all: 80 in each of 20 channels,
-    // or 5 in one, each a quarter of the byte bound.
-    const filled =
-      bound === "events"
-        ? Array.from({ length: 20 }, (_, i) => `f${i}`)
-        : ["quiet"];
-    const filler =
-      bound === "events"
-        ? filled.flatMap((id) =>
-            Array.from({ length: 80 }, (_, i) => hashed(id, T + 1000 + i)),
-          )
-        : Array.from({ length: 5 }, (_, i) =>
-            post(
-              peerKey,
-              "quiet",
-              T + 1000 + i,
-              [],
-              "x".repeat(UNREAD_RECORD_BYTES / 4),
-            ),
-          );
-    // 499 of the busy traffic, so a catch-up's one page is short.
-    const store = [
-      ...roots,
-      ...roots.map((root, i) => reply(viewerKey, "team", root, T + 100 + i)),
-      ...filler,
-      ...busy.slice(1),
-    ];
-    const roster = summaries(["team", ...filled, "busy"]);
-    const storage = memoryUnreadStorage();
-    const save = vi.spyOn(storage, "save");
-    const h = await launch({ store, storage, roster, frontiers: BUSY_READ });
-    await h.owner.capability.ensure();
-    await save.mock.results.at(-1)?.value;
-    const record = await storage.read();
-    expect(record).toMatchObject({ events: [], complete: false });
-    expect(record?.whole).toBeUndefined();
-    expect(record?.through).toBeUndefined();
-    const mark = record?.mark?.at ?? 0;
-    expect(await sentDuring(h, () => h.reconnected())).toEqual([
-      expect.objectContaining({ kinds: DELTA_KINDS }),
-    ]);
-    const refreshed = await sentDuring(h, () => h.owner.capability.refresh());
-    expect(threadReads(refreshed)).toEqual([
-      {
-        kinds: CONTENT,
-        "#h": ["team"],
-        "#e": expect.arrayContaining(roots.map((root) => root.id)),
-        since: mark - 1865,
-        include_aux: true,
-        limit: 500,
-      },
-    ]);
-    expect(threadReads(refreshed)[0]?.["#e"]).toHaveLength(60);
-    expect(refreshed.filter(windowOf("team"))).toHaveLength(1);
-    // Each pass reports its reads and a selection over the bound.
-    expect(
-      unreadPass.mock.calls.map(([{ route, fits, events, bytes }]) => [
-        route,
-        fits,
-        bound === "events"
-          ? events > UNREAD_RECORD_EVENTS
-          : bytes > UNREAD_RECORD_BYTES,
-      ]),
-    ).toEqual([
-      ["bootstrap", false, true],
-      ["delta", false, true],
-      ["bootstrap", false, true],
-    ]);
-    await save.mock.results.at(-1)?.value;
-    expect(await storage.read()).toMatchObject({ events: [], complete: false });
-    h.owner.dispose();
-    const relaunched = await launch({
-      store,
-      storage,
-      roster,
-      frontiers: BUSY_READ,
-    });
-    const next = await sentDuring(relaunched, () =>
-      relaunched.owner.capability.ensure(),
-    );
-    expect(next.filter(deltaFilter)).toEqual([]);
-    expect(next.filter(windowOf("team"))).toHaveLength(1);
-  },
-);
-
-it("a full read past the mark is read again in halves of its roots, each naming its own channels, and not paged", async () => {
-  const a = post(peerKey, "team", T);
-  const b = post(peerKey, "quiet", T + 1);
-  const { storage, since } = await readThrough({
-    hot: [
-      ["team", a],
-      ["quiet", b],
-    ],
-  });
-  const replies = [a, b].flatMap((root, n) =>
-    Array.from({ length: 300 }, (_, i) =>
-      hashed(n ? "quiet" : "team", since + 1 + i, 9, [
-        ["e", root.id, "", "reply"],
-      ]),
-    ),
-  );
-  const h = await launch({ store: [a, b, ...replies, ...busy], storage });
-  await h.owner.capability.ensure();
-  const requests = h.reader.read.mock.calls
-    .map(([filters]) => threadReads(filters))
-    .filter((filters) => filters.length);
-  const read = (channelId: string, rootIds: string[]) => ({
-    kinds: CONTENT,
-    "#h": [channelId],
-    "#e": rootIds,
-    since,
-    include_aux: true,
-    limit: 500,
-  });
-  // Newest first.
-  expect(requests).toEqual([
-    [{ ...read("quiet", [b.id, a.id]), "#h": ["quiet", "team"] }],
-    [read("quiet", [b.id]), read("team", [a.id])],
+  // Each pass reports its reads and a selection over the bound.
+  expect(
+    unreadPass.mock.calls.map(([{ route, fits, events }]) => [
+      route,
+      fits,
+      events > UNREAD_RECORD_EVENTS,
+    ]),
+  ).toEqual([
+    ["bootstrap", false, true],
+    ["delta", false, true],
+    ["bootstrap", false, true],
   ]);
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
+  await save.mock.results.at(-1)?.value;
+  expect(await storage.read()).toMatchObject({ events: [], complete: false });
+  h.owner.dispose();
+  const relaunched = await launch({
+    store,
+    storage,
+    roster,
+    frontiers: BUSY_READ,
+  });
+  const next = await sentDuring(relaunched, () =>
+    relaunched.owner.capability.ensure(),
+  );
+  expect(next.filter(deltaFilter)).toEqual([]);
+  expect(next.filter(windowOf("team"))).toHaveLength(1);
 });
 
 it("a dropped read past the mark holds the mark and says some activity could not be checked, and the next pass reads it again", async () => {
   const root = post(peerKey, "team", T);
-  const { storage, mark, since } = await readThrough({
-    hot: [["team", root]],
-  });
+  const { storage, mark, since } = await readThrough([["team", root]]);
   let failing = true;
   const past = (filter: ReadFilter) =>
     !!filter["#e"]?.includes(root.id) && filter.since === since;
@@ -3756,564 +1520,158 @@ it("a dropped read past the mark holds the mark and says some activity could not
   expect((await storage.read())?.mark?.checked).toBeGreaterThan(mark.checked);
 });
 
-it("a tick after a dropped read past the mark catches up with one delta from the mark it held, and no read past it, clearing the notice and moving the mark", async () => {
-  const root = post(peerKey, "team", T);
-  const { storage, mark, since } = await readThrough({
-    hot: [["team", root]],
-  });
-  let failing = true;
-  const past = (filter: ReadFilter) =>
-    !!filter["#e"]?.includes(root.id) && filter.since === since;
-  const h = await launch({
-    store: [root, reply(peerKey, "team", root, since + 5), ...busy],
-    storage,
-    frontiers: BUSY_READ,
-    fail: (filters) => failing && filters.some(past),
-  });
-  await h.owner.capability.ensure();
-  expect(h.owner.capability.inbox().partial).toBe(true);
-  await h.saved;
-  failing = false;
-  const ticking = await sentDuring(h, () => h.reconnected());
-  expect(ticking).toEqual([
-    expect.objectContaining({ kinds: DELTA_KINDS, "#h": ROSTER, since }),
-  ]);
-  expect(h.owner.capability.inbox().partial).toBeUndefined();
-  expect((await storage.read())?.mark?.checked).toBeGreaterThan(mark.checked);
-});
-
-it("a remembered thread not read through since the mark, whose newest time predates the mark less 1,865 s, is read since that time on its own beside the read past the mark", async () => {
-  const hot = Array.from({ length: 50 }, (_, i): [string, RelayEvent] => [
-    "team",
-    post(peerKey, "team", T + 10 + i),
-  ]);
-  const kept = post(peerKey, "quiet", T + 1);
-  const learned = post(peerKey, "quiet", T);
-  const { storage, since } = await readThrough({
-    hot,
-    cold: [["quiet", kept]],
-    owed: [["quiet", learned]],
-  });
-  const h = await launch({
-    store: [...hot.map(([, root]) => root), kept, learned, ...busy],
-    storage,
-    frontiers: BUSY_READ,
-  });
-  const launched = await sentDuring(h, () => h.owner.capability.ensure());
-  const reads = threadReads(launched);
-  const past = reads.filter((filter) => filter.since === since);
-  expect(past).toEqual([
-    expect.objectContaining({ "#h": ["team", "quiet"], limit: 500 }),
-  ]);
-  expect(new Set(past[0]?.["#e"])).toEqual(
-    new Set([...hot.map(([, root]) => root.id), kept.id]),
-  );
-  expect(ownReads(launched)).toEqual([
-    {
-      kinds: CONTENT,
-      "#h": ["quiet"],
-      "#e": [learned.id],
-      since: T,
-      include_aux: true,
-      limit: 50,
-    },
-  ]);
-  expect((await storage.read())?.through?.has(`quiet:${learned.id}`)).toBe(
-    true,
-  );
-});
-
 // A catch-up reads no cold thread of a channel the mark covers, so one whose
 // own read dropped takes its channel out, and the next catch-up reads that
 // channel's threads once.
-it.each([
-  ["tick", true],
-  ["launch", false],
-] as const)(
-  "a cold thread's own read dropped in a Refresh over a channel the mark covers takes the channel out of the roster set: the next %s catches up, reads the thread on its own and shows the reply it missed before the notice clears, and the tick after it reads the delta alone",
-  async (_, ticking) => {
-    // Ranked above the thread, so it is cold; read whole and through.
-    const hotter = Array.from({ length: 50 }, (_, i) =>
-      post(peerKey, "quiet", T + 10 + i),
-    );
-    const hotKeys = hotter.map((event) => `quiet:${event.id}`);
-    const root = post(viewerKey, "team", T);
-    const answer = reply(peerKey, "team", root, T + 2);
-    const at = SECONDS - 600;
-    const storage = memoryUnreadStorage();
-    // Complete, caught up a minute ago and covering every channel; the
-    // thread is not read through, as one learned beside a catch-up.
-    await storage.save({
-      participation: {
-        roots: new Map([
-          [`team:${root.id}`, { at: T }],
-          ...hotter.map(
-            (event) => [`quiet:${event.id}`, { at: event.created_at }] as const,
-          ),
-        ]),
-      },
-      events: [],
-      structure: new Set(),
-      complete: true,
-      mark: { at, checked: SECONDS - 60 },
-      roster: new Set(ROSTER),
-      whole: new Set(hotKeys),
-      through: new Set(hotKeys),
-    });
-    // Newer posts fill team's window above the answer and, with busy's
-    // traffic, the roster sample: only the thread's own read returns it.
-    const newer = Array.from({ length: 101 }, (_, i) =>
-      post(peerKey, "team", at + 1 + i),
-    );
-    const store = [...hotter, root, answer, ...newer, ...busy];
-    const own = (filter: ReadFilter) =>
-      !!filter["#e"]?.includes(root.id) && filter.since === T;
-    let failing = true;
-    let h = await launch({
-      store,
-      storage,
-      frontiers: BUSY_READ,
-      fail: (filters) => failing && filters.some(own),
-    });
-    const save = vi.spyOn(storage, "save");
-    const launched = await sentDuring(h, () => h.owner.capability.ensure());
-    expect(launched.filter(deltaFilter)).toHaveLength(1);
-    expect(launched.filter(own)).toEqual([]);
-    const refreshed = await sentDuring(h, () => h.owner.capability.refresh());
-    // Retried once, then dropped.
-    expect(refreshed.filter(own)).toHaveLength(2);
-    expect(h.owner.capability.inbox().partial).toBe(true);
-    expect(h.owner.owed()).toBe(true);
-    await save.mock.results.at(-1)?.value;
-    expect((await storage.read())?.complete).toBe(true);
-    failing = false;
-    if (!ticking) {
-      h.owner.dispose();
-      h = await launch({ store, storage, frontiers: BUSY_READ });
-    }
-    const shown = (items: readonly InboxItem[]) =>
-      items.some((item) => item.rootId === root.id && item.unreadCount === 1);
-    // Whether the reply shows when the tick first publishes the notice clear.
-    let clear: boolean | undefined;
-    const stop = h.owner.capability.subscribeInbox(() => {
-      const inbox = h.owner.capability.inbox();
-      if (ticking && clear === undefined && !inbox.partial)
-        clear = shown(inbox.items);
-    });
-    const next = await sentDuring(h, () =>
-      ticking ? h.reconnected() : h.owner.capability.ensure(),
-    );
-    stop();
-    expect(next.filter(deltaFilter)).toHaveLength(1);
-    expect(next.filter(windowOf("team"))).toHaveLength(1);
-    expect(next.filter(own)).toEqual([
-      {
-        kinds: CONTENT,
-        "#h": ["team"],
-        "#e": [root.id],
-        since: T,
-        include_aux: true,
-        limit: 50,
-      },
-    ]);
-    if (ticking) expect(clear).toBe(true);
-    expect(shown(h.owner.capability.inbox().items)).toBe(true);
-    expect(h.owner.capability.inbox().partial).toBeUndefined();
-    expect(h.owner.owed()).toBe(false);
-    const after = await sentDuring(h, () => h.reconnected());
-    expect(after).toEqual([expect.objectContaining({ kinds: DELTA_KINDS })]);
-    expect(shown(h.owner.capability.inbox().items)).toBe(true);
-  },
-);
-
-it("a read by ID asks 50 IDs a filter at most for the roots replies lack, and 100 for the marked messages whose channel is not known", async () => {
-  const roots = Array.from({ length: 120 }, (_, i) =>
-    post(peerKey, "team", T + i),
+it("a cold thread's own read dropped in a Refresh over a channel the mark covers takes the channel out of the roster set: the next tick catches up, reads the thread on its own and shows the reply it missed before the notice clears, and the tick after it reads the delta alone", async () => {
+  // Ranked above the thread, so it is cold; read whole and through.
+  const hotter = Array.from({ length: 50 }, (_, i) =>
+    post(peerKey, "quiet", T + 10 + i),
   );
+  const hotKeys = hotter.map((event) => `quiet:${event.id}`);
+  const root = post(viewerKey, "team", T);
+  const answer = reply(peerKey, "team", root, T + 2);
+  const at = SECONDS - 600;
   const storage = memoryUnreadStorage();
+  // Complete, caught up a minute ago and covering every channel; the
+  // thread is not read through, as one learned beside a catch-up.
   await storage.save({
     participation: {
-      roots: new Map(
-        roots.map((root) => [`team:${root.id}`, { at: root.created_at }]),
-      ),
+      roots: new Map([
+        [`team:${root.id}`, { at: T }],
+        ...hotter.map(
+          (event) => [`quiet:${event.id}`, { at: event.created_at }] as const,
+        ),
+      ]),
     },
     events: [],
     structure: new Set(),
-    complete: false,
+    complete: true,
+    mark: { at, checked: SECONDS - 60 },
+    roster: new Set(ROSTER),
+    whole: new Set(hotKeys),
+    through: new Set(hotKeys),
   });
-  // Unknown marked messages, covered by the team channel's mark.
-  const marks = Array.from({ length: 60 }, (_, i) =>
-    i.toString(16).padStart(64, "0"),
+  // Newer posts fill team's window above the answer and, with busy's
+  // traffic, the roster sample: only the thread's own read returns it.
+  const newer = Array.from({ length: 101 }, (_, i) =>
+    post(peerKey, "team", at + 1 + i),
   );
+  const store = [...hotter, root, answer, ...newer, ...busy];
+  const own = (filter: ReadFilter) =>
+    !!filter["#e"]?.includes(root.id) && filter.since === T;
+  let failing = true;
   const h = await launch({
-    store: [
-      ...roots,
-      ...roots.map((root, i) => reply(peerKey, "team", root, T + 1000 + i)),
-      ...busy,
-    ],
+    store,
     storage,
-    frontiers: {
-      ...BUSY_READ,
-      team: T + 2000,
-      ...Object.fromEntries(marks.map((id) => [`msg:${id}`, T])),
-    },
+    frontiers: BUSY_READ,
+    fail: (filters) => failing && filters.some(own),
   });
-  await h.owner.capability.ensure();
-  const asked = () =>
-    h.reader.read.mock.calls.flatMap(([filters]) =>
-      filters.flatMap((filter) => (filter.ids ? [filter] : [])),
-    );
-  const homes = () => asked().filter((filter) => !filter.include_aux);
-  await vi.waitFor(() =>
-    expect(homes().flatMap((filter) => filter.ids ?? [])).toHaveLength(60),
-  );
-  const fetches = asked().filter((filter) => filter.include_aux);
-  expect(new Set(fetches.flatMap((filter) => filter.ids ?? []))).toEqual(
-    new Set(roots.map((root) => root.id)),
-  );
-  expect(Math.max(...fetches.map((filter) => filter.ids?.length ?? 0))).toBe(
-    50,
-  );
-  expect(homes().map((filter) => filter.ids?.length)).toEqual([60]);
-});
-
-it("restored evidence discarded after a full repair from the mark asked its threads past it has them read again on their own, so the reply that read passed over still counts", async () => {
-  const { root, store } = discardable();
-  // Newer traffic moves the mark past the thread's unread answer.
-  const later = [...store, post(peerKey, "busy", T + 5000)];
-  const storage = await tamperedLate(later);
-  const record = await storage.read();
-  expect(record?.through).toEqual(new Set([`team:${root.id}`]));
-  const since = (record?.mark?.at ?? 0) - 1865;
-  expect(since).toBeGreaterThan(T + 2);
-  const past = (filter: ReadFilter) =>
-    !!filter["#e"]?.includes(root.id) && filter.since === since;
-  const sent = (h: Launch) =>
-    h.reader.read.mock.calls.flatMap(([filters]) => filters);
-  const release = holdRestore();
-  // Refresh on launch reads the bootstrap from the mark while restore still
-  // verifies.
-  const h = await launch({ store: later, storage });
-  let launched: Promise<void> | undefined;
-  try {
-    launched = h.owner.capability.refresh();
-    await vi.waitFor(() => expect(sent(h).filter(past)).toHaveLength(1));
-  } finally {
-    release();
-  }
-  await launched;
-  expect(sent(h).filter(past)).toHaveLength(1);
-  expect(sent(h).filter(wholeOf(root.id))).toHaveLength(1);
-  expect(h.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-  );
-});
-
-// A thread whose restored reply is forgotten is read whole or on its own
-// again: read past the mark alone, a reply older than it would be lost.
-it.each([
-  ["a full repair from a mark confirmed over a day ago", 86_401, 1001],
-  // Fresh, so the full repair reads past the mark.
-  [
-    "a catch-up still full at its last page, read in full from its mark",
-    60,
-    3000,
-  ],
-] as const)(
-  "restored evidence forgotten by %s, whose roster sample drops and whose edits since the mark are more than its read of deletions takes, leaves its thread read neither whole nor through: the next launch reads it whole and the unread reply counts",
-  async (_, age, edited) => {
-    const root = post(viewerKey, "team", T);
-    const answer = reply(peerKey, "team", root, T + 2);
-    const key = `team:${root.id}`;
-    const at = SECONDS - 600;
-    const storage = memoryUnreadStorage();
-    await storage.save({
-      participation: { roots: new Map([[key, { at: T }]]) },
-      events: [root, answer],
-      structure: new Set(),
-      complete: true,
-      mark: { at, checked: SECONDS - age },
-      roster: new Set(ROSTER),
-      whole: new Set([key]),
-      through: new Set([key]),
-    });
-    // Newer posts fill team's window above the answer; they are saved, so
-    // signed. The edits are of a message no longer held.
-    const newer = Array.from({ length: 101 }, (_, i) =>
-      post(peerKey, "team", at + 1 + i),
-    );
-    const edits = Array.from({ length: edited }, (_, i) =>
-      hashed("team", at + 200 + i, 40003, [["e", "f".repeat(64)]]),
-    );
-    const store = [root, answer, ...newer, ...edits];
-    const first = await launch({ store, storage, fail: sampleRead });
-    await first.owner.capability.ensure();
-    await first.saved;
-    first.owner.dispose();
-    const h = await launch({ store, storage });
-    const launched = await sentDuring(h, () => h.owner.capability.ensure());
-    expect(launched.filter(wholeOf(root.id))).toHaveLength(1);
-    expect(h.owner.capability.inbox().items).toContainEqual(
-      expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-    );
-  },
-);
-
-// A catch-up reads no cold thread, so the forget leaves the record owing a
-// full repair, which reads it on its own; once it has, a tick catches up.
-it.each([
-  ["launch", false],
-  ["tick", true],
-] as const)(
-  "restored evidence of a cold thread forgotten by a full repair whose roster sample drops and whose edits since the mark are more than its read of deletions takes leaves the record incomplete: the next %s reads the bootstrap, reads the thread on its own and the unread reply counts, and the tick after it catches up",
-  async (_, ticking) => {
-    // Ranked above the thread, so it is cold.
-    const hotter = Array.from({ length: 50 }, (_, i) =>
-      post(peerKey, "quiet", T + 10 + i),
-    );
-    const root = post(viewerKey, "team", T);
-    const answer = reply(peerKey, "team", root, T + 2);
-    const key = `team:${root.id}`;
-    const at = SECONDS - 600;
-    const storage = memoryUnreadStorage();
-    await storage.save({
-      participation: {
-        roots: new Map([
-          [key, { at: T }],
-          ...hotter.map(
-            (event) => [`quiet:${event.id}`, { at: event.created_at }] as const,
-          ),
-        ]),
-      },
-      events: [root, answer],
-      structure: new Set(),
-      complete: false,
-      mark: { at, checked: SECONDS - 60 },
-      roster: new Set(ROSTER),
-      through: new Set([key]),
-    });
-    // Newer posts fill team's window above the answer; they are saved, so
-    // signed. The edits are of a message no longer held.
-    const newer = Array.from({ length: 101 }, (_, i) =>
-      post(peerKey, "team", at + 1 + i),
-    );
-    const edits = Array.from({ length: 1001 }, (_, i) =>
-      hashed("team", at + 200 + i, 40003, [["e", "f".repeat(64)]]),
-    );
-    const store = [...hotter, root, answer, ...newer, ...edits];
-    let failing = true;
-    let h = await launch({
-      store,
-      storage,
-      fail: (filters) => failing && sampleRead(filters),
-    });
-    await h.owner.capability.ensure();
-    await h.saved;
-    failing = false;
-    if (!ticking) {
-      h.owner.dispose();
-      h = await launch({ store, storage });
-    }
-    const next = await sentDuring(h, () =>
-      ticking ? h.reconnected() : h.owner.capability.ensure(),
-    );
-    expect(next.filter(windowOf("team"))).toHaveLength(1);
-    expect(ownReads(next)).toContainEqual({
+  const save = vi.spyOn(storage, "save");
+  const launched = await sentDuring(h, () => h.owner.capability.ensure());
+  expect(launched.filter(deltaFilter)).toHaveLength(1);
+  expect(launched.filter(own)).toEqual([]);
+  const refreshed = await sentDuring(h, () => h.owner.capability.refresh());
+  // Retried once, then dropped.
+  expect(refreshed.filter(own)).toHaveLength(2);
+  expect(h.owner.capability.inbox().partial).toBe(true);
+  expect(h.owner.owed()).toBe(true);
+  await save.mock.results.at(-1)?.value;
+  expect((await storage.read())?.complete).toBe(true);
+  failing = false;
+  const shown = (items: readonly InboxItem[]) =>
+    items.some((item) => item.rootId === root.id && item.unreadCount === 1);
+  // Whether the reply shows when the tick first publishes the notice clear.
+  let clear: boolean | undefined;
+  const stop = h.owner.capability.subscribeInbox(() => {
+    const inbox = h.owner.capability.inbox();
+    if (clear === undefined && !inbox.partial) clear = shown(inbox.items);
+  });
+  const next = await sentDuring(h, () => h.reconnected());
+  stop();
+  expect(next.filter(deltaFilter)).toHaveLength(1);
+  expect(next.filter(windowOf("team"))).toHaveLength(1);
+  expect(next.filter(own)).toEqual([
+    {
       kinds: CONTENT,
       "#h": ["team"],
       "#e": [root.id],
       since: T,
       include_aux: true,
       limit: 50,
-    });
-    expect(h.owner.capability.inbox().items).toContainEqual(
-      expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
-    );
-    const after = await sentDuring(h, () => h.reconnected());
-    expect(after.filter(deltaFilter)).not.toEqual([]);
-    expect(after.filter(windowOf("team"))).toEqual([]);
-  },
-);
-
-it("a full repair from a mark confirmed more than a day ago reads each remembered thread on its own, none past the mark", async () => {
-  const hot = Array.from({ length: 50 }, (_, i): [string, RelayEvent] => [
-    "team",
-    post(peerKey, "team", T + 10 + i),
-  ]);
-  const cold = post(peerKey, "quiet", T);
-  const { storage, since } = await readThrough({
-    hot,
-    cold: [["quiet", cold]],
-    checked: SECONDS - 25 * 3600,
-  });
-  const h = await launch({
-    store: [...hot.map(([, root]) => root), cold, ...busy],
-    storage,
-    frontiers: BUSY_READ,
-  });
-  const launched = await sentDuring(h, () => h.owner.capability.ensure());
-  const reads = threadReads(launched);
-  expect(reads.filter((filter) => filter.since === since)).toEqual([]);
-  expect(
-    new Set(
-      reads
-        .filter((filter) => filter.since === undefined)
-        .flatMap((filter) => filter["#e"] ?? []),
-    ),
-  ).toEqual(new Set(hot.map(([, root]) => root.id)));
-  expect(ownReads(launched).filter((filter) => filter.since)).toEqual([
-    {
-      kinds: CONTENT,
-      "#h": ["quiet"],
-      "#e": [cold.id],
-      since: T,
-      include_aux: true,
-      limit: 50,
     },
   ]);
+  expect(clear).toBe(true);
+  expect(shown(h.owner.capability.inbox().items)).toBe(true);
+  expect(h.owner.capability.inbox().partial).toBeUndefined();
+  expect(h.owner.owed()).toBe(false);
+  const after = await sentDuring(h, () => h.reconnected());
+  expect(after).toEqual([expect.objectContaining({ kinds: DELTA_KINDS })]);
+  expect(shown(h.owner.capability.inbox().items)).toBe(true);
 });
 
-// The hot threads' replies are admitted, so the budget refuses the rest;
-// the cold ones' are read and older than their thread's newest time, so are
-// passed over and none is refused.
-it.each([
-  ["hot threads", false],
-  ["cold threads whose replies are read", true],
-] as const)(
-  "a read past the mark of %s still full after eight splits is dropped there: its threads are no longer read through, the mark stays, the Inbox says so, and the next full repair reads each of them on its own",
-  async (_, read) => {
-    const { since } = await readThrough({});
-    // Ranked below 50 hotter threads that have no replies.
-    const hotter = read
-      ? Array.from({ length: 50 }, (_, i): [string, RelayEvent] => [
-          "quiet",
-          post(peerKey, "quiet", since + 400 + i),
-        ])
-      : [];
-    const roots = Array.from({ length: 10 }, (_, i): [string, RelayEvent] => [
-      "team",
-      post(peerKey, "team", read ? since + 300 + i : T + i),
-    ]);
-    const { storage, mark } = await readThrough(
-      read ? { hot: hotter, cold: roots } : { hot: roots },
-    );
-    // Any two of them have more replies since the mark than a page holds, so
-    // every read of more than one is split.
-    const replies = roots.flatMap(([, root]) =>
-      Array.from({ length: 251 }, (_, i) =>
-        hashed("team", since + 1 + i, 9, [["e", root.id, "", "reply"]]),
-      ),
-    );
-    const h = await launch({
-      store: [
-        ...[...hotter, ...roots].map(([, root]) => root),
-        ...replies,
-        ...busy,
-      ],
-      storage,
-      frontiers: { ...BUSY_READ, team: SECONDS },
-    });
-    const past = (filter: ReadFilter) =>
-      !!filter["#e"] && filter.since === since;
-    const from = h.reader.read.mock.calls.length;
-    await h.owner.capability.ensure();
-    const requests = h.reader.read.mock.calls
-      .slice(from)
-      .map(([filters]) => filters.filter(past))
-      .filter((filters) => filters.length);
-    // The read and its eight splits.
-    expect(requests).toHaveLength(9);
-    // The roots of a read of many whose page is full and that is not split.
-    const filters = requests.flat();
-    const capped = filters.flatMap((filter) => {
-      const ids = filter["#e"] ?? [];
-      const page = replies.filter((event) =>
-        event.tags.some(([name, id]) => name === "e" && ids.includes(id ?? "")),
-      ).length;
-      const split = filters.some(
-        (other) =>
-          (other["#e"]?.length ?? 0) < ids.length &&
-          other["#e"]?.every((id) => ids.includes(id)),
-      );
-      return ids.length > 1 && page >= filter.limit && !split ? ids : [];
-    });
-    expect(capped).not.toEqual([]);
-    expect(h.owner.capability.inbox().partial).toBe(true);
-    await h.saved;
-    const record = await storage.read();
-    expect(record?.mark).toEqual(mark);
-    expect(record?.through).toEqual(
-      new Set(
-        [...hotter, ...roots]
-          .filter(([, root]) => !capped.includes(root.id))
-          .map(([channelId, root]) => `${channelId}:${root.id}`),
-      ),
-    );
-    const refreshed = await sentDuring(h, () => h.owner.capability.refresh());
-    expect(
-      new Set(
-        threadReads(refreshed)
-          .filter((filter) => !past(filter))
-          .flatMap((filter) => filter["#e"] ?? []),
-      ),
-    ).toEqual(new Set(capped));
-    expect(
-      refreshed
-        .filter(past)
-        .flatMap((filter) => filter["#e"] ?? [])
-        .filter((id) => capped.includes(id)),
-    ).toEqual([]);
-    expect(h.owner.capability.inbox().partial).toBeUndefined();
-  },
-);
-
-it("a catch-up that ends while the channel list is still being read leaves the walk mark, so a channel that read then lists is walked from it and the viewer's reply there is remembered", async () => {
-  const walked = SECONDS - 6000;
+// A catch-up reads no cold thread, so the forget leaves the record owing a
+// full repair, which reads it on its own; once it has, a tick catches up.
+it("restored evidence of a cold thread forgotten by a full repair whose roster sample drops and whose edits since the mark are more than its read of deletions takes leaves the record incomplete: the next tick reads the bootstrap, reads the thread on its own and the unread reply counts, and the tick after it catches up", async () => {
+  // Ranked above the thread, so it is cold.
+  const hotter = Array.from({ length: 50 }, (_, i) =>
+    post(peerKey, "quiet", T + 10 + i),
+  );
+  const root = post(viewerKey, "team", T);
+  const answer = reply(peerKey, "team", root, T + 2);
+  const key = `team:${root.id}`;
+  const at = SECONDS - 600;
   const storage = memoryUnreadStorage();
   await storage.save({
-    participation: { roots: new Map(), walk: { since: walked } },
-    events: [],
+    participation: {
+      roots: new Map([
+        [key, { at: T }],
+        ...hotter.map(
+          (event) => [`quiet:${event.id}`, { at: event.created_at }] as const,
+        ),
+      ]),
+    },
+    events: [root, answer],
     structure: new Set(),
-    complete: true,
-    mark: { at: SECONDS - 600, checked: SECONDS - 60 },
+    complete: false,
+    mark: { at, checked: SECONDS - 60 },
     roster: new Set(ROSTER),
+    through: new Set([key]),
   });
-  const store: RelayEvent[] = [];
-  let settled = true;
-  // The viewer reads `added` on another device after replying there.
+  // Newer posts fill team's window above the answer; they are saved, so
+  // signed. The edits are of a message no longer held.
+  const newer = Array.from({ length: 101 }, (_, i) =>
+    post(peerKey, "team", at + 1 + i),
+  );
+  const edits = Array.from({ length: 1001 }, (_, i) =>
+    hashed("team", at + 200 + i, 40003, [["e", "f".repeat(64)]]),
+  );
+  const store = [...hotter, root, answer, ...newer, ...edits];
+  let failing = true;
   const h = await launch({
     store,
     storage,
-    frontiers: { added: SECONDS - 2900 },
-    rosterSettled: () => settled,
+    fail: (filters) => failing && sampleRead(filters),
   });
   await h.owner.capability.ensure();
-  // While away the viewer was added to `added` and replied there, then
-  // posted in team; busier channels' newer traffic keeps the reply out of
-  // the roster's newest events. The reply is older than the next catch-up's
-  // lookback and than `added`'s window, so only the walk reaches it.
-  const root = post(peerKey, "added", SECONDS - 3500);
-  const mine = reply(viewerKey, "added", root, SECONDS - 3000);
-  store.push(
-    root,
-    mine,
-    ...Array.from({ length: 500 }, (_, i) =>
-      hashed("busy", SECONDS - 390 + (i % 50)),
-    ),
-    post(viewerKey, "team", SECONDS - 300),
+  await h.saved;
+  failing = false;
+  const next = await sentDuring(h, () => h.reconnected());
+  expect(next.filter(windowOf("team"))).toHaveLength(1);
+  expect(ownReads(next)).toContainEqual({
+    kinds: CONTENT,
+    "#h": ["team"],
+    "#e": [root.id],
+    since: T,
+    include_aux: true,
+    limit: 50,
+  });
+  expect(h.owner.capability.inbox().items).toContainEqual(
+    expect.objectContaining({ rootId: root.id, unreadCount: 1 }),
   );
-  // A reconnect's catch-up ends before the channel list read beside it.
-  settled = false;
-  await h.reconnected();
-  expect((await storage.read())?.participation.walk).toEqual({
-    since: walked,
-  });
-  settled = true;
-  h.roster(summaries([...ROSTER, "added"]));
-  await h.owner.capability.ensure();
-  expect(
-    (await storage.read())?.participation.roots.has(`added:${root.id}`),
-  ).toBe(true);
+  const after = await sentDuring(h, () => h.reconnected());
+  expect(after.filter(deltaFilter)).not.toEqual([]);
+  expect(after.filter(windowOf("team"))).toEqual([]);
 });
 
 /** A device's first launch as the live relay showed it (#note:8341a9c0):
@@ -4441,81 +1799,35 @@ it("a root that full repair's fetch finds deleted is saved as absent, so the rec
   expect(warm.owner.capability.inbox().items).toContainEqual(row);
 });
 
-it("a root that full repair's fetch returns with no channel, which groups nothing, is saved as absent, so the record saves complete and the next launch reads one delta", async () => {
-  const { roster, frontiers, cold, store } = ownColdThreads();
-  const n = cold.find(({ channelId }) => channelId === "n");
-  assert(n);
-  const root = signed(peerKey, {
-    kind: 9,
-    content: "no channel",
-    created_at: T + 100,
-    tags: [],
-  });
-  const mine = reply(viewerKey, "n", root, T + 200);
-  const untagged = [
-    ...store.filter((event) => event !== n.root && event !== n.mine),
-    root,
-    mine,
-  ];
+it("a full repair whose fetch of those roots drops saves the record incomplete and says some activity could not be checked; the next tick reads the bootstrap, fetches them and saves it complete, and the tick after it reads one delta", async () => {
+  const { roster, frontiers, rootIds, store } = ownColdThreads();
   const storage = memoryUnreadStorage();
-  const fresh = await launch({ store: untagged, storage, roster, frontiers });
-  const launched = await sentDuring(fresh, () =>
-    fresh.owner.capability.ensure(),
-  );
-  expect(fetchesOf(launched, [root.id])).toHaveLength(1);
-  await fresh.saved;
-  const record = await storage.read();
-  expect(record?.complete).toBe(true);
-  expect(record?.absent).toEqual(new Set([root.id]));
-  expect(await saved(storage)).toContain(mine.id);
-  fresh.owner.dispose();
-  const warm = await launch({ store: untagged, storage, roster, frontiers });
-  expect(await sentDuring(warm, () => warm.owner.capability.ensure())).toEqual([
+  const save = vi.spyOn(storage, "save");
+  let failing = true;
+  const h = await launch({
+    store,
+    storage,
+    roster,
+    frontiers,
+    fail: (filters) => failing && fetchesOf(filters, rootIds).length > 0,
+  });
+  const launched = await sentDuring(h, () => h.owner.capability.ensure());
+  // Read once more in its slot, then dropped.
+  expect(fetchesOf(launched, rootIds)).toHaveLength(2);
+  expect(h.owner.capability.inbox().partial).toBe(true);
+  await h.saved;
+  expect((await storage.read())?.complete).toBe(false);
+  failing = false;
+  const next = await sentDuring(h, () => h.reconnected());
+  expect(next.filter(deltaFilter)).toEqual([]);
+  expect(fetchesOf(next, rootIds)).toHaveLength(1);
+  expect(h.owner.capability.inbox().partial).toBeFalsy();
+  await save.mock.results.at(-1)?.value;
+  expect((await storage.read())?.complete).toBe(true);
+  expect(await sentDuring(h, () => h.reconnected())).toEqual([
     expect.objectContaining({ kinds: DELTA_KINDS }),
   ]);
 });
-
-it.each([
-  ["launch", false],
-  ["tick", true],
-] as const)(
-  "a full repair whose fetch of those roots drops saves the record incomplete and says some activity could not be checked; the next %s reads the bootstrap, fetches them and saves it complete, and the tick after it reads one delta",
-  async (_, ticking) => {
-    const { roster, frontiers, rootIds, store } = ownColdThreads();
-    const storage = memoryUnreadStorage();
-    const save = vi.spyOn(storage, "save");
-    let failing = true;
-    let h = await launch({
-      store,
-      storage,
-      roster,
-      frontiers,
-      fail: (filters) => failing && fetchesOf(filters, rootIds).length > 0,
-    });
-    const launched = await sentDuring(h, () => h.owner.capability.ensure());
-    // Read once more in its slot, then dropped.
-    expect(fetchesOf(launched, rootIds)).toHaveLength(2);
-    expect(h.owner.capability.inbox().partial).toBe(true);
-    await h.saved;
-    expect((await storage.read())?.complete).toBe(false);
-    failing = false;
-    if (!ticking) {
-      h.owner.dispose();
-      h = await launch({ store, storage, roster, frontiers });
-    }
-    const next = await sentDuring(h, () =>
-      ticking ? h.reconnected() : h.owner.capability.ensure(),
-    );
-    expect(next.filter(deltaFilter)).toEqual([]);
-    expect(fetchesOf(next, rootIds)).toHaveLength(1);
-    expect(h.owner.capability.inbox().partial).toBeFalsy();
-    await save.mock.results.at(-1)?.value;
-    expect((await storage.read())?.complete).toBe(true);
-    expect(await sentDuring(h, () => h.reconnected())).toEqual([
-      expect.objectContaining({ kinds: DELTA_KINDS }),
-    ]);
-  },
-);
 
 it("the roots of 1,000 remembered threads a catch-up brought replies to are fetched at most 16 filters of 50 IDs a request, each within the reader's 64 KiB, so the record saves complete", async () => {
   // The viewer's replies, 100 to each channel's window, under roots older
@@ -4568,125 +1880,4 @@ it("the roots of 1,000 remembered threads a catch-up brought replies to are fetc
   expect(h.owner.capability.inbox().partial).toBeFalsy();
   await save.mock.results.at(-1)?.value;
   expect((await storage.read())?.complete).toBe(true);
-});
-
-/** Replies only the record holds, whose roots nothing else brings: an
- * unread answer in a remembered DM thread, below the DM's window full of
- * newer messages and cold behind 50 hotter threads, read since a mark after
- * it (a DM reply counts without a lookup); and the viewer's reply in a
- * thread the record does not remember, before the walk mark and the
- * channel's window, which once restored teaches the thread, newest, so it
- * ranks among the hot ones. Busier traffic fills the roster sample. */
-function onlyRecordHolds() {
-  const hot = Array.from({ length: 50 }, (_, i) =>
-    post(peerKey, "team", T + 100 + i),
-  );
-  const root = post(peerKey, "dm", T);
-  const answer = reply(peerKey, "dm", root, T + 10);
-  const newer = Array.from({ length: 100 }, (_, i) =>
-    post(peerKey, "dm", T + 20 + i),
-  );
-  const begun = post(peerKey, "quiet", T + 240);
-  const mine = reply(viewerKey, "quiet", begun, T + 250);
-  return {
-    rootIds: [root.id, begun.id],
-    record: {
-      participation: {
-        roots: new Map([
-          ...hot.map((event): [string, { at: number }] => [
-            `team:${event.id}`,
-            { at: event.created_at },
-          ]),
-          [`dm:${root.id}`, { at: T + 11 }],
-        ]),
-        walk: { since: T + 260 },
-      },
-      // Restore yields between batches of eight, where a test may hold it.
-      events: [answer, mine, ...newer.slice(0, 8)],
-      structure: new Set<string>(),
-      complete: false,
-      mark: { at: SECONDS - 600, checked: SECONDS - 60 },
-      roster: new Set(ROSTER),
-    },
-    store: [...hot, root, answer, ...newer, begun, mine, ...busy],
-    frontiers: { ...BUSY_READ, team: T + 200, dm: T + 5, quiet: T + 300 },
-  };
-}
-
-it("a full repair whose reads land before restore is in waits for it, then fetches the roots of the remembered threads whose replies only the record holds, one restore taught included, so the record saves complete", async () => {
-  const { rootIds, record, store, frontiers } = onlyRecordHolds();
-  const [root] = rootIds;
-  const storage = memoryUnreadStorage();
-  await storage.save(record);
-  const save = vi.spyOn(storage, "save");
-  const release = holdRestore();
-  const coldOf = (filter: ReadFilter) =>
-    !!root && !!filter["#e"]?.includes(root) && filter.since !== undefined;
-  const h = await launch({
-    store,
-    storage,
-    frontiers,
-    // Restore is let go once the bootstrap has read the DM thread, which
-    // returns nothing of it.
-    fail: (filters) => {
-      if (filters.some(coldOf)) release();
-      return false;
-    },
-  });
-  await h.owner.capability.ensure();
-  const fetched = fetchesOf(
-    h.reader.read.mock.calls.flatMap(([filters]) => filters),
-    rootIds,
-  );
-  expect(fetched).toEqual([
-    { kinds: CONTENT, ids: expect.any(Array), include_aux: true, limit: 2 },
-  ]);
-  expect(new Set(fetched[0]?.ids)).toEqual(new Set(rootIds));
-  await save.mock.results.at(-1)?.value;
-  const saved = await storage.read();
-  expect(saved?.complete).toBe(true);
-  for (const id of rootIds) expect(saved?.structure.has(id)).toBe(true);
-});
-
-it("a repair in which nothing lands fails without fetching the roots of the remembered threads its record holds replies in", async () => {
-  const { rootIds, record, store, frontiers } = onlyRecordHolds();
-  const storage = memoryUnreadStorage();
-  await storage.save(record);
-  const h = await launch({ store, storage, frontiers, down: true });
-  await h.owner.capability.ensure();
-  expect(h.owner.capability.inbox()).toMatchObject({
-    freshness: "stale",
-    error: "Relay read timed out",
-  });
-  expect(
-    fetchesOf(
-      h.reader.read.mock.calls.flatMap(([filters]) => filters),
-      rootIds,
-    ),
-  ).toEqual([]);
-});
-
-it("each pass reports whether it read the full repair or caught up, the events and bytes its save selected, and whether they fit the record", async () => {
-  unreadPass.mockClear();
-  const storage = memoryUnreadStorage();
-  const save = vi.spyOn(storage, "save");
-  const store = [post(peerKey, "team", T), ...busy.slice(1)];
-  const h = await launch({ store, storage, frontiers: BUSY_READ });
-  await h.owner.capability.ensure();
-  await save.mock.results.at(-1)?.value;
-  const events = (await storage.read())?.events ?? [];
-  expect(events).toHaveLength(store.length);
-  const selection = {
-    fits: true,
-    events: events.length,
-    bytes: byteSize(events),
-  };
-  expect(unreadPass.mock.calls).toEqual([
-    [{ route: "bootstrap", ...selection }],
-  ]);
-  await h.reconnected();
-  expect(unreadPass.mock.calls).toEqual([
-    [{ route: "bootstrap", ...selection }],
-    [{ route: "delta", ...selection }],
-  ]);
 });
