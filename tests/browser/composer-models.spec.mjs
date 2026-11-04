@@ -1,5 +1,34 @@
 import { test, expect } from "./source-fixture.mjs";
 
+test.afterEach(async ({ context }, testInfo) => {
+  if (
+    testInfo.status === testInfo.expectedStatus ||
+    !testInfo.title.includes("shares storage and lock ownership")
+  )
+    return;
+  for (const [index, page] of context.pages().entries()) {
+    const snapshot = await page.evaluate(async () => ({
+      picks: await (
+        await import("/src/features/messages/solo-model-picks.ts")
+      ).readSoloModelPicks(
+        "composer-models-fixture",
+        "solo:model-picks:fixture",
+      ),
+      models: [
+        ...document.querySelectorAll('button[aria-label^="Model for"]'),
+      ].map((button) => ({
+        name: button.getAttribute("aria-label"),
+        text: button.textContent,
+      })),
+      locks: await navigator.locks.query(),
+    }));
+    await testInfo.attach(`model-persistence-page-${index}.json`, {
+      body: JSON.stringify(snapshot, null, 2),
+      contentType: "application/json",
+    });
+  }
+});
+
 // Capture transitions at the DOM-change boundary. transitionrun is queued and
 // can arrive after a busy renderer has already finished the entrance.
 async function holdPickerMotion(page) {
@@ -43,6 +72,49 @@ test("effort picker opens, follows the keyboard and returns focus", async ({
   await page.keyboard.press("ArrowLeft");
   await expect(slider).toHaveAttribute("aria-valuetext", "Medium");
   await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+});
+
+test("Solo first-send choices stay selected until explicit reset", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/tests/fixtures/composer-models.html?solo");
+  const trigger = page.getByRole("button", {
+    name: "Model and effort for this chat",
+  });
+  await expect(trigger).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("solo-model-picker-before-selection.png"),
+  });
+  await trigger.click();
+  await page
+    .getByRole("button", { name: "Model for Honey in this chat" })
+    .click();
+  await page.getByRole("menuitemradio", { name: "Alternate model" }).click();
+  const effort = page.getByRole("slider", {
+    name: "Effort for Honey in this chat",
+  });
+  await expect(effort).toHaveAttribute("aria-valuetext", "Medium");
+  await effort.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(effort).toHaveAttribute("aria-valuetext", "High");
+  await page.keyboard.press("Escape");
+  await expect(trigger).toHaveAttribute("data-selected", "");
+
+  await trigger.click();
+  const popup = page.getByRole("dialog");
+  await expect(
+    popup.getByRole("button", { name: "Model for Honey in this chat" }),
+  ).toContainText("Alternate model");
+  await expect(effort).toHaveAttribute("aria-valuetext", "High");
+  await expect(
+    popup.getByRole("button", { name: "Reset model and effort" }),
+  ).toBeVisible();
+  await popup.screenshot({ path: testInfo.outputPath("solo-first-send.png") });
+
+  await popup.getByRole("button", { name: "Reset model and effort" }).click();
+  await expect(trigger).not.toHaveAttribute("data-selected");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(trigger).toBeFocused();
 });
 
@@ -216,4 +288,289 @@ test("keyboard-opened picker stays settled when switching to the pointer", async
   );
   expect(after.x).toBeCloseTo(before.x, 0);
   expect(after.opacity).toBe(1);
+});
+
+// Real same-origin IDB transactions, notifications and Web Locks span two pages; mounted tests
+// own pending intent, resets, Send and refused-start lifecycle permutations.
+test("Solo model persistence shares storage and lock ownership across pages", async ({
+  page,
+  context,
+}) => {
+  const other = await context.newPage();
+  await Promise.all([
+    page.goto("/tests/fixtures/composer-models.html?solo&persist"),
+    other.goto("/tests/fixtures/composer-models.html?solo&persist"),
+  ]);
+  await page.evaluate(async () => {
+    const { lockSoloModelPicks } = await import(
+      "/src/features/messages/solo-model-picks.ts"
+    );
+    const gate = new Promise((resolve) => {
+      window.releaseModelLock = resolve;
+    });
+    await new Promise((resolve) => {
+      window.modelLock = lockSoloModelPicks("composer-models-fixture", () => {
+        resolve();
+        return gate;
+      });
+    });
+  });
+  const trigger = (page) =>
+    page.getByRole("button", { name: "Model and effort for this chat" });
+  try {
+    for (const [target, name] of [
+      [page, "Honey"],
+      [other, "Bumble"],
+    ]) {
+      await trigger(target).click();
+      await target
+        .getByRole("button", { name: `Model for ${name} in this chat` })
+        .click();
+      await target
+        .getByRole("menuitemradio", { name: "Alternate model" })
+        .click();
+      await expect(trigger(target)).toHaveAttribute("data-selected", "");
+    }
+    // Both UI actions completed, but the real lock is still held elsewhere.
+    expect(
+      await page.evaluate(async () =>
+        (await import("/src/features/messages/solo-model-picks.ts"))
+          .readSoloModelPicks(
+            "composer-models-fixture",
+            "solo:model-picks:fixture",
+          )
+          .then((saved) => saved.revision),
+      ),
+    ).toBeNull();
+  } finally {
+    await page.evaluate(async () => {
+      window.releaseModelLock();
+      await window.modelLock;
+    });
+  }
+  // Each page must observe its peer's edit through a post-commit notification.
+  await expect(
+    page.getByRole("button", { name: "Model for Bumble in this chat" }),
+  ).toContainText("Alternate model");
+  await expect(
+    other.getByRole("button", { name: "Model for Honey in this chat" }),
+  ).toContainText("Alternate model");
+  await page.reload();
+  await trigger(page).click();
+  await expect(
+    page.getByRole("button", { name: "Model for Honey in this chat" }),
+  ).toContainText("Alternate model");
+  await expect(
+    page.getByRole("button", { name: "Model for Bumble in this chat" }),
+  ).toContainText("Alternate model");
+});
+
+// An IDB transaction alone cannot order a purge behind a save waiting on a Web Lock.
+test("Solo choice purge waits for already queued saves", async ({ page }) => {
+  await page.goto("/tests/fixtures/composer-models.html");
+  await page.evaluate(async () => {
+    const { lockSoloModelPicks, updateSoloModelPicks } = await import(
+      "/src/features/messages/solo-model-picks.ts"
+    );
+    const { purgeSoloModelPicks } = await import(
+      "/src/features/messages/solo-model-picks-storage.ts"
+    );
+    const gate = new Promise((resolve) => {
+      window.releaseModelLock = resolve;
+    });
+    await new Promise((resolve) => {
+      window.modelLock = lockSoloModelPicks("purge", () => {
+        resolve();
+        return gate;
+      });
+    });
+    window.queuedModelSave = updateSoloModelPicks(
+      "purge",
+      "solo:model-picks:fixture",
+      new Map([["a".repeat(64), { model: "fixture" }]]),
+    );
+    window.modelPurge = purgeSoloModelPicks("purge").then(() => {
+      window.modelPurgeFinished = true;
+    });
+  });
+  try {
+    // Both implementations reach a boundary: an unlocked purge completes,
+    // while a locked one waits behind the save. Neither depends on runner speed.
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          const { pending } = await navigator.locks.query();
+          return (
+            window.modelPurgeFinished === true ||
+            pending.filter(
+              (lock) => lock.name === "buzz-solo-model-picks:purge",
+            ).length === 2
+          );
+        }),
+      )
+      .toBe(true);
+  } finally {
+    await page.evaluate(async () => {
+      window.releaseModelLock();
+      await Promise.all([
+        window.modelLock,
+        window.queuedModelSave,
+        window.modelPurge,
+      ]);
+    });
+  }
+  expect(
+    await page.evaluate(async () => {
+      const { readSoloModelPicks } = await import(
+        "/src/features/messages/solo-model-picks.ts"
+      );
+      return (await readSoloModelPicks("purge", "solo:model-picks:fixture"))
+        .revision;
+    }),
+  ).toBeNull();
+});
+
+// Real IDB commit/abort and storage availability are browser contracts, not jsdom mocks.
+test("Solo choice initialization and first-send compare/clear commit atomically", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/composer-models.html");
+  const result = await page.evaluate(async () => {
+    const { transactModelPicks, purgeSoloModelPicks } = await import(
+      "/src/features/messages/solo-model-picks-storage.ts"
+    );
+    const { readSoloModelPicks } = await import(
+      "/src/features/messages/solo-model-picks.ts"
+    );
+    const { writeView, viewRevision } = await import(
+      "/src/shared/view-state.ts"
+    );
+    const scope = "initialization",
+      kept = "initialization-other",
+      draft = "solo:model-picks:new",
+      chat = "solo:model-picks:chat";
+    const original = {
+      ["a".repeat(64)]: { model: "alternate", effort: "high" },
+    };
+    const newer = { ["b".repeat(64)]: { model: "fixture" } };
+    writeView(scope, draft, original);
+    const read = async (scope, key) =>
+      (await readSoloModelPicks(scope, key)).revision;
+    const getItem = Storage.prototype.getItem;
+    let freshWithoutLocalStorage, savedWithoutLocalStorage;
+    Storage.prototype.getItem = function (key) {
+      if (key === `buzz-view.v1:${JSON.stringify([scope, draft])}`)
+        throw new DOMException("Legacy storage unavailable");
+      return getItem.call(this, key);
+    };
+    try {
+      freshWithoutLocalStorage = await read(scope, draft);
+      await transactModelPicks(scope, [draft], (tx) =>
+        tx.write(draft, original),
+      );
+      savedWithoutLocalStorage = await read(scope, draft);
+    } finally {
+      Storage.prototype.getItem = getItem;
+    }
+    let aborted = false;
+    try {
+      await transactModelPicks(scope, [draft, chat], (tx) => {
+        tx.write(chat, original);
+        tx.write(draft, null);
+        throw new Error("Simulated failure after both writes were queued");
+      });
+    } catch {
+      aborted = true;
+    }
+    const afterAbort = [await read(scope, draft), await read(scope, chat)];
+    const baseline = (await readSoloModelPicks(scope, draft)).version;
+    const cleared = await transactModelPicks(scope, [draft, chat], (tx) => {
+      tx.write(chat, original);
+      if (tx.version(draft) !== baseline) return false;
+      tx.write(draft, null);
+      return true;
+    });
+    const afterTransfer = [await read(scope, draft), await read(scope, chat)];
+    const clearedReceipt = (await readSoloModelPicks(scope, draft)).version;
+    await transactModelPicks(scope, [draft], (tx) => tx.write(draft, original));
+    await transactModelPicks(scope, [draft], (tx) => tx.write(draft, {}));
+    const restoredAfterReset = await transactModelPicks(
+      scope,
+      [draft],
+      (tx) => {
+        if (tx.version(draft) !== clearedReceipt) return false;
+        tx.write(draft, original);
+        return true;
+      },
+    );
+    const afterReset = await read(scope, draft);
+    await transactModelPicks(scope, [draft], (tx) => tx.write(draft, null));
+    // Unrelated view-state bytes cannot resurrect consumed choices.
+    const legacy = viewRevision(scope, draft);
+    writeView(scope, draft, newer);
+    const afterLegacyWrite = await read(scope, draft);
+    await transactModelPicks(scope, [draft], (tx) => tx.write(draft, newer));
+    const clearedNewer = await transactModelPicks(scope, [draft], (tx) => {
+      if (tx.version(draft) !== baseline) return false;
+      tx.write(draft, null);
+      return true;
+    });
+    const afterCompare = await read(scope, draft);
+    const beforeEqualWrite = (await readSoloModelPicks(scope, draft)).version;
+    await transactModelPicks(scope, [draft], (tx) => tx.write(draft, newer));
+    const undidEqualWrite = await transactModelPicks(scope, [draft], (tx) => {
+      if (tx.version(draft) !== beforeEqualWrite) return false;
+      tx.write(draft, null);
+      return true;
+    });
+    const afterStaleUndo = await read(scope, draft);
+    await transactModelPicks(kept, [draft], (tx) => tx.write(draft, original));
+    // Purge cannot revive view-state bytes and does not touch another scope.
+    writeView(scope, "solo:model-picks:unread", original);
+    await purgeSoloModelPicks(scope);
+    return {
+      aborted,
+      freshWithoutLocalStorage,
+      savedWithoutLocalStorage,
+      afterAbort,
+      cleared,
+      afterTransfer,
+      restoredAfterReset,
+      afterReset,
+      undidEqualWrite,
+      afterStaleUndo,
+      legacy,
+      afterLegacyWrite,
+      clearedNewer,
+      afterCompare,
+      purged: await read(scope, draft),
+      purgedUnread: await read(scope, "solo:model-picks:unread"),
+      purgedLegacy: viewRevision(scope, draft),
+      kept: await read(kept, draft),
+    };
+  });
+  const original = JSON.stringify({
+    ["a".repeat(64)]: { model: "alternate", effort: "high" },
+  });
+  const newer = JSON.stringify({ ["b".repeat(64)]: { model: "fixture" } });
+  expect(result).toEqual({
+    aborted: true,
+    freshWithoutLocalStorage: null,
+    savedWithoutLocalStorage: original,
+    afterAbort: [original, null],
+    cleared: true,
+    afterTransfer: [null, original],
+    restoredAfterReset: false,
+    afterReset: "{}",
+    undidEqualWrite: false,
+    afterStaleUndo: newer,
+    legacy: original,
+    afterLegacyWrite: null,
+    clearedNewer: false,
+    afterCompare: newer,
+    purged: null,
+    purgedUnread: null,
+    purgedLegacy: newer,
+    kept: original,
+  });
 });
