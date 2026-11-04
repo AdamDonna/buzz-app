@@ -1839,6 +1839,70 @@ export function createUnread({
     Array.from({ length: Math.ceil(items.length / size) }, (_, i) =>
       items.slice(i * size, (i + 1) * size),
     );
+  /** The roster's windows, most recently read channels first (the viewer is
+   * active there, and their windows are the smallest; never-read channels go
+   * last), the channels with a read mark, and the roster sample: what a
+   * repair reads of the roster. */
+  function rosterReads(ids: readonly string[]) {
+    const { frontiers } = reads.state();
+    const floor = Math.floor(now() / 1000) - WINDOW_FLOOR_SECONDS;
+    const limit = Math.max(
+      WINDOW_LEAST,
+      Math.min(WINDOW_LIMIT, Math.floor(WINDOW_BUDGET / ids.length)),
+    );
+    const windows = ids
+      .map((id) => {
+        const marks = [frontiers[id], frontiers[`activity:${id}`]].filter(
+          (mark): mark is number => mark !== undefined,
+        );
+        return { id, since: marks.length ? Math.min(...marks) : undefined };
+      })
+      .sort((a, b) => (b.since ?? -1) - (a.since ?? -1));
+    return {
+      marked: new Set(
+        windows.flatMap(({ id, since }) => (since === undefined ? [] : [id])),
+      ),
+      windows: windows.map(
+        ({ id, since }): ReadFilter => ({
+          kinds: contentKinds,
+          "#h": [id],
+          since: since ?? floor,
+          include_aux: true,
+          limit,
+        }),
+      ),
+      sample: chunk(ids, SAMPLE_CHANNELS).map(
+        (part): ReadFilter => ({
+          kinds: contentKinds,
+          "#h": part,
+          include_aux: true,
+          limit: SAMPLE_LIMIT,
+        }),
+      ),
+    };
+  }
+  /** A thread read: whole, or replies since a time. */
+  const threadRead = (
+    channelId: string,
+    rootIds: readonly string[],
+    since?: number,
+  ): ReadFilter => ({
+    kinds: contentKinds,
+    "#h": [channelId],
+    "#e": [...rootIds],
+    ...(since === undefined ? {} : { since }),
+    include_aux: true,
+    limit: since === undefined ? THREAD_LIMIT : COLD_LIMIT,
+  });
+  /** The viewer's newest authored page, since the last walk when there was
+   * one. */
+  const authoredRead = (walk: ThreadParticipation["walk"]): ReadFilter => ({
+    kinds: contentKinds,
+    authors: [viewer],
+    ...(walk ? { since: walk.since } : {}),
+    include_aux: true,
+    limit: WINDOW_LIMIT,
+  });
   /** One repair's reads: whether any landed, whether one was dropped, and
    * the last failure, which is the repair's error when nothing landed. */
   type Pass = { landed: boolean; dropped: boolean; failure: unknown };
@@ -2067,18 +2131,7 @@ export function createUnread({
     // The reply each cold read begins at, by root: already seen, so its
     // return is neither evidence nor a reason to fetch its root.
     const boundary = new Map<string, string>();
-    const threads = (
-      channelId: string,
-      rootIds: readonly string[],
-      since?: number,
-    ): ReadFilter => ({
-      kinds: contentKinds,
-      "#h": [channelId],
-      "#e": [...rootIds],
-      ...(since === undefined ? {} : { since }),
-      include_aux: true,
-      limit: since === undefined ? THREAD_LIMIT : COLD_LIMIT,
-    });
+    const threads = threadRead;
     /** The roots of `keys` not yet asked for, by channel, now asked for. */
     const group = (keys: readonly string[]) => {
       const groups = new Map<string, string[]>();
@@ -2118,15 +2171,7 @@ export function createUnread({
       walk: {
         /** The authored read riding the first request: the viewer's newest
          * page, since the last walk when there was one. */
-        first(): ReadFilter {
-          return {
-            kinds: contentKinds,
-            authors: [viewer],
-            ...(stored.walk ? { since: stored.walk.since } : {}),
-            include_aux: true,
-            limit: WINDOW_LIMIT,
-          };
-        },
+        first: () => authoredRead(stored.walk),
         /** Learns the threads the viewer replied in from a walk page and
          * returns the next page when this one was full: the viewer's older
          * messages, keyset from the page's oldest. */
@@ -2486,28 +2531,7 @@ export function createUnread({
         // channels. Each bounded request owns its queue-inclusive deadline
         // after marker sync; optional profiles must not block the initial
         // user-visible observation.
-        const { frontiers } = reads.state();
-        const floor = Math.floor(now() / 1000) - WINDOW_FLOOR_SECONDS;
-        const limit = Math.max(
-          WINDOW_LEAST,
-          Math.min(WINDOW_LIMIT, Math.floor(WINDOW_BUDGET / ids.length)),
-        );
-        // Most recently read channels first: the viewer is active there, and
-        // their windows are the smallest; never-read channels go last.
-        const windows = ids
-          .map((id) => {
-            const marks = [frontiers[id], frontiers[`activity:${id}`]].filter(
-              (mark): mark is number => mark !== undefined,
-            );
-            return {
-              id,
-              since: marks.length ? Math.min(...marks) : undefined,
-            };
-          })
-          .sort((a, b) => (b.since ?? -1) - (a.since ?? -1));
-        const marked = new Set(
-          windows.flatMap(({ id, since }) => (since === undefined ? [] : [id])),
-        );
+        const { marked, windows, sample } = rosterReads(ids);
         // The viewer's newest messages ride the first request, and the
         // remembered threads most recently read or written in are read right
         // behind it, before the windows: the pinned rows are the ones the
@@ -2517,31 +2541,12 @@ export function createUnread({
         // the viewer's history, behind them.
         const pass = participating(new Set(ids), stored);
         const requests = chunk<ReadFilter>(
-          [
-            pass.walk.first(),
-            ...windows.map(({ id, since }) => ({
-              kinds: contentKinds,
-              "#h": [id],
-              since: since ?? floor,
-              include_aux: true,
-              limit,
-            })),
-          ],
+          [pass.walk.first(), ...windows],
           UNREAD_WINDOW_BATCH,
         );
         const hot = pass.hot();
         requests.splice(1, 0, ...hot);
-        requests.push(
-          ...chunk(ids, SAMPLE_CHANNELS).map((part) => [
-            {
-              kinds: contentKinds,
-              "#h": part,
-              include_aux: true,
-              limit: SAMPLE_LIMIT,
-            },
-          ]),
-          ...pass.cold(),
-        );
+        requests.push(...sample.map((filter) => [filter]), ...pass.cold());
         remembered = pass.roots;
         const run: Run = { pass, generation, queue: requests, pooling: true };
         activePass = run;
