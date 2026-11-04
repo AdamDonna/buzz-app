@@ -1666,7 +1666,7 @@ function fixture(
     return result.slice(0, filter.limit);
   };
   let journal: ReadJournal | undefined;
-  let saveFailure = false;
+  let saveFailures = 0;
   let failThreadSave = false;
   let hold: Promise<void> | undefined;
   let saveStarted = false;
@@ -1884,8 +1884,8 @@ function fixture(
             hold = undefined;
             await wait;
           }
-          if (saveFailure) {
-            saveFailure = false;
+          if (saveFailures) {
+            saveFailures--;
             throw new Error("disk full");
           }
           const next = readJournal(change(journal), viewer.pubkey);
@@ -2177,8 +2177,8 @@ function fixture(
       events.push(renamed);
       emit([renamed]);
     },
-    failSave() {
-      saveFailure = true;
+    failSave(times = 1) {
+      saveFailures = times;
     },
     failThreadSave() {
       failThreadSave = true;
@@ -4026,6 +4026,81 @@ it("Retry repeats a failed step of the next conversation after its other steps c
   await waitFor(() =>
     expect(
       h.owner.session.unread.snapshot({ kind: "channel", channelId: "room" })
+        .observedCount,
+    ).toBe(0),
+  );
+});
+
+it("Retry repeats the next shared chat's failed step after both chats' saves fail", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true });
+  // A second shared chat, marked unread, with a top-level tag and a newer
+  // threaded one: two saves, the second of which clears its mark.
+  const top = message(h.alice, "room2", "Top-level tag", 30, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const root = message(h.alice, "room2", "Thread root", 31);
+  h.events.push(
+    roster(h.relayKey, "room2", [h.viewer.pubkey, h.alice.pubkey], 10, {
+      [h.alice.pubkey]: "owner",
+    }),
+    metadata(h.relayKey, "room2", "Research", 10, [
+      ["t", "stream"],
+      ["private"],
+      ["t", "buzz.solo"],
+      ["P", h.alice.pubkey],
+    ]),
+    top,
+    root,
+    message(h.alice, "room2", "Threaded tag", 40, [
+      ["e", root.id, "", "reply"],
+      ["p", h.viewer.pubkey],
+    ]),
+  );
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const next = () =>
+    h.owner.session.unread
+      .inbox()
+      .items.find((item) => item.channelId === "room2");
+  await waitFor(() => expect(next()?.readThrough.length).toBe(2));
+  const target = next()?.target;
+  if (!target) throw new Error("Missing second shared chat");
+  await act(() => h.owner.session.unread.markUnreadLocal(target));
+  const source = rows().find((row) => row.textContent?.includes("Design"));
+  fireEvent.click(
+    within(source as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  await act(() =>
+    h.owner.session.unread.markUnreadLocal({
+      kind: "message",
+      channelId: "room",
+      messageId: h.mention.id,
+    }),
+  );
+  // Saves run in order: the next chat's first step, the archived chat's read,
+  // then the next chat's second step. The first two fail; the third waits.
+  h.failSave(2);
+  const first = h.holdSave();
+  await archiveOpened(h);
+  await waitFor(() => expect(h.saveStarted()).toBe(true));
+  const second = h.holdSave();
+  await act(async () => first());
+  await waitFor(() => expect(h.saveStarted()).toBe(true));
+  const third = h.holdSave();
+  await act(async () => second());
+  await waitFor(() => expect(h.saveStarted()).toBe(true));
+  await act(async () => third());
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() =>
+    expect(
+      h.owner.session.unread.snapshot({ kind: "channel", channelId: "room2" })
         .observedCount,
     ).toBe(0),
   );
