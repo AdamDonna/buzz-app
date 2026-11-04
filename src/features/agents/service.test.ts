@@ -13728,6 +13728,7 @@ it("lets an installed harness dispatch only its own hooks through the plugin API
     accepts: (value: unknown) =>
       !!value && typeof value === "object" && "denied" in value,
     milliseconds: 1000,
+    compose: (output: unknown, pluginId: string) => ({ output, pluginId }),
   };
   try {
     await expect(
@@ -13738,7 +13739,7 @@ it("lets an installed harness dispatch only its own hooks through the plugin API
         context,
         options,
       ),
-    ).resolves.toEqual({ denied: true });
+    ).resolves.toEqual({ output: { denied: true }, pluginId: "policy" });
     expect(calls).toEqual(["first", "later"]);
     expect(() =>
       scope.agents.dispatchHook(

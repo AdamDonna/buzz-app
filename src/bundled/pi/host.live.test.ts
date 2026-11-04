@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import host from "./host.mjs?raw";
+import { piHookOutput } from "../hook-output";
 
 const DEPS = process.env.PI_DEPS;
 const run = promisify(execFile);
@@ -47,7 +48,7 @@ const tools = [
   { name: "watch_add", description: "Watch for events", inputSchema: { type: "object" }, load: "search" },
 ];
 const out = {};
-let blockTools = false, rewriteTools = false;
+let blockTools = false, rewriteTools = false, blockedMessages = [];
 function start(prompt = async () => undefined) {
   const input = new PassThrough(), output = new PassThrough();
   const events = [], tools = [], pending = new Map();
@@ -57,9 +58,9 @@ function start(prompt = async () => undefined) {
     if (message.method === "event") events.push(message.params);
     else if (message.method === "hook") {
       const { event, input: call } = message.params;
-      const result = blockTools && event === "beforeTool" ? { block: "Fixture blocks the command" }
+      const result = blockTools && event === "beforeTool" ? ${JSON.stringify(piHookOutput({ block: "Fixture blocks the command" }, "fixture-policy"))}
         : rewriteTools && event === "beforeTool" ? { arguments: { ...call.arguments, text: "Rewritten arguments" } }
-        : rewriteTools && event === "afterTool" ? { output: [{ type: "text", text: "Replaced result" }] }
+        : rewriteTools && event === "afterTool" ? ${JSON.stringify(piHookOutput({ output: [{ type: "text", text: "Replaced result" }] }, "fixture-policy"))}
         : null;
       input.write(JSON.stringify({ id: message.id, result }) + "\\n");
     }
@@ -123,10 +124,10 @@ out.entries = (await pi.rpc("entries", { agent, conversation: a.conversation }))
 blockTools = true;
 faux.setResponses([
   fauxAssistantMessage(fauxToolCall("buzz_send", { text: "blocked", final: true }), { stopReason: "toolUse" }),
-  fauxAssistantMessage("Blocked by policy"),
+  (context) => { blockedMessages = context.messages; return fauxAssistantMessage("Blocked by policy"); },
 ]);
 const blocked = await pi.rpc("deliver", turn("HOOK", "blocked tool"));
-out.blocked = { ...(await pi.rpc("wait", { agent, submission: blocked.submission })), tools: pi.tools.splice(0), conversation: blocked.conversation };
+out.blocked = { ...(await pi.rpc("wait", { agent, submission: blocked.submission })), messages: blockedMessages, tools: pi.tools.splice(0), conversation: blocked.conversation };
 blockTools = false;
 // A request while the run works steers it.
 rewriteTools = true;
@@ -616,6 +617,9 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       tools: [],
       conversation: out.a.conversation,
     });
+    expect(JSON.stringify(out.blocked.messages)).toContain(
+      "[Buzz plugin: fixture-policy] Fixture blocks the command",
+    );
     expect(out.cleanupFailure).toMatchObject({
       status: "done",
       text: "Plain answer",
@@ -668,6 +672,7 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
     // What a Buzz tool answered is what the model reads.
     expect(out.c.rewritten).toMatchObject({ text: "Rewritten arguments" });
     expect(out.c.results.at(-1)).toEqual([
+      { type: "text", text: "[Buzz plugin: fixture-policy]" },
       { type: "text", text: "Replaced result" },
     ]);
     expect(out.stopped).toEqual({ status: "closed" });

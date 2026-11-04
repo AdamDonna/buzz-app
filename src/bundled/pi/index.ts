@@ -1,3 +1,4 @@
+import { piHookOutput } from "../hook-output";
 // Pi agents: an agent type whose agents run on Pi durable on this computer,
 // with any provider Pi supports. One Pi host runs them all, each with its own
 // storage; each conversation the agent is in is one continuing, durable Pi
@@ -36,7 +37,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
           event,
           input,
           { agent, session },
-          { accepts: (output) => output != null, milliseconds: 25000 },
+          {
+            accepts: (output) => output != null,
+            milliseconds: 25000,
+            compose: (output, pluginId) =>
+              piHookOutput(output, pluginId, input),
+          },
         )) ?? null
       );
     },
