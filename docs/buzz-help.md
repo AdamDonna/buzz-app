@@ -279,6 +279,12 @@ that agent in Buzz; they do not notify the external app through this connection.
   and Linux) an HTTP(S) link in a message to open it in your default browser
   instead of a side panel. You can also right-click the link and choose
   **Open in browser**.
+- **Inbox preview**: with a mouse or trackpad, rest the pointer on **Inbox** in
+  the sidebar to see recent mentions, DMs, and thread replies without opening
+  the Inbox page. Archived conversations are not shown. Clicking a conversation
+  opens it directly; **Open Inbox** opens the page. The card's **Unread only**
+  switch is separate from the Inbox page's filters. The preview is not shown on
+  touch devices or while the Inbox page is open.
 - **Sidebar width**: drag the sidebar's right edge, or focus its resize handle
   and use the Left/Right arrow keys. Double-click the handle to reset the width.
   Messages and plugin pages share the saved width within the same community
