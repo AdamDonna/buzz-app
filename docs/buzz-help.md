@@ -117,7 +117,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   With Nexus enabled, each workspace also contains its tasks. The title opens
   its optional lead task, or a task composer if it has no lead; sending from
   that composer establishes the lead. Only the chevron expands or collapses
-  the workspace. Use **New task** in its menu for another task. Chat creation
+  the workspace. Hover Solo or a workspace and use **New task**, beside **…**, for another task. The button also appears with keyboard focus. Chat creation
   is available only in **Chats**.
   Folders are optional unless **Work in a new worktree** is on. In that mode,
   add at least one project folder; the form shows a message beside Folders

@@ -376,9 +376,11 @@ it("shares a workspace frame while keeping lead selection, disclosure and chat c
     expect(card).toContainElement(
       screen.getByRole("button", { name: "Planning" }),
     );
-    await user.click(screen.getByRole("button", { name: "Actions for Work" }));
-    await user.click(await screen.findByRole("menuitem", { name: "New task" }));
+    await user.click(screen.getByRole("button", { name: "New task in Work" }));
     expect(onTask).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Actions for Work" }));
+    expect(screen.queryByRole("menuitem", { name: "New task" })).toBeNull();
+    await user.keyboard("{Escape}");
     expect(
       screen.queryByRole("button", { name: "New chat in Work" }),
     ).toBeNull();

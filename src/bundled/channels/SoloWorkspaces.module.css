@@ -265,6 +265,13 @@
   transform: translateY(-50%);
   inset-inline-end: var(--space-1);
 }
+.projectHeader [data-solo-workspace-new-task] {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  inset-inline-end: calc(var(--space-1) + var(--size-control-sm));
+  opacity: 0;
+}
 .projectHeader:is(
     :hover,
     [data-context-menu-present],
@@ -273,6 +280,15 @@
   )
   > [data-solo-overflow-action] {
   opacity: 1;
+}
+.projectHeader:is(:hover, :focus-within, [data-context-menu-present])
+  [data-solo-workspace-new-task] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .projectHeader [data-solo-workspace-new-task] {
+    opacity: 1;
+  }
 }
 
 /* Working flows in the row, so the title reserves exactly the pill. */

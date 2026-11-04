@@ -9,7 +9,8 @@ import {
   NavigationCard,
   NavigationItem,
 } from "../../shared/design-system/ui/NavigationItem";
-import { MenuItem } from "../../shared/design-system/ui/Menu";
+import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { PencilSimpleIcon } from "../../shared/design-system/icons";
 import { SoloDisclosure } from "./SoloDisclosure";
 import type { SoloWorkspaceProps } from "./solo-navigation-contract";
 import styles from "./WorkspaceComposition.module.css";
@@ -77,6 +78,17 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
         onClick={props.onSelect}
       />
       {disclosure}
+      {props.onNewTask && (
+        <IconButton
+          variant="bare"
+          size="compact"
+          data-solo-workspace-new-task=""
+          aria-label={`New task in ${title}`}
+          title="New task"
+          icon={<PencilSimpleIcon size={15} />}
+          onClick={props.onNewTask}
+        />
+      )}
     </div>
   ) : (
     disclosure
@@ -88,13 +100,7 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
         data-drop-target={props.dropTarget || undefined}
         body={workspace.panel(props.children)}
       >
-        {workspace.header(
-          primary,
-          null,
-          props.onNewTask && (
-            <MenuItem onClick={props.onNewTask}>New task</MenuItem>
-          ),
-        )}
+        {workspace.header(primary)}
       </NavigationCard>
     </div>,
   );

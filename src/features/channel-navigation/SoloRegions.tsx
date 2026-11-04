@@ -30,6 +30,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import {
   SlidersHorizontalIcon,
   DotsThreeIcon,
+  PencilSimpleIcon,
 } from "../../shared/design-system/icons";
 import {
   MenuRoot,
@@ -311,6 +312,8 @@ function RegionFrame({
     </>
   );
   const composing = !!source?.composeWorkspaces && !!composeOrdinary;
+  const creation = actions.find((action) => action.icon === "plus");
+  const directCreation = composing && creation && !creation.menu;
   const body =
     source &&
     binding &&
@@ -384,13 +387,18 @@ function RegionFrame({
                 .map((action) => (
                   <RegionAction key={action.id} action={action} run={run} />
                 ))}
-              {(actions.some((action) => action.icon === "plus") ||
-                ordinaryActions) && (
+              {directCreation && (
+                <RegionAction
+                  action={{ ...creation, icon: <PencilSimpleIcon size={15} /> }}
+                  run={run}
+                />
+              )}
+              {((creation && !directCreation) || ordinaryActions) && (
                 <RegionAction
                   action={
-                    actions.find((action) => action.icon === "plus") ?? {
+                    (directCreation ? undefined : creation) ?? {
                       id: "create",
-                      label: "Create",
+                      label: "Solo actions",
                       icon: "plus",
                       onSelect() {},
                       menu: () => [],
