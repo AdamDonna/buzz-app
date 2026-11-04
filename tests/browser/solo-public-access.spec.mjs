@@ -68,33 +68,35 @@ test.describe("owner", () => {
     ownSoloChannels: [own],
     historyCounts: { [own]: 2 },
   });
-  test("omits Public, retains View only after reload, and restores privacy", async ({
-    page,
-    app,
-  }, info) => {
-    await openChat(page, app, own);
-    const row = page.locator(`[data-solo-channel-id="${own}"]`);
-    const access = page
-      .getByRole("button", { name: "Share access", exact: true })
-      .last();
-    const dialog = page.getByRole("dialog", {
-      name: "Share access",
-      exact: true,
-    });
-    const audience = dialog.getByRole("combobox", { name: "General access" });
-    const openAccess = async () => {
-      // Cached startup renders Share access too. Its local dialog is replaced
-      // with the live session; Chat actions exists only on the live header.
-      await expect(
-        page.getByRole("button", { name: "Chat actions", exact: true }),
-      ).toBeVisible();
-      await access.click();
-    };
-    const confirm = page.getByRole("alertdialog", {
-      name: "Change general access?",
-    });
-    let saves = 0;
-    for (const presentation of presentations) {
+  // Each presentation owns a fresh fixture and deadline; combining all four
+  // exhausted the test budget during otherwise progressing WebKit actions.
+  for (const presentation of presentations) {
+    test(`omits Public, retains View only after reload, and restores privacy (${presentation.mode}, ${presentation.width}px)`, async ({
+      page,
+      app,
+    }, info) => {
+      await openChat(page, app, own);
+      const row = page.locator(`[data-solo-channel-id="${own}"]`);
+      const access = page
+        .getByRole("button", { name: "Share access", exact: true })
+        .last();
+      const dialog = page.getByRole("dialog", {
+        name: "Share access",
+        exact: true,
+      });
+      const audience = dialog.getByRole("combobox", { name: "General access" });
+      const openAccess = async () => {
+        // Cached startup renders Share access too. Its local dialog is replaced
+        // with the live session; Chat actions exists only on the live header.
+        await expect(
+          page.getByRole("button", { name: "Chat actions", exact: true }),
+        ).toBeVisible();
+        await access.click();
+      };
+      const confirm = page.getByRole("alertdialog", {
+        name: "Change general access?",
+      });
+      let saves = 0;
       const suffix = `${presentation.mode}_${presentation.width}`;
       await present(page, presentation);
       if (presentation.width === 1440) await expect(row).toBeVisible();
@@ -198,34 +200,31 @@ test.describe("owner", () => {
         dialog.getByRole("button", { name: "Done", exact: true }),
       ).toBeInViewport({ ratio: 1 });
       await page.keyboard.press("Escape");
-    }
-    // The longer conditional descriptions need real modal geometry and focus
-    // coverage. Guest/status matrices remain in the component/session tests.
-    const guest = app.serveProfile(generateSecretKey(), {
-      name: "Aria viewer",
-    });
-    await page.route("**/api/relay/**/query", async (route) => {
-      const filters = route.request().postDataJSON();
-      if (!filters.some((filter) => filter.kinds?.includes(39002)))
-        return route.continue();
-      const response = await route.fetch();
-      const events = await response.json();
-      await route.fulfill({
-        json: events.map((event) =>
-          event.kind === 39002 &&
-          event.tags.some(([key, value]) => key === "d" && value === own)
-            ? app.signRelay({
-                ...event,
-                // A changed signed roster must supersede the startup version.
-                created_at: event.created_at + 1,
-                tags: [...event.tags, ["p", guest.pubkey, "", "guest"]],
-              })
-            : event,
-        ),
+      // The longer conditional descriptions need real modal geometry and focus
+      // coverage. Guest/status matrices remain in the component/session tests.
+      const guest = app.serveProfile(generateSecretKey(), {
+        name: "Aria viewer",
       });
-    });
-    for (const presentation of presentations) {
-      const suffix = `${presentation.mode}_${presentation.width}`;
+      await page.route("**/api/relay/**/query", async (route) => {
+        const filters = route.request().postDataJSON();
+        if (!filters.some((filter) => filter.kinds?.includes(39002)))
+          return route.continue();
+        const response = await route.fetch();
+        const events = await response.json();
+        await route.fulfill({
+          json: events.map((event) =>
+            event.kind === 39002 &&
+            event.tags.some(([key, value]) => key === "d" && value === own)
+              ? app.signRelay({
+                  ...event,
+                  // A changed signed roster must supersede the startup version.
+                  created_at: event.created_at + 1,
+                  tags: [...event.tags, ["p", guest.pubkey, "", "guest"]],
+                })
+              : event,
+          ),
+        });
+      });
       app.setChannelMetadata(own, [
         ["t", "stream"],
         ["t", "buzz.solo"],
@@ -301,13 +300,13 @@ test.describe("owner", () => {
       await page.keyboard.press("Escape");
       await expect(audience).toBeFocused();
       await page.keyboard.press("Escape");
-    }
-    expect(app.report.detailsPublications.map(({ kind }) => kind)).toEqual(
-      Array(8).fill(9002),
-    );
-    expect(app.report.lifecyclePublications ?? []).toEqual([]);
-    expect(app.report.publications).toEqual([]);
-  });
+      expect(app.report.detailsPublications.map(({ kind }) => kind)).toEqual(
+        Array(2).fill(9002),
+      );
+      expect(app.report.lifecyclePublications ?? []).toEqual([]);
+      expect(app.report.publications).toEqual([]);
+    });
+  }
 });
 
 test.describe("visitor", () => {
