@@ -540,7 +540,7 @@ it("custom palette drafts preview without saving, survive external changes and c
     "#663399",
   );
   expect(screen.getByText(/The saved theme changed/)).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   fireEvent.click(screen.getByRole("button", { name: "Edit custom theme" }));
   expect(screen.getByRole("textbox", { name: "Accent hex color" })).toHaveValue(
     DEFAULT_CUSTOM_PALETTE.light.accent,

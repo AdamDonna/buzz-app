@@ -36,6 +36,22 @@
       )
       .join("")}`;
   }
+  function compositedBound(fill, hoverInk, hover, ink, overlay) {
+    const foreground = channels(ink);
+    const hovered = channels(hoverInk);
+    // CSS retains fractional channels between bubble and mention hover.
+    // Bound the final composite toward the ink (the lower-contrast direction),
+    // rather than round either intermediate blend to the nearest integer.
+    return `#${channels(fill)
+      .map((channel, index) => {
+        const bubble = channel * (1 - hover) + hovered[index] * hover;
+        const composite = bubble * (1 - overlay) + foreground[index] * overlay;
+        const bounded =
+          ink === "#000000" ? Math.floor(composite) : Math.ceil(composite);
+        return bounded.toString(16).padStart(2, "0");
+      })
+      .join("")}`;
+  }
   function luminance(hex, perceptual) {
     const weights = perceptual
       ? [0.2126729, 0.7151522, 0.072175]
@@ -83,7 +99,10 @@
         ["#000000", "#ffffff"].every((hoverInk) =>
           [0, 0.05].every((hover) =>
             [0, 0.08, 0.1, 0.16, 0.22].every((overlay) =>
-              readable(ink, mix(mix(fill, hoverInk, hover), ink, overlay)),
+              readable(
+                ink,
+                compositedBound(fill, hoverInk, hover, ink, overlay),
+              ),
             ),
           ),
         )

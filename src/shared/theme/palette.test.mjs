@@ -15,6 +15,7 @@ const colors = [
   "#0000ff",
   "#777777",
   "#888888",
+  "#085d35",
   "#663399",
   "#ffff00",
 ];
@@ -23,17 +24,20 @@ const palette = (color) => ({
   light: { window: color, sidebar: color, selection: color, accent: color },
   dark: { window: color, sidebar: color, selection: color, accent: color },
 });
-const mix = (a, b, amount) =>
-  `#${[1, 3, 5]
-    .map((i) =>
-      Math.round(
-        Number.parseInt(a.slice(i, i + 2), 16) * (1 - amount) +
-          Number.parseInt(b.slice(i, i + 2), 16) * amount,
-      )
-        .toString(16)
-        .padStart(2, "0"),
-    )
-    .join("")}`;
+// Independent numeric composition: preserve fractions through both layers,
+// then round each final channel toward the ink. WCAG/APCA are monotonic in
+// that direction, so passing this conservative bound guarantees the CSS pair.
+function stackedBound(fill, hoverInk, hover, ink, overlay) {
+  const rgb = (color) =>
+    [1, 3, 5].map((i) => Number.parseInt(color.slice(i, i + 2), 16));
+  const first = rgb(fill).map(
+    (value, i) => value + (rgb(hoverInk)[i] - value) * hover,
+  );
+  const final = first.map(
+    (value, i) => value + (rgb(ink)[i] - value) * overlay,
+  );
+  return `#${final.map((value) => (ink === "#ffffff" ? Math.ceil(value) : Math.floor(value)).toString(16).padStart(2, "0")).join("")}`;
+}
 function readable(ink, fill, target = 60) {
   expect(wcagRatio(ink, fill), `${ink} on ${fill}`).toBeGreaterThanOrEqual(4.5);
   expect(
@@ -83,7 +87,7 @@ it.each(colors)(
       for (const hoverInk of ["#000000", "#ffffff"]) {
         for (const hover of [0, 0.05]) {
           for (const alpha of [0, 0.04, 0.08, 0.1, 0.16, 0.22]) {
-            readable(ink, mix(mix(accent, hoverInk, hover), ink, alpha));
+            readable(ink, stackedBound(accent, hoverInk, hover, ink, alpha));
           }
         }
       }
