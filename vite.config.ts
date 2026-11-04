@@ -56,9 +56,12 @@ function isBuiltInBuilderlab(raw: string) {
  * empty opts out, and a Builderlab URL for another deployment turns the
  * built-in server off. Native builds read the descriptor from the process
  * only, and so does this. */
-function federatedBuilderlabUrl(legacy: string | undefined) {
+function federatedBuilderlabUrl(legacy: string | undefined, live: boolean) {
   const raw = process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG;
   if (raw === "") return undefined;
+  // The development broker keeps its own Builderlab sign-in unless the
+  // build adds a server (native's `dev_viewer`).
+  if (raw === undefined && live) return undefined;
   if (raw === undefined)
     return legacy === undefined
       ? BUILT_IN_BUILDERLAB
@@ -87,13 +90,13 @@ export default defineConfig(async ({ command, mode }) => {
   // Native builds consume only process values and repository-root .env.local.
   // Keep this frontend value on the same source so Vite mode files cannot
   // select a different same-origin deployment path.
-  const legacyUrl = sharedBuilderlabUrl();
-  const federatedUrl = federatedBuilderlabUrl(legacyUrl);
-  const builderlabUrl = federatedUrl ?? legacyUrl ?? BUILT_IN_BUILDERLAB;
   // The development broker is the dev server's default: it runs whenever the
   // developer has pinned their public key. Production builds (`pnpm build`,
   // `pnpm tauri build`) never load it, regardless of .env.local contents.
   const live = command === "serve" && Boolean(env.BUZZ_DEV_VIEWER?.trim());
+  const legacyUrl = sharedBuilderlabUrl();
+  const federatedUrl = federatedBuilderlabUrl(legacyUrl, live);
+  const builderlabUrl = federatedUrl ?? legacyUrl ?? BUILT_IN_BUILDERLAB;
   const aliases = env.BUZZ_COMMUNITY_ALIASES ?? "";
   parseCommunityAliases(aliases);
   const externalMcpCommunities = (env.BUZZ_EXTERNAL_MCP_COMMUNITIES ?? "")

@@ -84,6 +84,8 @@ export class FederatedIdentityService
     ctx.effect(() => () => {
       this.shared.closed = true;
       this.shared.listeners.clear();
+      for (const session of this.shared.communities.values()) session.dispose();
+      this.shared.communities.clear();
     });
     ctx.effect(async () => {
       if (!nativeIdentityEnabled())
@@ -267,7 +269,14 @@ class CommunitySession implements FederatedIdentity {
   private readonly listeners = new Set<() => void>();
   private started = false;
   private epoch = 0;
+  private readonly unlistens: Promise<() => void>[] = [];
   constructor(private readonly relay: string) {}
+  /** Releases its native event listeners, including ones still registering. */
+  dispose() {
+    this.started = true;
+    for (const unlisten of this.unlistens.splice(0))
+      void unlisten.then((release) => release());
+  }
   private accept(snapshot: SessionSnapshot) {
     this.epoch++;
     this.state = Object.freeze(snapshot);
@@ -277,10 +286,12 @@ class CommunitySession implements FederatedIdentity {
     if (this.started || !nativeIdentityEnabled()) return;
     this.started = true;
     for (const event of EVENTS)
-      void listen<SessionSnapshot>(event, ({ payload }) => {
-        const id = this.state.authority?.id;
-        if (id && payload.authority?.id === id) this.accept(payload);
-      }).catch(() => {});
+      this.unlistens.push(
+        listen<SessionSnapshot>(event, ({ payload }) => {
+          const id = this.state.authority?.id;
+          if (id && payload.authority?.id === id) this.accept(payload);
+        }).catch(() => () => {}),
+      );
     void this.operation("federated_identity_snapshot").catch(() => {});
   }
   snapshot = () => this.state;

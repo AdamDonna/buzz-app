@@ -279,6 +279,7 @@ fn configure_enterprise_auth() {
 fn configure_federated_identity() {
     const NAME: &str = "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
     const BUILDERLAB_URL: &str = "BUZZ_BUILDERLAB_URL";
+    const DEV_VIEWER: &str = "BUZZ_DEV_VIEWER";
     println!("cargo:rerun-if-env-changed={NAME}");
     println!("cargo:rerun-if-env-changed={BUILDERLAB_URL}");
     let local = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
@@ -297,11 +298,22 @@ fn configure_federated_identity() {
         }
     }
     // The Builderlab URL is read as the plugin manager reads it, .env.local included.
-    let builderlab_url = build_env::load(&local, &[BUILDERLAB_URL], |key| std::env::var(key).ok())
-        .unwrap_or_else(|error| panic!("{error}"))
-        .remove(BUILDERLAB_URL);
-    let servers = federated_identity_config::compiled(added.as_deref(), builderlab_url.as_deref())
-        .unwrap_or_else(|error| panic!("{error}"));
+    // A development build's pinned viewer is the frontend's development broker.
+    println!("cargo:rerun-if-env-changed={DEV_VIEWER}");
+    let mut values = build_env::load(&local, &[BUILDERLAB_URL, DEV_VIEWER], |key| {
+        std::env::var(key).ok()
+    })
+    .unwrap_or_else(|error| panic!("{error}"));
+    let builderlab_url = values.remove(BUILDERLAB_URL);
+    let dev_viewer = values
+        .remove(DEV_VIEWER)
+        .filter(|_| std::env::var("PROFILE").as_deref() == Ok("debug"));
+    let servers = federated_identity_config::compiled(
+        added.as_deref(),
+        builderlab_url.as_deref(),
+        dev_viewer.as_deref(),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     if !servers.is_empty() {
         println!(
             "cargo:rustc-env={NAME}={}",

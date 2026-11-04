@@ -77,6 +77,7 @@ fn each_community_routes_by_host_to_its_own_server() {
     let servers = config::compiled(
         Some(r#"{"version":1,"id":"bb-block","identityOrigin":"https://block.builderlab.xyz","communityHosts":["buzz.block.builderlab.xyz"],"adapterBase":"https://block.builderlab.xyz/api/goose","apiBasePath":"/api/goose/"}"#),
         None,
+        None,
     )
     .unwrap();
     let server = |config: Config| {

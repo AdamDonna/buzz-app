@@ -391,3 +391,13 @@ it("reauthorizes communities when another server signs in", async () => {
   publish({ payload: { ...signedIn, authority: peer } });
   expect(reauthorize).toHaveBeenCalledTimes(1);
 });
+
+it("releases each community session's native listeners when it is disposed", async () => {
+  const { root, service } = setup();
+  await vi.waitFor(() => expect(listen).toHaveBeenCalledOnce());
+  service.forCommunity("wss://team.communities.example").subscribe(() => {});
+  await vi.waitFor(() => expect(listen).toHaveBeenCalledTimes(3));
+  await root.fiber.dispose();
+  // The root's listener and both of the community's.
+  await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(3));
+});

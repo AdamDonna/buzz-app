@@ -89,7 +89,7 @@ fn main() {
         "cargo:rerun-if-changed={}",
         root.join("crates/build_env.rs").display()
     );
-    let process = |key| match std::env::var(key) {
+    let process = |key: &str| match std::env::var(key) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => panic!("Native build inputs must be UTF-8"),
@@ -97,21 +97,29 @@ fn main() {
     const FI: &str = "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
     println!("cargo:rerun-if-env-changed={FI}");
     let added = process(FI);
-    let builderlab_url = build_env::load(&local, &[BUILDERLAB_URL_KEY], |_| {
-        process(BUILDERLAB_URL_KEY)
-    })
-    .expect("Invalid Builderlab build configuration")
-    .remove(BUILDERLAB_URL_KEY);
+    // A development build's pinned viewer is the frontend's development broker.
+    const DEV_VIEWER: &str = "BUZZ_DEV_VIEWER";
+    println!("cargo:rerun-if-env-changed={DEV_VIEWER}");
+    let mut values = build_env::load(&local, &[BUILDERLAB_URL_KEY, DEV_VIEWER], process)
+        .expect("Invalid Builderlab build configuration");
+    let builderlab_url = values.remove(BUILDERLAB_URL_KEY);
+    let dev_viewer = values
+        .remove(DEV_VIEWER)
+        .filter(|_| std::env::var("PROFILE").as_deref() == Ok("debug"));
     if added.as_deref().is_some_and(|raw| !raw.is_empty())
         && builderlab_url.as_deref().is_some_and(|url| !url.is_empty())
     {
         panic!("BUZZ_BUILDERLAB_URL must be removed when FI is configured");
     }
     // The build's Builderlab is its first sign-in server, when it has one.
-    let fi = federated_identity_config::compiled(added.as_deref(), builderlab_url.as_deref())
-        .expect("Invalid FI deployment descriptor")
-        .into_iter()
-        .next();
+    let fi = federated_identity_config::compiled(
+        added.as_deref(),
+        builderlab_url.as_deref(),
+        dev_viewer.as_deref(),
+    )
+    .expect("Invalid FI deployment descriptor")
+    .into_iter()
+    .next();
     println!(
         "cargo:rustc-env={FI}={}",
         fi.as_ref()
