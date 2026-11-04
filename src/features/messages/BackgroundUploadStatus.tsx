@@ -18,8 +18,9 @@ export function BackgroundUploadStatus({
 }: {
   session: ComposerSession;
   focusTarget: React.RefObject<HTMLElement | null>;
-  /** The hosting composer's own conversation, which a notice need not open. */
-  here: string;
+  /** The conversation the hosting composer presents, which a notice need not
+   * open. Absent while a covered tab hides it. */
+  here?: string | undefined;
   /** The hosting composer's link handler opens a notice's conversation. */
   onOpenLink?: ((target: string) => boolean) | undefined;
 }) {

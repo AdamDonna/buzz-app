@@ -3119,6 +3119,37 @@ it.each([
   },
 );
 
+it("offers Open for a failed send to the conversation its covered tab hides", async () => {
+  const h = await mountUploadComposer();
+  attachByPaste(h.input(), attachmentFile());
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  const onOpenLink = vi.fn(() => true);
+  // A retained tab keeps its composer mounted while another tab covers it.
+  h.rerender(
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="channel"
+      channelName="General"
+      shown={false}
+      onOpenLink={onOpenLink}
+    />,
+  );
+  await act(async () =>
+    h.uploadCalls[0]?.result.reject(new Error("relay down")),
+  );
+  const notice = await screen.findByRole("dialog", {
+    name: "Upload to #General failed",
+  });
+  fireEvent.click(
+    within(notice).getByRole("button", { name: "Open #General" }),
+  );
+  expect(onOpenLink).toHaveBeenCalledWith("buzz://channel/channel");
+  await waitFor(() => expect(notice).not.toBeInTheDocument());
+});
+
 it("offers no Open for a failed send to a huddle, which opens only from its entry point", async () => {
   const h = await mountUploadComposer({ huddle: true });
   await h.otherMembership(true);

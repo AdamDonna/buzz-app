@@ -2998,7 +2998,9 @@ function Composer({
         <BackgroundUploadStatus
           session={session}
           focusTarget={input}
-          here={conversationLink(channelId, threadRootId)}
+          here={
+            presented ? conversationLink(channelId, threadRootId) : undefined
+          }
           onOpenLink={onOpenLink}
         />
         {dragging && <FileDropOverlay composer={form} />}

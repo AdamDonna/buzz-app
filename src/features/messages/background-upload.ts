@@ -237,7 +237,9 @@ function live(queue: Queue) {
 export function cancelBackgroundUpload(session: ComposerSession) {
   const queue = queueFor(session);
   live(queue).at(-1)?.controller.abort();
-  // A publish in flight ignores the abort; the pill still leaves it uncounted.
+  // The abort does not stop a publish in flight: the message still sends, and
+  // the job then restores its draft as if cancelled. The pill leaves it
+  // uncounted either way.
   update(queue);
 }
 
