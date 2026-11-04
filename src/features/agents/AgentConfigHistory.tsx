@@ -391,9 +391,9 @@ export function AgentConfigVersionRow({
   label?: string;
   onSelect(): void;
 }) {
+  const operation = artifactOp(event);
   const invalid =
-    artifactOp(event) !== "delete" &&
-    revisionProblem(expected, event, settings);
+    operation !== "delete" && revisionProblem(expected, event, settings);
   const nowSeconds = Date.now() / 1000;
   const timestamp =
     nowSeconds - event.created_at < 7 * 24 * 60 * 60
@@ -412,10 +412,12 @@ export function AgentConfigVersionRow({
         aria-haspopup="dialog"
         onClick={onSelect}
       >
-        <span className="flex w-full min-w-0 items-center justify-between gap-3 text-caption text-left">
+        <span className="flex w-full min-w-0 items-center justify-between gap-3 text-body text-left">
           <span className="min-w-0 truncate">
-            {label && `${label} · `}
-            {artifactOp(event)}
+            {label ?? "Version"}
+            {operation === "delete" ? " · Deleted" : ""}
+            {operation === "restore" ? " · Restored" : ""}
+            {operation === "move" ? " · Moved" : ""}
             {event.id === head?.id ? " · Current" : ""}
             {invalid ? " · Not valid" : ""}
           </span>{" "}

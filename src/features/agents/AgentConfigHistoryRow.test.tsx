@@ -87,12 +87,11 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
   expect(screen.queryByRole("heading", { name: "Instructions" })).toBeNull();
   const entries = feed.getAllByRole("button");
   expect(entries).toHaveLength(3);
-  expect(entries[0]).toHaveTextContent("Instructions · update · Current");
-  expect(entries[1]).toHaveTextContent("Instructions · create");
-  expect(entries[2]).toHaveTextContent("Settings · create · Current");
-  await user.click(
-    feed.getByRole("button", { name: /^Instructions · create / }),
-  );
+  expect(feed.queryByText(/\b(create|update)\b/)).toBeNull();
+  expect(entries[0]).toHaveTextContent("Instructions · Current");
+  expect(entries[1]).toHaveTextContent("Instructions");
+  expect(entries[2]).toHaveTextContent("Settings · Current");
+  await user.click(feed.getByRole("button", { name: /^Instructions (?!·)/ }));
   const dialog = within(
     screen.getByRole("dialog", { name: "Instructions version" }),
   );
@@ -112,9 +111,7 @@ it("counts both tracks while collapsed and preserves changes and conflict feedba
   await user.click(dialog.getByRole("button", { name: "Close" }));
   await user.click(row);
   await user.click(row);
-  await user.click(
-    feed.getByRole("button", { name: /^Instructions · create / }),
-  );
+  await user.click(feed.getByRole("button", { name: /^Instructions (?!·)/ }));
   expect(screen.getByRole("region", { name: "Changes" })).toBeVisible();
   expect(screen.getByRole("alert")).toBeVisible();
   expect(read).toHaveBeenCalledTimes(2);

@@ -122,10 +122,14 @@ it("pages older history, labels the gap, shows a diff and reverts on the head", 
   ).toBeInTheDocument();
   fail = false;
   fireEvent.click(screen.getByText("Retry"));
-  expect(await screen.findAllByText(/^create/)).toHaveLength(1);
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: /^Version / })).toHaveLength(
+      HISTORY_PAGE + 1,
+    ),
+  );
   expect(screen.queryByText(/aren't loaded|Couldn't load/)).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: /^update · Current/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Version · Current/ }));
   expect(screen.getByText("This is the current version.")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   const diff = screen.getByRole("region", { name: "Changes" });
@@ -134,7 +138,7 @@ it("pages older history, labels the gap, shows a diff and reverts on the head", 
 
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   fireEvent.click(
-    screen.getAllByRole("button", { name: /^update / })[1] as HTMLElement,
+    screen.getAllByRole("button", { name: /^Version / })[1] as HTMLElement,
   );
   fireEvent.click(screen.getByRole("button", { name: "Revert to this" }));
   expect(onRevert).toHaveBeenCalledOnce();
@@ -183,8 +187,8 @@ it("shows an invalid revision honestly and never offers to revert to it", async 
       onRevert={vi.fn()}
     />,
   );
-  expect(await screen.findByText(/^update · Not valid/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /^update · Not valid/ }));
+  expect(await screen.findByText(/^Version · Not valid/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Version · Not valid/ }));
   expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   expect(
     screen.getByText(
@@ -212,7 +216,9 @@ it("shows a failed revert beside the revision, keeps history and allows retry", 
     />,
   );
   const button = () => screen.getByRole("button", { name: "Revert to this" });
-  fireEvent.click(await screen.findByRole("button", { name: /^create / }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /^Version (?!·)/ }),
+  );
   fireEvent.click(button());
   await waitFor(() => expect(button()).toHaveAttribute("aria-busy", "true"));
   expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
@@ -260,7 +266,7 @@ it("opens a version by keyboard, shows a missing predecessor honestly, and resto
       onRevert={vi.fn()}
     />,
   );
-  const row = await screen.findByRole("button", { name: /^update · Current/ });
+  const row = await screen.findByRole("button", { name: /^Version · Current/ });
   row.focus();
   await user.keyboard("{Enter}");
   const dialog = screen.getByRole("dialog", { name: "History version" });
@@ -291,14 +297,14 @@ it("shows deletion details without offering to restore the deletion itself", asy
     />,
   );
   fireEvent.click(
-    await screen.findByRole("button", { name: /^delete · Current/ }),
+    await screen.findByRole("button", { name: /^Version · Deleted · Current/ }),
   );
   expect(
     screen.getByText("This version removed this configuration."),
   ).toBeVisible();
   expect(screen.queryByRole("button", { name: "Restore this" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
-  fireEvent.click(screen.getByRole("button", { name: /^create / }));
+  fireEvent.click(screen.getByRole("button", { name: /^Version (?!·)/ }));
   expect(screen.getByRole("button", { name: "Restore this" })).toBeVisible();
 });
 
