@@ -15,6 +15,7 @@ import {
 } from "react";
 import {
   openProfileTranscript,
+  profileActivityViewKey,
   profileActivityViewTarget,
 } from "../profiles/target";
 import {
@@ -25,14 +26,8 @@ import { localWorkLabel, type LocalWork } from "../agents/local-activity";
 import { AgentResponsePreview } from "./AgentResponsePreview";
 import { ActivityStepPreview, activityStepLabel } from "./ActivityStepPreview";
 import { AgentActivityRow } from "../agents/AgentActivityRow";
-import {
-  NavigationCard,
-  NavigationItem,
-} from "../../shared/design-system/ui/NavigationItem";
-import {
-  ArrowUpRightIcon,
-  OctagonIcon,
-} from "../../shared/design-system/icons";
+import { NavigationCard } from "../../shared/design-system/ui/NavigationItem";
+import { OctagonIcon } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { AgentsContext, useAgentsSnapshot } from "../agents/react";
 import { conversationWorkStops } from "../agents/work-stop";
@@ -349,14 +344,16 @@ export function TypingIndicator({
     return rootId ? { rootId } : undefined;
   };
   // Only work in one known conversation opens straight to its transcript.
-  const activityTarget = (pubkey: string) => {
+  const knownConversation = (pubkey: string) => {
     const roots = details.get(pubkey)?.roots ?? [];
-    const known =
+    return (
       !!threadRootId ||
-      (roots.length === 1 && (roots[0] === null || !!roots[0]));
-    return profileActivityViewTarget(pubkey, { transcript: known });
+      (roots.length === 1 && (roots[0] === null || !!roots[0]))
+    );
   };
-  const directTarget = firstAgent ? activityTarget(firstAgent) : undefined;
+  const directTarget = firstAgent
+    ? profileActivityViewTarget(firstAgent)
+    : undefined;
   const agentStatus = (
     pubkey: string,
     navigate: (target: string, origin?: MessageLinkOrigin) => void,
@@ -373,7 +370,7 @@ export function TypingIndicator({
         ).get(pubkey)
       : details.get(pubkey);
     if (!detail) return null;
-    const target = activityTarget(pubkey);
+    const target = profileActivityViewTarget(pubkey);
     const canOpen = !!target && !!openActivity && !!canOpenActivity?.(target);
     const knownRoots = detail.roots.filter(
       (value) => typeof value === "string",
@@ -398,13 +395,8 @@ export function TypingIndicator({
       detail.roots.length === 1 && detail.roots[0] === null
         ? undefined
         : scopeLabel(pubkey, workRoot);
-    const viewActivity =
-      canOpen && target
-        ? () => navigate(target, activityOrigin(pubkey))
-        : undefined;
-    // Going to the conversation already shown would do nothing, so the row
-    // opens its activity instead.
-    if (viewActivity && conversationRoot === threadRootId)
+    // The row is the way into an agent's transcript for this work.
+    if (canOpen && target)
       return (
         <AgentActivityRow
           name={name(pubkey)}
@@ -412,7 +404,12 @@ export function TypingIndicator({
           status={status}
           scope={scope}
           openLabel={`View ${name(pubkey)} activity`}
-          onOpen={viewActivity}
+          onOpen={() =>
+            navigate(
+              target,
+              workRoot ? { rootId: workRoot } : activityOrigin(pubkey),
+            )
+          }
         />
       );
     return (
@@ -503,18 +500,18 @@ export function TypingIndicator({
                 }
                 openTarget={
                   openActivity &&
-                  ((target, origin) =>
-                    openProfileTranscript(target, (next) =>
-                      openActivity(next, origin),
-                    ))
+                  ((target, origin) => {
+                    const agent = profileActivityViewKey(target);
+                    const show = (next: string) => openActivity(next, origin);
+                    return agent && (origin?.rootId || knownConversation(agent))
+                      ? openProfileTranscript(target, show)
+                      : show(target);
+                  })
                 }
                 directTarget={
                   directTarget && canOpenActivity?.(directTarget)
                     ? directTarget
                     : undefined
-                }
-                directOrigin={
-                  firstAgent ? activityOrigin(firstAgent) : undefined
                 }
               >
                 {(navigate) =>
@@ -572,7 +569,6 @@ function AgentChooser({
   content,
   openTarget,
   directTarget,
-  directOrigin,
   children,
 }: {
   label: string;
@@ -581,7 +577,6 @@ function AgentChooser({
     | ((target: string, origin?: MessageLinkOrigin) => boolean)
     | undefined;
   directTarget?: string | undefined;
-  directOrigin?: MessageLinkOrigin | undefined;
   children(
     navigate: (target: string, origin?: MessageLinkOrigin) => void,
   ): ReactNode;
@@ -696,16 +691,6 @@ function AgentChooser({
           className={activityStyles.activityList}
           aria-label="Agents working now"
         >
-          <NavigationItem
-            variant="option"
-            label="Activity"
-            aria-label="View full activity"
-            trailing={<ArrowUpRightIcon aria-hidden="true" />}
-            disabled={!directTarget || !openTarget}
-            onClick={() => {
-              if (directTarget) navigate(directTarget, directOrigin);
-            }}
-          />
           <ChooserItems items={() => children(navigate)} />
         </section>
       </PopoverPopup>

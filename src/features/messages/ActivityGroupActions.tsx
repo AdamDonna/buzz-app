@@ -116,9 +116,7 @@ export function ActivityGroupActions({
     <div className="flex flex-wrap items-center gap-2">
       {participants.map((agent) => {
         const name = named(agent);
-        const target = profileActivityViewTarget(agent, {
-          transcript: true,
-        });
+        const target = profileActivityViewTarget(agent);
         return target && open && canOpen?.(target) ? (
           <IconButton
             key={agent}

@@ -26,7 +26,6 @@ import {
   OctagonIcon,
   WarningCircleIcon,
   XIcon,
-  ArrowUpRightIcon,
 } from "../../shared/design-system/icons";
 import {
   NavigationCard,
@@ -528,35 +527,8 @@ function ActivityBubble({
       >
         {expanded && (
           <div className={styles.previews}>
-            <NavigationItem
-              variant="option"
-              label="Activity"
-              aria-label="View full activity"
-              trailing={<ArrowUpRightIcon aria-hidden="true" />}
-              disabled={
-                !entries[0] ||
-                !props.canOpen(
-                  profileActivityViewTarget(entries[0].agent, {
-                    transcript: true,
-                  }) ?? "",
-                )
-              }
-              onClick={() => {
-                const target =
-                  entries[0] &&
-                  profileActivityViewTarget(entries[0].agent, {
-                    transcript: true,
-                  });
-                if (
-                  target &&
-                  props.canOpen(target) &&
-                  openProfileTranscript(target, props.open)
-                )
-                  setExpanded(false);
-              }}
-            />
             {entries.map((entry) => {
-              // Opens the agent's profile on its Activity tab.
+              // Opens the agent's Activity on this message's transcript.
               const target = profileActivityViewTarget(entry.agent);
               const preview = entry.working
                 ? currentActivity(entry.records, entry.turns)
@@ -570,7 +542,11 @@ function ActivityBubble({
                     aria-label={`View activity for ${entry.name}`}
                     disabled={!target || !props.canOpen(target)}
                     onClick={() => {
-                      if (target && props.canOpen(target) && props.open(target))
+                      if (
+                        target &&
+                        props.canOpen(target) &&
+                        openProfileTranscript(target, props.open)
+                      )
                         setExpanded(false);
                     }}
                     icon={

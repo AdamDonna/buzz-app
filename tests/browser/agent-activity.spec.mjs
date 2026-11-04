@@ -213,9 +213,10 @@ test("channel activity consumes telemetry, opens each agent's profile, and reset
   await expect(responseAvatars(trigger)).toHaveCount(2);
 
   await openWorkingNow(page, composer);
+  // Each agent's row is the way in; there is no separate Activity heading.
   await expect(
     popup.getByRole("button", { name: "View full activity", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   // Observer turns carry no thread identity, and the channel is already shown:
   // rows open each agent's activity instead of guessing a thread.
   for (const agent of [first, second]) {
@@ -239,9 +240,7 @@ test("channel activity consumes telemetry, opens each agent's profile, and reset
   await expect(popup).toBeVisible();
   // Keyboard opening focuses the first row a frame later. Rows can be in either
   // order, so wait for that focus, then Tab to this agent's row.
-  await expect(
-    popup.getByRole("button", { name: "View full activity" }),
-  ).toBeFocused();
+  await expect(popup.getByRole("button").first()).toBeFocused();
   const firstAction = agentActivityAction(popup, first);
   for (let step = 0; step < 3 && !(await isFocused(firstAction)); step++)
     await page.keyboard.press("Tab");
@@ -629,10 +628,6 @@ test.describe("thread activity", () => {
     await expect(agentRow(popup, agent)).toBeVisible();
     // Keyboard opening focuses the first row a frame later. Tabbing before then
     // can skip past it and leave the non-modal popup, which closes it.
-    await expect(
-      popup.getByRole("button", { name: "View full activity" }),
-    ).toBeFocused();
-    await page.keyboard.press("Tab");
     await expect(agentRow(popup, agent)).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(popup).toHaveCount(0);

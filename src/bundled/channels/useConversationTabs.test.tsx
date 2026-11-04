@@ -26,6 +26,11 @@ import { createAgentLibrary } from "../../features/agents/library";
 import { setThreadPlacementPreference } from "../../features/messages/thread-preferences";
 import { channelTabs, tabPane, useChannelTabState } from "./useChannelTabState";
 import { useConversationTabs } from "./useConversationTabs";
+import {
+  claimProfileTranscript,
+  openProfileTranscript,
+  profileActivityViewTarget,
+} from "../../features/profiles/target";
 
 // For every test in this file: thread rows are memoized, so count real renders
 // past that boundary and keep each row's latest link opener. The composer is
@@ -277,6 +282,60 @@ it("retained offline tabs can close and open threads without activating connecte
   act(() => staleOpen("beta", "another-root", "another-root"));
   const restored = renderHook(() => useChannelTabState(session, "alpha"));
   expect(restored.result.current.tabs).toHaveLength(2);
+});
+
+it("reuses an agent's open Activity tab when its transcript is asked for", () => {
+  const channels = [{ id: "alpha", name: "Alpha" }];
+  const session = {
+    viewer: "viewer",
+    channels: { list: () => ({ channels }) },
+  } as unknown as RelaySession;
+  const panel = { key: "profile", title: "Profile" } as RegisteredPanel;
+  const available = [panel];
+  const panels = {
+    snapshot: () => available,
+    subscribe: () => () => {},
+    resolve: () => panel,
+  } as unknown as Panels;
+  const snapshot = { status: "ready", session };
+  const relay = { snapshot: () => snapshot } as unknown as RelayData;
+  const h = renderHook(() =>
+    useConversationTabs({
+      profiles: new Map(),
+      state: useChannelTabState(session, "alpha"),
+      relay,
+      session,
+      panels,
+      current: channels[0],
+      channels,
+      scope: "scope:viewer",
+      conversationIcon: () => null,
+      leadingIds: [],
+      continuingVisit: true,
+      isLive: () => true,
+      openLink: () => false,
+    }),
+  );
+  const agent = "ab".repeat(32);
+  const activity = profileActivityViewTarget(agent) ?? "";
+  act(() => {
+    h.result.current.openConversationLink("alpha", activity);
+  });
+  act(() => {
+    openProfileTranscript(activity, (next) =>
+      h.result.current.openConversationLink("alpha", next, {
+        rootId: "root",
+      }),
+    );
+  });
+  expect(h.result.current.items).toHaveLength(1);
+  const [item] = h.result.current.items;
+  if (!item) throw new Error("no panel tab");
+  const { context } = (item.content as { props: { context: PanelContext } })
+    .props;
+  // The one tab now serves the conversation the transcript was asked from.
+  expect(context).toMatchObject({ channelId: "alpha", rootId: "root" });
+  expect(claimProfileTranscript(activity)).toBeDefined();
 });
 
 it("gives a panel the thread its link was opened from, retargeting a reopened tab", () => {

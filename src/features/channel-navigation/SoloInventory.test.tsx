@@ -168,10 +168,20 @@ it("opens a typing-only agent's profile activity in its Solo chat", async () => 
   screen.getByRole("button", { name: /^Planning/ }).focus();
   await user.keyboard("{Enter}");
   let popup = screen.getByRole("dialog", { name: "Activity in Planning" });
+  let intent: unknown;
+  const navigate = f.open.getMockImplementation();
+  f.open.mockImplementationOnce(async (next) => {
+    intent = f.handoff()?.activityAgent.current;
+    if (!navigate) throw new Error("Missing navigator");
+    return navigate(next);
+  });
   await user.click(
     within(popup).getByRole("button", { name: "View Owned Agent activity" }),
   );
   expect(f.open).toHaveBeenLastCalledWith(conversationTarget(scope, id));
+  // A Solo chat is one conversation, so its page opens the transcript.
+  expect(intent).toMatchObject({ channelId: id, agent });
+  expect(intent).toHaveProperty("transcript", {});
   screen.getByRole("button", { name: /^Planning/ }).focus();
   await user.keyboard("{Enter}");
   popup = screen.getByRole("dialog", { name: "Activity in Planning" });

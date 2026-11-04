@@ -178,7 +178,11 @@ export function ChannelActivityPopover({
     agent: string,
     messageId: string | undefined,
   ) => void;
-  onOpenAgentActivity?: (channelId: string, agent: string) => void;
+  onOpenAgentActivity?: (
+    channelId: string,
+    agent: string,
+    messageId: string | undefined,
+  ) => void;
   onOpenThread(item: ThreadActivityItem): void;
 }) {
   const subscribe = useCallback(
@@ -351,7 +355,7 @@ export function ChannelActivityPopover({
                         onOpenAgentActivity
                           ? () => {
                               close();
-                              onOpenAgentActivity(channelId, agent);
+                              onOpenAgentActivity(channelId, agent, messageId);
                             }
                           : undefined
                       }

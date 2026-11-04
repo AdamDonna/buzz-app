@@ -184,7 +184,9 @@ export type ComposerAccessoryProps = Readonly<{
   onFocusedRemoval?: (() => void) | undefined;
   /** Presentation only; the host re-resolves targets. No editor or access grant. */
   canOpen(target: string): boolean;
-  /** False after contribution removal or the originating composer retires. */
+  /** False after contribution removal or the originating composer retires.
+   * A message-placed accessory's target opens in that message's thread, like
+   * a link in its body. */
   open(target: string): boolean;
 }>;
 export type ComposerAccessory = Readonly<{

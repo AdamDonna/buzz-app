@@ -25,6 +25,10 @@ import {
   TypingPresentation,
 } from "../../features/conversation/typing-presentation";
 import { TypingIndicator } from "../../features/messages/TypingIndicator";
+import {
+  claimProfileTranscript,
+  profileTranscriptRequest,
+} from "../../features/profiles/target";
 import { createAgentActivity } from "../../features/agents/activity";
 import { createAgentLibrary } from "../../features/agents/library";
 import type { RelaySession } from "../../features/relay/session";
@@ -41,6 +45,9 @@ afterEach(() => {
   notify.mockReset();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  // Transcript requests live in a module-level map; each test starts clean.
+  for (const agent of [A, B])
+    claimProfileTranscript(`buzz:profile?agent=${agent}&tab=activity`);
 });
 const A = "b".repeat(64),
   B = "c".repeat(64),
@@ -260,9 +267,10 @@ it("previews only live scoped actions and retains profile navigation", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
-    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity`,
-    );
+    const activity = `buzz:profile?agent=${A}&tab=activity`;
+    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(activity);
+    // It asks that Activity for this message's transcript, once.
+    expect(claimProfileTranscript(activity)).toBeDefined();
   } finally {
     view.unmount();
     f.dispose();
@@ -288,7 +296,13 @@ it("removes the whole popup when access is revoked", () => {
 
 it("makes the compact avatar and tool preview one action, retaining the popup when opening fails", () => {
   const f = fixture();
-  f.props.open.mockReturnValue(false);
+  const activity = `buzz:profile?agent=${A}&tab=activity`;
+  let asked: number | undefined;
+  // Opening fails, after seeing whether a transcript was asked for.
+  f.props.open.mockImplementation(() => {
+    asked = profileTranscriptRequest(activity);
+    return false;
+  });
   const view = render(<ActivityAccessory {...f.props} />);
   try {
     f.send(A, "a", 1, "turn_started", { triggeringEventIds: [root] });
@@ -310,7 +324,8 @@ it("makes the compact avatar and tool preview one action, retaining the popup wh
     const popup = within(
       screen.getByRole("dialog", { name: "Agent activity" }),
     );
-    expect(popup.getAllByRole("button")).toHaveLength(2);
+    // The agent's row is the popup's one action; no separate Activity heading.
+    expect(popup.getAllByRole("button")).toHaveLength(1);
     for (const text of [
       "Agent activity",
       "Latest reported activity for this message.",
@@ -324,10 +339,11 @@ it("makes the compact avatar and tool preview one action, retaining the popup wh
     });
     expect(row).toHaveTextContent("Read file · Running");
     expect(row.querySelector(".buzz-avatar")).not.toBeNull();
-    fireEvent.click(popup.getByRole("button", { name: "View full activity" }));
-    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity&open=transcript`,
-    );
+    fireEvent.click(row);
+    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(activity);
+    expect(asked).toBeDefined();
+    // The failed opening leaves no request behind for a later Activity.
+    expect(claimProfileTranscript(activity)).toBeUndefined();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     view.rerender(
       <ActivityAccessory
@@ -433,9 +449,9 @@ it("shows local receipt and failure without requiring an ACP transcript, and ope
     fireEvent.click(
       screen.getByRole("button", { name: "View activity for Blossom" }),
     );
-    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(
-      `buzz:profile?agent=${A}&tab=activity`,
-    );
+    const activity = `buzz:profile?agent=${A}&tab=activity`;
+    expect(f.props.open).toHaveBeenCalledExactlyOnceWith(activity);
+    expect(claimProfileTranscript(activity)).toBeDefined();
   } finally {
     view.unmount();
     f.dispose();
@@ -1446,10 +1462,9 @@ it("hands request controls to recorded history and keeps Stop and transcript the
       screen.getAllByRole("button", { name: "Stop Blossom" }),
     ).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "View transcript" }));
-    expect(f.props.open).toHaveBeenCalledWith(
-      expect.stringContaining("open=transcript"),
-      { rootId: root },
-    );
+    const activity = `buzz:profile?agent=${A}&tab=activity`;
+    expect(f.props.open).toHaveBeenCalledWith(activity, { rootId: root });
+    expect(claimProfileTranscript(activity)).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Stop Blossom" }));
     await settle();
     expect(stop).toHaveBeenCalledOnce();

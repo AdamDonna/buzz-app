@@ -4,7 +4,6 @@ import {
   openProfileTranscript,
   profileTranscriptRequest,
   profileAgentHint,
-  profileActivityTranscript,
   profileActivityViewTarget,
   profileActivityViewKey,
   profileKey,
@@ -71,33 +70,42 @@ it("recognizes only the exact local profile Activity destination", () => {
     expect(profileActivityViewKey(invalid)).toBeUndefined();
 });
 
-it("marks only the transcript Activity destination as asking for it", () => {
+it("gives an agent one Activity destination, with no transcript variant", () => {
   const key = "ab".repeat(32);
   const plain = profileActivityViewTarget(key) ?? "";
-  const transcript = profileActivityViewTarget(key, { transcript: true }) ?? "";
-  expect(transcript).not.toBe(plain);
-  expect(profileActivityViewKey(transcript)).toBe(key);
-  expect(profileActivityTranscript(transcript)).toBe(true);
-  expect(profileActivityTranscript(plain)).toBe(false);
-  expect(profileActivityTranscript(`${transcript}&owner=true`)).toBe(false);
+  // A transcript is asked for alongside the destination, never as another
+  // destination, so a link naming one cannot open a second Activity tab.
+  for (const link of [`${plain}&open=transcript`, `${plain}&open=other`]) {
+    expect(profileActivityViewKey(link)).toBeUndefined();
+    // Nor does it open the profile any other way.
+    expect(profilePanelKey(link)).toBeUndefined();
+  }
+  expect(profileActivityViewKey(plain)).toBe(key);
 });
 
 it("asks for a transcript once per opening until its profile claims it", () => {
   const key = "cd".repeat(32);
-  const plain = profileActivityViewTarget(key) ?? "";
-  const transcript = profileActivityViewTarget(key, { transcript: true }) ?? "";
-  expect(openProfileTranscript(plain, () => true)).toBe(true);
-  expect(profileTranscriptRequest(plain)).toBeUndefined();
+  const activity = profileActivityViewTarget(key) ?? "";
+  const other = `nostr:${"x".repeat(5)}`;
+  const opened: string[] = [];
+  const open = (next: string) => {
+    opened.push(next);
+    return true;
+  };
+  // A target that is not an Activity destination only opens.
+  expect(openProfileTranscript(other, open)).toBe(true);
+  expect(profileTranscriptRequest(other)).toBeUndefined();
   // An opening that fails leaves nothing for a later remount to act on.
-  expect(openProfileTranscript(transcript, () => false)).toBe(false);
-  expect(profileTranscriptRequest(transcript)).toBeUndefined();
-  expect(openProfileTranscript(transcript, () => true)).toBe(true);
-  const first = profileTranscriptRequest(transcript);
+  expect(openProfileTranscript(activity, () => false)).toBe(false);
+  expect(profileTranscriptRequest(activity)).toBeUndefined();
+  expect(openProfileTranscript(activity, open)).toBe(true);
+  expect(opened).toEqual([other, activity]);
+  const first = profileTranscriptRequest(activity);
   expect(first).toBeDefined();
-  expect(claimProfileTranscript(transcript)).toBe(first);
-  expect(profileTranscriptRequest(transcript)).toBeUndefined();
-  expect(claimProfileTranscript(transcript)).toBeUndefined();
+  expect(claimProfileTranscript(activity)).toBe(first);
+  expect(profileTranscriptRequest(activity)).toBeUndefined();
+  expect(claimProfileTranscript(activity)).toBeUndefined();
   // Opening the same target again is a new opening.
-  openProfileTranscript(transcript, () => true);
-  expect(claimProfileTranscript(transcript)).toBeGreaterThan(first ?? 0);
+  openProfileTranscript(activity, open);
+  expect(claimProfileTranscript(activity)).toBeGreaterThan(first ?? 0);
 });

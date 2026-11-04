@@ -276,9 +276,10 @@ test("message activity opens a grouped preview and the agent's profile without l
       await expect(
         popup.getByRole("button", { name: /^View activity for/ }),
       ).toHaveCount(2);
+      // Each agent's row is the way in; there is no separate Activity heading.
       await expect(
         popup.getByRole("button", { name: "View full activity" }),
-      ).toBeVisible();
+      ).toHaveCount(0);
       const lastActivity = popup.getByRole("button").last();
       await expect
         .poll(() =>

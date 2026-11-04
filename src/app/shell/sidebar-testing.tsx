@@ -9,7 +9,10 @@ import type { ReadTransport } from "../../features/relay/transport";
 import type { FederatedIdentity } from "../../features/federated-identity/service";
 import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
-import { ChannelNavigationProvider } from "../../features/channel-navigation/ChannelNavigationState";
+import {
+  ChannelNavigationProvider,
+  useChannelNavigation,
+} from "../../features/channel-navigation/ChannelNavigationState";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { NewMenu } from "./NewMenu";
 import type { Agents } from "../../features/agents/service";
@@ -204,9 +207,15 @@ export function fixture(
   const publish = () => {
     for (const listener of listeners) listener();
   };
+  let handoff: ReturnType<typeof useChannelNavigation>;
+  const HandoffProbe = () => {
+    handoff = useChannelNavigation();
+    return null;
+  };
   const tree = () => (
     <ToastProvider>
       <ChannelNavigationProvider relay={relay}>
+        <HandoffProbe />
         {combined ? (
           <SidebarCreationHost
             relay={relay}
@@ -269,6 +278,8 @@ export function fixture(
       });
     },
     open,
+    /** The sidebar's hand-off to the conversation page it opens. */
+    handoff: () => handoff,
     markThrough,
     listeners,
     typing(next: typeof typing) {
