@@ -70,6 +70,7 @@ test("all reactor names wrap and remain reachable with pointer and keyboard", as
     { count: 40, width: 520, height: 400, scale: 1, longNames: false },
     { count: 150, width: 1440, height: 950, scale: 1, longNames: true },
     { count: 40, width: 520, height: 950, scale: 2, longNames: true },
+    { count: 40, width: 390, height: 360, scale: 2, longNames: true },
   ]) {
     await page.setViewportSize({ width, height });
     await page.goto(
@@ -153,10 +154,14 @@ test("all reactor names wrap and remain reachable with pointer and keyboard", as
       await expect
         .poll(() => preview.evaluate((el) => el.scrollHeight - el.clientHeight))
         .toBe(0);
+      // A wrapped name may be taller than the scrollport; its final line must
+      // remain reachable when scrolled to the end.
       const lastName = await people
         .locator("[data-author]")
         .last()
-        .boundingBox();
+        .evaluate((element) =>
+          Array.from(element.getClientRects()).at(-1).toJSON(),
+        );
       const list = await people.boundingBox();
       expect(lastName.y).toBeGreaterThanOrEqual(list.y);
       expect(lastName.y + lastName.height).toBeLessThanOrEqual(
