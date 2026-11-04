@@ -1,3 +1,4 @@
+import type { ArtifactIncrementalReader } from "./artifact-incremental-reader.ts";
 import type { VerifiedProfileAuthority } from "./verified-profile";
 import type { ReminderHost } from "./reminders";
 import {
@@ -88,6 +89,7 @@ export interface RelayWriter {
   ): Promise<string> | Promise<void>;
 }
 export interface ReadTransport {
+  readonly artifactIncremental?: ArtifactIncrementalReader;
   readonly projectGit?: RepoGit;
   readonly readAgentMemories?: MemoryReader;
   /** Session-scoped owner proof, not an arbitrary signing capability. */
@@ -1336,7 +1338,7 @@ export const admitSignedRequest = (
   request: () => Promise<Response>,
   signal?: AbortSignal,
   priority: "foreground" | "background" = "foreground",
-  reason?: (body: unknown) => string | undefined,
+  reason?: Parameters<typeof admittedApiRequest>[4],
 ) =>
   admittedApiRequest(
     signedAdmissions(relayOrigin(origin), viewer).api,

@@ -1,4 +1,5 @@
 import { ArtifactStorageService } from "../features/artifact-storage/service";
+import { provideArtifactStoreSync } from "../features/relay/artifact-store-sync";
 import { createAdminAccess } from "../bundled/admin-access";
 import { nativeRelayStaff } from "../features/relay-staff/native";
 import { createLocalAgentActivity } from "../features/agents/local-activity";
@@ -122,6 +123,7 @@ export function createServices() {
   });
   const relay = communities.relay;
   const artifactStorage = new ArtifactStorageService(ctx);
+  provideArtifactStoreSync(ctx, artifactStorage);
   // Expose v2 only with the complete label/projection/frame/Destination/guard slice.
   new SoloNavigationService(ctx, relay, plugins);
   // The one recovery point for federated sign-in; see onSignedIn.

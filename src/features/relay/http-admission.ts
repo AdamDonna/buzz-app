@@ -23,6 +23,7 @@ export class ApiCapacity extends ApiNotSent {
 }
 export type ApiFailure = Readonly<{
   error: string;
+  code?: string;
   quota?: "api";
   paused?: true;
   retryAfterMs?: number;
@@ -84,7 +85,10 @@ export function apiFailure(status: number, value: unknown): ApiFailure {
  * `reason` may keep an exact, caller-allowed upstream refusal from that body. */
 export async function readApiFailure(
   response: Response,
-  reason?: (body: unknown, status: number) => string | undefined,
+  reason?: (
+    body: unknown,
+    status: number,
+  ) => string | Pick<ApiFailure, "error" | "code"> | undefined,
 ): Promise<ApiFailure> {
   if (!response.body) return apiFailure(response.status, undefined);
   const reader = response.body.getReader();
@@ -109,7 +113,12 @@ export async function readApiFailure(
     }
     const failure = apiFailure(response.status, body);
     const allowed = failure.quota ? undefined : reason?.(body, response.status);
-    return allowed ? { ...failure, error: allowed } : failure;
+    return allowed
+      ? {
+          ...failure,
+          ...(typeof allowed === "string" ? { error: allowed } : allowed),
+        }
+      : failure;
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();
@@ -248,7 +257,10 @@ export async function admittedApiRequest(
   request: () => Promise<Response>,
   signal?: AbortSignal,
   priority: Ticket["priority"] = "foreground",
-  reason?: (body: unknown, status: number) => string | undefined,
+  reason?: (
+    body: unknown,
+    status: number,
+  ) => string | Pick<ApiFailure, "error" | "code"> | undefined,
 ): Promise<Response> {
   return lane.run(
     async () => {

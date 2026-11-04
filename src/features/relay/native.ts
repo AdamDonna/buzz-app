@@ -1,4 +1,9 @@
 import {
+  artifactIncrementalCapability,
+  artifactIncrementalFailure,
+  createArtifactIncrementalReader,
+} from "./artifact-incremental-reader";
+import {
   verifiedProfileAuthority,
   verifiedProfileDiscovery,
 } from "./verified-profile";
@@ -439,6 +444,21 @@ export async function connectNativeTransport(
   // Capabilities describe implemented host operations, not everything this key can sign.
   return {
     ...transport,
+    ...(artifactIncrementalCapability(info)
+      ? {
+          artifactIncremental: createArtifactIncrementalReader(
+            (filter, signal) =>
+              admitSignedRequest(
+                origin,
+                transport.viewer,
+                () => nativeRelayRequest(origin, "/query", [filter]),
+                signal,
+                "background",
+                artifactIncrementalFailure,
+              ),
+          ),
+        }
+      : {}),
     workflows: workflowHost(async (route, body, signal) => {
       if (route !== "workflow-runs") throw new Error("Invalid workflow read");
       workflowRunsPath(body);

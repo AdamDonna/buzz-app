@@ -1,4 +1,8 @@
 import {
+  ARTIFACT_INCREMENTAL_LIMITS,
+  ArtifactIncrementalError,
+} from "./artifact-incremental-reader";
+import {
   ReadStateTimestampRejected,
   READ_STATE_TIMESTAMP_REFUSAL,
 } from "./read-state-host";
@@ -2082,4 +2086,47 @@ it("cancellation during ingress prevents further chunks and final upload", async
       .mock.calls.filter(([command]) => command === "relay_upload_chunk"),
   ).toHaveLength(1);
   expect(uploads).toHaveLength(0);
+});
+
+it.each([
+  { live: false, incremental: false },
+  { live: true, incremental: false },
+  { live: false, incremental: true },
+  { live: true, incremental: true },
+])(
+  "keeps live and incremental artifact capabilities separate: %j",
+  async ({ live, incremental }) => {
+    discovery = {
+      artifacts: {
+        ...(live ? { sync: { version: 1 } } : {}),
+        ...(incremental ? { incremental: ARTIFACT_INCREMENTAL_LIMITS } : {}),
+      },
+    };
+    const transport = await connectNativeTransport(community);
+    expect(transport.artifactSync).toBe(live ? true : undefined);
+    expect(transport.artifactIncremental !== undefined).toBe(incremental);
+  },
+);
+
+it.each([
+  "incremental_limit",
+  "incremental_reset",
+  "incremental_invalid",
+  "incremental_unsupported_scope",
+  "incremental_unavailable",
+])("preserves %s through native admission", async (code) => {
+  discovery = { artifacts: { incremental: ARTIFACT_INCREMENTAL_LIMITS } };
+  const transport = await connectNativeTransport(community);
+  respond = () => ({
+    status: 422,
+    body: { error: "scope or capacity", code },
+  });
+  assert.exists(transport.artifactIncremental);
+  const work = transport.artifactIncremental.delta(
+    { artifact: "current", kinds: [45010], "#type": ["task"] },
+    {},
+    new AbortController().signal,
+  );
+  await expect(work).rejects.toBeInstanceOf(ArtifactIncrementalError);
+  await expect(work).rejects.toMatchObject({ code });
 });
