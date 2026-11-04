@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MentionCompletion } from "./MentionCompletion";
 import { MentionPicker } from "./MentionPicker";
 import { mentionQuery } from "./mention-query";
-import { useMentionChoices } from "./use-mention-choices";
+import { MENTION_ROWS, useMentionChoices } from "./use-mention-choices";
 import { useTeamMentions } from "./use-team-mentions";
 import { createAgentLibrary } from "../../features/agents/library";
 import { createAgentChoices } from "../../features/agents/choices";
@@ -520,6 +527,25 @@ it("reserves room for teams ready when the first 50-choice budget installs", asy
     expect(menu.result().items[49]?.id).toBe("team:team");
   } finally {
     menu.view.unmount();
+    h.library.dispose();
+  }
+});
+
+it.each([
+  [MENTION_ROWS, false],
+  [MENTION_ROWS + 1, true],
+])("%i members fill the shown rows; truncated is %s", async (count, more) => {
+  const h = fixture({ count, team: 0 });
+  const view = renderHook(() =>
+    useMentionChoices(h.session, "parent", false, "", "open", true),
+  );
+  try {
+    await waitFor(() =>
+      expect(view.result.current.choices).toHaveLength(MENTION_ROWS),
+    );
+    expect(view.result.current.truncated).toBe(more);
+  } finally {
+    view.unmount();
     h.library.dispose();
   }
 });

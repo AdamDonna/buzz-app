@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useTeamMentions } from "./use-team-mentions";
-import { useMentionChoices } from "./use-mention-choices";
+import { MENTION_ROWS, useMentionChoices } from "./use-mention-choices";
 import type { ComposerCompletionProps } from "../../features/conversation/contracts";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
@@ -231,11 +231,14 @@ export function MentionCompletion({
       : [
           ...available.slice(
             0,
-            Math.min(matching.length, 50 - matchingTeams.length),
+            Math.min(matching.length, MENTION_ROWS - matchingTeams.length),
           ),
           ...available.slice(matching.length),
         ];
-    const next = [...ids, ...additions.map((item) => item.id)].slice(0, 50);
+    const next = [...ids, ...additions.map((item) => item.id)].slice(
+      0,
+      MENTION_ROWS,
+    );
     shown.current = { session, key, ids: next };
     const byId = new Map(available.map((item) => [item.id, item]));
     // Space is undecided, not declined, only while evidence is still arriving:
@@ -304,7 +307,8 @@ export function MentionCompletion({
                         ? { status: "Searching community…" }
                         : model.directory.more ||
                             model.truncated ||
-                            matching.length + matchingTeams.length > 50
+                            matching.length + matchingTeams.length >
+                              MENTION_ROWS
                           ? {
                               status: "Narrow your search to see more members.",
                             }
