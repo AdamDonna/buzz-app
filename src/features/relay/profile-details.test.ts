@@ -677,7 +677,9 @@ it("keeps background reads asked for after a release when the shrink runs", asyn
   );
   const directory = createProfileDirectory({ read });
   try {
-    const [stale, joined, fresh] = unsignedProfiles(3, "N") as [
+    const profiles = unsignedProfiles(4, "N");
+    const [stale, joined, other, fresh] = profiles as [
+      RelayEvent,
       RelayEvent,
       RelayEvent,
       RelayEvent,
@@ -686,29 +688,25 @@ it("keeps background reads asked for after a release when the shrink runs", asyn
     // The departing view's reads, both asked for before its release.
     const departing = Promise.all([
       directory.ensure([stale.pubkey], "background"),
-      directory.ensure([joined.pubkey], "background"),
+      directory.ensure([joined.pubkey, other.pubkey], "background"),
     ]);
     const before = directory.queries.evictions?.() ?? 0;
     release?.();
-    // The next view mounts before the shrink runs: one new read, and one
-    // author it joins on the departing view's pending read.
+    // The next view mounts before the shrink runs: one new author, and one
+    // on the departing view's pending page.
     const next = directory.ensure([fresh.pubkey, joined.pubkey], "background");
     expect(answers).toHaveLength(3);
     await vi.runAllTimersAsync();
     expect(directory.queries.limit?.()).toBe(1024);
-    // Only the stale read was cancelled.
-    expect(directory.queries.evictions?.()).toBe(before + 1);
-    for (const answer of answers)
-      answer.resolve(
-        [joined, fresh].filter((event) =>
-          answer.authors.includes(event.pubkey),
-        ),
-      );
+    // Both departing reads were cancelled.
+    expect(directory.queries.evictions?.()).toBe(before + 2);
+    for (const answer of answers) answer.resolve(profiles);
     await Promise.all([departing, next]);
     const snapshot = directory.queries.snapshot();
     expect(snapshot.has(fresh.pubkey)).toBe(true);
     expect(snapshot.has(joined.pubkey)).toBe(true);
     expect(snapshot.has(stale.pubkey)).toBe(false);
+    expect(snapshot.has(other.pubkey)).toBe(false);
   } finally {
     directory.dispose();
     vi.useRealTimers();

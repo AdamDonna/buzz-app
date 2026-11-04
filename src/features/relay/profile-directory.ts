@@ -98,8 +98,9 @@ export function createProfileDirectory(
     reading: boolean;
     refresh: boolean;
     cancel: AbortController;
-    // `releases` when it was last asked for.
-    releases: number;
+    // The release count when it was asked for; a shrink cancels a background
+    // read once a release follows.
+    readonly releases: number;
   };
   const pending = new Map<string, Batch>();
   // The batch each read attempt's signal belongs to, so the session's accept
@@ -107,9 +108,17 @@ export function createProfileDirectory(
   const attempts = new WeakMap<AbortSignal, Batch>();
   // Background reads a shrink cancelled; counted with evictions.
   let cancelled = 0;
-  // Reservations released so far. A shrink cancels only background reads last
-  // asked for before the latest release.
+  // Reservations released so far.
   let releases = 0;
+  // Whether a shrink cancels this read: a background read, not a reconnect
+  // refresh, asked for before the latest release.
+  function shrinkCancels(batch: Batch) {
+    return (
+      batch.priority === "background" &&
+      !batch.refresh &&
+      batch.releases !== releases
+    );
+  }
   const listeners = new Set<() => void>();
   let snapshot: ReadonlyMap<string, Profile> = new Map();
   // Replaced, never mutated, so stores can compare it like `snapshot`.
@@ -336,10 +345,12 @@ export function createProfileDirectory(
     const signal = controller.signal;
     const waiting = new Set<Promise<void>>();
     const missing = unique.filter((id) => {
-      const batch = pending.get(id);
+      let batch = pending.get(id);
+      // Don't join a read the waiting shrink cancels: this name gets its own
+      // read, and the rest of that page is still cancelled.
+      if (batch && shrinking !== undefined && shrinkCancels(batch))
+        batch = undefined;
       if (batch) {
-        // A later requester keeps the read alive through a shrink.
-        batch.releases = releases;
         // Rejoin the equal read so the reader promotes it if still queued;
         // waiting on the old promise alone would leave it behind background work.
         if (priority === "foreground" && batch.priority === "background") {
@@ -463,12 +474,7 @@ export function createProfileDirectory(
     // foreground reads and reconnect refreshes keep going.
     if (shrink)
       for (const batch of new Set(pending.values())) {
-        if (
-          batch.priority !== "background" ||
-          batch.refresh ||
-          batch.releases === releases
-        )
-          continue;
+        if (!shrinkCancels(batch)) continue;
         batch.cancel.abort();
         for (const id of batch.authors)
           if (pending.get(id) === batch) pending.delete(id);
