@@ -338,6 +338,7 @@ export const test = base.extend({
     const hiddenDmIds = new Set(lifecycleVisibility.hidden);
     let lifecycleTime = 1700000001;
     const joinedRoles = new Map();
+    const channelGuests = new Map();
     const rosterIds = [
       ...new Set([
         ...channels,
@@ -1190,6 +1191,12 @@ export const test = base.extend({
                   pubkey,
                   "",
                   "member",
+                ]),
+                ...[...(channelGuests.get(id) ?? [])].map((pubkey) => [
+                  "p",
+                  pubkey,
+                  "",
+                  "guest",
                 ]),
                 ...(dmMembers[id]
                   ? dmMembers[id].map((index) => [
@@ -2652,6 +2659,13 @@ export const test = base.extend({
         },
         // Change only modeled relay state. The app must consume the next real
         // roster response; this does not call client purge/recovery internals.
+        addChannelGuest(id, pubkey) {
+          expect(rosterIds).toContain(id);
+          const guests = channelGuests.get(id) ?? new Set();
+          guests.add(pubkey);
+          channelGuests.set(id, guests);
+          lifecycleTime++;
+        },
         renameChannel(id, name) {
           expect(rosterIds).toContain(id);
           renamedChannels.set(id, name);

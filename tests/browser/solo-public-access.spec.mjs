@@ -204,26 +204,7 @@ test.describe("owner", () => {
     const guest = app.serveProfile(generateSecretKey(), {
       name: "Aria viewer",
     });
-    await page.route("**/api/relay/**/query", async (route) => {
-      const filters = route.request().postDataJSON();
-      if (!filters.some((filter) => filter.kinds?.includes(39002)))
-        return route.continue();
-      const response = await route.fetch();
-      const events = await response.json();
-      await route.fulfill({
-        json: events.map((event) =>
-          event.kind === 39002 &&
-          event.tags.some(([key, value]) => key === "d" && value === own)
-            ? app.signRelay({
-                ...event,
-                // A changed signed roster must supersede the startup version.
-                created_at: event.created_at + 1,
-                tags: [...event.tags, ["p", guest.pubkey, "", "guest"]],
-              })
-            : event,
-        ),
-      });
-    });
+    app.addChannelGuest(own, guest.pubkey);
     for (const presentation of presentations) {
       const suffix = `${presentation.mode}_${presentation.width}`;
       app.setChannelMetadata(own, [
