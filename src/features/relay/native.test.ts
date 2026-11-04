@@ -344,7 +344,7 @@ it.each([true, false])(
         status: accepted ? 200 : 403,
         body: accepted
           ? { accepted: true, event_id: JSON.parse(request.body ?? "{}").id }
-          : { error: "Registration denied" },
+          : { error: "restricted: registration denied" },
       });
       expect(outbox.supports(30177)).toBe(true);
       const id = outbox.send({ kind: 30177, tags: [["d", agent]], content });
@@ -353,7 +353,7 @@ it.each([true, false])(
           outbox.snapshot().find((item) => item.event.id === id),
         ).toMatchObject({
           delivery: accepted ? "accepted" : "failed",
-          ...(accepted ? {} : { error: "Relay rejected the message (403)" }),
+          ...(accepted ? {} : { error: "Registration denied" }),
         }),
       );
       const publishes = requests.filter(

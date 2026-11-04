@@ -1458,6 +1458,9 @@ export async function connectSignedTransport(
             profiling,
             event.id,
             principal().api,
+            "foreground",
+            false,
+            refusalText,
           ).catch((error) => {
             if (error instanceof ApiPaused || error instanceof ApiNotSent)
               throw new PublishNotSent(error.message);
@@ -1525,11 +1528,12 @@ async function signedPost(
   admission: Parameters<typeof admittedApiRequest>[0],
   priority: "foreground" | "background" = "foreground",
   optionalPresence = false,
+  reason?: (body: unknown, status: number) => string | undefined,
 ) {
   const dispatch = (request: () => Promise<Response>) =>
     optionalPresence
       ? admission.prepare(request)
-      : admittedApiRequest(admission, request, signal, priority);
+      : admittedApiRequest(admission, request, signal, priority, reason);
   signal?.throwIfAborted();
   return admission.prepare(async () => {
     const body = JSON.stringify(value);
@@ -1564,6 +1568,39 @@ export async function acceptReadStatePublish(response: Response, id: string) {
   return acceptPublish(response, id);
 }
 
+const REFUSAL_STATUSES = [400, 401, 403, 404, 413, 422];
+/** NIP-01 machine-readable prefixes: the shape of a relay's own refusal. */
+const NIP01_PREFIX =
+  /^(invalid|blocked|restricted|error|pow|duplicate|rate-limited|conflict|auth-required):\s*/;
+/** Prefixes writers match on, so the text is shown as sent. */
+const KEPT_PREFIXES = new Set(["rate-limited", "conflict", "auth-required"]);
+/** The relay's own `{error}` text for a refused write. Admission otherwise
+ * reduces every upstream body to a status summary, so a signed publish asks
+ * it to keep this one, bounded by `readApiFailure`. A gateway or VPN edge
+ * can answer the same statuses with JSON `{error}`, so only relay-shaped
+ * text (a NIP-01 prefix) is kept. The prefix is a shape, not proof of origin. */
+const refusalText = (body: unknown, status: number) => {
+  const error = (body as { error?: unknown } | null)?.error;
+  return REFUSAL_STATUSES.includes(status) &&
+    typeof error === "string" &&
+    NIP01_PREFIX.test(error)
+    ? error
+    : undefined;
+};
+
+/** The display text for an HTTP refusal: the relay's own words without their
+ * NIP-01 machine prefix. `reason` keeps the raw text for classification. Text
+ * with a prefix writers match on (`conflict:`, `rate-limited:`) is shown as
+ * sent. Text without a prefix is not relay-shaped, so the status summary stays. */
+function refusalMessage(status: number, reason: string | undefined) {
+  const prefix = reason ? NIP01_PREFIX.exec(reason) : null;
+  if (!reason || !prefix) return `Relay rejected the message (${status})`;
+  if (KEPT_PREFIXES.has(prefix[1] ?? "")) return reason.trim();
+  const text = reason.slice(prefix[0].length).trim();
+  if (!text) return `Relay rejected the message (${status})`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** A transport failure is an unknown outcome; only a definitive rejection is a failed write. */
 export async function acceptPublish(response: Response, id: string) {
   if (!response.ok) {
@@ -1574,7 +1611,7 @@ export async function acceptPublish(response: Response, id: string) {
       throw new PublishRejected(
         "conflict: the relay state changed; reload before writing again",
       );
-    if ([400, 401, 403, 404, 413, 422].includes(response.status)) {
+    if (REFUSAL_STATUSES.includes(response.status)) {
       // Keep the relay's bounded `{error}` text for writers that classify it.
       let reason: string | undefined;
       await readApiFailure(response, (value) => {
@@ -1583,7 +1620,7 @@ export async function acceptPublish(response: Response, id: string) {
         return undefined;
       });
       throw new PublishRejected(
-        `Relay rejected the message (${response.status})`,
+        refusalMessage(response.status, reason),
         reason,
       );
     }
