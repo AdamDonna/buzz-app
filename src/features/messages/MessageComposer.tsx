@@ -148,6 +148,7 @@ import type {
   ComposerFormat,
 } from "./composer-dom";
 import { TargetOpenerProvider } from "../conversation/opener";
+import { channelText } from "../channels/channel-icon";
 import { avatarMedia } from "../../shared/avatar-source";
 import { followUpBehaviorPreference } from "./follow-up-preference";
 import { followUpQueue } from "./follow-up-queue";
@@ -2621,10 +2622,24 @@ function Composer({
       } else if (capturedAttachments.length) {
         // The revision acceptance saves; remembered agents are not a draft.
         const followup = JSON.stringify(mentionDraft(""));
+        // Name it as the sidebar does; a thread link opens the thread.
+        const name = channelText({
+          ...channels().find((channel) => channel.id === channelId),
+          name: channelName,
+        });
         sendInBackground(
           session,
           recoveryKey,
           channelId,
+          threadRootId
+            ? {
+                name: `thread in ${name}`,
+                link: `buzz://message?${new URLSearchParams({ channel: channelId, id: threadRootId, thread: threadRootId })}`,
+              }
+            : {
+                name,
+                link: `buzz://channel/${encodeURIComponent(channelId)}`,
+              },
           capturedAttachments,
           async (uploaded) => {
             const sent = await publish(uploaded);
@@ -2961,7 +2976,11 @@ function Composer({
             resolved={value}
           />
         )}
-        <BackgroundUploadStatus session={session} focusTarget={input} />
+        <BackgroundUploadStatus
+          session={session}
+          focusTarget={input}
+          onOpenLink={onOpenLink}
+        />
         {dragging && <FileDropOverlay composer={form} />}
         {attachmentError && (
           <ToastNotice

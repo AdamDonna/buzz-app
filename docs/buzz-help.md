@@ -153,8 +153,12 @@ that agent in Buzz; they do not notify the external app through this connection.
   uploads are available. Files and media are shared with the conversation's
   members. If an upload fails, its attachment shows the reason, **Retry**, and
   **Remove**. Follow the error's guidance before retrying, or remove the attachment
-  to unblock Send; your typed message stays in the composer. Do not promise
-  support for every file type or size.
+  to unblock Send; your typed message stays in the composer. In the main window,
+  files still uploading when you press **Send** finish in the background: the
+  upload bar names the conversation they are going to, and **Cancel** stops the
+  send it names. If a background send fails, its notice names that conversation
+  and can open it, where your message and files are back in the composer. Do not
+  promise support for every file type or size.
 - **Emoji suggestions** appear when you type `:` and an emoji name. If a name
   is shortened with an ellipsis, hover over it or use the arrow keys to select
   it and see the full name in a tooltip.

@@ -13,9 +13,12 @@ import styles from "./Messages.module.css";
 export function BackgroundUploadStatus({
   session,
   focusTarget,
+  onOpenLink,
 }: {
   session: ComposerSession;
   focusTarget: React.RefObject<HTMLElement | null>;
+  /** The hosting composer's link handler opens a notice's conversation. */
+  onOpenLink?: ((target: string) => boolean) | undefined;
 }) {
   const uploads = useBackgroundUploads(session);
   const focusedCancel = useRef(false);
@@ -34,10 +37,11 @@ export function BackgroundUploadStatus({
   }, [uploads.uploading, focusTarget]);
   return (
     <>
-      {uploads.uploading && (
+      {uploads.destination && (
         <div className={styles.backgroundUpload}>
           <span id={phase} role="status">
-            {uploads.phase}
+            {`${uploads.phase} to ${uploads.destination.name}`}
+            {uploads.others > 0 && ` and ${uploads.others} more`}
           </span>
           {/* Desktop's bar: measured bytes, or an indeterminate sweep while
               the host reports none. It never shows a number. */}
@@ -81,27 +85,42 @@ export function BackgroundUploadStatus({
             }}
             size="sm"
             variant="ghost"
+            aria-label={`Cancel upload to ${uploads.destination.name}`}
             onClick={() => cancelBackgroundUpload(session)}
           >
             Cancel
           </Button>
         </div>
       )}
-      {uploads.notices.map((notice) => (
-        <ToastNotice
-          key={notice.id}
-          title={notice.message}
-          {...(!notice.retry && {
-            onDismiss: () => dismissBackgroundUploadNotice(session, notice.id),
-          })}
-        >
-          {notice.retry && (
-            <Button type="button" onClick={notice.retry}>
-              Retry failed send recovery
-            </Button>
-          )}
-        </ToastNotice>
-      ))}
+      {uploads.notices.map((notice) => {
+        const dismiss = () => dismissBackgroundUploadNotice(session, notice.id);
+        return (
+          <ToastNotice
+            key={notice.id}
+            title={notice.title}
+            {...(notice.description && { description: notice.description })}
+            {...(!notice.retry && { onDismiss: dismiss })}
+          >
+            {notice.retry && (
+              <Button type="button" onClick={notice.retry}>
+                Retry failed send recovery
+              </Button>
+            )}
+            {onOpenLink && (
+              <Button
+                type="button"
+                onClick={() => {
+                  // Opening answers a failure; recovery stays until it succeeds.
+                  if (onOpenLink(notice.destination.link) && !notice.retry)
+                    dismiss();
+                }}
+              >
+                {`Open ${notice.destination.name}`}
+              </Button>
+            )}
+          </ToastNotice>
+        );
+      })}
     </>
   );
 }
