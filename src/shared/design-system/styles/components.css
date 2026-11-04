@@ -1852,6 +1852,16 @@
   .buzz-sidebar-navigation .navigation-item[data-variant="row"][data-selected] {
     --navigation-item-text: var(--text-row-selected);
   }
+  /* Pressing an unselected sidebar row keeps its quiet fill and matching ink. */
+  .buzz-sidebar-navigation
+  .navigation-item[data-variant="row"]:active:not(
+    [data-selected],
+    [data-disabled],
+    :disabled
+  ) {
+    --text-subtle: var(--text-sidebar-hover);
+    --text-metadata: var(--text-sidebar-hover);
+  }
   .buzz-sidebar-navigation .navigation-item[data-variant="row"][data-inset] {
     padding-inline-start: calc(var(--space-2) + var(--space-6));
   }

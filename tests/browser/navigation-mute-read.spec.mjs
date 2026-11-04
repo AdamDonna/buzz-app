@@ -367,3 +367,48 @@ async function captureActions(page, menu, path) {
     },
   });
 }
+
+// Real pointer-down activates CSS :active; DOM click() skips that state.
+test("muted bell stays visible while pressing an unselected channel", async ({
+  page,
+  app,
+}, testInfo) => {
+  await open(page, app);
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const beta = sidebar.locator('[data-channel-id="beta"]');
+  const alpha = sidebar.locator('[data-channel-id="alpha"]');
+  const bell = beta.getByRole("img", { name: "Muted", exact: true });
+  await beta.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Mute", exact: true }).click();
+  await expect(bell).toBeVisible();
+  const settledColor = () =>
+    bell.evaluate((element) => {
+      for (const animation of element.getAnimations()) animation.finish();
+      return getComputedStyle(element).color;
+    });
+  for (const mode of ["dark", "light"]) {
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+    }, mode);
+    await alpha.click();
+    await beta.hover();
+    const before = await settledColor();
+    await page.mouse.down();
+    try {
+      expect(await beta.evaluate((element) => element.matches(":active"))).toBe(
+        true,
+      );
+      await expect(beta).not.toHaveAttribute("aria-current", "page");
+      await expect(bell).toBeVisible();
+      const pressed = await settledColor();
+      await sidebar.screenshot({
+        path: testInfo.outputPath(`${mode}-pressed.png`),
+      });
+      expect(pressed, `${mode} pressed icon color`).toBe(before);
+    } finally {
+      await page.mouse.up();
+    }
+    await expect(beta).toHaveAttribute("aria-current", "page");
+    await expect(bell).toBeVisible();
+  }
+});
