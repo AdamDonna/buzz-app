@@ -120,6 +120,14 @@ export interface UnreadCapability {
     target: ReadTarget,
     messageId: string,
   ): Promise<ReadMutationResult>;
+  /** Explicit read of these verified top-level messages in one save, as the
+   * reader's catch-up reads a channel bottom: the channel catch-up mark reads
+   * ordinary messages through the newest, and still-unread mentions,
+   * broadcasts and marked messages are read individually. Replies stay unread. */
+  markTimelineRead(
+    channelId: string,
+    messageIds: readonly string[],
+  ): Promise<ReadMutationResult>;
   /** One immediate menu action over the selected verified message and loaded reply subtree. */
   markMessageUnread(
     channelId: string,
@@ -1020,7 +1028,11 @@ export function createUnread({
         const session = channel.channelType === "solo";
         const evidence = (byChannel.get(channel.id) ?? []).filter((entry) => {
           want(entry, dm);
-          return entry.event.pubkey !== viewer && !!category(entry, dm);
+          return (
+            entry.event.pubkey !== viewer &&
+            (!!category(entry, dm) ||
+              (session && !entry.parentId && !entry.quiet))
+          );
         });
         // A session's top-level timeline is one conversation; its threads,
         // roots included, stay separate.
@@ -1041,8 +1053,9 @@ export function createUnread({
         const rows = folded(channel.id);
         const content = new Map(rows.map((row) => [row.id, row.content]));
         // A session's top-level row shows its newest message from someone
-        // else to everyone, even one that is not Inbox evidence, unless that
-        // message is the root of its own thread row.
+        // else, unless that message is the root of its own thread row. This
+        // mostly matches its newest evidence, but follows a relay-signed row's
+        // author rather than its signer.
         const newest = session
           ? rows.reduce<RelayEvent | undefined>((best, row) => {
               const event = events.get(row.id);
@@ -1094,22 +1107,25 @@ export function createUnread({
                     channelId: channel.id,
                     messageId: latest.event.id,
                   };
-            const readThrough: { target: ReadTarget; messageId: string }[] = dm
-              ? []
-              : entries
-                  .filter(
-                    (entry) =>
-                      !entry.rootId ||
-                      !!reads.localUnread(`msg:${entry.event.id}`),
-                  )
-                  .map((entry) => ({
-                    target: {
-                      kind: "message" as const,
-                      channelId: channel.id,
+            // A DM reads its channel, and a session's top-level timeline reads
+            // with one catch-up (`markTimelineRead`), not a step per message.
+            const readThrough: { target: ReadTarget; messageId: string }[] =
+              dm || timeline
+                ? []
+                : entries
+                    .filter(
+                      (entry) =>
+                        !entry.rootId ||
+                        !!reads.localUnread(`msg:${entry.event.id}`),
+                    )
+                    .map((entry) => ({
+                      target: {
+                        kind: "message" as const,
+                        channelId: channel.id,
+                        messageId: entry.event.id,
+                      },
                       messageId: entry.event.id,
-                    },
-                    messageId: entry.event.id,
-                  }));
+                    }));
             if (!dm && lastReply?.rootId)
               readThrough.push({
                 target: {
@@ -1150,7 +1166,12 @@ export function createUnread({
                 !!reads.localUnread(targetKey(target)) ||
                 readThrough.some(
                   ({ target }) => !!reads.localUnread(targetKey(target)),
-                ),
+                ) ||
+                (timeline &&
+                  entries.some(
+                    (entry) => !!reads.localUnread(`msg:${entry.event.id}`),
+                  )),
+              ...(timeline ? { timeline: true as const } : {}),
               readThrough: Object.freeze(
                 readThrough.map((step) =>
                   Object.freeze({
@@ -2372,6 +2393,65 @@ export function createUnread({
           true,
         ),
       );
+    },
+    async markTimelineRead(channelId, messageIds) {
+      const target = { kind: "channel" as const, channelId };
+      const shown = messageIds.map((id) => requireMessage(target, id));
+      // A DM's catch-up is its channel read, never `activity:`; until the
+      // channel's type is known, it might be a DM.
+      const type = channels
+        .list()
+        .channels.find((channel) => channel.id === channelId)?.channelType;
+      if (type === undefined || type === "dm")
+        throw new Error("Read target unavailable");
+      if (!shown.length || shown.some(threadReference))
+        throw new Error("A thread reply cannot advance the channel frontier");
+      const generation = epoch;
+      const valid = () =>
+        !closed &&
+        generation === epoch &&
+        shown.every((event, index) => {
+          const id = messageIds[index];
+          return id !== undefined && requireMessage(target, id) === event;
+        });
+      return serialize(channelId, () => {
+        indexEvidence();
+        const state = reads.state();
+        const entries = shown.flatMap((event) => byId.get(event.id) ?? []);
+        const cut = Math.max(
+          ...entries
+            .filter((entry) => timeline(entry, false))
+            .map((entry) => entry.event.created_at),
+          -1,
+        );
+        const marks = entries
+          .filter(
+            (entry) =>
+              (!timeline(entry, false) ||
+                !!reads.localUnread(`msg:${entry.event.id}`)) &&
+              isUnread(entry, state, false),
+          )
+          .map((entry) => ({
+            key: `msg:${entry.event.id}`,
+            timestamp: entry.event.created_at,
+            channelId,
+          }));
+        const covered =
+          Math.max(
+            state.frontiers[`activity:${channelId}`] ?? -1,
+            state.frontiers[channelId] ?? -1,
+          ) >= cut;
+        return reads.readMessages(
+          covered
+            ? marks
+            : [
+                { key: `activity:${channelId}`, timestamp: cut, channelId },
+                ...marks,
+              ],
+          undefined,
+          valid,
+        );
+      });
     },
     async markMessageUnread(channelId, messageId) {
       const visit = visits.get(channelId) ?? 0;

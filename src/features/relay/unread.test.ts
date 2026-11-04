@@ -2704,8 +2704,8 @@ it("inbox groups a Solo chat's top-level timeline into one conversation, keeping
   const mention = (channel: string, content: string, at: number) =>
     message(h.alice, channel, content, at, [["p", h.viewer.pubkey]]);
   const [first, second] = [
-    mention("chat", "First", 20),
-    mention("chat", "Second", 21),
+    message(h.alice, "chat", "First", 20),
+    message(h.alice, "chat", "Second", 21),
   ];
   const root = message(h.viewer, "chat", "My thread", 22);
   const reply = message(h.alice, "chat", "Reply", 23, [
@@ -2734,12 +2734,77 @@ it("inbox groups a Solo chat's top-level timeline into one conversation, keeping
       target: { kind: "message", channelId: "chat", messageId: second.id },
       messageIds: [first.id, second.id],
       thread: false,
+      timeline: true,
+      readThrough: [],
       unreadCount: 2,
     }),
   ]);
-  for (const step of chat()[1]?.readThrough ?? [])
-    await h.session.unread.markThrough(step.target, step.messageId);
+  await h.session.unread.markTimelineRead("chat", chat()[1]?.messageIds ?? []);
   expect(chat().map((item) => item.unreadCount)).toEqual([1, 0]);
+  const incoming = message(h.alice, "chat", "New response", 26);
+  const bottom = message(h.alice, "chat", "Quiet", 28, [
+    ["audience", "agents"],
+  ]);
+  h.emit([incoming, message(h.viewer, "chat", "My answer", 27), bottom]);
+  expect(chat().find((item) => item.id === "chat:chat")?.unreadCount).toBe(1);
+  const lease = h.session.unread.reading("chat");
+  await lease.catchUp(bottom.id);
+  expect(chat().find((item) => item.id === "chat:chat")?.unreadCount).toBe(0);
+  expect(chat().find((item) => item.thread)?.unreadCount).toBe(1);
+  lease.dispose();
+});
+
+it("reading a Solo chat's timeline row takes one save however many responses it retains", async () => {
+  const h = setup();
+  h.grant("chat");
+  h.emit([
+    metadata(h.relay, "chat", "Solo chat", 11, [
+      ["t", "stream"],
+      ["private"],
+      ["t", SOLO_LABEL],
+    ]),
+  ]);
+  const responses = Array.from({ length: 150 }, (_, index) =>
+    message(h.alice, "chat", `Response ${index}`, 20 + index),
+  );
+  const ping = message(h.alice, "chat", "Ping", 200, [["p", h.viewer.pubkey]]);
+  const root = message(h.viewer, "chat", "My thread", 201);
+  const reply = message(h.alice, "chat", "Reply", 202, [
+    ["e", root.id, "", "reply"],
+  ]);
+  const last = message(h.alice, "chat", "Last", 203);
+  h.emit([...responses, ping, root, reply, last]);
+  const chat = () =>
+    h.session.unread.inbox().items.filter((item) => item.channelId === "chat");
+  const row = () => chat().find((item) => item.timeline);
+  // A read response the viewer marked unread stays in the row's one save.
+  const [marked] = responses;
+  if (!marked) throw new Error("missing response");
+  await h.session.unread.markMessageRead("chat", marked.id);
+  await h.session.unread.markUnreadLocal({
+    kind: "message",
+    channelId: "chat",
+    messageId: marked.id,
+  });
+  expect(row()).toMatchObject({
+    unreadCount: 152,
+    manual: true,
+    readThrough: [],
+  });
+  const before = h.journal()?.revision ?? 0;
+  await h.session.unread.markTimelineRead("chat", row()?.messageIds ?? []);
+  expect(h.journal()?.revision).toBe(before + 1);
+  expect(row()).toMatchObject({ unreadCount: 0, manual: false });
+  expect(chat().find((item) => item.thread)?.unreadCount).toBe(1);
+  const marks = h.journal()?.state.frontiers ?? {};
+  expect(marks["activity:chat"]).toBe(203);
+  expect(marks[`msg:${ping.id}`]).toBe(200);
+  // The catch-up mark covers ordinary responses, so none keeps its own mark.
+  expect(Object.keys(marks)).toEqual(
+    expect.not.arrayContaining(responses.map(({ id }) => `msg:${id}`)),
+  );
+  expect(h.session.unread.attention("chat", marked.id).unread).toBe(false);
+  expect(h.journal()?.localUnread).toEqual({});
 });
 
 it("inbox describes a Solo chat row by its newest top-level message, not only its Inbox evidence", () => {
@@ -2766,8 +2831,8 @@ it("inbox describes a Solo chat row by its newest top-level message, not only it
     .items.find((item) => item.id === "chat:chat");
   expect(item).toMatchObject({
     messageId: ping.id,
-    messageIds: [ping.id],
-    unreadCount: 1,
+    messageIds: [ping.id, update.id],
+    unreadCount: 2,
     authorId: h.alice.pubkey,
     preview: "Later update",
     createdAt: 21,

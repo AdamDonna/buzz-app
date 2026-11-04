@@ -461,6 +461,13 @@ it.each(["shortcut", "row"])(
     fireEvent.click(first);
     await waitFor(() => expect(h.archive.current).toBeDefined());
     const [tab] = sideTabs();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("list", { name: "Inbox conversations" }),
+      ).toHaveAttribute("aria-busy", "false"),
+    );
+    await Promise.all(h.readSteps.map((step) => step.work));
+    const readSteps = h.readSteps.length;
     // Leaving Inbox and returning restores the tab with its row's selection.
     view.unmount();
     render(h.view);
@@ -472,6 +479,8 @@ it.each(["shortcut", "row"])(
       if (!row) throw new Error("No selected row");
       return row;
     });
+    // Restoring the presentation must not replay the row's read command.
+    expect(h.readSteps).toHaveLength(readSteps);
     if (from === "shortcut") await archiveOpened(h);
     else
       fireEvent.click(
@@ -3939,7 +3948,7 @@ it("Inbox Solo chat activity shared with a person sends without a tag", async ()
   expect(h.published[0]?.tags.filter(([name]) => name === "p")).toEqual([]);
 });
 
-it("a Solo chat row shows, and is ordered by, a later agent reply that is not Inbox evidence", async () => {
+it("a Solo chat row includes ordinary agent responses under All, not DMs, keeping threads separate", async () => {
   const h = fixture({ soloChannel: true, memberAgents: 1 });
   const progress = message(h.agent, "room", "Agent progress", 30);
   h.addEvent(progress);
@@ -3949,6 +3958,22 @@ it("a Solo chat row shows, and is ordered by, a later agent reply that is not In
   await waitFor(() => expect(rows()[0]).toHaveTextContent("Agent progress"));
   expect(rows()[1]).toHaveTextContent("A thread update");
   expect(screen.queryByText("Please review this")).not.toBeInTheDocument();
+  // Opening the timeline row reads it with one channel catch-up mark, leaving
+  // its separate thread row unread.
+  const before = h.journal()?.revision ?? 0;
+  fireEvent.click(
+    within(rows()[0] as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers["activity:room"]).toBe(30),
+  );
+  expect(h.journal()?.revision).toBe(before + 1);
+  expect(
+    within(rows()[1] as HTMLElement).getByRole("img", { name: "Unread" }),
+  ).toBeInTheDocument();
+  // The sidebar keeps Solo chats apart from direct messages; so does Inbox.
+  await chooseFilter("DMs");
+  expect(screen.queryByText("Agent progress")).not.toBeInTheDocument();
 });
 
 it("Inbox keeps an open Solo chat timeline when a late reply regroups its mention", async () => {

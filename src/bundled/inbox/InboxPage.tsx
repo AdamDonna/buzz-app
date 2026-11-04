@@ -870,7 +870,9 @@ function InboxList({
       else if (item.target.kind === "channel") {
         readChannel ??= session.unread.prepareChannelRead(item.channelId);
         await readChannel();
-      } else
+      } else if (item.timeline)
+        await session.unread.markTimelineRead(item.channelId, item.messageIds);
+      else
         while (remaining.length) {
           // Close/Escape retires undispatched steps, not the admitted save.
           // Its genuine storage/access rejection still propagates through run.

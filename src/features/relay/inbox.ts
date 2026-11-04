@@ -29,6 +29,9 @@ export type InboxItem = Readonly<{
   thread: boolean;
   unreadCount: number;
   manual: boolean;
+  /** A session's top-level timeline row: its explicit read is one
+   * `markTimelineRead` over `messageIds`, and `readThrough` is empty. */
+  timeline?: true;
   /** Explicit prefixes; a thread prefix never acknowledges its top-level root. */
   readThrough: readonly Readonly<{ target: ReadTarget; messageId: string }>[];
 }>;
