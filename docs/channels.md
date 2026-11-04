@@ -1398,6 +1398,43 @@ not visible rows or complete history.
 The relay can filter rows after its limit, and summaries/EOSE are not proof of
 exhaustion. See [the thread owner and bounds](relay-queries.md#thread-views).
 
+### Scrolling long threads
+
+These requirements govern how the thread panel scrolls through the replies it has
+loaded, however many that is, with mixed Markdown, mentions, links, media and
+authors. They do not change the history bounds above; reaching replies beyond
+them belongs to the relay's thread retention.
+
+- **Responsive:** scrolling moves with wheel, trackpad and keyboard input from the
+  first event, and a reversal follows at once. The panel's own position
+  corrections do not stall input or cut trackpad momentum short.
+- **Available:** loaded replies are painted as they enter view at any scroll
+  speed. The panel never shows empty space where loaded replies belong, and
+  replies already shown stay readable while an older page loads.
+- **Final on entry:** a reply enters view at its final size and position.
+  Unchanged content does not rewrap, resize or move after it appears; media
+  occupy their reserved frame.
+- **Reading position:** older pages, resolved media, profiles and activity, live
+  replies and panel resizes keep the message being read at the same offset. New
+  replies are followed only while the reader is at the bottom; an own send stays
+  explicit navigation.
+- **Bounded work:** the cost of a scroll gesture depends on the replies near the
+  viewport, not on how many are loaded. If replies far from the viewport are not
+  rendered, scrolling, exact links, keyboard selection and Back/Forward still
+  reach every loaded reply.
+- **Interactions preserved:** focus, keyboard selection, editing, open menus and
+  dialogs, expanded branches, drafts, exact links and Back/Forward restoration
+  keep working when the reply involved is far from the viewport.
+
+Current gaps: the panel renders every displayed reply as a full message row, and
+its reading-anchor and read-tracking measurements scan the mounted rows, so
+scroll cost grows with loaded history. In the macOS app, each programmatic
+correction stops any remaining trackpad coast to avoid an unpainted viewport (see
+[the WebKit momentum patch](../patches/README.md)). Thread scrolling has no
+[performance measurement](performance.md) yet. Browser measurements establish
+main-thread and DOM evidence only; painted pixels and momentum require the native
+macOS app.
+
 ## Validation and limits
 
 `just scan` runs frontend checks/build, runtime/CLI tests, relay behavior tests,
