@@ -6,6 +6,7 @@ import type { ComposerSnapshot } from "../messages/mention-draft";
 import { scanMarkdown } from "../relay/message-content";
 import type { ComposerInputElement } from "../messages/composer-dom";
 import { createPortal } from "react-dom";
+import { RobotIcon } from "../../shared/design-system/icons/index";
 import { useCompletionPosition } from "./useCompletionPosition";
 import {
   useId,
@@ -566,6 +567,9 @@ function OwnedCompletion({
                       : undefined
                   }
                   id={`${id}-${i}`}
+                  // The provider's identity for the row (a mention's key),
+                  // which its label no longer spells out.
+                  data-completion-id={item.id}
                   key={item.id}
                   onPointerDown={(event) => {
                     if (event.button === 0) event.preventDefault();
@@ -598,19 +602,21 @@ function OwnedCompletion({
                         keyboardSelected={keyboardSelection === item.id}
                       />
                     ) : named ? (
-                      <span className={styles.name}>{item.label}</span>
+                      // Only the name ellipsizes; the agent mark stays visible.
+                      <span className={styles.nameRow}>
+                        <span className={styles.name}>{item.label}</span>
+                        {item.agent && (
+                          <span aria-hidden="true" className={styles.agentMark}>
+                            <RobotIcon />
+                          </span>
+                        )}
+                        {item.agent && <span className="sr-only"> Agent</span>}
+                      </span>
                     ) : (
                       item.label
                     )}
                     {item.detail && (
-                      <small
-                        aria-hidden={compact || undefined}
-                        data-recipient-key={
-                          (mention && /^[0-9a-f]{64}$/.test(item.detail)) ||
-                          undefined
-                        }
-                        title={mention ? item.detail : undefined}
-                      >
+                      <small aria-hidden={compact || undefined}>
                         {item.detail}
                       </small>
                     )}

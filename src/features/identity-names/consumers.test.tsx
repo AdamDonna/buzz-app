@@ -332,7 +332,7 @@ it.each(["live", "reconnect", "clear-cache"] as const)(
         screen.getByRole("button", { name: "Mention a member" }),
       );
       expect(
-        await screen.findByRole("button", { name: `GLM ${agent.pubkey}` }),
+        await screen.findByRole("button", { name: /^GLM\s*Agent/ }),
       ).toBeVisible();
 
       const oldRosterReads = rosterReads;
@@ -369,11 +369,11 @@ it.each(["live", "reconnect", "clear-cache"] as const)(
           view.container.querySelector('[data-message-id="message"]'),
         ).toHaveTextContent("Luna");
         expect(
-          screen.getByRole("button", { name: `Luna ${agent.pubkey}` }),
+          screen.getByRole("button", { name: /^Luna\s*Agent/ }),
         ).toBeVisible();
       });
       expect(
-        screen.queryByRole("button", { name: `GLM ${agent.pubkey}` }),
+        screen.queryByRole("button", { name: /^GLM\s*Agent/ }),
       ).not.toBeInTheDocument();
     } finally {
       owner.dispose();

@@ -653,16 +653,14 @@ test.describe("personal recipients", () => {
         name: "Mention a member or agent",
       });
       await expect(
-        linkedPicker.getByRole("button", {
-          name: `${brain.name} ${brain.pubkey}`,
-          exact: true,
-        }),
+        linkedPicker
+          .getByRole("button")
+          .and(page.locator(`[data-mention-choice="${brain.pubkey}"]`)),
       ).toBeVisible();
       await expect(
-        linkedPicker.getByRole("button", {
-          name: `${outsider.name} ${outsider.pubkey}`,
-          exact: true,
-        }),
+        linkedPicker
+          .getByRole("button")
+          .and(page.locator(`[data-mention-choice="${outsider.pubkey}"]`)),
       ).toHaveCount(0);
       await page.keyboard.press("Escape");
       expect(publications()).toHaveLength(1);

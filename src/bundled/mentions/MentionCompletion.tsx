@@ -1,6 +1,7 @@
 import { useProfileGeneration } from "../../features/relay/react";
 import { TeamMentionAvatars } from "./TeamMentionAvatars";
 import {
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -27,10 +28,31 @@ import {
 
 // Demand bookkeeping only, not another profile cache. Missing names do not issue
 // the same network request on every query keystroke; explicit retry remains available.
-const demands = new WeakMap<
-  ComposerSession,
-  { generation: number; evictions: number; ids: Set<string> }
->();
+// `failed` outlives the per-keystroke mount: a failed read stays reported, with
+// Retry, until a later read of those names succeeds or the demand resets.
+type Demand = {
+  generation: number;
+  evictions: number;
+  ids: Set<string>;
+  failed: Set<string>;
+};
+const demands = new WeakMap<ComposerSession, Demand>();
+const failureListeners = new WeakMap<ComposerSession, Set<() => void>>();
+function settle(
+  session: ComposerSession,
+  demand: Demand,
+  ids: readonly string[],
+  failed: boolean,
+) {
+  // A reset demand (purge, eviction) starts over; its old outcome is stale.
+  if (demands.get(session) !== demand) return;
+  for (const id of ids) {
+    // A batch that failed may still have answered for some of its names.
+    if (failed && !session.profiles.snapshot().has(id)) demand.failed.add(id);
+    else demand.failed.delete(id);
+  }
+  for (const listener of failureListeners.get(session) ?? []) listener();
+}
 export function MentionCompletion({
   session,
   scope,
@@ -72,7 +94,32 @@ export function MentionCompletion({
     ids: string[];
   }>(undefined);
   const [attempt, retry] = useState(0);
-  const [error, setError] = useState(false);
+  // A failed read reports only names still unresolved: a member loaded since
+  // (by any reader) or known unnamed, or one no longer in the roster, is not.
+  const error = useSyncExternalStore(
+    useCallback(
+      (listener: () => void) => {
+        const listeners = failureListeners.get(session) ?? new Set();
+        failureListeners.set(session, listeners);
+        listeners.add(listener);
+        const unsubscribe = session.profiles.subscribe(listener);
+        return () => {
+          listeners.delete(listener);
+          unsubscribe();
+        };
+      },
+      [session],
+    ),
+    () => {
+      const failed = demands.get(session)?.failed;
+      if (draftRoster || !failed?.size) return false;
+      const loaded = session.profiles.snapshot();
+      const unnamed = session.profiles.unnamed?.();
+      return members.some(
+        (key) => failed.has(key) && !loaded.has(key) && !unnamed?.has(key),
+      );
+    },
+  );
   const profileGeneration = useProfileGeneration(session.profiles);
   // Evictions also count cancelled reads, so a shrink asks again for this roster.
   const readEvictions = () => session.profiles.evictions?.() ?? 0;
@@ -92,8 +139,14 @@ export function MentionCompletion({
       demand?.generation !== profileGeneration ||
       demand.evictions !== evictions
     ) {
-      demand = { generation: profileGeneration, evictions, ids: new Set() };
+      demand = {
+        generation: profileGeneration,
+        evictions,
+        ids: new Set(),
+        failed: new Set(),
+      };
       demands.set(session, demand);
+      for (const listener of failureListeners.get(session) ?? []) listener();
     }
     const requested = demand.ids;
     // An open channel reserves room for its whole roster (ConversationChannel).
@@ -113,16 +166,15 @@ export function MentionCompletion({
       .slice(0, attempt > 0 ? limit : Math.max(0, limit - asked));
     if (!ids.length) return;
     for (const id of ids) requested.add(id);
-    let live = true;
-    // Retry is explicit: a foreground read rereads known absences.
+    // Retry is explicit: a foreground read rereads known absences. The
+    // outcome belongs to the session's demand, not this keystroke's mount.
+    const current = demand;
     void session.profiles
       .ensure(ids, attempt > 0 ? "foreground" : "background")
-      .catch(() => {
-        if (live) setError(true);
-      });
-    return () => {
-      live = false;
-    };
+      .then(
+        () => settle(session, current, ids, false),
+        () => settle(session, current, ids, true),
+      );
   }, [session, memberKey, attempt, draftRoster, profileGeneration, evictions]);
   useEffect(() => {
     const members = memberKey ? memberKey.split(":") : [];
@@ -141,7 +193,6 @@ export function MentionCompletion({
     const membershipMissing =
       !draftRoster && (!inviteAgents || !!channel) && !channel?.members;
     const membershipError = !draftRoster && list.error;
-    const missing = !draftRoster && members.some((key) => !profiles.has(key));
     // A multi-word query that continues no known name is prose, not a search.
     if (
       !admitted &&
@@ -154,50 +205,55 @@ export function MentionCompletion({
         if (withdraw) withdraw();
       };
     }
-    // Each shown row asks both; one pass each instead of one scan per row.
+    // Each shown row asks; one pass instead of one scan per row.
     const memberKeys = new Set(members);
-    const agentKeys = new Set(
-      model.candidates.flatMap((c) => (c.agent ? [c.recipient.pubkey] : [])),
-    );
     const available = [
       ...matching.map(
-        ({ recipient, label, elsewhere, disabled, fullName }) => ({
-          disabled,
-          canSelect: (key: string) =>
-            (key !== " " || !teams.blocksSpace) &&
-            model.canSelect(recipient.pubkey, key === " "),
-          id: recipient.pubkey,
-          label,
-          detail:
+        ({ recipient, label, elsewhere, disabled, fullName, agent }) => {
+          const detail =
             disabled ??
             // A verified full name sits beside the detail.
-            [
+            ([
               fullName !== label ? fullName : undefined,
+              model.managedBy.get(recipient.pubkey),
               memberKeys.has(recipient.pubkey)
-                ? recipient.pubkey
+                ? undefined
                 : inviteAgents
-                  ? `${parentAdmission ? "Adds to channel" : "Adds to chat"} · ${recipient.pubkey}`
+                  ? parentAdmission
+                    ? "Adds to channel"
+                    : "Adds to chat"
                   : outsideMentionDetail(channel, elsewhere),
             ]
               .filter(Boolean)
-              .join(" · "),
-          preview: (
-            <Avatar
-              alt=""
-              fallback={label}
-              src={avatarMedia(
-                profiles.get(recipient.pubkey)?.picture ??
-                  model.directory.people.find(
-                    (person) => person.pubkey === recipient.pubkey,
-                  )?.picture,
-                session.media,
-              )}
-              size="default"
-              shape={agentKeys.has(recipient.pubkey) ? "squircle" : "circle"}
-            />
-          ),
-          edit: { mention: recipient },
-        }),
+              .join(" · ") ||
+              undefined);
+          return {
+            disabled,
+            canSelect: (key: string) =>
+              (key !== " " || !teams.blocksSpace) &&
+              model.canSelect(recipient.pubkey, key === " "),
+            id: recipient.pubkey,
+            label,
+            agent,
+            ...(detail ? { detail } : {}),
+            preview: (
+              <Avatar
+                alt=""
+                fallback={label}
+                src={avatarMedia(
+                  profiles.get(recipient.pubkey)?.picture ??
+                    model.directory.people.find(
+                      (person) => person.pubkey === recipient.pubkey,
+                    )?.picture,
+                  session.media,
+                )}
+                size="default"
+                shape={agent ? "squircle" : "circle"}
+              />
+            ),
+            edit: { mention: recipient },
+          };
+        },
       ),
       ...matchingTeams.map((team) => ({
         id: team.id,
@@ -295,22 +351,18 @@ export function MentionCompletion({
                   ? { status: "Channel membership unavailable." }
                   : admitted && membershipError
                     ? { status: "Could not refresh channel membership." }
-                    : error || missing
+                    : // Only a failed read: a member who never set a name is
+                      // a complete answer, not an error.
+                      error
                       ? {
                           status:
-                            "Some names unavailable. Exact public keys still identify recipients.",
+                            "Could not load some names. Retry to refresh.",
                         }
                       : model.directory.loading
                         ? { status: "Searching community…" }
-                        : model.directory.more ||
-                            model.truncated ||
-                            matching.length + matchingTeams.length > 50
-                          ? {
-                              status: "Narrow your search to see more members.",
-                            }
-                          : teams.status
-                            ? { status: teams.status }
-                            : {}),
+                        : teams.status
+                          ? { status: teams.status }
+                          : {}),
       ...((admitted && teams.canRetry) ||
       model.directory.error ||
       (admitted &&
@@ -319,8 +371,7 @@ export function MentionCompletion({
           agents.error ||
           membershipMissing ||
           membershipError ||
-          error ||
-          missing))
+          error))
         ? {
             retry: () => {
               teams.retry();
@@ -329,7 +380,6 @@ export function MentionCompletion({
                 !!inviteAgents || teams.includeLegacy,
               );
               void session.archives?.refresh();
-              setError(false);
               retry((value) => value + 1);
               if (membershipMissing || membershipError)
                 session.channels.refreshList?.();

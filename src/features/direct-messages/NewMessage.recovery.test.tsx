@@ -642,12 +642,12 @@ it.each(["picker", "completion"])(
     const first = await choices();
     expect(
       first.getByRole(choiceRole, {
-        name: new RegExp(`Avery.*${other.pubkey}`),
+        name: /^Avery/,
       }),
     ).toBeVisible();
     await t.user.click(
       first.getByRole(choiceRole, {
-        name: new RegExp(`Zoe.*${another.pubkey}`),
+        name: /^Zoe/,
       }),
     );
     expect(composer()).toHaveTextContent("@Zoe");
@@ -659,11 +659,11 @@ it.each(["picker", "completion"])(
     const second = await choices();
     expect(
       second.getByRole(choiceRole, {
-        name: new RegExp(`Avery.*${other.pubkey}`),
+        name: /^Avery/,
       }),
     ).toBeVisible();
     expect(
-      second.queryByRole(choiceRole, { name: new RegExp(another.pubkey) }),
+      second.queryByRole(choiceRole, { name: /^Zoe/ }),
     ).not.toBeInTheDocument();
     // Dismiss the suggestions without replacing the existing mention in jsdom.
     await t.user.keyboard("{Escape}");
@@ -679,7 +679,7 @@ it.each(["picker", "completion"])(
     const last = await choices();
     await t.user.click(
       last.getByRole(choiceRole, {
-        name: new RegExp(`Avery.*${other.pubkey}`),
+        name: /^Avery/,
       }),
     );
     await t.user.click(send());

@@ -3,6 +3,7 @@ import { useMentionArchives } from "../../features/messages/use-mention-archives
 import {
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -18,7 +19,11 @@ import { DraftMentionRoster } from "../../features/messages/draft-mention-roster
 import { SelectedMentionContext } from "../../features/messages/selected-mention-context";
 import { archivedMention } from "../../features/messages/mention-admission";
 import { mentionHistory } from "../../features/messages/mention-history";
-import { directoryChanges, mentionCandidates } from "./mention-candidates";
+import {
+  directoryChanges,
+  managedByDetail,
+  mentionCandidates,
+} from "./mention-candidates";
 import { useListedChannel } from "../../features/relay/listed-channel";
 import { useNamesRevision } from "../../features/identity-names/react";
 import {
@@ -78,12 +83,13 @@ function page(session: ComposerSession, people: readonly Person[]) {
   const key = JSON.stringify(
     [...people]
       .sort((a, b) => (a.pubkey < b.pubkey ? -1 : a.pubkey > b.pubkey ? 1 : 0))
-      .map(({ pubkey, name, isAgent, fullName, profileNames }) => [
+      .map(({ pubkey, name, isAgent, fullName, profileNames, ownerPubkey }) => [
         pubkey,
         name,
         !!isAgent,
         fullName ?? "",
         profileNames ?? [],
+        ownerPubkey,
       ]),
   );
   const seen = pages.get(session) ?? new Map<string, readonly Person[]>();
@@ -159,10 +165,11 @@ export function namedCandidates(
       .filter(
         (person) => !known?.(person.pubkey) || pageVerified.has(person.pubkey),
       )
-      .map(({ pubkey, name, isAgent }) => ({
+      .map(({ pubkey, name, isAgent, ownerPubkey }) => ({
         pubkey,
         name,
         ...(isAgent ? { isAgent } : {}),
+        ...(ownerPubkey ? { ownerPubkey } : {}),
       })),
     ...selected,
   ];
@@ -375,6 +382,48 @@ export function useMentionChoices(
   let rows = same ? installed.rows : undefined;
   if (!same && installed) install(undefined);
   // Only choices the query can match; ranking reads no others.
+  // "Managed by" names only an attested owner. Attestation settles after the
+  // profile lands and notifies without a new snapshot, so read it here, not
+  // in the cached candidates.
+  const agentKeys = candidates.flatMap((c) =>
+    c.agent ? [c.recipient.pubkey] : [],
+  );
+  const attested = useSyncExternalStore(session.profiles.subscribe, () =>
+    agentKeys
+      .flatMap((key) => {
+        const owner = session.profiles.owner?.(key);
+        return owner && owner !== session.viewer ? [`${key}=${owner}`] : [];
+      })
+      .join(","),
+  );
+  const owners = useMemo(
+    () =>
+      new Map(
+        attested
+          ? attested
+              .split(",")
+              .map((pair) => pair.split("=") as [string, string])
+          : [],
+      ),
+    [attested],
+  );
+  const ownerKeys = [...new Set(owners.values())].sort().join(":");
+  useEffect(() => {
+    if (ownerKeys)
+      void session.profiles
+        .ensure(ownerKeys.split(":"), "background")
+        .catch(() => {});
+  }, [session, ownerKeys]);
+  const managedBy = useMemo(
+    () =>
+      new Map(
+        [...owners].flatMap(([key, owner]) => {
+          const label = managedByDetail(owner, session.viewer, profiles);
+          return label ? [[key, label] as const] : [];
+        }),
+      ),
+    [owners, profiles, session.viewer],
+  );
   const matches = matchingMentions(candidates, query);
   const rank = (choices: readonly MentionChoice[]) =>
     rankMentions(
@@ -460,6 +509,7 @@ export function useMentionChoices(
       choices,
       directory: { ...directory, people },
       profiles,
+      managedBy,
       list,
       agents,
       channel,
@@ -481,8 +531,6 @@ export function useMentionChoices(
             spaceMention(fresh, localKeys(), query, evidence) === pubkey)
         );
       },
-      truncated:
-        rankMentions(matchingMentions(candidates, query), query).length > 50,
     };
   }, [
     session,
@@ -495,6 +543,7 @@ export function useMentionChoices(
     missingNames,
     archives,
     profiles,
+    managedBy,
     list,
     agents,
     channel,

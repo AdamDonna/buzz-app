@@ -2162,7 +2162,8 @@ still revokes unpublished work, without exposing ARIA controls for a missing lis
 
 Providers receive immutable observation/range evidence and `publish(result)`—not
 DOM, focus or replacement commands. Results contain stable IDs, labels, optional
-detail/decorative previews and either text, an exact `{ pubkey, name }` mention,
+detail/decorative previews, an optional `agent` flag (marked and announced only
+for the bundled mention and channel providers) and either text, an exact `{ pubkey, name }` mention,
 or a `mentions` array of up to 32 such recipients. Batch edit primitives are
 copied and frozen before display, and accepted as a single editor transaction.
 The host copies edit/query primitives and caps publications at 50 choices. A

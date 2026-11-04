@@ -650,7 +650,10 @@ test("empty compose, keyboard selection, pagination, removal effects, retry, the
   const mentions = page.getByRole("dialog", {
     name: "Mention a member or agent",
   });
-  const averyMention = mentions.getByRole("button", { name: /^Avery Chen / });
+  const averyMention = mentions.getByRole("button", {
+    name: "Avery Chen",
+    exact: true,
+  });
   await expect(mentions.getByRole("button")).toHaveCount(1);
   await averyMention.click();
   await expect(composer).toHaveText("@Avery Chen ");
@@ -665,7 +668,7 @@ test("empty compose, keyboard selection, pagination, removal effects, retry, the
   });
   await expect(suggestions.getByRole("option")).toHaveCount(1);
   await expect(
-    suggestions.getByRole("option", { name: /^Avery Chen / }),
+    suggestions.getByRole("option", { name: "Avery Chen", exact: true }),
   ).toBeVisible();
   expect(app.commands).toHaveLength(0);
   await composer.press("Enter");

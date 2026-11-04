@@ -1200,7 +1200,8 @@ test("detached regular composer keeps failed drafts, uploads real file bytes and
     }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: `Alex ${"cd".repeat(32)}`, exact: true })
+    .getByRole("button")
+    .and(page.locator(`[data-mention-choice="${"cd".repeat(32)}"]`))
     .click();
   // The host picker delivers the selection to the companion asynchronously.
   await expect(

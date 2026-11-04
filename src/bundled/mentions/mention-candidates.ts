@@ -34,7 +34,24 @@ export function outsideMentionDetail(
   if (elsewhere) return `In ${elsewhere}`;
   return channel?.channelType === "dm"
     ? "Not in DM · Will not be notified"
-    : "Not in channel · Choose whether to add when you send";
+    : "Not in channel";
+}
+
+/**
+ * "Managed by" for an agent whose owner is attested (NIP-OA,
+ * `profiles.owner`), once that owner has a real name. Never the viewer.
+ */
+export function managedByDetail(
+  owner: string | undefined,
+  viewer: string | undefined,
+  profiles: ReadonlyMap<
+    string,
+    { name?: string | undefined; nameIsFallback?: true | undefined }
+  >,
+) {
+  const profile = owner && owner !== viewer ? profiles.get(owner) : undefined;
+  const name = profile && !profile.nameIsFallback && profile.name?.trim();
+  return name ? `Managed by ${name}` : undefined;
 }
 
 type DirectoryPerson = MentionRecipient & {
@@ -43,6 +60,8 @@ type DirectoryPerson = MentionRecipient & {
   fullName?: string | undefined;
   /** The profile name and handle a verified person was found by. */
   profileNames?: readonly string[] | undefined;
+  /** Self-declared, for naming only; never shown as a manager. */
+  ownerPubkey?: string;
 };
 type ElsewhereAgent = Pick<Agent, "pubkey" | "name" | "relay">;
 const none: readonly never[] = [];

@@ -268,26 +268,25 @@ it("late teams preserve the highlighted recipient and all 50 installed people", 
     );
   try {
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(50));
-    const initial = screen.getAllByRole("option").map((row) => row.textContent);
+    // Agent knowledge may arrive late and mark a row; the rows themselves stay.
+    const rows = () =>
+      screen
+        .getAllByRole("option")
+        .map((row) => row.textContent?.replace(/ Agent$/, ""));
+    const initial = rows();
     press("ArrowUp");
     expect(screen.getByRole("option", { selected: true })).toHaveTextContent(
       "Person 49",
     );
     h.loaded();
     await waitFor(() => expect(h.read).toHaveBeenCalledOnce());
-    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual(
-      initial,
-    );
+    expect(rows()).toEqual(initial);
     expect(screen.getByRole("option", { selected: true })).toHaveTextContent(
       "Person 49",
     );
     press("Enter");
     expect(replace.mock.lastCall?.[0]).toEqual({ mention: h.people[49] });
-    await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Narrow your search",
-      ),
-    );
+    expect(screen.queryByText(/Narrow your search/)).not.toBeInTheDocument();
   } finally {
     view.unmount();
     input.remove();
@@ -728,11 +727,15 @@ it("a mention keystroke checks longer names only on choices the query matches", 
   }
 });
 
-it("Retry rereads members whose names a background read found missing", async () => {
+it("Retry after a failed names read rereads members, known absences included", async () => {
   const h = fixture({ count: 3 });
   const nameless = h.people[2]?.pubkey ?? "";
   (h.session.profiles.snapshot() as Map<string, unknown>).delete(nameless);
-  const ensure = vi.fn(async () => {});
+  // A member who never set a name is a complete answer; only the failed read
+  // offers Retry.
+  const ensure = vi.fn(async (_ids: readonly string[], priority?: string) => {
+    if (priority === "background") throw new Error("relay unavailable");
+  });
   Object.assign(h.session.profiles, { ensure });
   const menu = inline(h.session);
   try {
