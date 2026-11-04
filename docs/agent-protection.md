@@ -25,7 +25,35 @@ Policy changes and newly committed identities after opt-in allocate from that
 clock. Joins copy the identity's generation; defaults-only writes, deletion and
 forgetting the final identity preserve the clock. Re-importing the same public
 key cannot revive an earlier generation. Protected durable runtime state uses a
-new namespace, so an older preview's ambiguous history is not resumed.
+new namespace, so an older preview's ambiguous history is not resumed. Codex records the
+protection `stateKey` with each saved thread and resumes it only under the same
+key, so a policy change, or moving between unprotected and protected, starts a
+new thread.
+
+Protected Codex runs in Buzz's Codex home, like unprotected Codex. Its security
+reviews run in a separate Buzz review home, which the security plugin keeps
+read-only to contained workers. That home holds only links to the sign-in and to
+the state Codex must write, and reviews turn off project instructions, skills and
+memories, so no Codex settings, instructions, skills or memories reach a review.
+The sign-in stays linked to the shared one, which contained workers can replace,
+because Codex rotates refresh tokens and a copy would stop working. Signing in
+through Buzz's Codex setup also records the ChatGPT workspace in the review
+home, and reviews start Codex with `forced_chatgpt_workspace_id` set to it and
+`forced_login_method="chatgpt"`. Codex then refuses an API key, or a sign-in
+recorded for another workspace, before loading any workspace's managed
+configuration. A replacement that records the pinned workspace with another
+workspace's tokens is stopped only if OpenAI's servers check the two match,
+which Buzz has not verified. Existing users must sign in through Buzz once, with
+**Sign in again** in Codex's harness defaults: until then, and while the shared
+sign-in is an API key or names another workspace, Codex reviews fail closed with
+a message saying where to sign in. API key sign-ins, keyring sign-in and custom
+model providers cannot run Codex reviews. Protected Codex gives its tool shells
+an empty protection bridge address and token through
+`shell_environment_policy.set`, which keeps the user's own shell policy. This
+stops tool shells inheriting them, but a same-user command that reads the
+engine's environment can still end the bridge session, and later turns then fail
+closed. This follows Codex 0.164.0's source and is unverified against the
+protected binary.
 
 An earlier protection preview could save a version-2 identity envelope that
 omitted memberships still present in its sidecar. Buzz refuses that incomplete

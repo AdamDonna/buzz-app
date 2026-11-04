@@ -296,6 +296,10 @@ available rather than silently discarding it.
   `claude setup-token` in Terminal and paste its token under **Sign in for
   reviews** in Claude's **Edit configuration**. Until it is saved, Claude
   reviews fail closed. It needs a Claude subscription and lasts a year.
+  Codex security reviews for protected agents need a ChatGPT sign-in made
+  there, and fail until there is one, or while Codex's sign-in is for another
+  workspace; once signed in elsewhere, use Codex's **Sign in again**. API key
+  and keyring sign-ins can't run them.
 - **Activity**, where the agent type provides it, shows sessions and their
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label
   opens that conversation. Choosing an agent in the activity under a message,

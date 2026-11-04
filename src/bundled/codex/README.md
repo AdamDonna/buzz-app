@@ -57,6 +57,30 @@ original untouched; a missing rollout starts a new thread.
   linked shared `auth.json` with a file, as `codex login` does. Keyring sign-in
   is scoped to the home and needs a separate Buzz sign-in.
 
+Protected agents run in this home too. Security reviews run in a separate Buzz
+review home (`codex-review-home` beside the releases), which the security plugin
+keeps read-only to contained workers. It holds only a link to the shared
+`auth.json`, the recorded workspace, and links to a `codex-review-state` folder
+for the names Codex writes at startup. Reviews also turn off project
+instructions, skills and memories, so no Codex settings, instructions, skills or
+memories reach a review.
+
+Signing in through Buzz runs `codex login` in the review home, records the
+ChatGPT workspace there, and then hands the sign-in to the shared one. Once
+Codex is ready, **Sign in again** in its harness defaults does the same. It
+first removes the review home's link, so Codex's sign-out before a sign-in
+revokes nothing and a cancelled sign-in leaves the shared one working; the
+replaced sign-in is left to expire. With
+`cli_auth_credentials_store = "keyring"` in the shared `config.toml`, it signs
+in to Buzz's home as before and records no workspace. Reviews start Codex with
+`forced_chatgpt_workspace_id` set to that workspace and
+`forced_login_method="chatgpt"`, so a replaced shared sign-in loads only if it
+names the same workspace. One that names it with another workspace's tokens is
+stopped only if OpenAI's servers check the two match, which is unverified. Until
+someone signs in through Buzz, and while the shared sign-in is an API key or
+names another workspace, reviews fail closed and ask for a Buzz sign-in. API key
+sign-ins, keyring sign-in and custom model providers cannot run reviews.
+
 See the launcher for home recovery when a desktop build inherits Buzz's
 `CODEX_HOME`, credential synchronization and rollout adoption.
 

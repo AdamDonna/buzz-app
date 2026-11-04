@@ -7,6 +7,13 @@
 #   use VERSION                    makes a downloaded release the one in use
 #   adopt THREAD                   copies a thread Buzz saved in the user's
 #                                  Codex home into Buzz's
+#   home                           prints Buzz's Codex home
+#   login                          signs in to Codex in Buzz's review home,
+#                                  records the ChatGPT workspace, and leaves
+#                                  the sign-in for the shared one
+#   review                         makes Buzz's review home, and prints it, the
+#                                  state folder it links to and the workspace,
+#                                  while the sign-in still names it
 set -eu
 
 # Shared by every Buzz build on this computer, so there is one download.
@@ -18,6 +25,14 @@ fi
 # Versions name folders, so only digits and dots: no `..` or `/` escapes.
 valid() {
   case "$1" in "" | [!0-9]* | *[!0-9.]*) return 1 ;; esac
+}
+
+# Prints the one ChatGPT workspace the sign-in in file $1 names; fails for an
+# API key or any other sign-in. Reviews refuse those.
+chatgpt_workspace() {
+  id=$(sed -n 's/^ *"account_id": "\(.*\)",\{0,1\}$/\1/p' "$1" 2>/dev/null) || return
+  grep -q '^ *"auth_mode": "chatgpt",\{0,1\}$' "$1" &&
+    case "$id" in "" | *[!0-9A-Za-z_-]*) false ;; *) printf '%s\n' "$id" ;; esac
 }
 
 # Whether release $1 is newer than release $2.
@@ -47,7 +62,7 @@ shift
 # out of the user's Codex history, and the Codex app, which holds a writer lock
 # on each recent thread it reopens, can't block them. It links in only the
 # settings, sign-in and instructions, and never replaces a file in the way.
-if [ "$command" = run ] || [ "$command" = adopt ]; then
+case "$command" in run | adopt | home | login | review)
   mkdir -p "${CODEX_HOME:-$HOME/.codex}"
   shared=$(cd "${CODEX_HOME:-$HOME/.codex}" && pwd -P)
   mkdir -p -m 700 "$dir-home"
@@ -93,7 +108,8 @@ if [ "$command" = run ] || [ "$command" = adopt ]; then
       { echo "Buzz's Codex setup conflicts with $home/$name" >&2; exit 1; }
   done
   export CODEX_HOME="$home"
-fi
+  ;;
+esac
 case "$command" in
 run)
   # Even a shared `sqlite_home` setting must not lead back to the user's history.
@@ -187,6 +203,70 @@ adopt)
     ln $physical "$copy.$$" "$copy" 2>/dev/null || true
     rm -f "$copy.$$"
   done
+  ;;
+home)
+  printf '%s\n' "$home"
+  ;;
+login | review)
+  # The security plugin keeps this home read-only to every contained worker, so
+  # nothing one writes (config.toml, AGENTS.md, skills, memories, rules) can
+  # reach a review: it holds only the sign-in, the workspace a Buzz sign-in
+  # recorded, and the names Codex must write at startup, linked to a state
+  # folder. Shared with the plugin, by path. Anything else, such as a file
+  # planted before the plugin protected it, is removed.
+  mkdir -p -m 700 "$dir-review-state" "$dir-review-home"
+  state=$(cd "$dir-review-state" && pwd -P)
+  review=$(cd "$dir-review-home" && pwd -P)
+  # So a review never relinks a sign-in still being made here.
+  lock "$dir-home.lock"
+  mkdir -p "$state/tmp" "$state/.tmp"
+  find "$review" -mindepth 1 -maxdepth 1 ! -name auth.json ! -name installation_id \
+    ! -name .sandbox_migration ! -name tmp ! -name .tmp \
+    ! \( -name workspace -type f \) -exec rm -rf {} +
+  for name in auth.json installation_id .sandbox_migration tmp .tmp; do
+    target="$state/$name"
+    [ "$name" != auth.json ] || target="$shared/auth.json"
+    [ "$(readlink "$review/$name")" = "$target" ] ||
+      { rm -rf "${review:?}/$name"; ln -sfn "$target" "$review/$name"; }
+  done
+  if [ "$command" = login ]; then
+    version="${BUZZ_CODEX_VERSION:-$(cat "$dir/current" 2>/dev/null)}"
+    valid "$version" || { echo "Codex is not installed" >&2; exit 127; }
+    # Codex set to keep sign-ins in the keyring reads only the one saved for
+    # its home, so that sign-in is made in Buzz's home, as `run` would. Reviews
+    # read only a file, so they refuse it.
+    if grep -Eq "^[[:space:]]*cli_auth_credentials_store[[:space:]]*=[[:space:]]*[\"']keyring[\"']" \
+      "$shared/config.toml" 2>/dev/null; then
+      rm -f "$review/workspace"
+      echo "Codex security reviews can't use a sign-in kept in the keyring." >&2
+      exec "$dir/$version/bin/codex" -c "sqlite_home=$home" login 9>&-
+    fi
+    # Codex signs out first, revoking the sign-in it finds, so it must not find
+    # the shared one: a cancelled sign-in would sign Codex out everywhere. The
+    # new sign-in is written here, where no contained worker can change it
+    # before its workspace is read. The browser it opens must not keep the lock.
+    rm -f "$review/auth.json"
+    CODEX_HOME="$review" "$dir/$version/bin/codex" login 9>&-
+    [ -s "$review/auth.json" ] && [ ! -L "$review/auth.json" ] ||
+      { echo "Codex did not save a sign-in" >&2; exit 1; }
+    if workspace=$(chatgpt_workspace "$review/auth.json"); then
+      printf '%s\n' "$workspace" >"$review/workspace"
+    else
+      rm -f "$review/workspace"
+      echo "Codex security reviews can't use this sign-in: it names no ChatGPT workspace." >&2
+    fi
+    # As a sign-in made in Buzz's home, which the next step hands to the shared one.
+    mv -f $nofollow "$review/auth.json" "$home/auth.json"
+    ln -sfn "$shared/auth.json" "$review/auth.json"
+    exit
+  fi
+  printf '%s\n%s\n' "$review" "$state"
+  # Codex enforces the workspace. This read of a sign-in contained workers can
+  # replace only lets a review Codex would refuse say where to sign in again.
+  workspace=$(cat "$review/workspace" 2>/dev/null) || true
+  if [ -n "$workspace" ] && [ "$(chatgpt_workspace "$review/auth.json")" = "$workspace" ]; then
+    printf '%s\n' "$workspace"
+  fi
   ;;
 *)
   echo "Unknown command: $command" >&2

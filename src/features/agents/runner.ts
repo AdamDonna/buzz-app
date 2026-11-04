@@ -26,6 +26,7 @@ import { wake, wakePrompt } from "../agent-harness/wakes";
 import {
   type PluginTrigger,
   type ConversationWake,
+  unframed,
   wakeAnchor,
   wakeLands,
 } from "../agent-harness/plugin-wake";
@@ -768,7 +769,8 @@ export class AgentRunners {
     if (!runner || !this.runs(key)) return false;
     runner.notes.set(channelId, [
       ...(runner.notes.get(channelId) ?? []),
-      { text, root },
+      // A plugin's note cannot pose as the turn's event or steer section.
+      { text: unframed(text), root },
     ]);
     return true;
   }

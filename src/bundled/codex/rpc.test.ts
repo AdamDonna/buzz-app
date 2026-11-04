@@ -85,3 +85,15 @@ it("contains consumer exceptions and closes malformed output while rejecting pen
     consoleError.mockRestore();
   }
 });
+it("attempts a failed close again and never spawns once closed", async () => {
+  const f = fixture();
+  await f.open();
+  f.process.end.mockRejectedValueOnce(new Error("stuck"));
+  f.process.kill.mockRejectedValueOnce(new Error("stuck"));
+  await expect(f.rpc.close()).rejects.toThrow("stuck");
+  await f.rpc.close();
+  expect(f.process.end).toHaveBeenCalledTimes(2);
+  const spawn = vi.fn();
+  await expect(f.rpc.open(spawn)).rejects.toThrow("Codex connection closed");
+  expect(spawn).not.toHaveBeenCalled();
+});
