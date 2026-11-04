@@ -204,11 +204,6 @@ export function createCommunities(
   const emitRelay = () => {
     for (const fn of relayListeners) fn();
   };
-  const notify = () => {
-    if (disposed) return;
-    for (const fn of listeners) fn();
-    emitRelay();
-  };
   const update = (
     patch: Partial<ClientSnapshot>,
     persist = true,
@@ -248,7 +243,8 @@ export function createCommunities(
     }
     unresolvedSelection = selection;
     state = next;
-    notify();
+    for (const fn of listeners) fn();
+    emitRelay();
   };
   const acquire = (id: string, viewer = state.viewer) => {
     if (!connect) return disconnected;
@@ -446,6 +442,11 @@ export function createCommunities(
       ...entry,
       localName: readLocalCommunityName(entry.id, viewer),
     }));
+    saved.selected = saved.memberships.some(
+      (entry) => entry.id === state.selected,
+    )
+      ? state.selected
+      : null;
     state = { ...state, ...saved };
     for (const { id } of removed) {
       presentations.delete(id);
@@ -453,17 +454,18 @@ export function createCommunities(
       void release(id);
     }
     if (saved.selected) acquire(saved.selected);
-    // Snapshot readers can hold their own operation guard only after this call returns.
-    queueMicrotask(notify);
     refreshPresentation();
   }
-  const syncLocalNames = (event: StorageEvent) => {
+  const syncStorage = (event: StorageEvent) => {
     const viewer = state.viewer;
     if (!viewer) return;
     try {
       if (event.storageArea !== localStorage) return;
-      if (event.key === null || event.key === `buzz-client.v1:${viewer}`)
+      if (event.key === null || event.key === `buzz-client.v1:${viewer}`) {
         syncSaved();
+        for (const fn of listeners) fn();
+        emitRelay();
+      }
       let changed = false;
       const memberships = state.memberships.map((membership) => {
         if (
@@ -487,10 +489,8 @@ export function createCommunities(
     }
   };
   if (typeof window !== "undefined") {
-    window.addEventListener("storage", syncLocalNames);
-    ctx.effect(
-      () => () => window.removeEventListener("storage", syncLocalNames),
-    );
+    window.addEventListener("storage", syncStorage);
+    ctx.effect(() => () => window.removeEventListener("storage", syncStorage));
   }
   return {
     presence: presenceActivity,

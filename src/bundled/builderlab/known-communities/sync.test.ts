@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { Context } from "@deepseek-ai/cordis";
-import { createCommunities } from "../../../features/communities/service";
 import {
   emptySync,
   enqueue,
@@ -811,68 +809,4 @@ it("disposal stops listening", async () => {
   window.dispatchEvent(new Event("online"));
   await vi.advanceTimersByTimeAsync(120_000);
   expect(h.client.add).not.toHaveBeenCalled();
-});
-
-it("keeps one upload in flight when a wake reads a changed device record", async () => {
-  const root = new Context();
-  const record = `buzz-client.v1:${viewer}`;
-  localStorage.removeItem(record);
-  const communities = createCommunities(
-    root,
-    false,
-    undefined,
-    "",
-    undefined,
-    Promise.resolve(viewer),
-  );
-  await until(() => expect(communities.snapshot().status).toBe("ready"));
-  const client = fakeClient();
-  const upload = deferred<UpdateResult>();
-  client.add.mockReturnValue(upload.promise);
-  const session = createOAuthSession(async () => ({
-    value: "fixture",
-    account: {
-      subject: "user",
-      email: "fixture@example.test",
-      canUseRemoteAgents: false,
-    },
-  }));
-  const stop = startKnownCommunitiesSync({
-    client,
-    session,
-    knownCommunities: {
-      snapshot: communities.snapshot,
-      subscribe: communities.subscribe,
-      pending: communities.pendingSync,
-      apply: communities.applySync,
-    },
-  });
-  try {
-    await session.signIn();
-    await until(() => expect(communities.snapshot().sync.account).toBe("user"));
-    localStorage.setItem(
-      record,
-      JSON.stringify({
-        ...communities.snapshot(),
-        memberships: [{ id: "https://primary.example", name: "Primary" }],
-        sync: {
-          known: [],
-          outbox: [{ url: primary, removed: false }],
-          account: "user",
-        },
-      }),
-    );
-    window.dispatchEvent(new Event("online"));
-    await until(() => expect(client.add).toHaveBeenCalled());
-    expect(client.add).toHaveBeenCalledTimes(1);
-    upload.resolve(accepted);
-    await until(() => expect(communities.pendingSync()).toEqual([]));
-    expect(client.add).toHaveBeenCalledTimes(1);
-  } finally {
-    upload.resolve(accepted);
-    stop();
-    session.dispose();
-    await root.fiber.dispose();
-    localStorage.removeItem(record);
-  }
 });

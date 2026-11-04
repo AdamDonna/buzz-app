@@ -929,6 +929,7 @@ it("a synced-in community shows the viewer's local name and reads its presentati
       id: "https://new.example",
       name: "new.example",
       localName: "Mine",
+      generation: expect.any(String),
     }),
   ]);
   await flush();
@@ -1058,7 +1059,13 @@ it("keeps a leave from another window when a local command saves before its stor
       },
     }),
   );
+  const changed = vi.fn();
+  client.subscribe(changed);
+  expect(client.snapshot().memberships).toEqual([]);
+  await flush();
+  expect(changed).not.toHaveBeenCalled();
   client.saveProfile({ name: "Updated", picture: "" });
+  expect(changed).toHaveBeenCalledOnce();
   expect(JSON.parse(localStorage.getItem(record) ?? "null")).toMatchObject({
     profile: { name: "Updated" },
     memberships: [],
