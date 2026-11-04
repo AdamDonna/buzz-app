@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { npubEncode } from "nostr-tools/nip19";
@@ -54,8 +61,18 @@ function backupHost(initial: BackupStatus) {
     },
   );
   const store = createBackupStatus(send as Send);
+  const setBackupChoice = vi.fn(async (pubkey: string, automatic: boolean) => ({
+    available: true,
+    pubkey,
+    automatic,
+  }));
   return {
-    identity: { exportKey: vi.fn(), backup: store } as unknown as Identity,
+    identity: {
+      exportKey: vi.fn(),
+      backup: store,
+      setBackupChoice,
+    } as unknown as Identity,
+    setBackupChoice,
     push: (status: BackupStatus) =>
       act(() => watchers.at(-1)?.onmessage(status)),
     /** Settles once the row's own offer check has: it started first on the same store. */
@@ -68,7 +85,16 @@ const renderBackup = (initial: BackupStatus) => {
   render(<IdentitySettings viewer={viewer} identity={host.identity} />);
   return host;
 };
-const backupRow = () => screen.queryByText("Key backup");
+const backupRow = () => screen.queryByText("Identity sync");
+/** The row's live feedback and indicator, of which at most one has text. */
+const status = () =>
+  screen
+    .getAllByRole("status")
+    .find((region) => region.textContent) as HTMLElement;
+const description = () =>
+  screen.getByText(
+    "Save your identity key with your Builderlab account so you can log in more easily on another device.",
+  );
 it("shows exact public identity formats and copies either value", async () => {
   const writeText = vi.fn(async () => {});
   const user = userEvent.setup();
@@ -286,11 +312,11 @@ it("places organization sign-in below signing out of Buzz", () => {
 });
 
 it.each([
-  [{ status: "complete" }, "Your key is backed up to Builderlab."],
-  [{ status: "running" }, "Backing up your key…"],
+  [{ status: "complete" }, "Synced with Builderlab"],
+  [{ status: "running" }, "Syncing…"],
   [
     { status: "waiting", reason: "no_session" },
-    "Sign in to Builderlab to back up your key.",
+    "Sign in to Builderlab to sync your identity.",
   ],
   [
     { status: "waiting", reason: "not_linked" },
@@ -310,12 +336,101 @@ it.each([
       ] as const,
   ),
 ] as const)(
-  "reads the uploader's %o status as one sentence",
+  "reads the uploader's %o status as one sentence beside the fixed description",
   async (progress, sentence) => {
     vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
     await renderBackup(at(1, progress)).settled();
     expect(backupRow()).toBeVisible();
-    expect(screen.getByRole("status").textContent).toBe(sentence);
+    expect(description()).toBeVisible();
+    expect(status().textContent).toBe(sentence);
+  },
+);
+
+const sync = { name: "Sync with Builderlab" };
+const prompt = () =>
+  screen.getByRole("alertdialog", {
+    name: "Sync your identity with Builderlab?",
+  });
+
+it("while backup waits for consent, Sync with Builderlab opens the backup prompt and saves its answer", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  const host = renderBackup(at(1, { status: "waiting", reason: "no_consent" }));
+  await host.settled();
+  const user = userEvent.setup();
+  // Missing consent says nothing about whether the account holds a copy.
+  expect(description()).toBeVisible();
+  for (const region of screen.getAllByRole("status"))
+    expect(region).toBeEmptyDOMElement();
+  await user.click(screen.getByRole("button", sync));
+  const open = prompt();
+  // Closing saves nothing, and the surviving action takes focus back.
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(open).not.toBeInTheDocument());
+  expect(host.setBackupChoice).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByRole("button", sync)).toHaveFocus());
+  await user.click(screen.getByRole("button", sync));
+  await user.click(within(prompt()).getByRole("button", sync));
+  expect(host.setBackupChoice).toHaveBeenCalledExactlyOnceWith(viewer, true);
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  // The saved choice wakes the uploader, and the action goes with the wait.
+  host.push(at(2, { status: "running" }));
+  expect(screen.queryByRole("button", sync)).toBeNull();
+});
+
+it("closes the prompt when the consent wait settles without its answer", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+  const host = renderBackup(at(1, { status: "waiting", reason: "no_consent" }));
+  await host.settled();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", sync));
+  const open = prompt();
+  // Every pass runs before admission, even one that waits for consent again.
+  host.push(at(2, { status: "running" }));
+  host.push(at(3, { status: "waiting", reason: "no_consent" }));
+  expect(open).toBeVisible();
+  // A hosted membership saved consent elsewhere, and its pass backed up.
+  host.push(at(4, { status: "running" }));
+  host.push(at(5, { status: "complete" }));
+  await waitFor(() => expect(open).not.toBeInTheDocument());
+  expect(host.setBackupChoice).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(description().closest("[tabindex]")).toHaveFocus(),
+  );
+});
+
+// Native publishes `running` before it answers, but the two reach the page
+// on different channels, so either can arrive first.
+it.each([
+  ["after the save is answered", false],
+  ["before the save is answered", true],
+] as const)(
+  "Sync leaves focus on the row's description when the consent wait ends %s",
+  async (_, waitEndsFirst) => {
+    vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
+    const host = renderBackup(
+      at(1, { status: "waiting", reason: "no_consent" }),
+    );
+    await host.settled();
+    let answer = () => {};
+    host.setBackupChoice.mockImplementationOnce(
+      (pubkey, automatic) =>
+        new Promise((resolve) => {
+          answer = () => resolve({ available: true, pubkey, automatic });
+        }),
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", sync));
+    await user.click(within(prompt()).getByRole("button", sync));
+    expect(host.setBackupChoice).toHaveBeenCalledExactlyOnceWith(viewer, true);
+    if (waitEndsFirst) host.push(at(2, { status: "running" }));
+    await act(async () => answer());
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    if (!waitEndsFirst) host.push(at(2, { status: "running" }));
+    expect(screen.queryByRole("button", sync)).toBeNull();
+    expect(status()).toHaveTextContent("Syncing…");
+    await waitFor(() =>
+      expect(description().closest("[tabindex]")).toHaveFocus(),
+    );
   },
 );
 
@@ -337,22 +452,21 @@ it("follows the status store as it publishes a higher seq", async () => {
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
   const host = renderBackup(at(1, { status: "idle" }));
   await host.settled();
-  const status = screen.getByRole("status");
-  expect(status).toHaveTextContent(
-    "Buzz hasn’t checked your key’s backup since it opened.",
+  expect(status()).toHaveTextContent(
+    "Buzz hasn’t checked whether your identity is synced since it opened.",
   );
   host.push(at(2, { status: "running" }));
-  expect(status).toHaveTextContent("Backing up your key…");
+  expect(status()).toHaveTextContent("Syncing…");
   host.push(at(3, { status: "failed", kind: "busy" }));
   const busy = /^Another backup of this key is in progress\. Buzz tries/;
-  expect(status).toHaveTextContent(busy);
+  expect(status()).toHaveTextContent(busy);
   // A late, lower seq is not newer news.
   host.push(at(2, { status: "complete" }));
-  expect(status).toHaveTextContent(busy);
+  expect(status()).toHaveTextContent(busy);
   host.push(at(4, { status: "complete" }));
-  expect(status).toHaveTextContent("Your key is backed up to Builderlab.");
+  expect(status()).toHaveTextContent("Synced with Builderlab");
   // Read-only: no consent, retry or other control beside the status.
-  const row = status.closest(".buzz-preference-row") as HTMLElement;
+  const row = status().closest(".buzz-preference-row") as HTMLElement;
   expect(within(row).queryByRole("button")).toBeNull();
   expect(within(row).queryByRole("switch")).toBeNull();
 });
