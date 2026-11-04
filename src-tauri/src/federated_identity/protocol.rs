@@ -37,12 +37,15 @@ pub(crate) fn client() -> Result<Client, &'static str> {
 pub(crate) struct Failure {
     pub(crate) code: &'static str,
     pub(crate) session_denied: bool,
+    /// The last answer before giving up, by retries or the deadline, was a 429.
+    pub(crate) rate_limited: bool,
 }
 impl From<&'static str> for Failure {
     fn from(code: &'static str) -> Self {
         Self {
             code,
             session_denied: false,
+            rate_limited: false,
         }
     }
 }
@@ -81,9 +84,16 @@ pub(crate) async fn json<T: DeserializeOwned>(
     // One total deadline includes bounded retry and Retry-After. Refusals and
     // invalid success bodies do not retry; no browser is launched here.
     let terminal_headers = std::sync::atomic::AtomicBool::new(false);
+    let rate_limited = std::sync::atomic::AtomicBool::new(false);
     tokio::time::timeout(DEADLINE, async {
         for attempt in 0..3u64 {
             let response = request().send().await;
+            rate_limited.store(
+                response
+                    .as_ref()
+                    .is_ok_and(|response| response.status().as_u16() == 429),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             let retry = match response {
                 Err(_) => Some(None),
                 Ok(response) => {
@@ -143,6 +153,7 @@ pub(crate) async fn json<T: DeserializeOwned>(
                         return Err(Failure {
                             code,
                             session_denied,
+                            rate_limited: false,
                         });
                     }
                 }
@@ -169,6 +180,10 @@ pub(crate) async fn json<T: DeserializeOwned>(
             },
         )
     })?
+    .map_err(|failure| Failure {
+        rate_limited: rate_limited.load(std::sync::atomic::Ordering::Relaxed),
+        ..failure
+    })
 }
 
 fn retry_after(value: &str) -> Option<Duration> {

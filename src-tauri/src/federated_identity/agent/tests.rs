@@ -1837,3 +1837,34 @@ async fn removing_one_row_keeps_another_rows_admission_and_the_shared_durable_gr
         .unwrap();
     assert!(survivor.commit(false, || Ok(())).is_err());
 }
+
+#[tokio::test]
+async fn an_issuer_that_keeps_rate_limiting_is_not_reported_as_unreachable() {
+    let limited = || (429, serde_json::json!({ "error": "rate_limited" }));
+    let unavailable = || (503, serde_json::json!({ "error": "issuance_unavailable" }));
+    let (base, served) = issuer(vec![
+        limited(),
+        limited(),
+        limited(),
+        limited(),
+        limited(),
+        unavailable(),
+        (200, enrolled(&"b".repeat(64))),
+        limited(),
+        limited(),
+        limited(),
+    ])
+    .await;
+    let f = fixture(base);
+    let limit = |error: String| assert!(error.contains("limiting this agent"), "{error}");
+    // Enrollment: throttling is transient, so the next request enrolls again.
+    limit(f.tokens.evidence(&f.agent, &f.key, 0).await.unwrap_err());
+    // Only the last attempt's answer decides.
+    assert_eq!(
+        f.tokens.evidence(&f.agent, &f.key, 0).await.unwrap_err(),
+        "Your organization's identity service is unreachable"
+    );
+    // Assertion minting.
+    limit(f.tokens.evidence(&f.agent, &f.key, 0).await.unwrap_err());
+    assert_eq!(settled(served).await.len(), 10);
+}
