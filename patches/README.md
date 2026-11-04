@@ -340,3 +340,13 @@ hold consumes reader movement before reconciling list height and rebases after i
 own correction; browser range clamping remains layout movement. Mounted regressions
 cover both model/DOM orderings and coalesced movement, while installed-driver tests
 verify actual offsets, including fractional clamping.
+
+## dnd-kit core 6.3.1: stable idle transform
+
+`DndContext` passes its drag transform as `ActiveDraggableContext`'s value and
+rebuilds that object on every render, even with no drag. The sidebar renders its
+`DndContext` whenever channel state changes, so each live message changed the
+context value, and React searched the whole sidebar subtree for consumers. The
+patch keeps the previous transform object while its four numbers are unchanged.
+A drag still publishes each new transform; only identity of an equal value is
+kept. Only the ESM entry, which the application imports, is patched.
