@@ -414,9 +414,19 @@ export function createUnread({
     done: boolean;
     evidence: string | undefined;
     more: boolean;
+    /** A structure lookup whose root the cache has let go since. */
+    released?: boolean;
   };
   const lookups = new Map<string, Lookup>();
   const lookupEvents = new Map<string, RelayEvent>();
+  const rememberedRoot = (event: RelayEvent) =>
+    !threadReference(event) && pinned(event);
+  // How many remembered threads' roots the structure cache holds, counted
+  // for the remembered set as it was (which only grows in place), and
+  // counted again once it changes or structure is let go elsewhere.
+  let heldRoots:
+    | { of: typeof remembered; size: number; count: number }
+    | undefined;
   const queued = new Map<
     string,
     {
@@ -1351,6 +1361,7 @@ export function createUnread({
       if (!allowed(lookup.channelId)) lookups.delete(key);
     for (const [id, event] of lookupEvents)
       if (!allowed(channelOf(event) ?? "")) lookupEvents.delete(id);
+    heldRoots = undefined;
     for (const [id, event] of witnesses)
       if (!allowed(channelOf(event) ?? "")) witnesses.delete(id);
     for (const [key, { channelId }] of queued)
@@ -1483,8 +1494,19 @@ export function createUnread({
     const key = structuralRecovery
       ? `${conversationKey(channelId, structuralRootId)}:structure`
       : conversationKey(channelId, parentId);
-    if (
-      lookups.has(key) ||
+    // A mention or a reply in the viewer's conversation teaches the pass
+    // its thread, as retained evidence does (see `participating().learn`);
+    // a read reply outside them only needs its root to group under.
+    const teaches = () =>
+      structuralRecovery && (entry.mentioned || conversation(entry));
+    // A root the cache let go is fetched again for a thread whose root it
+    // keeps from then on: remembered, or taught by this reply. Another
+    // thread's lookup stays done, so replies needing more roots than the
+    // cache holds cannot cycle their fetches.
+    const found = lookups.get(key);
+    if (found?.released && (teaches() || pinned(event))) lookups.delete(key);
+    else if (
+      found ||
       (!structuralRecovery &&
         (!undecided(entry, dm) || (read() && !pinned(event))))
     )
@@ -1508,13 +1530,7 @@ export function createUnread({
       rootId,
       ids,
       structuralOnly: structuralRecovery,
-      // A mention or a reply in the viewer's conversation teaches the pass
-      // its thread, as retained evidence does (see `participating().learn`);
-      // a read reply outside them only needs its root to group under.
-      taught:
-        structuralRecovery && (entry.mentioned || conversation(entry))
-          ? event
-          : undefined,
+      taught: teaches() ? event : undefined,
     });
     if (scheduled || retry) return;
     scheduled = true;
@@ -1526,6 +1542,7 @@ export function createUnread({
   function resetLookups() {
     lookups.clear();
     lookupEvents.clear();
+    heldRoots = undefined;
     queued.clear();
     retracted.clear();
     witnesses.clear();
@@ -1545,12 +1562,57 @@ export function createUnread({
       lookups.delete(oldest);
     }
   }
+  /** Fetched structure, 1,024 events besides the roots of remembered
+   * threads it holds, which go last as their evidence does: a cold thread
+   * does not fetch its root again for a reply it already holds. Each thread
+   * has one root, so the remembered set bounds them and the oldest other
+   * event goes first; a root passed over moves to the newest end, so the
+   * next eviction does not walk it again. A root let go releases its
+   * structure lookup (see `want`). */
   function keep(event: RelayEvent) {
-    lookupEvents.set(event.id, event);
-    for (const [oldest] of lookupEvents) {
-      if (lookupEvents.size <= 1024) break;
-      lookupEvents.delete(oldest);
+    const size = remembered?.size ?? 0;
+    let roots = heldRoots;
+    if (!roots || roots.of !== remembered || roots.size !== size) {
+      let count = 0;
+      for (const held of lookupEvents.values())
+        if (rememberedRoot(held)) count++;
+      roots = heldRoots = { of: remembered, size, count };
     }
+    if (!lookupEvents.has(event.id) && rememberedRoot(event)) roots.count++;
+    lookupEvents.delete(event.id);
+    lookupEvents.set(event.id, event);
+    for (const [id, oldest] of lookupEvents) {
+      if (lookupEvents.size - roots.count <= 1024) break;
+      lookupEvents.delete(id);
+      if (rememberedRoot(oldest)) {
+        lookupEvents.set(id, oldest);
+        continue;
+      }
+      const lookup = lookups.get(
+        `${conversationKey(channelOf(oldest) ?? "", id)}:structure`,
+      );
+      if (lookup) lookup.released = true;
+    }
+  }
+  /** A root the participation pass fetched by ID is structure, as a
+   * lookup's fetch is: it groups its thread's replies and counts only once a
+   * window or the roster sample returns it, so a repair counts the same
+   * whether the root came from a lookup or a thread read. The viewer's own
+   * root witnesses their membership of its thread, as it does for a lookup
+   * that fetched it. */
+  function keepRoot(event: RelayEvent) {
+    const channelId = channelOf(event);
+    if (!channelId || (event.pubkey === viewer && retracted.has(event.id)))
+      return;
+    keep(event);
+    if (event.pubkey !== viewer) return;
+    const key = conversationKey(channelId, event.id);
+    const found = lookups.get(key);
+    const lookup: Lookup = found?.done
+      ? found
+      : { channelId, done: true, evidence: undefined, more: false };
+    remember(key, lookup);
+    witness(lookup, event);
   }
   const contentKinds = UNREAD_CONTENT_KINDS;
   type Target = { parentId: string; rootId: string | undefined };
@@ -2387,6 +2449,17 @@ export function createUnread({
             !reply(event) || admitted.has(event.id) || !!structural(event.id),
         );
         for (const event of kept) rows.set(event.id, event);
+        // A root fetched by ID is structure (see `keepRoot`), kept before the
+        // replies are accepted so they group under it at once.
+        const fetchedRoots = new Set(
+          kept.filter(
+            (event) =>
+              !reply(event) &&
+              fetchedIds.has(event.id) &&
+              !events.has(event.id),
+          ),
+        );
+        for (const event of fetchedRoots) keepRoot(event);
         // A root an admitted reply names that nothing holds is fetched, so
         // the reply groups under it rather than standing as its own row.
         const missing = [
@@ -2402,7 +2475,18 @@ export function createUnread({
         );
         if (missing.length)
           requests.unshift(...chunk(byId(missing), UNREAD_WINDOW_BATCH));
-        return accept(kept);
+        const accepted = accept(
+          kept.filter((event) => !fetchedRoots.has(event)),
+        );
+        if (fetchedRoots.size) {
+          indexed = false;
+          publish(
+            new Set(
+              [...fetchedRoots].flatMap((event) => channelOf(event) ?? []),
+            ),
+          );
+        }
+        return accepted;
       },
       /** Learns roots and their newest times from retained evidence and the
        * thread reads so far. */
@@ -2774,7 +2858,7 @@ export function createUnread({
       retracted.add(id);
       witnesses.delete(id);
       // A deleted message must be fetched again, not reused from the cache.
-      lookupEvents.delete(id);
+      if (lookupEvents.delete(id)) heldRoots = undefined;
       for (const [key, lookup] of lookups) {
         if (lookup.evidence !== id) continue;
         changed.add(lookup.channelId);
