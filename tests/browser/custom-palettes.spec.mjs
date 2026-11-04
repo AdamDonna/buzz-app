@@ -158,3 +158,44 @@ test("saved custom colors paint with the React module withheld", async ({
   );
   await expect(page.locator("html")).toHaveAttribute("data-custom-palette", "");
 });
+
+// Browser storage events cross actual windows; a DOM emulator cannot prove
+// the integration between the browser event and a retained editor draft.
+test("another window updates the saved palette while a dirty draft remains local", async ({
+  page,
+  context,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await openSettings(page);
+  await selectSettingsSection(page, "Appearance");
+  await button(page, "Create custom theme").click();
+  await page
+    .getByRole("textbox", { name: "Accent hex color", exact: true })
+    .fill("#ff0000");
+  const other = await context.newPage();
+  try {
+    await other.goto(app.origin);
+    const external = structuredClone(palette);
+    external.light.window = "#00ff00";
+    await other.evaluate(
+      (data) => localStorage.setItem("buzz-palette.v1", JSON.stringify(data)),
+      external,
+    );
+    await expect(page.locator("html")).toHaveCSS(
+      "background-color",
+      "rgb(240, 255, 240)",
+    );
+    await expect(page.getByText(/The saved theme changed/)).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "Accent hex color", exact: true }),
+    ).toHaveValue("#ff0000");
+    await button(page, "Cancel").click();
+    await button(page, "Edit custom theme").click();
+    await expect(
+      page.getByRole("textbox", { name: "Accent hex color", exact: true }),
+    ).toHaveValue("#888888");
+  } finally {
+    await other.close();
+  }
+});
