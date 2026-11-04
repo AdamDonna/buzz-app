@@ -590,7 +590,8 @@ it("a window dropped after its retry leaves its channel unknown and the Inbox pa
     observedCount: null,
   });
   expect(snapshot("quiet").coverage).toBe("observed");
-  // No automatic retry; an explicit refresh reads the channel again.
+  // The owner does not retry on its own (the session's next recovery tick
+  // does, as the repair stays owed); an explicit refresh reads it again.
   const attempted = h.reader.read.mock.calls.length;
   await h.owner.capability.ensure();
   expect(h.reader.read).toHaveBeenCalledTimes(attempted);

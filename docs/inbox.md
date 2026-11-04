@@ -297,15 +297,17 @@ roster are one more request per 128 channels, behind the windows. The Inbox is
 ready once the viewer's own recent messages and the remembered threads most
 recently read or written in have landed, or were dropped, and reports
 `observing` while further windows still read. A catch-up is one request per
-128 channels, and reads on only while a channel gained more than it returns. A read that fails is tried once more; dropped
-after that, its channels or threads stay as they were—a dropped thread read
-leaves its channels' counts observed—and the Inbox notes that some recent
-activity could not be checked until the next refresh, with no automatic retry;
-later reads that fail in the same pass are dropped at once, and a dropped walk
-page leaves the walk to the next repair without a notice. A response too large
-for the reader or the native host is split and read in parts rather than
-retried. A repair in which no read lands fails instead, keeping the previous
-evidence and its stale freshness.
+128 channels, and reads on only while a channel gained more than it returns.
+A read that fails is tried once more; dropped after that, its channels or
+threads stay as they were—a dropped thread read leaves its channels' counts
+observed—and the Inbox notes that some recent activity could not be checked
+until a check reads them: the repair stays owed, so the next periodic check, a
+minute later, repairs again, as after a repair that fails. Later reads that
+fail in the same pass are dropped at once, and a dropped walk page leaves the
+walk to the next repair without a notice. A response too large for the reader
+or the native host is split and read in parts rather than retried. A repair in
+which no read lands fails instead, keeping the previous evidence and its stale
+freshness.
 
 For a roster of up to 128 channels with nothing new, unread reads:
 
