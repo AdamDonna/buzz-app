@@ -172,7 +172,9 @@ retains its dot without bolding a caught-up, unmuted channel. Confirmed-muted ch
 suppress ordinary automatic unread styling and offscreen cues without clearing
 unread evidence; explicit manual unread can still strengthen the label.
 Pending or failed mute changes do not suppress these cues. Muted DMs also suppress
-automatic unread bolding; “N unread” offscreen counts and avatar previews remain. Muted
+automatic unread bolding. Confirmed-muted destinations, including DMs and Solo chats,
+do not contribute to “N unread” offscreen counts or avatar previews, even for
+mentions, manual unread or thread replies. Muted
 channel and DM sidebar rows show a crossed-out bell immediately after their names,
 even with no unread activity. They hide all unread dots, including
 thread activity dots. Thread activity remains available through the row's activity popover,

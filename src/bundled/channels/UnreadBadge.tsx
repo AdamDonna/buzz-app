@@ -144,6 +144,7 @@ export function UnreadBadge({
         <span
           className={styles.unreadState}
           data-channel-unread=""
+          data-channel-muted={muted || undefined}
           data-priority={priority}
           role="img"
           aria-label={unreadLabel}
@@ -164,6 +165,7 @@ export function UnreadBadge({
           <span
             className={styles.threadActivityDot}
             data-channel-activity=""
+            data-channel-muted={muted || undefined}
             role="img"
             aria-label={threadLabel}
             title={threadLabel}
