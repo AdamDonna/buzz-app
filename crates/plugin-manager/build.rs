@@ -97,15 +97,16 @@ fn main() {
     const FI: &str = "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
     println!("cargo:rerun-if-env-changed={FI}");
     let added = process(FI);
-    // A development build's pinned viewer is the frontend's development broker.
+    // A `tauri dev` run's pinned viewer is the frontend's development broker.
     const DEV_VIEWER: &str = "BUZZ_DEV_VIEWER";
     println!("cargo:rerun-if-env-changed={DEV_VIEWER}");
     let mut values = build_env::load(&local, &[BUILDERLAB_URL_KEY, DEV_VIEWER], process)
         .expect("Invalid Builderlab build configuration");
     let builderlab_url = values.remove(BUILDERLAB_URL_KEY);
-    let dev_viewer = values
-        .remove(DEV_VIEWER)
-        .filter(|_| std::env::var("PROFILE").as_deref() == Ok("debug"));
+    let dev_viewer = federated_identity_config::dev_viewer(
+        values.remove(DEV_VIEWER),
+        std::env::var("DEP_TAURI_DEV").ok().as_deref(),
+    );
     if added.as_deref().is_some_and(|raw| !raw.is_empty())
         && builderlab_url.as_deref().is_some_and(|url| !url.is_empty())
     {

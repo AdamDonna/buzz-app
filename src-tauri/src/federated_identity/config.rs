@@ -42,6 +42,15 @@ const INVALID: &str = "Invalid BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
 #[allow(dead_code)] // Compiled in by build.rs.
 pub(crate) const BUILT_IN: &str = r#"{"version":1,"id":"bb-public","identityOrigin":"https://app.builderlab.xyz","communityHosts":["*.communities.buzz.xyz","communities.buzz.xyz"],"adapterBase":"https://app.builderlab.xyz/api/goose","apiBasePath":"/api/goose/"}"#;
 
+/// A build's pinned development viewer (`BUZZ_DEV_VIEWER`), kept only for a
+/// `tauri dev` run, which serves the development broker. Tauri marks that run
+/// by building without `custom-protocol` (`DEP_TAURI_DEV`); a packaged build,
+/// debug or release, keeps NIP-FI whatever its pin.
+#[allow(dead_code)] // Called by build.rs.
+pub(crate) fn dev_viewer(viewer: Option<String>, tauri_dev: Option<&str>) -> Option<String> {
+    viewer.filter(|_| tauri_dev == Some("true"))
+}
+
 /// The most servers a build trusts, the built-in one included.
 const MAX_SERVERS: usize = 16;
 
@@ -370,6 +379,11 @@ mod tests {
     #[test]
     fn an_empty_value_or_another_builderlab_opts_out() {
         assert!(compiled(Some(""), None, None).unwrap().is_empty());
+        // Only a `tauri dev` run keeps the pin; packaged builds drop it.
+        let pin = || Some("npub1viewer".to_owned());
+        assert_eq!(dev_viewer(pin(), Some("true")), pin());
+        assert_eq!(dev_viewer(pin(), Some("false")), None);
+        assert_eq!(dev_viewer(pin(), None), None);
         // A pinned development viewer keeps the development broker's sign-in,
         // unless the build adds a server.
         assert!(compiled(None, None, Some("npub1viewer"))

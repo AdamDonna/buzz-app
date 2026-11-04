@@ -1882,28 +1882,37 @@ async fn each_agent_enrolls_with_the_server_its_community_routes_to() {
         relay: "wss://peer.example".into(),
         ..home.clone()
     };
+    // Each server has its own session token, account, grant and issuer.
+    let peer_enrolled = {
+        let mut reply = enrolled(&home.owner);
+        reply["access_token"] = "peer-grant".into();
+        reply["nip_fi_issuer"] = "https://peer-issuer.example".into();
+        reply
+    };
     let (base, served) = issuer(vec![
         (200, enrolled(&home.owner)),
         (200, issued(&home, serde_json::json!({}))),
     ])
     .await;
     let (peer_base, peer_served) = issuer(vec![
-        (200, enrolled(&home.owner)),
+        (200, peer_enrolled),
         (
             200,
             issued(
                 &peer_agent,
-                serde_json::json!({ "aud": "https://peer.example" }),
+                serde_json::json!({ "aud": "https://peer.example", "iss": "https://peer-issuer.example" }),
             ),
         ),
     ])
     .await;
-    let signed_in = |identity: &FederatedIdentity| {
+    let signed_in = |identity: &FederatedIdentity, token: &str, email: &str| {
         let mut session = record();
-        Arc::get_mut(&mut session).unwrap().record.email = Some("a@example.com".into());
+        let record = &mut Arc::get_mut(&mut session).unwrap().record;
+        record.email = Some(email.into());
+        record.session_token = token.into();
         let mut state = identity.state();
         state.session = Some(session);
-        state.account = Some(Some("a@example.com".into()));
+        state.account = Some(Some(email.into()));
     };
     let mut config = super::super::config::Config::parse(r#"{"version":1,"id":"peer","identityOrigin":"https://peer-identity.example","adapterBase":"https://peer-identity.example","apiBasePath":"/api/","communityHosts":["peer.example"]}"#).unwrap();
     config.adapter_base = peer_base;
@@ -1915,29 +1924,58 @@ async fn each_agent_enrolls_with_the_server_its_community_routes_to() {
     );
     let mut first = at_adapter(Arc::new(Memory::default()), base);
     Arc::get_mut(&mut first.0).unwrap().peers = vec![peer.clone()];
-    for (identity, relay) in [(&first, &home.relay), (&peer, &peer_agent.relay)] {
-        signed_in(identity);
-        identity.discovered(relay, true);
-    }
+    signed_in(&first, "first-session", "a@example.com");
+    signed_in(&peer, "peer-session", "p@example.com");
+    first.discovered(&home.relay, true);
+    peer.discovered(&peer_agent.relay, true);
     let tokens = AgentTokens::with_store(first.clone(), template.grants.clone());
+    tokens.watch({
+        let listed = vec![
+            (home.owner.clone(), home.pubkey.clone()),
+            (home.owner.clone(), peer_agent.pubkey.clone()),
+        ];
+        move || Ok(listed.clone())
+    });
     for (agent, key) in [(&home, &template.key), (&peer_agent, &peer_key)] {
         let evidence = tokens.evidence(agent, key, 0).await.unwrap().unwrap();
         assert!(evidence.starts_with("Bearer "));
     }
-    assert_eq!(settled(served).await.len(), 2);
-    assert_eq!(settled(peer_served).await.len(), 2);
+    // Each enrollment spends its own server's session; each mint its own grant.
+    for (seen, session, grant) in [
+        (settled(served).await, "first-session", "grant-1"),
+        (settled(peer_served).await, "peer-session", "peer-grant"),
+    ] {
+        assert_eq!(seen.len(), 2);
+        let form: HashMap<String, String> = url::form_urlencoded::parse(&seen[0].body)
+            .into_owned()
+            .collect();
+        assert_eq!(form["subject_token"], session);
+        assert!(seen[1]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "authorization" && *value == format!("Bearer {grant}")));
+    }
     // The first server's grants keep the key they had as the only server.
-    let stored = |key: String| template.grants.read(&key).unwrap().is_some();
-    assert!(stored(super::super::store::agent_grant_key(
-        "account",
-        &home.owner,
-        &home.pubkey
-    )));
-    assert!(stored(
-        peer.agent_grant_key(&home.owner, &peer_agent.pubkey)
-    ));
-    assert!(!stored(
-        first.agent_grant_key(&home.owner, &peer_agent.pubkey)
-    ));
-    assert!(!stored(peer.agent_grant_key(&home.owner, &home.pubkey)));
+    let first_key = super::super::store::agent_grant_key("account", &home.owner, &home.pubkey);
+    assert_eq!(first_key, first.agent_grant_key(&home.owner, &home.pubkey));
+    let peer_grant_key = peer.agent_grant_key(&home.owner, &peer_agent.pubkey);
+    let stored = |key: &str| template.grants.read(key).unwrap();
+    assert_eq!(stored(&first_key).unwrap().token, "grant-1");
+    assert_eq!(stored(&peer_grant_key).unwrap().token, "peer-grant");
+    assert!(stored(&first.agent_grant_key(&home.owner, &peer_agent.pubkey)).is_none());
+    assert!(stored(&peer.agent_grant_key(&home.owner, &home.pubkey)).is_none());
+
+    // Signing out of the peer retires only its grant.
+    tokens.for_server(&peer).unwrap().sign_out().await.unwrap();
+    assert!(stored(&peer_grant_key).is_none());
+    assert!(stored(&first_key).is_some());
+    // Deleting an agent removes its grant from every server.
+    let peer_home_key = peer.agent_grant_key(&home.owner, &home.pubkey);
+    template
+        .grants
+        .write(&peer_home_key, &stored(&first_key).unwrap())
+        .unwrap();
+    tokens.forget(&home.owner, &home.pubkey).await.unwrap();
+    assert!(stored(&first_key).is_none());
+    assert!(stored(&peer_home_key).is_none());
 }
