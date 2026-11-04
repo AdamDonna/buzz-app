@@ -12,6 +12,8 @@ export type {
   HostByteRequest,
   HostByteResponse,
   HostSavedBytes,
+  HostMcpServer,
+  McpHandler,
 } from "../features/host/service";
 export type {
   IdentityNames,
@@ -127,10 +129,20 @@ export type { VoiceRecording } from "../features/relay/voice-media";
 export type {
   Agents,
   AgentAddedTab,
+  AgentHandle,
   AgentType,
   AgentSession,
   AgentSessions,
+  Delivery,
+  StandaloneTurn,
+  TurnResult,
 } from "../features/agents/service";
+export type {
+  HarnessConversation,
+  HarnessKit,
+  HarnessPrompt,
+  HarnessScope,
+} from "../features/agent-harness/kit";
 
 export type { ArtifactStorage } from "../features/artifact-storage/service";
 export type {

@@ -7,6 +7,8 @@ import { respondExternal } from "../../buzz-mcp/external";
 import type { ExternalScope } from "./external-connection";
 import { externalMcpEnabled } from "./external-connection";
 import { connectMcp } from "../../buzz-mcp/connection";
+import { type HarnessKit, harnessKit } from "../agent-harness/kit";
+import { repositoriesContext } from "../communities/repositories";
 import type {
   HostMcpServer,
   HostProcess,
@@ -1075,6 +1077,10 @@ export type Agents = {
   addTool(tool: AddedTool): void;
   /** The tools active plugins add now. A name is only ever one plugin's. */
   tools(): readonly AddedTool[];
+  /** The Buzz side of a turn for an agent type a plugin brings: where a
+   * delivery goes, the bundled harnesses' prompts, the agent's Buzz tools as
+   * an MCP handler, and its replies. */
+  readonly harness: HarnessKit;
   /** Wakes an agent this copy of the app runs in one of its conversations,
    * as a mention there would, but with no message: the agent is told `text`
    * comes from this plugin, not its owner, and is data. Throws when this copy does not run the agent or its queue is full;
@@ -2489,6 +2495,12 @@ export class AgentsService extends Service implements Agents {
     };
   }
   tools = () => this.addedTools.snapshot();
+  readonly harness = harnessKit({
+    relay: (key) => this.relay(key),
+    core: (key) => this.core(key),
+    added: () => this.tools(),
+    repositories: repositoriesContext,
+  });
   wake(key: AgentKey, wake: AgentWake) {
     const plugin = this.ctx.pluginOwner?.id;
     if (!plugin) throw new Error("Only a plugin wakes an agent");

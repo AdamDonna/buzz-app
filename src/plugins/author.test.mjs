@@ -33,7 +33,7 @@ test("generated author package in a path with spaces exposes shared message fact
       join(dir, "consumer.ts"),
       `
 import { createElement } from "react";
-import type { Context, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
+import type { Context, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -81,6 +81,32 @@ export function apply(ctx: Context) {
     },
   };
   ctx.agents.addTool(tool);
+  const { harness } = ctx.agents;
+  ctx.agents.register({
+    id: "example",
+    title: "Example",
+    defaults: () => ({ config: {} }),
+    async run(delivery: Delivery) {
+      const conversation: HarnessConversation | undefined = await harness.conversation(delivery, "thread");
+      if (!conversation) return delivery.ignored?.();
+      void [conversation.key, conversation.channel, conversation.root, conversation.topLevel, conversation.where];
+      const system: string = await harness.systemPrompt(delivery, { scope: "thread", cwd: "~", instructions: "", tools: false });
+      const first = await harness.turnPrompt(delivery, conversation);
+      const prompt = await harness.turnPrompt(delivery, conversation, { cursor: first.cursor });
+      const next: string = prompt.cursor;
+      const tools: McpHandler = harness.tools(delivery.agent, conversation, { read: async () => new Uint8Array() });
+      void host.serveMcp?.(tools);
+      void [system, prompt.text, next];
+      prompt.restore();
+      await harness.reply(delivery.agent, conversation, "Done", { notifyOwner: true });
+    },
+    async runOnce(turn: StandaloneTurn): Promise<TurnResult> {
+      const text = await turn.prompt();
+      if (text !== undefined) void harness.standalonePrompt(turn.delivery.agent, text);
+      void harness.tools(turn.delivery.agent);
+      return { ok: true };
+    },
+  });
   void host.runCommand("status").then((output: string | null) => void output);
   void host.request({
     url: "https://api.example.com/graphql",
