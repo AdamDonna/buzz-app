@@ -581,6 +581,68 @@ it("finds a cached profile by username or resolved identity name when the direct
   ).toBeVisible();
 });
 
+it("matches live cached aliases after browsing without replacing directory eligibility", async () => {
+  const t = setup();
+  const person = {
+    pubkey: "a".repeat(64),
+    name: "Directory name",
+    username: "oldhandle",
+  };
+  const agent = {
+    pubkey: "b".repeat(64),
+    name: "Foreign agent",
+    isAgent: true as const,
+  };
+  let profiles = new Map([
+    [person.pubkey, { name: person.name, username: person.username }],
+    [agent.pubkey, { name: agent.name, username: "oldagent" }],
+  ]);
+  const listeners = new Set<() => void>();
+  Object.assign(t.session.profiles, {
+    snapshot: () => profiles,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  t.directMessages.people.mockResolvedValue({
+    people: [person, agent],
+    hasMore: false,
+  });
+  t.mount();
+  await screen.findByRole("option", { name: person.name });
+  await t.user.type(recipient(), "newhandle");
+  await screen.findByText("No matching people.");
+  act(() => {
+    profiles = new Map([
+      [person.pubkey, { name: "Updated name", username: "newhandle" }],
+      [agent.pubkey, { name: "Updated agent", username: "newagent" }],
+    ]);
+    for (const listener of listeners) listener();
+  });
+  expect(
+    await screen.findByRole("option", { name: person.name }),
+  ).toBeVisible();
+  for (const query of ["Updated name", "newhandle"]) {
+    await t.user.clear(recipient());
+    await t.user.type(recipient(), query);
+    expect(
+      await screen.findByRole("option", { name: person.name }),
+    ).toBeVisible();
+  }
+  // The completed browse must use the profile update, without a relay read.
+  expect(t.directMessages.people).toHaveBeenCalledTimes(1);
+  await t.user.clear(recipient());
+  await t.user.type(recipient(), "newagent");
+  expect(await screen.findByText("No matching people.")).toBeVisible();
+  await t.user.clear(recipient());
+  await t.user.type(recipient(), "newhandle");
+  await t.user.keyboard(" ");
+  expect(
+    screen.getByRole("button", { name: `Remove ${person.name}` }),
+  ).toBeVisible();
+});
+
 it("matches accented names the way the directory finds them", async () => {
   const t = setup();
   const jose = { pubkey: "a".repeat(64), name: "José" };

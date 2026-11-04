@@ -18,12 +18,17 @@ import {
   searchable,
 } from "../../shared/search-debounce";
 
-export type Recipient = Profile & { pubkey: string };
+export type Recipient = Profile & {
+  pubkey: string;
+  /** Current cached profile names, used only for matching a directory row. */
+  aliases?: readonly string[];
+};
 
 export function recipientNames(person: Recipient, names?: IdentityNameView) {
   return [
     person.name,
     person.username,
+    ...(person.aliases ?? []),
     names?.lookup(person.pubkey)?.name,
   ].filter((name): name is string => !!name);
 }
@@ -223,9 +228,16 @@ export function usePeople(session: RelaySession, query: string) {
     visible.people.map((person) => [person.pubkey, person]),
   );
   if (query.trim())
-    for (const [pubkey, profile] of profiles)
-      if (!known.has(pubkey) && (!profile.nameIsFallback || profile.username))
-        known.set(pubkey, { ...profile, pubkey });
+    for (const [pubkey, profile] of profiles) {
+      if (profile.nameIsFallback && !profile.username) continue;
+      const person = known.get(pubkey);
+      known.set(
+        pubkey,
+        person
+          ? { ...person, aliases: recipientNames({ ...profile, pubkey }) }
+          : { ...profile, pubkey },
+      );
+    }
   return {
     people: matching([...known.values()], query, session.names).sort(
       peopleOrder(query),
