@@ -55,10 +55,14 @@ function fixture(
     model?: string;
     model_reasoning_effort?: string;
     model_reasoning_summary?: string;
+    model_provider?: string;
+    model_providers?: Record<string, { base_url?: string }>;
+    openai_base_url?: string;
     features?: { hooks?: boolean; codex_hooks?: boolean };
   } = {},
   repositories?: (scope: string | undefined) => string,
   hooks?: ConstructorParameters<typeof CodexRuntime>[7],
+  endpoint?: ConstructorParameters<typeof CodexRuntime>[8],
 ) {
   let terminals = remainingTerminals;
   let options: HostProcessOptions | undefined;
@@ -145,6 +149,8 @@ function fixture(
             },
           ],
         };
+      if (request.method === "account/read")
+        result = { account: { type: "chatgpt" } };
       if (request.method === "config/read")
         result = {
           config: {
@@ -339,6 +345,7 @@ function fixture(
     () => added,
     repositories,
     hooks,
+    endpoint,
   );
   runtimes.push(runtime);
   const events: EventData[] = [];
@@ -457,7 +464,13 @@ function fixture(
     vi.stubGlobal("localStorage", local);
     vi.stubGlobal("navigator", { platform: "MacIntel" });
     apply({
-      host: { spawn },
+      host: {
+        spawn,
+        serveModelProxy: async () => ({
+          url: "http://127.0.0.1:7777/private",
+          close: async () => {},
+        }),
+      },
       agents: {
         snapshot: () => ({ status: "ready", agents: [], running }),
         relay: () => relay,
@@ -4561,3 +4574,49 @@ it("keeps interrupting an idle existing conversation a no-op", async () => {
     f.runtime.session(agent, { channelId: "channel", root }, "interrupt"),
   ).resolves.toBeUndefined();
 });
+
+it.each([
+  [{}, "chatgpt", "openai"],
+  [
+    { openai_base_url: "https://api.example.test/v1" },
+    "https://api.example.test/v1",
+    "openai",
+  ],
+  [
+    {
+      model_provider: "custom",
+      model_providers: {
+        custom: { base_url: "https://models.example.test/v1" },
+      },
+    },
+    "https://models.example.test/v1",
+    "custom",
+  ],
+] as const)(
+  "preserves provider identity while proxying %j",
+  async (configured, upstream, provider) => {
+    const endpoint = vi.fn(async () => "http://127.0.0.1:7777/private");
+    const f = fixture(
+      [],
+      undefined,
+      false,
+      configured,
+      undefined,
+      undefined,
+      endpoint,
+    );
+    await f.runtime.run(f.delivery("work"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(endpoint).toHaveBeenCalledWith(upstream);
+    const started = f.sent.find((wire) => wire.method === "thread/start");
+    expect(started?.params).toMatchObject({
+      config: {
+        [`model_providers.${provider}.base_url`]:
+          "http://127.0.0.1:7777/private",
+        [`model_providers.${provider}.supports_websockets`]: false,
+        "features.enable_request_compression": false,
+      },
+    });
+    await f.complete();
+  },
+);

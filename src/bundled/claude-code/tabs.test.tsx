@@ -242,6 +242,10 @@ function applied({
   const ctx = {
     pluginOwner: { id: "buzz.claude-code", revision: "r1" },
     host: {
+      serveModelProxy: vi.fn(async () => ({
+        url: "http://127.0.0.1:7777/private",
+        close: async () => {},
+      })),
       spawn,
       // Offer the installed release unless the test requests an update.
       request: vi.fn(async ({ url }: { url: string }) => ({
