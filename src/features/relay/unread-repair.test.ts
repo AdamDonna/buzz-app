@@ -9,10 +9,12 @@ import {
   type ReadJournal,
 } from "./read-state-storage";
 import {
-  memoryThreadParticipation,
+  NO_THREAD_PARTICIPATION,
   type ThreadMark,
+  type ThreadParticipation,
 } from "./thread-participation";
 import { createUnread } from "./unread";
+import { memoryUnreadStorage, type UnreadStorage } from "./unread-storage";
 
 // Repair's evidence reads: per-channel windows since each channel's read mark
 // and the participation pass that refetches the viewer's threads. Events are
@@ -48,6 +50,11 @@ const viewer = "a".repeat(64),
 const flood = (channelId: string, count: number, from: number) =>
   Array.from({ length: count }, (_, i) => event(channelId, peer, from + i));
 const NOW = 10_000_000;
+// The threads storage holds for the next launch, and a record seeding them.
+const remembered = async (storage: UnreadStorage) =>
+  (await storage.read())?.participation ?? NO_THREAD_PARTICIPATION;
+const remember = (storage: UnreadStorage, participation: ThreadParticipation) =>
+  storage.save({ participation });
 
 const owners: ReturnType<typeof createUnread>[] = [];
 afterEach(() => {
@@ -57,14 +64,14 @@ afterEach(() => {
 async function setup({
   channels: ids,
   frontiers,
-  participation = memoryThreadParticipation(),
+  storage = memoryUnreadStorage(),
   authoredPage = true,
   sampled = true,
   localUnread = {},
 }: {
   channels: readonly string[];
   frontiers: Readonly<Record<string, number>>;
-  participation?: ReturnType<typeof memoryThreadParticipation>;
+  storage?: UnreadStorage;
   // Whether the viewer's newest authored page still reaches their old replies.
   authoredPage?: boolean;
   // Whether the roster sample still reaches this history; busier channels
@@ -186,7 +193,7 @@ async function setup({
     channels,
     reader,
     viewer,
-    participation,
+    storage,
     now: () => NOW * 1000,
   });
   owners.push(owner);
@@ -209,7 +216,7 @@ async function setup({
     failing,
     transient,
     hold,
-    participation,
+    storage,
   };
 }
 
@@ -251,7 +258,7 @@ it("a thread the viewer replied in outlives its channel's later traffic and a bu
 });
 
 it("an unread reply below a channel's catch-up mark, in a thread the viewer started, is in the Inbox and stays after the sample moves on", async () => {
-  const participation = memoryThreadParticipation();
+  const storage = memoryUnreadStorage();
   // The channel was only scrolled to its end, so its one mark is the
   // catch-up mark, which reads no replies; the viewer has written much
   // since, so their authored page no longer reaches the root.
@@ -259,7 +266,7 @@ it("an unread reply below a channel's catch-up mark, in a thread the viewer star
     setup({
       channels: ["c0"],
       frontiers: { "activity:c0": 3000 },
-      participation,
+      storage,
       authoredPage: false,
       sampled,
     });
@@ -284,7 +291,7 @@ it("an unread reply below a channel's catch-up mark, in a thread the viewer star
   });
   // The thread is remembered as of its root, so a launch after busier
   // channels have moved the sample on still reads the reply.
-  expect((await participation.read()).roots.get(`c0:${root.id}`)).toEqual({
+  expect((await remembered(storage)).roots.get(`c0:${root.id}`)).toEqual({
     at: 1000,
     newestId: root.id,
   });
@@ -301,14 +308,14 @@ it("an unread reply below a channel's catch-up mark, in a thread the viewer star
 });
 
 it("a read mention whose root the windows dropped groups under its fetched root, and its thread is read in the same repair", async () => {
-  const participation = memoryThreadParticipation();
-  const write = vi.spyOn(participation, "write");
+  const storage = memoryUnreadStorage();
+  const save = vi.spyOn(storage, "save");
   const h = await setup({
     channels: ["c0", "own"],
     // The catch-up mark is older than the read mark, so the window reaches
     // the read mention; its root is older still.
     frontiers: { c0: 1100, "activity:c0": 1010 },
-    participation,
+    storage,
   });
   const root = event("c0", peer, 1000);
   const mention = reply("c0", peer, 1020, root, [["p", viewer]]);
@@ -342,8 +349,8 @@ it("a read mention whose root the windows dropped groups under its fetched root,
   expect(h.filters()).toContainEqual(
     expect.objectContaining({ "#h": ["c0"], "#e": [root.id] }),
   );
-  expect(write).toHaveBeenCalledTimes(1);
-  expect((await participation.read()).roots.get(`c0:${root.id}`)).toEqual({
+  expect(save).toHaveBeenCalledTimes(1);
+  expect((await remembered(storage)).roots.get(`c0:${root.id}`)).toEqual({
     at: 1020,
     newestId: mention.id,
   });
@@ -433,11 +440,11 @@ async function spentBudget(
   cold: readonly (readonly [RelayEvent, number])[],
   events: readonly RelayEvent[],
 ) {
-  const participation = memoryThreadParticipation();
+  const storage = memoryUnreadStorage();
   const h = await setup({
     channels: ["c0"],
     frontiers: { c0: 5000 },
-    participation,
+    storage,
     sampled: false,
   });
   const busy = Array.from({ length: 6 }, (_, i) => event("c0", peer, 1000 + i));
@@ -455,7 +462,7 @@ async function spentBudget(
     `c0:${"f".repeat(60)}${i.toString(16).padStart(4, "0")}`,
     { at: 6000 + i },
   ]);
-  await participation.write({
+  await remember(storage, {
     roots: new Map<string, ThreadMark>([
       ...quiet,
       ...busy.map((root, i): [string, ThreadMark] => [
@@ -659,12 +666,12 @@ it("a first run with a large roster sizes each window so the pass fits the budge
 });
 
 it("remembered participation is saved and refetches the thread after the authored page moves on", async () => {
-  const participation = memoryThreadParticipation();
-  const write = vi.spyOn(participation, "write");
+  const storage = memoryUnreadStorage();
+  const save = vi.spyOn(storage, "save");
   const first = await setup({
     channels: ["c0"],
     frontiers: { c0: 1015 },
-    participation,
+    storage,
   });
   const root = event("c0", peer, 1000);
   const mine = reply("c0", viewer, 1010, root);
@@ -678,9 +685,11 @@ it("remembered participation is saved and refetches the thread after the authore
     expect.objectContaining({ rootId: root.id, unreadCount: 200 }),
   );
   // Remembered as of the viewer's reply: the unread answers advance nothing.
-  expect(write).toHaveBeenCalledWith({
-    roots: new Map([[`c0:${root.id}`, { at: 1010, newestId: mine.id }]]),
-    walk: { since: 1010 },
+  expect(save).toHaveBeenCalledWith({
+    participation: {
+      roots: new Map([[`c0:${root.id}`, { at: 1010, newestId: mine.id }]]),
+      walk: { since: 1010 },
+    },
   });
   first.owner.dispose();
   // A later session: the viewer has since written a page of newer messages
@@ -689,7 +698,7 @@ it("remembered participation is saved and refetches the thread after the authore
   const second = await setup({
     channels: ["c0"],
     frontiers: { c0: 1300 },
-    participation,
+    storage,
     authoredPage: false,
     sampled: false,
   });
@@ -731,11 +740,11 @@ function history(h: Awaited<ReturnType<typeof setup>>) {
 }
 
 it("a device's first repair walks the viewer's history behind the windows, remembering every thread they replied in, and reads new replies in the older ones", async () => {
-  const participation = memoryThreadParticipation();
+  const storage = memoryUnreadStorage();
   const h = await setup({
     channels: ["a", "b"],
     frontiers: { a: 9600, b: 9600 },
-    participation,
+    storage,
     sampled: false,
   });
   const { roots, notes } = history(h);
@@ -835,7 +844,7 @@ it("a device's first repair walks the viewer's history behind the windows, remem
     h.owner.capability.snapshot({ kind: "channel", channelId: "a" })
       .observedCount,
   ).toBe(0);
-  const saved = await participation.read();
+  const saved = await remembered(storage);
   expect(saved.roots.size).toBe(140);
   expect(saved.roots.get(`a:${oldest.id}`)).toEqual({
     at: 9500,
@@ -852,7 +861,7 @@ it("a device's first repair walks the viewer's history behind the windows, remem
   const second = await setup({
     channels: ["a", "b"],
     frontiers: { a: 9600, b: 9600 },
-    participation,
+    storage,
   });
   second.store.push(...h.store);
   const late = event("b", peer, 9000);
@@ -877,17 +886,17 @@ it("a device's first repair walks the viewer's history behind the windows, remem
   expect(
     second.filters().filter((filter) => filter["#e"] && filter.since),
   ).toHaveLength(90);
-  expect(await second.participation.read()).toMatchObject({
+  expect(await remembered(second.storage)).toMatchObject({
     walk: { since: 9700 },
   });
-  expect((await participation.read()).roots.size).toBe(141);
+  expect((await remembered(storage)).roots.size).toBe(141);
 });
 
 // A remembered thread outside the 50 most recently active, so the repair asks
 // it for replies since its newest time rather than reading it whole: 50 newer
 // threads are remembered beside it, and the walk mark is past everything.
 async function coldThread(
-  participation: ReturnType<typeof memoryThreadParticipation>,
+  storage: UnreadStorage,
   channelId: string,
   root: RelayEvent,
   at: number,
@@ -897,7 +906,7 @@ async function coldThread(
     `${channelId}:${"f".repeat(60)}${i.toString(16).padStart(4, "0")}`,
     { at: 5000 + i },
   ]);
-  await participation.write({
+  await remember(storage, {
     roots: new Map([
       ...newer,
       [`${channelId}:${root.id}`, newestId ? { at, newestId } : { at }],
@@ -916,10 +925,10 @@ const coldReads = (h: Awaited<ReturnType<typeof setup>>, root: RelayEvent) =>
     );
 
 it("a cold thread's unread replies return on every launch until read; read, the newest is passed over on the next", async () => {
-  const participation = memoryThreadParticipation();
+  const storage = memoryUnreadStorage();
   const root = event("c0", peer, 1000);
   const mine = reply("c0", viewer, 1010, root);
-  await coldThread(participation, "c0", root, 1010, mine.id);
+  await coldThread(storage, "c0", root, 1010, mine.id);
   const answers = Array.from({ length: 3 }, (_, i) =>
     reply("c0", peer, 2000 + i, root),
   );
@@ -930,7 +939,7 @@ it("a cold thread's unread replies return on every launch until read; read, the 
     const h = await setup({
       channels: ["c0"],
       frontiers,
-      participation,
+      storage,
       sampled: false,
     });
     h.store.push(...history);
@@ -943,7 +952,7 @@ it("a cold thread's unread replies return on every launch until read; read, the 
   const fetched = (h: Launch) =>
     h.filters().flatMap((filter) => filter.ids ?? []);
   const mark = async () =>
-    (await participation.read()).roots.get(`c0:${root.id}`);
+    (await remembered(storage)).roots.get(`c0:${root.id}`);
   // A session admits the three unread replies; they advance nothing.
   const first = await launch({ c0: 1500 });
   await vi.waitFor(() => expect(row(first)).toMatchObject({ unreadCount: 3 }));
@@ -988,11 +997,11 @@ it("a cold thread's unread replies return on every launch until read; read, the 
 });
 
 it("a cold thread's boundary reply marked unread on this device is admitted on the next launch, not passed over", async () => {
-  const participation = memoryThreadParticipation();
+  const storage = memoryUnreadStorage();
   const root = event("c0", peer, 1000);
   const mine = reply("c0", viewer, 1010, root);
   const answer = reply("c0", peer, 2000, root);
-  await coldThread(participation, "c0", root, 1010, mine.id);
+  await coldThread(storage, "c0", root, 1010, mine.id);
   const history = [root, mine, answer, ...flood("c0", 100, 3000)];
   // The thread was read through the answer on another device.
   const frontiers = { c0: 1500, [`thread:${root.id}`]: 2000 };
@@ -1000,7 +1009,7 @@ it("a cold thread's boundary reply marked unread on this device is admitted on t
     const h = await setup({
       channels: ["c0"],
       frontiers,
-      participation,
+      storage,
       localUnread,
     });
     h.store.push(...history);
@@ -1011,7 +1020,7 @@ it("a cold thread's boundary reply marked unread on this device is admitted on t
   const row = (h: Launch) =>
     h.owner.capability.inbox().items.find((item) => item.rootId === root.id);
   const mark = async () =>
-    (await participation.read()).roots.get(`c0:${root.id}`);
+    (await remembered(storage)).roots.get(`c0:${root.id}`);
   // The read answer is the thread's newest reply: the repair learns it as
   // the boundary. Marked unread here, it counts at once.
   const first = await launch();
