@@ -644,8 +644,16 @@ export function subscribeRelayTraffic(
       if (route.status === "live" && !route.previous) {
         replace(route);
         sent = true;
-      } else if (route.status === "pending" && route.wire)
-        route.regranted = true;
+        continue;
+      }
+      // A route not live yet resumes from a cursor of a stream the relay may
+      // have left this channel out of, even if its REQ follows the grant
+      // (one that waits to retry), so the channel catches up.
+      if (route.resumedChannels?.has(id))
+        route.resumedChannels = new Set(
+          [...route.resumedChannels].filter((other) => other !== id),
+        );
+      if (route.status === "pending" && route.wire) route.regranted = true;
     }
     if (!sent) return;
     pump();

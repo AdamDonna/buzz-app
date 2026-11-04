@@ -2398,6 +2398,45 @@ it("reports a channel continuous only when the session can apply its whole repla
   }
 });
 
+it("catches up a channel granted while its batch waits to retry its first REQ", async () => {
+  vi.useFakeTimers({ now: 1_700_000_000_000 });
+  const h = setup([], undefined, 10, () => 0.5);
+  try {
+    age();
+    h.owner.update(["a", "b"], ["a", "b"]);
+    await establish(h.first);
+    h.first.close();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = h.sockets[1];
+    assert.exists(second);
+    await second.auth();
+    await vi.advanceTimersByTimeAsync(750);
+    const batches = () =>
+      second.requests().filter((r) => scopeOf(r).length > 1);
+    const first = batches()[0];
+    assert.exists(first);
+    await second.receive(["CLOSED", first[1], "auth-required: sign in"]);
+    for (const r of second.requests())
+      if (r !== first) await second.receive(["EOSE", r[1]]);
+    h.callbacks.established.mockClear();
+    // The retry follows the grant, but its replay was planned from b's cursor.
+    await grant(h, "b", second);
+    for (let tick = 0; tick < 30 && batches().length < 2; tick++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await second.receive(["NOTICE", "live"]);
+    }
+    const retry = batches().at(-1);
+    assert.exists(retry);
+    await second.receive(["EOSE", retry[1]]);
+    expect(batches()).toHaveLength(2);
+    expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+      [["a", "b"], undefined, ["a"]],
+    ]);
+  } finally {
+    h.owner.dispose();
+  }
+});
+
 it.each([
   ["an undecodable replay event", () => ({})],
   [
