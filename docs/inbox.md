@@ -233,9 +233,12 @@ moved, or whose window or a thread read in it failed—has its window, the
 roster's newest events and its remembered threads' new replies read once
 beside the catch-up, and
 leaving a channel has the roster's newest events read once more, at once, so
-they reach as far back as they would have without it. A catch-up only adds
-channels to what the point covers; only a full repair that moved the point
-sets it afresh. The record also keeps which remembered threads were read
+they reach as far back as they would have without it. A thread read that
+fails takes its channel out of what the point covers, covered before or
+not, unless a catch-up reads all it asked for, as for the read of the threads
+read through to the point; otherwise a catch-up only adds channels to what
+the point covers, and only a full repair that moved the point sets it
+afresh. The record also keeps which remembered threads were read
 whole: beside the catch-up, any of the 50 most recently read or written in
 that was not—one the viewer just replied in, was mentioned in or followed, or
 whose read failed—is read whole once, and one that leaves those 50, is

@@ -4069,8 +4069,12 @@ export function createUnread({
         // Whether a read the roster sample cannot vouch for dropped: a
         // dropped window only leaves its channel out of the roster set.
         let unvouched = false;
-        // Channels a thread read of dropped in, which stay out of the roster
-        // set: a delta does not read their threads' older replies again.
+        // Channels a thread read of dropped in, which leave the roster set,
+        // covered before or not: a delta does not read their threads' older
+        // replies again, so the next catch-up reads them once (see
+        // `uncovered`). A read from the delta's start or later, as the read
+        // past the mark, is one a delta from the mark reads whole: this
+        // pass's, or the next, as a full repair's drop holds the mark.
         const short = new Set<string>();
         const windowed = new Set<string>();
         const sampled = new Set<string>();
@@ -4134,7 +4138,12 @@ export function createUnread({
             if (!result) {
               unchecked = unvouched = true;
               for (const filter of request)
-                for (const id of filter["#h"] ?? []) short.add(id);
+                if (
+                  !prior ||
+                  filter.since === undefined ||
+                  filter.since < deltaSince
+                )
+                  for (const id of filter["#h"] ?? []) short.add(id);
             }
           } else if (!result) {
             unchecked ||= request.some(checks);
@@ -4329,7 +4338,7 @@ export function createUnread({
         // sample landed, and those a delta read to its end kept reading. A
         // mark only the sample moved covers no more, nor a thread not read
         // whole or through since; one a delta did not move keeps what it
-        // covered.
+        // covered. Either way a channel a thread read dropped in leaves it.
         if (moved) {
           covered.clear();
           for (const key of whole)
@@ -4341,8 +4350,8 @@ export function createUnread({
           for (const id of covered) if (!read.has(id)) covered.delete(id);
         }
         for (const id of ids)
-          if (windowed.has(id) && sampled.has(id) && !short.has(id))
-            covered.add(id);
+          if (windowed.has(id) && sampled.has(id)) covered.add(id);
+        for (const id of short) covered.delete(id);
         if (resampled) resample = false;
         // A pass that read the bootstrap has read on its own each thread
         // forgotten before it; one it forgets now owes the next.

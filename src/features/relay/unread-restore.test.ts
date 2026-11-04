@@ -3823,6 +3823,109 @@ it("a remembered thread not read through since the mark, whose newest time preda
   );
 });
 
+// A catch-up reads no cold thread of a channel the mark covers, so one whose
+// own read dropped takes its channel out, and the next catch-up reads that
+// channel's threads once.
+it.each([
+  ["tick", true],
+  ["launch", false],
+] as const)(
+  "a cold thread's own read dropped in a Refresh over a channel the mark covers takes the channel out of the roster set: the next %s catches up, reads the thread on its own and shows the reply it missed before the notice clears, and the tick after it reads the delta alone",
+  async (_, ticking) => {
+    // Ranked above the thread, so it is cold; read whole and through.
+    const hotter = Array.from({ length: 50 }, (_, i) =>
+      post(peerKey, "quiet", T + 10 + i),
+    );
+    const hotKeys = hotter.map((event) => `quiet:${event.id}`);
+    const root = post(viewerKey, "team", T);
+    const answer = reply(peerKey, "team", root, T + 2);
+    const at = SECONDS - 600;
+    const storage = memoryUnreadStorage();
+    // Complete, caught up a minute ago and covering every channel; the
+    // thread is not read through, as one learned beside a catch-up.
+    await storage.save({
+      participation: {
+        roots: new Map([
+          [`team:${root.id}`, { at: T }],
+          ...hotter.map(
+            (event) => [`quiet:${event.id}`, { at: event.created_at }] as const,
+          ),
+        ]),
+      },
+      events: [],
+      structure: new Set(),
+      complete: true,
+      mark: { at, checked: SECONDS - 60 },
+      roster: new Set(ROSTER),
+      whole: new Set(hotKeys),
+      through: new Set(hotKeys),
+    });
+    // Newer posts fill team's window above the answer and, with busy's
+    // traffic, the roster sample: only the thread's own read returns it.
+    const newer = Array.from({ length: 101 }, (_, i) =>
+      post(peerKey, "team", at + 1 + i),
+    );
+    const store = [...hotter, root, answer, ...newer, ...busy];
+    const own = (filter: ReadFilter) =>
+      !!filter["#e"]?.includes(root.id) && filter.since === T;
+    let failing = true;
+    let h = await launch({
+      store,
+      storage,
+      frontiers: BUSY_READ,
+      fail: (filters) => failing && filters.some(own),
+    });
+    const save = vi.spyOn(storage, "save");
+    const launched = await sentDuring(h, () => h.owner.capability.ensure());
+    expect(launched.filter(deltaFilter)).toHaveLength(1);
+    expect(launched.filter(own)).toEqual([]);
+    const refreshed = await sentDuring(h, () => h.owner.capability.refresh());
+    // Retried once, then dropped.
+    expect(refreshed.filter(own)).toHaveLength(2);
+    expect(h.owner.capability.inbox().partial).toBe(true);
+    expect(h.owner.owed()).toBe(true);
+    await save.mock.results.at(-1)?.value;
+    expect((await storage.read())?.complete).toBe(true);
+    failing = false;
+    if (!ticking) {
+      h.owner.dispose();
+      h = await launch({ store, storage, frontiers: BUSY_READ });
+    }
+    const shown = (items: readonly InboxItem[]) =>
+      items.some((item) => item.rootId === root.id && item.unreadCount === 1);
+    // Whether the reply shows when the tick first publishes the notice clear.
+    let clear: boolean | undefined;
+    const stop = h.owner.capability.subscribeInbox(() => {
+      const inbox = h.owner.capability.inbox();
+      if (ticking && clear === undefined && !inbox.partial)
+        clear = shown(inbox.items);
+    });
+    const next = await sentDuring(h, () =>
+      ticking ? h.reconnected() : h.owner.capability.ensure(),
+    );
+    stop();
+    expect(next.filter(deltaFilter)).toHaveLength(1);
+    expect(next.filter(windowOf("team"))).toHaveLength(1);
+    expect(next.filter(own)).toEqual([
+      {
+        kinds: CONTENT,
+        "#h": ["team"],
+        "#e": [root.id],
+        since: T,
+        include_aux: true,
+        limit: 50,
+      },
+    ]);
+    if (ticking) expect(clear).toBe(true);
+    expect(shown(h.owner.capability.inbox().items)).toBe(true);
+    expect(h.owner.capability.inbox().partial).toBeUndefined();
+    expect(h.owner.owed()).toBe(false);
+    const after = await sentDuring(h, () => h.reconnected());
+    expect(after).toEqual([expect.objectContaining({ kinds: DELTA_KINDS })]);
+    expect(shown(h.owner.capability.inbox().items)).toBe(true);
+  },
+);
+
 it("a read by ID asks 50 IDs a filter at most for the roots replies lack, and 100 for the marked messages whose channel is not known", async () => {
   const roots = Array.from({ length: 120 }, (_, i) =>
     post(peerKey, "team", T + i),
