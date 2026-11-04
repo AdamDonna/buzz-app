@@ -49,9 +49,10 @@ cannot save its first snapshot, the directory created during initialization can
 make a later launch count as existing. Restart stability requires a saved
 snapshot; this is a limitation of the local install heuristic.
 
-A deliberate reset uses current bundled defaults. Once it succeeds, another
-launch cannot reapply the legacy backfill. Reset is an explicit user action,
-rather than an upgrade.
+A deliberate reset uses current bundled defaults. Browser reset replaces the
+settings key in one atomic write, so a failed replacement keeps the old settings.
+Once reset succeeds, another launch cannot reapply the legacy backfill. Reset is
+an explicit user action, rather than an upgrade.
 
 ## Required checks for a default change
 

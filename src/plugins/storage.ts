@@ -26,7 +26,7 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
             /^buzz-client\.v1:[a-f0-9]{64}$/.test(key),
           ));
       const flags: Record<string, boolean> = {};
-      if (raw !== null) {
+      if (raw !== null && !reset) {
         const value: unknown = JSON.parse(raw);
         if (!value || typeof value !== "object" || !("version" in value))
           throw new Error("Invalid browser plugin settings");
@@ -107,7 +107,6 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
     const raw = localStorage.getItem(storageKey);
     if (raw !== null)
       localStorage.setItem(`${storageKey}.backup.${Date.now()}`, raw);
-    localStorage.removeItem(storageKey);
     return webCatalog(true);
   }
   async function readModule(id: string, revision: string): Promise<string> {

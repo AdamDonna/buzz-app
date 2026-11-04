@@ -239,6 +239,73 @@ it("does not activate a catalog whose initial defaults could not be saved", asyn
   expect(storage.getItem("buzzodz.plugins.v1")).toBe(null);
 });
 
+it.each(["corrupt", "saved"])(
+  "preserves %s settings when writing reset defaults fails",
+  async (kind) => {
+    const storage = browserStorage();
+    const key = "buzzodz.plugins.v1";
+    const original =
+      kind === "corrupt"
+        ? "broken"
+        : JSON.stringify({
+            version: 3,
+            enabled: {
+              "buzz.channels": true,
+              "buzz.github": false,
+              "buzz.reminders": false,
+              "buzz.workflows": false,
+            },
+          });
+    storage.setItem(`buzz-client.v1:${"a".repeat(64)}`, "{}");
+    storage.setItem(key, original);
+    const write = storage.setItem.getMockImplementation();
+    if (!write) throw new Error("Missing storage writer");
+    storage.setItem.mockImplementation((name, value) => {
+      if (name === key) throw new Error("Quota exceeded");
+      write(name, value);
+    });
+    const installation = createPluginStorage(optionalCatalog);
+    expect(await installation.recoverSettings()).toMatchObject({
+      status: "recovery",
+      reason: expect.stringContaining("Quota exceeded"),
+    });
+    expect(storage.getItem(key)).toBe(original);
+    const reopened = await createPluginStorage(optionalCatalog).getCatalog();
+    if (kind === "corrupt")
+      expect(reopened).toMatchObject({ status: "recovery" });
+    else
+      expect(reopened).toMatchObject({
+        status: "ready",
+        catalog: {
+          plugins: [
+            {},
+            { enabled: false },
+            { enabled: false },
+            { enabled: false },
+          ],
+        },
+      });
+    storage.setItem.mockImplementation(write);
+    expect(await installation.recoverSettings()).toMatchObject({
+      status: "ready",
+      catalog: {
+        plugins: [
+          {},
+          { enabled: true },
+          { enabled: false },
+          { enabled: false },
+        ],
+      },
+    });
+    expect(
+      await createPluginStorage(optionalCatalog).getCatalog(),
+    ).toMatchObject({
+      status: "ready",
+      catalog: { plugins: [{}, {}, { enabled: false }, { enabled: false }] },
+    });
+  },
+);
+
 it("migrates the Agents switch once and ignores v1's", async () => {
   const agents = (): PluginInfo[] =>
     catalog()
