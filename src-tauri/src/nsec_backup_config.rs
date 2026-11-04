@@ -39,9 +39,30 @@ pub(crate) fn configured(
     }))
 }
 
+/// `BUZZ_NSEC_BACKUP_CONSENT=managed` marks an organization-managed build: every
+/// local key is backed up and any saved choice is ignored. Unset or empty keeps
+/// explicit consent. Managed consent needs configured backup.
+pub(crate) fn managed(consent: Option<&str>, configured: bool) -> Result<bool, String> {
+    match consent.filter(|value| !value.is_empty()) {
+        None => Ok(false),
+        Some("managed") if configured => Ok(true),
+        Some("managed") => Err("Managed backup consent needs a backup service".into()),
+        Some(_) => Err("Backup consent must be empty or managed".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_consent_needs_configured_backup() {
+        assert_eq!(managed(None, false), Ok(false));
+        assert_eq!(managed(Some(""), true), Ok(false));
+        assert_eq!(managed(Some("managed"), true), Ok(true));
+        assert!(managed(Some("managed"), false).is_err());
+        assert!(managed(Some("true"), true).is_err());
+    }
 
     #[test]
     fn backup_is_disabled_until_both_trusted_inputs_are_valid() {

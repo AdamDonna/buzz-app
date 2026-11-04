@@ -134,17 +134,47 @@ pub(crate) fn read(path: &Path, config: &Config, pubkey: &str) -> Result<BackupC
     })
 }
 
+/// Consent's shared lease for a backup pass, or `None` when backup is not
+/// authorized. A managed build ignores the saved choice, so even a malformed
+/// one cannot stop backup.
+pub(crate) fn admit(
+    path: &Path,
+    config: &Config,
+    pubkey: &str,
+    managed: bool,
+) -> Result<Option<Lease>> {
+    if managed {
+        return lock(path, false).map(Some);
+    }
+    let choice = read(path, config, pubkey)?;
+    Ok(choice._lease.filter(|_| choice.automatic == Some(true)))
+}
+
 pub(crate) async fn set(
     identity: &IdentityHost,
     path: &Path,
     config: &Config,
     pubkey: &str,
     automatic: bool,
+    managed: bool,
 ) -> Result<BackupChoice> {
     if identity.viewer().await? != pubkey {
         return Err("This device’s identity changed. Read its backup choice again.".into());
     }
-    let _lease = lock(path, true)?;
+    let _lease = match lock(path, true) {
+        Ok(lease) => lease,
+        // A managed build's running pass backs up this key whatever is saved,
+        // so turning automatic backup on while it holds the lease changes nothing.
+        Err(error) if automatic && managed && error == BUSY => {
+            return Ok(BackupChoice {
+                available: true,
+                pubkey: pubkey.into(),
+                automatic: Some(true),
+                _lease: None,
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let record = Record {
         version: 1,
         pubkey: pubkey.into(),
