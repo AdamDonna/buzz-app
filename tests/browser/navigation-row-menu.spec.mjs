@@ -45,7 +45,10 @@ test.describe("menu placement lifetime", () => {
     const starred = sidebar
       .locator("[data-sidebar-section]")
       .filter({ has: page.locator("summary", { hasText: /Starred$/ }) });
-    const beta = sidebar.locator('[data-channel-id="beta"]');
+    // A section move retains an inert exit copy until its fade finishes.
+    const beta = sidebar.locator(
+      'button[data-channel-id="beta"]:not([inert] *)',
+    );
     const menu = page.getByRole("menu", { name: "Actions for Beta" });
     await expect(work.locator('[data-channel-id="beta"]')).toBeVisible();
     await openChannelDetails(page);

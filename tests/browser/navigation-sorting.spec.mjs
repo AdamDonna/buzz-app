@@ -3,6 +3,69 @@ import { open } from "./timeline.mjs";
 
 test.use({ productionBroker: true, savedSidebar: true, sortingSidebar: true });
 
+// Pause real WAAPI animations at creation, before a busy renderer can finish
+// them. Seeking still exercises the browser's actual keyframes and geometry.
+async function holdSidebarMotion(page) {
+  const control = await page.evaluateHandle(() => {
+    const animate = Element.prototype.animate;
+    const animations = [];
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args);
+      if (
+        this.closest("[data-sidebar-section]") &&
+        this.firstElementChild?.matches("[data-channel-sidebar-row]")
+      ) {
+        animations.push(animation);
+        // Motion assigns startTime after animate(), which resumes playback.
+        queueMicrotask(() => {
+          animation.pause();
+          animation.currentTime = 0;
+        });
+      }
+      return animation;
+    };
+    return {
+      animations,
+      finish() {
+        for (const animation of animations)
+          if (animation.playState === "paused") animation.finish();
+      },
+      release() {
+        Element.prototype.animate = animate;
+        this.finish();
+      },
+    };
+  });
+  return {
+    async seek(property, count = 1) {
+      await expect
+        .poll(() =>
+          control.evaluate(
+            ({ animations }, property) =>
+              animations.filter((animation) =>
+                animation.effect
+                  .getKeyframes()
+                  .some((frame) => property in frame),
+              ).length,
+            property,
+          ),
+        )
+        .toBeGreaterThanOrEqual(count);
+      await control.evaluate(async ({ animations }) => {
+        for (const fraction of [0, 0.25, 0.5, 0.75]) {
+          for (const animation of animations)
+            if (animation.playState === "paused")
+              animation.currentTime =
+                Number(animation.effect.getTiming().duration) * fraction;
+          await new Promise(requestAnimationFrame);
+        }
+      });
+    },
+    finish: () => control.evaluate((state) => state.finish()),
+    release: () => control.evaluate((state) => state.release()),
+  };
+}
+
 // Real layout/paint and focus retention while live activity reorders keyed DOM
 // cannot be established in jsdom. The same flow exercises reduced motion.
 for (const reducedMotion of ["no-preference", "reduce"]) {
@@ -40,22 +103,15 @@ for (const reducedMotion of ["no-preference", "reduce"]) {
           state.ys.push(element.getBoundingClientRect().y);
           if (!state.done) requestAnimationFrame(sample);
         };
-        requestAnimationFrame(sample);
+        sample();
       });
-      app.activity({ channel: "cedar", kind: 45003 });
-      await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
-      if (reducedMotion === "no-preference") {
-        await expect
-          .poll(() =>
-            page.evaluate(() =>
-              window.sidebarMotion.transforms.some(
-                (value) =>
-                  value !== "none" &&
-                  Math.abs(new DOMMatrixReadOnly(value).m42) > 1,
-              ),
-            ),
-          )
-          .toBe(true);
+      const motion = await holdSidebarMotion(page);
+      try {
+        app.activity({ channel: "cedar", kind: 45003 });
+        await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
+        if (reducedMotion === "no-preference") await motion.seek("transform");
+      } finally {
+        await motion.release();
       }
       await expect
         .poll(() =>
@@ -163,38 +219,33 @@ test("keeps a stationary selected row visible while its neighbors exchange place
       });
       if (!state.done) requestAnimationFrame(sample);
     };
-    requestAnimationFrame(sample);
+    sample();
   });
-  await section
-    .getByRole("button", { name: "More actions for Channels" })
-    .click();
-  await page
-    .getByRole("menu", { name: "More actions for Channels", exact: true })
-    .getByRole("menuitem", { name: "Sort", exact: true })
-    .focus();
-  await page.keyboard.press("ArrowRight");
-  await page
-    .getByRole("menu", { name: "Sort Channels", exact: true })
-    .getByRole("menuitemradio", { name: "Recent", exact: true })
-    .click();
-  await expect
-    .poll(() =>
-      rows.evaluateAll((elements) =>
-        elements.map((element) => element.dataset.channelId),
-      ),
-    )
-    .toEqual(["willow", "maple", "cedar"]);
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.stationaryMotion.frames.some(
-          (frame) =>
-            frame.movingTransform !== "none" &&
-            Math.abs(new DOMMatrixReadOnly(frame.movingTransform).m42) > 1,
+  const motion = await holdSidebarMotion(page);
+  try {
+    await section
+      .getByRole("button", { name: "More actions for Channels" })
+      .click();
+    await page
+      .getByRole("menu", { name: "More actions for Channels", exact: true })
+      .getByRole("menuitem", { name: "Sort", exact: true })
+      .focus();
+    await page.keyboard.press("ArrowRight");
+    await page
+      .getByRole("menu", { name: "Sort Channels", exact: true })
+      .getByRole("menuitemradio", { name: "Recent", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        rows.evaluateAll((elements) =>
+          elements.map((element) => element.dataset.channelId),
         ),
-      ),
-    )
-    .toBe(true);
+      )
+      .toEqual(["willow", "maple", "cedar"]);
+    await motion.seek("transform");
+  } finally {
+    await motion.release();
+  }
   await expect
     .poll(() =>
       maple.evaluate(
@@ -291,13 +342,43 @@ test("retargets an unfinished slide without jumping or losing focus", async ({
         ),
       )
       .toBe(true);
+  await expect(rows.first()).toHaveAttribute("data-channel-id", "willow");
   await settled();
   await cedar.focus();
-  app.activity({ channel: "cedar", kind: 45003, age: 30 });
-  await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
-  await expect
-    .poll(
-      () =>
+  const motion = await holdSidebarMotion(page);
+  try {
+    app.activity({ channel: "cedar", kind: 45003, age: 30 });
+    await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
+    await expect
+      .poll(
+        () =>
+          willow.evaluate((element) =>
+            element
+              .closest("[data-channel-sidebar-row]")
+              .parentElement.getAnimations()
+              .some((animation) =>
+                animation.effect
+                  .getKeyframes()
+                  .some((frame) => "transform" in frame),
+              ),
+          ),
+        { intervals: [10, 20, 50] },
+      )
+      .toBe(true);
+    // Freeze the old slide at its midpoint, then compare with the first frame
+    // of its replacement. Elapsed runner time cannot masquerade as a jump.
+    const before = await willow.evaluate((element) => {
+      const row = element.closest("[data-channel-sidebar-row]").parentElement;
+      for (const animation of row.getAnimations()) {
+        animation.pause();
+        animation.currentTime = 70;
+      }
+      return element.getBoundingClientRect().y;
+    });
+    app.activity({ channel: "willow", kind: 45003, age: 29 });
+    await expect(rows.first()).toHaveAttribute("data-channel-id", "willow");
+    await expect
+      .poll(() =>
         willow.evaluate((element) =>
           element
             .closest("[data-channel-sidebar-row]")
@@ -308,47 +389,24 @@ test("retargets an unfinished slide without jumping or losing focus", async ({
                 .some((frame) => "transform" in frame),
             ),
         ),
-      { intervals: [10, 20, 50] },
-    )
-    .toBe(true);
-  // Freeze the old slide at its midpoint, then compare with the first frame
-  // of its replacement. Elapsed runner time cannot masquerade as a jump.
-  const before = await willow.evaluate((element) => {
-    const row = element.closest("[data-channel-sidebar-row]").parentElement;
-    for (const animation of row.getAnimations()) {
-      animation.pause();
-      animation.currentTime = 70;
-    }
-    return element.getBoundingClientRect().y;
-  });
-  app.activity({ channel: "willow", kind: 45003, age: 29 });
-  await expect(rows.first()).toHaveAttribute("data-channel-id", "willow");
-  await expect
-    .poll(() =>
-      willow.evaluate((element) =>
-        element
-          .closest("[data-channel-sidebar-row]")
-          .parentElement.getAnimations()
-          .some((animation) =>
-            animation.effect
-              .getKeyframes()
-              .some((frame) => "transform" in frame),
-          ),
-      ),
-    )
-    .toBe(true);
-  const after = await willow.evaluate((element) => {
-    const row = element.closest("[data-channel-sidebar-row]").parentElement;
-    for (const animation of row.getAnimations()) {
-      animation.pause();
-      animation.currentTime = 0;
-    }
-    const y = element.getBoundingClientRect().y;
-    for (const animation of row.getAnimations()) animation.play();
-    return y;
-  });
-  expect(Math.abs(after - before)).toBeLessThan(0.5);
+      )
+      .toBe(true);
+    const after = await willow.evaluate((element) => {
+      const row = element.closest("[data-channel-sidebar-row]").parentElement;
+      for (const animation of row.getAnimations()) {
+        animation.pause();
+        animation.currentTime = 0;
+      }
+      const y = element.getBoundingClientRect().y;
+      for (const animation of row.getAnimations()) animation.play();
+      return y;
+    });
+    expect(Math.abs(after - before)).toBeLessThan(0.5);
+  } finally {
+    await motion.release();
+  }
   await settled();
+  await expect(section.locator("[data-moving]")).toHaveCount(0);
   await expect(cedar).toBeFocused();
   await expect
     .poll(() =>
@@ -419,10 +477,18 @@ test.describe("distant channel motion", () => {
         });
         if (!state.done) requestAnimationFrame(sample);
       };
-      requestAnimationFrame(sample);
+      sample();
     });
-    app.activity({ channel: id, kind: 45003 });
-    await expect(rows.first()).toHaveAttribute("data-channel-id", id);
+    const motion = await holdSidebarMotion(page);
+    try {
+      app.activity({ channel: id, kind: 45003 });
+      await motion.seek("opacity");
+      await motion.finish();
+      await expect(rows.first()).toHaveAttribute("data-channel-id", id);
+      await motion.seek("opacity", 2);
+    } finally {
+      await motion.release();
+    }
     await expect
       .poll(() =>
         target.evaluate(
