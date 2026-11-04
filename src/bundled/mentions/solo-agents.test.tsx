@@ -1424,9 +1424,12 @@ it("prioritizes the viewer-owned namesake in both menus and selects the exact ow
   );
   expect(
     (publish.mock.lastCall?.[0] as CompletionResult | undefined)?.items.map(
-      (item) => item.id,
+      ({ id, agent, detail }) => [id, agent, detail],
     ),
-  ).toEqual([mine, test.key]);
+  ).toEqual([
+    [mine, true, undefined],
+    [test.key, true, "Managed by Wes"],
+  ]);
   completion.unmount();
   const select = vi.fn(() => true);
   const view = render(
