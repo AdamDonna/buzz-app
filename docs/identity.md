@@ -27,10 +27,10 @@ continuing as the old account, and one that times out fails as *Sign-in did
 not finish*. Setup's account calls then go through the native forwarder as the
 bundled plugin's installation, fenced to that session, and a backup hands the
 uploader the session's revision. Native admission checks only that
-installation's grant, so this works whether or not the plugin has started. The
-forwarder grants no backup-status route, so Welcome back offers no restore and
-an imported key is backed up automatically. The session outlives first run: sign-in
-at launch finds it signed in.
+installation's grant, so this works whether or not the plugin has started.
+*Checking for a backed-up key* (below) goes through the forwarder too, so
+Welcome back offers a restore where the portal accepts the session there. The
+session outlives first run: sign-in at launch finds it signed in.
 
 A URL given on the welcome screen is looked up first, before sign-in and before
 any key exists: **Continue** opens the same **Finding community** page described

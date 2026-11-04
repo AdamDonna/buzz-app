@@ -352,6 +352,7 @@ const BUILDERLAB_FI_ROUTES: &[&str] = &[
     "v1/buzz/nostr-identities/delete",
     "v1/buzz/nostr-identities/challenge",
     "v1/buzz/nostr-identities/verify",
+    "v1/buzz/nsec-backups/status",
     "v1/buzz/communities/list",
     "v1/buzz/communities/availability",
     "v1/buzz/communities",
@@ -2302,6 +2303,7 @@ mod tests {
                 .collect();
             assert!(operations.contains(&format!("GET {base}v1/auth/me")));
             assert!(operations.contains(&format!("POST {base}v3/beekeeper/register-agent")));
+            assert!(operations.contains(&format!("POST {base}v1/buzz/nsec-backups/status")));
             assert_eq!(operations.len(), super::BUILDERLAB_FI_ROUTES.len());
         }
         assert!(grants.commands.is_empty());
