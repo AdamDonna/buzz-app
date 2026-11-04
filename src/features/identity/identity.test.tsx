@@ -2638,6 +2638,71 @@ it("a created community is joined once found, without Join Community, and contin
   identity.dispose();
 });
 
+it("after a created community's automatic join fails, Back looks it up again through Join Community, whose Cancel keeps the address", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
+  const member = keypair();
+  const relay = nativeRelay(member);
+  const identity = createIdentity();
+  const communities = communitiesFor(identity);
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={communities}
+      invites={invites}
+      account={creatingWith({
+        communityAvailable: () => Promise.resolve(true),
+        createCommunity: () => Promise.resolve(relay.origin),
+      })}
+      connect={vi.fn().mockResolvedValue(credential)}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+  await createMyKey(user);
+  await user.click(
+    await screen.findByRole("button", { name: "Create a community" }),
+  );
+  await waitFor(() => expect(communities.snapshot().status).toBe("ready"));
+  await user.type(
+    screen.getByRole("textbox", { name: "Community address" }),
+    "relay",
+  );
+  await screen.findByText("That address is available.", {}, { timeout: 3_000 });
+  // The device will not keep the join's record, so the automatic join fails.
+  const storage = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+  await user.click(screen.getByRole("button", { name: "Create community" }));
+  expect(
+    await screen.findByRole("heading", { name: "Couldn’t join community" }),
+  ).toBeVisible();
+  storage.mockRestore();
+  expect(relay.calls.map(({ path }) => path)).toEqual([
+    "/",
+    "/api/join-policy",
+  ]);
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  expect(
+    await screen.findByRole("heading", { name: "Join Community" }),
+  ).toBeVisible();
+  // The retry waits for Join: only the lookup ran again.
+  expect(relay.calls.slice(2).map(({ path }) => path)).toEqual([
+    "/",
+    "/api/join-policy",
+  ]);
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(
+    screen.getByRole("heading", { name: "Connect to a community" }),
+  ).toBeVisible();
+  expect(urlField()).toHaveValue("relay.example.com:8443");
+  identity.dispose();
+});
+
 it("a refused create stays on Create a community with the card's copy until the name changes, and Back returns focus to Create a community", async () => {
   const { identity, user, relayCalls } = await connectPage(
     creatingWith({

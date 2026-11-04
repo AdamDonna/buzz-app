@@ -952,11 +952,20 @@ export function Welcome({
             onContinue={(next) => finishJoin(profileStep, next)}
           />
         ) : joinError ? (
-          // Back returns to the find page, which looks the community up again.
+          // Back returns to the find page, which looks the community up again,
+          // through Join Community even for a created one: another automatic
+          // join would leave no way out of a join that keeps failing.
           <Failure
             title={joinError.title}
             error={joinError.error}
-            onBack={admitted ? undefined : () => setJoinError(undefined)}
+            onBack={
+              admitted
+                ? undefined
+                : () => {
+                    setCreated(false);
+                    setJoinError(undefined);
+                  }
+            }
             publicKey={denied ? npubOf(state) : undefined}
             invite={
               denied && {
