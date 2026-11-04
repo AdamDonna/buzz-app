@@ -11320,6 +11320,105 @@ it("changes instructions in place and discards a dismissed change draft", async 
   expect(native.setType).not.toHaveBeenCalled();
 });
 
+it("drafts a proposed picture for the owner to save, and refuses one that is not an HTTPS image", async () => {
+  const { service, native, plugin } = await setup();
+  await service.create({ type: "example/echo", name: "Parent" });
+  await service.create({ type: "example/echo", name: "Child" });
+  await vi.waitFor(() => expect(plugin.agents.handle(bot)).toBeDefined());
+  const handle = plugin.agents.handle(bot);
+  if (!handle?.updateAgent || !handle.createAgent)
+    throw new Error("Missing request handles");
+  const old = "https://relay.example/media/old.png";
+  const url = "https://relay.example/media/new.png";
+  const uploaded = (value: string) => async () => value;
+  await service.save(sibling, { picture: old });
+  native.setPicture.mockClear();
+  for (const value of ["http://relay.example/media/new.png", "new.png"]) {
+    const picture = uploaded(value);
+    await expect(
+      handle.updateAgent({ agent: "Child", picture }),
+    ).rejects.toThrow("HTTPS image URL");
+    await expect(
+      handle.createAgent({ type: "example/echo", name: "Kid", picture }),
+    ).rejects.toThrow("HTTPS image URL");
+  }
+  await expect(
+    handle.updateAgent({ agent: "Child", picture: uploaded(old) }),
+  ).rejects.toThrow("at least one change");
+  const { requestId } = await handle.updateAgent({
+    agent: "Child",
+    picture: uploaded(url),
+  });
+  expect(service.updateRequests()).toMatchObject([
+    { id: requestId, agent: sibling, picture: url },
+  ]);
+  expect(native.setPicture).not.toHaveBeenCalled();
+  await service.approveUpdate(requestId, {
+    name: "Child",
+    type: "example/echo",
+    picture: url,
+  });
+  expect(native.setPicture).toHaveBeenCalledWith(member(sibling), url);
+  expect(service.find(sibling)?.picture).toBe(url);
+  await handle.createAgent({
+    type: "example/echo",
+    name: "Kid",
+    picture: uploaded(url),
+  });
+  expect(service.creationRequests()).toMatchObject([
+    { name: "Kid", picture: url },
+  ]);
+});
+
+it("uploads a proposed picture only once its request is valid", async () => {
+  const { service, plugin } = await setup();
+  await service.create({ type: "example/echo", name: "Parent" });
+  await service.create({ type: "example/echo", name: "Child" });
+  await vi.waitFor(() => expect(plugin.agents.handle(bot)).toBeDefined());
+  const handle = plugin.agents.handle(bot);
+  if (!handle?.updateAgent || !handle.createAgent)
+    throw new Error("Missing request handles");
+  const picture = vi.fn(async () => "https://relay.example/media/new.png");
+  await expect(
+    handle.updateAgent({ agent: "Nobody", picture }),
+  ).rejects.toThrow("no agent here");
+  await expect(
+    handle.createAgent({ type: "example/missing", name: "Kid", picture }),
+  ).rejects.toThrow("not available");
+  for (let i = 0; i < 16; i++)
+    await handle.updateAgent({ agent: sibling, name: `Kid ${i}` });
+  await expect(handle.updateAgent({ agent: "Child", picture })).rejects.toThrow(
+    "pending agent requests",
+  );
+  await expect(
+    handle.createAgent({ type: "example/echo", name: "Kid", picture }),
+  ).rejects.toThrow("pending agent requests");
+  expect(picture).not.toHaveBeenCalled();
+});
+
+it("keeps a picture proposal's agent when another takes its name during the upload", async () => {
+  const { service, plugin } = await setup();
+  await service.create({ type: "example/echo", name: "Parent" });
+  await service.create({ type: "example/echo", name: "Child" });
+  await vi.waitFor(() => expect(plugin.agents.handle(bot)).toBeDefined());
+  const handle = plugin.agents.handle(bot);
+  if (!handle?.updateAgent) throw new Error("Missing change handle");
+  const url = "https://relay.example/media/new.png";
+  let release = () => {};
+  const picture = vi.fn(
+    () => new Promise<string>((resolve) => (release = () => resolve(url))),
+  );
+  const proposal = handle.updateAgent({ agent: "Child", picture });
+  await vi.waitFor(() => expect(picture).toHaveBeenCalledOnce());
+  await service.save(sibling, { name: "Moved" });
+  await service.save(bot, { name: "Child" });
+  release();
+  await proposal;
+  expect(service.updateRequests()).toMatchObject([
+    { agent: sibling, agentName: "Moved", picture: url },
+  ]);
+});
+
 it("releases a deleted agent's pending change requests", async () => {
   const { service, plugin } = await setup();
   await service.create({ type: "example/echo", name: "Parent" });

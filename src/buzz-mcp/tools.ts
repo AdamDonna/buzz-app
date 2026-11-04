@@ -27,6 +27,7 @@ import {
   referencedEmoji,
 } from "../features/relay/emoji";
 import { newer } from "../features/relay/events";
+import { imageType } from "../features/relay/attachment-limits";
 import { CANVAS_BYTES } from "../features/channel-templates/model";
 import { threadReference } from "../features/relay/thread-reference";
 import { parseBuzzLink } from "../features/navigation/buzz-links";
@@ -98,6 +99,11 @@ export async function captureToolBody(
   name: string,
   args: Record<string, unknown>,
 ) {
+  if (
+    (name === "agent_create" || name === "agent_update") &&
+    text(args.picture)
+  )
+    throw new Error("Protected picture uploads are not supported.");
   const message = name === "send" || name === "reply_in_subthread";
   if (
     !message &&
@@ -131,14 +137,14 @@ export const TOOLS: readonly Tool[] = [
   ),
   tool(
     "agent_create",
-    "Submit an unsaved agent-creation draft for your owner to review. Nothing is created until they save it. Use a type key from agent_types.",
-    { type: str, name: str },
+    "Submit an unsaved agent-creation draft for your owner to review. Nothing is created until they save it. Use a type key from agent_types; picture is a local image file for its avatar.",
+    { type: str, name: str, picture: str },
     ["type", "name"],
   ),
   tool(
     "agent_update",
-    "Submit an unsaved draft of changes to one of your owner's agents for them to review. agent is its pubkey or exact name; type is a key from agent_types. Nothing changes until they save it.",
-    { agent: str, name: str, type: str, instructions: str },
+    "Submit an unsaved draft of changes to one of your owner's agents, yourself included, for them to review. agent is its pubkey or exact name; type is a key from agent_types; picture is a local image file for its avatar. Nothing changes until they save it.",
+    { agent: str, name: str, type: str, instructions: str, picture: str },
     ["agent"],
   ),
   tool(
@@ -454,7 +460,10 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const type = text(args.type)?.trim();
     const name = text(args.name)?.trim();
     if (!type || !name) throw new Error("type and name are required");
-    return JSON.stringify(await client.createAgent({ type, name }));
+    const picture = proposedPicture(client, args.picture);
+    return JSON.stringify(
+      await client.createAgent({ type, name, ...(picture && { picture }) }),
+    );
   },
   async self_handoff(tools, args) {
     const { client, context } = tools;
@@ -503,12 +512,14 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const type = text(args.type);
     // Empty instructions propose clearing them.
     const { instructions } = args;
+    const picture = proposedPicture(client, args.picture);
     return JSON.stringify(
       await client.updateAgent({
         agent,
         ...(name && { name }),
         ...(type && { type }),
         ...(typeof instructions === "string" && { instructions }),
+        ...(picture && { picture }),
       }),
     );
   },
@@ -2104,6 +2115,24 @@ function imeta(upload: Upload) {
       .filter((key) => upload[key] !== undefined)
       .map((key) => `${key} ${upload[key]}`),
   ];
+}
+
+/** A draft's picture: uploads the image at `path` as the agent once the
+ * draft is valid, giving its URL. */
+function proposedPicture(client: BuzzClient, path: unknown) {
+  const file = text(path)?.trim();
+  if (!file) return undefined;
+  const upload = client.uploadPicture?.bind(client);
+  if (!upload)
+    throw new Error("Picture proposals are unavailable on this host");
+  return async () => {
+    const data = await client.read(file);
+    // The preparer's own detector, so it never passes an image through.
+    const type = imageType(data);
+    if (!type)
+      throw new Error("picture must be a PNG, JPEG, GIF or WebP image");
+    return (await upload(data, type)).url;
+  };
 }
 
 /** An image or MP4's type, by the file's leading bytes. */

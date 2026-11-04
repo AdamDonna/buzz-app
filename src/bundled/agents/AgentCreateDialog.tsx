@@ -86,11 +86,14 @@ export function AgentCreateDialog({
   const [name, setName] = useState(
     update ? (update.request.name ?? update.agent.name) : (request?.name ?? ""),
   );
-  const [avatar, setAvatar] = useState<AvatarSelection>(() =>
-    update
-      ? { kind: "image", picture: update.agent.picture ?? "" }
-      : { kind: "gloopie", picture: randomAgentAvatar().url },
-  );
+  const [avatar, setAvatar] = useState<AvatarSelection>(() => {
+    const picture = update
+      ? (update.request.picture ?? update.agent.picture ?? "")
+      : request?.picture;
+    return picture === undefined
+      ? { kind: "gloopie", picture: randomAgentAvatar().url }
+      : { kind: "image", picture };
+  });
   const [typeKey, setTypeKey] = useState(
     (update ? (update.request.type ?? update.agent.type) : request?.type) ??
       types[0]?.key ??

@@ -418,7 +418,7 @@ export type AgentHandle = Readonly<{
   /** Installed local types and owner-reviewed creation requests. */
   agentTypes?(): readonly Readonly<{ key: string; title: string }>[];
   createAgent?(
-    input: Readonly<{ type: string; name: string }>,
+    input: AgentCreationInput,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
   /** Owner-reviewed changes to one of the owner's agents here. */
   updateAgent?(
@@ -897,24 +897,35 @@ export type RetypePreview = Readonly<{
     outcome: "reset" | "dropped";
   }>[];
 }>;
-/** An unsaved creation request. Only the owner-facing review may approve it. */
-export type AgentCreationRequest = Readonly<{
-  id: string;
-  requester: string;
-  requesterName: string;
-  owner: string;
-  community: string;
-  type: string;
-  name: string;
-}>;
-/** Proposed changes; absent fields stay as they are. */
+/** A proposal's picture: uploads it once the proposal is valid, giving its
+ * HTTPS image URL. */
+export type ProposedPicture = () => Promise<string>;
+type AgentCreation = Readonly<{ type: string; name: string }>;
+/** A requested agent. */
+export type AgentCreationInput = AgentCreation &
+  Readonly<{ picture?: ProposedPicture }>;
+/** An unsaved creation request; `picture` is an HTTPS image URL. Only the
+ * owner-facing review may approve it. */
+export type AgentCreationRequest = AgentCreation &
+  Readonly<{
+    picture?: string;
+    id: string;
+    requester: string;
+    requesterName: string;
+    owner: string;
+    community: string;
+  }>;
+/** Proposed changes; absent fields stay as they are. `picture` is an HTTPS
+ * image URL. */
 export type AgentUpdate = Readonly<{
   name?: string;
   type?: string;
   instructions?: string;
+  picture?: string;
 }>;
 /** `agent` is a pubkey or the exact name of one of the owner's agents here. */
-export type AgentUpdateInput = AgentUpdate & Readonly<{ agent: string }>;
+export type AgentUpdateInput = Omit<AgentUpdate, "picture"> &
+  Readonly<{ agent: string; picture?: ProposedPicture }>;
 /** An unsaved change request. Only the owner-facing review may approve it. */
 export type AgentUpdateRequest = AgentUpdate &
   Readonly<{
@@ -1486,6 +1497,13 @@ const recordPicture = (value: unknown) => {
   const source = avatarSource(value);
   return source?.startsWith("https:") ? source : undefined;
 };
+/** A proposed picture as a record carries it; refuses any other. */
+const proposedPicture = (value: string | undefined) => {
+  if (value === undefined) return undefined;
+  const picture = recordPicture(value);
+  if (!picture) throw new Error("Propose an HTTPS image URL as the picture");
+  return picture;
+};
 /** The `wss://` URL of a community, as agents and their providers know it. */
 const wssOf = (origin: string) =>
   relayOrigin(origin).replace(/^https:/, "wss:");
@@ -1810,69 +1828,82 @@ export class AgentsService extends Service implements Agents {
         this.types()
           .filter((type) => !type.remote)
           .map(({ key, title }) => ({ key, title })),
-      createAgent: async (agent, input) => {
-        const binding = this.bindingOf(agent);
-        if (!binding || !this.liveMember(agent.key))
-          throw new Error("The requesting agent is no longer available");
-        if (!input.name.trim()) throw new Error("Name the agent");
-        const kind = this.types().find((entry) => entry.key === input.type);
-        if (!kind) throw new Error("That agent type is not available");
-        if (kind.remote)
-          throw new Error("A hosted agent's key stays with its provider");
-        if (this.requests.length + this.updates.length >= 16)
-          throw new Error("Review the pending agent requests first");
-        const id = crypto.randomUUID();
-        this.requests = [
-          ...this.requests,
-          {
-            id,
+      createAgent: async (agent, { picture: upload, ...input }) => {
+        const request = (picture?: string): AgentCreationRequest => {
+          const binding = this.bindingOf(agent);
+          if (!binding || !this.liveMember(agent.key))
+            throw new Error("The requesting agent is no longer available");
+          if (!input.name.trim()) throw new Error("Name the agent");
+          const kind = this.types().find((entry) => entry.key === input.type);
+          if (!kind) throw new Error("That agent type is not available");
+          if (kind.remote)
+            throw new Error("A hosted agent's key stays with its provider");
+          if (this.requests.length + this.updates.length >= 16)
+            throw new Error("Review the pending agent requests first");
+          return {
+            id: crypto.randomUUID(),
             requester: agent.pubkey,
             requesterName: agent.name,
             owner: agent.owner,
             community: binding.origin,
             type: input.type,
             name: input.name.trim(),
-          },
-        ];
-        this.notify();
-        return { requestId: id, saved: false };
-      },
-      updateAgent: async (agent, { agent: target, ...proposed }) => {
-        const binding = this.bindingOf(agent);
-        if (!binding || !this.liveMember(agent.key))
-          throw new Error("The requesting agent is no longer available");
-        const matches = this.identities.filter(
-          (identity) =>
-            !identity.deleted &&
-            !identity.deleting &&
-            identity.owner === agent.owner &&
-            originOf(identity.relay) === binding.origin &&
-            (identity.pubkey === target || identity.name === target),
-        );
-        const [identity] = matches;
-        if (!identity)
-          throw new Error("Your owner has no agent here by that name or key");
-        if (matches.length > 1)
-          throw new Error("Several agents have that name; use its pubkey");
-        const name = proposed.name?.trim();
-        const change: AgentUpdate = {
-          ...(name !== undefined && name !== identity.name && { name }),
-          ...(proposed.type !== undefined &&
-            proposed.type !== identity.type && { type: proposed.type }),
-          ...(proposed.instructions !== undefined && {
-            instructions: proposed.instructions,
-          }),
+            ...(picture && { picture }),
+          };
         };
-        if (Object.keys(change).length === 0)
-          throw new Error("Propose at least one change");
-        this.updateKind(identity, change);
-        if (this.requests.length + this.updates.length >= 16)
-          throw new Error("Review the pending agent requests first");
-        const id = crypto.randomUUID();
-        this.updates = [
-          ...this.updates,
-          {
-            id,
+        // Its picture uploads only for a valid request, which is then
+        // checked again.
+        request();
+        const next = request(proposedPicture(await upload?.()));
+        this.requests = [...this.requests, next];
+        this.notify();
+        return { requestId: next.id, saved: false };
+      },
+      updateAgent: async (
+        agent,
+        { agent: target, picture: upload, ...proposed },
+      ) => {
+        /** `wanted`: the target; `pending`: a picture still to upload, a
+         * change until its URL is known. */
+        const request = (
+          wanted: (identity: AgentIdentity) => boolean,
+          picture?: string,
+          pending = false,
+        ): AgentUpdateRequest => {
+          const binding = this.bindingOf(agent);
+          if (!binding || !this.liveMember(agent.key))
+            throw new Error("The requesting agent is no longer available");
+          const matches = this.identities.filter(
+            (identity) =>
+              !identity.deleted &&
+              !identity.deleting &&
+              identity.owner === agent.owner &&
+              originOf(identity.relay) === binding.origin &&
+              wanted(identity),
+          );
+          const [identity] = matches;
+          if (!identity)
+            throw new Error("Your owner has no agent here by that name or key");
+          if (matches.length > 1)
+            throw new Error("Several agents have that name; use its pubkey");
+          const name = proposed.name?.trim();
+          const change: AgentUpdate = {
+            ...(name !== undefined && name !== identity.name && { name }),
+            ...(proposed.type !== undefined &&
+              proposed.type !== identity.type && { type: proposed.type }),
+            ...(proposed.instructions !== undefined && {
+              instructions: proposed.instructions,
+            }),
+            ...(picture !== undefined &&
+              picture !== identity.picture && { picture }),
+          };
+          if (Object.keys(change).length === 0 && !pending)
+            throw new Error("Propose at least one change");
+          this.updateKind(identity, change);
+          if (this.requests.length + this.updates.length >= 16)
+            throw new Error("Review the pending agent requests first");
+          return {
+            id: crypto.randomUUID(),
             requester: agent.pubkey,
             requesterName: agent.name,
             owner: agent.owner,
@@ -1881,10 +1912,22 @@ export class AgentsService extends Service implements Agents {
             agentName: identity.name,
             agentType: identity.type,
             ...change,
-          },
-        ];
+          };
+        };
+        // Its picture uploads only for a valid request, which is then
+        // checked again for the same agent, even if renamed meanwhile.
+        const { agent: key } = request(
+          (identity) => identity.pubkey === target || identity.name === target,
+          undefined,
+          upload !== undefined,
+        );
+        const next = request(
+          (identity) => identity.pubkey === key,
+          proposedPicture(await upload?.()),
+        );
+        this.updates = [...this.updates, next];
         this.notify();
-        return { requestId: id, saved: false };
+        return { requestId: next.id, saved: false };
       },
       handoff: (agent, { from, ...wake }) =>
         this.wakeIn(agent.key, wake, { from }),

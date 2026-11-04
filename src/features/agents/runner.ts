@@ -9,6 +9,7 @@ import type {
   Agent,
   AgentAttention,
   AgentHandle,
+  AgentCreationInput,
   AgentUpdateInput,
   AgentHandoff,
   RegisteredAgentType,
@@ -453,7 +454,7 @@ export type RunnerHost = {
   agentTypes(): ReturnType<NonNullable<AgentHandle["agentTypes"]>>;
   createAgent(
     agent: Agent,
-    input: Readonly<{ type: string; name: string }>,
+    input: AgentCreationInput,
   ): Promise<Readonly<{ requestId: string; saved: false }>>;
   updateAgent(
     agent: Agent,
@@ -2616,9 +2617,7 @@ export class AgentRunners {
         agentTypes: () => this.host.agentTypes(),
         // Drafts outlive the run's handover deadline, as a turn still working may
         // submit one, but not the agent or its type.
-        createAgent: async (
-          input: Readonly<{ type: string; name: string }>,
-        ) => {
+        createAgent: async (input: AgentCreationInput) => {
           lifetime.throwIfAborted();
           return this.host.createAgent(agent, input);
         },

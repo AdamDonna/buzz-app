@@ -35,8 +35,8 @@ and reported as migration errors.
 ## Creating and changing agents from a conversation
 
 The shared tools offer `agent_types` to list installed local runtimes and
-`agent_create` to submit an unsaved creation draft using a listed type key and a display name.
-It returns a request ID and `saved: false`; no identity exists yet. The owner reviews
+`agent_create` to submit an unsaved creation draft using a listed type key and a display name,
+optionally with a picture. It returns a request ID and `saved: false`; no identity exists yet. The owner reviews
 the usual Create agent form, may edit the name, runtime and settings, and creates
 only by submitting it. Closing the form discards the request. Requests are local,
 bounded to 16 and do not survive reload or a change of signed-in owner.
@@ -47,12 +47,17 @@ the available operations and arguments. Agent tools do not expose draft approval
 
 `agent_update` submits an unsaved draft of changes to one of the owner's local
 agents in the same community, named by pubkey or exact name: a new name, a type
-key from `agent_types`, or new instructions. Absent fields stay as they are. The
+key from `agent_types`, new instructions or a new picture. An agent may propose
+changes to itself. Absent fields stay as they are. The
 owner reviews them in the New agent form, titled Edit and filled in with the
 agent's settings and the proposed changes, with the usual type-change preview;
 saving applies what the owner reviewed, and closing the review discards the
-request. A type change carries what the new type adopts, as a manual one does. Change
-requests share the creation requests' local bound and lifetime.
+request. A type change carries what the new type adopts, as a manual one does. A proposed picture
+is a local PNG, JPEG, GIF or WebP file that the tool uploads to the community as
+the requesting agent once the request is valid, stripped of metadata as the
+owner's own avatar upload is. The draft carries only its HTTPS URL, which starts the
+review's avatar picker, and saving sets it as the owner's own avatar change
+does. Change requests share the creation requests' local bound and lifetime.
 Keys stay in native custody. Hosted-provider provisioning and standalone tool
 servers do not support these operations.
 
