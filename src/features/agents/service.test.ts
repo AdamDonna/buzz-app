@@ -12844,6 +12844,7 @@ it.runIf(process.env.BUZZ_AGENT_COMMAND_BINARY)(
           {
             env: {
               PATH: process.env.PATH,
+              ...options.env,
               BUZZ_AGENT_CONNECTION: JSON.stringify(options.mcp),
             },
             stdio: ["pipe", "pipe", "pipe"],
@@ -12951,46 +12952,49 @@ it.runIf(process.env.BUZZ_AGENT_COMMAND_BINARY)(
   20_000,
 );
 
-it.each(["Attention turns off", "the community reconnects"])(
-  "kills a source command when %s",
-  async (reason) => {
-    const { ctx, service, native, connect } = await setup();
-    let close!: () => void;
-    const closed = new Promise<void>((resolve) => {
-      close = resolve;
-    });
-    const kill = vi.fn(async () => {});
-    const spawn = vi.fn(async () => ({
-      exited: new Promise<number | null>(() => {}),
-      kill,
-      write: async () => {},
-      end: async () => {},
-    }));
-    ctx.provide("host", {
-      spawn,
-      serveMcp: async () => ({
-        url: "http://127.0.0.1:1234/mcp",
-        headers: [],
-        closed,
-        close: async () => {
-          close();
-        },
-      }),
-    } as unknown as import("../host/service").Host);
-    const consumer = ctx.extend({
-      pluginOwner: Object.freeze({ id: "consumer", revision: "one" }),
-    });
-    await service.create({ type: "example/echo", name: "Echo" });
-    await vi.waitFor(() => expect(native.claim).toHaveBeenCalledWith(bot, 0));
-    const controller = new AbortController();
-    expect(spawn).not.toHaveBeenCalled();
-    await sourceCommand(service, consumer, { signal: controller.signal });
-    if (reason === "Attention turns off")
-      await service.save(bot, { attentionEnabled: false });
-    else connect(true);
-    await vi.waitFor(() => expect(kill).toHaveBeenCalledTimes(1));
-  },
-);
+it.each([
+  "Attention turns off",
+  "the community reconnects",
+  "the watch is removed",
+])("kills a source command when %s", async (reason) => {
+  const { ctx, service, native, connect } = await setup();
+  let close!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    close = resolve;
+  });
+  const kill = vi.fn(async () => {});
+  const spawn = vi.fn(async () => ({
+    exited: new Promise<number | null>(() => {}),
+    kill,
+    write: async () => {},
+    end: async () => {},
+  }));
+  ctx.provide("host", {
+    spawn,
+    serveMcp: async () => ({
+      url: "http://127.0.0.1:1234/mcp",
+      headers: [],
+      closed,
+      close: async () => {
+        close();
+      },
+    }),
+  } as unknown as import("../host/service").Host);
+  const consumer = ctx.extend({
+    pluginOwner: Object.freeze({ id: "consumer", revision: "one" }),
+  });
+  await service.create({ type: "example/echo", name: "Echo" });
+  await vi.waitFor(() => expect(native.claim).toHaveBeenCalledWith(bot, 0));
+  const controller = new AbortController();
+  expect(spawn).not.toHaveBeenCalled();
+  await sourceCommand(service, consumer, { signal: controller.signal });
+  if (reason === "Attention turns off")
+    await service.save(bot, { attentionEnabled: false });
+  else if (reason === "the watch is removed")
+    await service.save(bot, { attention: { "watch/command": null } });
+  else connect(true);
+  await vi.waitFor(() => expect(kill).toHaveBeenCalledTimes(1));
+});
 
 it("exposes agent execution only inside an Attention source run", async () => {
   const { service, plugin } = await setup();
@@ -13613,6 +13617,15 @@ it.each(["command"])(
           id === "command"
             ? ["printf", "hello"]
             : ["--interval", "60", "https://github.com/example/repo/pull/1"],
+        env: {
+          BUZZ_ATTENTION_COMMAND: JSON.stringify([
+            bot,
+            "buzz.agents",
+            "command",
+            "watch/saved",
+            "attention-command",
+          ]),
+        },
         mcp: expect.objectContaining({ url: "http://127.0.0.1/mcp" }),
       }),
     );

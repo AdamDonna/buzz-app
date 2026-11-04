@@ -366,6 +366,9 @@ available rather than silently discarding it.
   to follow work. Its tab in an agent's profile shows what that agent is watching
   and whether Attention is on for this device. A mention can still wake an agent
   when Attention is off; turning Attention on does not grant new access.
+  On macOS and Linux, watched commands stop when their Buzz process exits.
+  During a handoff between Buzz builds, the new copy waits for the previous
+  command to stop, then continues the watch.
 - **Solo workers**: where a plugin offers it, an owner can authorize one agent to
   start, message, read, stop, and archive the owner's workers in Solo chats. The
   agent asks the owner's Buzz in a private channel with only the two of them;

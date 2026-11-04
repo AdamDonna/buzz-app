@@ -491,6 +491,8 @@ A source may also `present` its watches on the Agent Attention page. Given a wat
 
 Each Attention source `run` receives `spawn(processId, options)` for commands using that watch's owning agent. The host binds agent identity, watch destination and run lifetime; plugins cannot select another agent or obtain the raw authenticated connection. Declare the process in `host.processes` and request `host.mcp`, plus `host.files` for tools reading local paths. Options supply arguments, working directory, environment and output callbacks.
 
+On macOS and Linux, only one instance of a declared process may run for the same agent, provider and watch, including across Buzz builds. A concurrent instance waits for the existing instance to stop, then starts. Await the previous handle's `process.exited` before spawning a replacement, including after calling `kill()`. Different declared processes or watches can run concurrently. Windows does not enforce this singleton constraint.
+
 Buzz revokes command access on return, failure, cancellation, agent stop, provider unload or community reconnection, and closes the process and its descendants. Successfully emitted output remains queued after a producer returns. The key and MCP connection stay in Buzz; commands retain the app user's operating-system privileges and can use the agent's tools while their run remains active.
 
 ```ts

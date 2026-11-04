@@ -2311,6 +2311,7 @@ export class AgentsService extends Service implements Agents {
     };
     const spawn = async (
       key: AgentKey,
+      watch: string,
       process: string,
       options: Omit<HostProcessOptions, "mcp"> & {
         signal: AbortSignal;
@@ -2328,13 +2329,27 @@ export class AgentsService extends Service implements Agents {
         throw new Error(
           "Protected agents cannot run external Attention commands until that execution path supports complete protection",
         );
-      const source = ownerReads(this.relay(key), pubkeyOf(key));
-      if (!source) throw new Error("The agent's community is not connected");
+      const connectionSource = ownerReads(this.relay(key), pubkeyOf(key));
+      if (!connectionSource)
+        throw new Error("The agent's community is not connected");
       const spawn = host.spawn.bind(host);
       return spawnAgentCommand(
         {
           connect: (signal) => connect(key, { ...options, signal }),
-          spawn: (settings) => spawn(process, settings),
+          spawn: (settings) =>
+            spawn(process, {
+              ...settings,
+              env: {
+                ...settings.env,
+                BUZZ_ATTENTION_COMMAND: JSON.stringify([
+                  key,
+                  plugin,
+                  source.id,
+                  watch,
+                  process,
+                ]),
+              },
+            }),
           subscribe: (changed) => {
             const agent = this.subscribe(changed);
             const community = this.relay(key)?.subscribe(changed);
@@ -2348,7 +2363,7 @@ export class AgentsService extends Service implements Agents {
               throw new Error("Attention is off");
             if (
               ownerReads(this.relay(key), pubkeyOf(key))?.connection !==
-              source.connection
+              connectionSource.connection
             )
               throw new Error("The agent's community connection changed");
           },
@@ -2369,7 +2384,7 @@ export class AgentsService extends Service implements Agents {
           await source.run({
             ...input,
             spawn: (process, options) =>
-              spawn(agent, process, {
+              spawn(agent, input.id, process, {
                 ...options,
                 signal,
                 channel,
