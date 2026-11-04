@@ -2122,3 +2122,11 @@ motion and hidden documents; it never owns focus or blocks an action.
 ### Standalone account cards
 
 First-run setup uses `Panel shape="card"`, matching Builderlab/Auth0: content-sized, `radius-card` corners and `shadow-card` lift. Compose a 490px reading column with space-8 insets, title/body-sm typography, shared Field/Input controls and large capsule actions. Keep welcome artwork separate from these opaque setup cards.
+
+### Compact control groups
+
+`buzz-compact-controls` is an opt-in wrapper recipe for compact adjacent Button
+and IconButton actions, currently used by message reaction capsules and their
+Add reaction control. It supplies a 1.625rem height, square icon geometry, and
+content-width labelled controls. Features retain placement and behavior; the
+shared recipe owns sizing. Do not infer this treatment from product data attributes.

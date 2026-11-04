@@ -417,6 +417,19 @@
     width: var(--size-control-sm);
     height: var(--size-control-sm);
   }
+  /* Opt-in compact control group: one geometry for labelled and icon actions. */
+  .buzz-compact-controls {
+    --compact-control-size: calc(var(--space-6) + var(--space-half));
+  }
+  .buzz-compact-controls .buzz-button:not([data-icon-variant]) {
+    min-height: var(--compact-control-size);
+    padding: calc(var(--space-1) + var(--space-half) / 2)
+      calc(var(--space-1h) + var(--space-half) / 2);
+  }
+  .buzz-compact-controls .buzz-button[data-icon-variant] {
+    width: var(--compact-control-size);
+    height: var(--compact-control-size);
+  }
   /* Compact icon actions: 20px control with 12px artwork. */
   .buzz-button[data-icon-variant][data-icon-size="xs"] {
     width: var(--space-5);
@@ -689,6 +702,8 @@
   /* A preview is supplemental context; destination cards can also open it.
      It is portal-rendered by Base UI so a clipped parent cannot hide it. */
   .buzz-preview-card-positioner[popover] {
+    /* Only interactive popup content owns hit-testing, never its empty shell. */
+    pointer-events: none;
     margin: 0;
     padding: 0;
     border: 0;

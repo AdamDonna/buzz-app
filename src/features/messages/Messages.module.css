@@ -256,7 +256,7 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0;
+  gap: var(--space-1);
   margin: var(--space-1h) 0 0;
 }
 .reactions[data-populated],
@@ -265,14 +265,9 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   align-self: flex-start;
   width: fit-content;
   max-width: 100%;
-  padding-inline: var(--space-1);
-  border-radius: calc(var(--size-control-sm) / 2);
-  /* The strip follows the lightness of whatever it sits on, like a chip. */
-  background: var(--reaction-surface, var(--affordance-reaction));
 }
-/* The add control's circle meets the strip's rounded end. */
-.reactions[data-populated]:has(> .inlineReactionTool:not(:empty):last-child) {
-  padding-inline-end: 0;
+.reactions[data-populated] {
+  padding: var(--space-half);
 }
 .reactions:empty {
   margin-top: 0;
@@ -295,6 +290,12 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   display: inline-flex;
   max-width: 100%;
 }
+.reactionItem,
+.inlineReactionTool,
+.reactionFallback > span:not([role]) {
+  border-radius: var(--radius-capsule);
+  background: var(--reaction-surface, var(--affordance-reaction));
+}
 .reactionGlyph {
   display: inline-flex;
   align-items: center;
@@ -308,6 +309,7 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 }
 .reactionCount {
   @apply text-caption;
+  font-variant-numeric: tabular-nums;
 }
 .reactionItem [data-reaction] {
   color: var(--reaction-ink, var(--text-standard));
@@ -315,19 +317,33 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 @media (hover: hover) and (pointer: fine) and (
     prefers-reduced-motion: no-preference
   ) {
-  .reactionGlyph {
-    transition: transform var(--duration-fast) var(--easing-enter);
+  .reactionGlyph > :not(.reactionCount) {
+    transform-origin: center;
+    transition: transform var(--duration-settle) var(--easing-settle);
   }
-  .reactionItem
+  html:not([data-keyboard-navigation])
+    .reactionItem
     button:enabled:not([aria-disabled="true"]):hover
-    .reactionGlyph {
-    transform: rotate(var(--reaction-tilt, 0deg)) scale(1.1);
+    .reactionGlyph
+    > :not(.reactionCount) {
+    transform: translateY(calc(-1 * var(--space-half)))
+      rotate(clamp(-8deg, var(--reaction-tilt, -6deg), 8deg)) scale(1.5);
+    transition-duration: var(--duration-state);
+    transition-timing-function: var(--easing-enter);
+  }
+  html:not([data-keyboard-navigation])
+    .reactionItem
+    button:enabled:not([aria-disabled="true"]):hover:active
+    .reactionGlyph
+    > :not(.reactionCount) {
+    transform: scale(0.96);
+    transition-duration: var(--duration-fast);
   }
 }
 .reactionNativeEmoji {
   display: inline-block;
   min-width: 0.75rem;
-  max-width: var(--size-control-sm);
+  max-width: var(--compact-control-size, var(--size-control-sm));
   font-size: var(--text-caption);
   line-height: 1;
   text-align: center;
@@ -343,7 +359,7 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 .reactionFallbackEmoji {
   display: inline-block;
   min-width: 0;
-  max-width: var(--size-control-sm);
+  max-width: var(--compact-control-size, var(--size-control-sm));
   font-size: var(--text-caption);
   line-height: 1;
   overflow: hidden;
@@ -356,6 +372,11 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   height: 0.75rem;
   object-fit: contain;
 }
+/* Paint 12px artwork at 14px (10.5pt), keeping the capsule's layout box. */
+.reactionGlyph [data-reaction-artwork],
+.reactionGlyph .reactionCustomEmoji {
+  scale: calc(7 / 6);
+}
 .visuallyHidden {
   position: absolute;
   width: 1px;
@@ -366,11 +387,20 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 }
 .reactionPreviewContent {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
   justify-items: center;
   gap: var(--space-1);
-  max-width: 14rem;
+  max-width: 28rem;
   text-align: center;
   overflow-wrap: anywhere;
+}
+.reactionPreview.reactionPreview {
+  /* Spend available height on the names scrollport, keeping emoji and label visible. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-width: min(30rem, 85vw, var(--available-width, 100vw));
 }
 .reactionPreviewEmoji {
   --reaction-preview-size: calc(var(--space-6) * 2);
@@ -394,13 +424,11 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
 }
 .reactionPreviewNames {
   @apply text-caption text-standard;
-  display: grid;
+  min-height: 0;
   max-width: 100%;
-}
-.reactionPreviewPerson {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-height: min(20rem, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 @media (prefers-reduced-motion: reduce) {
   .reactionPreview.reactionPreview {
@@ -448,8 +476,6 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   transform-style: preserve-3d;
   display: inline-flex;
   align-items: center;
-  width: var(--size-control-sm);
-  height: var(--size-control-sm);
   border-radius: var(--radius-capsule);
 }
 .inlineReactionTool:empty {
@@ -461,16 +487,14 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   opacity: 0.65;
 }
 .inlineReactionTool [data-icon-variant] {
-  width: 100%;
-  height: 100%;
   border: 1px solid transparent;
-  border-radius: inherit;
+  border-radius: var(--radius-capsule);
   background: transparent;
   color: var(--reaction-ink, var(--text-secondary));
 }
 .inlineReactionTool
   [data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  /* The strip's own overlay again, laid on top of it. */
+  /* Reinforce the capsule on hover, keyboard focus, and while picking. */
   background: var(--reaction-surface, var(--affordance-reaction));
   color: var(--reaction-ink, var(--text-standard));
 }
@@ -3162,8 +3186,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 .message .messageBubble > .reactions {
   margin: var(--space-2) 0 0;
   margin-inline-start: calc(-1 * var(--space-2));
-  /* Short prose still leaves room for a reaction and its add control. The add
-     control ends the strip with no end padding, so only the start padding counts. */
+  /* Short prose still leaves room for a counted reaction, gap, and add control. */
   min-inline-size: calc(3 * var(--size-control-sm) + var(--space-1));
   max-width: calc(100% + 2 * var(--space-2));
   border: 0;
