@@ -16,8 +16,9 @@ const HOSTED = [PUBLIC] as const;
 
 /**
  * Whether this build signs in at the public Builderlab portal, so a first-run
- * sign-in is an account there. Exact origin: an unconfigured,
- * federated-identity or other deployment's build never is.
+ * sign-in is an account there. Exact origin: a build that signs in anywhere
+ * else (unconfigured, or another deployment's portal) never is. A
+ * federated-identity build is only when its identity origin is that portal.
  */
 export function atPublicBuilderlab(
   build = import.meta.env.VITE_BUZZ_BUILDERLAB_URL ?? "",

@@ -132,9 +132,13 @@ const backupAnswers = {
     cancelRecovery: unexpectedRecovery,
   },
 } satisfies BackupAnswers;
-/** Create a community is not offered; only its own tests let an account create. */
+/** The account's community list, owning `owned`; only Create a community's own tests let it create. */
+const owning =
+  (owned: readonly OwnedCommunity[] = []) =>
+  () =>
+    Promise.resolve({ owned, canCreate: false });
+/** Create a community is never reached. */
 const noCreation = {
-  canCreateCommunity: () => Promise.resolve(false),
   communityAvailable: () =>
     Promise.reject(new Error("Welcome checked an address it never offered")),
   createCommunity: () =>
@@ -151,7 +155,7 @@ const unlinkedWith =
   ): NonNullable<ComponentProps<typeof Welcome>["account"]> =>
   () => ({
     linkedKey: () => Promise.resolve(null),
-    ownedCommunities: () => Promise.resolve([]),
+    communityList: owning(),
     knownCommunities: () => Promise.resolve([]),
     saveCommunity,
     bind,
@@ -1916,7 +1920,7 @@ it("Sign in with Builderlab runs sign-in, creates the key mid-setup, and lands o
   );
   const account = vi.fn(() => ({
     linkedKey: () => linked.promise,
-    ownedCommunities: () => Promise.resolve([]),
+    communityList: owning(),
     knownCommunities,
     saveCommunity,
     bind,
@@ -2072,7 +2076,7 @@ it("Use a different account on Get started with Buzz signs the session out, retu
     if (!linkedKey) throw new Error("A third sign-in");
     return {
       linkedKey,
-      ownedCommunities: () => Promise.resolve([]),
+      communityList: owning(),
       knownCommunities: () => Promise.resolve([]),
       saveCommunity,
       bind: () =>
@@ -2439,15 +2443,27 @@ it("Connect to a community checks the typed URL, opens Finding community, and Ca
   identity.dispose();
 });
 
-/** `unlinked`, with Create a community's answers in place of `noCreation`'s. */
+/**
+ * `unlinked`, whose bind links the key as kgoose's verify does and whose list
+ * lets it create, with Create a community's `answers` in place of `noCreation`'s.
+ */
 const creatingWith =
   (
     answers: Partial<FirstRunAccount>,
   ): NonNullable<ComponentProps<typeof Welcome>["account"]> =>
-  (credential, identity) => ({
-    ...unlinked(credential, identity),
-    ...answers,
-  });
+  (credential, identity) => {
+    let bound: string | null = null;
+    return {
+      ...unlinked(credential, identity),
+      linkedKey: () => Promise.resolve(bound),
+      bind: (pubkey) => {
+        bound = pubkey;
+        return Promise.resolve();
+      },
+      communityList: () => Promise.resolve({ owned: [], canCreate: true }),
+      ...answers,
+    };
+  };
 /** Setup through Create my key at `build`'s Builderlab, resting on Connect to a community. */
 async function connectPage(
   account: NonNullable<ComponentProps<typeof Welcome>["account"]>,
@@ -2491,15 +2507,16 @@ async function connectPage(
 }
 
 it("Connect to a community offers Create a community for an account the public Builderlab lets create, and the new community is looked up as an entered address", async () => {
-  const canCreateCommunity = vi.fn(() => Promise.resolve(true));
+  const communityList = vi.fn(() =>
+    Promise.resolve({ owned: [], canCreate: true, quotaLimit: 2 }),
+  );
   const communityAvailable = vi.fn(() => Promise.resolve(true));
   const created = deferred<string>();
   const createCommunity = vi.fn(() => created.promise);
   const { identity, user, relayCalls } = await connectPage(
-    creatingWith({ canCreateCommunity, communityAvailable, createCommunity }),
+    creatingWith({ communityList, communityAvailable, createCommunity }),
   );
-  // Asked for the key just created and linked on this device.
-  expect(canCreateCommunity).toHaveBeenCalledWith(viewer);
+  expect(communityList).toHaveBeenCalledTimes(1);
   await user.click(screen.getByRole("button", { name: "Create a community" }));
   expect(
     screen.getByRole("heading", { name: "Create a community" }),
@@ -2514,7 +2531,8 @@ it("Connect to a community offers Create a community for an account the public B
   await screen.findByText("That address is available.", {}, { timeout: 3_000 });
   expect(communityAvailable).toHaveBeenLastCalledWith("north-star");
   await user.click(create);
-  expect(createCommunity).toHaveBeenCalledWith("north-star");
+  // The list's quota words a limit refusal, as Settings does.
+  expect(createCommunity).toHaveBeenCalledWith("north-star", 2);
   expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
   expect(relayCalls).toEqual([]);
   created.resolve("https://north-star.communities.buzz.xyz");
@@ -2538,13 +2556,12 @@ it("Connect to a community offers Create a community for an account the public B
   identity.dispose();
 });
 
-it("a refused create stays on Create a community with the card's copy, and Back returns focus to Create a community", async () => {
-  const { identity, user, relayCalls } = await connectPage(
+it("Cancel on Finding community after a create returns to Connect to a community with the new community's address in the field", async () => {
+  const { identity, user } = await connectPage(
     creatingWith({
-      canCreateCommunity: () => Promise.resolve(true),
       communityAvailable: () => Promise.resolve(true),
       createCommunity: () =>
-        Promise.reject(new Error("That Buzz address is already taken.")),
+        Promise.resolve("https://north-star.communities.buzz.xyz"),
     }),
   );
   await user.click(screen.getByRole("button", { name: "Create a community" }));
@@ -2554,9 +2571,34 @@ it("a refused create stays on Create a community with the card's copy, and Back 
   );
   await screen.findByText("That address is available.", {}, { timeout: 3_000 });
   await user.click(screen.getByRole("button", { name: "Create community" }));
+  await screen.findByRole("heading", { name: "Finding community" });
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(
+    screen.getByRole("heading", { name: "Connect to a community" }),
+  ).toBeVisible();
+  expect(urlField()).toHaveValue("north-star.communities.buzz.xyz");
+  identity.dispose();
+});
+
+it("a refused create stays on Create a community with the card's copy until the name changes, and Back returns focus to Create a community", async () => {
+  const { identity, user, relayCalls } = await connectPage(
+    creatingWith({
+      communityAvailable: () => Promise.resolve(true),
+      createCommunity: () =>
+        Promise.reject(new Error("That Buzz address is already taken.")),
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "Create a community" }));
+  const field = screen.getByRole("textbox", { name: "Community address" });
+  await user.type(field, "north-star");
+  await screen.findByText("That address is available.", {}, { timeout: 3_000 });
+  await user.click(screen.getByRole("button", { name: "Create community" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "That Buzz address is already taken.",
   );
+  // The refusal was for that name, not the next one.
+  await user.type(field, "s");
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "Back" }));
   expect(
@@ -2569,15 +2611,24 @@ it("a refused create stays on Create a community with the card's copy, and Back 
   identity.dispose();
 });
 
-it.each([
-  ["refuses", () => Promise.resolve(false)],
-  ["fails", () => Promise.reject(new Error("HTTP 503"))],
+it.each<[string, Partial<FirstRunAccount>]>([
+  [
+    "the list refuses",
+    {
+      communityList: () =>
+        Promise.resolve({ owned: [], canCreate: false, quotaLimit: 1 }),
+    },
+  ],
+  [
+    "the list fails",
+    { communityList: () => Promise.reject(new Error("HTTP 503")) },
+  ],
+  // The account holds another key, or none: the new one was never linked.
+  ["the key is not bound", { bind: () => Promise.resolve() }],
 ])(
-  "Connect to a community offers no Create a community when the public Builderlab's check %s",
-  async (_, canCreateCommunity) => {
-    const { identity } = await connectPage(
-      creatingWith({ canCreateCommunity }),
-    );
+  "Connect to a community offers no Create a community when %s",
+  async (_, answers) => {
+    const { identity } = await connectPage(creatingWith(answers));
     expect(
       screen.queryByRole("button", { name: "Create a community" }),
     ).toBeNull();
@@ -2586,15 +2637,17 @@ it.each([
 );
 
 it("a build at another Builderlab never asks whether its account may create, and offers no Create a community", async () => {
-  const canCreateCommunity = vi.fn(() => Promise.resolve(true));
+  const communityList = vi.fn(() =>
+    Promise.resolve({ owned: [], canCreate: true }),
+  );
   const { identity } = await connectPage(
-    creatingWith({ canCreateCommunity }),
+    creatingWith({ communityList }),
     "https://builderlab.example",
   );
   expect(
     screen.queryByRole("button", { name: "Create a community" }),
   ).toBeNull();
-  expect(canCreateCommunity).not.toHaveBeenCalled();
+  expect(communityList).not.toHaveBeenCalled();
   identity.dispose();
 });
 
@@ -3377,7 +3430,7 @@ const restoringAccount =
   ): NonNullable<ComponentProps<typeof Welcome>["account"]> =>
   () => ({
     linkedKey: () => Promise.resolve(null),
-    ownedCommunities: () => Promise.resolve([]),
+    communityList: owning(),
     knownCommunities: () => Promise.resolve(known),
     saveCommunity,
     bind: () => Promise.resolve(),
@@ -4586,7 +4639,7 @@ const linkedTo =
   ): NonNullable<ComponentProps<typeof Welcome>["account"]> =>
   () => ({
     linkedKey: () => Promise.resolve(pubkey),
-    ownedCommunities: () => Promise.resolve(communities),
+    communityList: owning(communities),
     knownCommunities: () => Promise.resolve([]),
     saveCommunity,
     // The import accepts only the linked key: there is nothing to bind.
@@ -4744,7 +4797,7 @@ it("Use a different account on Welcome back returns to the landing without touch
   const linkedKey = vi.fn(() => Promise.resolve(owned.pubkey));
   const account: ComponentProps<typeof Welcome>["account"] = () => ({
     linkedKey,
-    ownedCommunities: () => Promise.resolve([]),
+    communityList: owning(),
     knownCommunities: () => Promise.resolve([]),
     saveCommunity,
     bind: () => Promise.reject(new Error("Welcome bound the linked key again")),
@@ -5522,7 +5575,8 @@ const replacedBy =
   ): NonNullable<ComponentProps<typeof Welcome>["account"]> =>
   () => ({
     linkedKey: () => Promise.resolve(owned.pubkey),
-    ownedCommunities: communities,
+    communityList: () =>
+      communities().then((owned) => ({ owned, canCreate: false })),
     knownCommunities: () => Promise.resolve([]),
     saveCommunity,
     unbind,
@@ -5869,6 +5923,33 @@ it("a linked account's owned communities are offered on Connect to a community, 
   identity.dispose();
 });
 
+it("a linked account at the public Builderlab is offered Create a community from the one list read that finds its communities", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
+  landingRelay();
+  const linkedKey = vi.fn(() => Promise.resolve(owned.pubkey));
+  const communityList = vi.fn(() =>
+    Promise.resolve({ owned: [], canCreate: true }),
+  );
+  const identity = createIdentity();
+  const user = userEvent.setup();
+  await welcomeBackPage(user, identity, (credential, id) => ({
+    ...linkedTo(owned.pubkey)(credential, id),
+    linkedKey,
+    communityList,
+  }));
+  await importLinkedKey(user);
+  expect(
+    await screen.findByRole("heading", { name: "Connect to a community" }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "Create a community" }),
+  ).toBeVisible();
+  // The account check proved the binding; the lane's key is that one.
+  expect(linkedKey).toHaveBeenCalledTimes(1);
+  expect(communityList).toHaveBeenCalledTimes(1);
+  identity.dispose();
+});
+
 it("a linked account signed in from the connect choice is welcomed back and its imported key lands on Join Community for the landing URL", async () => {
   const relay = landingRelay("https://relay.example.com");
   relay.info.resolve();
@@ -5984,7 +6065,7 @@ it("an account check that fails stops setup, and Back returns to the first-launc
           Promise.reject(
             new Error("Builderlab account check failed (HTTP 503: not JSON)."),
           ),
-        ownedCommunities: () => Promise.resolve([]),
+        communityList: owning(),
         knownCommunities: () => Promise.resolve([]),
         saveCommunity,
         bind: () => Promise.resolve(),

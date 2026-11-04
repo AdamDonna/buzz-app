@@ -64,7 +64,13 @@ it("falls back to the relay key when the hostname is unknown, on the default por
   expect(hostedByThisBuilderlab(found("wss://buzz.example"), "")).toBe(false);
 });
 
-it.each([PUBLIC, `${PUBLIC}/`])("%s is the public Builderlab", (build) => {
+it.each([
+  PUBLIC,
+  `${PUBLIC}/`,
+  // A federated-identity build at the public portal, as vite.config.ts
+  // derives it from an `apiBasePath` of /buzz/api/goose/.
+  `${PUBLIC}/buzz`,
+])("%s is the public Builderlab", (build) => {
   expect(atPublicBuilderlab(build)).toBe(true);
 });
 

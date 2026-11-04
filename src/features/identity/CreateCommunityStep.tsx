@@ -12,30 +12,38 @@ import { WireframePanel } from "./Wireframe";
  * First run's Create a community, offered from Join a community: the address
  * field and availability check of the Builderlab communities section, then
  * its create. `onCreated` receives the new community's origin, which joins as
- * an entered address does.
+ * an entered address does; `quotaLimit` words a limit refusal.
  */
 export function CreateCommunityStep({
   account,
+  quotaLimit,
   onCreated,
   onBack,
 }: {
   account: Pick<FirstRunAccount, "communityAvailable" | "createCommunity">;
+  quotaLimit?: number | undefined;
   onCreated: (origin: string) => void;
   onBack: () => void;
 }) {
   const address = useCommunityAddress(account.communityAvailable, true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  // A refusal belongs to the name it refused, so editing the name clears it.
+  const [error, setError] = useState<{ name: string; message: string }>();
+  const refusal = error?.name === address.name ? error.message : "";
   return (
     <form
       className="flex flex-1 flex-col gap-6"
       onSubmit={(event) => {
         event.preventDefault();
         if (!address.ready || busy) return;
+        const { name } = address;
         setBusy(true);
-        setError("");
-        account.createCommunity(address.name).then(onCreated, (reason) => {
-          setError(reason instanceof Error ? reason.message : String(reason));
+        setError(undefined);
+        account.createCommunity(name, quotaLimit).then(onCreated, (reason) => {
+          setError({
+            name,
+            message: reason instanceof Error ? reason.message : String(reason),
+          });
           setBusy(false);
         });
       }}
@@ -55,9 +63,9 @@ export function CreateCommunityStep({
       <WireframePanel>
         <CommunityAddressField address={address} busy={busy} />
       </WireframePanel>
-      {error && (
+      {refusal && (
         <p role="alert" className="text-body text-danger">
-          {error}
+          {refusal}
         </p>
       )}
       {/* Footer order: secondary first, primary last. */}

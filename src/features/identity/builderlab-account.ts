@@ -28,6 +28,20 @@ import {
 export type OwnedCommunity = Readonly<{ host: string; url: string }>;
 
 /**
+ * The account's community list. `canCreate` is the Builderlab communities
+ * section's verdict before it enables Create a community, short of which key
+ * is bound: the account is linked (no missing-mapping refusal), and the list's
+ * quota (`api.ts` `quota`) does not refuse. A list with no readable quota does
+ * not refuse, as there; kgoose still enforces its limit on create, and
+ * `quotaLimit`, when readable, words that refusal.
+ */
+export type CommunityList = Readonly<{
+  owned: readonly OwnedCommunity[];
+  canCreate: boolean;
+  quotaLimit?: number | undefined;
+}>;
+
+/**
  * The identity's native recovery, with the state it publishes while a restore
  * is under way (`undefined` otherwise).
  */
@@ -45,25 +59,20 @@ export type Recovery = Pick<
 export type FirstRunAccount = Readonly<{
   /** The hex key bound 1:1 to the account, or null when none is (a reply with no `identity`). */
   linkedKey(): Promise<string | null>;
-  /** The communities the account owns. Archived ones have no relay to join and are left out. */
-  ownedCommunities(): Promise<readonly OwnedCommunity[]>;
   /**
-   * Whether the account may create a hosted community for `pubkey`, the key
-   * on this device, as the Builderlab communities section decides before it
-   * enables Create a community: the account is bound to `pubkey`, and the
-   * community list's quota (`api.ts` `quota`) does not refuse it. A list with
-   * no readable quota does not refuse, as there; kgoose still enforces its
-   * limit on create.
+   * The account's community list: the communities it owns (archived ones
+   * have no relay to join and are left out), and whether it may create one.
    */
-  canCreateCommunity(pubkey: string): Promise<boolean>;
+  communityList(): Promise<CommunityList>;
   /** Whether `<name>.communities.buzz.xyz` is free to create: the section's availability check. */
   communityAvailable(name: string): Promise<boolean>;
   /**
    * Creates `<name>.communities.buzz.xyz`, owned by the account's bound key,
    * and resolves to the canonical origin a join uses. The section's create;
-   * kgoose provisions the relay before it answers.
+   * kgoose provisions the relay before it answers. A limit refusal is worded
+   * with the list's `quotaLimit`, as the section words it.
    */
-  createCommunity(name: string): Promise<string>;
+  createCommunity(name: string, quotaLimit?: number): Promise<string>;
   /**
    * The destinations saved to the account, `wss://host[:port]` in kgoose's
    * order: the list the Builderlab plugin's known-communities sync keeps.
@@ -231,14 +240,14 @@ const ACCOUNT_ERRORS: Readonly<
  * kgoose's wording never reaches the failed page. So is its correlation ID,
  * which the card's `ApiFailure` would append to the copy; `call` keeps it.
  */
-function checked(reply: Reply, fallback: string) {
+function checked(reply: Reply, fallback: string, quotaLimit?: number) {
   if (!reply.error) return reply;
   const code = reply.error.code ?? "";
   const own = Object.hasOwn(ACCOUNT_ERRORS, code)
     ? ACCOUNT_ERRORS[code]
     : undefined;
   // Throws the card's copy: the reply has an error.
-  if (!own) return check({ error: { code } }, fallback);
+  if (!own) return check({ error: { code } }, fallback, quotaLimit);
   throw Object.assign(
     new ApiFailure(code, own.message ?? fallback),
     own.retryable ? { retryable: true } : {},
@@ -428,7 +437,10 @@ function kgooseAccount(
     fallback: string,
     read: (reply: Reply | null, response: HostResponse) => T,
     body: object = {},
-    limit?: number,
+    {
+      limit,
+      quotaLimit,
+    }: { limit?: number; quotaLimit?: number | undefined } = {},
   ) => {
     const response = await post(path, body).catch((error: unknown) => {
       throw transient(asError(error));
@@ -437,7 +449,10 @@ function kgooseAccount(
     try {
       if (response.status === 401) throw new Error(SIGNED_OUT);
       reply = parse(step, response, limit);
-      return read(notLinked(reply) ? null : checked(reply, fallback), response);
+      return read(
+        notLinked(reply) ? null : checked(reply, fallback, quotaLimit),
+        response,
+      );
     } catch (error) {
       const id = reply?.correlation_id;
       if (id && error instanceof Error)
@@ -544,25 +559,20 @@ function kgooseAccount(
           : OTHER_KEY,
       );
     },
-    ownedCommunities: () =>
+    communityList: () =>
       call(
         "community list",
         "/v1/buzz/communities/list",
         "Could not load the communities this account owns.",
-        (reply) => reply?.communities?.flatMap(owned) ?? [],
+        (reply) => {
+          const readable = reply && quota(reply);
+          return {
+            owned: reply?.communities?.flatMap(owned) ?? [],
+            canCreate: reply !== null && readable?.canCreate !== false,
+            quotaLimit: readable?.limit,
+          };
+        },
       ),
-    async canCreateCommunity(pubkey) {
-      const [bound, allowed] = await Promise.all([
-        linkedKey(),
-        call(
-          "community list",
-          "/v1/buzz/communities/list",
-          "Could not load the communities this account owns.",
-          (reply) => reply !== null && quota(reply)?.canCreate !== false,
-        ),
-      ]);
-      return bound === pubkey && allowed;
-    },
     communityAvailable: (name) =>
       call(
         "community availability",
@@ -572,7 +582,7 @@ function kgooseAccount(
           Boolean(notBound(reply, "Could not check that address.").available),
         { name },
       ),
-    createCommunity: (name) =>
+    createCommunity: (name, quotaLimit) =>
       call(
         "community create",
         "/v1/buzz/communities",
@@ -588,6 +598,7 @@ function kgooseAccount(
           return enteredRelayOrigin(relay);
         },
         { name },
+        { quotaLimit },
       ),
     // The route consults no Nostr identity, so its refusals are plain strings
     // and `reply` is never null here; its rows are not the card's.
@@ -610,7 +621,7 @@ function kgooseAccount(
         // Uncapped, as the plugin's own client reads it: kgoose holds about
         // 1,000 destinations of at most 512 characters, far inside the host
         // transport's cap.
-        Number.POSITIVE_INFINITY,
+        { limit: Number.POSITIVE_INFINITY },
       ),
     async saveCommunity(url) {
       await call(
@@ -731,10 +742,10 @@ export function seededAccount(
   let failOnce = seed.backup === "fail-once";
   return {
     linkedKey: () => Promise.resolve(seed.linked),
-    ownedCommunities: () => Promise.resolve(seed.communities),
-    knownCommunities: () => Promise.resolve(seed.known ?? []),
     // The seed models no hosted communities to create.
-    canCreateCommunity: () => Promise.resolve(false),
+    communityList: () =>
+      Promise.resolve({ owned: seed.communities, canCreate: false }),
+    knownCommunities: () => Promise.resolve(seed.known ?? []),
     communityAvailable: () => Promise.resolve(false),
     createCommunity: () =>
       Promise.reject(new Error("The development seed creates no communities.")),

@@ -39,6 +39,7 @@ import {
 } from "./builderlab-hosted";
 import {
   builderlabAccount,
+  type CommunityList,
   federatedBuilderlabAccount,
   type FirstRunAccount,
   type OwnedCommunity,
@@ -160,9 +161,9 @@ export function Welcome({
   const known = useRef<readonly string[] | undefined>(undefined);
   // Backup status belongs to this signed-in account and is cleared on the landing.
   const [backups, setBackups] = useState<readonly string[]>();
-  // Whether Join a community offers Create a community (`checkCreation`), and
-  // whether its page is shown; both cleared on the landing.
-  const [creatable, setCreatable] = useState(false);
+  // The community list that lets Join a community offer Create a community
+  // (`checkCreation`), and whether its page is shown; both cleared on the landing.
+  const [creatable, setCreatable] = useState<CommunityList>();
   const [creating, setCreating] = useState(false);
 
   // The typed address survives a round trip to the find page and back.
@@ -363,7 +364,7 @@ export function Welcome({
     setFinding(undefined);
     setInviteCode("");
     setEntered("");
-    setCreatable(false);
+    setCreatable(undefined);
     setCreating(false);
     setup.reset();
   };
@@ -408,13 +409,19 @@ export function Welcome({
       : [];
   /**
    * How every lane ends: a linked account's owned communities feed Join a
-   * community, beside whether it offers Create a community.
+   * community, beside whether it offers Create a community. Every lane that
+   * finishes with `linked` holds that key, so its one list read answers both.
    */
   const finish = () => [
     ...(linked && reads.current
-      ? [findCommunities(reads.current, setOwned)]
-      : []),
-    ...offerCreation(),
+      ? [
+          findCommunities(
+            reads.current,
+            setOwned,
+            atPublicBuilderlab() ? setCreatable : undefined,
+          ),
+        ]
+      : offerCreation()),
     ...restore(),
   ];
   /** A retry after expiration reacquires the same account before uploading. */
@@ -464,7 +471,7 @@ export function Welcome({
     setLinked(undefined);
     setOwned(undefined);
     setBackups(undefined);
-    setCreatable(false);
+    setCreatable(undefined);
     setCreating(false);
     reads.current = undefined;
     known.current = undefined;
@@ -972,8 +979,12 @@ export function Welcome({
           // The created community joins as an entered address does.
           <CreateCommunityStep
             account={reads.current}
+            quotaLimit={creatable?.quotaLimit}
             onCreated={(origin) => {
               setCreating(false);
+              // Kept in the field, as a typed address is, so a cancelled or
+              // failed join can find the new community again.
+              setEntered(new URL(origin).host);
               find(origin);
             }}
             onBack={() => {
