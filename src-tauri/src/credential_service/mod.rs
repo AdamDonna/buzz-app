@@ -28,11 +28,11 @@ use crate::federated_identity::agent::Stamp;
 use crate::federated_identity::FederatedIdentity;
 use crate::host_mcp::header;
 use crate::identity::IdentityHost;
+use crate::loopback;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{self as headers, HeaderName};
-use hyper::{server::conn::http1, service::service_fn, Method, Request, Response, StatusCode};
-use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper::{Method, Request, Response, StatusCode};
 pub(crate) use pairing::Notice;
 use pairing::Pairings;
 use serde::Deserialize;
@@ -42,9 +42,9 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
-use tokio::net::TcpListener;
-use tokio::sync::{OnceCell, Semaphore};
+use tokio::sync::OnceCell;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 /// Set in a harness's environment: `{"url": …, "token": …}`.
@@ -58,9 +58,6 @@ pub(crate) fn drop_inherited() {
 const VERSION_HEADER: HeaderName = HeaderName::from_static("buzz-credential-provider");
 const VERSIONS: [u32; 1] = [1];
 const ENDPOINT: &str = "/v1";
-const CONNECTIONS: usize = 32;
-const HEAD_LIMIT: usize = 8192;
-const HEAD_TIMEOUT: Duration = Duration::from_secs(5);
 /// An agent event is at most 64 KiB of content and 256 tags of 4 KiB.
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 const BODY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -333,20 +330,16 @@ impl CredentialService {
     }
 
     async fn listen(&self) -> Result<String, String> {
-        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .and_then(|listener| listener.set_nonblocking(true).map(|()| listener))
-            .map_err(|_| "Could not start the Buzz credential service")?;
-        let authority = format!(
-            "127.0.0.1:{}",
-            listener
-                .local_addr()
-                .map_err(|_| "Could not start the Buzz credential service")?
-                .port()
-        );
-        let listener = TcpListener::from_std(listener)
-            .map_err(|_| "Could not start the Buzz credential service")?;
+        let (listener, authority) =
+            loopback::bind().map_err(|_| "Could not start the Buzz credential service")?;
         let url = format!("http://{authority}{ENDPOINT}");
-        tauri::async_runtime::spawn(accept(listener, self.clone(), authority));
+        let (service, authority): (_, Arc<str>) = (self.clone(), authority.into());
+        let answer = move |request| {
+            let (service, authority) = (service.clone(), authority.clone());
+            async move { answer(&service, &authority, request).await }
+        };
+        // The service runs as long as the app.
+        tauri::async_runtime::spawn(loopback::serve(listener, CancellationToken::new(), answer));
         Ok(url)
     }
 
@@ -604,35 +597,6 @@ impl Failure {
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::BAD_REQUEST,
         }
-    }
-}
-
-async fn accept(listener: TcpListener, service: CredentialService, authority: String) {
-    let connections = Arc::new(Semaphore::new(CONNECTIONS));
-    let authority: Arc<str> = authority.into();
-    loop {
-        let Ok(permit) = connections.clone().acquire_owned().await else {
-            return;
-        };
-        let Ok((socket, _)) = listener.accept().await else {
-            drop(permit);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        };
-        let (service, authority) = (service.clone(), authority.clone());
-        tauri::async_runtime::spawn(async move {
-            let _ = http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(HEAD_TIMEOUT)
-                .max_buf_size(HEAD_LIMIT)
-                .keep_alive(false)
-                .serve_connection(
-                    TokioIo::new(socket),
-                    service_fn(|request| answer(&service, &authority, request)),
-                )
-                .await;
-            drop(permit);
-        });
     }
 }
 

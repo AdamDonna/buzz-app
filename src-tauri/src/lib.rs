@@ -59,6 +59,7 @@ mod keep_awake;
 #[cfg(target_os = "macos")]
 mod legacy_cli_shortcut;
 mod legacy_communities;
+mod loopback;
 #[cfg(any(not(target_os = "macos"), test))]
 mod microphone;
 #[cfg(target_os = "macos")]
