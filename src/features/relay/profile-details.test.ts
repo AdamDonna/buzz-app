@@ -695,7 +695,11 @@ it("keeps background reads asked for after a release when the shrink runs", asyn
     // The next view mounts before the shrink runs: one new author, and one
     // on the departing view's pending page.
     const next = directory.ensure([fresh.pubkey, joined.pubkey], "background");
-    expect(answers).toHaveLength(3);
+    expect(answers.map((answer) => answer.authors)).toEqual([
+      [stale.pubkey],
+      [joined.pubkey, other.pubkey],
+      [fresh.pubkey, joined.pubkey],
+    ]);
     await vi.runAllTimersAsync();
     expect(directory.queries.limit?.()).toBe(1024);
     // Both departing reads were cancelled.

@@ -346,7 +346,7 @@ export function createProfileDirectory(
     const waiting = new Set<Promise<void>>();
     const missing = unique.filter((id) => {
       let batch = pending.get(id);
-      // Don't join a read the waiting shrink cancels: this name gets its own
+      // Don't join a read a waiting shrink would cancel: this name gets its own
       // read, and the rest of that page is still cancelled.
       if (batch && shrinking !== undefined && shrinkCancels(batch))
         batch = undefined;
