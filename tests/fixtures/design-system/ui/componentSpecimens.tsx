@@ -2455,6 +2455,7 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
             },
           ]}
         />
+        <PreferenceRow title="Remove from this community" />
       </SettingsGroup>
       <h3 className="text-label">
         Form disclosures · spacing owned by the form

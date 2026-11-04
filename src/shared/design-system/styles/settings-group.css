@@ -55,6 +55,12 @@
   }
   .buzz-settings-group[data-layout="rows"]
     > .buzz-accordion[data-variant="settings"]
+    + .buzz-preference-row {
+    margin-inline: calc(0px - var(--settings-group-inset));
+    padding-inline: var(--settings-group-inset);
+  }
+  .buzz-settings-group[data-layout="rows"]
+    > .buzz-accordion[data-variant="settings"]
     :is(
       .buzz-accordion-item,
       .buzz-accordion-trigger,
