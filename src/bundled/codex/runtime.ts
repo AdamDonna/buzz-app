@@ -1505,12 +1505,6 @@ export class CodexRuntime {
       !disabled && this.server?.rpc === rpc && this.hooks
         ? await nativeHookState(rpc, workspace)
         : undefined;
-    const hookAdapter = disabled ? undefined : this.hooks;
-    const bridge = hookAdapter
-      ? await openHookBridge(hookAdapter.serve, (session, event, input) =>
-          hookAdapter.run(agent.key, session, event, input),
-        )
-      : undefined;
     const proxy: Record<string, unknown> = {};
     if (this.modelEndpoint) {
       const provider = normalized.config.model_provider ?? "openai";
@@ -1532,6 +1526,12 @@ export class CodexRuntime {
       proxy[`model_providers.${provider}.base_url`] =
         await this.modelEndpoint(upstream);
     }
+    const hookAdapter = disabled ? undefined : this.hooks;
+    const bridge = hookAdapter
+      ? await openHookBridge(hookAdapter.serve, (session, event, input) =>
+          hookAdapter.run(agent.key, session, event, input),
+        )
+      : undefined;
     const params = {
       model,
       cwd: workspace,

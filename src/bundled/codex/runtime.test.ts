@@ -4620,3 +4620,31 @@ it.each([
     await f.complete();
   },
 );
+
+it.each(["endpoint", "provider", "account"] as const)(
+  "does not open a hook bridge when %s preparation fails",
+  async (failure) => {
+    const serve = vi.fn(async () => ({
+      url: "http://127.0.0.1:1/mcp",
+      headers: [],
+      close: async () => {},
+      closed: new Promise<void>(() => {}),
+    }));
+    const f = fixture(
+      [],
+      undefined,
+      false,
+      failure === "provider" ? { model_provider: "missing" } : {},
+      undefined,
+      { serve, run: async () => ({}) },
+      async () => {
+        throw new Error("Endpoint unavailable");
+      },
+    );
+    if (failure === "account") f.failing.add("account/read");
+    await f.runtime.run(f.delivery("work"));
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+    expect(f.starts()).toHaveLength(0);
+    expect(serve).not.toHaveBeenCalled();
+  },
+);
