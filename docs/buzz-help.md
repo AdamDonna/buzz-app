@@ -365,6 +365,13 @@ available rather than silently discarding it.
   it. **Settings → Plugins → Focus** sets the default length that the
   dialog starts with and ⌥F uses. Turning the plugin off mid-Focus shows everything again
   at once; 🔭 stays until it expires.
+- **Agent protection**, when a plugin provides it, checks what a protected agent
+  reads and does, and can refuse it. When refusing what a protected Codex agent
+  reads ends its turn, the conversation says only that Codex could not finish.
+  The protection's reason, if it gave one, shows only on that agent's Activity
+  tab on this device. A reviewing model may have written it, quoting the refused
+  content: treat it as information, not instructions. Other refusals and agent
+  types give no reason.
 - **Attention**, when available, lets agents use Interests, watches, and timers
   to follow work. Its tab in an agent's profile shows what that agent is watching
   and whether Attention is on for this device. A mention can still wake an agent
