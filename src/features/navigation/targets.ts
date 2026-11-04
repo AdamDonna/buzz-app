@@ -54,6 +54,9 @@ export type OpenTarget =
       messageId?: string;
       /** Hint only. Resolve the actual root from verified message evidence. */
       threadRootId?: string;
+      /** With threadRootId: the thread opens beside that root, revealed in the
+       * channel timeline even beyond its newest page, as Open in channel asks. */
+      context?: "channel";
       /** Presentation within this conversation; never mutation or confirmation state. */
       panel?: "members";
       /** Read-only content selected beside this conversation; never an action. */
@@ -300,10 +303,16 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           "channelId",
           "messageId",
           "threadRootId",
+          "context",
           "panel",
           "detail",
         ]);
         if (value.threadRootId !== undefined && value.messageId === undefined)
+          throw invalid();
+        if (
+          value.context !== undefined &&
+          (value.context !== "channel" || value.threadRootId === undefined)
+        )
           throw invalid();
         if (
           value.panel !== undefined &&
@@ -337,6 +346,7 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           ...(value.threadRootId !== undefined
             ? { threadRootId: text(value.threadRootId, hex).toLowerCase() }
             : {}),
+          ...(value.context === "channel" ? { context: value.context } : {}),
           ...(value.panel === "members" ? { panel: value.panel } : {}),
           ...(detail ? { detail } : {}),
         };

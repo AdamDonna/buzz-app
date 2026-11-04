@@ -19,6 +19,7 @@ import panelStyles from "../../features/panels/Panels.module.css";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { useReturnHighlight } from "../../features/messages/use-return-highlight";
+import { useMessageOpening } from "../../features/messages/use-message-opening";
 import { ChannelBody } from "./ChannelBody";
 import {
   entryPane,
@@ -951,6 +952,32 @@ function ChannelWorkspace({
       threadPane,
     ],
   );
+  // Open in channel also shows the thread's root in the timeline, reading
+  // older pages to find it. The thread keeps focus; Members covers both.
+  const contextRoot =
+    routedThread &&
+    !membersRequested &&
+    navigation?.target.kind === "conversation" &&
+    navigation.target.context === "channel"
+      ? requestedThread
+      : undefined;
+  const contextInTimeline = useMessageOpening(
+    queries.channels,
+    routedThread?.channelId ?? "",
+    contextRoot,
+  );
+  const contextSignal = navigation?.signal;
+  const contextTarget = useMemo(
+    () =>
+      contextRoot && contextInTimeline && contextSignal
+        ? {
+            messageId: contextRoot,
+            signal: contextSignal,
+            focus: false as const,
+          }
+        : undefined,
+    [contextRoot, contextInTimeline, contextSignal],
+  );
   const conversationIcon = (item: (typeof channels)[number]) => {
     const person = item.participants?.[0];
     return (
@@ -1856,6 +1883,9 @@ function ChannelWorkspace({
             navigation={
               !requestedMessage || exact?.inTimeline ? navigation : undefined
             }
+            // Mount the list once, at the root, not while it is sought.
+            holding={!!contextRoot && contextInTimeline === undefined}
+            inlineTarget={contextTarget}
             onOpenThread={openThread}
             revealMessageId={
               sent?.channelId === current.id ? sent.id : undefined

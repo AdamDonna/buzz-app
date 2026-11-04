@@ -931,6 +931,7 @@ it("opens another conversation's tab in its channel, but not the current channel
       channelId: "beta",
       messageId: other,
       threadRootId: other,
+      context: "channel",
     }),
   );
 });

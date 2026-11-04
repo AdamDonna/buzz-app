@@ -149,9 +149,10 @@ export type ChannelTimelineProps = {
   onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   canOpenLink?: ((target: string) => boolean) | undefined;
   revealMessageId?: string | undefined;
-  /** One inline exact visit: focus the verified mounted row, without a page navigation. */
+  /** One inline exact visit: focus the verified mounted row, without a page
+   * navigation. `focus: false` marks it beside a reader that owns focus. */
   inlineTarget?:
-    | Readonly<{ messageId: string; signal: AbortSignal }>
+    | Readonly<{ messageId: string; signal: AbortSignal; focus?: false }>
     | undefined;
   /** Draft context starts at the returned tail, never reads/writes canonical scroll. */
   transient?: boolean | undefined;
@@ -557,12 +558,13 @@ function Timeline({
     navigation?.complete({ status: "opened" });
     setRevealedSignal(targetSignal);
   }, [navigation, targetSignal]);
+  const covered =
+    navigation?.target.kind === "conversation" &&
+    navigation.target.panel === "members";
   useMessageReveal({
     scroller,
-    focus: !(
-      navigation?.target.kind === "conversation" &&
-      navigation.target.panel === "members"
-    ),
+    focus: !covered && inlineTarget?.focus !== false,
+    mark: !covered,
     settled,
     messageId: targetId,
     signal: targetSignal,

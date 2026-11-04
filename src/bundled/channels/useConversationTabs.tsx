@@ -772,8 +772,10 @@ export function useConversationTabs({
             },
             channelId: tab.channelId,
             ...(tab.messageId && { messageId: tab.messageId }),
+            // The channel shows the thread's root beside it, for its context.
             ...(tab.kind === "thread" && {
               threadRootId: rootOfTab(tab),
+              context: "channel",
             }),
           })
       : undefined;

@@ -47,6 +47,8 @@ export const test = base.extend({
   threadUnreadMentions: [false, { option: true }],
   threadUnreadJoined: [false, { option: true }],
   threadUnreadOwnedRoot: [true, { option: true }],
+  // Newer top-level alpha rows put the threadUnread roots beyond the head page.
+  threadUnreadNewerRows: [0, { option: true }],
   exactMessages: [false, { option: true }],
   openSearch: [false, { option: true }],
   searchAuthor: [false, { option: true }],
@@ -120,6 +122,7 @@ export const test = base.extend({
       threadUnreadMentions,
       threadUnreadJoined,
       threadUnreadOwnedRoot,
+      threadUnreadNewerRows,
       exactMessages,
       openSearch,
       searchAuthor,
@@ -818,6 +821,21 @@ export const test = base.extend({
             reply_count: 23,
             participants: [getPublicKey(peerKey)],
           }),
+        ),
+      );
+    }
+    if (threadUnread && threadUnreadNewerRows) {
+      const history = histories.get("primary/alpha");
+      const after = Math.max(...history.map((event) => event.created_at)) + 20;
+      history.push(
+        ...Array.from({ length: threadUnreadNewerRows }, (_, index) =>
+          sign(
+            9,
+            [["h", "alpha"]],
+            `Newer alpha message ${index}`,
+            userKey,
+            after + index,
+          ),
         ),
       );
     }

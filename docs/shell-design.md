@@ -461,7 +461,9 @@ detail tab, such as an agent log, the tab that owns it stays instead, without
 its details.
 A tab for another conversation, or for one of its threads, also offers
 **Open in channel**, which opens that conversation in Channels; a thread opens
-there at the same message. The current channel's own threads do not offer it.
+there at the same message, beside its root, which the channel timeline reveals
+and marks even beyond its newest page. The current channel's own threads do not
+offer it.
 A thread that offers it also names its conversation above its original message,
 as Inbox rows do (`#channel` or `DM · names`); that name is a link that does
 the same.
