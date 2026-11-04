@@ -109,6 +109,21 @@ type Filters = {
   attention: AttentionFilter;
 };
 const filtersKey = "inbox:filters";
+
+/** Whether focus is in the page or in a popup it opened, which portals outside it. */
+function holdsFocus(page: HTMLElement | null) {
+  const active = document.activeElement;
+  if (!page || !active) return false;
+  if (page.contains(active)) return true;
+  const popup = active.closest('[role="menu"]')?.id;
+  return (
+    !!popup &&
+    [...page.querySelectorAll("[aria-controls]")].some(
+      (trigger) => trigger.getAttribute("aria-controls") === popup,
+    )
+  );
+}
+
 /** Saved choices are per device/viewer/community; unknown or missing fields use defaults. */
 function readFilters(scope: string): Filters {
   const saved = readView<unknown>(scope, filtersKey, undefined);
@@ -355,8 +370,22 @@ function InboxList({
     )
       return;
     appliedRoutes.add(navigation);
-    setFilter({ show: "inbox", ...route });
-    setDrafts(false);
+    // Like the menu, entering or leaving Drafts retires the Inbox action and
+    // restores focus the swapped surface dropped. Only focus in this page or
+    // its popups can drop; a fresh open leaves focus where navigation put it.
+    if (drafts !== "drafts" in route) {
+      cancelRetry();
+      viewFocus.current = holdsFocus(split.ref.current);
+    }
+    setDrafts("drafts" in route);
+    if ("drafts" in route) return;
+    const next = route.show ?? "inbox";
+    // Like the menu's Inbox/Archived choice, a new list ends the selection.
+    if (next !== show) {
+      cancelRetry();
+      setSelectedTarget(undefined);
+    }
+    setFilter({ ...route, show: next });
   }, [navigation]);
   const subscribeArchives = useCallback(
     (listener: () => void) => subscribeView(archiveScope, listener),

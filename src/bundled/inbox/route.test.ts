@@ -4,11 +4,21 @@ import { inboxRouteTarget, isInboxRoute, routeOf } from "./route";
 it.each([
   {},
   { attention: "unread" },
+  { attention: "all" },
   { activity: "all" },
   { activity: "threads" },
   { activity: "mentions" },
   { activity: "dms" },
   { activity: "all", attention: "unread" },
+  { show: "archived" },
+  { show: "inbox" },
+  { sender: "humans" },
+  { sender: "agents" },
+  { sender: "everyone" },
+  { activity: "dms", sender: "agents", show: "archived", attention: "unread" },
+  { drafts: true },
+  // buzz:// plugin links carry every route value as a string.
+  { drafts: "true" },
 ])("accepts the filter params %j", (params) => {
   expect(isInboxRoute(params)).toBe(true);
 });
@@ -19,13 +29,19 @@ it.each([
   3,
   "threads",
   ["threads"],
-  { attention: "all" },
   { attention: "read" },
   { activity: "drafts" },
   { activity: 1 },
   { activity: null },
-  { show: "archived" },
-  { activity: "dms", sender: "agents" },
+  { show: "drafts" },
+  { sender: "people" },
+  { drafts: false },
+  { drafts: "false" },
+  { drafts: "" },
+  // Drafts has no type, sender, status or attention filters to apply.
+  { drafts: true, activity: "dms" },
+  { drafts: true, show: "inbox" },
+  { unknown: "x" },
 ])("rejects the filter params %j", (params) => {
   expect(isInboxRoute(params)).toBe(false);
 });
