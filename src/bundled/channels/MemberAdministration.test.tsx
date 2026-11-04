@@ -1177,9 +1177,11 @@ it.each(["failed", "uncertain"])(
         ? /This request may have taken effect/
         : "Permission changed";
     await screen.findByText(message);
-    expect(
-      screen.getByRole("button", { name: "Retry member data" }),
-    ).toBeVisible();
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry member data" }),
+      ).toBeVisible(),
+    );
     await vi.waitFor(() =>
       expect(memberData()).toHaveAttribute("data-refreshing", "false"),
     );
