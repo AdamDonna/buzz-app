@@ -442,7 +442,9 @@ it("a lookup that lands after the repair reads the thread it found in the backgr
   const inbox = () => owner.capability.inbox();
   expect(inbox()).toMatchObject({ status: "ready", freshness: "observed" });
   expect(inbox().partial).toBeUndefined();
-  expect(save).not.toHaveBeenCalled();
+  // The repair saved its evidence, and no thread yet.
+  expect(save).toHaveBeenCalledTimes(1);
+  expect((await remembered(storage)).roots.size).toBe(0);
   expect(threadReads()).toBe(0);
   // The membership lookup finds the viewer's reply: one background read of
   // the thread, then the record written with its key and the viewer's reply,
@@ -454,7 +456,7 @@ it("a lookup that lands after the repair reads the thread it found in the backgr
     }),
   );
   expect(threadReads()).toBe(1);
-  expect(save).toHaveBeenCalledTimes(1);
+  expect(save).toHaveBeenCalledTimes(2);
   expect(inbox()).toMatchObject({ status: "ready", freshness: "observed" });
   expect(inbox().partial).toBeUndefined();
   expect(inbox().error).toBeUndefined();
