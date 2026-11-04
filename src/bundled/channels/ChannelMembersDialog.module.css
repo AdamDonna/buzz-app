@@ -161,28 +161,6 @@
 .manager > * {
   pointer-events: auto;
 }
-.stagedRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--size-row);
-  padding-block: var(--space-2);
-}
-.stagedName {
-  display: grid;
-  flex: 1;
-  min-width: 0;
-}
-.choice {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-@media (max-width: 480px) {
-  .stagedRow {
-    flex-wrap: wrap;
-  }
-}
 
 .generalAccess {
   min-width: 0;

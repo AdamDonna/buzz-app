@@ -11,6 +11,10 @@ export const SOLO_LABEL = "buzz.solo";
 export const SOLO_ACCESS_DISCLOSURE =
   "Everyone in this community will be able to read this chat’s full history and Canvas, including its workspace folders and agent instructions.";
 
+export function soloShareDisclosure(multiple = false): string {
+  return `Everyone in this community can read ${multiple ? "each chat’s" : "its"} full history, Canvas, workspace folders, and agent instructions.`;
+}
+
 /** Switching an open Solo chat to Private never removes its members. */
 export function soloRetainedAccessWarning(
   base: Pick<ChannelSummary, "visibility" | "joinRole">,

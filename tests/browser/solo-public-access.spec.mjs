@@ -176,6 +176,19 @@ test.describe("owner", () => {
       await openAccess();
       await expect(audience).toHaveText("View only");
       await expect(audience).toBeEnabled();
+      // A title update can arrive while Share access stays open. Switching
+      // back to Private must review the current signed details, not overwrite
+      // that update or fail against the snapshot from opening the dialog.
+      if (saves === 1) {
+        app.setChannelMetadata(own, [
+          ["t", "stream"],
+          ["t", "buzz.solo"],
+          ["P", app.viewer],
+          ["name", "Renamed while sharing"],
+          ["public"],
+          ["join_role", "guest"],
+        ]);
+      }
       await audience.click();
       await expect(
         page.getByRole("option", { name: "Public", exact: true }),
@@ -194,6 +207,11 @@ test.describe("owner", () => {
         "visibility",
         "private",
       ]);
+      if (saves === 2)
+        expect(app.report.detailsPublications.at(-1).tags).toContainEqual([
+          "name",
+          "Renamed while sharing",
+        ]);
       await expect(
         dialog.getByRole("button", { name: "Done", exact: true }),
       ).toBeInViewport({ ratio: 1 });

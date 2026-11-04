@@ -317,16 +317,15 @@ test("dragging a chat between a project and Chats saves and reloads like Move to
   await expect(inProject("Alpha")).toHaveCount(0);
 });
 
-// App wiring proof: grants and the normal link publication preserve Solo placement,
-// identity/history and navigation, with a held signed grant readback barrier.
-test("Share grants access and posts a link without promoting or moving the Solo chat", async ({
+// App wiring proof: access readback precedes link publication while Solo
+// placement, identity, history, navigation and keyboard focus stay intact.
+test("Share opens View only and posts a link without promoting or moving the Solo chat", async ({
   page,
   app,
 }) => {
   await page.clock.install();
-  const person = app.serveProfile(generateSecretKey(), { name: "Aria" });
-  const grants = [];
   const evidence = [];
+  const grants = [];
   let signalReadback;
   const requestedReadback = new Promise((resolve) => {
     signalReadback = resolve;
@@ -336,200 +335,101 @@ test("Share grants access and posts a link without promoting or moving the Solo 
     releaseReadback = resolve;
   });
   let readbackHeld = false;
-  let rosterTime = Math.floor(Date.now() / 1000);
   await page.route("**/api/relay/**/query", async (route) => {
     const filters = route.request().postDataJSON();
     if (
+      !readbackHeld &&
+      app.report.detailsPublications?.length &&
       filters.some(
-        (filter) => filter.kinds?.includes(0) && filter.search === "Aria",
+        (filter) =>
+          filter.kinds?.includes(39000) &&
+          filter["#d"]?.includes(id) &&
+          filter.consistency === "strong",
       )
     ) {
-      return route.fulfill({ json: [person] });
+      readbackHeld = true;
+      evidence.push("access", "readback-requested");
+      signalReadback();
+      await heldReadback;
+      evidence.push("readback-released");
     }
-    const response = await route.fetch();
-    const events = await response.json();
-    if (filters.some((filter) => filter.kinds?.includes(39002))) {
-      if (
-        !readbackHeld &&
-        grants.length &&
-        filters.some(
-          (filter) =>
-            filter.kinds?.includes(39002) &&
-            filter["#d"]?.includes(id) &&
-            filter.consistency === "strong",
-        ) &&
-        events.some(
-          (event) =>
-            event.kind === 39002 &&
-            event.tags.some(([key, value]) => key === "d" && value === id),
-        )
-      ) {
-        readbackHeld = true;
-        evidence.push("readback-requested");
-        signalReadback();
-        await heldReadback;
-        evidence.push("readback-released");
-      }
-      return route.fulfill({
-        json: events.map((event) => {
-          const room =
-            event.kind === 39002 &&
-            event.tags.find(([key]) => key === "d")?.[1];
-          // Aria is a Team member, so sharing to Team grants her chat access.
-          if (room === destination)
-            return app.signRelay({
-              kind: 39002,
-              content: "",
-              created_at: event.created_at,
-              tags: [...event.tags, ["p", person.pubkey, "", "member"]],
-            });
-          if (room !== id) return event;
-          return app.signRelay({
-            kind: 39002,
-            content: "",
-            created_at: ++rosterTime,
-            tags: [
-              ...event.tags,
-              ...grants.map((grant) => [
-                "p",
-                grant.tags.find(([key]) => key === "p")[1],
-                "",
-                "member",
-              ]),
-            ],
-          });
-        }),
-      });
-    }
-    return route.fulfill({ response });
+    // Gate the app's request itself; never fetch a parallel copy of it.
+    await route.continue();
   });
   await page.route("**/api/relay/**/publish", async (route) => {
     const event = route.request().postDataJSON();
     if (event.kind === 9) evidence.push("link");
-    if (event.kind !== 9000) return route.continue();
-    expect(verifyEvent(event)).toBe(true);
-    expect(event.pubkey).toBe(app.viewer);
-    grants.push(event);
-    evidence.push("grant");
-    await route.fulfill({ json: { accepted: true, event_id: event.id } });
+    if (event.kind === 9000) grants.push(event);
+    await route.continue();
   });
   await page.goto(app.origin);
   await newChat(page);
-  const sidebar = page.getByRole("navigation", { name: "Solo conversations" });
-  const row = sidebar.getByRole("button", { name: "Alpha", exact: true });
+  const row = page.locator(`[data-solo-channel-id="${id}"]`);
   await row.click();
-  await expect(
-    page.getByText(`primary ${id} message 0`, { exact: false }),
-  ).toBeVisible();
+  const history = page.getByText(`primary ${id} message 0`, { exact: false });
+  await expect(history).toBeVisible();
   await row.click({ button: "right" });
   await page
     .getByRole("menuitem", { name: "Share access", exact: true })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Share access" });
+  const dialog = page.getByRole("dialog", {
+    name: "Share access",
+    exact: true,
+  });
   const search = dialog.getByRole("searchbox", {
     name: "Search people and channels",
   });
-  // Text entry starts after the menu-to-dialog transition.
-  await dialog.evaluate(async (element) => {
-    await Promise.all(
-      element.getAnimations().map((animation) => animation.finished),
-    );
-  });
+  await expect(search).toBeFocused();
   await search.fill("Team");
-  await dialog
-    .getByRole("button", { name: "Select #Team", exact: true })
-    .click();
-  const primary = dialog.getByRole("button", {
-    name: "Share",
+  const share = dialog.getByRole("button", {
+    name: "Share #Team",
     exact: true,
   });
-  const copy = dialog.getByRole("button", { name: "Copy link", exact: true });
-  // Copy link leads Share. At a narrow width with enlarged text
-  // the footer actions wrap; real flex wrapping, Tab order and hit testing are
-  // invisible to mounted DOM tests.
+  await expect(share).toBeEnabled();
   await page.setViewportSize({ width: 390, height: 850 });
   await page.evaluate(() =>
     document.documentElement.style.setProperty("--buzz-text-scale", "2"),
   );
-  const actions = dialog.locator(".buzz-dialog-actions");
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(390);
+  await expect(page.locator("html")).toHaveCSS("font-size", "32px");
+  // Let the resized, enlarged-text layout finish before testing focus reveal.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  await share.focus();
+  await expect(share).toBeInViewport({ ratio: 1 });
   await expect
     .poll(() =>
-      actions.evaluate((footer) => {
-        const widest = Math.max(
-          ...[...footer.querySelectorAll("button")].map(
-            (button) => button.getBoundingClientRect().width,
-          ),
-        );
-        // Include the shared focus-ring inset around an oversized action.
-        const style = getComputedStyle(footer);
-        const inset =
-          parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-        return (
-          footer.scrollWidth - Math.max(footer.clientWidth, widest + inset)
+      share.evaluate((element) => {
+        const r = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
         );
       }),
     )
-    .toBeLessThanOrEqual(1);
-  await expect
-    .poll(async () => {
-      const copied = await copy.boundingBox();
-      const shared = await primary.boundingBox();
-      return shared.y >= copied.y + copied.height;
-    })
     .toBe(true);
-  // Focus the preceding body control, then traverse every wrapped action.
-  await search.focus();
-  for (const action of [copy, primary]) {
-    for (
-      let step = 0;
-      !(await action.evaluate((el) => el === document.activeElement));
-      step++
-    ) {
-      expect(step).toBeLessThan(12);
-      await page.keyboard.press("Tab");
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            document.activeElement?.hasAttribute("data-base-ui-focus-guard"),
-          ),
-        )
-        .toBe(false);
-    }
-    await expect(action).toBeInViewport({ ratio: 1 });
-    await expect
-      .poll(() =>
-        action.evaluate((element) => {
-          const r = element.getBoundingClientRect();
-          return element.contains(
-            document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2),
-          );
-        }),
-      )
-      .toBe(true);
-  }
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--buzz-text-scale", "1"),
-  );
-  await page.setViewportSize({ width: 1280, height: 850 });
-  const hint = page.getByRole("tooltip").filter({
-    hasText: "Sharing grants access and posts a link in the selected channel.",
+  await page.keyboard.press("Enter");
+  const confirmation = page.getByRole("alertdialog", {
+    name: "Share this chat?",
   });
-  await primary.hover();
-  await expect(hint).toBeVisible();
-  await page.mouse.move(0, 0);
-  await expect(hint).not.toBeVisible();
-  await copy.focus();
+  await expect(confirmation).toContainText(
+    "This changes the chat from Private to View only and posts its link in #Team.",
+  );
+  await expect(confirmation).toContainText("Everyone in this community");
+  await expect(
+    confirmation.getByRole("button", { name: "Cancel", exact: true }),
+  ).toBeFocused();
+  expect(app.report.detailsPublications ?? []).toHaveLength(0);
+  const primary = confirmation.getByRole("button", {
+    name: "Share",
+    exact: true,
+  });
   await page.keyboard.press("Tab");
   await expect(primary).toBeFocused();
-  await expect(hint).toBeVisible();
-  await expect(primary).toHaveAccessibleDescription(
-    "Sharing grants access and posts a link in the selected channel.",
-  );
-  // Tooltip dismissal consumes only its own Escape, not the enclosing modal.
-  await page.keyboard.press("Escape");
-  await expect(hint).not.toBeVisible();
-  await expect(dialog).toBeVisible();
-  // Hold the page clock so the held readback cannot reach its read deadline.
+  await expect(primary).toBeInViewport({ ratio: 1 });
   await pauseClock(page, 100);
   try {
     await page.keyboard.press("Enter");
@@ -537,34 +437,52 @@ test("Share grants access and posts a link without promoting or moving the Solo 
     await expect(dialog).toBeVisible();
     await expect(primary).toHaveAttribute("aria-busy", "true");
     await expect(
-      dialog.getByRole("button", { name: "Close", exact: true }),
+      confirmation.getByRole("button", { name: "Close", exact: true }),
     ).toBeDisabled();
-    expect(evidence).toEqual(["grant", "readback-requested"]);
+    await page.keyboard.press("Escape");
+    await expect(confirmation).toBeVisible();
+    await expect(dialog).toBeVisible();
+    expect(evidence).toEqual(["access", "readback-requested"]);
     expect(
       app.report.publications.filter(({ event }) => event.kind === 9),
     ).toHaveLength(0);
     releaseReadback();
     await page.clock.resume();
     await expect(dialog).not.toBeVisible();
-    // The dialog closes once the link is queued; the Outbox then posts it.
     await expect
-      .poll(() => evidence)
-      .toEqual(["grant", "readback-requested", "readback-released", "link"]);
+      .poll(() =>
+        app.report.publications.filter(({ event }) => event.kind === 9),
+      )
+      .toHaveLength(1);
+    expect(evidence).toEqual([
+      "access",
+      "readback-requested",
+      "readback-released",
+      "link",
+    ]);
   } finally {
     releaseReadback();
     await page.clock.resume();
   }
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("--buzz-text-scale", "1"),
+  );
+  await page.setViewportSize({ width: 1280, height: 850 });
   await expect(row).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Alpha", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByText(`primary ${id} message 0`, { exact: false }),
-  ).toBeVisible();
-  expect(grants).toHaveLength(1);
-  expect(grants[0].tags).toContainEqual(["h", id]);
-  expect(grants[0].tags).toContainEqual(["p", person.pubkey]);
-  expect(app.report.detailsPublications ?? []).toHaveLength(0);
+  await expect(history).toBeVisible();
+  expect(grants).toHaveLength(0);
+  const changes = app.report.detailsPublications;
+  expect(changes).toHaveLength(1);
+  expect(verifyEvent(changes[0])).toBe(true);
+  expect(changes[0].pubkey).toBe(app.viewer);
+  expect(changes[0].tags).toContainEqual(["h", id]);
+  expect(changes[0].tags).toContainEqual(["visibility", "open"]);
+  expect(changes[0].tags).toContainEqual(["join_role", "guest"]);
+  expect(changes[0].tags.filter(([key]) => key === "p")).toHaveLength(0);
+  expect(app.report.detailsPublications).toHaveLength(1);
   expect(
     (app.report.sidebarPublications ?? []).filter((entry) =>
       entry.coordinate.startsWith("buzz-me-kit"),
@@ -575,6 +493,29 @@ test("Share grants access and posts a link without promoting or moving the Solo 
   expect(links[0].event.tags).toContainEqual(["h", destination]);
   expect(links[0].event.tags.filter(([key]) => key === "p")).toHaveLength(0);
   expect(links[0].event.content).toBe(`[Chat: Alpha](buzz://channel/${id})`);
+  // Reopen the same app surface immediately after sharing, without reloading
+  // the page. The new access edit must use the confirmed View only snapshot.
+  await row.click({ button: "right" });
+  await page
+    .getByRole("menuitem", { name: "Share access", exact: true })
+    .click();
+  const access = dialog.getByRole("combobox", { name: "General access" });
+  await expect(access).toBeEnabled();
+  await expect(access).toHaveText("View only");
+  await access.click();
+  await page.getByRole("option", { name: "Private", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "Change general access?" })
+    .getByRole("button", { name: "Change access", exact: true })
+    .click();
+  await expect(access).toHaveText("Private");
+  await expect(access).toBeEnabled();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  expect(app.report.detailsPublications).toHaveLength(2);
+  expect(app.report.detailsPublications.at(-1).tags).toContainEqual([
+    "visibility",
+    "private",
+  ]);
 });
 
 // App composition boundary: signed metadata switches Messages discoverability

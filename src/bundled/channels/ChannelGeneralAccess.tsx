@@ -141,7 +141,10 @@ function ChannelGeneralAccessEditor({
       setError("");
       try {
         const details = await capability.load(channelId, signal);
-        if (!signal.aborted) setBase(details);
+        if (!signal.aborted) {
+          setBase(details);
+          return details;
+        }
       } catch (reason) {
         if (!signal.aborted) {
           setBase(undefined);
@@ -175,7 +178,7 @@ function ChannelGeneralAccessEditor({
       : access === "view-only"
         ? EyeIcon
         : LockIcon;
-  function choose(value: string) {
+  async function choose(value: string) {
     if (locked || !base) return;
     const option = Object.values(generalAccessOptions).find(
       (option) => option.value === value,
@@ -184,9 +187,21 @@ function ChannelGeneralAccessEditor({
     origin.current =
       section.current?.querySelector<HTMLElement>('[role="combobox"]') ?? null;
     setError("");
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted) return;
+    // The title or access may have changed since this dialog opened. Consent
+    // starts from a fresh signed snapshot; save still verifies its version.
+    const current = await load(signal);
+    if (
+      signal.aborted ||
+      !current?.canEdit ||
+      generalAccessValue(current) === value ||
+      (soloLabels(current.labels) && value === "public")
+    )
+      return;
     setChoice({
-      ...base,
-      ...generalAccessPolicy(option.value, base.joinRole),
+      ...current,
+      ...generalAccessPolicy(option.value, current.joinRole),
     });
   }
   async function apply(check = false) {

@@ -1,31 +1,35 @@
 # Sharing a Solo chat
 
-Sharing uses ordinary channel membership. Solo project filing is private
-client-side organization, independent of access; see [Solo](README.md).
+Sharing uses ordinary channel visibility and signed membership. Solo project
+filing is private client-side organization, independent of access; see
+[Solo](README.md).
 
 ## The model
 
 - A Solo chat is a channel with the `buzz.solo` label.
-- Channel visibility and signed membership control access. Sharing gives people
-  a membership in the chat.
+- Channel visibility and signed membership control access. Direct invitations
+  add members; sharing from Chat access to a channel opens community reading.
 - A shared chat link is an ordinary message containing
   `[Chat: name](buzz://channel/<id>)`. It renders as a chat card when the target
   is a Solo chat; the `Chat:` label lets a viewer without access see it as one.
   Links carry no other share marker, and older `Session:` labels still render.
 
-There are two ways to give access:
+The access dialog has two ways to share:
 
-1. **Add a person** in the access dialog: one membership grant, no message.
-2. **Share with a channel**: give the channel's current members who lack access
-   a membership, then post the link there. Both entry points use
-   `shareChatsWithChannel` in `src/features/solo/share.ts`.
+1. **Add a person**: one membership grant, no message.
+2. **Share with a channel**: make a Private chat View only, then post its link.
+   View only chats confirm delivery without changing access. Public chats post
+   directly and keep their access.
+   Channel members and their agents can read without joining. Opening the link
+   creates no sidebar entry. This is community-wide reading,
+   not access limited to the chosen channel.
 
 ## Access dialog
 
 The Solo chat header's **Access** button and the conversation-row **Share…** action
 open the one access dialog every conversation uses (`ChannelMembersDialog`). In a
 Solo chat it is titled **Chat access**, with the chat name as its description.
-Share stays in the same conversation: no metadata change, promotion to a channel,
+Share stays in the same conversation: no promotion to a channel,
 Solo removal or automatic navigation to Messages. **Convert to channel** lives only
 in the chat's actions menu. **Copy link** sits at the footer's leading edge and
 copies `buzz://channel/<id>` only; its hint explains that copying grants no access.
@@ -55,17 +59,28 @@ for sharing; this presentation grants no additional authority.
 Solo and channels intentionally share the device-local `channel-members` usage
 picks, so a choice in either surface can improve its order in the other.
 
-While searching, eligible stream/forum channels appear in a **Channels** group;
-**Select** chooses one. The selected channel shows **#name** with its **N members**,
-expandable to inspect participants. **Share** gives that channel's current members (agents
-included, archived members skipped, at most 100 needing access) membership in the
-chat, then posts one link message in the channel through the Outbox and closes.
-The toast **Shared in #channel** offers **View**, which opens the posted link. If a
-grant fails, the dialog shows the error and **Retry share**; a retry reads the
-channel again and grants only whoever is still missing. Grants already confirmed
-stay. With no channel selected, **Done** closes without writes.
+While searching, eligible stream/forum channels appear in a **Channels** group.
+Each result has a **Share** action. It checks current access and opens a
+confirmation titled **Share this chat?**. It first states the chat changes from
+Private to View only and its link will be posted in that channel, then discloses
+community reading of the full history and Canvas. **Share** saves that
+access and posts the link in one step. A chat already set to View only gets a
+similar confirmation explaining link delivery; Share posts the link without an
+access write. Public (existing) chats keep their access and post directly.
+Cancel returns focus to the same Share result and preserves the search.
+The toast says **Chat changed to View only. Shared in #channel** when Share
+changed access, or **Shared in #channel** when access was already open. Both
+offer **View**, which opens the posted link. **Done** closes the access dialog
+without writes.
 
-People added together (a share, a team, mentioned nonmembers or brought agents)
+An access failure leaves the link unsent. An uncertain access save offers
+**Check access and share**: it checks the existing write without resending, then
+posts the link only after confirmation. If link enqueue fails after access was
+saved, the chat remains View only; **Retry share** checks access and retries the
+link without another access change. Once queued, delivery and retry belong to
+the ordinary Outbox. Direct invitations remain separate and keep their roles.
+
+People invited together (a team, mentioned nonmembers or brought agents)
 go in one kind 9000 per role, at most 100 each, and the roster is read once after.
 A relay without batch support adds only the first person an event names, so the
 roster decides who was added; anyone else, or anyone with an earlier addition
@@ -136,35 +151,36 @@ workspace filing.
 Changing back to Private stops nonmembers from reading; it does not remove
 members or change their roles. Guests who joined while the chat was View only
 keep read access until they leave or are removed in People.
-Reading without joining creates no membership to retain. Neither transition
-changes invitations, creates a share message or adds notifications. Unconfirmed
-publication uses **Check save status**, without automatically resending.
+Reading without joining creates no membership to retain. Changing the General
+access picker alone does not change invitations, post a share message or add
+notifications. Unconfirmed publication uses **Check save status**, without
+automatically resending.
 
 ## Sending a chat link in a channel
 
 Pasting a recognized Solo chat link into a composer stages it as a chat card.
-Sending that card into a channel (at channel level or in a thread) or a DM asks
-**Share and send** or **Send link only**. Closing keeps the draft and sends nothing.
+Sending the card into a channel, thread or DM uses the same policy as Share.
+For a Private chat you own, **Share** confirms community access to
+its full history and Canvas, opens reading, then sends your original message.
+**Cancel** leaves access and the draft unchanged.
 
-The conversation's members are read before asking. In a channel, the dialog names
-the channel and how many members don't yet have access. In a DM, it names the
-people who don't (or counts them while a name is still unknown). When everyone
-already has access, or no one else is in the conversation, the message sends
-without asking. If Share can't
-succeed (the viewer can't share the chat, or more than 100 members need access),
-the dialog explains why and offers only link-only.
+View only chats you own get a link-delivery confirmation and retain their access.
+Public chats send without a prompt and retain their access.
+Links to chats you do not own also send without changing access; recipients still
+need their own permission to read. Solo destinations retain their existing send
+behavior. Direct person/agent invitations remain available in Chat access.
 
-**Share and send** runs the same channel share, then the composer sends the one
-original message. It keeps the members it read for the prompt, so a retry after a
-failed grant never widens who gets access. A failed grant leaves the message
-unsent with Retry in the dialog; grants that succeeded remain. A changed draft or
-leaving the composer stops further grants and sending, not already dispatched
-writes. **Send link only** leaves access unchanged. Solo destinations keep their
-ordinary behavior and don't ask.
-
-Consent covers the full chat history and future messages. Sharing never
-unarchives anyone or removes them from a channel, and future joins or departures
-in the destination channel are not synchronized.
+Multiple owned Private or View only chats in one message are named in one
+confirmation. Only Private chats need an access edit. If an
+access save fails, the message stays unsent. Retry skips chats already opened;
+if a chat's access or details changed while consent was open, the confirmation
+reloads its current policy and requires **Share** again before continuing.
+**Check access and send** checks an uncertain save without resending it. Any
+access change already saved is kept when you cancel or a later step fails.
+Changing the draft or leaving stops further access writes and message sending;
+an already-dispatched access change may finish. Ordinary Outbox delivery owns
+recovery after the message is queued. Future destination membership is never
+synchronized into the chat.
 
 ## Explicit conversion, separate from Share
 
@@ -264,8 +280,10 @@ View-only role.
 
 ## Validation
 
-`share.test.ts` covers grants, channel audiences, archived members, retry without
-repeated grants and the share blockers. `ChannelMembersDialog.solo.test.tsx` and
-`chat-link-sharing.test.tsx` cover the dialog and the composer prompt.
-Live relay ACLs, cross-account discovery and no-wake behavior are separate
-checks.
+`share.test.ts` covers the shared Private-only access policy, exact save recovery,
+authority/ownership changes and destination admission.
+`ChannelMembersDialog.solo.test.tsx` and `chat-link-sharing.test.tsx` cover the two
+entry points, no membership grants, failed/uncertain access, draft cancellation,
+partial multi-chat recovery and original-message delivery. Existing direct
+invitation and Outbox receipt coverage remains separate. Live relay ACLs,
+cross-account discovery and no-wake behavior are separate checks.

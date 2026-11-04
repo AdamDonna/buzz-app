@@ -1,7 +1,7 @@
 # Solo
 
 Solo starts as a private channel whose only human member is its owner, talking with
-their agents. Its owner can share membership or open it for community viewing.
+their agents. Its owner can invite members or open it for community viewing.
 It is not a separate page, message store or relay-enforced privacy
 mode: a Solo chat is a channel, opened in Messages like any other. Ordinary
 channel visibility and signed membership determine access.
@@ -21,7 +21,7 @@ channel visibility and signed membership determine access.
   Other channels are threaded. Conversion to a channel clears the label.
 - **The label decides the sidebar.** Every Solo chat the viewer is a member of
   lists under Solo: their own and any shared with them, whether added directly or
-  through a shared link's access grant. A shared chat starts in Chats and the
+  through an explicit membership grant. A shared chat starts in Chats and the
   viewer may file it in one of their own workspaces; it never lists under Team.
   Ordinary channels list under Team. Opening a chat without membership adds
   nothing to the sidebar.
@@ -94,10 +94,14 @@ behavior on the label, so a rename touches copy only.
   chat's actions menu and opens the explicit visibility confirmation.
   Name and lifetime are not sharing controls.
 - **Chat access** adds a person immediately, without a DM or link delivery;
-  the owner can also add agents there (below). Choosing one existing channel and Share gives its
-  current members access and posts a link without notifications, the same share as
-  sending a chat link in that channel. Current access is grouped
-  into **People** and **Agents** like a channel, with Owner and Admin tags. Future
+  the owner can also add agents there (below). Search for a channel and click
+  **Share** beside its result to make the
+  Private chat View only and post a link, after confirming full-history and
+  Canvas disclosure. View only chats confirm link delivery and keep their access;
+  Public chats post directly. Pasting an owned Private or View only chat link
+  uses the same confirmation before sending the original message. Opening the
+  link creates no sidebar entry.
+  Current access is grouped into **People** and **Agents** like a channel, with Owner and Admin tags. Future
   joins/departures are not synchronized. Copy link grants no access; Done with no
   channel closes without writes. Shared uses verified membership and cached human
   evidence, not privacy inference or a required role refresh. See

@@ -2103,7 +2103,6 @@ export function createRelaySession(
         intents,
         lifetime.signal,
         solo(channelId),
-        undefined,
         writes?.local,
       ),
   );

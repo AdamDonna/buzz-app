@@ -222,7 +222,21 @@ that agent in Buzz; they do not notify the external app through this connection.
   between pages set to three fingers (or two or three fingers). Two-finger
   scrolling does not navigate.
 - **Sharing a Solo chat** grants access to its conversation history, not only
-  the next message. Its access dialog offers **View only** for community reading
+  the next message. Search for a channel in its access dialog and click **Share**
+  beside the result. This makes a Private chat **View only** and posts a link
+  there, after confirming community
+  access to the full history and Canvas. Chats already set to View only get a
+  delivery confirmation and keep their access. Public chats post directly.
+  The success toast confirms any change to View only and offers **View** to open
+  the posted link in the destination channel.
+  Opening a shared chat link creates no sidebar entry.
+  Direct invitations still add members. Pasting a link to a Private chat you own into a channel, thread or DM
+  uses the same confirmation, then sends your original message. Owned View only
+  chat links also confirm delivery. Other chat links send without changing access;
+  recipients still need permission to read.
+  If an owned chat's access or details change during confirmation, review the
+  refreshed consent and choose **Share** again before sending.
+  The access dialog offers **View only** for community reading
   or **Private** for people added to the chat. Public is not offered in
   this UI; a Public policy set through another client appears as
   **Public (existing)**. This is not protocol enforcement. View-only visitors
@@ -230,7 +244,7 @@ that agent in Buzz; they do not notify the external app through this connection.
   about retained viewers unless verified roles show no Guests, including while
   roles load or fail to load; remove them in People to end their access. Public
   (existing) → Private also warns that joined members retain their access.
-  Public (existing) → View only confirms that existing
+  Manually changing Public (existing) to View only confirms that existing
   members keep their access. Agents the owner adds through
   access search or a composer mention receive Bot access so they can reply,
   including with a Guest admission default. Conversion to a channel offers

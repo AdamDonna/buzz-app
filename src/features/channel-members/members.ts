@@ -150,9 +150,6 @@ async function addOneMember(
   intent: MemberAdditionIntent = {},
   receipts: LocalEvents | undefined = session.outbox,
   soloParticipant = false,
-  allowSoloAgents = false,
-  /** Runs synchronously just before a new or retried addition is dispatched. */
-  beforeDispatch?: () => void,
 ): Promise<void> {
   if (!keyPattern.test(pubkey))
     throw new Error("Choose a valid person or agent.");
@@ -229,12 +226,7 @@ async function addOneMember(
     );
   const check = () => {
     checkAccess();
-    if (
-      soloParticipant &&
-      !allowSoloAgents &&
-      !recoveringSoloAgent &&
-      knownAgent(session, pubkey)
-    )
+    if (soloParticipant && !recoveringSoloAgent && knownAgent(session, pubkey))
       throw new Error(
         "Add agents by tagging them in the chat composer instead.",
       );
@@ -297,7 +289,6 @@ async function addOneMember(
               (intent.retry && recorded)
             )
               return undefined;
-            beforeDispatch?.();
             return invitation();
           },
           queued: (id) => {
@@ -320,8 +311,6 @@ async function addOneMember(
         intent,
         receipts,
         soloParticipant,
-        allowSoloAgents,
-        beforeDispatch,
       );
     }
     await session.memberAdministration.refresh(channelId);
@@ -367,7 +356,6 @@ async function addOneMember(
       "This addition expired. Remove its Not sent item in Outbox, then try again.",
     );
 
-  beforeDispatch?.();
   const id = pending?.event.id ?? outbox.send(invitation(), recovery);
   if (pending?.delivery === "failed" || pending?.delivery === "unknown")
     outbox.retry(id);
@@ -434,8 +422,8 @@ const batchLimit = 100;
  * Adds people missing from a channel with one kind:9000 per role and at most
  * 100 people, then reads the roster once. Returns everyone it shows, including
  * people already there. A relay without batch support adds only the first
- * person each event names. Best effort: only an abort or `beforeDispatch`
- * throws. Everyone not returned is left to `addChannelMember`, which also says
+ * person each event names. Best effort: only an abort throws.
+ * Everyone not returned is left to `addChannelMember`, which also says
  * why they failed, as is anyone with an earlier single addition pending, so a
  * stale role is never resent. A batch is never resumed and never blocks one;
  * it stays in Outbox until everyone it names is settled.
@@ -447,7 +435,6 @@ export async function addChannelMembersAtOnce(
   intents: ReadonlyMap<string, MemberAdditionIntent>,
   signal: AbortSignal,
   soloParticipant = false,
-  beforeDispatch?: () => void,
   /** Receipts the single addition reads, including resolved ones. */
   receipts?: LocalEvents,
 ): Promise<ReadonlySet<string>> {
@@ -556,7 +543,6 @@ export async function addChannelMembersAtOnce(
           );
           if (!recipients.length) continue;
           dispatched = true;
-          beforeDispatch?.();
           const id = await attempt(() =>
             outbox.send(
               {
