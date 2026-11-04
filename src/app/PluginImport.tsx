@@ -352,7 +352,13 @@ export function PluginImport({
               : "an unknown source"
         }; remove it first to install it from ${sourceLabel(preview.source, candidate.path)}.`
       : null;
-  const pinned = requested ? bound?.source.commit : undefined;
+  const constraint = bound ? bound.source : initialGit;
+  const linkConstrained = !bound && !!(constraint?.commit || constraint?.path);
+  const pinned = bound
+    ? requested
+      ? bound.source.commit
+      : undefined
+    : initialGit?.commit;
   const pinError =
     pinned && preview && preview.commit?.toLowerCase() !== pinned
       ? "This repository is not at the commit that was requested. Nothing was installed."
@@ -554,8 +560,7 @@ export function PluginImport({
     linked = false,
   ) {
     if (!imports) return;
-    const commit = bound?.source.commit;
-    const path = bound?.source.path;
+    const { commit, path } = (linked ? initialGit : constraint) ?? {};
     await load(async () => {
       const signed = await authorizeGit?.(repository);
       const result = signed
@@ -568,7 +573,7 @@ export function PluginImport({
         : commit
           ? await imports.git(repository, reference, undefined, commit)
           : await imports.git(repository, reference);
-      return bound ? requestedFolder(result, path) : result;
+      return requestedFolder(result, path);
     }, linked);
   }
   async function requestedFolder(
@@ -1125,7 +1130,7 @@ export function PluginImport({
                         required
                         value={repository}
                         disabled={blocked}
-                        readOnly={!!bound}
+                        readOnly={!!bound || linkConstrained}
                         placeholder="https://github.com/owner/repository"
                         onChange={(event) => setRepository(event.target.value)}
                       />
@@ -1134,22 +1139,25 @@ export function PluginImport({
                       <Input
                         value={reference}
                         disabled={blocked}
-                        readOnly={!!bound}
+                        readOnly={!!bound || linkConstrained}
                         placeholder="Repository default"
                         onChange={(event) => setReference(event.target.value)}
                       />
                     </Field>
-                    {bound && (
+                    {(bound || linkConstrained) && (
                       <p className="m-0 break-all text-caption text-muted">
-                        Opened from {requester(bound.origin)}.{" "}
-                        {bound.source.commit
-                          ? `Pinned to commit ${shortCommit(bound.source.commit)}. Nothing is installed unless the fetched repository matches it. `
+                        {bound
+                          ? `Opened from ${requester(bound.origin)}. `
+                          : "Opened from a link. "}
+                        {constraint?.commit
+                          ? `Pinned to commit ${shortCommit(constraint.commit)}. Nothing is installed unless the fetched repository matches it. `
                           : ""}
-                        {bound.source.path
-                          ? `Plugin folder: ${bound.source.path}. `
+                        {constraint?.path
+                          ? `Plugin folder: ${constraint.path}. `
                           : ""}
-                        Review the source, then choose Find to read it. Nothing
-                        is installed until you confirm.
+                        {bound
+                          ? "Review the source, then choose Find to read it. Nothing is installed until you confirm."
+                          : "Nothing is installed until you confirm."}
                       </p>
                     )}
                     <p className="m-0 text-caption text-muted">
@@ -1281,7 +1289,7 @@ export function PluginImport({
                   </p>
                 )}
                 {reviewing && pinError && <p className="m-0">{pinError}</p>}
-                {reviewing && requested && preview.commit && (
+                {reviewing && (requested || pinned) && preview.commit && (
                   <p className="m-0 break-all text-caption text-muted">
                     Commit {shortCommit(preview.commit)}
                     {pinned && !pinError

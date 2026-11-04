@@ -3014,3 +3014,127 @@ it("carries a pinned commit through the signed community branch", async () => {
     pinned,
   );
 });
+
+function linkedHarness(
+  preview: ImportPreview,
+  source: Partial<{ path: string; commit: string }>,
+) {
+  const git = vi.fn(async () => preview);
+  const discard = vi.fn(async () => {});
+  const installImport = vi.fn(async () => true);
+  const manager = {
+    imports: { git, discard },
+    installImport,
+    change: vi.fn(async () => true),
+    snapshot: () => ({ error: null }),
+  } as unknown as PluginManager;
+  const element = (
+    <PluginImport
+      initialGit={{
+        repository: "https://example.com/plugins.git",
+        reference: "v1",
+        ...source,
+      }}
+      plugins={manager}
+      catalog={{ profile: "test", location: "test", plugins: [] }}
+      busy={false}
+    />
+  );
+  return { git, discard, installImport, element };
+}
+
+it("pins a linked source to its commit and installs the linked folder", async () => {
+  const { git, installImport, element } = linkedHarness(
+    requestedPreview(pinned, ["a", "plugins/b"]),
+    { commit: pinned, path: "plugins/b" },
+  );
+  render(element);
+  await screen.findByRole("dialog", { name: /^Review .+ access$/ });
+  expect(git).toHaveBeenCalledExactlyOnceWith(
+    "https://example.com/plugins.git",
+    "v1",
+    undefined,
+    pinned,
+  );
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "Commit 0123456789ab (matches the requested commit)",
+  );
+  expect(installImport).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Install plugin" }));
+  await waitFor(() =>
+    expect(installImport).toHaveBeenCalledExactlyOnceWith(
+      "requested-token",
+      "plugins/b",
+    ),
+  );
+});
+
+it("refuses a linked source whose fetched commit differs from the pin", async () => {
+  const { installImport, element } = linkedHarness(
+    requestedPreview("f".repeat(40)),
+    { commit: pinned },
+  );
+  render(element);
+  const dialog = await screen.findByRole("dialog", {
+    name: /^Review .+ access$/,
+  });
+  expect(dialog).toHaveTextContent("not at the commit that was requested");
+  expect(dialog).not.toHaveTextContent("matches the requested commit");
+  expect(screen.queryByRole("button", { name: "Install plugin" })).toBeNull();
+  expect(installImport).not.toHaveBeenCalled();
+});
+
+it("refuses a linked repository that lacks the linked folder", async () => {
+  const { discard, installImport, element } = linkedHarness(
+    requestedPreview(pinned, ["a"]),
+    { path: "plugins/b" },
+  );
+  render(element);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This repository has no plugin at plugins/b. Nothing was installed.",
+  );
+  expect(discard).toHaveBeenCalledWith("requested-token");
+  expect(installImport).not.toHaveBeenCalled();
+});
+
+it("locks a pinned link's source and keeps the pin when Find is retried", async () => {
+  const { git, element } = linkedHarness(requestedPreview(pinned), {
+    commit: pinned,
+    path: ".",
+  });
+  render(element);
+  const review = await screen.findByRole("dialog", {
+    name: /^Review .+ access$/,
+  });
+  fireEvent.click(within(review).getByRole("button", { name: "Back" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add a plugin" });
+  expect(
+    within(dialog).getByLabelText("Git or GitHub repository"),
+  ).toHaveAttribute("readonly");
+  expect(dialog).toHaveTextContent(
+    "Opened from a link. Pinned to commit 0123456789ab.",
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "Find plugins" }));
+  await waitFor(() => expect(git).toHaveBeenCalledTimes(2));
+  expect(git).toHaveBeenLastCalledWith(
+    "https://example.com/plugins.git",
+    "v1",
+    undefined,
+    pinned,
+  );
+});
+
+it("leaves an unconstrained link editable and unpinned", async () => {
+  const { git, element } = linkedHarness(requestedPreview(null), {});
+  render(element);
+  await screen.findByRole("dialog", { name: /^Review .+ access$/ });
+  expect(git).toHaveBeenCalledExactlyOnceWith(
+    "https://example.com/plugins.git",
+    "v1",
+  );
+  expect(screen.getByRole("dialog")).not.toHaveTextContent("Commit ");
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(screen.getByLabelText("Git or GitHub repository")).not.toHaveAttribute(
+    "readonly",
+  );
+});

@@ -102,7 +102,7 @@ source imports are not a versioned external SDK. See
 
 ## Open a Git import from a link
 
-Open `buzz://plugin-install?repository=<encoded-repository>[&ref=<encoded-ref>]`
+Open `buzz://plugin-install?repository=<encoded-repository>[&ref=<encoded-ref>][&path=<encoded-folder>][&commit=<hex>]`
 to open a preview in **Settings > Plugins > Manage plugins > Add**. The repository
 accepts HTTPS, `ssh://`, `git@host:path`, `github.com/owner/repo`, or `owner/repo`.
 Omit `ref` to use the repository default. For example, on macOS:
@@ -110,7 +110,21 @@ Omit `ref` to use the repository default. For example, on macOS:
 ```sh
 open 'buzz://plugin-install?repository=https%3A%2F%2Fgithub.com%2FOWNER%2FPLUGIN.git&ref=main'
 open 'buzz://plugin-install?repository=git%40github.com%3AOWNER%2FPLUGIN.git&ref=main'
+open 'buzz://plugin-install?repository=OWNER%2FPLUGINS&path=plugins%2Fone&commit=0123456789abcdef0123456789abcdef01234567'
 ```
+
+`path` names the plugin folder inside the repository. It is relative and
+`/`-separated; absolute paths, `.` or `..` segments, empty segments, backslashes and
+control characters make the link invalid, and an empty value or `.` means the
+repository root. The review then offers only that folder instead of asking you to
+choose, and refuses a repository with no plugin there.
+
+`commit` is a full 40- or 64-digit hex commit. It pins the link the same way
+`requestInstall` pins a plugin's request: the import refuses a reference whose tip is
+any other commit, the review checks the fetched commit again, and nothing installs
+unless it matches. A link that carries `path` or `commit` locks the repository and
+reference fields, so Find retries the same pinned source. Each of `repository`, `ref`,
+`path` and `commit` may appear once; a repeated key makes the link invalid.
 
 The link fetches a preview through the existing importer. Review the plugin and
 computer access, then select **Install plugin**. Opening the link does not install,

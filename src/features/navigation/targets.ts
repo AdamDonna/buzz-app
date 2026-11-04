@@ -14,6 +14,8 @@ export type NavigationScope = Readonly<{
 export type GitPluginSource = Readonly<{
   repository: string;
   reference: string;
+  path?: string;
+  commit?: string;
 }>;
 export type OpenTarget =
   | Readonly<{ version: 1; kind: "home" }>
@@ -67,6 +69,7 @@ const section = /^[a-z0-9][a-z0-9._-]{0,127}(?:\/[a-z0-9][a-z0-9._-]{0,127})?$/;
 const provider = /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/;
 const hex = /^[a-f0-9]{64}$/i;
 const paramKey = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const gitCommit = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const MAX_PARAMS = 16;
 const MAX_PARAM_LENGTH = 1024;
 const invalid = () => new Error("Invalid or unsupported navigation target");
@@ -93,9 +96,21 @@ function text(value: unknown, pattern = token): string {
   if (typeof value !== "string" || !pattern.test(value)) throw invalid();
   return value;
 }
+function pluginFolder(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 512 ||
+    /[\p{Cc}\\]/u.test(value)
+  )
+    throw invalid();
+  if (value === "" || value === ".") return ".";
+  if (value.split("/").some((part) => !part || part === "." || part === ".."))
+    throw invalid();
+  return value;
+}
 export function parseGitPluginSource(input: unknown): GitPluginSource {
   const value = record(input);
-  fields(value, ["repository", "reference"]);
+  fields(value, ["repository", "reference", "path", "commit"]);
   if (
     typeof value.repository !== "string" ||
     value.repository.length > 2048 ||
@@ -134,9 +149,18 @@ export function parseGitPluginSource(input: unknown): GitPluginSource {
     repository.hash
   )
     throw invalid();
+  if (
+    value.commit !== undefined &&
+    (typeof value.commit !== "string" || !gitCommit.test(value.commit))
+  )
+    throw invalid();
   return Object.freeze({
     repository: repository.href,
     reference: value.reference,
+    ...(value.path !== undefined ? { path: pluginFolder(value.path) } : {}),
+    ...(value.commit !== undefined
+      ? { commit: value.commit.toLowerCase() }
+      : {}),
   });
 }
 function boundScope(input: unknown): NavigationScope {

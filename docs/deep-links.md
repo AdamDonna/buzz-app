@@ -19,7 +19,7 @@ The OS ingress accepts the Buzz link forms and nothing else:
 
 - `buzz://mcp-authorize?version=1&client=<name>&callback=<loopback-url>&state=<state>&scope=<scopes>&code_challenge=<challenge>&code_challenge_method=S256`
 - `buzz://message?channel=<id>&id=<event>[&thread=<root>]`
-- `buzz://plugin-install?repository=<encoded-https-or-ssh-url>[&ref=<encoded-branch-or-tag>]`
+- `buzz://plugin-install?repository=<encoded-https-or-ssh-url>[&ref=<encoded-branch-or-tag>][&path=<encoded-folder>][&commit=<40-or-64-hex>]`
 - `buzz://channel/<id>`
 - `buzz://channel/<id>/<event>` (the original desktop message alias)
 - `buzz://repo?owner=<64-hex key>&d=<identifier>[&tab=<section>]`
@@ -35,8 +35,11 @@ External authorization links show owner consent. They never grant access on arri
 Plugin install links open **Settings > Plugins > Manage plugins** and fetch a
 preview from the Git repository and optional branch or tag. The repository accepts
 HTTPS, `ssh://`, `git@host:path`, `github.com/owner/repo`, or `owner/repo`.
-Percent-encode each query value. Review the plugin and computer access, then select
-**Install plugin**. Opening the link does not install, enable, or grant access.
+Percent-encode each query value. `path` selects the plugin folder inside the
+repository (relative, `/`-separated; no `..`, backslashes or absolute paths). `commit`
+pins the install to that exact commit: nothing installs unless the fetched repository
+matches it. Repeating any of the four keys makes the link invalid. Review the plugin
+and computer access, then select **Install plugin**. Opening the link does not install, enable, or grant access.
 You can close a linked preview while Git loads; its late result is discarded.
 An omitted `ref` uses the repository default. Duplicate known parameters and
 repository credentials are rejected.

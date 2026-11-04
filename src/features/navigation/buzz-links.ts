@@ -93,7 +93,7 @@ export function parseBuzzLink(href: string): BuzzLink | null {
         (url.pathname !== "" &&
           (url.pathname !== "/" ||
             !/^buzz:\/\/plugin-install\/\?/i.test(href))) ||
-        ["repository", "ref"].some(
+        ["repository", "ref", "path", "commit"].some(
           (key) => url.searchParams.getAll(key).length > 1,
         )
       )
@@ -103,6 +103,12 @@ export function parseBuzzLink(href: string): BuzzLink | null {
         source: parseGitPluginSource({
           repository: url.searchParams.get("repository") ?? "",
           reference: url.searchParams.get("ref") ?? "",
+          ...(url.searchParams.has("path")
+            ? { path: url.searchParams.get("path") }
+            : {}),
+          ...(url.searchParams.has("commit")
+            ? { commit: url.searchParams.get("commit") }
+            : {}),
         }),
       };
     }

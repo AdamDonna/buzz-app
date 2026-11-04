@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseOpenTarget, targetKey, type OpenTarget } from "./targets";
+import {
+  parseGitPluginSource,
+  parseOpenTarget,
+  targetKey,
+  type OpenTarget,
+} from "./targets";
 const viewer = "a".repeat(64);
 const conversation = {
   version: 1,
@@ -276,6 +281,71 @@ it("retains copied Git source fields only on the Plugins settings destination", 
   expect(() =>
     parseOpenTarget({ ...target, pluginImport: { ...source, enable: true } }),
   ).toThrow();
+  const pinned = {
+    ...source,
+    path: "plugins/one",
+    commit: "a".repeat(40),
+  };
+  expect(parseOpenTarget({ ...target, pluginImport: pinned })).toMatchObject({
+    pluginImport: pinned,
+  });
+  expect(() =>
+    parseOpenTarget({ ...target, pluginImport: { ...pinned, path: "../x" } }),
+  ).toThrow();
+});
+
+const gitSource = {
+  repository: "https://github.com/example/plugin",
+  reference: "release",
+};
+it("keeps an optional plugin folder and lowercased commit on a Git source", () => {
+  const commit = "A".repeat(40);
+  expect(
+    parseGitPluginSource({ ...gitSource, path: "plugins/one", commit }),
+  ).toEqual({ ...gitSource, path: "plugins/one", commit: "a".repeat(40) });
+  expect(
+    parseGitPluginSource({ ...gitSource, commit: "b".repeat(64) }),
+  ).toEqual({ ...gitSource, commit: "b".repeat(64) });
+  expect(parseGitPluginSource(gitSource)).toEqual(gitSource);
+  expect(
+    Object.isFrozen(parseGitPluginSource({ ...gitSource, path: "x" })),
+  ).toBe(true);
+  expect(parseGitPluginSource({ ...gitSource, path: "" }).path).toBe(".");
+  expect(parseGitPluginSource({ ...gitSource, path: "." }).path).toBe(".");
+});
+
+it.each([
+  "/abs",
+  "../up",
+  "a/../b",
+  "a/..",
+  "a/./b",
+  "a//b",
+  "a/",
+  "a\\b",
+  "a\u0000b",
+  "a\nb",
+  "x".repeat(513),
+])("rejects the plugin folder %j", (path) => {
+  expect(() => parseGitPluginSource({ ...gitSource, path })).toThrow();
+});
+
+it.each([
+  "",
+  "abc123",
+  "a".repeat(39),
+  "a".repeat(41),
+  "a".repeat(63),
+  "g".repeat(40),
+  ` ${"a".repeat(40)}`,
+])("rejects the pinned commit %j", (commit) => {
+  expect(() => parseGitPluginSource({ ...gitSource, commit })).toThrow();
+});
+
+it("rejects non-string plugin folders and commits", () => {
+  expect(() => parseGitPluginSource({ ...gitSource, path: 1 })).toThrow();
+  expect(() => parseGitPluginSource({ ...gitSource, commit: 1 })).toThrow();
+  expect(() => parseGitPluginSource({ ...gitSource, path: null })).toThrow();
 });
 
 it("bounds plugin link targets to plain string params", () => {

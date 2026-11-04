@@ -232,6 +232,48 @@ it.each([
     fail: "invalid-target",
   });
 });
+const commit = "0123456789abcdef0123456789abcdef01234567";
+it("carries an optional plugin folder and pinned commit in plugin links", () => {
+  const pinned = `${pluginLink}&path=plugins%2Fone&commit=${commit.toUpperCase()}`;
+  const target = {
+    version: 1,
+    kind: "settings",
+    section: "plugins",
+    pluginImport: {
+      repository: pluginRepository,
+      reference: "release/stable",
+      path: "plugins/one",
+      commit,
+    },
+  };
+  expect(buzzLinkTarget(pinned, scope)).toEqual(target);
+  expect(deepLinkStep(pinned, { selected: null })).toEqual({ open: target });
+  expect(buzzLinkTarget(`${pluginLink}&path=`, scope)).toMatchObject({
+    pluginImport: { path: "." },
+  });
+  expect(buzzLinkTarget(`${pluginLink}&path=.`, scope)).toMatchObject({
+    pluginImport: { path: "." },
+  });
+});
+it.each([
+  "path=a&path=b",
+  `commit=${"a".repeat(40)}&commit=${"b".repeat(40)}`,
+  "path=%2Fetc",
+  "path=..%2Fx",
+  "path=a%2F..%2Fb",
+  "path=a%5Cb",
+  "path=a%00b",
+  "commit=",
+  "commit=abc123",
+  `commit=${"a".repeat(41)}`,
+  `commit=${"g".repeat(40)}`,
+])("rejects a plugin link with %s", (query) => {
+  const href = `${pluginLink}&${query}`;
+  expect(parseBuzzLink(href)).toBeNull();
+  expect(deepLinkStep(href, clientForPluginLink)).toEqual({
+    fail: "invalid-target",
+  });
+});
 const clientForPluginLink = {
   selected: scope.communityOrigin,
   viewer: scope.viewer,
