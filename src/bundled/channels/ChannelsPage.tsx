@@ -955,8 +955,12 @@ function ChannelWorkspace({
   // Open in channel also shows the thread's root in the timeline, reading
   // older pages to find it. The thread keeps focus; Members covers both.
   // The target alone decides, so the list is held from the visit's start.
+  // Like exact opening, it waits for a live session: cached rows decide
+  // nothing, so they stay shown, and the seek runs beside them on connecting.
   const contextRoot =
+    !cached &&
     current &&
+    !current.cached &&
     !membersRequested &&
     !exact?.inTimeline &&
     navigation?.target.kind === "conversation" &&

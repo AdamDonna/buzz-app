@@ -11,8 +11,9 @@ import type { OpenTarget } from "../../features/navigation/targets";
 import type { Panels } from "../../features/panels/service";
 import type { ReadFilter, RelayEvent } from "../../features/relay/events";
 import { matchesEvent } from "../../features/relay/projection";
-import type { RelayData } from "../../features/relay/service";
+import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import { createRelaySession } from "../../features/relay/session";
+import type { ReadTransport } from "../../features/relay/transport";
 import {
   bounds,
   flush,
@@ -134,60 +135,60 @@ function page(filter: ReadFilter, history: readonly RelayEvent[]) {
 
 /** Channels with alpha's thread root beyond its head page, or, with
  * `root: false`, absent from its history. Alpha's older pages wait for
- * `release()`. A `cached` session has only alpha's saved head. */
+ * `release()`. A `cached` session has only alpha's saved head until
+ * `connect()`. */
 async function channelsPage({ root = true, cached = false } = {}) {
   const { viewer, authority, reply, newer, channels } = fixture;
   const alpha = [...(root ? [fixture.root] : []), reply, ...newer];
   const held: ((error?: Error) => void)[] = [];
-  const owner = createRelaySession(
-    {
-      viewer: viewer.pubkey,
-      relayAuthor: authority.pubkey,
-      media: () => undefined,
-      query: async (filters) => {
-        const window = filters.find((filter) => filter.top_level);
-        if (!window)
-          return [...channels, ...alpha].filter((event) =>
-            filters.some((filter) => matchesEvent(event, filter)),
-          );
-        const channelId = window["#h"]?.[0];
-        if (channelId === "alpha" && window.until !== undefined)
-          await new Promise<void>((resolve, reject) =>
-            held.push((error) => (error ? reject(error) : resolve())),
-          );
-        return page(window, channelId === "alpha" ? alpha : []);
+  const transport: ReadTransport = {
+    viewer: viewer.pubkey,
+    relayAuthor: authority.pubkey,
+    media: () => undefined,
+    query: async (filters) => {
+      const window = filters.find((filter) => filter.top_level);
+      if (!window)
+        return [...channels, ...alpha].filter((event) =>
+          filters.some((filter) => matchesEvent(event, filter)),
+        );
+      const channelId = window["#h"]?.[0];
+      if (channelId === "alpha" && window.until !== undefined)
+        await new Promise<void>((resolve, reject) =>
+          held.push((error) => (error ? reject(error) : resolve())),
+        );
+      return page(window, channelId === "alpha" ? alpha : []);
+    },
+  };
+  const outboxStorage = { load: () => [], save: () => {} };
+  const owner = createRelaySession(transport, {
+    outboxStorage,
+    ...(cached && {
+      prepared: true,
+      cachedOnly: true,
+      persistence: {
+        readStartup: async () => ({
+          discovery: {
+            savedAt: Date.now(),
+            relayAuthor: authority.pubkey,
+            events: channels,
+          },
+        }),
+        read: async () => [
+          {
+            channelId: "alpha",
+            savedAt: Date.now(),
+            events: page({ "#h": ["alpha"], limit: 20 }, alpha),
+            profiles: [],
+          },
+        ],
+        write: async () => {},
+        remove: async () => {},
+        retain: async () => {},
+        clear: async () => {},
+        close() {},
       },
-    },
-    {
-      outboxStorage: { load: () => [], save: () => {} },
-      ...(cached && {
-        prepared: true,
-        cachedOnly: true,
-        persistence: {
-          readStartup: async () => ({
-            discovery: {
-              savedAt: Date.now(),
-              relayAuthor: authority.pubkey,
-              events: channels,
-            },
-          }),
-          read: async () => [
-            {
-              channelId: "alpha",
-              savedAt: Date.now(),
-              events: page({ "#h": ["alpha"], limit: 20 }, alpha),
-              profiles: [],
-            },
-          ],
-          write: async () => {},
-          remove: async () => {},
-          retain: async () => {},
-          clear: async () => {},
-          close() {},
-        },
-      }),
-    },
-  );
+    }),
+  });
   owners.push(owner);
   if (cached) await owner.restore();
   owner.session.channels.ensureList();
@@ -195,17 +196,21 @@ async function channelsPage({ root = true, cached = false } = {}) {
     expect(owner.session.channels.list().status).toBe("ready"),
   );
   const scope = `https://relay.test:${viewer.pubkey}`;
-  const snapshot = {
-    status: cached ? ("connecting" as const) : ("ready" as const),
+  let snapshot: RelaySnapshot = {
+    status: cached ? "connecting" : "ready",
     ...(cached && { cached: true as const }),
     generation: 1,
     scope,
     viewer: viewer.pubkey,
     session: owner.session,
   };
+  const listeners = new Set<() => void>();
   const relay: RelayData = {
     snapshot: () => snapshot,
-    subscribe: () => () => {},
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     retry() {},
     disconnect() {},
     clearCache: async () => {},
@@ -286,6 +291,25 @@ async function channelsPage({ root = true, cached = false } = {}) {
       else ({ rerender } = render(view(navigation)));
       shown = navigation;
     },
+    /** Hand off to a live session in the same generation, as reconnecting
+     * does once it has loaded the list and alpha's head. */
+    async connect() {
+      const live = createRelaySession(transport, { outboxStorage });
+      owners.push(live);
+      live.session.channels.ensureList();
+      await vi.waitFor(() =>
+        expect(live.session.channels.list().status).toBe("ready"),
+      );
+      live.session.channels.ensure("alpha");
+      await vi.waitFor(() =>
+        expect(live.session.channels.window("alpha").status).toBe("ready"),
+      );
+      const { cached: _cached, ...connecting } = snapshot;
+      snapshot = { ...connecting, status: "ready", session: live.session };
+      act(() => {
+        for (const listener of listeners) listener();
+      });
+    },
     /** Answer the oldest held older-page read, or fail it with `error`. */
     async release(error?: Error) {
       const next = held.shift();
@@ -358,22 +382,35 @@ it("opens the timeline at its usual place when an older page fails", async () =>
   expect(timeline("alpha")).not.toBeNull();
 });
 
-it("holds the list through a cached session, which cannot seek", async () => {
+it("shows a cached session's rows, then seeks beside them once it connects", async () => {
   const h = await channelsPage({ cached: true });
-  h.go(h.visit(h.inChannel(), "visit"));
+  const first = h.visit(h.inChannel(), "visit");
+  h.go(first);
+  // Cached rows decide nothing, so the list shows them without seeking.
+  await vi.waitFor(() => expect(timeline("alpha")).not.toBeNull());
+  expect(h.session.channels.window("alpha").freshness).toBe("cached");
+  await act(flush);
+  expect(renders("alpha").some((body) => body.holding)).toBe(false);
+  expect(latest("alpha")?.inlineTarget).toBeUndefined();
+  expect(h.held).toHaveLength(0);
+  const list = timeline("alpha");
+  const shown = renders("alpha").length;
+  await h.connect();
+  await vi.waitFor(() => expect(h.held).toHaveLength(1));
+  await h.release();
   await vi.waitFor(() =>
-    expect(h.session.channels.window("alpha")).toMatchObject({
-      status: "ready",
-      freshness: "cached",
+    expect(latest("alpha")?.inlineTarget).toMatchObject({
+      messageId: fixture.root.id,
+      signal: first.signal,
+      focus: false,
     }),
   );
-  // The saved head could show, but cached rows decide nothing.
-  expect(h.session.channels.window("alpha").rows.length).toBeGreaterThan(0);
-  await act(flush);
-  expect(renders("alpha").length).toBeGreaterThan(0);
-  expect(renders("alpha").every((body) => body.holding)).toBe(true);
-  expect(timeline("alpha")).toBeNull();
-  expect(h.held).toHaveLength(0);
+  expect(
+    renders("alpha")
+      .slice(shown)
+      .some((body) => body.holding),
+  ).toBe(false);
+  expect(timeline("alpha")).toBe(list);
 });
 
 it("seeks nothing and holds nothing under Members", async () => {

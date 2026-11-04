@@ -1671,7 +1671,8 @@ timeline: the list waits while older pages are read to find it, within the same
 bound as conversation tabs, then reveals and marks the root without taking the
 thread's focus. A root it cannot find leaves the timeline at its usual place.
 Back or Forward to that visit, or closing Members, seeks the root again; a list
-already shown stays in place while it does.
+already shown stays in place while it does. Cached rows cannot place the root,
+so a cached session shows them as usual and seeks once it connects.
 
 Navigation completes only after the exact folded target is visible and focused.
 Reclick/Back reveals again; live/profile updates do not steal focus. The shared
