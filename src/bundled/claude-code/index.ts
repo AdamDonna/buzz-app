@@ -1,3 +1,4 @@
+import { modelProxyEndpoints } from "../../features/agents/model-proxy-host";
 import { CLAUDE_HOOK_EVENTS } from "./hooks";
 import { repositoriesContext } from "../../features/communities/repositories";
 // Claude agents: an agent type whose agents are Claude sessions on
@@ -26,7 +27,23 @@ export const apply: PluginModule["apply"] = (ctx) => {
   if (!isTauri() || !/Mac|Linux/i.test(navigator.platform)) return;
   const { agents, host } = ctx;
   const typeKey = `${ctx.pluginOwner?.id ?? "buzz.claude-code"}/${TYPE_ID}`;
-  const spawn = host.spawn && withScript(host.spawn.bind(host));
+  const endpoint = modelProxyEndpoints(ctx, typeKey);
+  const direct = host.spawn && withScript(host.spawn.bind(host));
+  const spawn: typeof direct =
+    direct &&
+    (async (id, options) =>
+      direct(
+        id,
+        id === "claude"
+          ? {
+              ...options,
+              env: {
+                ...options?.env,
+                ANTHROPIC_BASE_URL: await endpoint("anthropic"),
+              },
+            }
+          : options,
+      ));
   const readFile = host.readFile?.bind(host);
   const setup = new ClaudeSetup(spawn, (input) => host.request(input));
   const providerDefaults = new ClaudeDefaults(agents.storage);

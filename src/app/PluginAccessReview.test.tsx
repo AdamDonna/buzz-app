@@ -184,3 +184,21 @@ it("uses the existing unchanged disclosure for managed saves", () => {
     screen.getByRole("button", { name: /Save temporary plugin files/ }),
   ).toBeVisible();
 });
+
+it("discloses model request access when a proxy plugin is added", () => {
+  render(
+    <PluginAccessReview
+      manifest={{
+        id: "trim",
+        name: "Trim",
+        apiVersion: 1,
+        host: { modelProxies: ["buzz.codex/codex"] },
+      }}
+    />,
+  );
+  expect(
+    screen.getByRole("button", {
+      name: /Read and change buzz.codex\/codex model requests/,
+    }),
+  ).toBeInTheDocument();
+});

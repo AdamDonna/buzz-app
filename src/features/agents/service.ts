@@ -1,3 +1,8 @@
+import {
+  createModelProxies,
+  type AgentModelProxy,
+  type ModelProxyRequest,
+} from "./model-proxy";
 import { followUpQueue } from "../messages/follow-up-queue";
 import type {} from "../navigation/service";
 import { removeSessionPrompts } from "./session-prompts";
@@ -1017,6 +1022,13 @@ export type NewAgent = Readonly<{
   config?: unknown;
 }>;
 export type Agents = {
+  /** Register a model request transform with declared harness access. */
+  registerModelProxy(proxy: AgentModelProxy): void;
+  /** Dispatch only for the calling harness plugin. Credentials stay native. */
+  dispatchModelProxy(
+    harness: string,
+    request: ModelProxyRequest,
+  ): Promise<string>;
   registerHook(hook: AgentHook): void;
   /** Dispatches hooks for this plugin's agent types in contribution order. */
   dispatchHook(
@@ -1491,6 +1503,18 @@ const wssOf = (origin: string) =>
   relayOrigin(origin).replace(/^https:/, "wss:");
 
 export class AgentsService extends Service implements Agents {
+  private readonly modelProxies;
+  registerModelProxy(proxy: AgentModelProxy) {
+    this.modelProxies.register(this.ctx, proxy);
+  }
+  dispatchModelProxy(harness: string, request: ModelProxyRequest) {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !harness.startsWith(`${owner.id}/`))
+      throw new Error(
+        "Plugins can dispatch model requests only for their own types",
+      );
+    return this.modelProxies.dispatch(harness, request);
+  }
   private readonly hookContributions;
   registerHook(hook: AgentHook) {
     const adapter = this.contributions
@@ -1637,6 +1661,7 @@ export class AgentsService extends Service implements Agents {
     super(ctx, "agents");
     this.contributions = createContributions<AgentType>(ctx);
     this.hookContributions = createAgentHooks(ctx);
+    this.modelProxies = createModelProxies(ctx);
     this.tabContributions = createContributions<AgentAddedTab>(ctx);
     this.attentionControls = createContributions<{ id: string }>(ctx);
     this.addedTools = createContributions<AddedTool & { id: string }>(ctx);

@@ -1,3 +1,4 @@
+import { modelProxyEndpoints } from "../../features/agents/model-proxy-host";
 import { CODEX_HOOK_EVENTS } from "./hook-bridge";
 import { repositoriesContext } from "../../features/communities/repositories";
 import { isTauri } from "@tauri-apps/api/core";
@@ -60,6 +61,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
           },
         }
       : undefined,
+    modelProxyEndpoints(ctx, typeKey),
   );
   /** A Codex agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */

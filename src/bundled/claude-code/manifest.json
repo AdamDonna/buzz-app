@@ -8,6 +8,7 @@
     "tags": ["Essentials", "code", "coding-agents"]
   },
   "host": {
+    "modelEndpoint": true,
     "networkOrigins": ["https://downloads.claude.ai"],
     "files": true,
     "processes": [

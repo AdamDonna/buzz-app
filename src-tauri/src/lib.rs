@@ -42,6 +42,7 @@ mod host_mcp;
 mod host_process;
 mod host_request;
 mod identity;
+mod model_proxy;
 mod native_mcp;
 mod nsec_backup;
 mod nsec_backup_choice;
@@ -723,6 +724,9 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         plugin_host_process_spawn,
         plugin_host_process_write,
         plugin_host_process_kill,
+        model_proxy::plugin_model_proxy_serve,
+        model_proxy::plugin_model_proxy_reply,
+        model_proxy::plugin_model_proxy_close,
         plugin_host_mcp_serve,
         plugin_host_mcp_authorize,
         plugin_host_mcp_reply,
@@ -1042,6 +1046,7 @@ pub fn run() {
         .manage(HostCalls::default())
         .manage(HostProcesses::default())
         .manage(HostMcpServers::default())
+        .manage(model_proxy::ModelProxies::default())
         .manage(OAuthCallbackHost::default())
         .manage(NsecBackupHost::default().with_federated_identity(federated_identity))
         .manage(Notifications::default())
@@ -1089,6 +1094,7 @@ pub fn run() {
                 webview.state::<federated_identity::FederatedIdentity>().clear_discoveries();
                 webview.state::<HostProcesses>().stop_all();
                 webview.state::<HostMcpServers>().stop_all();
+                webview.state::<model_proxy::ModelProxies>().stop_all();
                 webview.state::<app_agents::AppAgentHost>().page_load();
             }
             browser::page_load(webview, payload);
@@ -1137,6 +1143,7 @@ pub(crate) fn shut_down<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     app.state::<HostProcesses>().shutdown();
     host_command::stop_login_shell_probe();
     app.state::<HostMcpServers>().stop_all();
+    app.state::<model_proxy::ModelProxies>().stop_all();
     browser::shutdown();
     if let Err(error) = app.state::<Terminals>().shutdown() {
         eprintln!("Terminal shutdown failed: {error}");

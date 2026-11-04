@@ -137,7 +137,16 @@ type McpEvent =
  * This permits token reuse after initialization. The handler must bind identity
  * itself and grant every client the same authority. Defaults to false. */
 export type HostMcpOptions = Readonly<{ sharedSession?: boolean }>;
+/** A native loopback model endpoint owned by the harness plugin. */
+export type HostModelProxy = Readonly<{ url: string; close(): Promise<void> }>;
 export interface Host {
+  /** Serve streamed model requests with body transformations. Requires host.modelEndpoint. */
+  serveModelProxy?: (
+    upstream: string,
+    handler: (
+      request: import("../agents/model-proxy").ModelProxyRequest,
+    ) => Promise<string>,
+  ) => Promise<HostModelProxy>;
   denyMcpAuthorization?(request: McpAuthorization): Promise<void>;
   runCommand(id: string, input?: string): Promise<string | null>;
   /** Starts a process the manifest declares in `host.processes`. It lives until
@@ -462,6 +471,59 @@ export class HostService extends Service implements Host {
           request,
         }).catch(rethrow),
     });
+  }
+
+  async serveModelProxy(
+    upstream: string,
+    handler: (
+      request: import("../agents/model-proxy").ModelProxyRequest,
+    ) => Promise<string>,
+  ): Promise<HostModelProxy> {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Model endpoints require a desktop plugin");
+    let handle: number | undefined;
+    type Event =
+      | { type: "request"; request: number; path: string; body: string }
+      | { type: "closed" };
+    const onEvent = new Channel<Event>((event) => {
+      if (event.type !== "request") return;
+      void (async () => {
+        let body: string | null = null;
+        try {
+          body = await handler({ path: event.path, body: event.body });
+        } catch {
+          console.warn("Model proxy callback failed", owner.id);
+        }
+        await invoke("plugin_model_proxy_reply", {
+          id: owner.id,
+          handle,
+          request: event.request,
+          body,
+        }).catch(() => {});
+      })();
+    });
+    const server = await invoke<{ handle: number; url: string }>(
+      "plugin_model_proxy_serve",
+      {
+        id: owner.id,
+        revision: owner.revision,
+        upstream,
+        onEvent,
+      },
+    );
+    handle = server.handle;
+    const close = () =>
+      invoke<void>("plugin_model_proxy_close", { id: owner.id, handle }).catch(
+        () => {},
+      );
+    try {
+      this.ctx.effect(() => () => void close(), "model proxy listener");
+    } catch (error) {
+      void close();
+      throw error;
+    }
+    return Object.freeze({ url: server.url, close });
   }
 
   async denyMcpAuthorization(request: McpAuthorization) {

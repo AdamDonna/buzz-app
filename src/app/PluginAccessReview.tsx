@@ -55,6 +55,28 @@ function hostDeclarations(
   types: readonly RegisteredAgentType[],
 ) {
   return [
+    ...(manifest.host?.modelEndpoint
+      ? [
+          {
+            key: "modelEndpoint",
+            signature: "Serve model endpoints",
+            title: "Model endpoints:",
+            label: "Serve model forwarding endpoints on this computer",
+            hint: "For harness plugins. Can forward model requests and their authentication headers to an upstream service.",
+            icon: PlugIcon,
+            details: null,
+          },
+        ]
+      : []),
+    ...(manifest.host?.modelProxies ?? []).map((harness) => ({
+      key: `modelProxies:${harness}`,
+      signature: `Model proxy: ${harness}`,
+      title: "Model proxy:",
+      label: `Read and change ${types.find((type) => type.key === harness)?.title ?? harness} model requests`,
+      hint: "Can read conversation content and change requests sent to the model. Authentication headers remain in the native host.",
+      icon: PlugIcon,
+      details: <code className={styles.sourcePath}>{harness}</code>,
+    })),
     ...(manifest.host?.agentHooks ?? []).map((harness) => ({
       key: `agentHooks:${harness}`,
       signature: `Agent hooks: ${harness}`,

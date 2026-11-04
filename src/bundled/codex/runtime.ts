@@ -276,6 +276,7 @@ export class CodexRuntime {
         input: unknown,
       ): Promise<Record<string, unknown>>;
     },
+    private readonly modelEndpoint?: (upstream: string) => Promise<string>,
   ) {}
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -1456,6 +1457,9 @@ export class CodexRuntime {
       config: {
         mcp_servers?: Record<string, Record<string, unknown>>;
         model_reasoning_summary?: string | null;
+        model_provider?: string;
+        model_providers?: Record<string, { base_url?: string }>;
+        openai_base_url?: string;
         features?: { hooks?: boolean; codex_hooks?: boolean };
       };
     }>("config/read", { cwd: workspace });
@@ -1507,6 +1511,27 @@ export class CodexRuntime {
           hookAdapter.run(agent.key, session, event, input),
         )
       : undefined;
+    const proxy: Record<string, unknown> = {};
+    if (this.modelEndpoint) {
+      const provider = normalized.config.model_provider ?? "openai";
+      let upstream = normalized.config.model_providers?.[provider]?.base_url;
+      if (!upstream && provider === "openai") {
+        upstream = normalized.config.openai_base_url;
+        if (!upstream) {
+          const account = await rpc.request<{ account?: { type?: string } }>(
+            "account/read",
+            { refreshToken: false },
+          );
+          upstream = account.account?.type === "chatgpt" ? "chatgpt" : "openai";
+        }
+      }
+      if (!upstream)
+        throw new Error("The Codex model provider has no proxyable base URL");
+      proxy["features.enable_request_compression"] = false;
+      proxy[`model_providers.${provider}.supports_websockets`] = false;
+      proxy[`model_providers.${provider}.base_url`] =
+        await this.modelEndpoint(upstream);
+    }
     const params = {
       model,
       cwd: workspace,
@@ -1516,6 +1541,7 @@ export class CodexRuntime {
       // agent's own watches and timers start work.
       sandbox: "danger-full-access",
       config: {
+        ...proxy,
         ...(hooks ? { "hooks.state": hooks } : {}),
         web_search: "disabled",
         mcp_servers: { ...mcp, ...bridge?.config },

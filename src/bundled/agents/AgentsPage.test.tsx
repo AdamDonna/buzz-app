@@ -394,6 +394,8 @@ function setup(
     updateRequests: () => [],
     dismissUpdate: vi.fn(),
     approveUpdate: vi.fn(),
+    registerModelProxy: () => {},
+    dispatchModelProxy: async (_, request) => request.body,
     registerHook: vi.fn(),
     dispatchHook: vi.fn(async () => undefined),
     configHistory: () => undefined,

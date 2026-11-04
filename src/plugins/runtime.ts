@@ -153,6 +153,9 @@ export class PluginRuntime {
         pluginOwner: Object.freeze({
           id: entry.plugin.manifest.id,
           revision: entry.plugin.revision,
+          modelProxies: Object.freeze([
+            ...(entry.plugin.manifest.host?.modelProxies ?? []),
+          ]),
           agentHooks: Object.freeze([
             ...(entry.plugin.manifest.host?.agentHooks ?? []),
           ]),

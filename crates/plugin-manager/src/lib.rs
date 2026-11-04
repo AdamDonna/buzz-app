@@ -58,6 +58,12 @@ pub struct HostGrants {
     /// Hook callbacks may observe and influence these agent types.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_hooks: Vec<String>,
+    /// Request transformations may read and alter these harnesses' model bodies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_proxies: Vec<String>,
+    /// Serve native model forwarding endpoints for locally run harnesses.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub model_endpoint: bool,
     #[serde(default)]
     pub commands: Vec<HostCommand>,
     #[serde(default)]
@@ -221,7 +227,8 @@ impl Manifest {
             }
         }
         if let Some(host) = &self.host {
-            if host.agent_hooks.len() > 16
+            if host.model_proxies.len() > 16
+                || host.agent_hooks.len() > 16
                 || host.commands.len() > 16
                 || host.network_origins.len() > 16
                 || host.processes.len() > 16
@@ -235,6 +242,15 @@ impl Manifest {
                 valid_id(kind)?;
                 if !hook_types.insert(key) {
                     return Err("Duplicate agent hook type".into());
+                }
+            }
+            let mut proxy_types = std::collections::HashSet::new();
+            for key in &host.model_proxies {
+                let (plugin, kind) = key.split_once('/').ok_or("Invalid model proxy type")?;
+                valid_id(plugin)?;
+                valid_id(kind)?;
+                if !proxy_types.insert(key) {
+                    return Err("Duplicate model proxy type".into());
                 }
             }
             if let Some(grant) = &host.federated_identity {
@@ -2598,6 +2614,25 @@ mod tests {
         assert!(plugin.enabled);
         assert_eq!(plugin.revision, first);
         assert_eq!(plugin.previous, None);
+    }
+    #[test]
+    fn validates_model_proxy_grants() {
+        for (keys, valid) in [
+            (
+                vec!["buzz.claude-code/claude-code", "buzz.codex/codex"],
+                true,
+            ),
+            (vec!["codex"], false),
+            (vec!["buzz.codex/codex", "buzz.codex/codex"], false),
+            (vec!["buzz.codex/../codex"], false),
+        ] {
+            let manifest: super::Manifest = serde_json::from_value(serde_json::json!({
+                "id": "trimmer", "name": "Trimmer", "apiVersion": 1,
+                "host": { "modelProxies": keys, "modelEndpoint": true },
+            }))
+            .unwrap();
+            assert_eq!(manifest.validate().is_ok(), valid);
+        }
     }
     #[test]
     fn validates_agent_hook_grants() {

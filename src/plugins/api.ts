@@ -17,8 +17,12 @@ export type PluginManifest = Readonly<{
     tags?: readonly string[];
   }>;
   host?: Readonly<{
+    /** Serve native model forwarding endpoints for a harness plugin. */
+    modelEndpoint?: boolean;
     /** Observe and influence native hook events for these agent type keys. */
     agentHooks?: readonly string[];
+    /** Read and transform model requests for these agent type keys. */
+    modelProxies?: readonly string[];
     commands?: readonly Readonly<{
       id: string;
       program: string;
@@ -79,6 +83,8 @@ declare module "@deepseek-ai/cordis" {
       id: string;
       revision: string;
       agentHooks?: readonly string[];
+      /** Read and transform model requests for these agent type keys. */
+      modelProxies?: readonly string[];
     }>;
   }
 }
