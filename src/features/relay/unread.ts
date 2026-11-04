@@ -107,8 +107,9 @@ export interface UnreadCapability {
   retrySync(): Promise<void>;
   /** Durable local intent revision, not sync-health changes. */
   revision(): number;
-  /** Whether a manual unread in this channel was saved after `revision`. */
-  markedSince(channelId: string, revision: number): boolean;
+  /** Whether a manual unread that reading this target clears was saved
+   * after `revision`: anywhere in a channel, or the thread or message itself. */
+  markedSince(target: ReadTarget, revision: number): boolean;
   /** Access/cache/connection retirement fence. */
   generation(): number;
   reading(channelId: string): ReadingHandle;
@@ -2092,10 +2093,12 @@ export function createUnread({
       await repair();
     },
     revision: reads.revision,
-    markedSince(channelId, revision) {
-      return [...channelIntentKeys(channelId)].some(
-        (key) => (reads.localUnread(key) ?? 0) > revision,
-      );
+    markedSince(target, revision) {
+      const keys =
+        target.kind === "channel"
+          ? [...channelIntentKeys(target.channelId)]
+          : [targetKey(target)];
+      return keys.some((key) => (reads.localUnread(key) ?? 0) > revision);
     },
     generation: () => epoch,
     retrySync: async () => {

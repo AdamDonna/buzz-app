@@ -750,7 +750,7 @@ function InboxList({
     // a later Mark as unread is never overridden by it.
     let readNext: (() => Promise<unknown>) | undefined;
     let reading: Promise<unknown> | undefined;
-    let readChannel = "";
+    let readTargets: readonly InboxItem["target"][] = [];
     let readSince = 0;
     // Archiving the open conversation closes its tab and opens the next;
     // restoring it keeps its tab.
@@ -799,7 +799,10 @@ function InboxList({
                           ),
                         ),
                       );
-              readChannel = next.channelId;
+              readTargets =
+                next.target.kind === "channel"
+                  ? [next.target]
+                  : next.readThrough.map((step) => step.target);
               readSince = session.unread.revision();
               reading = readNext();
             } catch {
@@ -843,9 +846,14 @@ function InboxList({
     };
     void run(async () => {
       navigate();
-      // A failed read retries only until the conversation is marked unread
-      // again: that newer choice is the one to keep.
-      if (readNext && session.unread.markedSince(readChannel, readSince))
+      // A failed read retries only until something it would clear is marked
+      // unread again: that newer choice is the one to keep.
+      if (
+        readNext &&
+        readTargets.some((target) =>
+          session.unread.markedSince(target, readSince),
+        )
+      )
         readNext = undefined;
       const following = reading ?? readNext?.();
       reading = undefined;
