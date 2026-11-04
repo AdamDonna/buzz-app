@@ -64,6 +64,42 @@ test("Settings opens over the retained workspace and closing restores the prior 
   await expect(button(page, "Your profile")).toBeFocused();
 });
 
+test("long Settings sections end with the dialog padding at every width", async ({
+  page,
+  app,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto(app.origin);
+  await openSettings(page);
+  await selectSettingsSection(page, "Profile");
+  const content = page.getByRole("region", { name: "Profile", exact: true });
+  // Measure the gap between the section's end and the end of whichever pane
+  // scrolls it: the detail beside the navigation, or the stacked layout.
+  const endGap = () =>
+    content.evaluate((section) => {
+      let port = section.parentElement;
+      while (
+        !/auto|scroll/.test(getComputedStyle(port).overflowY) ||
+        port.scrollHeight <= port.clientHeight
+      )
+        port = port.parentElement;
+      port.scrollTop = port.scrollHeight;
+      const padding = Number.parseFloat(
+        getComputedStyle(section.closest(".buzz-dialog-navigation-detail"))
+          .paddingBottom,
+      );
+      const gap =
+        port.getBoundingClientRect().top +
+        port.clientTop +
+        port.clientHeight -
+        section.getBoundingClientRect().bottom;
+      return { padding, gap: Math.round(gap) };
+    });
+  await expect.poll(endGap).toEqual({ padding: 32, gap: 32 });
+  await page.setViewportSize({ width: 480, height: 600 });
+  await expect.poll(endGap).toEqual({ padding: 16, gap: 16 });
+});
+
 test("short narrow Settings keeps plugin copy and controls reachable at 200% interface size", async ({
   page,
   app,
