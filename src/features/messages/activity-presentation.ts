@@ -158,6 +158,8 @@ export function activityPresentation(
   const requests = new Map<string, string>();
   if (rootId) requests.set(rootId, rootId);
   const representedAgents = new Map<string, string[]>();
+  // Each request's latest public reply row per agent.
+  const publicReplies = new Map<string, Map<string, string>>();
   const activityAuthors = new Set(
     rows
       .filter((row) => row.audience === "agents" || row.agentEnvelope)
@@ -186,7 +188,18 @@ export function activityPresentation(
       const represented = representedAgents.get(rowRequest) ?? [];
       if (!represented.includes(row.authorId)) represented.push(row.authorId);
       representedAgents.set(rowRequest, represented);
+      if (row.audience !== "agents") {
+        const replies = publicReplies.get(rowRequest) ?? new Map();
+        replies.set(row.authorId, row.id);
+        publicReplies.set(rowRequest, replies);
+      }
     }
+  }
+  const repliedAgents = new Map<string, string[]>();
+  const replyRequests = new Map<string, string>();
+  for (const [requestId, replies] of publicReplies) {
+    repliedAgents.set(requestId, [...replies.keys()]);
+    for (const id of replies.values()) replyRequests.set(id, requestId);
   }
   const groups: ActivityPresentation[] = [];
   const bubbleAnchors = new Set<string>();
@@ -250,7 +263,14 @@ export function activityPresentation(
       standalone,
     });
   }
-  return { groups, byRow, representedAgents, bubbleAnchors };
+  return {
+    groups,
+    byRow,
+    representedAgents,
+    repliedAgents,
+    replyRequests,
+    bubbleAnchors,
+  };
 }
 export function useActivityPresentation(
   rows: readonly ChannelMessage[],

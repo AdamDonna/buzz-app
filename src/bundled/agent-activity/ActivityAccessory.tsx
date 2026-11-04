@@ -63,9 +63,38 @@ import { AgentResponsePreview } from "../../features/messages/AgentResponsePrevi
 const noSubscribe = () => () => {};
 export type ActivityAgents = WorkStopAgents;
 type ActivityProps = ComposerAccessoryProps & { agents?: ActivityAgents };
-/** Activity belongs to the exact triggering message, not the composer. */
+const noWork: RequestWork[] = [];
+/** Activity belongs to the exact triggering message, not the composer. Once an
+ * agent has publicly replied, its stopped note follows that reply instead. */
 export function ActivityAccessory(props: ActivityProps) {
-  const { session, channelId, message, canOpen } = props;
+  const request = props.stoppedRequest;
+  const author = props.message?.authorId;
+  return (
+    <>
+      <MessageActivity {...props} />
+      {request && author && (
+        <MessageActivity
+          {...props}
+          message={request}
+          threadRootId={request.threadRootId}
+          representedAgents={undefined}
+          repliedAgents={undefined}
+          stoppedRequest={undefined}
+          stoppedAgent={author}
+          // Visibility follows the request's scope, not the reply row's layout.
+          threadScoped={
+            props.messageLayout === "thread" || !!props.message?.threadRootId
+          }
+        />
+      )}
+    </>
+  );
+}
+/** With `stoppedAgent`, only that agent's stopped note for `message`. */
+function MessageActivity(
+  props: ActivityProps & { stoppedAgent?: string; threadScoped?: boolean },
+) {
+  const { session, channelId, message, canOpen, stoppedAgent } = props;
   const messageId = message?.id;
   const recorded = useRecordedActivityAgents(session, channelId, messageId);
   // Every row mounts this; only rows with work subscribe to each activity
@@ -83,13 +112,19 @@ export function ActivityAccessory(props: ActivityProps) {
     hasWork ? session.agentActivity.subscribe : noSubscribe,
     session.agentActivity.snapshot,
   );
-  const { live: entries, stopped } = useMemo(
+  const work = useMemo(
     () =>
       messageId && hasWork
         ? messageWork(snapshot, channelId, messageId)
-        : { live: [], stopped: [] },
+        : { live: noWork, stopped: noWork },
     [snapshot, channelId, messageId, hasWork],
   );
+  const entries = stoppedAgent ? noWork : work.live;
+  const stopped = stoppedAgent
+    ? work.stopped.filter((entry) => entry.agent === stoppedAgent)
+    : work.stopped.filter(
+        (entry) => !props.repliedAgents?.includes(entry.agent),
+      );
   const profiles = useSyncExternalStore(
     hasWork ? session.profiles.subscribe : noSubscribe,
     session.profiles.snapshot,
@@ -133,7 +168,10 @@ export function ActivityAccessory(props: ActivityProps) {
       entry.state !== "stopped"
     )
       return false;
-    if (props.messageLayout !== "thread" && !message?.threadRootId) {
+    const threadScoped =
+      props.threadScoped ??
+      (props.messageLayout === "thread" || !!message?.threadRootId);
+    if (!threadScoped) {
       const local = (snapshot.local ?? []).filter(
         (work) =>
           work.agent === entry.agent &&
@@ -230,24 +268,33 @@ export function ActivityAccessory(props: ActivityProps) {
         entry.state === "error" ||
         !props.representedAgents?.includes(entry.agent)),
   );
-  // Once its live bubble has left, a stopped request stays noted here.
+  // Once its live bubble has left, a stopped request stays noted here. It sits
+  // in the incoming message frame without a gutter, so it starts at the reply
+  // avatars' edge.
   const noted = bubble.length ? [] : stopped.filter(visible);
   const note = noted.length ? (
     <div
-      className={`${styles.root} ${styles.stopped} text-caption text-subtle buzz-arrive`}
-      data-activity-stopped=""
-      data-buzz-ui=""
+      className={messageStyles.message}
+      data-layout={props.messageLayout ?? "timeline"}
     >
-      <AvatarStack
-        size="mini"
-        items={noted.map(({ agent }) => ({
-          id: agent,
-          name: named(agent),
-          src: avatarMedia(profiles.get(agent)?.picture, session.media),
-          shape: "squircle",
-        }))}
-      />
-      <span>{noted.map(({ agent }) => named(agent)).join(", ")} · Stopped</span>
+      <div
+        className={`${styles.root} ${styles.stopped} text-caption text-subtle buzz-arrive`}
+        data-activity-stopped=""
+        data-buzz-ui=""
+      >
+        <AvatarStack
+          size="mini"
+          items={noted.map(({ agent }) => ({
+            id: agent,
+            name: named(agent),
+            src: avatarMedia(profiles.get(agent)?.picture, session.media),
+            shape: "squircle",
+          }))}
+        />
+        <span>
+          {noted.map(({ agent }) => named(agent)).join(", ")} · Stopped
+        </span>
+      </div>
     </div>
   ) : null;
   if (!bubble.length) return note;

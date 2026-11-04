@@ -38,9 +38,13 @@ vi.mock("./MessageRow", () => ({
     stackPrevious,
     stackNext,
     day,
+    repliedAgents,
+    stoppedRequest,
   }: MessageRowProps) => (
     <article
       data-message-id={row.id}
+      data-replied-agents={repliedAgents?.join(",")}
+      data-stopped-request={stoppedRequest?.id}
       data-layout={layout}
       data-stack-previous={stackPrevious || undefined}
       data-stack-next={stackNext || undefined}
@@ -181,6 +185,22 @@ function setup(messageId = "root") {
     },
   };
 }
+it("keeps a stopped note on the agent's latest reply that a collapsed branch cannot hide", () => {
+  const h = setup();
+  const agent = "b".repeat(64);
+  const reply = (id: string, parent: string) => ({
+    ...row(id, parent),
+    authorId: agent,
+    agentEnvelope: true as const,
+  });
+  h.update([reply("answer", "root"), reply("aside", "answer")]);
+  const article = (text: string) => screen.getByText(text).closest("article");
+  expect(article("root")).toHaveAttribute("data-replied-agents", agent);
+  expect(article("answer")).toHaveAttribute("data-stopped-request", "root");
+  fireEvent.click(screen.getByRole("button", { name: "View 1 reply" }));
+  expect(article("aside")).not.toHaveAttribute("data-stopped-request");
+  expect(article("answer")).toHaveAttribute("data-stopped-request", "root");
+});
 it("expands a one-level branch by keyboard and focuses the first child", async () => {
   setup();
   const user = userEvent.setup();

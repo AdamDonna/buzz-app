@@ -170,6 +170,12 @@ export type ComposerAccessoryProps = Readonly<{
   message?: ChannelMessage;
   /** Agents already represented by subsequent content in this request's visible run. */
   representedAgents?: readonly string[] | undefined;
+  /** Agents with a later public reply to this request; their stopped notes
+   * follow that reply instead of this message. */
+  repliedAgents?: readonly string[] | undefined;
+  /** The request this row is its author's latest public reply to; that
+   * author's stopped note follows this row. */
+  stoppedRequest?: ChannelMessage | undefined;
   /** Host geometry for response-side accessories. */
   messageLayout?: "timeline" | "thread" | "continuation" | undefined;
   /** A single selected decorator may wrap the host summary with its preview.

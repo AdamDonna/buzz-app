@@ -3,6 +3,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ChannelMessage } from "../relay/contracts";
 import {
+  activityPresentation,
   useChannelActivitySnapshot,
   useStableRowActivity,
   type ActivityRowPresentation,
@@ -113,4 +114,42 @@ it("keeps a conversation's activity snapshot through other channels' work", () =
   const withRecord = result.current;
   live.update([], { records: [elsewhere, here], turns: [turn("channel", 3)] });
   expect(result.current).not.toBe(withRecord);
+});
+
+it("maps each request to its agents' latest public replies", () => {
+  const message = (
+    id: string,
+    authorId: string,
+    extra: Partial<ChannelMessage> = {},
+  ) =>
+    ({
+      id,
+      channelId: "channel",
+      authorId,
+      createdAt: 1,
+      content: id,
+      mentions: [],
+      attachments: [],
+      reactions: [],
+      participants: [],
+      replyCount: 0,
+      ...extra,
+    }) as ChannelMessage;
+  const human = "h".repeat(64);
+  const { repliedAgents, replyRequests } = activityPresentation(
+    [
+      message("request", human),
+      message("first", agent),
+      message("update", agent, { audience: "agents" }),
+      message("latest", agent),
+      message("later", human),
+    ],
+    undefined,
+    new Set([agent]),
+  );
+  expect(repliedAgents.get("request")).toEqual([agent]);
+  expect(replyRequests.get("latest")).toBe("request");
+  expect(replyRequests.has("first")).toBe(false);
+  expect(replyRequests.has("update")).toBe(false);
+  expect(repliedAgents.has("later")).toBe(false);
 });
