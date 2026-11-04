@@ -64,11 +64,16 @@ function fixture({
   others = [],
   unread,
   capability = "frontier-sync",
+  viewOnly = false,
+  preview,
 }: {
   /** Observed unread messages in this chat; fakes the read state when given. */
   unread?: number;
   /** What the read state can do on this connection. */
   capability?: "unsupported" | "read-only" | "frontier-sync";
+  viewOnly?: boolean;
+  /** An unjoined reader of an open chat, including legacy admission defaults. */
+  preview?: { joinRole?: "member" | "guest" };
   /** Other Solo chats listed after this one in the sidebar's Chats. */
   others?: readonly string[];
   /** The viewer's own profile has loaded too. */
@@ -120,9 +125,15 @@ function fixture({
     id,
     name: "Planning",
     channelType: type,
-    private: true as const,
+    ...(!preview && { private: true as const }),
     creator: ownedBy ?? (placed ? viewer.pubkey : agent),
     members: [viewer.pubkey, agent, ...people],
+    ...(viewOnly && { readOnly: true as const, viewerRole: "guest" as const }),
+    ...(preview && {
+      members: [agent, ...people],
+      readOnly: true,
+      ...preview,
+    }),
     ...(archived && { archived }),
   };
   const neighbors = others.map((other, index) => ({
@@ -226,10 +237,10 @@ function fixture({
       load: vi.fn(async () => ({
         channelId: id,
         channelType: "stream" as const,
-        canArchive: true,
+        canArchive: !viewOnly,
         canUnarchive: false,
-        canDelete: true,
-        canLeave: false,
+        canDelete: !viewOnly,
+        canLeave: viewOnly,
         canHide: false,
       })),
       run,
@@ -1013,6 +1024,54 @@ it("marks an archived chat once and keeps only its lifecycle actions", async () 
     await screen.findByRole("region", { name: "Archived chat" }),
   ).toHaveTextContent("This chat is archived");
   expect(screen.queryByRole("textbox")).toBeNull();
+});
+
+it.each([
+  { preview: { joinRole: "guest" as const }, joinable: true },
+  { preview: { joinRole: "member" as const }, joinable: false },
+  { preview: {}, joinable: false },
+])(
+  "offers Solo preview Join only for Guest admission ($preview)",
+  async ({ preview, joinable }) => {
+    fixture({ placed: false, preview }).mount();
+    expect(
+      await screen.findByRole("region", {
+        name:
+          "joinRole" in preview && preview.joinRole === "guest"
+            ? "Read-only chat"
+            : "Chat preview",
+      }),
+    ).toBeVisible();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(!!screen.queryByRole("button", { name: "Join" })).toBe(joinable);
+  },
+);
+
+it("lets a joined Solo viewer cancel Leave and restores focus to Chat actions", async () => {
+  const f = fixture({ placed: false, viewOnly: true });
+  f.mountWithSidebar();
+  const row = await screen.findByRole("button", { name: /^Planning/ });
+  expect(row).toBeVisible();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
+  const user = userEvent.setup();
+  const actions = screen.getByRole("button", { name: "Chat actions" });
+  await user.click(actions);
+  const leave = await screen.findByRole("menuitem", { name: "Leave chat" });
+  expect(screen.queryByRole("menuitem", { name: "Archive chat" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Delete chat" })).toBeNull();
+  await user.click(leave);
+  const dialog = await screen.findByRole("dialog", {
+    name: "Leave chat: Planning",
+  });
+  await waitFor(() =>
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus(),
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(actions).toHaveFocus());
+  expect(f.run).not.toHaveBeenCalled();
 });
 
 it.each(["solo", "stream"] as const)(

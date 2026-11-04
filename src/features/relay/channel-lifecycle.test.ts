@@ -2120,7 +2120,7 @@ describe("join from a public preview", () => {
     const h = preview(tags);
     try {
       await expect(h.owner.capability.run("join", id)).rejects.toThrow(
-        "Only active public channels can be joined.",
+        "This conversation can’t be joined right now.",
       );
       expect(h.sign).not.toHaveBeenCalled();
       expect(h.acceptDiscovery).not.toHaveBeenCalled();

@@ -566,7 +566,8 @@ function ThreadMessages({
       if (channel?.viewerRole === "guest") return "guest";
       if (channel?.readOnly && !channel.cached) {
         return channel.channelType === "stream" ||
-          channel.channelType === "forum"
+          channel.channelType === "forum" ||
+          (channel.channelType === "solo" && channel.joinRole === "guest")
           ? "joinable"
           : "preview";
       }

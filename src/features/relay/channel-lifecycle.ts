@@ -396,7 +396,7 @@ export function createChannelLifecycle({
               !openMetadata(channel) ||
               exactLifecycleTag(channel, "archived") === "true"
             )
-              throw new Error("Only active public channels can be joined.");
+              throw new Error("This conversation can’t be joined right now.");
             return false;
           };
           const authorize = async () => {
