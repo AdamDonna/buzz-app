@@ -77,6 +77,11 @@ it("shows recent versions relatively and older dates with an exact timestamp", (
       </ul>,
     );
     const time = screen.getByText("2 hours ago");
+    const current = screen.getByTitle("Current version");
+    expect(screen.getAllByTitle("Current version")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /^Instructions · Current/ }),
+    ).toContainElement(current);
     expect(time.tagName).toBe("TIME");
     expect(time).toHaveAttribute("datetime", "2026-11-03T18:00:00.000Z");
     expect(time.getAttribute("title")).toMatch(/2026/);

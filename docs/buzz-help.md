@@ -269,8 +269,9 @@ available rather than silently discarding it.
   in one feed, newest first, with a label on each version. Versions are kept
   automatically when changes are saved. Click a version to open
   its changes in a dialog; older valid versions offer **Revert to this** (or
-  **Restore this** after deletion). The current version is labelled and has no
-  restore action. **Load older** fetches more history. Reverting one track saves
+  **Restore this** after deletion). An accent dot marks the current version in
+  the feed; the dialog identifies it in words and offers no restore action.
+  **Load older** fetches more history. Reverting one track saves
   a new revision without changing the other track.
 - **Activity**, where the agent type provides it, shows sessions and their
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label

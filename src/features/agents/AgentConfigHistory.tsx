@@ -413,13 +413,27 @@ export function AgentConfigVersionRow({
         onClick={onSelect}
       >
         <span className="flex w-full min-w-0 items-center justify-between gap-3 text-body text-left">
-          <span className="min-w-0 truncate">
-            {label ?? "Version"}
-            {operation === "delete" ? " · Deleted" : ""}
-            {operation === "restore" ? " · Restored" : ""}
-            {operation === "move" ? " · Moved" : ""}
-            {event.id === head?.id ? " · Current" : ""}
-            {invalid ? " · Not valid" : ""}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">
+              {label ?? "Version"}
+              {operation === "delete" ? " · Deleted" : ""}
+              {operation === "restore" ? " · Restored" : ""}
+              {operation === "move" ? " · Moved" : ""}
+              {event.id === head?.id && (
+                <>
+                  {" "}
+                  <span className="sr-only">· Current</span>
+                </>
+              )}
+              {invalid ? " · Not valid" : ""}
+            </span>
+            {event.id === head?.id && (
+              <span
+                className={styles.current}
+                title="Current version"
+                aria-hidden="true"
+              />
+            )}
           </span>{" "}
           <time
             className="shrink-0 whitespace-nowrap text-right text-secondary"
