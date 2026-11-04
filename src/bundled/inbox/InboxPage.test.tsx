@@ -2416,6 +2416,35 @@ it("a drafts route retires a failed Inbox action, as the menu does", async () =>
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
 });
 
+it("a route that swaps Drafts keeps focus on the filter trigger", async () => {
+  const h = fixture();
+  const view = render(viewAt(h, visit({ drafts: true })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
+  screen.getByRole("button", { name: "Inbox filters" }).focus();
+  view.rerender(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
+  view.rerender(viewAt(h, visit({ drafts: true })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
+  expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
+});
+
+it("a route that swaps Drafts leaves focus elsewhere alone", async () => {
+  const h = fixture();
+  const elsewhere = document.createElement("button");
+  document.body.append(elsewhere);
+  try {
+    const view = render(viewAt(h, visit({ drafts: true })));
+    await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
+    elsewhere.focus();
+    view.rerender(viewAt(h, visit({ activity: "threads" })));
+    await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+    expect(elsewhere).toHaveFocus();
+  } finally {
+    elsewhere.remove();
+  }
+});
+
 it("a plain open leaves saved filters alone", async () => {
   const h = fixture();
   const saved = {

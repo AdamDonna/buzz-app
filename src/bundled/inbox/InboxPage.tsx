@@ -355,8 +355,12 @@ function InboxList({
     )
       return;
     appliedRoutes.add(navigation);
-    // Like the menu, entering or leaving Drafts retires the Inbox action.
-    if (drafts !== "drafts" in route) cancelRetry();
+    // Like the menu, entering or leaving Drafts retires the Inbox action and
+    // restores focus the swapped surface dropped.
+    if (drafts !== "drafts" in route) {
+      cancelRetry();
+      viewFocus.current = true;
+    }
     setDrafts("drafts" in route);
     if ("drafts" in route) return;
     const next = route.show ?? "inbox";
