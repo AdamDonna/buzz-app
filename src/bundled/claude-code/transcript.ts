@@ -308,6 +308,85 @@ export async function workspaceProject(
   return project.length > PROJECT_NAME_LIMIT ? undefined : project;
 }
 
+/** MiB per page of a session too large to read whole, under its 50 MB. */
+const PAGE_MIB = 32;
+/** Pages read of one session at most, so a few huge turns or a record with
+ * no end cannot hold more than this in memory; older lines are left. */
+const PAGE_BUDGET = 2;
+const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+/** A session file in `~/.claude/projects`. One too large to read whole is
+ * read a page at a time from its end, until `enough` of its latest lines are
+ * read, its start is or `PAGE_BUDGET` pages are; `cut` says older ones were
+ * left. Its `start` is the session's first lines even then, which say whose
+ * conversation it is. */
+async function readSession(
+  spawn: Spawn,
+  path: string,
+  signal: AbortSignal,
+  enough: (text: string) => boolean,
+) {
+  const read = (process?: string, ...args: string[]) =>
+    readFile(
+      spawn,
+      "~/.claude/projects",
+      path,
+      signal,
+      undefined,
+      process,
+      args,
+    );
+  try {
+    const text = decode(await read());
+    return { text, cut: false, start: async () => text };
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!/larger than 50 MB/.test(error instanceof Error ? error.message : ""))
+      throw error;
+  }
+  let output = "";
+  const sizing = await spawn("size", {
+    args: [path],
+    cwd: "~/.claude/projects",
+    onStdout: (data) => {
+      output += data;
+    },
+  });
+  const stop = () => void sizing.kill();
+  signal.addEventListener("abort", stop, { once: true });
+  if (signal.aborted) stop();
+  const code = await sizing.exited.finally(() =>
+    signal.removeEventListener("abort", stop),
+  );
+  const size = Number.parseInt(output, 10);
+  if (code !== 0 || !(size > 0)) throw new Error(`Could not read ${path}`);
+  signal.throwIfAborted();
+  let page = Math.floor((size - 1) / (PAGE_MIB << 20));
+  let text = "";
+  // A page starts partway through a line, which ends the page before it.
+  let rest = new Uint8Array();
+  for (let pages = 1; page >= 0; page--, pages++) {
+    const chunk = await read(
+      "read-page",
+      String(page * PAGE_MIB),
+      String(PAGE_MIB),
+    );
+    const bytes = new Uint8Array(chunk.length + rest.length);
+    bytes.set(chunk);
+    bytes.set(rest, chunk.length);
+    const line = page ? bytes.indexOf(10) + 1 || bytes.length : 0;
+    rest = bytes.subarray(0, line);
+    text = decode(bytes.subarray(line)) + text;
+    if (pages >= PAGE_BUDGET || enough(text)) break;
+  }
+  const cut = page > 0;
+  return {
+    text,
+    cut,
+    start: async () => (cut ? decode(await read("read-page", "0", "4")) : text),
+  };
+}
+
 /** The title Claude Code generated for a session (its latest `ai-title`
  * record), or undefined before it has one. */
 export async function readSessionTitle(
@@ -320,14 +399,12 @@ export async function readSessionTitle(
   if (!project || !/^[\w-]+$/.test(sessionId)) return undefined;
   let file: string;
   try {
-    file = new TextDecoder().decode(
-      await readFile(
-        spawn,
-        "~/.claude/projects",
-        `./${project}/${sessionId}.jsonl`,
-        signal,
-      ),
-    );
+    ({ text: file } = await readSession(
+      spawn,
+      `./${project}/${sessionId}.jsonl`,
+      signal,
+      (text) => text.includes('"ai-title"'),
+    ));
   } catch (error) {
     signal.throwIfAborted();
     if (/no such file/i.test(error instanceof Error ? error.message : ""))
@@ -386,17 +463,24 @@ export async function readTranscript(
   signal.throwIfAborted();
   const turns: TranscriptTurn[] = [];
   let found = false;
+  let cut = false;
+  // A cut session's older turns are left, so other sessions' turns before its
+  // first kept one would leave a gap; the transcript starts there instead.
+  let since = Number.NEGATIVE_INFINITY;
   for (const name of names) {
-    let file: string;
+    const session = {
+      sessionId: name.slice(0, -".jsonl".length),
+      channelId: conversation.channelId,
+      ...(conversation.root ? { root: conversation.root } : {}),
+    };
+    let file: Awaited<ReturnType<typeof readSession>>;
     try {
-      file = new TextDecoder().decode(
-        await readFile(
-          spawn,
-          "~/.claude/projects",
-          // Project names start with `-`; GNU base64 would read one as options.
-          `./${project}/${name}`,
-          signal,
-        ),
+      // Project names start with `-`; GNU base64 would read one as options.
+      file = await readSession(
+        spawn,
+        `./${project}/${name}`,
+        signal,
+        (text) => claudeTurns(text, session, false).length > TURN_LIMIT,
       );
     } catch (error) {
       signal.throwIfAborted();
@@ -404,31 +488,35 @@ export async function readTranscript(
         continue;
       throw error;
     }
-    if (name !== saved && !startedFor(file, conversation)) continue;
+    if (name !== saved && !startedFor(await file.start(), conversation))
+      continue;
     found = true;
-    const sessionId = name.slice(0, -".jsonl".length);
-    turns.push(
-      ...claudeTurns(
-        file,
-        {
-          sessionId,
-          channelId: conversation.channelId,
-          ...(conversation.root ? { root: conversation.root } : {}),
-        },
-        working && name === saved,
-        nameOf,
-      ),
+    const own = claudeTurns(
+      file.text,
+      session,
+      working && name === saved,
+      nameOf,
     );
+    cut ||= file.cut;
+    if (file.cut) {
+      // Its first kept turn did not start the session, and with none kept
+      // (one record larger than the budget) nothing older is contiguous.
+      if (own[0]) own[0].newSession = false;
+      since = Math.max(since, own[0]?.startedAt ?? Number.POSITIVE_INFINITY);
+    }
+    turns.push(...own);
   }
   // Nothing found is no transcript only when every file was searched.
   if (!found) {
     if (failure) throw failure;
     return undefined;
   }
-  turns.sort((a, b) => a.startedAt - b.startedAt);
+  const kept = turns
+    .filter((turn) => turn.startedAt >= since)
+    .sort((a, b) => a.startedAt - b.startedAt);
   return {
-    turns: turns.slice(-TURN_LIMIT),
-    more: turns.length > TURN_LIMIT,
+    turns: kept.slice(-TURN_LIMIT),
+    more: cut || turns.length > TURN_LIMIT,
     ...(failure
       ? {
           incomplete:

@@ -15,7 +15,12 @@ import { manifestProcesses } from "./claude-testing";
 import manifest from "./manifest.json";
 import type { EventData } from "../../features/relay/events";
 import { steerPrompt, turnPrompt } from "./prompt";
-import { claudeTurns, projectName, readTranscript } from "./transcript";
+import {
+  claudeTurns,
+  projectName,
+  readTranscript,
+  TURN_LIMIT,
+} from "./transcript";
 
 const root = "c".repeat(64);
 const homes: string[] = [];
@@ -269,7 +274,7 @@ it("reads a prompt and a steer sent as exact records, naming the sender", () => 
 });
 
 /** `workspace` prints the resolved folder and `read` serves `files` as
- * base64; the manifest's `list` and `starts` run for real on a copy of them. */
+ * base64; the manifest's other processes run for real on a copy of them. */
 function host(files: Record<string, string>) {
   const home = mkdtempSync(join(tmpdir(), "claude-transcript-"));
   homes.push(home);
@@ -284,7 +289,8 @@ function host(files: Record<string, string>) {
   const listed = manifestProcesses(home);
   const reads: HostProcessOptions[] = [];
   const spawn = vi.fn(async (id: string, options: HostProcessOptions = {}) => {
-    if (id === "list" || id === "starts") return listed(id, options);
+    if (["list", "starts", "size", "read-page"].includes(id))
+      return listed(id, options);
     let code = 0;
     if (id === "workspace") options.onStdout?.("/Users/me/.buzz\n");
     if (id === "read") {
@@ -340,6 +346,192 @@ it("treats a missing session file as no transcript, not a failure", async () => 
       new AbortController().signal,
     ),
   ).resolves.toBeUndefined();
+});
+
+/** A session for the thread that is not the saved one, so its start must say
+ * it is the thread's, with `turns` after it. */
+const large = (...turns: string[]) => {
+  clock = 0;
+  const thread = `Session scope: thread\nChannel: dev (#channel)\nThread root: ${root}\nAgent: ${agent}`;
+  return {
+    "./-Users-me--buzz/large.jsonl": [
+      line(
+        "user",
+        prompt("first").replace("Scope: thread", `Scope: thread\n${thread}`),
+      ),
+      ...turns,
+    ].join("\n"),
+  };
+};
+const long = "x".repeat(55 * 1024 * 1024);
+
+it("reads a session too large to read whole a page at a time", async () => {
+  const { spawn } = host(
+    large(
+      line("assistant", [{ type: "text", text: long }]),
+      line("user", prompt("latest")),
+      line("assistant", [{ type: "text", text: "re: latest" }]),
+    ),
+  );
+  const read = await readTranscript(
+    spawn,
+    "~/.buzz",
+    conversation,
+    false,
+    new AbortController().signal,
+  );
+  expect(read?.more).toBe(false);
+  // The reply that spans two pages is read whole.
+  expect(read?.turns.map((turn) => turn.items)).toEqual([
+    [
+      expect.objectContaining({ text: "first" }),
+      expect.objectContaining({ text: long }),
+    ],
+    [
+      expect.objectContaining({ text: "latest" }),
+      expect.objectContaining({ text: "re: latest" }),
+    ],
+  ]);
+});
+
+it("stops reading a large session once it has its latest turns", async () => {
+  const { spawn } = host(
+    large(
+      line("assistant", [{ type: "text", text: long }]),
+      ...Array.from({ length: TURN_LIMIT + 1 }, (_, turn) =>
+        line("user", prompt(`turn ${turn}`)),
+      ),
+    ),
+  );
+  const read = await readTranscript(
+    spawn,
+    "~/.buzz",
+    conversation,
+    false,
+    new AbortController().signal,
+  );
+  expect(read?.more).toBe(true);
+  expect(read?.turns.map((turn) => turn.items[0])).toEqual(
+    Array.from({ length: TURN_LIMIT }, (_, turn) =>
+      expect.objectContaining({ text: `turn ${turn + 1}` }),
+    ),
+  );
+  // Only its last page and its start were read.
+  expect(
+    spawn.mock.calls
+      .filter(([id]) => id === "read-page")
+      .map(([, options]) => options?.args?.slice(1)),
+  ).toEqual([
+    ["32", "32"],
+    ["0", "4"],
+  ]);
+});
+
+it("reads no more than two pages of a large session with few turns", async () => {
+  const third = "x".repeat(30 * 1024 * 1024);
+  const { spawn } = host(
+    large(
+      ...[1, 2, 3].map(() =>
+        line("assistant", [{ type: "text", text: third }]),
+      ),
+      line("user", prompt("latest")),
+    ),
+  );
+  const read = await readTranscript(
+    spawn,
+    "~/.buzz",
+    conversation,
+    false,
+    new AbortController().signal,
+  );
+  expect(read?.more).toBe(true);
+  expect(read?.turns.at(-1)?.items[0]).toEqual(
+    expect.objectContaining({ text: "latest" }),
+  );
+  // Its last two pages and its start; the first page's turns are left.
+  expect(
+    spawn.mock.calls
+      .filter(([id]) => id === "read-page")
+      .map(([, options]) => options?.args?.slice(1)),
+  ).toEqual([
+    ["64", "32"],
+    ["32", "32"],
+    ["0", "4"],
+  ]);
+});
+
+it("leaves other sessions' turns from before a large session's kept ones", async () => {
+  const third = "x".repeat(30 * 1024 * 1024);
+  const files = large(
+    line("user", prompt("newer")),
+    ...[1, 2, 3].map(() => line("assistant", [{ type: "text", text: third }])),
+    line("user", prompt("latest")),
+  );
+  clock = -10;
+  const { spawn } = host({
+    ...files,
+    "./-Users-me--buzz/session-1.jsonl": line("user", prompt("old")),
+  });
+  const read = await readTranscript(
+    spawn,
+    "~/.buzz",
+    conversation,
+    false,
+    new AbortController().signal,
+  );
+  // "newer" was in the page left, so "old" before it would hide the gap.
+  expect(read?.more).toBe(true);
+  expect(read?.turns.map((turn) => turn.items[0])).not.toContainEqual(
+    expect.objectContaining({ text: "old" }),
+  );
+  expect(read?.turns.at(-1)?.items[0]).toEqual(
+    expect.objectContaining({ text: "latest" }),
+  );
+});
+
+it("labels no turn of a cut session as its start", async () => {
+  const reply = (mib: number) =>
+    line("assistant", [{ type: "text", text: "x".repeat(mib << 20) }]);
+  const { spawn } = host(
+    large(
+      reply(40),
+      line("user", prompt("mid")),
+      reply(30),
+      line("user", prompt("latest")),
+    ),
+  );
+  const read = await readTranscript(
+    spawn,
+    "~/.buzz",
+    conversation,
+    false,
+    new AbortController().signal,
+  );
+  expect(read?.more).toBe(true);
+  expect(read?.turns[0]?.items[0]).toEqual(
+    expect.objectContaining({ text: "mid" }),
+  );
+  expect(read?.turns.some((turn) => turn.newSession)).toBe(false);
+});
+
+it("keeps no older sessions' turns when a cut session kept none", async () => {
+  const files = large(
+    line("user", prompt("huge")),
+    line("assistant", [{ type: "text", text: "x".repeat(70 << 20) }]),
+  );
+  clock = -10;
+  const { spawn } = host({
+    ...files,
+    "./-Users-me--buzz/session-1.jsonl": line("user", prompt("old")),
+  });
+  const read = await readTranscript(
+    spawn,
+    "~/.buzz",
+    conversation,
+    false,
+    new AbortController().signal,
+  );
+  expect(read).toEqual(expect.objectContaining({ more: true, turns: [] }));
 });
 
 it("merges the agent's other sessions for the thread, oldest turn first", async () => {
