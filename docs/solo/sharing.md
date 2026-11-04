@@ -65,6 +65,15 @@ grant fails, the dialog shows the error and **Retry share**; a retry reads the
 channel again and grants only whoever is still missing. Grants already confirmed
 stay. With no channel selected, **Done** closes without writes.
 
+People added together (a share, a team, mentioned nonmembers or brought agents)
+go in one kind 9000 per role, at most 100 each, and the roster is read once after.
+A relay without batch support adds only the first person an event names, so the
+roster decides who was added; anyone else, or anyone with an earlier addition
+still pending, gets the single addition, which reports their own failure. A batch
+is never resent, and stays in Outbox until everyone it names is in the roster or
+has their own addition; its **Retry** checks each person again. See the
+relay's kind 9000 entry in block/buzz `NOSTR.md`.
+
 The sidebar's Shared mark is status only: it uses the verified current roster and
 cached non-agent evidence for an additional human. Unknown profiles remain
 unclassified; absence of the indicator is **not** a privacy promise. Clicking the

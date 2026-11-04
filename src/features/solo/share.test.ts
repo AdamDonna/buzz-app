@@ -33,6 +33,7 @@ function setup() {
   let failLink = false;
   let chosenName: string | undefined;
   let rejectGrant = false;
+  let batches = false;
   let records: readonly import("../relay/outbox").OutgoingEvent[] = [];
   const publish = vi.fn(async (event: RelayEvent) => {
     if (event.kind === 9000 && rejectGrant)
@@ -40,10 +41,14 @@ function setup() {
     if (event.kind === 9 && failLink) throw new PublishRejected("Post denied");
     if (event.kind === 9000) {
       const id = event.tags.find(([tag]) => tag === "h")?.[1] ?? "";
+      // A relay without batch support adds only the first person named.
+      const named = event.tags.flatMap(([tag, value]) =>
+        tag === "p" ? [value ?? ""] : [],
+      );
       members.set(id, [
         ...new Set([
           ...(members.get(id) ?? []),
-          event.tags.find(([tag]) => tag === "p")?.[1] ?? "",
+          ...named.slice(0, batches ? named.length : 1),
         ]),
       ]);
     }
@@ -155,6 +160,9 @@ function setup() {
       });
       query.mockImplementationOnce(async () => [archive]);
       await owner.session.archives.refresh();
+    },
+    supportBatches: () => {
+      batches = true;
     },
     rejectGrant: (value: boolean) => {
       rejectGrant = value;
@@ -304,6 +312,69 @@ it("shares with a channel by granting only members missing from the chat, and po
   // The member who already had access gets no second grant; no link is posted.
   expect(t.published.map((event) => event.kind)).toEqual([9000]);
   expect(t.published[0]?.tags).toContainEqual(["p", t.human.pubkey]);
+});
+
+it.each([true, false])(
+  "shares with several channel members in one grant (batch relay: %s)",
+  async (batchRelay) => {
+    const t = setup();
+    await t.ready();
+    if (batchRelay) t.supportBatches();
+    t.addDestination(t.human.pubkey);
+    t.addDestination(t.late.pubkey);
+    await shareChatsWithChannel(t.session, [chatId], channelId, {
+      signal: new AbortController().signal,
+    });
+    expect(t.members.get(chatId)).toEqual(
+      expect.arrayContaining([t.human.pubkey, t.late.pubkey]),
+    );
+    const named = t.published.map((event) =>
+      event.tags.flatMap(([tag, value]) => (tag === "p" ? [value] : [])),
+    );
+    const [first, second] = named[0] ?? [];
+    expect(named).toEqual(
+      batchRelay
+        ? [[first, second]]
+        : // Whoever the batch missed gets a single grant.
+          [[first, second], [second]],
+    );
+    expect(t.records().filter((item) => !item.acknowledged)).toEqual([]);
+  },
+);
+
+it("keeps each agent's grant to a Solo chat on its own receipt", async () => {
+  const t = setup();
+  await t.ready();
+  await t.setAgent();
+  t.supportBatches();
+  await grantSoloChatAccess(
+    t.session,
+    chatId,
+    [t.human.pubkey, t.bot.pubkey, t.late.pubkey],
+    new Map(),
+    new AbortController().signal,
+    () => {},
+    true,
+  );
+  expect(t.members.get(chatId)).toEqual(
+    expect.arrayContaining([t.human.pubkey, t.bot.pubkey, t.late.pubkey]),
+  );
+  // A recovering share can then finish the agent's exact Bot grant.
+  expect(
+    t.published.map((event) =>
+      event.tags.filter(([tag]) => tag === "p" || tag === "role"),
+    ),
+  ).toEqual([
+    [
+      ["p", t.human.pubkey],
+      ["p", t.late.pubkey],
+      ["role", "member"],
+    ],
+    [
+      ["p", t.bot.pubkey],
+      ["role", "bot"],
+    ],
+  ]);
 });
 
 it("retries a failed channel share without repeating confirmed grants", async () => {

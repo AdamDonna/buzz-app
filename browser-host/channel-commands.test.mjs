@@ -131,6 +131,37 @@ it("accepts one trailing outbox identifier for invitations and rejects ambiguous
     expect(validChannelCommand(invite(tags))).toBe(false);
 });
 
+it("signs a batch invitation of up to 100 distinct people without elevating roles", () => {
+  const invite = (tags) => ({ kind: 9000, created_at: 1, content: "", tags });
+  const h = ["h", id],
+    client = ["client-id", id];
+  const people = (count) =>
+    Array.from({ length: count }, (_, index) => [
+      "p",
+      index.toString(16).padStart(64, "0"),
+    ]);
+  for (const role of [
+    [],
+    [["role", "member"]],
+    [["role", "guest"]],
+    [["role", "bot"]],
+  ])
+    expect(
+      validChannelCommand(invite([h, ...people(100), ...role, client])),
+    ).toBe(true);
+  for (const tags of [
+    [h, ...people(101)],
+    [h, ...people(2), people(1)[0]],
+    [h, ...people(2), ["role", "admin"]],
+    [h, ...people(2), ["role", "owner"]],
+    [h, ["role", "member"]],
+    [h, people(1)[0], ["role", "bot"]],
+    [h, people(2)[0], ["role", "member"], people(2)[1]],
+    [h, ["p", "a".repeat(64), "admin"], ...people(1)],
+  ])
+    expect(validChannelCommand(invite(tags))).toBe(false);
+});
+
 it("allows bounded ordinary stream creation and rejects malformed TTL", () => {
   const create = {
     kind: 9007,

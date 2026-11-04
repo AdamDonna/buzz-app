@@ -37,10 +37,16 @@ export function useNonmemberMentions(
     };
     setPending({ ...request, busy: true });
     try {
-      for (const person of request.people) {
-        check();
-        await session.memberAdditions.add(channelId, person.pubkey);
-      }
+      check();
+      // Requested together, so they go to the relay together.
+      const failed = (
+        await Promise.allSettled(
+          request.people.map((person) =>
+            session.memberAdditions.add(channelId, person.pubkey),
+          ),
+        )
+      ).find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
       check();
       request.finish([]);
     } catch (reason) {

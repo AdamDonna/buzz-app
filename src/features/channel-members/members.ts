@@ -1,7 +1,7 @@
 import { archiveHides } from "../relay/identity-archives";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
-import type { LocalEvents } from "../relay/outbox";
+import type { LocalEvents, OutgoingEvent } from "../relay/outbox";
 import type { RelayEvent } from "../relay/events";
 
 const keyPattern = /^[0-9a-f]{64}$/;
@@ -47,6 +47,39 @@ export function canShareSoloChat(
   );
 }
 
+const channelOf = (session: RelaySession, channelId: string) =>
+  session.channels.list().channels.find((item) => item.id === channelId) ??
+  session.channels.get?.(channelId);
+
+const knownAgent = (session: RelaySession, pubkey: string) =>
+  session.agentChoices
+    .snapshot()
+    .identities.some((agent) => agent.pubkey === pubkey) ||
+  !!session.profiles.snapshot().get(pubkey)?.isAgent;
+
+/** An explicit Guest stays one; agents join as Bot. Solo sharing and
+ * private-channel invitations grant participation explicitly, independently
+ * of the admission default for public visitors. */
+function additionRole(
+  session: RelaySession,
+  channelId: string,
+  pubkey: string,
+  soloParticipant: boolean,
+  intent?: MemberAdditionIntent,
+) {
+  const current = channelOf(session, channelId);
+  return intent?.role
+    ? intent.role
+    : knownAgent(session, pubkey)
+      ? "bot"
+      : soloParticipant ||
+          (current?.visibility === "private" &&
+            (current.channelType === "stream" ||
+              current.channelType === "forum"))
+        ? "member"
+        : undefined;
+}
+
 /** Reuse the outbox's durable operation on retry, including an unknown result. */
 function waitForAddition(outbox: LocalEvents, id: string, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -81,6 +114,11 @@ function waitForAddition(outbox: LocalEvents, id: string, signal: AbortSignal) {
   });
 }
 
+const batchPrefix = "member-add:batch:";
+/** A batch addition is settled by the roster read after it, never resumed. */
+export const isBatchAddition = (item: OutgoingEvent) =>
+  !!item.recovery?.key.startsWith(batchPrefix);
+
 export type MemberAdditionIntent = {
   id?: string;
   confirmed?: boolean;
@@ -91,8 +129,20 @@ export type MemberAdditionIntent = {
   retry?: true;
 };
 
-/** Explicit single-person intent. Membership truth and pending writes stay session-owned. */
+/** Explicit single-person intent. Membership truth and pending writes stay
+ * session-owned. Whatever the outcome, settles the batches it may complete. */
 export async function addChannelMember(
+  ...args: Parameters<typeof addOneMember>
+) {
+  const [session, channelId] = args;
+  try {
+    await addOneMember(...args);
+  } finally {
+    await settleBatchAdditions(session, channelId);
+  }
+}
+
+async function addOneMember(
   session: RelaySession,
   channelId: string,
   pubkey: string,
@@ -106,9 +156,7 @@ export async function addChannelMember(
 ): Promise<void> {
   if (!keyPattern.test(pubkey))
     throw new Error("Choose a valid person or agent.");
-  const channel = () =>
-    session.channels.list().channels.find((item) => item.id === channelId) ??
-    session.channels.get?.(channelId);
+  const channel = () => channelOf(session, channelId);
   const checkAccess = () => {
     signal.throwIfAborted();
     if (
@@ -146,16 +194,21 @@ export async function addChannelMember(
   const saved = journal.snapshot();
   const pending = fresh
     ? undefined
-    : (saved.find(({ event, acknowledged }) =>
+    : (saved.find((item) =>
         intent.id
-          ? event.id === intent.id
-          : !acknowledged && matchesTarget(event),
+          ? item.event.id === intent.id
+          : !item.acknowledged &&
+            !isBatchAddition(item) &&
+            matchesTarget(item.event),
       ) ??
       // Keep a resolved legacy Guest outcome actionable after restart.
       (soloParticipant && channel()?.members?.includes(pubkey)
         ? saved.find(
-            ({ event, acknowledged }) =>
-              acknowledged && matchesTarget(event) && noRole(event),
+            (item) =>
+              item.acknowledged &&
+              !isBatchAddition(item) &&
+              matchesTarget(item.event) &&
+              noRole(item.event),
           )
         : undefined));
   // A saved addition finishes only with the role this one asks for.
@@ -180,10 +233,7 @@ export async function addChannelMember(
       soloParticipant &&
       !allowSoloAgents &&
       !recoveringSoloAgent &&
-      (session.agentChoices
-        .snapshot()
-        .identities.some((agent) => agent.pubkey === pubkey) ||
-        session.profiles.snapshot().get(pubkey)?.isAgent)
+      knownAgent(session, pubkey)
     )
       throw new Error(
         "Add agents by tagging them in the chat composer instead.",
@@ -262,7 +312,7 @@ export async function addChannelMember(
       if (intent.retry && recorded && !channel()?.members?.includes(pubkey))
         return;
       // A joined target still needs role reconciliation; never overwrite a Guest.
-      return addChannelMember(
+      return addOneMember(
         session,
         channelId,
         pubkey,
@@ -324,24 +374,13 @@ export async function addChannelMember(
   return confirmAddition(id);
 
   function invitation() {
-    const isAgent =
-      session.agentChoices
-        .snapshot()
-        .identities.some((agent) => agent.pubkey === pubkey) ||
-      session.profiles.snapshot().get(pubkey)?.isAgent;
-    const current = channel();
-    // Solo sharing and private-channel invitations grant participation explicitly,
-    // independently of the admission default for public visitors.
-    const role = intent.role
-      ? intent.role
-      : isAgent
-        ? "bot"
-        : soloParticipant ||
-            (current?.visibility === "private" &&
-              (current.channelType === "stream" ||
-                current.channelType === "forum"))
-          ? "member"
-          : undefined;
+    const role = additionRole(
+      session,
+      channelId,
+      pubkey,
+      soloParticipant,
+      intent,
+    );
     return {
       kind: 9000,
       content: "",
@@ -351,5 +390,199 @@ export async function addChannelMember(
         ...(role ? [["role", role]] : []),
       ],
     };
+  }
+}
+
+/** A batch is the only durable record of the people it names until each is
+ * in the roster or has their own addition pending, so only then is it
+ * acknowledged. Batches still sending are left to their own sender. */
+export async function settleBatchAdditions(
+  session: RelaySession,
+  channelId: string,
+) {
+  const outbox = session.outbox;
+  if (!outbox) return;
+  const items = outbox
+    .snapshot()
+    .filter(
+      (item) =>
+        !item.acknowledged &&
+        item.event.kind === 9000 &&
+        item.event.tags.some(
+          ([tag, value]) => tag === "h" && value === channelId,
+        ),
+    );
+  const named = (item: OutgoingEvent) =>
+    item.event.tags.flatMap(([tag, value]) => (tag === "p" ? [value] : []));
+  const covered = new Set([
+    ...(channelOf(session, channelId)?.members ?? []),
+    ...items.filter((item) => !isBatchAddition(item)).flatMap(named),
+  ]);
+  for (const item of items)
+    if (
+      isBatchAddition(item) &&
+      item.delivery !== "sending" &&
+      named(item).every((key) => covered.has(key))
+    )
+      await outbox.acknowledge(item.event.id).catch(() => {});
+}
+
+/** Most people one kind:9000 may name; see the relay's put-user handler. */
+const batchLimit = 100;
+
+/**
+ * Adds people missing from a channel with one kind:9000 per role and at most
+ * 100 people, then reads the roster once. Returns everyone it shows, including
+ * people already there. A relay without batch support adds only the first
+ * person each event names. Best effort: only an abort or `beforeDispatch`
+ * throws. Everyone not returned is left to `addChannelMember`, which also says
+ * why they failed, as is anyone with an earlier single addition pending, so a
+ * stale role is never resent. A batch is never resumed and never blocks one;
+ * it stays in Outbox until everyone it names is settled.
+ */
+export async function addChannelMembersAtOnce(
+  session: RelaySession,
+  channelId: string,
+  people: readonly string[],
+  intents: ReadonlyMap<string, MemberAdditionIntent>,
+  signal: AbortSignal,
+  soloParticipant = false,
+  beforeDispatch?: () => void,
+  /** Receipts the single addition reads, including resolved ones. */
+  receipts?: LocalEvents,
+): Promise<ReadonlySet<string>> {
+  const confirmed = new Set<string>();
+  const outbox = session.outbox;
+  if (people.length < 2 || !outbox) return confirmed;
+  const allowed = () =>
+    soloParticipant
+      ? canShareSoloChat(session, channelOf(session, channelId))
+      : canAddMembers(session, channelOf(session, channelId));
+  const attempt = async <T>(work: () => T | Promise<T>) => {
+    try {
+      return await work();
+    } catch {
+      signal.throwIfAborted();
+      return undefined;
+    }
+  };
+  // Restored receipts count, so read them only once the outbox has loaded.
+  const loaded = await attempt(async () => {
+    await outbox.ready();
+    return true;
+  });
+  if (!loaded) return confirmed;
+  const singles = (receipts ?? outbox)
+    .snapshot()
+    .filter(
+      (item) =>
+        !isBatchAddition(item) &&
+        item.event.kind === 9000 &&
+        item.event.tags.some(
+          ([tag, value]) => tag === "h" && value === channelId,
+        ),
+    );
+  const named = (items: readonly OutgoingEvent[]) =>
+    new Set(
+      items.flatMap(({ event }) =>
+        event.tags.flatMap(([tag, value]) => (tag === "p" ? [value] : [])),
+      ),
+    );
+  const pending = named(singles.filter((item) => !item.acknowledged));
+  // A Solo chat's resolved no-role invitation may have granted Guest, which
+  // only the single addition reconciles and reports.
+  const legacy = soloParticipant
+    ? named(
+        singles.filter(
+          (item) =>
+            item.acknowledged &&
+            !item.event.tags.some(([tag]) => tag === "role"),
+        ),
+      )
+    : new Set<string>();
+  // Anyone with a single addition pending, or whom one would refuse, stays
+  // with it: it alone may resume that write, and it reports why. Retry only
+  // finishes an existing receipt, so it never joins a batch.
+  const eligible = people.filter(
+    (key) =>
+      keyPattern.test(key) &&
+      !intents.get(key)?.id &&
+      !intents.get(key)?.retry &&
+      !pending.has(key) &&
+      !legacy.has(key) &&
+      !archiveHides(session.archives, key, session.viewer) &&
+      // A Solo chat's agents keep their own receipts, so a recovering share
+      // can finish its exact Bot grant.
+      !(soloParticipant && knownAgent(session, key)),
+  );
+  if (eligible.length < 2) return confirmed;
+  const before = allowed()
+    ? await attempt(() => session.channelWrites.refreshMembership(channelId))
+    : undefined;
+  signal.throwIfAborted();
+  if (!before || !allowed()) return confirmed;
+  const groups = new Map<string | undefined, string[]>();
+  for (const key of eligible)
+    if (!before.members?.includes(key)) {
+      const role = additionRole(
+        session,
+        channelId,
+        key,
+        soloParticipant,
+        intents.get(key),
+      );
+      groups.set(role, [...(groups.get(role) ?? []), key]);
+    }
+  let sent = false;
+  try {
+    let roster: ChannelSummary | undefined = before;
+    let dispatched = false;
+    // One missing person gains nothing from a batch; the single addition sends it.
+    if ([...groups.values()].flat().length > 1)
+      for (const [role, keys] of groups)
+        for (let start = 0; start < keys.length; start += batchLimit) {
+          // Each later write reads the roster again, so it never names someone
+          // admitted meanwhile, whose role an explicit one would overwrite.
+          if (dispatched)
+            roster = await attempt(() =>
+              session.channelWrites.refreshMembership(channelId),
+            );
+          if (!roster || !allowed()) break;
+          const recipients = keys.slice(start, start + batchLimit).filter(
+            (key) =>
+              !roster?.members?.includes(key) &&
+              // Archives may refresh during any read, as the single addition rechecks.
+              !archiveHides(session.archives, key, session.viewer),
+          );
+          if (!recipients.length) continue;
+          dispatched = true;
+          beforeDispatch?.();
+          const id = await attempt(() =>
+            outbox.send(
+              {
+                kind: 9000,
+                content: "",
+                tags: [
+                  ["h", channelId],
+                  ...recipients.map((key) => ["p", key]),
+                  ...(role ? [["role", role]] : []),
+                ],
+              },
+              { key: `${batchPrefix}${crypto.randomUUID()}`, value: "1" },
+            ),
+          );
+          if (!id) continue;
+          sent = true;
+          // A refusal or unknown result still leaves the roster to decide.
+          await attempt(() => waitForAddition(outbox, id, signal));
+        }
+    const after = sent
+      ? await attempt(() => session.channelWrites.refreshMembership(channelId))
+      : before;
+    for (const key of eligible)
+      if (after?.members?.includes(key)) confirmed.add(key);
+    return confirmed;
+  } finally {
+    await settleBatchAdditions(session, channelId);
   }
 }

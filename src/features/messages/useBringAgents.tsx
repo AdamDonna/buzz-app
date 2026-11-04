@@ -68,12 +68,22 @@ export function useBringAgents(
             notes.push(...(await agents.join(agent.key)).notes);
           joined.add(agent.pubkey);
         }
-        if (canAdd && !added.has(agent.pubkey)) {
-          check();
-          await session.memberAdditions.add(channelId, agent.pubkey);
-          added.add(agent.pubkey);
-        }
       }
+      check();
+      // Requested together, so they go to the relay together.
+      const results = await Promise.allSettled(
+        canAdd
+          ? request.agents
+              .filter((agent) => !added.has(agent.pubkey))
+              .map((agent) =>
+                session.memberAdditions
+                  .add(channelId, agent.pubkey)
+                  .then(() => added.add(agent.pubkey)),
+              )
+          : [],
+      );
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
       check();
       if (notes.length) setPending({ ...request, busy: false, reviewed: true });
       else request.finish([...added]);

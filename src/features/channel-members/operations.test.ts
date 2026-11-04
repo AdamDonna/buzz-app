@@ -113,3 +113,59 @@ it("keeps Retry separate from a concurrent explicit Add and clears its flag afte
   await owner.add("channel", "person");
   expect(add).toHaveBeenCalledTimes(2);
 });
+
+it("batches additions to a channel requested in the same turn and adds the rest singly", async () => {
+  const add = vi.fn(async (_channel: string, _key: string) => {});
+  const addAtOnce = vi.fn(async () => new Set(["one", "two"]));
+  const owner = createMemberAdditions(
+    new AbortController().signal,
+    add,
+    undefined,
+    addAtOnce,
+  );
+  await Promise.all(
+    ["one", "two", "three"].map((key) => owner.add("channel", key)),
+  );
+  await owner.add("other", "four");
+  expect(addAtOnce).toHaveBeenCalledExactlyOnceWith(
+    "channel",
+    ["one", "two", "three"],
+    expect.any(Map),
+  );
+  // Whoever the roster didn't show, and a lone request, get a single addition.
+  expect(add.mock.calls.map(([channel, key]) => [channel, key])).toEqual([
+    ["channel", "three"],
+    ["other", "four"],
+  ]);
+  expect(owner.snapshot()).toEqual([]);
+});
+
+it("never batches a Retry, which may only finish its own receipt", async () => {
+  const add = vi.fn(async () => {});
+  const addAtOnce = vi.fn(async () => new Set(["one", "two"]));
+  const owner = createMemberAdditions(
+    new AbortController().signal,
+    add,
+    undefined,
+    addAtOnce,
+  );
+  await Promise.all(
+    ["one", "two"].map((key) => owner.add("channel", key, { retry: true })),
+  );
+  expect(addAtOnce).not.toHaveBeenCalled();
+  expect(add).toHaveBeenCalledTimes(2);
+});
+
+it("adds everyone singly when the batch fails", async () => {
+  const add = vi.fn(async () => {});
+  const owner = createMemberAdditions(
+    new AbortController().signal,
+    add,
+    undefined,
+    async () => {
+      throw new Error("Roster unavailable");
+    },
+  );
+  await Promise.all(["one", "two"].map((key) => owner.add("channel", key)));
+  expect(add).toHaveBeenCalledTimes(2);
+});

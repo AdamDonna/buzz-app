@@ -21,11 +21,45 @@ export function createMemberAdditions(
     intent: MemberAdditionIntent,
   ) => Promise<void>,
   receipts?: LocalEvents,
+  /** Adds several people at once; returns who the roster then shows. */
+  addAtOnce?: (
+    channelId: string,
+    pubkeys: readonly string[],
+    intents: ReadonlyMap<string, MemberAdditionIntent>,
+  ) => Promise<ReadonlySet<string>>,
 ) {
   let snapshot: readonly Addition[] = [];
   const listeners = new Set<() => void>();
   const pending = new Map<string, Promise<void>>();
   const intents = new Map<string, MemberAdditionIntent>();
+  /** Additions to a channel requested in the same turn share one batch. */
+  const batches = new Map<
+    string,
+    {
+      people: Map<string, MemberAdditionIntent>;
+      shown: Promise<ReadonlySet<string>>;
+    }
+  >();
+  function batch(
+    channelId: string,
+    pubkey: string,
+    intent: MemberAdditionIntent,
+  ) {
+    let current = batches.get(channelId);
+    if (!current) {
+      const people = new Map<string, MemberAdditionIntent>();
+      const shown = Promise.resolve().then(() => {
+        batches.delete(channelId);
+        return people.size > 1 && addAtOnce
+          ? addAtOnce(channelId, [...people.keys()], people)
+          : new Set<string>();
+      });
+      current = { people, shown };
+      batches.set(channelId, current);
+    }
+    current.people.set(pubkey, intent);
+    return current.shown;
+  }
   const stopReceipts = trackMemberAdditionReceipts(receipts, () =>
     intents.values(),
   );
@@ -83,6 +117,11 @@ export function createMemberAdditions(
       if (options.retry) intent.retry = true;
       else delete intent.retry;
       let confirmed = previous?.confirmed ?? false;
+      // Retry only finishes an existing receipt, so it never joins a batch.
+      const shown =
+        confirmed || options.retry || !addAtOnce
+          ? undefined
+          : batch(channelId, pubkey, intent);
       const update = (item?: Addition) => {
         if (!signal.aborted)
           publish([
@@ -94,7 +133,9 @@ export function createMemberAdditions(
         .then(async () => {
           signal.throwIfAborted();
           if (!confirmed) {
-            await add(channelId, pubkey, intent);
+            if ((await shown?.catch(() => undefined))?.has(pubkey))
+              intent.confirmed = true;
+            else await add(channelId, pubkey, intent);
             confirmed = true;
           }
           signal.throwIfAborted();

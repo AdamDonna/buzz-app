@@ -8228,6 +8228,37 @@ it("Enter on a deliberately focused Invite adds a nonmember before sending", asy
   expect(h.messages.send.mock.calls[0]?.[2]).toEqual([first.pubkey]);
 });
 
+it("invites mentioned nonmembers together so they share one addition", async () => {
+  const h = mount();
+  const held = deferred<void>();
+  const add = vi.fn(() => held.promise);
+  const list = {
+    status: "ready",
+    channels: [
+      { id: "channel", channelType: "stream", members: ["d".repeat(64)] },
+    ],
+  };
+  Object.assign(h.session, {
+    viewer: "d".repeat(64),
+    channels: { list: () => list, subscribeList: () => () => {} },
+    memberAdditions: { add },
+  });
+  act(() => {
+    h.commands().insertMention(first);
+    h.commands().insertMention(second);
+  });
+  fireEvent.submit(screen.getByRole("form"));
+  fireEvent.click(await screen.findByRole("button", { name: "Invite" }));
+  // Both are requested before either finishes.
+  await waitFor(() => expect(add).toHaveBeenCalledTimes(2));
+  expect(add.mock.calls).toEqual([
+    ["channel", first.pubkey],
+    ["channel", second.pubkey],
+  ]);
+  held.resolve();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+});
+
 it.each([
   ["", false],
   [", taking it out of its archive here after a Remove", true],
@@ -8312,6 +8343,66 @@ it.each([
     expect(screen.queryByRole("dialog")).toBeNull();
   },
 );
+
+it("brings several agents in, then adds them together", async () => {
+  const calls: string[] = [];
+  const join = vi.fn(async (key: string) => {
+    calls.push(`join ${key}`);
+    return { agent: {} as never, notes: [] };
+  });
+  const snapshot = { agents: [] };
+  const types: never[] = [];
+  const agents = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+    find: () => undefined,
+    types: () => types,
+    joinable: () =>
+      [first, second].map((person, index) => ({
+        key: person.pubkey,
+        pubkey: person.pubkey,
+        name: ["Honey", "Pollen"][index],
+        relay: "wss://oss.example.com",
+      })),
+    join,
+  } as unknown as Agents;
+  const h = mount({}, undefined, undefined, agents);
+  const held = deferred<void>();
+  const add = vi.fn((_channel: string, key: string) => {
+    calls.push(`add ${key}`);
+    return held.promise;
+  });
+  const list = {
+    status: "ready",
+    channels: [
+      { id: "channel", channelType: "stream", members: ["d".repeat(64)] },
+    ],
+  };
+  Object.assign(h.session, {
+    viewer: "d".repeat(64),
+    scope: `https://relay.example.test:${"d".repeat(64)}`,
+    channels: { list: () => list, subscribeList: () => () => {} },
+    memberAdditions: { add },
+  });
+  act(() => {
+    h.commands().insertMention(first);
+    h.commands().insertMention(second);
+  });
+  fireEvent.submit(screen.getByRole("form"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Bring them here" }),
+  );
+  // Both are requested before either finishes, after every join.
+  await waitFor(() => expect(add).toHaveBeenCalledTimes(2));
+  expect(calls).toEqual([
+    `join ${first.pubkey}`,
+    `join ${second.pubkey}`,
+    `add ${first.pubkey}`,
+    `add ${second.pubkey}`,
+  ]);
+  held.resolve();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+});
 
 it.each(["close", "escape", "enter"])(
   "%s preserves the captured draft and returns focus without adding or sending",

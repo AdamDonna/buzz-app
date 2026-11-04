@@ -44,11 +44,13 @@ const invitation = {
 function show(item: OutgoingEvent) {
   const retry = vi.fn();
   const add = vi.fn(async () => {});
+  const acknowledge = vi.fn(async () => {});
   const items = [item];
   const outbox = {
     snapshot: () => items,
     subscribe: () => () => {},
     retry,
+    acknowledge,
     dismiss: vi.fn(),
   } as unknown as Outbox;
   render(
@@ -59,7 +61,7 @@ function show(item: OutgoingEvent) {
     />,
   );
   fireEvent.click(screen.getByText("Outbox · 1 items"));
-  return { retry, add };
+  return { retry, add, acknowledge };
 }
 
 it("does not offer generic retry for guarded invitations from either profile or composer", () => {
@@ -176,6 +178,62 @@ it("retries a guest addition as a guest", async () => {
     }),
   );
 });
+
+it("retries a guest batch per person as guests, each as a new addition", async () => {
+  const { add } = show({
+    ...invitation,
+    event: {
+      ...invitation.event,
+      tags: [
+        ["h", "channel"],
+        ["p", "one"],
+        ["p", "two"],
+        ["role", "guest"],
+      ],
+    },
+    recovery: { key: "member-add:batch:operation", value: "1" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() =>
+    expect(add.mock.calls).toEqual([
+      ["channel", "one", { role: "guest" }],
+      ["channel", "two", { role: "guest" }],
+    ]),
+  );
+});
+
+it.each(["failed", "accepted"] as const)(
+  "retries a %s batch addition per person, never resending it",
+  async (delivery) => {
+    const { retry, add, acknowledge } = show({
+      ...invitation,
+      delivery,
+      event: {
+        ...invitation.event,
+        tags: [
+          ["h", "channel"],
+          ["p", "one"],
+          ["p", "two"],
+          ["role", "member"],
+        ],
+      },
+      recovery: { key: "member-add:batch:operation", value: "1" },
+    });
+    expect(screen.getByText(/Add 2 people/)).toBeVisible();
+    add.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === "two") throw new Error("Could not add two");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/Could not add two/)).toBeVisible();
+    expect(add.mock.calls).toEqual([
+      ["channel", "one", {}],
+      ["channel", "two", {}],
+    ]);
+    // Additions settle the batch once everyone is; Retry never clears it.
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  },
+);
 
 it.each(
   (["failed", "unknown", "admitted"] as const).flatMap((failure) =>
