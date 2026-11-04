@@ -12,6 +12,14 @@ import { Button } from "../../shared/design-system/ui/Button";
 
 type BestieAgent = AgentChoicesSnapshot["selectable"][number];
 
+const made = new Set<(pubkey: string) => void>();
+/** Hears each agent the viewer makes Bestie on this device, once it is
+ * saved. A choice synced from elsewhere isn't heard. */
+export function onBestieMade(listener: (pubkey: string) => void) {
+  made.add(listener);
+  return () => void made.delete(listener);
+}
+
 /** Making an agent Bestie, wherever it is offered: `make` asks before
  * replacing an explicitly saved Bestie, in the dialog `view` renders. */
 export function useBestieChoice(session: RelaySession, scope: string) {
@@ -60,6 +68,7 @@ export function useBestieChoice(session: RelaySession, scope: string) {
     setSavingBestie(true);
     chooseDefaultAgent(session, scope, pubkey)
       .then(() => {
+        for (const listener of made) listener(pubkey);
         if (choice === latest.current) setReplacement(undefined);
       })
       .catch((failure: Error) => {

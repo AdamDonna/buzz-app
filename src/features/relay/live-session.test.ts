@@ -29,13 +29,16 @@ it("clears retained repository homes on live recovery, cache clearing, and dispo
     viewer = keypair();
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let live!: LiveCallbacks;
-  const owner = createRelaySession({
-    ...wire.transport,
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, retry() {}, dispose() {} };
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
     },
-  });
+    { readStateFloor: () => 0 },
+  );
   const seed = async () => {
     const pending = owner.session.repositories.home(
       "repo-channel",
@@ -67,13 +70,16 @@ it("establishing a large roster reads only retained windows, not every channel h
     viewer = keypair();
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let live!: LiveCallbacks;
-  const owner = createRelaySession({
-    ...wire.transport,
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, retry() {}, dispose() {} };
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
     },
-  });
+    { readStateFloor: () => 0 },
+  );
   try {
     const ids = Array.from({ length: 128 }, (_, i) => `channel-${i}`);
     const first = ids[0];
@@ -119,7 +125,7 @@ it("a skipped warm head cannot hide the stream gap behind its freshness lease", 
         return { update() {}, retry() {}, dispose() {} };
       },
     },
-    { prepared: true },
+    { readStateFloor: () => 0, prepared: true },
   );
   try {
     owner.session.channels.ensureList();
@@ -233,13 +239,16 @@ it("post-subscribe demand supersedes a pre-stream head and prioritizes the curre
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let live!: LiveCallbacks;
   const priority = vi.fn();
-  const owner = createRelaySession({
-    ...wire.transport,
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, prioritize: priority, retry() {}, dispose() {} };
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, prioritize: priority, retry() {}, dispose() {} };
+      },
     },
-  });
+    { readStateFloor: () => 0 },
+  );
   try {
     live.receive(["a", "z"].map((id) => roster(relay, id, [viewer.pubkey])));
     owner.session.channels.ensure("a");
@@ -280,13 +289,16 @@ it("long API pause keeps lightweight catch-up obligations; retry does not drain 
     viewer = keypair();
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let live!: LiveCallbacks;
-  const owner = createRelaySession({
-    ...wire.transport,
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, retry() {}, dispose() {} };
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
     },
-  });
+    { readStateFloor: () => 0 },
+  );
   try {
     live.receive(["a", "b"].map((id) => roster(relay, id, [viewer.pubkey])));
     for (const id of ["a", "b"]) {
@@ -347,13 +359,16 @@ it.each([1, 2, 130])(
       peer = keypair();
     const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
     let live!: LiveCallbacks;
-    const owner = createRelaySession({
-      ...wire.transport,
-      subscribe(callbacks) {
-        live = callbacks;
-        return { update() {}, retry() {}, dispose() {} };
+    const owner = createRelaySession(
+      {
+        ...wire.transport,
+        subscribe(callbacks) {
+          live = callbacks;
+          return { update() {}, retry() {}, dispose() {} };
+        },
       },
-    });
+      { readStateFloor: () => 0 },
+    );
     try {
       const ids = Array.from(
         { length: count },
@@ -430,7 +445,7 @@ function reconnectHarness(options: ChannelStoreOptions = {}) {
         return { update() {}, retry() {}, dispose() {} };
       },
     },
-    { prepared: true, ...options },
+    { readStateFloor: () => 0, prepared: true, ...options },
   );
   const window = () => owner.session.channels.window("c");
   const rows = () => window().rows.map((row) => row.id);

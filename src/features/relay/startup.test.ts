@@ -117,6 +117,7 @@ function setup(
         : {}),
     },
     {
+      readStateFloor: () => 0,
       ...(maxDiscoveryBytes ? { maxDiscoveryBytes } : {}),
       persistence: storage,
       prepared: true,

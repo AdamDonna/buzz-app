@@ -12,6 +12,7 @@ import {
 import { UsersIcon } from "../../shared/design-system/icons";
 import { avatarMedia } from "../../shared/avatar-source";
 import { formatPublicKey } from "../../shared/identity/public-key";
+import { PROFILE_CACHE_BASE } from "../../features/relay/budget";
 
 /** The members control previews people in a capsule that grows with them. */
 export function ChannelMembersTrigger({
@@ -71,9 +72,11 @@ export function ChannelMemberAvatars({
   const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
     void profileGeneration;
+    // Three avatars need no more than the base cache. An open channel reserves
+    // room for its whole roster, but only the mention menu reads all of it.
     if (memberKey)
       void session.profiles
-        .ensure(memberKey.split(":"), "background")
+        .ensure(memberKey.split(":").slice(0, PROFILE_CACHE_BASE), "background")
         .catch(() => {});
   }, [session, memberKey, profileGeneration]);
   const agents = new Set(choices.identities.map((agent) => agent.pubkey));

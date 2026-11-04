@@ -5,6 +5,7 @@ import { discoverHuddles } from "./discovery";
 import type { RelayData, RelaySnapshot } from "../relay/service";
 import type { HuddleBridge, HuddleDestination, HuddleUpdate } from "./bridge";
 import type { HuddleAudio, OpenHuddleAudio } from "./audio";
+import type { Context } from "@deepseek-ai/cordis";
 
 export type HuddleSnapshot = Readonly<{
   id?: string;
@@ -452,3 +453,32 @@ export function createHuddles(
   };
 }
 export type Huddles = ReturnType<typeof createHuddles>;
+
+/** Read-only call phase of this document for other plugins, such as a music
+ * player that pauses for a Huddle. No destination, roster, audio or controls. */
+export type HuddleStatus = Readonly<{
+  version: 1;
+  phase(): HuddleSnapshot["phase"];
+  subscribe(listener: () => void): () => void;
+}>;
+/** Provided while Huddles is active; unloading Huddles withdraws it. */
+export function provideHuddleStatus(
+  ctx: Context,
+  huddles: Pick<Huddles, "snapshot" | "subscribe">,
+) {
+  ctx.provide(
+    "huddleStatus",
+    Object.freeze({
+      version: 1,
+      phase: () => huddles.snapshot().phase,
+      subscribe: (listener: () => void) => huddles.subscribe(listener),
+    }) satisfies HuddleStatus,
+  );
+}
+
+declare module "@deepseek-ai/cordis" {
+  interface Context {
+    /** Optional: consumers read it with `ctx.inject(["huddleStatus"], …)`. */
+    huddleStatus?: HuddleStatus;
+  }
+}

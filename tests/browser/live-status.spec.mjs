@@ -96,6 +96,22 @@ for (const target of ["alpha", "profiles"]) {
     page,
     app,
   }, testInfo) => {
+    // Count inside the page: fetch settlement and its consumer's continuation
+    // drain in one microtask checkpoint, even while the page clock is held.
+    await page.addInitScript(() => {
+      const native = window.fetch;
+      window.retryControls = 0;
+      window.fetch = (input, init) => {
+        const result = native(input, init);
+        if (String(input).endsWith("/stream-retry")) {
+          const settled = () => window.retryControls--;
+          window.retryControls++;
+          result.then(settled, settled);
+        }
+        return result;
+      };
+    });
+    await page.clock.install();
     if (target === "profiles")
       await page.addInitScript(() =>
         localStorage.setItem("buzz-appearance.v1", "dark"),
@@ -192,19 +208,39 @@ for (const target of ["alpha", "profiles"]) {
       await openDiagnostics(page);
       await expect(notice(page)).toHaveCount(1);
     }
-    const beforeManual = requests().length;
-    await page
-      .getByRole("button", { name: "Close Channel settings tab", exact: true })
-      .click();
-    // Retry now stays available to skip the wait.
-    await retryNow(page).focus();
-    await retryNow(page).press("Enter");
-    await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
-    await expect(notice(page)).toBeVisible();
-    app.relay.releaseEose(target);
-    await expect(notice(page)).toHaveCount(0);
-    await openChannelDetails(page);
-    await openDiagnostics(page);
+    // The held request may still be busy after the layout checks. Retry now
+    // skips a failed source's wait; it does not restart an in-flight request.
+    // Hold that wait and observe a fresh refusal before testing keyboard Retry.
+    const pausedAt = new Date();
+    await page.clock.setFixedTime(pausedAt);
+    await page.clock.pauseAt(pausedAt);
+    await page.clock.setSystemTime(pausedAt);
+    try {
+      // Drain any automatic retry control already in flight when the clock
+      // stopped. A missing route after that is the broker's setup timeout;
+      // an active route can be refused directly without a preliminary Retry.
+      await expect
+        .poll(() => page.evaluate(() => window.retryControls))
+        .toBe(0);
+      const active = app.relay.hasRoute("primary", target);
+      const reason = active
+        ? "error: Fixture manual retry failure"
+        : "Live subscription setup timed out; retry available";
+      if (active) app.relay.failRoute("primary", target, reason);
+      await expect(
+        page.getByText(`Last rejection: ${reason}`, { exact: true }),
+      ).toBeVisible();
+      const beforeManual = requests().length;
+      await retryNow(page).focus();
+      await expect(retryNow(page)).toBeFocused();
+      await retryNow(page).press("Enter");
+      await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
+      await expect(notice(page)).toBeVisible();
+      app.relay.releaseEose(target);
+      await expect(notice(page)).toHaveCount(0);
+    } finally {
+      await page.clock.resume();
+    }
     await expect(
       page.getByText("Live updates: stream established", { exact: true }),
     ).toBeVisible();

@@ -9,6 +9,9 @@ type Addition = Readonly<{
   error?: string;
 }>;
 
+const differentRole =
+  "This member is already being added with another role. Wait for it to finish or show Not sent in Outbox, then try again.";
+
 /** Session-owned continuation and recovery; closing a view never cancels intent. */
 export function createMemberAdditions(
   signal: AbortSignal,
@@ -48,17 +51,37 @@ export function createMemberAdditions(
         listeners.delete(listener);
       };
     },
-    add(channelId: string, pubkey: string): Promise<void> {
+    add(
+      channelId: string,
+      pubkey: string,
+      options: { role?: "guest"; retry?: true } = {},
+    ): Promise<void> {
       if (signal.aborted)
         return Promise.reject(new Error("The community connection closed."));
       const key = JSON.stringify([channelId, pubkey]);
       const existing = pending.get(key);
-      if (existing) return existing;
+      // An addition under way keeps the role it asked for; another role
+      // waits for it rather than joining it or racing it with a second write.
+      if (existing) {
+        if (intents.get(key)?.role !== options.role)
+          return Promise.reject(new Error(differentRole));
+        if (intents.get(key)?.retry !== options.retry)
+          return Promise.reject(
+            new Error(
+              "A member operation is already running. Wait for it to finish, then try again.",
+            ),
+          );
+        return existing;
+      }
       const matches = (item: Addition) =>
         item.channelId === channelId && item.pubkey === pubkey;
       const previous = snapshot.find(matches);
       const intent = intents.get(key) ?? {};
       intents.set(key, intent);
+      if (options.role) intent.role = options.role;
+      else delete intent.role;
+      if (options.retry) intent.retry = true;
+      else delete intent.retry;
       let confirmed = previous?.confirmed ?? false;
       const update = (item?: Addition) => {
         if (!signal.aborted)

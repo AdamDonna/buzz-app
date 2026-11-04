@@ -137,7 +137,7 @@ need their own validation.
   An unavailable certificate fails the build rather than silently signing ad-hoc.
   This setting leaves `just desktop` and release builds unchanged. Explicit Tauri
   `--config` arguments still merge after the local defaults.
-- For opt-in automation of a disposable macOS native webview, see
+- For opt-in agent automation of the macOS native webview, see
   [Native webview automation](native-mcp.md).
 - `just design [args...]`: install locked dependencies, start the standalone
   design-system viewer, and open it in your browser. Arguments pass through to

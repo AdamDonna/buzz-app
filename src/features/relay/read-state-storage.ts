@@ -4,6 +4,7 @@ import {
   contextId,
   parseReadBlob,
   readCoordinate,
+  READ_STATE_SLOTS,
   record,
   slotId,
   uint32,
@@ -32,6 +33,11 @@ export type ReadJournal = Readonly<{
    * channel, so this lets a channel mark cover it while the message is not
    * loaded. */
   homes?: Readonly<Record<string, string>>;
+  /** The frontiers this installation advanced: all it publishes, never a
+   * peer's value. Message marks stay local (frontier-only sync). */
+  own?: Readonly<Record<string, number>>;
+  /** Further slots this installation owns after `slot`, in placement order. */
+  spill?: readonly string[];
   revision: number;
   acceptedRevision: number;
   lastCreatedAt: number;
@@ -46,10 +52,11 @@ export interface ReadStateStorage {
   read?(): Promise<ReadJournal | undefined>;
   close(): void;
 }
+export const newSlotId = () => crypto.randomUUID().replaceAll("-", "");
 export function newReadJournal(): ReadJournal {
   return {
     version: 1,
-    slot: crypto.randomUUID().replaceAll("-", ""),
+    slot: newSlotId(),
     clientId: crypto.randomUUID(),
     state: EMPTY_READ_STATE,
     localUnread: {},
@@ -145,6 +152,30 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
       ))
   )
     throw new Error("Invalid saved read mark channels");
+  if (
+    raw.own !== undefined &&
+    (!record(raw.own) ||
+      !Object.entries(raw.own).every(
+        ([key, value]) => contextId(key) && uint32(value),
+      ))
+  )
+    throw new Error("Invalid saved own read state");
+  const spill = raw.spill ?? [];
+  if (
+    !Array.isArray(spill) ||
+    spill.length >= READ_STATE_SLOTS ||
+    !spill.every(slotId) ||
+    new Set([raw.slot, ...spill]).size !== spill.length + 1
+  )
+    throw new Error("Invalid saved read slots");
+  // Before own values were kept apart, the journal published everything it held.
+  const own =
+    (raw.own as Record<string, number> | undefined) ??
+    Object.fromEntries(
+      Object.entries(parsed.state.frontiers).filter(
+        ([key]) => !key.startsWith("msg:"),
+      ),
+    );
   // Keep only the channels of messages that a kept mark still names.
   const named = new Set(
     [
@@ -169,7 +200,9 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     const event = eventDto(raw.pending.event);
     if (
       event.pubkey !== viewer ||
-      readCoordinate(event) !== `read-state:${raw.slot}` ||
+      ![raw.slot, ...spill].some(
+        (slot) => readCoordinate(event) === `read-state:${slot}`,
+      ) ||
       event.created_at > raw.lastCreatedAt
     )
       throw new Error("Saved read operation identity mismatch");
@@ -190,6 +223,8 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
       ...(raw.reserve as Record<string, number> | undefined),
     }),
     homes: Object.freeze(homes),
+    own: Object.freeze({ ...own }),
+    spill: Object.freeze([...(spill as string[])]),
     revision: raw.revision as number,
     acceptedRevision: raw.acceptedRevision as number,
     lastCreatedAt: raw.lastCreatedAt,

@@ -973,3 +973,41 @@ it("restores the last approved app after eviction instead of a later consent tic
   expect(canResumeUrl).toHaveBeenCalledWith(consent);
   lifetime.abort();
 });
+
+it("takes mouse back/forward requests for its page from app navigation", async () => {
+  const platform = fakePlatform();
+  const view = render(
+    <BrowserHostView
+      url="https://example.com"
+      platform={platform}
+      sessions={new BrowserSessions(platform)}
+      pollInterval={50_000}
+    />,
+  );
+  await waitFor(() =>
+    expect(platform.status).toHaveBeenCalledWith("session-1"),
+  );
+  const page = view.container.querySelector(
+    '[data-browser-session="session-1"]',
+  );
+  if (!page) throw new Error("Browser page has no session");
+  const app = vi.fn((event: Event) => event.defaultPrevented);
+  window.addEventListener("buzz:history-back", app);
+  window.addEventListener("buzz:history-forward", app);
+  try {
+    for (const name of ["buzz:history-back", "buzz:history-forward"]) {
+      page.dispatchEvent(new Event(name, { cancelable: true, bubbles: true }));
+    }
+    await waitFor(() =>
+      expect(platform.action).toHaveBeenCalledWith("session-1", "forward"),
+    );
+    expect(platform.action).toHaveBeenCalledWith("session-1", "back");
+    expect(app.mock.results.map((result) => result.value)).toEqual([
+      true,
+      true,
+    ]);
+  } finally {
+    window.removeEventListener("buzz:history-back", app);
+    window.removeEventListener("buzz:history-forward", app);
+  }
+});

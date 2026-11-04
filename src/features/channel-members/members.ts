@@ -2,6 +2,7 @@ import { archiveHides } from "../relay/identity-archives";
 import type { RelaySession } from "../relay/session";
 import type { ChannelSummary } from "../relay/contracts";
 import type { LocalEvents } from "../relay/outbox";
+import type { RelayEvent } from "../relay/events";
 
 const keyPattern = /^[0-9a-f]{64}$/;
 
@@ -39,7 +40,6 @@ export function canShareSoloChat(
     session.viewer &&
     session.outbox?.supports(9000) &&
     channel?.channelType === "solo" &&
-    channel.private &&
     !channel.readOnly &&
     !channel.cached &&
     !channel.archived &&
@@ -85,6 +85,10 @@ export type MemberAdditionIntent = {
   id?: string;
   confirmed?: boolean;
   dismissed?: boolean;
+  /** Adds the person as a guest, who can read but not post. */
+  role?: "guest";
+  /** Outbox recovery is not an explicit request to re-invite a removed member. */
+  retry?: true;
 };
 
 /** Explicit single-person intent. Membership truth and pending writes stay session-owned. */
@@ -99,7 +103,7 @@ export async function addChannelMember(
   allowSoloAgents = false,
   /** Runs synchronously just before a new or retried addition is dispatched. */
   beforeDispatch?: () => void,
-) {
+): Promise<void> {
   if (!keyPattern.test(pubkey))
     throw new Error("Choose a valid person or agent.");
   const channel = () =>
@@ -133,26 +137,33 @@ export async function addChannelMember(
   const fresh =
     intent.dismissed ||
     (intent.confirmed && !channel()?.members?.includes(pubkey));
+  const matchesTarget = (event: Pick<RelayEvent, "kind" | "tags">) =>
+    event.kind === 9000 &&
+    event.tags.some(([tag, value]) => tag === "h" && value === channelId) &&
+    event.tags.some(([tag, value]) => tag === "p" && value === pubkey);
+  const noRole = (event: Pick<RelayEvent, "tags">) =>
+    !event.tags.some(([tag]) => tag === "role");
+  const saved = journal.snapshot();
   const pending = fresh
     ? undefined
-    : journal
-        .snapshot()
-        .find(({ event, acknowledged }) =>
-          intent.id
-            ? event.id === intent.id
-            : !acknowledged &&
-              event.kind === 9000 &&
-              event.tags.some(
-                ([tag, value]) => tag === "h" && value === channelId,
-              ) &&
-              event.tags.some(
-                ([tag, value]) => tag === "p" && value === pubkey,
-              ) &&
-              !event.tags.some(
-                ([tag, value]) =>
-                  tag === "role" && value !== "bot" && value !== "member",
-              ),
-        );
+    : (saved.find(({ event, acknowledged }) =>
+        intent.id
+          ? event.id === intent.id
+          : !acknowledged && matchesTarget(event),
+      ) ??
+      // Keep a resolved legacy Guest outcome actionable after restart.
+      (soloParticipant && channel()?.members?.includes(pubkey)
+        ? saved.find(
+            ({ event, acknowledged }) =>
+              acknowledged && matchesTarget(event) && noRole(event),
+          )
+        : undefined));
+  // A saved addition finishes only with the role this one asks for.
+  const savedRole = pending?.event.tags.find(([tag]) => tag === "role")?.[1];
+  const sameRole = intent.role
+    ? savedRole === intent.role
+    : savedRole === undefined || savedRole === "bot" || savedRole === "member";
+
   const recovery = { key: `member-add:${channelId}:${pubkey}`, value: "1" };
   // A saved share may finish its exact Bot grant; it cannot authorize a new one.
   const recoveringSoloAgent =
@@ -179,13 +190,114 @@ export async function addChannelMember(
       );
   };
   check();
+  // A completed or missing receipt is not permission for Retry to create a grant.
+  if (intent.retry && !pending) return;
+  const confirmAddition = async (id: string) => {
+    intent.id = id;
+    intent.dismissed = false;
+    intent.confirmed = false;
+    await waitForAddition(journal, id, signal);
+    check();
+    await session.channelWrites.refreshMembership(channelId);
+    check();
+    if (!channel()?.members?.includes(pubkey))
+      throw new Error(
+        "Addition is not confirmed in the member list yet. Retry to check again.",
+      );
+    await outbox.acknowledge(id);
+    check();
+    intent.confirmed = true;
+  };
   if (pending?.guarded && !channel()?.members?.includes(pubkey))
     throw new Error(
       "Retry this invitation from the agent’s profile so its eligibility can be checked.",
     );
+  if (soloParticipant && pending && noRole(pending.event))
+    intent.id = pending.event.id;
+  if (pending && !sameRole && !channel()?.members?.includes(pubkey))
+    throw new Error(
+      "An addition of this member with another role is still in Outbox. Retry it there to finish it, or remove it once it shows Not sent, then try again.",
+    );
+
   if (pending && !pending.acknowledged)
     await outbox.recover(pending.event.id, recovery);
   check();
+  if (soloParticipant && pending && noRole(pending.event)) {
+    if (!channel()?.members?.includes(pubkey)) {
+      let replacement: string | undefined;
+      let recorded = false;
+      await outbox.acknowledge(
+        pending.event.id,
+        async (event) => {
+          check();
+          recorded = await session.channelWrites.additionRecorded(
+            event,
+            signal,
+          );
+          // Finish the fresh membership check while the original is recoverable.
+          await session.channelWrites.refreshMembership(channelId);
+          check();
+          return recorded ? "recorded" : undefined;
+        },
+        {
+          input: () => {
+            check();
+            if (
+              channel()?.members?.includes(pubkey) ||
+              (intent.retry && recorded)
+            )
+              return undefined;
+            beforeDispatch?.();
+            return invitation();
+          },
+          queued: (id) => {
+            replacement = id;
+          },
+        },
+      );
+      if (replacement) return confirmAddition(replacement);
+      check();
+      intent.confirmed = true;
+      // Retiring a recorded command must not fall through to a new grant.
+      if (intent.retry && recorded && !channel()?.members?.includes(pubkey))
+        return;
+      // A joined target still needs role reconciliation; never overwrite a Guest.
+      return addChannelMember(
+        session,
+        channelId,
+        pubkey,
+        signal,
+        intent,
+        receipts,
+        soloParticipant,
+        allowSoloAgents,
+        beforeDispatch,
+      );
+    }
+    await session.memberAdministration.refresh(channelId);
+    check();
+    const verified = session.memberAdministration.snapshot(channelId);
+    const role = verified.authority.roles[pubkey];
+    if (
+      verified.status !== "ready" ||
+      verified.operation?.status === "pending" ||
+      !role ||
+      role === "unknown"
+    )
+      throw new Error(
+        "Current access could not be confirmed. Refresh members and roles before trying again.",
+      );
+    // Membership resolves the original command, even when its grant was Guest.
+    // Do not promote a newer role or replay the old command after removal.
+    if (role === "guest") {
+      await outbox.acknowledge(pending.event.id);
+      check();
+      intent.confirmed = true;
+      throw new Error(
+        "This earlier invitation granted view-only access. To grant participation, remove them in People and invite them again.",
+      );
+    }
+  }
   if (channel()?.members?.includes(pubkey)) {
     if (!intent.id && pending) intent.id = pending.event.id;
     if (pending) await outbox.acknowledge(pending.event.id);
@@ -204,50 +316,40 @@ export async function addChannelMember(
     throw new Error(
       "This addition expired. Remove its Not sent item in Outbox, then try again.",
     );
-  const isAgent =
-    session.agentChoices
-      .snapshot()
-      .identities.some((agent) => agent.pubkey === pubkey) ||
-    session.profiles.snapshot().get(pubkey)?.isAgent;
-  const current = channel();
-  // Private channel additions grant participation explicitly, even if an older
-  // saved admission default is Guest. Solo and system admission stay separate.
-  const role = isAgent
-    ? "bot"
-    : !soloParticipant &&
-        current?.visibility === "private" &&
-        (current.channelType === "stream" || current.channelType === "forum")
-      ? "member"
-      : undefined;
+
   beforeDispatch?.();
-  const id =
-    pending?.event.id ??
-    outbox.send(
-      {
-        kind: 9000,
-        content: "",
-        tags: [
-          ["h", channelId],
-          ["p", pubkey],
-          ...(role ? [["role", role]] : []),
-        ],
-      },
-      recovery,
-    );
+  const id = pending?.event.id ?? outbox.send(invitation(), recovery);
   if (pending?.delivery === "failed" || pending?.delivery === "unknown")
     outbox.retry(id);
-  intent.id = id;
-  intent.dismissed = false;
-  intent.confirmed = false;
-  await waitForAddition(journal, id, signal);
-  check();
-  await session.channelWrites.refreshMembership(channelId);
-  check();
-  if (!channel()?.members?.includes(pubkey))
-    throw new Error(
-      "Addition is not confirmed in the member list yet. Retry to check again.",
-    );
-  await outbox.acknowledge(id);
-  check();
-  intent.confirmed = true;
+  return confirmAddition(id);
+
+  function invitation() {
+    const isAgent =
+      session.agentChoices
+        .snapshot()
+        .identities.some((agent) => agent.pubkey === pubkey) ||
+      session.profiles.snapshot().get(pubkey)?.isAgent;
+    const current = channel();
+    // Solo sharing and private-channel invitations grant participation explicitly,
+    // independently of the admission default for public visitors.
+    const role = intent.role
+      ? intent.role
+      : isAgent
+        ? "bot"
+        : soloParticipant ||
+            (current?.visibility === "private" &&
+              (current.channelType === "stream" ||
+                current.channelType === "forum"))
+          ? "member"
+          : undefined;
+    return {
+      kind: 9000,
+      content: "",
+      tags: [
+        ["h", channelId],
+        ["p", pubkey],
+        ...(role ? [["role", role]] : []),
+      ],
+    };
+  }
 }

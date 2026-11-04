@@ -235,6 +235,10 @@ export function createUnread({
   let requested = false;
   let repairAgain = false;
   let freshness: UnreadSnapshot["freshness"] = "unknown";
+  /** A repair failed, the evidence overflowed or the stream dropped, and no
+   * repair has completed since. Live traffic marks evidence observed again
+   * but does not pay this. */
+  let owing = false;
   let error: string | undefined;
   let refresh: Promise<void> | undefined;
   const lifetime = new AbortController();
@@ -309,14 +313,24 @@ export function createUnread({
         .map((channel) => channel.id),
     );
   let guests = new Set<string>();
+  // Per member list: a large channel would otherwise be scanned for the
+  // viewer on every event.
+  const viewerIn = new WeakMap<readonly string[], boolean>();
+  const member = (members: readonly string[] | undefined) => {
+    if (!members) return false;
+    let found = viewerIn.get(members);
+    if (found === undefined) {
+      found = members.includes(viewer);
+      if (Object.isFrozen(members)) viewerIn.set(members, found);
+    }
+    return found;
+  };
   const allowed = (id: string) =>
     channels
       .list()
       .channels.some(
         (channel) =>
-          channel.id === id &&
-          !channel.cached &&
-          channel.members?.includes(viewer),
+          channel.id === id && !channel.cached && member(channel.members),
       );
   const keyFor = (target: ReadTarget) =>
     `${target.channelId}:${targetKey(target)}`;
@@ -617,7 +631,13 @@ export function createUnread({
     const thread = rootId
       ? state.frontiers[`thread-activity:${rootId}`]
       : undefined;
-    const caughtUp = Math.max(frontier ?? -1, ordinary ?? -1, thread ?? -1);
+    // Past the retention window everything is read; overrides still force.
+    const caughtUp = Math.max(
+      frontier ?? -1,
+      ordinary ?? -1,
+      thread ?? -1,
+      reads.floor(),
+    );
     return event.created_at > caughtUp || !!forced;
   }
   /** An ordinary top-level message: the channel catch-up mark reads it. Its
@@ -1678,6 +1698,7 @@ export function createUnread({
         .sort();
       if (!ids.length) {
         freshness = "observed";
+        owing = false;
         error = undefined;
         return;
       }
@@ -1731,12 +1752,14 @@ export function createUnread({
             repaired.set(key, Math.max(mark ?? 0, Math.min(newest, asked)));
         }
         freshness = "observed";
+        owing = false;
         error = undefined;
         publish();
         void findHomes(generation);
       } catch (cause) {
         if (!current()) return;
         freshness = "stale";
+        owing = true;
         error =
           cause instanceof Error ? cause.message : "Unread observation failed";
         publish();
@@ -1882,6 +1905,7 @@ export function createUnread({
         bytes = 0;
         error = "Unread observation capacity reached; refresh available";
         freshness = "stale";
+        owing = true;
         publish();
         return false;
       }
@@ -2587,6 +2611,8 @@ export function createUnread({
     purge,
     /** `covered`: the membership route's replay was continuous, so read state
      * resumes from it instead of reading its snapshot again. */
+    /** A repair is still owed: evidence (see `owing`) or read-state markers. */
+    owed: () => requested && (owing || reads.owed()),
     reconnect(covered = false) {
       if (requested)
         void (covered ? reads.resume() : reads.refresh()).then(() =>
@@ -2597,6 +2623,7 @@ export function createUnread({
       epoch++;
       channelReadGenerations.clear();
       freshness = "stale";
+      owing = true;
       reads.stale();
       publish();
     },

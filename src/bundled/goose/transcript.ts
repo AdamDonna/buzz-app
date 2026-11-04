@@ -244,6 +244,8 @@ export function gooseTurns(
   });
   const current = turns.at(-1);
   if (current && !working) current.endedAt = Math.max(last, current.startedAt);
+  // goose returns a session's every message, from its start.
+  if (turns[0] && !turns[0].partial) turns[0].newSession = true;
   return turns;
 }
 
