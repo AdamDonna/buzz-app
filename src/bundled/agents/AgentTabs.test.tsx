@@ -225,6 +225,53 @@ it("warns before discarding edits even when validation disables Save", async () 
   expect(screen.getByRole("textbox")).toHaveValue("Invalid");
 });
 
+it.each([false, true])(
+  "guards a version-address tab request without losing a draft (split %s)",
+  async (split) => {
+    const user = userEvent.setup();
+    const { props } = editingFixture(split);
+    const discard = vi.fn();
+    const view = render(<AgentTabs {...props} onDiscard={discard} />);
+    await user.type(screen.getByRole("textbox"), " draft");
+    const requested = <AgentTabs {...props} showSettings onDiscard={discard} />;
+    view.rerender(requested);
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent(
+      "Discard changes?",
+    );
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Saved draft");
+    view.rerender(requested);
+    await user.type(screen.getByRole("textbox"), " again");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(discard).not.toHaveBeenCalled();
+    view.rerender(<AgentTabs {...props} onDiscard={discard} />);
+    view.rerender(requested);
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(discard).toHaveBeenCalledOnce();
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.click(screen.getByRole("tab", { name: "Identity" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Saved");
+  },
+);
+
+it("guards a version request while the host has a staged harness change", async () => {
+  const { props } = editingFixture(false);
+  const discard = vi.fn();
+  const pending = { ...props, settingsHost: { pendingSave: vi.fn() } };
+  const view = render(<AgentTabs {...pending} onDiscard={discard} />);
+  view.rerender(<AgentTabs {...pending} showSettings onDiscard={discard} />);
+  expect(await screen.findByRole("alertdialog")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(discard).not.toHaveBeenCalled();
+});
+
 it("keeps a saving section mounted, then permits discarding after a failed save", async () => {
   const user = userEvent.setup();
   let reject!: (error: Error) => void;
@@ -235,10 +282,11 @@ it("keeps a saving section mounted, then permits discarding after a failed save"
     true,
     vi.fn(() => pending),
   );
-  render(<AgentTabs {...props} />);
+  const view = render(<AgentTabs {...props} />);
   await user.type(screen.getByRole("textbox"), " draft");
   await user.click(screen.getByRole("button", { name: "Save" }));
   try {
+    view.rerender(<AgentTabs {...props} showSettings />);
     expect(screen.getByRole("tab", { name: "Memory" })).toHaveAttribute(
       "aria-disabled",
       "true",

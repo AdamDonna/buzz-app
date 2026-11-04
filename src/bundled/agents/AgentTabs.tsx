@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useId,
   useRef,
   useState,
@@ -71,9 +72,6 @@ export function AgentTabs(props: {
         ? "agent:activity"
         : (sections[0]?.value ?? ""),
   );
-  useEffect(() => {
-    if (props.showSettings) setTab("agent:management");
-  }, [props.showSettings]);
   const [draft, setDraft] = useState({ dirty: false, saving: false });
   const drafts = useRef(new Map<string, { dirty: boolean; saving: boolean }>());
   const reportDraft = useCallback(
@@ -92,6 +90,15 @@ export function AgentTabs(props: {
   const panelPrefix = useId();
   const selected =
     sections.find((section) => section.value === tab) ?? sections[0];
+  const requestTab = (value: string) => {
+    if (value === selected?.value || draft.saving) return;
+    if (draft.dirty || props.settingsHost.pendingSave) setPendingTab(value);
+    else setTab(value);
+  };
+  const requestSettings = useEffectEvent(() => requestTab("agent:management"));
+  useEffect(() => {
+    if (props.showSettings) requestSettings();
+  }, [props.showSettings]);
   const settingsSelected =
     selected?.value === "agent:settings" ||
     selected?.value === "agent:management";
@@ -113,12 +120,7 @@ export function AgentTabs(props: {
     <AgentSaveState value={reportDraft}>
       <Tabs
         value={selected?.value ?? ""}
-        onValueChange={(value) => {
-          if (value === selected?.value || draft.saving) return;
-          if (draft.dirty || props.settingsHost.pendingSave)
-            setPendingTab(value);
-          else setTab(value);
-        }}
+        onValueChange={requestTab}
         items={sections.map(({ value, label }) => ({
           value,
           label,
