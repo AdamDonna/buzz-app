@@ -280,8 +280,34 @@ export interface ChannelQueries {
    * resolves through `refer`. Empty while the directory is cold or in flight. */
   openDirectory?(): readonly Pick<
     ChannelSummary,
-    "id" | "name" | "channelType" | "archived"
+    "id" | "name" | "description" | "channelType" | "archived"
   >[];
+  /** The open channels to browse: a first read's pages so far as they land,
+   * otherwise `openDirectory`'s. Display only, like `openDirectory`. */
+  browseDirectory?(): ReturnType<NonNullable<ChannelQueries["openDirectory"]>>;
+  /** Hears each `browseDirectory` page and finished read. List subscribers
+   * hear only a finished read, so pages never wake the rest of the app. */
+  subscribeDirectory?(listener: () => void): () => void;
+  /** Whether `browseDirectory` names a finished read's channels, rather than
+   * the first read's pages so far or none. */
+  directoryComplete?(): boolean;
+  /** Read the whole open-channel directory for browsing, sharing the
+   * `searchPublic` read; `browseDirectory` names its channels as pages land.
+   * Never grants access: opening a channel resolves it. */
+  readDirectory?(options?: {
+    signal?: AbortSignal | undefined;
+  }): Promise<{ partial: boolean }>;
+  /** Member counts for browsing, from a joined channel's roster or an open
+   * channel's relay-signed one, kept a few minutes. A channel without a
+   * roster is left out of `counts`; `failed` names the ids whose read
+   * failed, while the rest still answer. Display only: never grants access. */
+  readMemberCounts?(
+    channelIds: readonly string[],
+    options?: { signal?: AbortSignal | undefined },
+  ): Promise<{
+    counts: ReadonlyMap<string, number>;
+    failed: readonly string[];
+  }>;
   /** Current reference state from local evidence; never reads. */
   describe?(channelId: string): ChannelReference;
   /** Demand a background lookup for a reference that isn't `found`, or is

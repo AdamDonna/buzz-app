@@ -130,6 +130,11 @@ that agent in Buzz; they do not notify the external app through this connection.
   stopped reading, or at the latest message once you had caught up. You and
   the person asking may have different channel access. A link alone never
   grants access.
+- **Finding channels**: search's **Channels** tab lists the community's open
+  channels you can join, with their member counts; typing also matches channels
+  you're in. Opening an unjoined channel shows a preview with **Join**. Private
+  channels appear only once someone adds you. Search reopens where you left it
+  for a few minutes; Escape starts fresh next time.
 - **Mute** is available from a channel or DM's sidebar context menu. Once
   confirmed, a crossed-out bell appears immediately after its name. New messages
   do not make muted channel or DM names bold.
