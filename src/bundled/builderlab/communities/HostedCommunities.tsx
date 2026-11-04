@@ -617,7 +617,7 @@ export function HostedCommunities({
                     setConfirm({
                       title: "Unpair this Buzz identity?",
                       description:
-                        "Your Builderlab account will no longer be connected to this Buzz key. You can reconnect any key later, but community actions stay unavailable until you do.",
+                        "Your Builderlab account will no longer be connected to this Buzz key. You can reconnect another key right away, or this key a few minutes from now, but community actions stay unavailable until you do.",
                       action: "Unpair identity",
                       run: async () => {
                         check(

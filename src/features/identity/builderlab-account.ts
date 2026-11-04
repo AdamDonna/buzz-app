@@ -200,6 +200,11 @@ const ACCOUNT_ERRORS: Readonly<
     message:
       "Builderlab has had too many attempts to link a key. Wait a few minutes, then try again.",
   },
+  pubkey_recently_unpaired: {
+    message:
+      "This key was unpaired from Builderlab a moment ago. Wait a few minutes, then link it again.",
+    retryable: true,
+  },
   unknown: {},
 };
 

@@ -688,6 +688,15 @@ it.each([
     "linked to a different Builderlab account",
   ],
   [
+    "the key was unpaired moments ago",
+    [
+      response({ correlation_id: "c" }),
+      response(challenge),
+      response({ error: { code: "pubkey_recently_unpaired" } }, 409),
+    ],
+    "unpaired a moment ago",
+  ],
+  [
     "the origin is refused",
     [
       response({ correlation_id: "c" }),

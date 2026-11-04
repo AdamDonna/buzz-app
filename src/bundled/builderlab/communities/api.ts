@@ -71,6 +71,8 @@ const messages: Record<string, string> = {
     "This Builderlab account is connected to another Buzz identity.",
   pubkey_already_bound:
     "This Buzz identity is connected to another Builderlab account.",
+  pubkey_recently_unpaired:
+    "This Buzz identity was unpaired a moment ago. Wait a few minutes, then connect it again.",
   not_owner: "Only the community owner can do that.",
   transferee_not_registered:
     "That person needs a connected Buzz identity before you can transfer ownership to them.",

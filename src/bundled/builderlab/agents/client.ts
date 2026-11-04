@@ -106,6 +106,8 @@ const LINK_ERRORS: Record<string, string> = {
     "This Builderlab account is linked to a different Buzz identity.",
   pubkey_already_bound:
     "This Buzz identity is linked to a different Builderlab account.",
+  pubkey_recently_unpaired:
+    "This Buzz identity was unpaired a moment ago. Wait a few minutes, then link it again.",
 };
 
 export function createAgentClient(

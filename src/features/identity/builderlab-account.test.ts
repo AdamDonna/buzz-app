@@ -541,6 +541,11 @@ describe("bind", () => {
       [answer(200, challenge), refusal(409, "pubkey_already_bound")],
       "This Buzz identity is connected to another Builderlab account.",
     ],
+    [
+      "a verify for a key unpaired moments ago",
+      [answer(200, challenge), refusal(409, "pubkey_recently_unpaired")],
+      "This key was unpaired from Builderlab a moment ago. Wait a few minutes, then link it again.",
+    ],
     // kgoose's codes the card lacks.
     [
       "a challenge refused for its origin",
@@ -639,6 +644,12 @@ describe("bind", () => {
       409,
       "This Buzz identity is connected to another Builderlab account.",
       false,
+    ],
+    [
+      "pubkey_recently_unpaired",
+      409,
+      "This key was unpaired from Builderlab a moment ago. Wait a few minutes, then link it again.",
+      true,
     ],
     // Defensive, not a kgoose reply: its identity routes never send `unknown`,
     // which the card reads as its deletion service's.
