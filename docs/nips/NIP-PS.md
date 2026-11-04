@@ -49,9 +49,13 @@ signature, and this draft defines no URL or MIME tag.
 
 ## Verification and trust
 
-Every external plugin requires a signed release, including local development
-builds. Only plugins compiled into Buzz are exempt. Missing signatures fail
-verification; existing unsigned installations remain manageable but cannot run.
+By default, every external plugin requires a signed release, including local
+development builds. Plugins compiled into Buzz are exempt. Missing signatures
+fail verification; existing unsigned installations remain manageable but cannot
+run. Launching the client or CLI with `BUZZ_REQUIRE_PLUGIN_SIGNATURES=0` permits
+unsigned plugins. Every other value, including an unset variable, requires
+signatures. Supplied signatures are always verified, and the publisher
+continuity rules below apply in either mode.
 
 Before import and each load, verify the NIP-01 event ID and signature, kind,
 empty content, required tags, and `x` against the exact artifact bytes. Parse

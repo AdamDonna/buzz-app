@@ -28,6 +28,8 @@ Options:
 
 The desktop and CLI also read BUZZODZ_HOME and BUZZODZ_PROFILE.
 BUZZ_MANAGED_PLUGINS overrides the managed plugin policy file location.
+Set BUZZ_REQUIRE_PLUGIN_SIGNATURES=0 when launching the desktop or CLI to allow
+unsigned plugins. Signatures are required by default; supplied signatures are always verified.
 Launch the desktop with BUZZODZ_SAFE_MODE=1 to skip external pages.";
 
 fn main() {

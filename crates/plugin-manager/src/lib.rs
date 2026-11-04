@@ -640,6 +640,18 @@ const UNSIGNED_PLUGIN_ERROR: &str =
     "External plugins require a signed release (plugin.artifact.json and plugin.signature.json)";
 const SIGNED_ROLLBACK_ERROR: &str = "Cannot roll back to an unsigned revision";
 
+fn signatures_required() -> bool {
+    std::env::var("BUZZ_REQUIRE_PLUGIN_SIGNATURES").as_deref() != Ok("0")
+}
+
+fn verified_publisher(digest: &str, signature: Option<&Event>) -> Result<Option<String>> {
+    match signature {
+        Some(signature) => publisher_for_hash(digest, signature).map(Some),
+        None if signatures_required() => Err(UNSIGNED_PLUGIN_ERROR.into()),
+        None => Ok(None),
+    }
+}
+
 fn publisher(bytes: &[u8], signature: &Event) -> Result<String> {
     publisher_for_hash(&hash(bytes), signature)
 }
@@ -913,7 +925,7 @@ impl Manager {
                 "Installed artifact failed its integrity check; reinstall or roll back".into(),
             );
         }
-        publisher(text.as_bytes(), signature.ok_or(UNSIGNED_PLUGIN_ERROR)?)?;
+        verified_publisher(revision, signature)?;
         let a: Artifact = serde_json::from_str(&text).map_err(err)?;
         a.manifest.validate()?;
         if a.manifest.id != id {
@@ -957,20 +969,16 @@ impl Manager {
         for (id, p) in registry.installed {
             // Catalog polling stays cheap; verify content hashes before enabling/loading.
             let has_signature = p.current_signature.is_some();
-            let rollback_blocked_reason = (p.previous.is_some() && p.previous_signature.is_none())
-                .then_some(SIGNED_ROLLBACK_ERROR);
+            let rollback_blocked_reason = ((signatures_required() || has_signature)
+                && p.previous.is_some()
+                && p.previous_signature.is_none())
+            .then_some(SIGNED_ROLLBACK_ERROR);
             let mut error = fs::metadata(self.artifact_path(&id, &p.current))
                 .map_err(err)
                 .err();
             let publisher = if error.is_none() {
-                match p
-                    .current_signature
-                    .as_ref()
-                    .ok_or(UNSIGNED_PLUGIN_ERROR)
-                    .map_err(str::to_owned)
-                    .and_then(|signature| publisher_for_hash(&p.current, signature))
-                {
-                    Ok(key) => Some(key),
+                match verified_publisher(&p.current, p.current_signature.as_ref()) {
+                    Ok(key) => key,
                     Err(reason) => {
                         error = Some(reason);
                         None
@@ -1106,7 +1114,9 @@ impl Manager {
                     }
                     "rollback" => {
                         let previous = p.previous.clone().ok_or("No previous revision")?;
-                        if p.previous_signature.is_none() {
+                        if (signatures_required() || p.current_signature.is_some())
+                            && p.previous_signature.is_none()
+                        {
                             return Err(SIGNED_ROLLBACK_ERROR.into());
                         }
                         let a = self.artifact(id, &previous, p.previous_signature.as_ref())?;
@@ -1340,11 +1350,12 @@ impl Release {
         if is_reserved(&artifact.manifest.id) || artifact.code.trim().is_empty() {
             return Err("Invalid plugin artifact".into());
         }
-        let signature = self.signature.as_ref().ok_or(UNSIGNED_PLUGIN_ERROR)?;
-        if serde_json::to_vec(signature).map_err(err)?.len() > 64 * 1024 {
-            return Err("Plugin release signature exceeds 64 KiB".into());
+        if let Some(signature) = &self.signature {
+            if serde_json::to_vec(signature).map_err(err)?.len() > 64 * 1024 {
+                return Err("Plugin release signature exceeds 64 KiB".into());
+            }
         }
-        publisher(&self.bytes, signature)?;
+        verified_publisher(&hash(&self.bytes), self.signature.as_ref())?;
         Ok(artifact)
     }
     fn validate(&self) -> Result<Manifest> {

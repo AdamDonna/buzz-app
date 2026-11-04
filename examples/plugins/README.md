@@ -14,7 +14,7 @@ build tools or runtime dependencies. They use the host's React instance and page
 makes network requests, writes files, nor reads your account. Plugins generally are
 trusted unsandboxed code; these examples do not change that trust model.
 
-Buzz requires signatures for all external plugins. After setting up your Buzz
+Buzz requires signatures for all external plugins by default. After setting up your Buzz
 identity, sign each example you want to install with the matching `buzzodz` CLI:
 
 ```sh

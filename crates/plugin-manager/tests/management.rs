@@ -203,6 +203,133 @@ fn unsigned_external_packages_are_rejected_without_affecting_bundled_plugins() {
 }
 
 #[test]
+fn signature_requirement_can_be_disabled_without_disabling_verification() {
+    use std::process::Command;
+    const FLAG: &str = "BUZZ_REQUIRE_PLUGIN_SIGNATURES";
+    // Isolate the launch environment from the other tests in this process.
+    if std::env::var(FLAG).as_deref() != Ok("0") {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "signature_requirement_can_be_disabled_without_disabling_verification",
+                "--nocapture",
+            ])
+            .env(FLAG, "0")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let (temp, manager, source) = fixture();
+    for name in ["plugin.artifact.json", "plugin.signature.json"] {
+        fs::remove_file(source.join(name)).unwrap();
+    }
+    fs::write(
+        source.join("manifest.json"),
+        r#"{"id":"example.page","name":"Example","apiVersion":1,"host":{"files":true}}"#,
+    )
+    .unwrap();
+    let preview = buzzodz_plugins::imports::prepare_folder(&source).unwrap();
+    assert_eq!(preview.preview.candidates.len(), 1);
+    assert!(preview.preview.candidates[0].publisher.is_none());
+    let revision = preview.preview.candidates[0].revision.clone();
+    preview
+        .install(&manager, &preview.preview.token, ".")
+        .unwrap();
+    manager.change("enable", "example.page").unwrap();
+    let reopened = Manager::open(Some(temp.path().into()), "test", false).unwrap();
+    assert!(reopened
+        .module("example.page", &revision)
+        .unwrap()
+        .contains("apply"));
+    assert!(reopened.content("example.page", &revision).is_ok());
+    assert!(
+        reopened
+            .host_grants("example.page", &revision)
+            .unwrap()
+            .files
+    );
+
+    // A new process without exactly 0 must reject this same unsigned installation.
+    for value in [None, Some("1"), Some(""), Some("false")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_buzzodz"));
+        command.args([
+            "--home",
+            temp.path().to_str().unwrap(),
+            "--profile",
+            "test",
+            "plugin",
+            "enable",
+            "example.page",
+        ]);
+        command.env_remove(FLAG);
+        if let Some(value) = value {
+            command.env(FLAG, value);
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("External plugins require a signed release"));
+    }
+
+    fs::write(
+        source.join("plugin.js"),
+        "export function apply() { return 2; }",
+    )
+    .unwrap();
+    let updated = reopened.reload_live("example.page").unwrap();
+    let plugin = updated
+        .plugins
+        .iter()
+        .find(|p| p.manifest.id == "example.page")
+        .unwrap();
+    assert!(plugin.error.is_none());
+    assert!(plugin.publisher.is_none());
+    assert_eq!(plugin.previous.as_deref(), Some(revision.as_str()));
+    assert!(plugin.rollback_blocked_reason.is_none());
+    reopened.change("rollback", "example.page").unwrap();
+    assert!(reopened.module("example.page", &revision).is_ok());
+
+    sign(&source);
+    let signature_path = source.join("plugin.signature.json");
+    let signature = fs::read(&signature_path).unwrap();
+    let mut invalid: serde_json::Value = serde_json::from_slice(&signature).unwrap();
+    invalid["content"] = "tampered".into();
+    fs::write(&signature_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+    assert!(
+        install_error(&reopened, &source).contains("Invalid plugin release event ID or signature")
+    );
+    fs::write(&signature_path, signature).unwrap();
+    let signed = reopened.install(&source).unwrap();
+    let plugin = signed
+        .plugins
+        .iter()
+        .find(|p| p.manifest.id == "example.page")
+        .unwrap();
+    assert!(plugin.publisher.is_some());
+    assert!(plugin.rollback_blocked_reason.is_some());
+    assert!(reopened.change("rollback", "example.page").is_err());
+
+    sign_release(&source, &"02".repeat(32)).unwrap();
+    assert!(install_error(&reopened, &source).contains("Publisher changed"));
+    for name in ["plugin.artifact.json", "plugin.signature.json"] {
+        fs::remove_file(source.join(name)).unwrap();
+    }
+    assert!(install_error(&reopened, &source).contains("signed plugin became unsigned"));
+    assert!(reopened
+        .reload_live("example.page")
+        .err()
+        .unwrap()
+        .contains("signed plugin became unsigned"));
+}
+
+#[test]
 fn install_enable_update_rollback_and_remove_survive_restart() {
     let (temp, manager, source) = fixture();
     let catalog = manager.install(&source).unwrap();
