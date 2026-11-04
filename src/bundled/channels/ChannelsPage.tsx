@@ -990,6 +990,18 @@ function ChannelWorkspace({
         : undefined,
     [contextRouted, contextRoot, contextInTimeline, contextSignal],
   );
+  // The channel whose list has shown since it opened. Hold only until then,
+  // so the list mounts once, at the root; a later attempt, as when Members
+  // closes, seeks with the list in place and reveals the root there.
+  const [listed, setListed] = useState<string>();
+  const contextHolding =
+    !!contextRoot && contextInTimeline === undefined && listed !== current?.id;
+  const listing =
+    listed === current?.id ||
+    (!contextHolding && contentReadyChannel === current?.id)
+      ? current?.id
+      : undefined;
+  if (listing !== listed) setListed(listing);
   const conversationIcon = (item: (typeof channels)[number]) => {
     const person = item.participants?.[0];
     return (
@@ -1895,8 +1907,7 @@ function ChannelWorkspace({
             navigation={
               !requestedMessage || exact?.inTimeline ? navigation : undefined
             }
-            // Mount the list once, at the root, not while it is sought.
-            holding={!!contextRoot && contextInTimeline === undefined}
+            holding={contextHolding}
             inlineTarget={contextTarget}
             onOpenThread={openThread}
             revealMessageId={

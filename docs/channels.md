@@ -1670,7 +1670,8 @@ Only **Open in channel** from a thread tab also shows the thread's root in the
 timeline: the list waits while older pages are read to find it, within the same
 bound as conversation tabs, then reveals and marks the root without taking the
 thread's focus. A root it cannot find leaves the timeline at its usual place.
-Back or Forward to that visit seeks the root again.
+Back or Forward to that visit, or closing Members, seeks the root again; a list
+already shown stays in place while it does.
 
 Navigation completes only after the exact folded target is visible and focused.
 Reclick/Back reveals again; live/profile updates do not steal focus. The shared

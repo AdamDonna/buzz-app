@@ -134,11 +134,11 @@ function page(filter: ReadFilter, history: readonly RelayEvent[]) {
 
 /** Channels with alpha's thread root beyond its head page, or, with
  * `root: false`, absent from its history. Alpha's older pages wait for
- * `release()`. */
-async function channelsPage({ root = true } = {}) {
+ * `release()`. A `cached` session has only alpha's saved head. */
+async function channelsPage({ root = true, cached = false } = {}) {
   const { viewer, authority, reply, newer, channels } = fixture;
   const alpha = [...(root ? [fixture.root] : []), reply, ...newer];
-  const held: (() => void)[] = [];
+  const held: ((error?: Error) => void)[] = [];
   const owner = createRelaySession(
     {
       viewer: viewer.pubkey,
@@ -152,20 +152,52 @@ async function channelsPage({ root = true } = {}) {
           );
         const channelId = window["#h"]?.[0];
         if (channelId === "alpha" && window.until !== undefined)
-          await new Promise<void>((resolve) => held.push(resolve));
+          await new Promise<void>((resolve, reject) =>
+            held.push((error) => (error ? reject(error) : resolve())),
+          );
         return page(window, channelId === "alpha" ? alpha : []);
       },
     },
-    { outboxStorage: { load: () => [], save: () => {} } },
+    {
+      outboxStorage: { load: () => [], save: () => {} },
+      ...(cached && {
+        prepared: true,
+        cachedOnly: true,
+        persistence: {
+          readStartup: async () => ({
+            discovery: {
+              savedAt: Date.now(),
+              relayAuthor: authority.pubkey,
+              events: channels,
+            },
+          }),
+          read: async () => [
+            {
+              channelId: "alpha",
+              savedAt: Date.now(),
+              events: page({ "#h": ["alpha"], limit: 20 }, alpha),
+              profiles: [],
+            },
+          ],
+          write: async () => {},
+          remove: async () => {},
+          retain: async () => {},
+          clear: async () => {},
+          close() {},
+        },
+      }),
+    },
   );
   owners.push(owner);
+  if (cached) await owner.restore();
   owner.session.channels.ensureList();
   await vi.waitFor(() =>
     expect(owner.session.channels.list().status).toBe("ready"),
   );
   const scope = `https://relay.test:${viewer.pubkey}`;
   const snapshot = {
-    status: "ready" as const,
+    status: cached ? ("connecting" as const) : ("ready" as const),
+    ...(cached && { cached: true as const }),
     generation: 1,
     scope,
     viewer: viewer.pubkey,
@@ -254,11 +286,12 @@ async function channelsPage({ root = true } = {}) {
       else ({ rerender } = render(view(navigation)));
       shown = navigation;
     },
-    async release() {
+    /** Answer the oldest held older-page read, or fail it with `error`. */
+    async release(error?: Error) {
       const next = held.shift();
       if (!next) throw new Error("No older page read is waiting");
       await act(async () => {
-        next();
+        next(error);
         await flush();
       });
     },
@@ -275,12 +308,15 @@ it("holds the list from the visit's start, then reveals the root beside the thre
   const first = h.visit(h.inChannel(), "visit");
   h.go(first);
   await vi.waitFor(() => expect(h.held).toHaveLength(1));
-  // The head is ready, but it lacks the root: the list never mounted there.
-  expect(h.session.channels.window("alpha").status).toBe("ready");
-  expect(renders("alpha").length).toBeGreaterThan(0);
-  expect(renders("alpha").every((body) => body.holding)).toBe(true);
-  expect(timeline("alpha")).toBeNull();
-  await h.release();
+  try {
+    // The head is ready, but it lacks the root: the list never mounted there.
+    expect(h.session.channels.window("alpha").status).toBe("ready");
+    expect(renders("alpha").length).toBeGreaterThan(0);
+    expect(renders("alpha").every((body) => body.holding)).toBe(true);
+    expect(timeline("alpha")).toBeNull();
+  } finally {
+    await h.release();
+  }
   await vi.waitFor(() =>
     expect(latest("alpha")).toMatchObject({
       holding: false,
@@ -297,11 +333,47 @@ it("opens the timeline at its usual place when the root is not in its history", 
   const h = await channelsPage({ root: false });
   h.go(h.visit(h.inChannel(), "visit"));
   await vi.waitFor(() => expect(h.held).toHaveLength(1));
-  expect(latest("alpha")?.holding).toBe(true);
-  await h.release();
+  try {
+    expect(latest("alpha")?.holding).toBe(true);
+  } finally {
+    await h.release();
+  }
   await vi.waitFor(() => expect(latest("alpha")?.holding).toBe(false));
   expect(latest("alpha")?.inlineTarget).toBeUndefined();
   expect(timeline("alpha")).not.toBeNull();
+});
+
+it("opens the timeline at its usual place when an older page fails", async () => {
+  const h = await channelsPage();
+  h.go(h.visit(h.inChannel(), "visit"));
+  await vi.waitFor(() => expect(h.held).toHaveLength(1));
+  try {
+    expect(latest("alpha")?.holding).toBe(true);
+  } finally {
+    await h.release(new Error("Relay unavailable"));
+  }
+  await vi.waitFor(() => expect(latest("alpha")?.holding).toBe(false));
+  expect(h.session.channels.window("alpha").error).toBeDefined();
+  expect(latest("alpha")?.inlineTarget).toBeUndefined();
+  expect(timeline("alpha")).not.toBeNull();
+});
+
+it("holds the list through a cached session, which cannot seek", async () => {
+  const h = await channelsPage({ cached: true });
+  h.go(h.visit(h.inChannel(), "visit"));
+  await vi.waitFor(() =>
+    expect(h.session.channels.window("alpha")).toMatchObject({
+      status: "ready",
+      freshness: "cached",
+    }),
+  );
+  // The saved head could show, but cached rows decide nothing.
+  expect(h.session.channels.window("alpha").rows.length).toBeGreaterThan(0);
+  await act(flush);
+  expect(renders("alpha").length).toBeGreaterThan(0);
+  expect(renders("alpha").every((body) => body.holding)).toBe(true);
+  expect(timeline("alpha")).toBeNull();
+  expect(h.held).toHaveLength(0);
 });
 
 it("seeks nothing and holds nothing under Members", async () => {
@@ -314,13 +386,48 @@ it("seeks nothing and holds nothing under Members", async () => {
   expect(h.held).toHaveLength(0);
 });
 
+it("closing Members reveals the root again in the list already shown", async () => {
+  const h = await channelsPage();
+  const first = h.visit(h.inChannel(), "visit");
+  h.go(first);
+  await vi.waitFor(() => expect(h.held).toHaveLength(1));
+  await h.release();
+  await vi.waitFor(() =>
+    expect(latest("alpha")?.inlineTarget?.signal).toBe(first.signal),
+  );
+  const list = timeline("alpha");
+  expect(list).not.toBeNull();
+  const shown = renders("alpha").length;
+  h.go(h.visit(h.inChannel({ panel: "members" }), "members"));
+  await vi.waitFor(() => expect(latest("alpha")?.inlineTarget).toBeUndefined());
+  // Closing Members returns to the visit's entry, a new attempt at it.
+  const closed = h.visit(h.inChannel(), "visit", true);
+  h.go(closed);
+  await vi.waitFor(() =>
+    expect(latest("alpha")?.inlineTarget).toMatchObject({
+      messageId: fixture.root.id,
+      signal: closed.signal,
+    }),
+  );
+  expect(
+    renders("alpha")
+      .slice(shown)
+      .some((body) => body.holding),
+  ).toBe(false);
+  expect(timeline("alpha")).toBe(list);
+  expect(h.held).toHaveLength(0);
+});
+
 it("a channel the reader moves to during the seek is neither held nor targeted", async () => {
   const h = await channelsPage();
   h.go(h.visit(h.inChannel(), "visit"));
   await vi.waitFor(() => expect(h.held).toHaveLength(1));
-  h.go(h.visit(h.target("beta"), "beta"));
-  await vi.waitFor(() => expect(timeline("beta")).not.toBeNull());
-  await h.release();
+  try {
+    h.go(h.visit(h.target("beta"), "beta"));
+    await vi.waitFor(() => expect(timeline("beta")).not.toBeNull());
+  } finally {
+    await h.release();
+  }
   await vi.waitFor(() =>
     expect(
       h.session.channels
@@ -339,18 +446,23 @@ it("another Open in channel during the seek reveals the root for itself", async 
   h.go(first);
   await vi.waitFor(() => expect(h.held).toHaveLength(1));
   const second = h.visit(h.inChannel(), "again");
-  h.go(second);
-  expect(latest("alpha")?.holding).toBe(true);
-  // The read in flight serves the new visit too.
-  expect(h.held).toHaveLength(1);
-  await h.release();
+  try {
+    h.go(second);
+    expect(latest("alpha")?.holding).toBe(true);
+    // The read in flight serves the new visit too.
+    expect(h.held).toHaveLength(1);
+  } finally {
+    await h.release();
+  }
   await vi.waitFor(() =>
     expect(latest("alpha")?.inlineTarget).toMatchObject({
       messageId: fixture.root.id,
       signal: second.signal,
     }),
   );
-  expect(first.signal.aborted).toBe(true);
+  expect(
+    renders("alpha").some((body) => body.inlineTarget?.signal === first.signal),
+  ).toBe(false);
 });
 
 it("Back to the visit seeks again once the channel has dropped the pages it read", async () => {
@@ -369,8 +481,11 @@ it("Back to the visit seeks again once the channel has dropped the pages it read
   h.go(back);
   expect(latest("alpha")).toMatchObject({ holding: true });
   await vi.waitFor(() => expect(h.held).toHaveLength(1));
-  expect(latest("alpha")?.holding).toBe(true);
-  await h.release();
+  try {
+    expect(latest("alpha")?.holding).toBe(true);
+  } finally {
+    await h.release();
+  }
   await vi.waitFor(() =>
     expect(latest("alpha")).toMatchObject({
       holding: false,
