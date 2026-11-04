@@ -2398,6 +2398,89 @@ it("reports a channel continuous only when the session can apply its whole repla
   }
 });
 
+it.each([
+  ["rebuilt for narrower interests", "rebuild"],
+  ["re-created on the next connection", "reconnect"],
+] as const)(
+  "catches up a channel granted while its refused batch was %s",
+  async (_, after) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      age();
+      h.owner.update(["a", "b", "c"], ["a", "b", "c"]);
+      await establish(h.first);
+      h.first.close();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = h.sockets[1];
+      assert.exists(second);
+      await second.auth();
+      await vi.advanceTimersByTimeAsync(750);
+      const first = second.requests().find((r) => scopeOf(r).length > 1);
+      assert.exists(first);
+      await second.receive(["CLOSED", first[1], "auth-required: sign in"]);
+      for (const r of second.requests())
+        if (r !== first) await second.receive(["EOSE", r[1]]);
+      await grant(h, "b", second);
+      h.callbacks.established.mockClear();
+      let socket = second;
+      if (after === "rebuild") h.owner.update(["b", "c"], ["b", "c"]);
+      else {
+        // The grant is no longer in the next membership replay.
+        second.close();
+        await vi.advanceTimersByTimeAsync(1_000);
+        const third = h.sockets[2];
+        assert.exists(third);
+        await third.auth();
+        socket = third;
+      }
+      await vi.advanceTimersByTimeAsync(750);
+      for (const r of socket.requests())
+        if (scopeOf(r).includes("c")) await socket.receive(["EOSE", r[1]]);
+      const calls = h.callbacks.established.mock.calls.filter((c) =>
+        c[0]?.includes("c"),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      for (const [, , continuous] of calls)
+        expect(continuous ?? []).not.toContain("b");
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it.each([
+  ["after its re-send reached EOSE", true, ["a", "b"]],
+  ["while its re-send was still pending", false, ["a"]],
+] as const)(
+  "resumes a granted channel on the next connection only %s",
+  async (_, finish, continuous) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      age();
+      h.owner.update(["a", "b"], ["a", "b"]);
+      await establish(h.first);
+      await grant(h, "b");
+      const resent = h.first.requests().at(-1);
+      assert.exists(resent);
+      if (finish) await h.first.receive(["EOSE", resent[1]]);
+      h.callbacks.established.mockClear();
+      h.first.close();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = h.sockets[1];
+      assert.exists(second);
+      // The grant is no longer in the next membership replay.
+      await establish(second);
+      expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+        [["a", "b"], undefined, continuous],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
 it("catches up a channel granted while its batch waits to retry its first REQ", async () => {
   vi.useFakeTimers({ now: 1_700_000_000_000 });
   const h = setup([], undefined, 10, () => 0.5);

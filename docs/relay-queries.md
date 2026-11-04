@@ -976,7 +976,7 @@ nothing when none is owed). Any other case keeps the catch-up above: a replay
 at the limit, a channel with no cursor, a window restored or read before the
 stream was up, a window or thread read again while the stream was down, a
 window still owed a catch-up from an earlier drop, and a live-only renewal,
-including a batch re-sent for a grant (it replays nothing, so it proves nothing), and a channel granted while its batch was not yet live (its replay starts from a cursor of a stream the relay may have left that channel out of, even when the REQ follows the grant). While the session's initial five-minute
+including a batch re-sent for a grant (it replays nothing, so it proves nothing), and a channel granted while its batch was not yet live (its replay starts from a cursor of a stream the relay may have left that channel out of, even when the REQ follows the grant). A grant also ends that channel's cursor, and no connection sets it again until a REQ sent after the grant reaches EOSE, so a rebuilt batch or a later connection cannot restore it. While the session's initial five-minute
 floor truncates the resume lag, channel and global routes keep their reconnect
 repair reads even when the replay ends below the limit, so the skip applies
 only once the live connection is about 11 minutes old.

@@ -465,6 +465,10 @@ export function subscribeRelayTraffic(
   // established it last heard the relay. A later connection that never
   // establishes it leaves the cursor, so flapping does not lose it.
   const cursors = new Map<string, LiveCursor>();
+  // Channels granted (ms) since a stream that holds them last started. The
+  // relay may have left such a channel out of every earlier stream, so it has
+  // no cursor until a REQ sent after its grant reaches EOSE.
+  const grantsOwed = new Map<string, number>();
   // Outlives each socket, so a reconnect's replay reuses the proofs.
   const verify = createEventVerifier(LIVE_PROOF_ENTRIES, signatures);
   const cursorKeys = (route: Route) =>
@@ -638,6 +642,8 @@ export function subscribeRelayTraffic(
   // before the grant, so it is re-sent once at its EOSE. A forged notice
   // costs one extra REQ, nothing more.
   function grant(id: string) {
+    cursors.delete(`channel:${id}`);
+    grantsOwed.set(id, Date.now());
     let sent = false;
     for (const route of [...routes.values()]) {
       if (!route.channelIds?.includes(id)) continue;
@@ -1268,6 +1274,7 @@ export function subscribeRelayTraffic(
               : undefined;
         if (!source) continue;
         const kept = new Set(cursorKeys(source));
+        for (const id of grantsOwed.keys()) kept.delete(`channel:${id}`);
         for (const key of cursorKeys(route))
           if (kept.has(key)) cursors.set(key, { liveUntil });
       }
@@ -1322,6 +1329,8 @@ export function subscribeRelayTraffic(
     }
     const used = new Set([...routes.values()].flatMap(cursorKeys));
     for (const key of cursors.keys()) if (!used.has(key)) cursors.delete(key);
+    for (const id of grantsOwed.keys())
+      if (!used.has(`channel:${id}`)) grantsOwed.delete(id);
     const current = generation;
     const valid = () => !closed && current === generation;
     heard = false;
@@ -1764,6 +1773,12 @@ export function subscribeRelayTraffic(
         route.status = "live";
         delete route.error;
         delete route.refusals;
+        // Its stream holds every channel granted before its REQ was sent.
+        for (const id of scope(route)) {
+          const at = grantsOwed.get(id);
+          if (at !== undefined && (route.sentAt ?? -Infinity) >= at)
+            grantsOwed.delete(id);
+        }
         route.replay =
           route.count >= LIVE_REPLAY_LIMIT ||
           (route.liveOnly && scope(route).length > REPLAY_BATCH_SIZE)
