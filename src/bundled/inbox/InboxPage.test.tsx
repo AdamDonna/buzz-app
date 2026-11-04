@@ -4104,6 +4104,35 @@ it("Retry still reads the next conversation's tags after an unrelated mark in it
     expect(h.owner.session.unread.snapshot(target).observedCount).toBe(0);
 });
 
+it("Retry keeps a tag of the next conversation marked unread after its read fails", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const step = h.owner.session.unread
+    .inbox()
+    .items.find((item) => item.channelId === "room")?.readThrough[0]?.target;
+  if (!step) throw new Error("Missing shared chat tag");
+  const dm = rows().find((row) => row.textContent?.includes("A direct reply"));
+  fireEvent.click(
+    within(dm as HTMLElement).getByRole("button", { name: /^Open / }),
+  );
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  h.failSave();
+  await archiveOpened(h);
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  await act(() => h.owner.session.unread.markUnreadLocal(step));
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  expect(h.owner.session.unread.snapshot(step).manual).toBe("local-only");
+});
+
 it("Retry repeats the next shared chat's failed step after both chats' saves fail", async () => {
   const h = fixture({ withWriter: true, sharedSolo: true });
   // A second shared chat, marked unread, with a top-level tag and a newer
