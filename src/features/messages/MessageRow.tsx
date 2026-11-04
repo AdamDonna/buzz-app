@@ -954,7 +954,6 @@ function MessageRowContent({
                   <WorkflowByline
                     ownerId={row.workflowOwnerId}
                     ownerName={workflowOwnerName}
-                    signer={row.signerId ?? row.authorId}
                     canOpenLink={canOpenLink}
                     onOpenLink={openLink}
                   />

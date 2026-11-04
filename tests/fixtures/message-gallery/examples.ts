@@ -338,7 +338,7 @@ export const groups: Group[] = [
         id: "workflow-owner",
         title: "Automated message",
         description:
-          "Automation leads; owner navigation is labelled. Open the information icon to inspect the separate owner and relay keys.",
+          "Automation leads; owner navigation is labelled. Rest on or open the information icon to read that the owner didn’t send it personally.",
         rows: foldMessages(
           "studio",
           workflowRelay.pubkey,

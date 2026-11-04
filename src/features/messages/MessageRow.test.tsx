@@ -2,7 +2,6 @@
 import { StrictMode } from "react";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
-import { npubEncode } from "nostr-tools/nip19";
 import "@testing-library/jest-dom/vitest";
 import { stubAvatarBrowserApis } from "../agents/avatar-testing";
 stubAvatarBrowserApis();
@@ -16,6 +15,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { PREVIEW_REST_MS } from "../../shared/design-system/ui/hoverIntent";
 import { messageCopyText } from "./message-copy";
 import { profileTarget, profileActivityViewTarget } from "../profiles/target";
@@ -2314,24 +2314,32 @@ it("dismisses an unsubmitted report when its retained row is suspended", async (
   }
 });
 
-it("presents automation, links the owner and discloses the separate relay signer", async () => {
-  const ownerId = "ab".repeat(32),
-    signer = "cd".repeat(32);
+function renderWorkflowMessage(open = vi.fn(() => true)) {
+  const ownerId = "ab".repeat(32);
+  renderMessage({
+    row: {
+      ...row,
+      authorId: ownerId,
+      signerId: "cd".repeat(32),
+      workflowOwnerId: ownerId,
+    },
+    viewer: ownerId,
+    profile: { name: "Wes" },
+    participantProfiles: new Map([[ownerId, { name: "Wes" }]]),
+    onOpenLink: open,
+    canOpenLink: () => true,
+  });
+  return {
+    ownerId,
+    trigger: screen.getByRole("button", { name: "Workflow message details" }),
+  };
+}
+
+it("presents automation, links the owner and explains the message without keys", async () => {
   const open = vi.fn(() => true);
+  const user = userEvent.setup();
   try {
-    renderMessage({
-      row: {
-        ...row,
-        authorId: ownerId,
-        signerId: signer,
-        workflowOwnerId: ownerId,
-      },
-      viewer: ownerId,
-      profile: { name: "Wes" },
-      participantProfiles: new Map([[ownerId, { name: "Wes" }]]),
-      onOpenLink: open,
-      canOpenLink: () => true,
-    });
+    const { ownerId, trigger } = renderWorkflowMessage(open);
     // The automation label stays plain; only the owner opens a profile.
     expect(
       screen.getByText("Workflow").closest('button, [role="button"]'),
@@ -2345,23 +2353,75 @@ it("presents automation, links the owner and discloses the separate relay signer
     expect(open).toHaveBeenCalledWith(profileTarget(ownerId), {
       rootId: "root",
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Workflow message details" }),
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const card = await screen.findByRole("dialog", {
+      name: "Workflow message",
+    });
+    // The byline beside the trigger already names the owner; the card only
+    // says what a workflow message is, without keys or relay identity.
+    expect(card).toHaveAccessibleDescription(
+      "Sent automatically by a workflow. Its owner set it up but didn’t send this message personally.",
     );
-    expect(
-      await screen.findByText(/the owner did not sign this message/),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Signed by the relay").nextElementSibling,
-    ).toHaveTextContent(npubEncode(signer));
-    expect(
-      screen.getByText("Owner public key").nextElementSibling,
-    ).toHaveTextContent(npubEncode(ownerId));
+    expect(card).not.toHaveTextContent(/npub1|Wes/);
     expect(
       screen.queryByRole("button", { name: "View Relay profile" }),
     ).toBeNull();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(trigger).toHaveFocus();
+    // fireEvent moves no pointer, so no hover rest timer can open the card.
+    fireEvent.click(trigger);
+    expect(
+      screen.getByRole("dialog", { name: "Workflow message" }),
+    ).toBeInTheDocument();
   } finally {
     cleanup();
+  }
+});
+
+it("opens workflow message details once the pointer rests, without a competing hint", async () => {
+  // Base UI's PATIENT_CLICK_THRESHOLD: a click this soon after a hover open
+  // keeps the popover open.
+  const BASE_UI_PATIENT_CLICK_MS = 500;
+  vi.useFakeTimers();
+  try {
+    const { trigger } = renderWorkflowMessage();
+    const focused = document.activeElement;
+    fireEvent.mouseEnter(trigger);
+    fireEvent.mouseMove(trigger);
+    await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS - 1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    screen.getByRole("dialog", { name: "Workflow message" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // A hover heads-up leaves focus where the reader had it.
+    expect(document.activeElement).toBe(focused);
+    // Clicking the trigger that just opened it keeps it open.
+    fireEvent.click(trigger);
+    await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
+    expect(
+      screen.getByRole("dialog", { name: "Workflow message" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Past Base UI's patient-click window, a click toggles a hover-opened
+    // card closed, as with every openOnHover="preview" popover.
+    fireEvent.mouseLeave(trigger);
+    fireEvent.mouseEnter(trigger);
+    fireEvent.mouseMove(trigger);
+    await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
+    screen.getByRole("dialog", { name: "Workflow message" });
+    await act(() => vi.advanceTimersByTimeAsync(BASE_UI_PATIENT_CLICK_MS));
+    fireEvent.click(trigger);
+    await act(() => vi.advanceTimersByTimeAsync(PREVIEW_REST_MS));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
   }
 });
 

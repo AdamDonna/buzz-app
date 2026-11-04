@@ -2908,20 +2908,6 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.workflowDetails {
-  margin-block: var(--space-3);
-  font-size: var(--text-body-sm);
-  line-height: var(--text-body-sm--line-height);
-  letter-spacing: var(--text-body-sm--letter-spacing);
-}
-.workflowDetails dt {
-  color: var(--text-subtle);
-  margin-top: var(--space-2);
-}
-.workflowDetails dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
 
 /* Content hugs short messages while rich content can use the available width. */
 .messageBubble {
