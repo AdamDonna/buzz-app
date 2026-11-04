@@ -163,6 +163,36 @@ it("decodes four self-encrypted coordinates through the narrow IPC command", asy
   expect(transport.writer?.kinds).toContain(30078);
 });
 
+it("clears a deleted agent from an account with no record without writing one", async () => {
+  const transport = await connectNativeTransport(community);
+  expect(
+    await transport.clearMainAgent?.("a".repeat(64), signal),
+  ).toBeUndefined();
+  // Still no record: never choosing a Bestie isn't saving none.
+  expect(await transport.readMainAgent?.(signal)).toBeUndefined();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "relay_sign_sidebar"),
+  ).toBe(false);
+});
+
+it("leaves a saved none alone when clearing a deleted agent", async () => {
+  const transport = await connectNativeTransport(community);
+  await transport.writeMainAgent?.(null, signal);
+  const signed = () =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "relay_sign_sidebar")
+      .length;
+  const before = signed();
+  expect(
+    await transport.clearMainAgent?.("a".repeat(64), signal),
+  ).toBeUndefined();
+  expect(signed()).toBe(before);
+  expect(await transport.readMainAgent?.(signal)).toBeNull();
+});
+
 it("saves and reads back the account's main agent", async () => {
   const transport = await connectNativeTransport(community);
   expect(await transport.readMainAgent?.(signal)).toBeUndefined();
