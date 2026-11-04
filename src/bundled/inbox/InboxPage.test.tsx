@@ -3947,6 +3947,37 @@ it("Retry gives up the next conversation's failed read once it is marked unread 
   expect(h.owner.session.unread.snapshot(dm).manual).toBe("local-only");
 });
 
+it("Retry keeps a message marked unread in an already-unread next conversation", async () => {
+  const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
+  render(h.view);
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  const dm = { kind: "channel", channelId: "dm-room" } as const;
+  await act(() => h.owner.session.unread.markUnreadLocal(dm));
+  const shared = rows().find((row) => row.textContent?.includes("Design"));
+  if (!shared) throw new Error("Missing shared chat row");
+  fireEvent.click(within(shared).getByRole("button", { name: /^Open / }));
+  await waitFor(() => expect(sideTabs()).toHaveLength(1));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("list", { name: "Inbox conversations" }),
+    ).toHaveAttribute("aria-busy", "false"),
+  );
+  h.failSave();
+  await archiveOpened(h);
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  // Still unread as a whole, so only the newer message mark records the choice.
+  const reply = h.events.find((event) => event.content === "A direct reply");
+  if (!reply) throw new Error("Missing direct reply");
+  await act(() =>
+    h.owner.session.unread.markMessageUnread("dm-room", reply.id),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+  expect(h.owner.session.unread.snapshot(dm).manual).toBe("local-only");
+});
+
 it("Retry still reads the next conversation after an unrelated save", async () => {
   const h = fixture({ withWriter: true, sharedSolo: true, withDm: true });
   render(h.view);

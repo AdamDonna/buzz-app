@@ -448,9 +448,6 @@ function InboxList({
     | undefined
   >(undefined);
   const intentRevision = useRef(0);
-  // While an archive's failed read of the next conversation awaits Retry,
-  // this watches that conversation for a newer read or unread choice.
-  const successorWatch = useRef<() => void>(undefined);
   function cancelRetry() {
     intentRevision.current++;
     failedMutation.current = undefined;
@@ -460,7 +457,6 @@ function InboxList({
     active.current = true;
     return () => {
       active.current = false;
-      successorWatch.current?.();
     };
   }, []);
   useEffect(() => {
@@ -754,7 +750,8 @@ function InboxList({
     // a later Mark as unread is never overridden by it.
     let readNext: (() => Promise<unknown>) | undefined;
     let reading: Promise<unknown> | undefined;
-    let readTarget: InboxItem["target"] | undefined;
+    let readChannel = "";
+    let readSince = 0;
     // Archiving the open conversation closes its tab and opens the next;
     // restoring it keeps its tab.
     const navigate = () => {
@@ -802,7 +799,8 @@ function InboxList({
                           ),
                         ),
                       );
-              readTarget = next.target;
+              readChannel = next.channelId;
+              readSince = session.unread.revision();
               reading = readNext();
             } catch {
               // A conversation that can no longer be read stays as it is.
@@ -845,34 +843,19 @@ function InboxList({
     };
     void run(async () => {
       navigate();
-      successorWatch.current?.();
-      successorWatch.current = undefined;
+      // A failed read retries only until the conversation is marked unread
+      // again: that newer choice is the one to keep.
+      if (readNext && session.unread.markedSince(readChannel, readSince))
+        readNext = undefined;
       const following = reading ?? readNext?.();
       reading = undefined;
-      try {
-        // Every save settles first, so the watch below starts from this
-        // attempt's final state, not one of its own queued saves.
-        await settled([
-          readShared(),
-          following?.then(() => {
-            readNext = undefined;
-          }),
-        ]);
-      } catch (cause) {
-        // A failed read retries only until the conversation is marked read or
-        // unread again: that newer choice is the one to keep.
-        const target = readTarget;
-        if (readNext && target) {
-          const manual = session.unread.snapshot(target).manual;
-          const stop = session.unread.subscribe(target, () => {
-            if (session.unread.snapshot(target).manual === manual) return;
-            readNext = undefined;
-            stop();
-          });
-          successorWatch.current = stop;
-        }
-        throw cause;
-      }
+      // Every save settles first, so a Retry never overlaps this attempt's.
+      await settled([
+        readShared(),
+        following?.then(() => {
+          readNext = undefined;
+        }),
+      ]);
     }, valid);
   }
   function mutate(item: InboxItem, unread: boolean) {

@@ -107,6 +107,8 @@ export interface UnreadCapability {
   retrySync(): Promise<void>;
   /** Durable local intent revision, not sync-health changes. */
   revision(): number;
+  /** Whether a manual unread in this channel was saved after `revision`. */
+  markedSince(channelId: string, revision: number): boolean;
   /** Access/cache/connection retirement fence. */
   generation(): number;
   reading(channelId: string): ReadingHandle;
@@ -2007,6 +2009,19 @@ export function createUnread({
       channelReadGenerations.get(channelId) === generation &&
       allowed(channelId);
   }
+  /** Every key that can hold manual intent for this channel's retained evidence. */
+  function channelIntentKeys(channelId: string) {
+    indexEvidence();
+    const keys = new Set([channelId, messageForceKey(channelId)]);
+    for (const { event, rootId } of byChannel.get(channelId) ?? []) {
+      keys.add(`msg:${event.id}`);
+      if (rootId) keys.add(`thread:${rootId}`);
+      // A retained top-level message establishes its thread's channel even
+      // when that thread's replies are outside our bounded evidence window.
+      if (!threadReference(event)) keys.add(`thread:${event.id}`);
+    }
+    return keys;
+  }
   // Capture evidence and time once per click, including every channel in a sweep.
   function channelReadIntent(channelId: string, clickedAt: number) {
     if (closed || !allowed(channelId))
@@ -2023,14 +2038,7 @@ export function createUnread({
       (newest, { event }) => Math.max(newest, event.created_at),
       clickedAt,
     );
-    const keys = new Set([channelId, messageForceKey(channelId)]);
-    for (const { event, rootId } of rows) {
-      keys.add(`msg:${event.id}`);
-      if (rootId) keys.add(`thread:${rootId}`);
-      // A retained top-level message establishes its thread's channel even
-      // when that thread's replies are outside our bounded evidence window.
-      if (!threadReference(event)) keys.add(`thread:${event.id}`);
-    }
+    const keys = channelIntentKeys(channelId);
     const valid = channelIntentValid(channelId);
     return async () => {
       const result =
@@ -2084,6 +2092,11 @@ export function createUnread({
       await repair();
     },
     revision: reads.revision,
+    markedSince(channelId, revision) {
+      return [...channelIntentKeys(channelId)].some(
+        (key) => (reads.localUnread(key) ?? 0) > revision,
+      );
+    },
     generation: () => epoch,
     retrySync: async () => {
       await reads.refresh();
