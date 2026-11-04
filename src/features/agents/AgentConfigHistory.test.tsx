@@ -135,7 +135,11 @@ it("pages older history, labels the gap, shows a diff and reverts on the head", 
   expect(screen.queryByText(/aren't loaded|Couldn't load/)).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /^Version · Current/ }));
-  expect(within(screen.getByRole("dialog")).getByText("Current")).toBeVisible();
+  expect(
+    within(within(screen.getByRole("dialog")).getByRole("heading")).getByText(
+      "Current",
+    ),
+  ).toBeVisible();
   expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   const diff = screen.getByRole("region", { name: "Changes" });
   expect(diff).toHaveTextContent(`− line ${HISTORY_PAGE - 1}`);
@@ -275,7 +279,9 @@ it("opens a version by keyboard, shows a missing predecessor honestly, and resto
   const row = await screen.findByRole("button", { name: /^Version · Current/ });
   row.focus();
   await user.keyboard("{Enter}");
-  const dialog = screen.getByRole("dialog", { name: "History version" });
+  const dialog = screen.getByRole("dialog", {
+    name: "History version Current",
+  });
   expect(
     within(dialog).getByText(/previous revision isn't loaded/),
   ).toBeVisible();

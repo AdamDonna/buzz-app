@@ -158,7 +158,7 @@ it("restores an expanded history address on the first commit and keeps it expand
     <Probe selected={{ side: "instructions", id: "instructions-1" }} />,
   );
   expect(
-    await screen.findByRole("dialog", { name: "Instructions version" }),
+    await screen.findByRole("dialog", { name: "Instructions version Current" }),
   ).toBeVisible();
   view.rerender(<Probe />);
   expect(commits.every((value) => value === "true")).toBe(true);

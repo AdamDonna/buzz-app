@@ -4369,12 +4369,16 @@ it("opens a restored version address in Settings, closes on Back, and retires on
     />
   );
   view.rerender(page());
-  expect(await screen.findByText("This is the current version.")).toBeVisible();
+  expect(
+    await screen.findByRole("heading", {
+      name: "Instructions version Current",
+    }),
+  ).toBeVisible();
   expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   current = { id: "base", target: base };
   view.rerender(page());
   expect(
-    screen.queryByRole("dialog", { name: "Instructions version" }),
+    screen.queryByRole("dialog", { name: "Instructions version Current" }),
   ).toBeNull();
   expect(
     screen.getByRole("button", { name: "Previous versions" }),
@@ -4382,7 +4386,7 @@ it("opens a restored version address in Settings, closes on Back, and retires on
   current = { id: "version", target: opened };
   view.rerender(page());
   expect(
-    await screen.findByRole("dialog", { name: "Instructions version" }),
+    await screen.findByRole("dialog", { name: "Instructions version Current" }),
   ).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Close" }));
   const [matches, fallback] = dismiss.mock.calls[0] as unknown as [

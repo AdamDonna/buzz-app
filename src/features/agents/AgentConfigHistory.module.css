@@ -45,7 +45,6 @@
   background: var(--affordance-accent-prominent);
 }
 .currentBadge {
-  justify-self: start;
   padding: var(--space-half) var(--space-2);
   border-radius: var(--radius-pill);
   background: var(--affordance-accent-prominent);

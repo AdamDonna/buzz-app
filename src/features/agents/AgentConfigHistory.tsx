@@ -311,7 +311,16 @@ export function AgentConfigHistory({
         onOpenChange={(next) => {
           if (!next) setOpen(undefined);
         }}
-        title={`${title} version`}
+        title={
+          <span className="flex flex-wrap items-center gap-2">
+            <span>{title} version</span>{" "}
+            {current && (
+              <span className={`${styles.currentBadge} text-label-sm`}>
+                Current
+              </span>
+            )}
+          </span>
+        }
         description={
           event
             ? `${artifactOp(event)} · ${new Date(event.created_at * 1000).toLocaleString()}`
@@ -337,11 +346,6 @@ export function AgentConfigHistory({
         }
       >
         <div className="grid gap-2">
-          {current && (
-            <span className={`${styles.currentBadge} text-label-sm`}>
-              Current
-            </span>
-          )}
           {event ? (
             deleted ? (
               <p className="m-0 text-body-sm">
