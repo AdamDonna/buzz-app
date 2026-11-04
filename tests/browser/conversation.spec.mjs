@@ -277,7 +277,8 @@ test("independent packed author consumer and native-installed contribution survi
       .getByRole("button", { name: "Mention a member", exact: true })
       .click();
     await page
-      .getByRole("button", { name: `Member ${member}`, exact: true })
+      .getByRole("button")
+      .and(page.locator(`[data-mention-choice="${member}"]`))
       .click();
     const recipients = draft.locator(".inline-chip");
     await expect(recipients).toHaveCount(1);

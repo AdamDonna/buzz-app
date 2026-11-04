@@ -411,7 +411,8 @@ test("paperclip follows mentions and recipients, before the remaining tools", as
     const pubkey = await page.evaluate(() => window.mentionFixture.first);
     await page
       .getByRole("dialog", { name: "Mention a member or agent" })
-      .getByRole("button", { name: `Honey ${pubkey}`, exact: true })
+      .getByRole("button")
+      .and(page.locator(`[data-mention-choice="${pubkey}"]`))
       .click();
     const recipient = page
       .getByRole("region", { name: "Explicit mentions" })

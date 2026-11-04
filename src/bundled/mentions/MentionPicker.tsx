@@ -402,7 +402,8 @@ export function MentionPicker({
                   return (
                     <NavigationItem
                       variant="option"
-                      data-mention-choice=""
+                      // The exact key the row picks; its label may not show it.
+                      data-mention-choice={recipient.pubkey}
                       type="button"
                       key={recipient.pubkey}
                       {...highlight.rowProps(personKey(recipient.pubkey))}

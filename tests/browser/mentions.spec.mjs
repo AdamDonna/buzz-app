@@ -92,17 +92,17 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
       const search = picker.getByRole("searchbox");
       // Both fixture keys are Honey namesakes; public keys are not search terms.
       await search.fill("Honey");
-      await expect(
-        picker.getByRole("button", { name: new RegExp(key) }),
-      ).toBeVisible();
+      // Rows no longer spell out their key; each carries it instead.
+      const row = picker
+        .getByRole("button")
+        .and(page.locator(`[data-mention-choice="${key}"]`));
+      await expect(row).toBeVisible();
       await expect(search).toBeFocused();
       await expectComposerAnchor(picker);
       await expect(picker).toHaveCSS("width", "380px");
       expect((await picker.boundingBox()).height).toBeLessThanOrEqual(360);
       await search.fill("");
-      const choice = picker.getByRole("button", {
-        name: new RegExp(key),
-      });
+      const choice = row;
       const index = await choice.evaluate((node) =>
         [
           ...node.parentElement.querySelectorAll("[data-mention-choice]"),
@@ -173,10 +173,9 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
       const mention = page.getByRole("dialog", {
         name: "Mention a member or agent",
       });
-      const row = mention.getByRole("button", {
-        name: `Honey ${keys.first}`,
-        exact: true,
-      });
+      const row = mention
+        .getByRole("button")
+        .and(page.locator(`[data-mention-choice="${keys.first}"]`));
       await expect(row).toHaveCSS("padding", "8px");
       // The first row opens highlighted, so Enter picks it.
       const highlighted = mention.locator(
@@ -563,7 +562,8 @@ test("selected mentions inside code remain visible through draft restore and cha
           .click();
         await page
           .getByRole("dialog", { name: "Mention a member or agent" })
-          .getByRole("button", { name: new RegExp(key) })
+          .getByRole("button")
+          .and(page.locator(`[data-mention-choice="${key}"]`))
           .click();
       }
       const source = "`@Honey @Honey  `";
@@ -656,7 +656,8 @@ test("namesake recipient qualifiers remain visible on touch after live name chan
         .tap();
       await page
         .getByRole("dialog", { name: "Mention a member or agent" })
-        .getByRole("button", { name: new RegExp(key) })
+        .getByRole("button")
+        .and(page.locator(`[data-mention-choice="${key}"]`))
         .tap();
     };
     await page.evaluate(() => window.mentionFixture.collide(false));

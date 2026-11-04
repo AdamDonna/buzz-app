@@ -567,6 +567,9 @@ function OwnedCompletion({
                       : undefined
                   }
                   id={`${id}-${i}`}
+                  // The provider's identity for the row (a mention's key),
+                  // which its label no longer spells out.
+                  data-completion-id={item.id}
                   key={item.id}
                   onPointerDown={(event) => {
                     if (event.button === 0) event.preventDefault();

@@ -5,6 +5,14 @@ const open = async (page) => {
   await page.goto("/tests/fixtures/mentions.html?test-controls");
   return page.getByRole("textbox", { name: "Message #General" });
 };
+// A row's name no longer spells out its identity key; the row carries it
+// instead, so select the exact identity by role and key.
+const completion = (page, key) =>
+  page.getByRole("option").and(page.locator(`[data-completion-id="${key}"]`));
+const choice = (picker, page, key) =>
+  picker
+    .getByRole("button")
+    .and(page.locator(`[data-mention-choice="${key}"]`));
 // Wait until the directory page for this query has settled, so a late page
 // cannot race the step under test.
 const settled = async (page, query) => {
@@ -65,17 +73,8 @@ test("mention completion distinguishes exact agent identity without reshaping a 
     agent: window.mentionFixture.second,
   }));
   await input.fill("@Ho");
-  await expectAvatarShape(
-    page.getByRole("option", { name: `Honey ${keys.human}`, exact: true }),
-    "circle",
-  );
-  await expectAvatarShape(
-    page.getByRole("option", {
-      name: `Honey (agent) ${keys.agent}`,
-      exact: true,
-    }),
-    "squircle",
-  );
+  await expectAvatarShape(completion(page, keys.human), "circle");
+  await expectAvatarShape(completion(page, keys.agent), "squircle");
   await input.fill("");
   await page
     .getByRole("button", { name: "Mention a member", exact: true })
@@ -83,17 +82,8 @@ test("mention completion distinguishes exact agent identity without reshaping a 
   const picker = page.getByRole("dialog", {
     name: "Mention a member or agent",
   });
-  await expectAvatarShape(
-    picker.getByRole("button", { name: `Honey ${keys.human}`, exact: true }),
-    "circle",
-  );
-  await expectAvatarShape(
-    picker.getByRole("button", {
-      name: `Honey (agent) ${keys.agent}`,
-      exact: true,
-    }),
-    "squircle",
-  );
+  await expectAvatarShape(choice(picker, page, keys.human), "circle");
+  await expectAvatarShape(choice(picker, page, keys.agent), "squircle");
 });
 test("open completion republishes library-only display hints without changing the query", async ({
   page,
@@ -110,12 +100,8 @@ test("open completion republishes library-only display hints without changing th
     .toBe(1);
   await input.fill("@Ho");
   await settled(page, "Ho");
-  const first = page.getByRole("option", {
-    name: new RegExp(keys.first),
-  });
-  const second = page.getByRole("option", {
-    name: new RegExp(keys.second),
-  });
+  const first = completion(page, keys.first);
+  const second = completion(page, keys.second);
   await expectAvatarShape(first, "circle");
   await expectAvatarShape(second, "squircle");
   // Completion observes the existing naming demand; it does not reload it.
@@ -203,7 +189,7 @@ for (const mode of ["light", "dark"]) {
       // Namesakes sort by their generated public keys, not fixture creation order.
       const recipient =
         kind === "mention"
-          ? await selected.locator("small").textContent()
+          ? await selected.getAttribute("data-completion-id")
           : null;
       await input.press("Tab");
       await expect(input).toHaveJSProperty("value", replacement);
@@ -239,10 +225,7 @@ test("typeahead replaces only the query and publishes selected namesake identity
     el.setSelectionRange(10, 10);
     el.dispatchEvent(new Event("select", { bubbles: true }));
   });
-  const option = page.getByRole("option", {
-    name: `Honey (agent) ${keys.second}`,
-    exact: true,
-  });
+  const option = completion(page, keys.second);
   await expect(option).toBeVisible();
   await option.click();
   await expect(input).toBeFocused();
@@ -260,12 +243,8 @@ test("typeahead replaces only the query and publishes selected namesake identity
   await page.getByRole("button", { name: "Toggle thread" }).click();
   const reply = page.getByRole("textbox", { name: "Reply to thread" });
   await reply.fill("@Ho");
-  await expect(
-    page.getByRole("option", { name: `Honey ${keys.first}`, exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("option", { name: `Honey ${keys.first}`, exact: true })
-    .click();
+  await expect(completion(page, keys.first)).toBeVisible();
+  await completion(page, keys.first).click();
   await page.evaluate(() =>
     window.mentionFixture.change("disable", "buzz.mentions"),
   );
@@ -926,12 +905,8 @@ test("mention choices survive unrelated list updates but revoke removed membersh
   }));
   await input.fill("@Ho");
   await settled(page, "Ho");
-  const first = page.getByRole("option", {
-    name: `Honey ${keys.first}`,
-    exact: true,
-  });
-  // The directory labels the second Honey as an agent, so match its key.
-  const second = page.getByRole("option", { name: new RegExp(keys.second) });
+  const first = completion(page, keys.first);
+  const second = completion(page, keys.second);
   await expect(first).toBeVisible();
   await page.evaluate(() => window.mentionFixture.refresh());
   await expect(first).toBeVisible();
@@ -949,7 +924,9 @@ test("mention choices survive unrelated list updates but revoke removed membersh
   await page.evaluate(() => window.mentionFixture.removeFirst());
   // The removed member is now outside the channel. Its row stays but is
   // disabled: adding them needs a fresh review.
-  await expect(first).toHaveCount(0);
+  // The row keeps its key, so the removed member's own row is the one disabled.
+  await expect(first).toHaveAttribute("aria-disabled", "true");
+  await expect(first).toContainText("Channel membership changed");
   await expect(
     page.getByRole("option", { name: /Channel membership changed/ }),
   ).toHaveAttribute("aria-disabled", "true");
@@ -973,11 +950,11 @@ test("cold multi-word mention query wakes when profiles arrive without another k
   await page.goto("/tests/fixtures/mentions.html?delayed-profiles");
   const input = page.getByRole("textbox", { name: "Message #General" });
   await input.fill("@Mary J");
-  await expect(page.getByRole("option", { name: /^Mary Jane / })).toHaveCount(
-    0,
-  );
+  await expect(
+    page.getByRole("option", { name: "Mary Jane", exact: true }),
+  ).toHaveCount(0);
   await page.evaluate(() => window.mentionFixture.releaseProfiles());
-  const choice = page.getByRole("option", { name: /^Mary Jane / });
+  const choice = page.getByRole("option", { name: "Mary Jane", exact: true });
   await expect(choice).toBeVisible();
   await input.press("Enter");
   await expect(input).toHaveJSProperty("value", "@Mary Jane ");
@@ -1039,7 +1016,10 @@ test("channel and actual ThreadPanel composers keep separate completion and draf
   await expect(page.getByRole("option").first()).toBeVisible();
   const mainControls = await main.getAttribute("aria-controls");
   await thread.fill("@Fixture");
-  const option = page.getByRole("option", { name: /^Fixture Reader / });
+  const option = page.getByRole("option", {
+    name: "Fixture Reader",
+    exact: true,
+  });
   await expect(option).toBeVisible();
   await expect(main).not.toHaveAttribute("aria-controls");
   expect(await thread.getAttribute("aria-controls")).not.toBe(mainControls);
@@ -1089,7 +1069,7 @@ test("a later emoji trigger wins after a mention without discarding recipient in
   const input = await open(page);
   const key = await page.evaluate(() => window.mentionFixture.first);
   await input.fill("@Ho");
-  await page.getByRole("option", { name: `Honey ${key}`, exact: true }).click();
+  await completion(page, key).click();
   await input.pressSequentially(":smile");
   await expect(page.getByRole("option").first()).toContainText(":smile:");
   await input.press("Tab");
