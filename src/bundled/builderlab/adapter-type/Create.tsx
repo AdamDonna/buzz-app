@@ -1,15 +1,22 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { AgentInstructions } from "../../../features/agents/AgentInstructions";
+import { ModelFamilyMenu } from "../../../features/agents/ModelFamilyMenu";
 import type { AgentCreateProps } from "../../../features/agents/service";
 import { Button } from "../../../shared/design-system/ui/Button";
 import { Select } from "../../../shared/design-system/ui/Select";
+import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import {
   type AgentClient,
   type RemoteAgentModel,
   validInstructions,
 } from "../agents/client";
 import type { BuilderlabSession } from "../session";
-import { effortLabel } from "./models";
+import { effortLabel, modelChoice } from "./models";
 
 export type CreationConfig = {
   instructions: string;
@@ -44,7 +51,12 @@ export function createCreationFields(
   client: AgentClient,
   session: BuilderlabSession,
 ) {
-  return function Create({ config, onChange, disabled }: AgentCreateProps) {
+  function CreateConfiguration({
+    config,
+    onChange,
+    disabled,
+    harnessControl,
+  }: AgentCreateProps & { harnessControl: ReactNode }) {
     const draft = config as CreationConfig;
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
     const [models, setModels] = useState<readonly RemoteAgentModel[]>();
@@ -79,6 +91,53 @@ export function createCreationFields(
       draft.subject && draft.subject !== login.account?.subject;
     return (
       <div className="grid gap-4">
+        <SettingsGroup>
+          {harnessControl}
+          {login.status === "signed-in" && !!models?.length && (
+            <>
+              <ModelFamilyMenu
+                label="Model"
+                align="end"
+                selected={
+                  model
+                    ? modelChoice(model)
+                    : { id: "", label: "Choose a model" }
+                }
+                models={models.map(modelChoice)}
+                disabled={disabled}
+                onChange={(modelId) =>
+                  onChange({
+                    ...draft,
+                    modelId,
+                    reasoningEffort: "",
+                    subject: login.account?.subject,
+                  })
+                }
+              />
+              <Select
+                label="Thinking"
+                variant="preference"
+                align="end"
+                name="builderlab-effort"
+                required
+                value={supported ? draft.reasoningEffort : ""}
+                placeholder="Choose thinking"
+                disabled={disabled || !model || !!wrongAccount}
+                groups={[
+                  {
+                    label: "",
+                    options: (model?.supportedReasoningEfforts ?? []).map(
+                      (value) => ({ value, label: effortLabel(value) }),
+                    ),
+                  },
+                ]}
+                onValueChange={(reasoningEffort) =>
+                  onChange({ ...draft, reasoningEffort })
+                }
+              />
+            </>
+          )}
+        </SettingsGroup>
         {login.status !== "signed-in" ? (
           <div className="grid justify-items-start gap-3">
             <p role="status" className="m-0 text-body-sm text-secondary">
@@ -109,60 +168,12 @@ export function createCreationFields(
             </Button>
           </div>
         ) : models?.length ? (
-          <>
-            <Select
-              label="Model"
-              variant="field"
-              name="builderlab-model"
-              required
-              value={model ? draft.modelId : ""}
-              placeholder="Choose a model"
-              disabled={disabled}
-              groups={[
-                {
-                  label: "Models",
-                  options: models.map((choice) => ({
-                    value: choice.id,
-                    label: choice.displayName,
-                  })),
-                },
-              ]}
-              onValueChange={(modelId) =>
-                onChange({
-                  ...draft,
-                  modelId,
-                  reasoningEffort: "",
-                  subject: login.account?.subject,
-                })
-              }
-            />
-            <Select
-              label="Thinking"
-              variant="field"
-              name="builderlab-effort"
-              required
-              value={supported ? draft.reasoningEffort : ""}
-              placeholder="Choose thinking"
-              disabled={disabled || !model || !!wrongAccount}
-              groups={[
-                {
-                  label: "",
-                  options: (model?.supportedReasoningEfforts ?? []).map(
-                    (value) => ({ value, label: effortLabel(value) }),
-                  ),
-                },
-              ]}
-              onValueChange={(reasoningEffort) =>
-                onChange({ ...draft, reasoningEffort })
-              }
-            />
-            {wrongAccount && (
-              <p role="status" className="m-0 text-body-sm text-secondary">
-                These choices belong to another Builderlab account. Choose a
-                model and thinking level again.
-              </p>
-            )}
-          </>
+          wrongAccount && (
+            <p role="status" className="m-0 text-body-sm text-secondary">
+              These choices belong to another Builderlab account. Choose a model
+              and thinking level again.
+            </p>
+          )
         ) : (
           <p
             role={error ? "alert" : "status"}
@@ -183,13 +194,21 @@ export function createCreationFields(
             </Button>
           </div>
         )}
-        <AgentInstructions
-          creation
-          value={draft.instructions}
-          disabled={disabled}
-          onChange={(instructions) => onChange({ ...draft, instructions })}
-        />
       </div>
     );
-  };
+  }
+
+  function Create({ config, onChange, disabled }: AgentCreateProps) {
+    const draft = config as CreationConfig;
+    return (
+      <AgentInstructions
+        creation
+        value={draft.instructions}
+        disabled={disabled}
+        onChange={(instructions) => onChange({ ...draft, instructions })}
+      />
+    );
+  }
+
+  return { Create, CreateConfiguration };
 }

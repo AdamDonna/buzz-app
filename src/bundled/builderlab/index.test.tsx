@@ -1006,18 +1006,34 @@ it.each([
         }
         await user.click(create);
         expect(
-          await within(createDialog).findByRole("combobox", { name: "Model" }),
+          await within(createDialog).findByRole("button", {
+            name: "Model: Choose a model",
+          }),
         ).toBeEnabled();
         expect(name).toHaveValue("Browser");
         return;
       }
       await user.click(create);
-      const model = await within(createDialog).findByRole("combobox", {
-        name: "Model",
+      const model = await within(createDialog).findByRole("button", {
+        name: "Model: Choose a model",
       });
+      const group = model.closest(".buzz-settings-group");
+      expect(group).toContainElement(
+        within(createDialog).getByRole("combobox", { name: "Harness" }),
+      );
+      expect(group).toContainElement(
+        within(createDialog).getByRole("combobox", { name: "Thinking" }),
+      );
+      expect(group).not.toContainElement(
+        within(createDialog).getByRole("textbox", {
+          name: "Instructions Optional",
+        }),
+      );
       await user.click(model);
+      (await screen.findByRole("menuitem", { name: "Other" })).focus();
+      await user.keyboard("{ArrowRight}");
       await user.click(
-        await screen.findByRole("option", { name: "Model One" }),
+        await screen.findByRole("menuitemradio", { name: "Model One" }),
       );
       await user.click(
         within(createDialog).getByRole("combobox", {

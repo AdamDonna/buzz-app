@@ -131,6 +131,7 @@ export function AgentCreateDialog({
   const form = useId();
   const Create = type?.Create;
   const Model = type?.CreateModel;
+  const Configuration = type?.CreateConfiguration;
   const close = () => setOpen(false);
   const chooseModel = (item: RegisteredAgentType, next: unknown) => {
     setTypeKey(item.key);
@@ -176,6 +177,32 @@ export function AgentCreateDialog({
       setPending(false);
     }
   };
+  const harnessControl = (
+    <PreferenceRow
+      title="Harness"
+      trailing={
+        <Select
+          label="Harness"
+          variant="compact"
+          align="end"
+          value={type?.key ?? ""}
+          leading={<TypeIcon type={type} size={20} />}
+          disabled={pending || types.length < 2}
+          groups={[
+            {
+              label: "",
+              options: types.map((item) => ({
+                value: item.key,
+                leading: <TypeIcon type={item} size={20} />,
+                label: item.remote ? `${item.title} (hosted)` : item.title,
+              })),
+            },
+          ]}
+          onValueChange={choose}
+        />
+      }
+    />
+  );
   return (
     <Dialog
       open={open}
@@ -275,47 +302,32 @@ export function AgentCreateDialog({
             aria-label="AI configuration"
             className={styles.configuration}
           >
-            <SettingsGroup>
-              <PreferenceRow
-                title="Harness"
-                trailing={
-                  <Select
-                    label="Harness"
-                    variant="compact"
-                    align="end"
-                    value={type?.key ?? ""}
-                    leading={<TypeIcon type={type} size={20} />}
-                    disabled={pending || types.length < 2}
-                    groups={[
-                      {
-                        label: "",
-                        options: types.map((item) => ({
-                          value: item.key,
-                          leading: <TypeIcon type={item} size={20} />,
-                          label: item.remote
-                            ? `${item.title} (hosted)`
-                            : item.title,
-                        })),
-                      },
-                    ]}
-                    onValueChange={choose}
-                  />
-                }
+            {Configuration ? (
+              <Configuration
+                key={type.key}
+                config={config}
+                disabled={pending}
+                harnessControl={harnessControl}
+                onChange={(next) => chooseModel(type, next)}
               />
-              {Model && (
-                <PreferenceRow
-                  title="Model"
-                  trailing={
-                    <Model
-                      key={type.key}
-                      config={config}
-                      disabled={pending}
-                      onChange={(next) => chooseModel(type, next)}
-                    />
-                  }
-                />
-              )}
-            </SettingsGroup>
+            ) : (
+              <SettingsGroup>
+                {harnessControl}
+                {Model && (
+                  <PreferenceRow
+                    title="Model"
+                    trailing={
+                      <Model
+                        key={type.key}
+                        config={config}
+                        disabled={pending}
+                        onChange={(next) => chooseModel(type, next)}
+                      />
+                    }
+                  />
+                )}
+              </SettingsGroup>
+            )}
           </section>
           {Create ? (
             <Create

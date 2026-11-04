@@ -1236,6 +1236,13 @@ appearance and truncation, and offer a trailing action to restore inheritance
 without duplicating the current model as the first option. Provider selection
 continues to use a searchable Combobox.
 
+Builderlab Identity and creation reuse the shared family → model menu, with a
+separate compact Thinking selector. Builderlab requires an explicit supported
+model/thinking pair rather than an inherited default. Its plugin owns catalog
+family aliases; changing the model clears the thinking choice. Creation places
+these controls beside the host-owned Harness row in one SettingsGroup, while
+keeping sign-in/recovery and Instructions outside the group.
+
 Provider dropdowns are intentionally text-only. The model control shows the
 selected model family icon, not the Goose runtime or Databricks/provider mark,
 as explicitly confirmed by the product owner. On agent cards the Goose mark

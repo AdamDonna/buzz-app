@@ -21,7 +21,7 @@ afterEach(() => {
 const catalog = [
   {
     id: "one",
-    display_name: "Model One",
+    display_name: "Sol 6.1",
     supported_reasoning_efforts: ["low", "high", "xhigh"],
   },
   {
@@ -30,7 +30,7 @@ const catalog = [
     supported_reasoning_efforts: ["none"],
   },
 ];
-async function fixture(signedIn = true) {
+async function fixture(signedIn = true, disabled = false) {
   const acquire = vi.fn(async () => ({
     value: "credential",
     account: {
@@ -56,14 +56,20 @@ async function fixture(signedIn = true) {
     };
   });
   const client = createAgentClient(session, null);
-  const Fields = createCreationFields(client, session);
+  const { Create, CreateConfiguration } = createCreationFields(client, session);
   let draft = { ...EMPTY_CREATION };
   function Form() {
     const [config, setConfig] = useState(draft);
     draft = config;
     return (
       <form onSubmit={(event) => event.preventDefault()}>
-        <Fields config={config} onChange={setConfig} disabled={false} />
+        <CreateConfiguration
+          config={config}
+          onChange={setConfig}
+          disabled={disabled}
+          harnessControl={null}
+        />
+        <Create config={config} onChange={setConfig} disabled={disabled} />
       </form>
     );
   }
@@ -81,6 +87,17 @@ async function fixture(signedIn = true) {
 }
 async function choose(label: string, value: string) {
   const user = userEvent.setup();
+  if (label === "Model") {
+    await user.click(await screen.findByRole("button", { name: /^Model:/ }));
+    (
+      await screen.findByRole("menuitem", {
+        name: value.startsWith("Sol") ? "OpenAI" : "Other",
+      })
+    ).focus();
+    await user.keyboard("{ArrowRight}");
+    await user.click(await screen.findByRole("menuitemradio", { name: value }));
+    return;
+  }
   await user.click(await screen.findByRole("combobox", { name: label }));
   await user.click(await screen.findByRole("option", { name: value }));
 }
@@ -89,7 +106,9 @@ it("loads the catalog and keeps instructions alongside explicit model and effort
   const h = await fixture();
   expect(screen.getByRole("status")).toHaveTextContent("Loading models");
   await act(async () => h.pending.resolve());
-  const model = await screen.findByRole("combobox", { name: "Model" });
+  const model = await screen.findByRole("button", {
+    name: "Model: Choose a model",
+  });
   expect(model).toHaveTextContent("Choose a model");
   expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
   await userEvent
@@ -98,7 +117,7 @@ it("loads the catalog and keeps instructions alongside explicit model and effort
       screen.getByRole("textbox", { name: "Instructions Optional" }),
       "Be precise.",
     );
-  await choose("Model", "Model One");
+  await choose("Model", "Sol 6.1");
   await choose("Thinking", "Extra high");
   expect(h.draft().reasoningEffort).toBe("xhigh");
   await choose("Model", "Model Two");
@@ -134,9 +153,75 @@ it("retains instructions when catalog loading fails and is retried", async () =>
   expect(screen.getByRole("alert")).toHaveTextContent("HTTP 400");
   h.fail(false);
   await userEvent.setup().click(retry);
-  await screen.findByRole("combobox", { name: "Model" });
+  await screen.findByRole("button", { name: "Model: Choose a model" });
   expect(h.draft().instructions).toBe("Keep this.");
   expect(h.draft().modelId).toBe("");
+});
+
+it("offers catalog families without a default or custom model action", async () => {
+  const h = await fixture();
+  await act(async () => h.pending.resolve());
+  await userEvent
+    .setup()
+    .click(
+      await screen.findByRole("button", { name: "Model: Choose a model" }),
+    );
+  expect(await screen.findByRole("menuitem", { name: "OpenAI" })).toBeVisible();
+  expect(screen.getByRole("menuitem", { name: "Other" })).toBeVisible();
+  expect(screen.queryByText(/Default|Custom model/)).not.toBeInTheDocument();
+  expect(h.draft()).toEqual(EMPTY_CREATION);
+});
+
+it("disables model, thinking and instructions while creation is pending", async () => {
+  const h = await fixture(true, true);
+  await act(async () => h.pending.resolve());
+  expect(
+    await screen.findByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  expect(
+    screen.getByRole("textbox", { name: "Instructions Optional" }),
+  ).toBeDisabled();
+  expect(h.draft()).toEqual(EMPTY_CREATION);
+});
+
+it("requires new account choices while retaining the draft instructions", async () => {
+  const h = await fixture();
+  await act(async () => h.pending.resolve());
+  await choose("Model", "Sol 6.1");
+  await choose("Thinking", "High");
+  await userEvent
+    .setup()
+    .type(
+      screen.getByRole("textbox", { name: "Instructions Optional" }),
+      "Keep this.",
+    );
+  act(() => h.session.signOut());
+  h.acquire.mockResolvedValue({
+    value: "other-credential",
+    account: {
+      subject: "other",
+      email: "b@example.com",
+      canUseRemoteAgents: true,
+      canUseBuilderlabDecisions: false,
+    },
+  });
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Sign in with Builderlab" }));
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "another Builderlab account",
+  );
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  await choose("Model", "Model Two");
+  await choose("Thinking", "None");
+  expect(h.draft()).toEqual({
+    instructions: "Keep this.",
+    modelId: "two",
+    reasoningEffort: "none",
+    subject: "other",
+  });
 });
 
 it("waits for explicit sign-in before loading the creation catalog", async () => {
@@ -147,7 +232,7 @@ it("waits for explicit sign-in before loading the creation catalog", async () =>
   await userEvent
     .setup()
     .click(screen.getByRole("button", { name: "Sign in with Builderlab" }));
-  await screen.findByRole("combobox", { name: "Model" });
+  await screen.findByRole("button", { name: "Model: Choose a model" });
   expect(h.acquire).toHaveBeenCalledTimes(1);
 });
 
@@ -164,9 +249,14 @@ it("can cancel a pending shared sign-in even while the creation form is disabled
   );
   const request = vi.fn<Host["request"]>();
   const client = createAgentClient(session, null);
-  const Create = createCreationFields(client, session);
+  const { CreateConfiguration } = createCreationFields(client, session);
   render(
-    <Create config={{ ...EMPTY_CREATION }} disabled onChange={() => {}} />,
+    <CreateConfiguration
+      config={{ ...EMPTY_CREATION }}
+      disabled
+      onChange={() => {}}
+      harnessControl={null}
+    />,
     { wrapper: StrictMode },
   );
   expect(
