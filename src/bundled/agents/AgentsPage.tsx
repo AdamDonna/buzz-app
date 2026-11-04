@@ -308,6 +308,10 @@ export function AgentsPage({
     routed && navigation.target.kind === "page"
       ? agentRoute(navigation.target.route?.params)
       : undefined;
+  const historyParams =
+    navigation?.target.kind === "page" && routedAgent === selected?.pubkey
+      ? navigation.target.route?.params
+      : undefined;
   const routedEntry = navigation?.entryId;
   useEffect(() => {
     if (!routedAgent || !routedEntry) return;
@@ -514,14 +518,14 @@ export function AgentsPage({
           navigation.target.kind === "page"
             ? historyPresentation(
                 navigator,
-                agentHistoryRoute(navigation.target.route?.params),
+                agentHistoryRoute(historyParams),
                 (selection) =>
                   agentHistoryTarget(
                     navigation.target as Extract<OpenTarget, { kind: "page" }>,
                     selected.pubkey,
                     selection,
                   ),
-                agentHistoryActive(navigation.target.route?.params),
+                agentHistoryActive(historyParams),
               )
             : undefined
         }

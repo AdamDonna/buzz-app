@@ -4287,6 +4287,7 @@ it("offers to save an automatic bestie to the account, and again after a failed 
 it("opens a restored version address in Settings, closes on Back, and retires only that scoped version on Close", async () => {
   const user = userEvent.setup();
   const ada = agent("Ada", 1);
+  const bea = agent("Bea", 2);
   const revision = {
     id: "a".repeat(64),
     pubkey: ada.pubkey,
@@ -4340,7 +4341,7 @@ it("opens a restored version address in Settings, closes on Back, and retires on
     };
     return navigation;
   };
-  const view = setup([ada]);
+  const view = setup([ada, bea]);
   const read = vi.fn(async () => [revision]);
   const revise = vi.fn();
   Object.assign(view.agents, {
@@ -4406,4 +4407,18 @@ it("opens a restored version address in Settings, closes on Back, and retires on
     }),
   ).toBe(false);
   expect(revise).not.toHaveBeenCalled();
+  current = { id: "base", target: base };
+  view.rerender(page());
+  await user.click(
+    within(screen.getByRole("grid", { name: "Agents" })).getByText("Bea"),
+  );
+  expect(screen.getByRole("heading", { name: "Bea" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+  expect(
+    screen.getByRole("button", { name: "Previous versions" }),
+  ).toHaveAttribute("aria-expanded", "false");
 });
