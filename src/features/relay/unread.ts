@@ -2178,13 +2178,24 @@ export function createUnread({
         for (const [request, result] of landed) reconcile(request, result);
       });
   }
+  /** Whether the relay returns `event` for `filter`. It matches `#h` against
+   * the channel it filed an event under, which for one with no `h` tag (a
+   * deletion naming only its target, such as a reaction's removal) is its
+   * target's, out of the client's sight: such an event is taken to match. */
+  function relayMatches(event: RelayEvent, filter: ReadFilter) {
+    if (!filter["#h"] || event.tags.some(([name]) => name === "h"))
+      return matchesEvent(event, filter);
+    const { "#h": _, ...unscoped } = filter;
+    return matchesEvent(event, unscoped);
+  }
   /** Restored evidence a read should have returned and did not is gone from
    * the relay: deleted, or no longer readable, while this device was closed,
    * which no read tells. A read returns each filter's newest matches, so a
    * short page covers every match and a full one those down to its last; a
    * keyset page starts below the newest and is not judged. Other filters of
    * the request return older matches too, so a filter's page is the newest
-   * `limit` matches of the whole response.
+   * `limit` matches of the whole response, as the relay matched them (see
+   * `relayMatches`).
    *
    * The repair's reads carry no deletions (the relay attaches edits and
    * deletions only to top-level and depth-limited reads), so restored
@@ -2206,7 +2217,7 @@ export function createUnread({
       const page = [
         ...new Map(
           result
-            .filter((event) => matchesEvent(event, filter))
+            .filter((event) => relayMatches(event, filter))
             .map((event) => [event.id, event]),
         ).values(),
       ].sort(byTime);
