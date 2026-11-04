@@ -1563,10 +1563,12 @@ export const test = base.extend({
           )
           .filter(
             (event) =>
-              filter.until === undefined ||
-              event.created_at < filter.until ||
-              (event.created_at === filter.until &&
-                event.id > filter.before_id),
+              (filter.since === undefined ||
+                event.created_at >= filter.since) &&
+              (filter.until === undefined ||
+                event.created_at < filter.until ||
+                (event.created_at === filter.until &&
+                  event.id > filter.before_id)),
           )
           .toSorted(
             (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
@@ -1750,10 +1752,13 @@ export const test = base.extend({
             (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
           )
           .slice(0, filter.limit);
-      // Unread evidence: a channel's window since its read mark, or the
-      // replies under given roots. Fixture history predates the app's
-      // never-read window start by years, so `since` is ignored except under
-      // `firstSeenHistory`, where it keeps the measured history first-seen.
+      // Unread evidence: a channel's window since its read mark, the
+      // replies under given roots, or the roster's delta since its mark.
+      // Fixture history predates the app's never-read window start by years,
+      // so `since` is ignored except under `firstSeenHistory`, where it keeps
+      // the measured history first-seen. A delta, the one read with
+      // deletions, returns everything since its start, so the viewer replies
+      // the windows pass over too, which that start never predates.
       if (
         filter.kinds?.includes(9) &&
         !filter.top_level &&
@@ -1763,7 +1768,12 @@ export const test = base.extend({
           .flatMap((channel) => [
             ...(histories.get(`${community}/${channel}`) ?? []),
             ...(threadUnread && community === "primary" && channel === "alpha"
-              ? [...threadReplies.values()].flat()
+              ? [
+                  ...[...threadReplies.values()].flat(),
+                  ...(filter.kinds.includes(5)
+                    ? [...displacedReplies.values()].flat()
+                    : []),
+                ]
               : []),
           ])
           .filter(
@@ -2314,8 +2324,11 @@ export const test = base.extend({
           ).values(),
         ];
         for (const { id } of result) served.add(id);
+        // A history page reads older rows below a cursor. The unread owner's
+        // catch-up pages (`since` from its mark, keyset-paged) are not held.
         if (
           filter.search === undefined &&
+          filter.since === undefined &&
           filter.until !== undefined &&
           filter["#h"]?.length
         ) {
@@ -2597,6 +2610,32 @@ export const test = base.extend({
           );
           targetEvents.push(deletion);
           relay.publish("primary", deletion);
+        },
+        // The peer deletes a thread reply on the relay alone, nothing live,
+        // now, as while the app is closed: the channel's later reads, and a
+        // relay's delta from the app's mark, return the deletion in its place.
+        deleteThreadReply(content) {
+          for (const replies of threadReplies.values()) {
+            const index = replies.findIndex(
+              (event) => event.content === content,
+            );
+            if (index < 0) continue;
+            const [event] = replies.splice(index, 1);
+            const channel = event.tags.find(([key]) => key === "h")[1];
+            const deletion = sign(
+              5,
+              [
+                ["h", channel],
+                ["e", event.id],
+              ],
+              "",
+              peerKey,
+              Math.floor(Date.now() / 1000),
+            );
+            histories.get(`primary/${channel}`).push(deletion);
+            return deletion;
+          }
+          throw new Error(`Unknown fixture reply: ${content}`);
         },
         exact,
         ownerAgentMessage,

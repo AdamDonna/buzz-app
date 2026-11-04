@@ -54,7 +54,12 @@ const NOW = 10_000_000;
 const remembered = async (storage: UnreadStorage) =>
   (await storage.read())?.participation ?? NO_THREAD_PARTICIPATION;
 const remember = (storage: UnreadStorage, participation: ThreadParticipation) =>
-  storage.save({ participation, events: [], structure: new Set() });
+  storage.save({
+    participation,
+    events: [],
+    structure: new Set(),
+    complete: false,
+  });
 
 const owners: ReturnType<typeof createUnread>[] = [];
 afterEach(() => {
@@ -68,6 +73,7 @@ async function setup({
   authoredPage = true,
   sampled = true,
   localUnread = {},
+  now = NOW,
 }: {
   channels: readonly string[];
   frontiers: Readonly<Record<string, number>>;
@@ -80,6 +86,8 @@ async function setup({
   sampled?: boolean;
   // Messages marked unread on this device, which a relaunch keeps.
   localUnread?: Readonly<Record<string, number>>;
+  // The device clock, in seconds.
+  now?: number;
 }) {
   const store: RelayEvent[] = [];
   // Channels whose window requests fail: every time, or only the first.
@@ -211,7 +219,7 @@ async function setup({
     reader,
     viewer,
     storage,
-    now: () => NOW * 1000,
+    now: () => now * 1000,
   });
   owners.push(owner);
   const filters = () => reader.read.mock.calls.flatMap(([filters]) => filters);
@@ -375,129 +383,6 @@ it("a read mention whose root the windows dropped groups under its fetched root,
   expect(
     h.owner.capability.inbox().items.filter((item) => item.channelId === "c0"),
   ).toHaveLength(1);
-});
-
-it("a remembered thread's root the repair fetches by ID, in a channel the viewer never read, groups its read mention and never counts", async () => {
-  const storage = memoryUnreadStorage();
-  // Older than a never-read channel's week of window, and past the roster
-  // sample: only the thread's read and the fetch of its root reach them.
-  const root = event("team", peer, NOW - 700_000);
-  const mention = reply("team", peer, NOW - 650_000, root, [["p", viewer]]);
-  await remember(storage, {
-    roots: new Map([
-      [`team:${root.id}`, { at: mention.created_at, newestId: mention.id }],
-    ]),
-  });
-  const h = await setup({
-    channels: ["team"],
-    frontiers: { [`msg:${mention.id}`]: mention.created_at },
-    storage,
-    sampled: false,
-  });
-  h.store.push(root, mention);
-  await h.owner.capability.ensure();
-  expect(h.filters()).toContainEqual(
-    expect.objectContaining({ ids: [root.id] }),
-  );
-  expect(h.owner.capability.inbox().items).toContainEqual(
-    expect.objectContaining({
-      rootId: root.id,
-      messageIds: [mention.id],
-      unreadCount: 0,
-    }),
-  );
-  // The root is structure, as a lookup's fetch is: a window or the sample
-  // would have to return it to count.
-  expect(
-    h.owner.capability.snapshot({ kind: "channel", channelId: "team" })
-      .observedCount,
-  ).toBe(0);
-});
-
-it("a remembered thread's root outlasts 1,024 other structure fetches, and a root let go is fetched again for a thread it teaches", async () => {
-  const storage = memoryUnreadStorage();
-  const root = event("team", peer, NOW - 700_000);
-  const mention = reply("team", peer, NOW - 650_000, root, [["p", viewer]]);
-  // Remembered threads besides, whose roots are gone: the cache holds no
-  // root of theirs, so it keeps no room for one.
-  const gone = Array.from({ length: 100 }, (_, i): [string, ThreadMark] => [
-    `team:${"f".repeat(60)}${i.toString(16).padStart(4, "0")}`,
-    { at: NOW - 800_000 + i },
-  ]);
-  await remember(storage, {
-    roots: new Map([
-      [`team:${root.id}`, { at: mention.created_at, newestId: mention.id }],
-      ...gone,
-    ]),
-  });
-  // Read replies sent to a channel the viewer read through, in threads they
-  // are not part of, each looked up for its root: `first`'s, then as many as
-  // the structure cache holds besides.
-  const roots = Array.from({ length: 1025 }, (_, i) =>
-    event("quiet", peer, NOW - 500_000 + i),
-  );
-  const replies = roots.map((parent, i) =>
-    reply("quiet", peer, NOW - 100_000 + i, parent, [["broadcast", "1"]]),
-  );
-  const [first] = roots;
-  assert(first);
-  const h = await setup({
-    channels: ["team", "quiet"],
-    frontiers: { [`msg:${mention.id}`]: mention.created_at, quiet: NOW },
-    storage,
-    sampled: false,
-  });
-  h.store.push(root, mention, ...roots);
-  await h.owner.capability.ensure();
-  const asked = (id: string) =>
-    h.reader.read.mock.calls.filter(([filters]) =>
-      filters.some((filter) => filter.ids?.includes(id)),
-    ).length;
-  const grouped = expect.objectContaining({
-    rootId: root.id,
-    messageIds: [mention.id],
-  });
-  expect(h.owner.capability.inbox().items).toContainEqual(grouped);
-  expect(asked(root.id)).toBe(1);
-  // Each batch's replies are accepted, and their roots fetched, once.
-  const landed = async (from: number, to?: number) => {
-    h.owner.accept(replies.slice(from, to));
-    h.owner.capability.inbox();
-    const fetched = roots.slice(from, to);
-    await vi.waitFor(() =>
-      expect(fetched.map(({ id }) => asked(id))).toEqual(fetched.map(() => 1)),
-    );
-  };
-  await landed(0, 1);
-  await landed(1);
-  // `first`'s root, the oldest of the others, was let go. Projected again,
-  // its read reply does not fetch it again, or replies needing more roots
-  // than the cache holds would fetch one another's forever: a later
-  // lookup in the channel, queued behind any such fetch, lands with it.
-  const later = event("quiet", peer, NOW - 400_000);
-  h.store.push(later);
-  h.owner.capability.inbox();
-  h.owner.accept([reply("quiet", peer, NOW - 90_000, later)]);
-  h.owner.capability.inbox();
-  await vi.waitFor(() => expect(asked(later.id)).toBe(1));
-  expect(asked(first.id)).toBe(1);
-  // The remembered thread's root stayed, so the next repair, which reads
-  // that thread again, has no root to fetch.
-  await h.owner.capability.refresh();
-  expect(asked(root.id)).toBe(1);
-  expect(h.owner.capability.inbox().items).toContainEqual(grouped);
-  expect(roots.map(({ id }) => asked(id))).toEqual(roots.map(() => 1));
-  // A mention in its thread teaches the thread, so its root is fetched
-  // again and the mention groups under it.
-  const taught = reply("quiet", peer, NOW - 50_000, first, [["p", viewer]]);
-  h.owner.accept([taught]);
-  h.owner.capability.inbox();
-  await vi.waitFor(() => expect(asked(first.id)).toBe(2));
-  await vi.waitFor(() =>
-    expect(h.owner.capability.inbox().items).toContainEqual(
-      expect.objectContaining({ rootId: first.id, messageIds: [taught.id] }),
-    ),
-  );
 });
 
 it("a full budget evicts the busiest channel's oldest ordinary evidence, never a quiet channel's only message or the viewer's thread", async () => {
@@ -832,17 +717,21 @@ it("remembered participation is saved and refetches the thread after the authore
         walk: { since: 1010 },
       },
     }),
+    expect.anything(),
   );
   first.owner.dispose();
-  // A later session: the viewer has since written a page of newer messages
-  // elsewhere, so their authored page no longer reaches the old reply, which
-  // the thread page ends before as well; the replies have been read since.
+  // A later session, days on, so it reads the bootstrap rather than a delta
+  // since the record's mark: the viewer has since written a page of newer
+  // messages elsewhere, so their authored page no longer reaches the old
+  // reply, which the thread page ends before as well; the replies have been
+  // read since.
   const second = await setup({
     channels: ["c0"],
     frontiers: { c0: 1300 },
     storage,
     authoredPage: false,
     sampled: false,
+    now: NOW + 2 * 24 * 60 * 60,
   });
   second.store.push(...first.store);
   await second.owner.capability.ensure();

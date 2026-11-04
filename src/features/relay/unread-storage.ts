@@ -12,12 +12,30 @@ import {
  * signed wire records; read back from storage they are untrusted until the
  * owner re-verifies them, and one that fails discards them. `structure`
  * names the events kept only to group replies (roots and parents a lookup
- * fetched), which never count. */
+ * fetched), which never count. `complete` says the events hold everything
+ * the next warm repair would read. `mark` is the newest relay time the last
+ * catch-up that read every chunk of the roster returned, with when this
+ * device confirmed it, in its own clock's seconds; it is kept apart from the
+ * rest, so a save that moves only it writes a few bytes; `roster` names the
+ * channels that mark covers, each read since this device saw it joined, so
+ * one outside it is read once before the mark vouches for it; `whole` names
+ * remembered threads read whole, whose later replies the mark's reads bring;
+ * `through` names remembered threads whose replies up to the mark this device
+ * read, so a full repair from the mark reads only their replies since it;
+ * `absent` names roots the relay returned nothing for when asked by ID, so a
+ * deleted root does not leave the record incomplete. */
 export type UnreadRecord<Event = RelayEvent> = Readonly<{
   participation: ThreadParticipation;
   events: readonly Event[];
   structure: ReadonlySet<string>;
+  complete: boolean;
+  mark?: UnreadMark;
+  roster?: ReadonlySet<string>;
+  whole?: ReadonlySet<string>;
+  through?: ReadonlySet<string>;
+  absent?: ReadonlySet<string>;
 }>;
+export type UnreadMark = Readonly<{ at: number; checked: number }>;
 /** A save refused because the partition was purged during this storage's
  * session: nothing the session holds may be saved back. */
 export class UnreadRecordPurged extends Error {
@@ -31,14 +49,21 @@ export type UnreadStorage = Readonly<{
   /** Replaces the record: its events become exactly those given. A record
    * beyond the bounds is refused and the saved one kept, as is any record
    * once the partition was purged during this storage's session
-   * (`UnreadRecordPurged`). */
-  save(record: UnreadRecord): Promise<void>;
+   * (`UnreadRecordPurged`). `sameMeta` says the record differs from this
+   * storage's previous save only in its events and mark, so only those need
+   * writing. */
+  save(record: UnreadRecord, options?: { sameMeta?: boolean }): Promise<void>;
   close(): void;
 }>;
 
-/** What one launch re-verifies, and half the in-memory evidence budget. */
+/** What one launch re-verifies, and half the in-memory evidence budget. The
+ * owner saves a selection beyond either bound as no events and incomplete,
+ * so a launch from it repairs in full; the session that selected it keeps
+ * catching up (see `persist` in unread.ts). */
 export const UNREAD_RECORD_EVENTS = 2048;
 export const UNREAD_RECORD_BYTES = 4 * 1024 * 1024;
+/** Far beyond any roster seen. */
+const ROSTER_LIMIT = 4096;
 const VERSION = 1;
 
 type StoredMeta = {
@@ -48,9 +73,21 @@ type StoredMeta = {
     walk?: { since: number };
   };
   structure?: string[];
+  complete?: boolean;
+  /** Names this meta, so the mark saved beside it pairs with it. */
+  revision?: string;
+  /** Where a record saved before the mark was kept apart holds it. */
+  mark?: { at: number; checked: number };
+  roster?: string[];
+  whole?: string[];
+  through?: string[];
+  absent?: string[];
   /** The partition's last purge, kept by every record written after it. */
   purged?: string;
 };
+/** The catch-up mark, beside the meta of the revision it was saved with. */
+type StoredMark = { meta: string; mark?: { at: number; checked: number } };
+const markKey = (scope: string) => [scope, "mark"];
 
 const time = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
@@ -62,15 +99,29 @@ function parseRoot(entry: unknown): [string, ThreadMark] | undefined {
   if (typeof newestId === "string" && newestId.length <= 64)
     return [key, { at, newestId }];
 }
+function parseMark(raw: unknown): UnreadMark | undefined {
+  const { at, checked } = (raw ?? {}) as { at?: unknown; checked?: unknown };
+  return time(at) && time(checked) ? { at, checked } : undefined;
+}
+const ids = (raw: unknown, bound: number, length = 64): raw is string[] =>
+  Array.isArray(raw) &&
+  raw.length <= bound &&
+  raw.every((id) => typeof id === "string" && id.length <= length);
 /** Storage is untrusted: a meta of another version or any malformed part of
  * its participation, or events beyond the bounds, read as no record. Fields
- * added later under this version read leniently instead, so a record from an
- * older build keeps its threads; without `structure` no event can be told
- * apart from structure, so none is restored. Event validity is left to the
- * owner's re-verification. */
+ * added later under this version read leniently instead, a missing or
+ * malformed one as incomplete, so a record from an older build keeps its
+ * threads and only owes a full repair (a missing or malformed `mark`,
+ * `whole`, `through` or `absent` reads as none); without `structure` no event can be
+ * told apart from structure, so none is restored, nor the threads read whole
+ * or through, whose replies those events held. The mark is read only beside
+ * the meta it was saved with (`saved`), or from the meta of a record saved
+ * before it was kept apart. Event validity is left to the owner's
+ * re-verification. */
 function parse(
   raw: unknown,
   events: readonly unknown[],
+  saved?: unknown,
 ): UnreadRecord<unknown> | undefined {
   if (!raw || typeof raw !== "object") return;
   const meta = raw as { version?: unknown; participation?: unknown };
@@ -96,17 +147,45 @@ function parse(
   } catch {
     return;
   }
-  const { structure } = raw as { structure?: unknown };
-  const known =
-    Array.isArray(structure) &&
-    structure.length <= UNREAD_RECORD_EVENTS &&
-    structure.every((id) => typeof id === "string" && id.length <= 64);
+  const { structure, complete, roster, whole, through, absent } = raw as {
+    structure?: unknown;
+    complete?: unknown;
+    roster?: unknown;
+    whole?: unknown;
+    through?: unknown;
+    absent?: unknown;
+  };
+  const known = ids(structure, UNREAD_RECORD_EVENTS);
+  const covered = ids(roster, ROSTER_LIMIT, 128);
+  const { revision, mark: inline } = raw as {
+    revision?: unknown;
+    mark?: unknown;
+  };
+  const { meta: pair, mark: apart } = (saved ?? {}) as {
+    meta?: unknown;
+    mark?: unknown;
+  };
+  const mark = parseMark(
+    revision === undefined ? inline : pair === revision ? apart : undefined,
+  );
   return {
     participation: time(since)
       ? { roots: marks, walk: { since } }
       : { roots: marks },
     events: known ? events : [],
-    structure: new Set(known ? (structure as string[]) : []),
+    structure: new Set(known ? structure : []),
+    complete: known && covered && complete === true,
+    ...(mark ? { mark } : {}),
+    ...(covered && roster.length ? { roster: new Set(roster) } : {}),
+    ...(known && ids(whole, THREAD_PARTICIPATION_LIMIT, 256) && whole.length
+      ? { whole: new Set(whole) }
+      : {}),
+    ...(known && ids(through, THREAD_PARTICIPATION_LIMIT, 256) && through.length
+      ? { through: new Set(through) }
+      : {}),
+    ...(ids(absent, THREAD_PARTICIPATION_LIMIT) && absent.length
+      ? { absent: new Set(absent) }
+      : {}),
   };
 }
 const purgeOf = (raw: unknown) => {
@@ -115,11 +194,17 @@ const purgeOf = (raw: unknown) => {
 };
 /** When a purge was made: it is written as `time:token`. */
 const purgedAt = (purge: string) => Number(purge.split(":", 1)[0]);
-/** The stored meta, refusing a record that would not read back. */
+/** The stored meta, without the mark, refusing a record that would not read
+ * back. */
 function stored({
   participation,
   events,
   structure,
+  complete,
+  roster,
+  whole,
+  through,
+  absent,
 }: UnreadRecord): StoredMeta {
   const meta: StoredMeta = {
     version: VERSION,
@@ -132,6 +217,11 @@ function stored({
         : {}),
     },
     structure: [...structure],
+    complete,
+    roster: [...(roster ?? [])],
+    ...(whole?.size ? { whole: [...whole] } : {}),
+    ...(through?.size ? { through: [...through] } : {}),
+    ...(absent?.size ? { absent: [...absent] } : {}),
   };
   if (
     events.length > UNREAD_RECORD_EVENTS ||
@@ -153,6 +243,12 @@ export function memoryUnreadStorage(): UnreadStorage {
         participation: { roots: new Map(roots), ...(walk ? { walk } : {}) },
         events: [...record.events],
         structure: new Set(record.structure),
+        complete: record.complete,
+        ...(record.mark ? { mark: { ...record.mark } } : {}),
+        ...(record.roster?.size ? { roster: new Set(record.roster) } : {}),
+        ...(record.whole?.size ? { whole: new Set(record.whole) } : {}),
+        ...(record.through?.size ? { through: new Set(record.through) } : {}),
+        ...(record.absent?.size ? { absent: new Set(record.absent) } : {}),
       };
     },
     close() {},
@@ -188,9 +284,10 @@ function settle(
   tx.onerror = () => reject(tx.error);
 }
 /** Device-local and partitioned by relay and viewer, like read state: one
- * meta entry per partition, and its events keyed by partition and ID so a
- * save writes only what changed. A sibling database rather than more stores
- * in `buzz-read-state-v1`, so neither owner's schema version gates the other.
+ * meta entry per partition, its mark in an entry of its own beside it, and
+ * its events keyed by partition and ID, so a save writes only what changed.
+ * A sibling database rather than more stores in `buzz-read-state-v1`, so
+ * neither owner's schema version gates the other.
  *
  * Leaving a community purges its partition while another window may still
  * hold a session for it, until that window reloads. Its saves would bring
@@ -209,6 +306,8 @@ export function browserUnreadStorage(scope: string): UnreadStorage {
   let read = false;
   let purged: string | undefined;
   let refused = false;
+  // The name of the meta this storage's latest save carries.
+  let revision: string | undefined;
   function first(found: string | undefined) {
     if (read) return;
     read = true;
@@ -231,6 +330,7 @@ export function browserUnreadStorage(scope: string): UnreadStorage {
       return new Promise((resolve, reject) => {
         const tx = db.transaction(["meta", "events"], "readonly");
         const meta = tx.objectStore("meta").get(scope);
+        const mark = tx.objectStore("meta").get(markKey(scope));
         // One past the bound is enough to refuse the record.
         const rows = tx
           .objectStore("events")
@@ -244,6 +344,7 @@ export function browserUnreadStorage(scope: string): UnreadStorage {
               parse(
                 meta.result,
                 rows.result.map((row: { event?: unknown }) => row?.event),
+                mark.result,
               ),
             );
           },
@@ -252,9 +353,15 @@ export function browserUnreadStorage(scope: string): UnreadStorage {
       });
     },
     /** One transaction over both stores reads which events the partition
-     * holds, puts the missing ones, deletes the rest and writes the meta, so
-     * saves from two windows leave exactly the last writer's record. */
-    async save(record) {
+     * holds, puts the missing ones, deletes the rest and writes the meta and
+     * the mark, so saves from two windows leave exactly the last writer's
+     * record. A meta is named once per change and a save of the same meta
+     * keeps its name; only this storage writes that name, and only with that
+     * meta, so a stored meta that carries it is left alone. Another window's
+     * meta, or one a failed save of this storage never wrote, is replaced. */
+    async save(record, { sameMeta = false } = {}) {
+      if (!sameMeta || revision === undefined) revision = crypto.randomUUID();
+      const named = revision;
       const meta = stored(record);
       if (typeof indexedDB === "undefined") return;
       const db = await open();
@@ -279,9 +386,23 @@ export function browserUnreadStorage(scope: string): UnreadStorage {
           }
           for (const [id, event] of selected)
             if (!held.has(id)) events.put({ scope, id, event });
-          tx.objectStore("meta").put(
-            purged === undefined ? meta : { ...meta, purged },
-            scope,
+          const store = tx.objectStore("meta");
+          if (current.result?.revision !== named)
+            store.put(
+              {
+                ...meta,
+                revision: named,
+                ...(purged === undefined ? {} : { purged }),
+              },
+              scope,
+            );
+          const { mark } = record;
+          store.put(
+            {
+              meta: named,
+              ...(mark ? { mark: { at: mark.at, checked: mark.checked } } : {}),
+            } satisfies StoredMark,
+            markKey(scope),
           );
         };
         settle(tx, resolve, reject);
@@ -309,6 +430,7 @@ export async function purgeUnreadStorage(scope: string) {
       keys.onsuccess = () => {
         for (const key of keys.result) events.delete(key);
       };
+      tx.objectStore("meta").delete(markKey(scope));
       tx.objectStore("meta").put(
         { version: VERSION, purged: `${Date.now()}:${crypto.randomUUID()}` },
         scope,

@@ -364,8 +364,10 @@ export function policyRelay({
         }
         // Unread participation: the viewer's newest threads refetched whole,
         // one `#e` filter per channel naming its roots, with roots the
-        // retained evidence lacks fetched by ID in the same request; older
-        // threads asked one root at a time for replies since their newest.
+        // retained evidence lacks fetched by ID (50 a filter) in the same
+        // request; older threads asked one root at a time for replies since
+        // their newest; from a mark, the threads read through to it asked in
+        // one filter of up to 200 roots in their channels since the mark.
         // Unread repair requests carry up to 128 filters
         // (`isUnreadWindowBatch`).
         if (
@@ -373,20 +375,49 @@ export function policyRelay({
             (filter) =>
               [9, 40002, 40008].every((kind) => filter.kinds?.includes(kind)) &&
               filter.include_aux &&
-              ((filter["#h"]?.length === 1 &&
-                filter["#e"] &&
-                !filter.authors) ||
+              ((filter["#h"]?.length && filter["#e"] && !filter.authors) ||
                 (filter.ids && !filter["#h"] && !filter["#e"])),
           )
         ) {
           expect(filters.length).toBeLessThanOrEqual(128);
           const community = communityOf(url);
           for (const filter of filters) {
-            if (filter.since !== undefined) {
+            if (filter.since !== undefined && filter.limit === 500) {
+              expect(filter["#e"].length).toBeLessThanOrEqual(200);
+              expect(filter["#h"].length).toBeLessThanOrEqual(128);
+              expect(filter.until).toBeUndefined();
+            } else if (filter.since !== undefined) {
+              expect(filter["#h"]).toHaveLength(1);
               expect(filter["#e"]).toHaveLength(1);
               expect(filter.limit).toBe(50);
-            } else
+            } else {
+              if (!filter.ids) expect(filter["#h"]).toHaveLength(1);
+              expect(filter.ids?.length ?? 0).toBeLessThanOrEqual(50);
               expect(filter.limit).toBe(filter.ids ? filter.ids.length : 200);
+            }
+            report.queries.push({ community, filter, at: performance.now() });
+          }
+          return Response.json(
+            filters.flatMap((filter) => answer(community, filter)),
+          );
+        }
+        // Unread repair: the edits and deletions of held events no read of the
+        // pass returned, by ID since the mark, up to 128 filters per request
+        // (`isUnreadWindowBatch`). The Inbox feed's overlay read has the same
+        // kinds and no `since`; it is answered below.
+        if (
+          filters.every(
+            (filter) =>
+              filter.kinds?.join() === "40003,5,9005" &&
+              filter["#e"] &&
+              filter.since !== undefined &&
+              !filter["#h"],
+          )
+        ) {
+          expect(filters.length).toBeLessThanOrEqual(128);
+          const community = communityOf(url);
+          for (const filter of filters) {
+            expect(filter["#e"].length).toBeLessThanOrEqual(100);
             report.queries.push({ community, filter, at: performance.now() });
           }
           return Response.json(
@@ -408,7 +439,10 @@ export function policyRelay({
             if (filter.authors) {
               expect(filter.authors).toEqual([viewer]);
               expect(filter["#h"]).toHaveLength(1);
-            } else expect(filter["#h"]).toBeUndefined();
+            } else {
+              expect(filter["#h"]).toBeUndefined();
+              expect(filter.ids.length).toBeLessThanOrEqual(50);
+            }
             report.queries.push({ community, filter, at: performance.now() });
           }
           return Response.json(
@@ -606,8 +640,11 @@ export function policyRelay({
               resolve(Response.json(result));
             });
           });
+        // A history page reads older rows below a cursor. The unread owner's
+        // catch-up pages (`since` from its mark, keyset-paged) are not held.
         if (
           filter.search === undefined &&
+          filter.since === undefined &&
           filter.until !== undefined &&
           holdOlder
         )

@@ -124,8 +124,8 @@ Multiple steps are not atomic: failures leave remaining evidence retryable. Manu
 disable read mutations. Saved frontiers are not proof of remote reconciliation.
 
 This is **bounded recent evidence**, not a complete historical inbox. Unread
-retains at most 4,096 events / 8 MiB. Each joined channel is observed on its
-own since its read mark (or since the last week, when never read anywhere), up
+retains at most 4,096 events / 8 MiB. A full repair observes each joined
+channel on its own since its read mark (or since the last week, when never read anywhere), up
 to 100 recent events per channel—fewer on a large roster, so a first run's
 windows together fit the budget—so one busy channel cannot push another
 channel's thread out of the Inbox. The newest 500 events of up to 128 joined
@@ -137,7 +137,7 @@ channel's week. Threads the viewer took part in—replied in, was mentioned or
 answered in, or follows—are remembered per relay and viewer on this device, at
 most 1,000 threads, so their new replies reach the Inbox after their channel's
 window has moved on. The 50 most recently read or
-written in are refetched whole on every repair, before the channel windows,
+written in are refetched whole on every full repair, before the channel windows,
 and show as rows read or unread. The rest are asked only for replies since the
 newest one the viewer wrote or read, behind the windows, and are rows only
 while they hold a reply the viewer has not read: that newest reply is
@@ -149,44 +149,182 @@ return on every repair until they are read, and a reply marked unread moves
 that mark back to itself (a thread or root marked unread, back to the root).
 A device's first repair also walks back through the viewer's own messages,
 behind the windows, to learn the threads they replied in before their most
-recent messages; later repairs read only what they wrote since.
+recent messages; later full repairs read only what they wrote since, and a
+catch-up (below) learns it from what it reads.
 With those threads, each repair keeps on this device the signed events the
 next one would read of what is held, every unread or undecided row, and what
 those rows depend on—roots, parents, the viewer's own messages in their
-threads, edits and deletions—up to 2,048 events and 4 MiB, beyond which it
-keeps none. A root or parent fetched only to group replies, by a lookup or a
-thread read, counts only once a channel's window or the newest events across
-the roster return it, and is restored as such. A launch verifies the events
-again beside the repair, not ahead of it, and shows them once all have
+threads, edits and deletions—up to 2,048 events and 4 MiB. Beyond that it
+keeps none and the record is incomplete: the next launch repairs in full, but
+the session that selected them still holds them, and its periodic checks and
+reconnects still catch up (below). Of each sender's edits of a message the
+device holds and keeps only the newest that is not deleted, beside any newer
+one that is; when the newest is deleted, the message shows the edit before it
+once a read returns it, and its original text until then. A root or parent
+fetched only to group replies, by a lookup or a thread read, counts only once
+a channel's window or the newest events across the roster return it, and is
+restored as such. A launch verifies the events
+again beside its reads, not ahead of them, and shows them once all have
 passed, which may be before or after the relay's first answer; one that fails
-verification discards them all, keeping the threads. The full repair still
-runs on every launch, and restored events only add to what it reads: one that
-a read should have returned and did not, deleted while the device was closed,
-is dropped, and one whose channel membership is not confirmed yet waits for
-it. The repair's reads return no deletions, so a restored event none of them
-reaches—an unread message older than its channel's window and outside the
-newest events across the roster—stays even if it was deleted while the device
-was closed, until its deletion arrives. Leaving a community clears its record,
+verification discards them all, keeping the threads. The record also keeps
+how far this device last read the whole roster. When it is complete and that
+read was confirmed within the last day, a launch, reconnect, periodic check or
+change to the viewer's channels catches up instead of repairing in full: it
+reads only what the joined channels gained since then—messages, edits,
+reactions and deletions, from far enough before that point that a send the
+relay committed late is still read—and applies it to what is held, so a
+message deleted while the device was closed is dropped. The Inbox is ready
+once the restored events have passed and that read's first answer has
+landed, and a channel that read reached the end of counts as checked only
+once the restored events are in. Besides what it reads once (below), a
+catch-up reads no windows, newest events across the roster or new replies of
+remembered threads: the replies it returns reach their remembered threads, a
+thread newly among the 50 most recently read or written in is read whole
+once, and the roots its remembered threads lack are fetched last, as a full
+repair's are (below). The viewer's own
+messages it returns move the walk on only when it read every channel the
+viewer may have written in; while one is listed but its membership is not
+yet confirmed, or the point does not cover it, the viewer's messages since
+the walk stopped are read beside the catch-up instead, as a full repair
+reads them, and a walk that stops short has the next check repair in full.
+While the channel list is still being read, as on a reconnect or periodic
+check, each of which reads it again beside the catch-up, the walk stays where
+it was, so a channel that list then adds is walked from there; the walk
+therefore mostly moves on at launch and in a full repair.
+The point moves once that read reaches its end in every channel, to the
+newest event it returned. Wherever it moves, it goes no further ahead of this
+device's clock than the relay accepts a message's date, so one dated beyond
+that cannot make later checks start after the present. A repair runs in
+full instead on a device's first launch, after its storage was lost, on
+a launch from a record over its bounds, when the record is incomplete
+(as after a walk that stopped short) or was not caught up within the day,
+when restored events fail verification, and on Refresh. In a full repair
+restored events only add to what it reads: one that a read should have
+returned and did not, deleted while the device was closed, is dropped, and
+one whose channel membership is not confirmed yet waits for it. A catch-up
+that finds a channel with more new events than it takes, or whose restored
+events fail verification after it started, runs the full repair in the
+same pass. After a failed verification the Inbox loads once that repair's
+first reads land, and a channel only the catch-up read is not counted
+until the repair reads it. Either way the full repair moves the point
+then: once it has read the newest events across the roster and every thread
+and the viewer's own recent messages it asked for and, after an earlier
+point, the edits and deletions since it in every channel holding events, so a
+message deleted meanwhile is not kept past it; after a catch-up that stopped
+short, only those it did not reach. When those edits and deletions are more
+than it reads, it reads instead those of each event held in the channels it
+did not read to the end, other than those that arrived live meanwhile, and
+applies them, so nothing is dropped that was not deleted and no edit is
+missed: its other reads return no edits. When those of several events are more
+than it reads too, it reads on in halves, down to single events, and for one
+event its newest edits, with any deletion made after them, are enough. The
+point moves once that read lands. When it fails, or would need too many
+halves, the point stays where it was and the Inbox says some recent activity
+could not be checked until a later check finishes it: the next goes on from
+where that read stopped, and reads again of what it finished only what may
+have arrived since. A catch-up whose
+read fails leaves the point
+where it was and the Inbox saying some recent activity could not be checked;
+the next check reads it again. Live events never move the point. The record
+keeps which channels that point covers: those read up to it, and those whose
+window and the roster's newest events were read since. A channel it does not
+cover—joined, regained after lost access, not yet confirmed when the point
+moved, or whose window or a thread read in it failed—has its window, the
+roster's newest events and its remembered threads' new replies read once
+beside the catch-up, and
+leaving a channel has the roster's newest events read once more, at once, so
+they reach as far back as they would have without it. A thread read that
+fails takes its channel out of what the point covers, covered before or
+not, unless a catch-up reads all it asked for, as for the read of the threads
+read through to the point; otherwise a catch-up only adds channels to what
+the point covers, and only a full repair that moved the point sets it
+afresh. The record also keeps which remembered threads were read
+whole: beside the catch-up, any of the 50 most recently read or written in
+that was not—one the viewer just replied in, was mentioned in or followed, or
+whose read failed—is read whole once, and one that leaves those 50, is
+unfollowed or loses its channel's coverage is read whole again when it
+returns. It keeps too which remembered threads this device read through to the
+point, which a full repair from the record does not read again when the point
+was confirmed within the last day: it asks them only for replies since the
+point, from as far before it as a catch-up reads, in one read of up to 200 of
+them at a time. From an older point each is read on its own, as one read of
+many would span the whole gap. A read that comes back full is read again in
+halves of its threads rather than paged, up to eight times; a half still full
+after that is dropped as a failed read is: its threads no longer count as read
+through, so the next full repair asks each on its own, and the point stays
+where it was with the Inbox saying some recent activity could not be checked.
+Of the 50 most recently read or written in, only those read whole ride that
+read; the others, such as one newly among them, are read whole. A thread
+not read through since the point is still asked on its own for replies since
+the newest one the viewer wrote or read, as is every thread on a device's
+first launch, after its storage was lost, on a launch from a record over its
+bounds or from one that never caught up. Such a thread was learned beside
+a catch-up, which read none of its replies from before the point, or had
+replies that were not kept or restored replies dropped (below), or is in a
+channel the point no longer covers. When restored events fail verification
+after that read, the threads it covered are read again on their own in
+the same pass. A dropped read leaves the point where it was and the Inbox
+saying some recent activity could not be checked, and the next check reads
+those threads again. Refresh always runs the full repair: pressed while a
+catch-up runs, it runs once that ends, and pressed before a check has chosen
+to catch up, that check runs it instead. The full repair also reads the
+deletions made since that point in the channels holding restored events the
+repair's reads did not return. If those deletions are more than it reads, or
+the record never caught up, those restored events are dropped, as a device
+without a record would never show them, rather than kept while they may have
+been deleted, and their threads no longer count as read whole or through. The
+record is then incomplete, so the next check runs the full repair, which reads
+each whole or on its own rather than only since the point; if the read of
+deletions fails, they are kept, and the next repair reads it again. A full
+repair ends by fetching the root nothing holds of each remembered thread it
+holds a reply in, whichever read brought the reply, to group it, never
+counted, so the record can be saved complete: a root the relay returns
+nothing for, deleted, or returns unable to group anything, with no channel or
+as the viewer's own deleted message, does not keep it incomplete, and when
+that fetch fails the record stays incomplete and the next check fetches the
+roots again. Three narrow cases can still leave a
+gap after the point: an event dated well ahead of the relay's clock can move
+the point past a late send in a channel read earlier in the same repair; a
+channel whose access the relay revoked before its channel list did stays
+covered through a catch-up that read nothing of it; and a channel whose
+window had to be read smaller to fit a response counts as read. Leaving a
+community clears its record,
 and a window still open on it cannot save it back; a session started after
 that, as when rejoining, saves as usual. Clearing the cache clears the record
 too, remembered threads included, so the next repair walks back through the
 viewer's messages again as a device's first does.
-The windows, the viewer's own recent messages and the thread reads ride
-together, up to 128 filters per request with two requests in flight, so a
-roster costs one or two round trips; the newest events across the roster are
-one more request per 128 channels, behind the windows. The Inbox is ready once
-the viewer's own recent messages and the remembered threads most recently read
-or written in have landed, or were dropped, and reports `observing` while
-further windows still read. A read that fails is tried once more; dropped
-after that, its channels or threads stay as they were—a dropped thread read
-leaves its channels' counts observed—and the Inbox notes that some recent
-activity could not be checked until a check reads them: the repair stays owed,
-so the next periodic check, a minute later, repairs again, as after a repair
-that fails. Later reads that fail in the same pass are dropped at once, and a
-dropped walk page leaves the walk to the next repair without a notice. A
-response too large for the reader or the native host is split and read in
-parts rather than retried. A repair in which no read lands fails instead,
-keeping the previous evidence and its stale freshness. While a
+In a full repair the windows, the viewer's own recent messages and the thread
+reads ride together, up to 128 filters per request with two requests in
+flight, so a roster costs one or two round trips; the newest events across the
+roster are one more request per 128 channels, behind the windows. The Inbox is
+ready once the viewer's own recent messages and the remembered threads most
+recently read or written in have landed, or were dropped, and reports
+`observing` while further windows still read. A catch-up is one request per
+128 channels, and reads on only while a channel gained more than it returns.
+A read that fails is tried once more; dropped after that, its channels or
+threads stay as they were—a dropped thread read leaves its channels' counts
+observed—and the Inbox notes that some recent activity could not be checked
+until a check reads them: the repair stays owed, so the next periodic check, a
+minute later, repairs again, as after a repair that fails. Later reads that
+fail in the same pass are dropped at once, and a dropped walk page leaves the
+walk to the next repair without a notice. A response too large for the reader
+or the native host is split and read in parts rather than retried. A repair in
+which no read lands fails instead, keeping the previous evidence and its stale
+freshness.
+
+For a roster of up to 128 channels with nothing new, unread reads:
+
+| Pass | Requests |
+|---|---|
+| Warm tick: a periodic check or reconnect, caught up | One, with one filter: what the roster gained since the point. |
+| Warm launch: caught up | The same one request. A remembered thread's root is fetched only when the thread holds a reply and nothing holds the root, and a thread newly among the 50 is read whole once. |
+| Full repair from a record caught up within the day: Refresh, or a record incomplete or whose catch-up found more than it takes | Three (four at 128 channels): the viewer's recent messages with every channel's window, one read of the remembered threads read through to the point (one more per further 200 of them, and up to eight more for each that comes back full), then the newest events across the roster. Any of the 50 most recently read or written in that was not read whole is read whole beside them. Then the edits and deletions since the point, and each thread not read through, on its own. Last, the roots nothing holds of the remembered threads holding a reply. |
+| Full repair without one: a first launch, lost storage, or a launch from a record over its bounds, never caught up or caught up more than a day ago | Two (three at 128 channels, whose windows with the viewer's recent messages take two): the viewer's recent messages with every channel's window, then the newest events across the roster. Then any further pages of the walk and, with a record, each remembered thread: the 50 most recently read or written in whole, the rest each on its own; from a record caught up before, the edits and deletions since its point too. Last, the roots nothing holds of the remembered threads holding a reply. |
+
+Read state and the addressed history Inbox reads for mentions are separate
+owners and not counted here.
+
+While a
 repair runs, a reply whose root is not yet retained is not shown as a row
 of its own; it appears under its root once the thread read or lookup brings
 it. A lookup that finds the viewer's reply in a thread, or fetches the root

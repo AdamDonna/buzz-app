@@ -3029,6 +3029,87 @@ it("inbox folds edits and deletions and revokes all evidence before a reentrant 
   expect(h.session.unread.inbox().items).toHaveLength(0);
 });
 
+it("of a sender's edits of a message only the newest is held: an older one arriving later is not, another sender's edit does not displace it, and once it is deleted the message shows its own body", () => {
+  const h = setup();
+  h.grant("room");
+  const row = message(h.alice, "room", "original", 20, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const edit = (author: typeof h.alice, content: string, created_at: number) =>
+    signed(author, {
+      kind: 40003,
+      created_at,
+      content,
+      tags: [
+        ["h", "room"],
+        ["e", row.id],
+      ],
+    });
+  const preview = () => h.session.unread.inbox().items[0]?.preview;
+  const newest = edit(h.alice, "newest", 23);
+  h.emit([row, edit(h.alice, "first", 21)]);
+  h.emit([newest]);
+  h.emit([edit(h.alice, "late", 22)]);
+  // The fold shows only the author's edits, but this sender's newer one is
+  // held beside them, not in place of theirs.
+  h.emit([edit(h.viewer, "forged", 24)]);
+  expect(preview()).toBe("newest");
+  h.emit([
+    signed(h.alice, {
+      kind: 5,
+      created_at: 25,
+      content: "",
+      tags: [
+        ["h", "room"],
+        ["e", newest.id],
+      ],
+    }),
+  ]);
+  expect(preview()).toBe("original");
+});
+
+it("a deleted edit is not the held one: the edit before a sender's newest, read again after it and its deletion, is held and shown, as the thread shows it", () => {
+  const h = setup();
+  h.grant("room");
+  const row = message(h.alice, "room", "original", 20, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const edit = (content: string, created_at: number) =>
+    signed(h.alice, {
+      kind: 40003,
+      created_at,
+      content,
+      tags: [
+        ["h", "room"],
+        ["e", row.id],
+      ],
+    });
+  const preview = () => h.session.unread.inbox().items[0]?.preview;
+  const previous = edit("previous", 21);
+  const newest = edit("newest", 22);
+  const deletion = signed(h.alice, {
+    kind: 5,
+    created_at: 23,
+    content: "",
+    tags: [
+      ["h", "room"],
+      ["e", newest.id],
+    ],
+  });
+  // The newest retires the one before it, is deleted, and the one before
+  // it is read again.
+  h.emit([row, previous]);
+  h.emit([newest]);
+  h.emit([deletion]);
+  expect(preview()).toBe("original");
+  h.emit([previous]);
+  expect(preview()).toBe("previous");
+  // The deleted edit stays beside its deletion, so read again alone it
+  // does not show, and an older edit still does not displace the held one.
+  h.emit([newest, edit("older", 20)]);
+  expect(preview()).toBe("previous");
+});
+
 it("inbox keeps unresolved mentions exact, joins a verified root, and never clears unrelated roots", async () => {
   const h = setup();
   h.grant("room");
@@ -3579,6 +3660,42 @@ it("finds the channels of marked messages that are not loaded, then drops the co
       filters.flatMap((filter) => filter.ids ?? []),
     ),
   ).toHaveLength(2);
+});
+
+it("asks for the channels of 2,200 marked messages in 22 requests of at most 100 IDs", async () => {
+  const marked = Array.from({ length: 2200 }, (_, i) =>
+    (i + 1).toString(16).padStart(64, "0"),
+  );
+  const h = setup({}, true, (journal) => ({
+    ...journal,
+    state: { frontiers: { room: 30 }, overrides: {} },
+    reserve: Object.fromEntries(marked.map((id) => [`msg:${id}`, 12])),
+  }));
+  h.grant("room");
+  await h.session.unread.ensure();
+  // Marked messages are asked by ID alone; lookups carry `include_aux`.
+  const homes = () =>
+    h.query.mock.calls.flatMap(([filters]) =>
+      filters.every((filter) => filter.ids && !filter.include_aux)
+        ? [filters]
+        : [],
+    );
+  // Each is asked once, so every one asked is the lookup's end.
+  await vi.waitFor(() =>
+    expect(
+      new Set(
+        homes()
+          .flat()
+          .flatMap((filter) => filter.ids),
+      ),
+    ).toEqual(new Set(marked)),
+  );
+  expect(homes()).toHaveLength(22);
+  for (const filters of homes()) {
+    expect(filters).toHaveLength(1);
+    expect(filters[0]?.ids?.length).toBeLessThanOrEqual(100);
+    expect(filters[0]?.limit).toBe(filters[0]?.ids?.length);
+  }
 });
 
 it("a loaded message in a channel too long to save does not block other reads", async () => {

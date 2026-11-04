@@ -10,136 +10,12 @@ import {
   UNREAD_RECORD_EVENTS,
   type UnreadRecord,
 } from "./unread-storage";
+import { memoryIndexedDB } from "./unread-storage-testing";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-// An in-memory IndexedDB shared by every connection. Transactions run one at
-// a time in the order they were created, as overlapping readwrite
-// transactions do, and complete once their last request has succeeded;
-// values are structured clones. `blocked` opens are refused first.
-function memoryIndexedDB(blocked = 0) {
-  const stores = new Map<string, Map<string, unknown>>();
-  const keyPaths = new Map<string, readonly string[]>();
-  const writes: [string, "put" | "delete", unknown][] = [];
-  let upgraded = false;
-  let turn = Promise.resolve();
-  const table = (name: string) => {
-    const rows = stores.get(name) ?? new Map<string, unknown>();
-    stores.set(name, rows);
-    return rows;
-  };
-  const scoped = (name: string, range: { only: unknown }) =>
-    [...table(name)]
-      .filter(
-        ([, value]) => (value as { scope?: unknown }).scope === range.only,
-      )
-      .sort(([a], [b]) => (a < b ? -1 : 1));
-  function transaction() {
-    const previous = turn;
-    let release = () => {};
-    turn = new Promise((resolve) => {
-      release = resolve;
-    });
-    let pending = 0;
-    let done = false;
-    const tx = {
-      error: null,
-      oncomplete: () => {},
-      onabort: () => {},
-      onerror: () => {},
-      objectStore: (name: string) => ({
-        get: (key: unknown) =>
-          request(() => structuredClone(table(name).get(JSON.stringify(key)))),
-        put: (value: Record<string, unknown>, key?: unknown) =>
-          request(() => {
-            const at = key ?? keyPaths.get(name)?.map((path) => value[path]);
-            writes.push([name, "put", at]);
-            table(name).set(JSON.stringify(at), structuredClone(value));
-          }),
-        delete: (key: unknown) =>
-          request(() => {
-            writes.push([name, "delete", key]);
-            table(name).delete(JSON.stringify(key));
-          }),
-        index: () => ({
-          getAll: (range: { only: unknown }, count = Infinity) =>
-            request(() =>
-              scoped(name, range)
-                .slice(0, count)
-                .map(([, value]) => structuredClone(value)),
-            ),
-          getAllKeys: (range: { only: unknown }) =>
-            request(() => scoped(name, range).map(([key]) => JSON.parse(key))),
-        }),
-      }),
-    };
-    const finish = () => {
-      if (pending || done) return;
-      done = true;
-      release();
-      tx.oncomplete();
-    };
-    function request(run: () => unknown) {
-      const issued = { result: undefined as unknown, onsuccess: () => {} };
-      pending++;
-      void previous.then(() => {
-        issued.result = run();
-        issued.onsuccess();
-        pending--;
-        finish();
-      });
-      return issued;
-    }
-    // A transaction that issues no request completes on its turn.
-    void previous.then(finish);
-    return tx;
-  }
-  const db = {
-    onversionchange: () => {},
-    close: vi.fn(),
-    createObjectStore(name: string, options?: { keyPath?: string[] }) {
-      table(name);
-      if (options?.keyPath) keyPaths.set(name, options.keyPath);
-      return { createIndex() {} };
-    },
-    transaction,
-  };
-  const opens: unknown[] = [];
-  vi.stubGlobal("IDBKeyRange", { only: (only: unknown) => ({ only }) });
-  vi.stubGlobal("indexedDB", {
-    open() {
-      const request = {
-        result: db,
-        error: null,
-        onupgradeneeded: () => {},
-        onsuccess: () => {},
-        onerror: () => {},
-        onblocked: () => {},
-      };
-      opens.push(request);
-      queueMicrotask(() => {
-        if (blocked-- > 0) return request.onblocked();
-        if (!upgraded) request.onupgradeneeded();
-        upgraded = true;
-        request.onsuccess();
-      });
-      return request;
-    },
-  });
-  return {
-    opens,
-    writes,
-    /** Writes a stored value as another build or a tampered disk would. */
-    seed(name: string, key: unknown, value: unknown) {
-      table(name).set(JSON.stringify(key), structuredClone(value));
-    },
-    keys: (name: string) =>
-      [...table(name).keys()].map((key) => JSON.parse(key)),
-  };
-}
 
 let next = 0;
 function event(content = ""): RelayEvent {
@@ -171,32 +47,59 @@ const meta = (participation: unknown) => ({
   version: 1,
   participation,
   structure: [],
+  roster: [],
 });
 
-it("a record round-trips with its threads, walk mark, events and structure", async () => {
-  memoryIndexedDB();
+it("a record round-trips with its threads, walk mark, events, structure, mark, roster, threads read whole and through, and absent roots", async () => {
+  const idb = memoryIndexedDB();
   const events = [event("first"), event("second")];
   const structure = new Set([(events[0] as RelayEvent).id]);
+  const mark = { at: 1700, checked: 1800 };
+  const roster = new Set(["c0", "c".repeat(128)]);
+  const whole = new Set(["c0:other"]);
+  const through = new Set(["c0:other", "c0:root"]);
+  const absent = new Set(["c".repeat(64)]);
   await browserUnreadStorage(scope).save({
     participation: threads,
     events,
     structure,
+    complete: true,
+    mark,
+    roster,
+    whole,
+    through,
+    absent,
+  });
+  // The mark is stored apart, beside the meta it was saved with.
+  const stored = idb.value("meta", scope) as { revision: string };
+  expect(stored).not.toHaveProperty("mark");
+  expect(idb.value("meta", [scope, "mark"])).toEqual({
+    meta: stored.revision,
+    mark,
   });
   // The next launch reads it through its own connection.
   await expect(browserUnreadStorage(scope).read()).resolves.toEqual({
     participation: threads,
     events: events.map(wire),
     structure,
+    complete: true,
+    mark,
+    roster,
+    whole,
+    through,
+    absent,
   });
   await browserUnreadStorage(scope).save({
     participation: { roots: new Map() },
     events: [],
     structure: none,
+    complete: false,
   });
   await expect(browserUnreadStorage(scope).read()).resolves.toEqual({
     participation: { roots: new Map() },
     events: [],
     structure: none,
+    complete: false,
   });
 });
 
@@ -230,14 +133,27 @@ it("malformed meta reads as no record", async () => {
   });
 });
 
-it("a record whose structure is missing or malformed keeps its threads and restores no events", async () => {
+it("a record whose completeness or structure is missing or malformed reads as incomplete, keeping its threads, and restores no events without structure", async () => {
   const idb = memoryIndexedDB();
   const storage = browserUnreadStorage(scope);
   const participation = { roots: [["c0:root", 1000]] };
   const held = wire(event());
   idb.seed("events", [scope, held.id], { scope, id: held.id, event: held });
+  for (const complete of [undefined, "true", 1, null, { complete: true }]) {
+    idb.seed("meta", scope, { ...meta(participation), complete });
+    await expect(storage.read()).resolves.toEqual({
+      participation: { roots: new Map([["c0:root", { at: 1000 }]]) },
+      events: [held],
+      structure: none,
+      complete: false,
+    });
+  }
+  idb.seed("meta", scope, { ...meta(participation), complete: true });
+  await expect(storage.read()).resolves.toMatchObject({ complete: true });
   // Without a readable structure no event is told apart from structure (a
-  // fetched root restored as evidence would count), so none is restored.
+  // fetched root restored as evidence would count), so none is restored, nor
+  // the threads read whole or through: their replies were those events.
+  const read = ["c0:root"];
   for (const structure of [
     undefined,
     held.id,
@@ -245,18 +161,34 @@ it("a record whose structure is missing or malformed keeps its threads and resto
     ["a".repeat(65)],
     Array.from({ length: UNREAD_RECORD_EVENTS + 1 }, () => held.id),
   ]) {
-    idb.seed("meta", scope, { ...meta(participation), structure });
+    idb.seed("meta", scope, {
+      ...meta(participation),
+      structure,
+      complete: true,
+      whole: read,
+      through: read,
+    });
     await expect(storage.read()).resolves.toEqual({
       participation: { roots: new Map([["c0:root", { at: 1000 }]]) },
       events: [],
       structure: none,
+      complete: false,
     });
   }
-  idb.seed("meta", scope, { ...meta(participation), structure: [held.id] });
+  idb.seed("meta", scope, {
+    ...meta(participation),
+    structure: [held.id],
+    complete: true,
+    whole: read,
+    through: read,
+  });
   await expect(storage.read()).resolves.toEqual({
     participation: { roots: new Map([["c0:root", { at: 1000 }]]) },
     events: [held],
     structure: new Set([held.id]),
+    complete: true,
+    whole: new Set(read),
+    through: new Set(read),
   });
 });
 
@@ -267,19 +199,26 @@ it("an oversized record is refused when saved, keeping the saved one, and reads 
     participation: threads,
     events: [event()],
     structure: none,
+    complete: true,
   };
   await storage.save(saved);
   const many = Array.from({ length: UNREAD_RECORD_EVENTS + 1 }, () => event());
   const large = [event("x".repeat(UNREAD_RECORD_BYTES))];
   for (const events of [many, large]) {
     await expect(
-      storage.save({ participation: threads, events, structure: none }),
+      storage.save({
+        participation: threads,
+        events,
+        structure: none,
+        complete: true,
+      }),
     ).rejects.toThrow(RangeError);
     await expect(
       memoryUnreadStorage().save({
         participation: threads,
         events,
         structure: none,
+        complete: true,
       }),
     ).rejects.toThrow(RangeError);
     await expect(storage.read()).resolves.toEqual({
@@ -293,6 +232,7 @@ it("an oversized record is refused when saved, keeping the saved one, and reads 
     participation: threads,
     events: bound,
     structure: none,
+    complete: true,
   });
   expect((await storage.read())?.events).toHaveLength(UNREAD_RECORD_EVENTS);
   // Beyond it on disk, by count or by bytes, nothing is restored.
@@ -303,7 +243,12 @@ it("an oversized record is refused when saved, keeping the saved one, and reads 
     event: wire(extra),
   });
   await expect(storage.read()).resolves.toBeUndefined();
-  await storage.save({ participation: threads, events: [], structure: none });
+  await storage.save({
+    participation: threads,
+    events: [],
+    structure: none,
+    complete: true,
+  });
   const [big] = large as [RelayEvent];
   idb.seed("events", [scope, big.id], { scope, id: big.id, event: wire(big) });
   await expect(storage.read()).resolves.toBeUndefined();
@@ -313,41 +258,95 @@ it("a blocked open is not held against the next read", async () => {
   const idb = memoryIndexedDB(1);
   const storage = browserUnreadStorage(scope);
   await expect(storage.read()).rejects.toThrow("Close other Buzz windows");
-  await storage.save({ participation: threads, events: [], structure: none });
+  await storage.save({
+    participation: threads,
+    events: [],
+    structure: none,
+    complete: true,
+  });
   await expect(storage.read()).resolves.toMatchObject({
     participation: threads,
   });
   expect(idb.opens).toHaveLength(2);
 });
 
-it("a save puts only the events the partition lacks and deletes the rest", async () => {
+it("a save puts only the events the partition lacks and deletes the rest, and leaves the meta alone when it is the last save's", async () => {
   const idb = memoryIndexedDB();
   const storage = browserUnreadStorage(scope);
-  const [a, b, c] = [event(), event(), event()] as [
+  const [a, b, c, d] = [event(), event(), event(), event()] as [
+    RelayEvent,
     RelayEvent,
     RelayEvent,
     RelayEvent,
   ];
-  await storage.save({
+  const record = (events: RelayEvent[], checked: number): UnreadRecord => ({
     participation: threads,
-    events: [a, b],
+    events,
     structure: none,
+    complete: true,
+    mark: { at: 1700, checked },
   });
+  await storage.save(record([a, b], 1800));
   idb.writes.splice(0);
-  await storage.save({
-    participation: threads,
-    events: [b, c],
-    structure: none,
-  });
+  await storage.save(record([b, c], 1860));
   // In any order: a transaction commits its writes together.
-  expect(idb.writes).toHaveLength(3);
+  expect(idb.writes).toHaveLength(4);
   expect(idb.writes).toEqual(
     expect.arrayContaining([
       ["meta", "put", scope],
+      ["meta", "put", [scope, "mark"]],
       ["events", "delete", [scope, a.id]],
       ["events", "put", [scope, c.id]],
     ]),
   );
+  // A check that read nothing new moves only the mark.
+  idb.writes.splice(0);
+  await storage.save(record([b, c], 1920), { sameMeta: true });
+  expect(idb.writes).toEqual([["meta", "put", [scope, "mark"]]]);
+  idb.writes.splice(0);
+  await storage.save(record([c, d], 1980), { sameMeta: true });
+  expect(idb.writes).toHaveLength(3);
+  expect(idb.writes).toEqual(
+    expect.arrayContaining([
+      ["meta", "put", [scope, "mark"]],
+      ["events", "delete", [scope, b.id]],
+      ["events", "put", [scope, d.id]],
+    ]),
+  );
+  await expect(browserUnreadStorage(scope).read()).resolves.toEqual({
+    ...record([c, d], 1980),
+    events: [c, d].map(wire),
+  });
+});
+
+it("a mark is read only beside the meta it was saved with", async () => {
+  const idb = memoryIndexedDB();
+  const storage = browserUnreadStorage(scope);
+  const mark = { at: 1700, checked: 1800 };
+  idb.seed("meta", scope, {
+    ...meta({ roots: [] }),
+    complete: true,
+    revision: "r1",
+    // A meta that names its revision keeps no mark of its own.
+    mark: { at: 1, checked: 1 },
+  });
+  for (const beside of [
+    undefined,
+    { meta: "r2", mark },
+    { mark },
+    { meta: "r1", mark: { at: 1.5, checked: 1800 } },
+    { meta: "r1" },
+  ]) {
+    idb.seed("meta", [scope, "mark"], beside);
+    await expect(storage.read()).resolves.toEqual({
+      participation: { roots: new Map() },
+      events: [],
+      structure: none,
+      complete: true,
+    });
+  }
+  idb.seed("meta", [scope, "mark"], { meta: "r1", mark });
+  await expect(storage.read()).resolves.toMatchObject({ mark });
 });
 
 it("two interleaved saves leave exactly the last writer's events and meta", async () => {
@@ -364,21 +363,38 @@ it("two interleaved saves leave exactly the last writer's events and meta", asyn
     roots: new Map([["c0:later", { at: 2000 }]]),
   };
   await Promise.all([
-    first.save({ participation: threads, events: [a, b], structure: none }),
-    second.save({ participation: later, events: [b, c], structure: none }),
+    first.save({
+      participation: threads,
+      events: [a, b],
+      structure: none,
+      complete: true,
+    }),
+    second.save({
+      participation: later,
+      events: [b, c],
+      structure: none,
+      complete: true,
+    }),
   ]);
   await expect(first.read()).resolves.toEqual({
     participation: later,
     events: [b, c].map(wire),
     structure: none,
+    complete: true,
   });
   // A window's earlier save is no guide to what the partition holds now.
-  await first.save({ participation: threads, events: [a], structure: none });
+  await first.save({
+    participation: threads,
+    events: [a],
+    structure: none,
+    complete: true,
+  });
   expect(idb.keys("events")).toEqual([[scope, a.id]]);
   await expect(second.read()).resolves.toEqual({
     participation: threads,
     events: [wire(a)],
     structure: none,
+    complete: true,
   });
 });
 
@@ -392,20 +408,26 @@ it("a purge clears only that partition", async () => {
       participation: threads,
       events: [item],
       structure: none,
+      complete: true,
     });
   await browserUnreadStorage(scope).save({
     participation: threads,
     events: [event(), event()],
     structure: none,
+    complete: true,
   });
   await purgeUnreadStorage(scope);
   await expect(browserUnreadStorage(scope).read()).resolves.toBeUndefined();
   expect(idb.keys("events").map(([partition]) => partition)).toEqual(others);
+  expect(idb.keys("meta")).not.toContainEqual([scope, "mark"]);
+  for (const other of others)
+    expect(idb.keys("meta")).toContainEqual([other, "mark"]);
   for (const [other, item] of kept)
     await expect(browserUnreadStorage(other).read()).resolves.toEqual({
       participation: threads,
       events: [wire(item)],
       structure: none,
+      complete: true,
     });
 });
 
@@ -415,6 +437,7 @@ it("a window that read before a purge cannot save the record back; a session sta
     participation: threads,
     events,
     structure: none,
+    complete: true,
   });
   // Another window's session for the community, live since before the leave.
   const stale = browserUnreadStorage(scope);

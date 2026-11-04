@@ -858,17 +858,18 @@ it.each(["clear", "dispose", "revoke", "join"])(
       h.receive([roster(h.relay, "new-room", [h.viewer.pubkey], 20)]);
     else h.receive([roster(h.relay, "other", [], 20)]);
     held.release();
-    await repair;
     if (boundary === "clear" || boundary === "dispose") {
+      await repair;
       expect(windows()).toHaveLength(2);
       expect(h.snapshot().observedCount).toBeNull();
       return;
     }
-    // The abandoned read starts over against the current membership.
+    // The abandoned read starts over against the current membership once
+    // the late chunks have landed, and the launch's wait settles with it.
     await vi.waitFor(() => expect(windows()).toHaveLength(4));
     expect(h.snapshot().observedCount).toBeNull();
     fresh.release();
-    await h.session.unread.ensure();
+    await repair;
     const reread = windows().slice(2).flat();
     if (boundary === "join") {
       expect(reread).toContain("new-room");
@@ -953,7 +954,7 @@ it("the recovery tick repairs unread only as a slow backstop after a connection'
         : answer(filters, signal),
     );
     await h.session.unread.ensure();
-    const evidence = () => tickReads(h).evidence;
+    const evidence = () => h.trace.filter(({ kind }) => kind === 9).length;
     const before = evidence();
     h.reconnect();
     await vi.waitFor(() => expect(evidence()).toBe(before + 1));
@@ -1101,7 +1102,7 @@ function tickReads(h: ReturnType<typeof setup>) {
     h.query.mock.calls.filter(([filters]) => filters[0] && match(filters[0]))
       .length;
   return {
-    // A channel read, not a lookup by ID or a thread read.
+    // A channel read (full or delta), not a lookup by ID or a thread read.
     evidence: count(
       (filter) =>
         !!filter["#h"] &&
@@ -1150,24 +1151,18 @@ it("a covered reconnect pays the drop's debt: the next recovery tick reads nothi
   }
 });
 
-it("a pass that drops a window chunk leaves unread owed: the next recovery tick reads it again, not the 15-minute backstop, and the tick after that reads nothing", async () => {
+it("a pass that drops a delta chunk leaves unread owed: the next recovery tick reads it again, not the 15-minute backstop, and the tick after that reads nothing", async () => {
   vi.useFakeTimers({ toFake: ["Date"], now: 1_700_000_000_000 });
   try {
-    // Two window requests: the viewer's page with 127 of the roster's
-    // windows, then the other two windows on their own.
+    // Two delta chunks: 128 of the roster's channels, then the other one.
     const h = setup(129);
     const answer = h.query.getMockImplementation();
     assert(answer);
     let refuse = false;
-    const lastChunk = (filters: readonly ReadFilter[]) =>
-      filters.length > 0 &&
-      filters.every(
-        (filter) =>
-          filter["#h"]?.length === 1 &&
-          filter.since !== undefined &&
-          !filter["#e"] &&
-          !filter.authors,
-      );
+    const lastChunk = ([filter]: readonly ReadFilter[]) =>
+      !!filter?.kinds?.includes(9) &&
+      !!filter.kinds.includes(5) &&
+      filter["#h"]?.length === 1;
     h.query.mockImplementation(async (filters, signal) => {
       if (filters[0]?.kinds?.includes(39002))
         return h.ids.flatMap((id) => [
@@ -1182,26 +1177,26 @@ it("a pass that drops a window chunk leaves unread owed: the next recovery tick 
       h.query.mock.calls.filter(([filters]) => lastChunk(filters)).length;
     await h.session.unread.ensure();
     h.reconnect();
-    await vi.waitFor(() => expect(asked()).toBe(2));
+    await vi.waitFor(() => expect(asked()).toBe(1));
     await vi.waitFor(() =>
       expect(h.session.unread.sync().status).toBe("reconciled"),
     );
     await h.session.unread.ensure();
     // A covered reconnect resumes the markers, so only the evidence is
-    // owed, and its last window request fails twice and is dropped.
+    // owed, and its last chunk fails twice and is dropped.
     refuse = true;
     h.reconnectCovered();
-    await vi.waitFor(() => expect(asked()).toBe(4));
+    await vi.waitFor(() => expect(asked()).toBe(3));
     await h.session.unread.ensure();
     expect(h.session.unread.inbox()).toMatchObject({
       freshness: "observed",
       partial: true,
     });
-    // A minute later the relay answers, and the tick reads it again.
+    // A minute later the relay answers, and the tick reads the chunk again.
     refuse = false;
     vi.setSystemTime(Date.now() + 60_000);
     h.recover();
-    await vi.waitFor(() => expect(asked()).toBe(5));
+    await vi.waitFor(() => expect(asked()).toBe(4));
     await h.session.unread.ensure();
     expect(h.session.unread.inbox().partial).toBeUndefined();
     // Paid, the next tick waits for the backstop. A sync settles after any
@@ -1235,7 +1230,7 @@ it("a covered reconnect does not postpone the recovery tick's full unread repair
     await h.session.unread.ensure();
     // A full repair reads the read-state snapshot; a covered one resumes it.
     const snapshots = () => h.trace.filter(({ kind }) => kind === 30078).length;
-    const evidence = () => tickReads(h).evidence;
+    const evidence = () => h.trace.filter(({ kind }) => kind === 9).length;
     h.reconnect();
     await vi.waitFor(() => expect(snapshots()).toBe(2));
     const repaired = Date.now();
@@ -1270,14 +1265,21 @@ it("a reconnect repair in which nothing lands keeps the observation stale instea
   });
   const count = h.query.mock.calls.length;
   h.reconnect();
-  // The window request and the roster sample beside it are each read twice,
-  // then dropped; nothing was observed.
+  // The first pass confirmed a mark, so the reconnect's reads only the
+  // delta since it: read twice, then dropped.
+  const delta = [
+    expect.objectContaining({
+      kinds: expect.arrayContaining([9, 40002, 40008, 40003, 5, 9005]),
+      "#h": ["other"],
+    }),
+  ];
   await vi.waitFor(() =>
     expect(
       h.query.mock.calls
         .slice(count)
-        .filter(([filters]) => filters[0]?.kinds?.includes(9)),
-    ).toHaveLength(4),
+        .filter(([filters]) => filters[0]?.kinds?.includes(9))
+        .map(([filters]) => filters),
+    ).toEqual([delta, delta]),
   );
   await vi.waitFor(() =>
     expect(h.session.unread.inbox()).toMatchObject({
@@ -1286,6 +1288,12 @@ it("a reconnect repair in which nothing lands keeps the observation stale instea
       error: "Relay read timed out",
     }),
   );
+  // Nothing was observed, so no read of edits and deletions follows.
+  expect(
+    h.query.mock.calls
+      .slice(count)
+      .filter(([filters]) => filters[0]?.kinds?.join() === "40003,5,9005"),
+  ).toEqual([]);
   expect(h.snapshot()).toMatchObject({ observedCount: 1, freshness: "stale" });
   expect(h.session.unread.inbox().partial).toBeUndefined();
 });
@@ -1482,8 +1490,10 @@ it("explicit refresh bypasses optional profiles for both markers and evidence", 
   try {
     await h.session.unread.refresh();
     expect(h.profileSignals[0]?.aborted).toBe(false);
+    // The refresh's sample confirms the mark again once the edits and
+    // deletions since the first repair's are read.
     expect(h.trace.map(({ kind }) => kind)).toEqual([
-      30078, 9, 9, 0, 30078, 9, 9,
+      30078, 9, 9, 0, 30078, 9, 9, 40003,
     ]);
   } finally {
     release();
