@@ -1014,6 +1014,102 @@ it("retains View only when link enqueue fails and retries just the link", async 
   );
 });
 
+it.each([false, true])(
+  "cancelling a checked share ends its toast attempt before sharing again (different target: %s)",
+  async (differentTarget) => {
+    const t = fixture(true);
+    const other = "33333333-3333-4333-8333-333333333333";
+    if (differentTarget) t.addChannel(other, "Review");
+    await t.ready();
+    const user = userEvent.setup();
+    t.mount();
+    await user.click(screen.getByRole("button", { name: "Access" }));
+    const dialog = screen.getByRole("dialog", { name: "Share access" });
+    await user.click(await findDestination(user, dialog));
+    t.loseDetailsResponse(true);
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Share",
+      }),
+    );
+    const check = await within(dialog).findByRole("button", {
+      name: "Check access and share Planning",
+    });
+    t.loseDetailsResponse(false);
+    await user.click(check);
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    const name = differentTarget ? "Review" : "Planning";
+    if (differentTarget) {
+      await user.clear(search(dialog));
+      await user.type(search(dialog), name);
+    }
+    await user.click(
+      await within(dialog).findByRole("button", { name: `Share ${name}` }),
+    );
+    const confirmation = await screen.findByRole("alertdialog");
+    expect(confirmation).toHaveTextContent("This chat is already View only.");
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Share" }),
+    );
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
+    );
+    expect(t.published[1]?.tags).toContainEqual([
+      "h",
+      differentTarget ? other : destination,
+    ]);
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      `Shared in ${name}`,
+      "success",
+      undefined,
+    );
+  },
+);
+
+it("a different target after link enqueue rejection starts a new toast attempt", async () => {
+  const t = fixture(true);
+  const other = "33333333-3333-4333-8333-333333333333";
+  t.addChannel(other, "Review");
+  await t.ready();
+  vi.spyOn(t.session.messages, "send").mockImplementationOnce(() => {
+    throw new Error("Link unavailable");
+  });
+  const user = userEvent.setup();
+  t.mount();
+  await user.click(screen.getByRole("button", { name: "Access" }));
+  const dialog = screen.getByRole("dialog", { name: "Share access" });
+  await user.click(await findDestination(user, dialog));
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Share",
+    }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "Link unavailable",
+  );
+  await user.clear(search(dialog));
+  await user.type(search(dialog), "Review");
+  await user.click(
+    await within(dialog).findByRole("button", { name: "Share Review" }),
+  );
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Share",
+    }),
+  );
+  await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  expect(notify).toHaveBeenCalledExactlyOnceWith(
+    "Shared in Review",
+    "success",
+    undefined,
+  );
+});
+
 it.each(["abort", "unmount"] as const)(
   "stops before posting if the access dialog's visit ends during an access save (%s)",
   async (mode) => {

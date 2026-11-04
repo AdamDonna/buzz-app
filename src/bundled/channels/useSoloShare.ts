@@ -176,6 +176,7 @@ export function useSoloShare({
       return;
     }
     running.current = true;
+    if (target !== destination) accessChanged.current = false;
     setDestination(target);
     setFailed(false);
     setBusy(true);
@@ -262,7 +263,10 @@ export function useSoloShare({
   return {
     eligible,
     confirmation,
-    cancelConfirmation: () => setConfirmation(undefined),
+    cancelConfirmation: () => {
+      accessChanged.current = false;
+      setConfirmation(undefined);
+    },
     confirm: () => submit(destination, confirmation),
     checkRequired,
     busy,
