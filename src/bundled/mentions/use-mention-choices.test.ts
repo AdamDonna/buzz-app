@@ -71,7 +71,7 @@ it.each([
     expect(fake).toMatchObject({
       label: "fname",
       recipient: { name: "fname" },
-      fullName: "Fake Name",
+      otherName: "Fake Name",
     });
     names.dispose();
   },

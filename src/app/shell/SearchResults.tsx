@@ -77,6 +77,7 @@ import {
 } from "./parseSearchOperators";
 import { avatarMedia } from "../../shared/avatar-source";
 import { useVerifiedNames } from "../../features/profiles/useVerifiedNames";
+import { verifiedLabel } from "../../features/profiles/name-preference";
 import { sortParticipantNames } from "../../features/identity-names/participant-order";
 
 function conversationName(
@@ -606,7 +607,7 @@ export function SearchResults({
       sources.set(
         person.pubkey,
         found
-          ? { ...source, name: found.displayName, username: found.username }
+          ? { ...source, name: verifiedLabel(found), username: found.username }
           : source,
       );
     }

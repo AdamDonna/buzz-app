@@ -161,7 +161,7 @@ export function MentionCompletion({
     );
     const available = [
       ...matching.map(
-        ({ recipient, label, elsewhere, disabled, fullName }) => ({
+        ({ recipient, label, elsewhere, disabled, otherName }) => ({
           disabled,
           canSelect: (key: string) =>
             (key !== " " || !teams.blocksSpace) &&
@@ -170,9 +170,9 @@ export function MentionCompletion({
           label,
           detail:
             disabled ??
-            // A verified full name sits beside the detail.
+            // The other verified name sits beside the detail.
             [
-              fullName !== label ? fullName : undefined,
+              otherName,
               memberKeys.has(recipient.pubkey)
                 ? recipient.pubkey
                 : inviteAgents

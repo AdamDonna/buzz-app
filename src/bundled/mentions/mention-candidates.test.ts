@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import { directoryChanges, mentionCandidates } from "./mention-candidates";
 import type { ComposerSession } from "../../features/messages/composer-session";
+import {
+  type NamePreference,
+  setNamePreference,
+} from "../../features/profiles/name-preference";
 
 const key = (n: number) => n.toString(16).padStart(64, "0");
 const members = [1, 2, 3, 4, 5].map(key);
@@ -97,31 +101,56 @@ it("directory people that change nothing can be left out", () => {
     );
 });
 
-it("carries verified full names and the profile names a verified person was found by", () => {
-  const session = fresh();
-  const verifiedProfiles = new Map<string, unknown>([
-    ...profiles,
-    [key(4), { name: "cy", verified: { fullName: "Cy Test" } }],
-  ]);
-  Object.assign(session, { profiles: { snapshot: () => verifiedProfiles } });
-  const found = rows(
-    [
-      {
-        pubkey: key(8),
-        name: "fname",
-        fullName: "Fake Name",
-        profileNames: ["Fake"],
-      },
-    ],
-    session,
-  );
-  const byKey = new Map(found.map((row) => [row.recipient.pubkey, row]));
-  expect(byKey.get(key(8))).toMatchObject({
-    recipient: { name: "fname" },
-    fullName: "Fake Name",
-    aliases: ["fname", "Fake Name", "Fake"],
-  });
-  // A member's full name comes from the shared verified profile.
-  expect(byKey.get(key(4))?.fullName).toBe("Cy Test");
-  expect(byKey.get(key(1))).not.toHaveProperty("fullName");
+it("shows the verified name each row is not, and matches every verified name", () => {
+  const found = (preference: NamePreference) => {
+    setNamePreference(preference);
+    const session = fresh();
+    const verifiedProfiles = new Map<string, unknown>([
+      ...profiles,
+      [
+        key(4),
+        {
+          name: preference === "full-name" ? "Cy Test" : "cy",
+          verified: { displayName: "cy", username: "cy", fullName: "Cy Test" },
+        },
+      ],
+    ]);
+    Object.assign(session, { profiles: { snapshot: () => verifiedProfiles } });
+    const rowsFound = rows(
+      [
+        {
+          pubkey: key(8),
+          name: preference === "full-name" ? "Fake Name" : "fname",
+          username: "fname",
+          fullName: "Fake Name",
+          profileNames: ["Fake"],
+        },
+      ],
+      session,
+    );
+    return new Map(rowsFound.map((row) => [row.recipient.pubkey, row]));
+  };
+  try {
+    const byUsername = found("username");
+    expect(byUsername.get(key(8))).toMatchObject({
+      recipient: { name: "fname" },
+      otherName: "Fake Name",
+      aliases: ["fname", "Fake Name", "Fake"],
+    });
+    // A member's names come from the shared verified profile.
+    expect(byUsername.get(key(4))?.otherName).toBe("Cy Test");
+    expect(byUsername.get(key(1))).not.toHaveProperty("otherName");
+    const byFullName = found("full-name");
+    expect(byFullName.get(key(8))).toMatchObject({
+      recipient: { name: "Fake Name" },
+      otherName: "@fname",
+      aliases: ["Fake Name", "fname", "Fake"],
+    });
+    expect(byFullName.get(key(4))).toMatchObject({
+      otherName: "@cy",
+      aliases: expect.arrayContaining(["Cy Test", "cy"]),
+    });
+  } finally {
+    setNamePreference("username");
+  }
 });

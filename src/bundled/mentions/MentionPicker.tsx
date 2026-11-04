@@ -388,7 +388,7 @@ export function MentionPicker({
                   agent,
                   elsewhere,
                   disabled: reason,
-                  fullName,
+                  otherName,
                 }) => {
                   // Each addressed agent's row shows a check; fill is only
                   // the keyboard and pointer highlight.
@@ -422,12 +422,12 @@ export function MentionPicker({
                             />
                           </span>
                           {reason && <small>{reason}</small>}
-                          {((fullName && fullName !== label) ||
+                          {(otherName ||
                             !members?.includes(recipient.pubkey)) && (
                             <small className="text-caption text-subtle">
-                              {/* A verified full name sits beside the detail. */}
+                              {/* The other verified name sits beside the detail. */}
                               {[
-                                fullName !== label ? fullName : undefined,
+                                otherName,
                                 members?.includes(recipient.pubkey)
                                   ? undefined
                                   : inviteAgents

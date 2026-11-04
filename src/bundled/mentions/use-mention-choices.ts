@@ -1,3 +1,4 @@
+import { useNamePreference } from "../../features/profiles/name-preference";
 import { useMentionDirectory } from "./useMentionDirectory";
 import { useMentionArchives } from "../../features/messages/use-mention-archives";
 import {
@@ -294,9 +295,10 @@ export function useMentionChoices(
     key: query,
     settled: !directory.loading,
   });
+  const preference = useNamePreference();
   const searched = useMemo(
-    () => withVerifiedNames(directory.people, verified, profiles),
-    [directory.people, verified, profiles],
+    () => withVerifiedNames(directory.people, verified, profiles, preference),
+    [directory.people, verified, profiles, preference],
   );
   const people = useMemo(() => {
     if (!carried.length) return searched;

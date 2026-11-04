@@ -7,6 +7,7 @@ import {
 import { useProfileMessage } from "./useProfileMessage";
 import {
   useState,
+  useSyncExternalStore,
   useEffect,
   useRef,
   useId,
@@ -21,6 +22,13 @@ import type { RelaySession } from "../relay/session";
 import { UserStatusDisplay } from "../user-status/StatusDisplay";
 import { ProfileBackdrop } from "./ProfileBackdrop";
 import styles from "./ProfilePeek.module.css";
+import {
+  otherVerifiedName,
+  useNamePreference,
+  verifiedLabel,
+} from "./name-preference";
+
+const noSubscription = () => () => {};
 
 type ProfilePeekProps = {
   trigger: ReactElement;
@@ -51,6 +59,14 @@ export function ProfilePeek({
   onFocusChange,
 }: ProfilePeekProps) {
   const [open, setOpen] = useState(false);
+  const verified = useSyncExternalStore(
+    session?.profiles.subscribe ?? noSubscription,
+    () => session?.profiles.snapshot().get(pubkey)?.verified,
+  );
+  const preference = useNamePreference();
+  const otherName =
+    verified &&
+    otherVerifiedName(verifiedLabel(verified, preference), verified);
   const [hoveredAction, setHoveredAction] = useState<"profile" | "message">();
   const profileButton = useRef<HTMLButtonElement>(null);
   const returningFromProfile = useRef<"pending" | "returned" | null>(null);
@@ -213,6 +229,9 @@ export function ProfilePeek({
               {agent && <RobotIcon aria-label="Agent" size={14} />}
               {name}
             </div>
+            {otherName && (
+              <div className="text-caption text-secondary">{otherName}</div>
+            )}
             {session && (
               <UserStatusDisplay
                 session={session}
