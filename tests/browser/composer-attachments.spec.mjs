@@ -248,6 +248,17 @@ test("a sent attachment keeps uploading after navigation and publishes to its or
         exact: true,
       }),
     ).not.toHaveAttribute("aria-valuenow");
+    // Browser-only geometry: Cancel ends the row whatever the text's length,
+    // so it stays put as the text changes.
+    const cancel = general.getByRole("button", {
+      name: "Cancel upload to #General",
+      exact: true,
+    });
+    const [row, button] = await Promise.all([
+      cancel.locator("xpath=..").boundingBox(),
+      cancel.boundingBox(),
+    ]);
+    expect(row.x + row.width - (button.x + button.width)).toBeCloseTo(0, 0);
     await expect(general.getByRole("textbox")).toHaveText("");
     await expect(general.getByText("held.txt")).toHaveCount(0);
 

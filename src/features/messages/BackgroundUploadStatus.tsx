@@ -43,7 +43,9 @@ export function BackgroundUploadStatus({
     <>
       {uploads.destination && (
         <div className={styles.backgroundUpload}>
-          <span id={phase} role="status" className="min-w-0 truncate">
+          {/* The text takes the spare width, so the bar and Cancel stay put
+              as it changes. */}
+          <span id={phase} role="status" className="min-w-0 flex-1 truncate">
             {`${uploads.phase} to ${uploads.destination.name}`}
             {uploads.others > 0 && ` and ${uploads.others} more`}
           </span>
