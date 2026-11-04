@@ -522,7 +522,9 @@ plugin submissions; the plugin decides what is still worth announcing.
 A page may supply `icon`, a `data:image/<subtype>[;params],<payload>` URL; the
 scheme and type match case-insensitively. Search Buzz and the page navigation
 render it as a decorative image, with the generic icon when it is absent or fails
-to load. Registration drops any other value with one console warning that names
+to load. An SVG that paints with `currentColor` is drawn as a mask in the text
+colour, so a monochrome glyph follows the theme and hover and selected states
+like the host's icons; any other image keeps its own colours. Registration drops any other value with one console warning that names
 the page; the page still registers and opens. Bundled pages keep their host icons.
 External plugins ship no separate assets, so inline the art into `plugin.js`, for
 example with a bundler `?inline` import.
