@@ -4203,9 +4203,8 @@ it("answers the owner and agents the owner attested, nobody else", async () => {
   ).toBe(false);
 });
 
-it("accepts relay workflow delegation only from this agent's owner", async () => {
+it("does not treat relay workflow attribution as owner authorization", async () => {
   const relay = keypair();
-  const workflow = { authority: relay.pubkey, agent: bot };
   const prompt = eventDto(
     signed(relay, {
       kind: 9,
@@ -4217,8 +4216,7 @@ it("accepts relay workflow delegation only from this agent's owner", async () =>
       ],
     }),
   );
-  expect(await fromOwner(prompt, viewer, workflow)).toBe(true);
-  expect(await fromOwner(prompt, other, workflow)).toBe(false);
+  expect(await fromOwner(prompt, other)).toBe(false);
   expect(await fromOwner(prompt, viewer)).toBe(false);
 });
 

@@ -1034,9 +1034,10 @@ saved-community membership; the selected server receives a short-lived token
 scoped to its origin. The scheme signs a fresh 60-second `get` token per request
 and forwards only a bounded single `Range`; non-image/video/audio types (and SVG)
 are served with download disposition and `nosniff`. The main webview does not navigate to protected media for downloads: a narrowly scoped native command authenticates the bounded media GET, saves to the OS Downloads directory without replacing existing files, and rejects unsafe filenames. `relay_upload`
-hashes, signs (`upload` + `x`) and sends the exact bytes JavaScript passes it;
-shared TypeScript (`hostUpload`) owns limits, error mapping and descriptor
-validation. JavaScript never signs kind 24242. Packaged HEIC and video
+hashes, signs (`upload` + `x`) and sends the exact bytes JavaScript passes it,
+then requires the successful response's SHA-256 and size to match those bytes.
+Shared TypeScript (`hostUpload`) owns limits, error mapping and the remaining
+descriptor validation. JavaScript never signs kind 24242. Packaged HEIC and video
 preparation uses fixed demuxers and ffmpeg arguments in the native host, then
 hashes and uploads only the converted bytes; JavaScript receives the descriptor,
 not the prepared file. ffmpeg must be installed on the computer.

@@ -861,6 +861,12 @@ for editor/Todos bases and setup preconditions. Setup delivery and its separate
 exact-ID confirmation both use writer-backed reads; unknown seed outcomes are
 checked without automatically replaying the seed. Template copies explicitly opt
 out and remain replica-eligible; Channel Settings no longer reads a Canvas preview.
+The session Canvas owner checks returned events independently of the relay's query
+filter: kind 40100 and exactly one two-field `h` tag naming the requested channel.
+It ignores mismatched events before selecting the current head; an invalid newer
+event cannot hide a valid returned head. History rejects pages containing invalid
+coordinates. These checks precede Solo's separate owner/agent-attestation check,
+so an authentic signature on unrelated content cannot make it Canvas instructions.
 Editor/Todos saves carry `expected-revision=<loaded
 head id>` (or `none` when absent); template seeds carry `none`. On relays supporting
 Canvas compare-and-swap, stale preconditions are refused atomically before mutation.

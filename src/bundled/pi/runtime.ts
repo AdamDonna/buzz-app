@@ -28,7 +28,7 @@ import {
   READ_TIMEOUT_MS,
 } from "../../features/agent-harness/core-memory";
 import { readProject } from "../../features/agent-harness/project";
-import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import { fromOwner } from "../../features/agents/owner-attestation";
 import { type AgentKey, pubkeyOf } from "../../features/agents/membership";
 import { sessionPrompts } from "../../features/agents/session-prompts";
 import { localStore, type AgentStore } from "../../features/agents/store";
@@ -546,11 +546,7 @@ export class PiRuntime {
     // Pi runs commands as you; mentions need owner or delegated authority.
     if (
       trigger.type === "mention" &&
-      !(await fromOwner(
-        trigger.event,
-        agent.owner,
-        workflowOf(this.reads(agent.key), agent.pubkey),
-      ))
+      !(await fromOwner(trigger.event, agent.owner))
     )
       return ignored?.();
     signal.throwIfAborted();

@@ -2979,15 +2979,31 @@ async fn upload(
     upload_file(host, None, url, kind, path, hash, progress).await
 }
 
+fn upload_descriptor(bytes: &[u8]) -> serde_json::Value {
+    let hash = format!("{:x}", Sha256::digest(bytes));
+    serde_json::json!({
+        "url": format!("/media/{hash}"),
+        "type": "application/octet-stream",
+        "sha256": hash,
+        "size": bytes.len(),
+    })
+}
+
+fn upload_reply(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
 #[tokio::test]
 async fn upload_signs_the_exact_bytes_it_sends() {
-    let (base, task) = fixture_server(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".into(),
-    );
-    let url = base.join("/upload").unwrap();
     // ASCII: the fixture server compares lengths on decoded text.
     let body = b"PNG fixture bytes".to_vec();
     let hash = format!("{:x}", Sha256::digest(&body));
+    let descriptor = upload_descriptor(&body).to_string();
+    let (base, task) = fixture_server(upload_reply("201 Created", &descriptor));
+    let url = base.join("/upload").unwrap();
     let result = upload(
         &IdentityHost::fixture(),
         url.clone(),
@@ -2997,7 +3013,10 @@ async fn upload_signs_the_exact_bytes_it_sends() {
     )
     .await
     .unwrap();
-    assert_eq!((result.status, result.body.as_str()), (200, "{}"));
+    assert_eq!(
+        (result.status, result.body.as_str()),
+        (201, descriptor.as_str())
+    );
     let (headers, sent) = task.join().unwrap();
     assert_eq!(sent.as_bytes(), body);
     assert!(headers.starts_with("PUT /upload "));
@@ -3019,10 +3038,68 @@ async fn upload_signs_the_exact_bytes_it_sends() {
 }
 
 #[tokio::test]
+async fn upload_rejects_descriptors_for_different_bytes() {
+    let body = b"abc";
+    let descriptor = upload_descriptor(body);
+    let mut wrong_size = descriptor.clone();
+    wrong_size["size"] = serde_json::json!(4);
+    let mut string_size = descriptor.clone();
+    string_size["size"] = serde_json::json!("3");
+    let mut missing_hash = descriptor.clone();
+    missing_hash.as_object_mut().unwrap().remove("sha256");
+    let mut missing_size = descriptor;
+    missing_size.as_object_mut().unwrap().remove("size");
+    for response in [
+        upload_descriptor(b"xyz").to_string(),
+        wrong_size.to_string(),
+        string_size.to_string(),
+        missing_hash.to_string(),
+        missing_size.to_string(),
+        "null".into(),
+        "not JSON".into(),
+    ] {
+        let (base, task) = fixture_server(upload_reply("200 OK", &response));
+        let result = upload(
+            &IdentityHost::fixture(),
+            base.join("/upload").unwrap(),
+            None,
+            body.to_vec(),
+            None,
+        )
+        .await;
+        assert_eq!(task.join().unwrap().1.as_bytes(), body);
+        assert!(result.is_err(), "accepted upload response: {response}");
+    }
+}
+
+#[tokio::test]
+async fn upload_preserves_relay_failure_responses() {
+    for (status, code) in [("401 Unauthorized", 401), ("413 Content Too Large", 413)] {
+        let body = r#"{"code":"denied"}"#;
+        let (base, task) = fixture_server(upload_reply(status, body));
+        let result = upload(
+            &IdentityHost::fixture(),
+            base.join("/upload").unwrap(),
+            None,
+            b"abc".to_vec(),
+            None,
+        )
+        .await
+        .unwrap();
+        task.join().unwrap();
+        assert_eq!((result.status, result.body.as_str()), (code, body));
+        assert_eq!(result.headers["content-type"], "application/json");
+    }
+}
+
+#[tokio::test]
 async fn upload_reports_bytes_handed_to_the_connection() {
-    let (base, task) = fixture_server(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".into(),
-    );
+    // Four 64 KiB chunks, ASCII for the fixture server's text comparison.
+    let body = vec![b'a'; 3 * UPLOAD_CHUNK + 1];
+    let (base, task) = fixture_server(upload_reply(
+        "200 OK",
+        &upload_descriptor(&body).to_string(),
+    ));
     let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = reports.clone();
     let channel = tauri::ipc::Channel::new(move |message| {
@@ -3034,8 +3111,6 @@ async fn upload_reports_bytes_handed_to_the_connection() {
             .push(serde_json::from_str::<serde_json::Value>(&json).unwrap());
         Ok(())
     });
-    // Four 64 KiB chunks, ASCII for the fixture server's text comparison.
-    let body = vec![b'a'; 3 * UPLOAD_CHUNK + 1];
     let result = upload(
         &IdentityHost::fixture(),
         base.join("/upload").unwrap(),
@@ -3576,10 +3651,9 @@ async fn converted_spool_streams_signed_output_then_removes_both_files() {
                     .parse()
                     .unwrap();
                 if bytes.len() == end + 4 + size {
+                    let descriptor = upload_descriptor(&bytes[end + 4..]).to_string();
                     socket
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
-                        )
+                        .write_all(upload_reply("200 OK", &descriptor).as_bytes())
                         .unwrap();
                     return (header, bytes[end + 4..].to_vec());
                 }
@@ -3604,6 +3678,7 @@ async fn converted_spool_streams_signed_output_then_removes_both_files() {
     assert!(header.lines().any(|line| line == "content-type: video/mp4"));
     let hash = format!("{:x}", Sha256::digest(&body));
     assert_eq!(tag(&blossom_event(&header), "x"), [hash.as_str()]);
+    assert_eq!(response.body, upload_descriptor(&body).to_string());
     assert!(!path.exists());
 }
 
@@ -3937,10 +4012,11 @@ mod federated_header {
 
     async fn uploads(required: bool) {
         let community = community(required).await;
-        let server = community.serve(vec![reply("200 OK", "{}")]);
+        let bytes = b"PNG fixture bytes";
+        let server = community.serve(vec![reply("200 OK", &upload_descriptor(bytes).to_string())]);
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("source");
-        std::fs::write(&path, b"PNG fixture bytes").unwrap();
+        std::fs::write(&path, bytes).unwrap();
         let hash = upload_spool::hash_file(&path).unwrap();
         let response = upload_file(
             &community.host,

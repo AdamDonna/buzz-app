@@ -1487,7 +1487,7 @@ async fn upload_file_authorized(
             .timeout(Duration::from_secs(600))
             .header("Authorization", auth)
             .header("Content-Type", kind)
-            .header("X-SHA-256", hash)
+            .header("X-SHA-256", &hash)
             .header(reqwest::header::CONTENT_LENGTH, size)
             .body(reqwest::Body::wrap_stream(file_chunks(
                 file,
@@ -1517,7 +1517,20 @@ async fn upload_file_authorized(
         {
             return Err(reason.into());
         }
-        read_response(response, 8192).await
+        let response = read_response(response, 8192).await?;
+        if (200..300).contains(&response.status) {
+            // Only this host knows the final bytes when preparation converted
+            // the source. Bind the returned descriptor before JavaScript can
+            // use it in the user's signed message.
+            let descriptor: serde_json::Value = serde_json::from_str(&response.body)
+                .map_err(|_| "Upload response is not a valid descriptor")?;
+            if descriptor["sha256"].as_str() != Some(hash.as_str())
+                || descriptor["size"].as_u64() != Some(size as u64)
+            {
+                return Err("Upload response does not match uploaded bytes".into());
+            }
+        }
+        Ok(response)
     };
     if let (Some(fi), Some(assertion)) = (authorization.fi, authorization.assertion) {
         fi.during_admitted_operation(host, assertion, true, operation)

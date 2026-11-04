@@ -235,6 +235,9 @@ available rather than silently discarding it.
   uses. Available types and models depend on the platform, active plugins, and
   provider setup. Tools and connections depend on that agent's configuration;
   naming a service or adding instructions does not connect it.
+- Workflow messages do not automatically start or steer local Claude, Codex,
+  Goose, or Pi agents. To have one act on a workflow result, send it a direct
+  request explaining what to do with that result.
 - **Agents** is where people create and manage agents. For supported types,
   open an agent there and use **Identity → Instructions**. Opening its avatar or
   name in a conversation shows its profile, where **Settings → Instructions**
