@@ -987,6 +987,36 @@ it("keeps a saved thinking level changeable without Claude's model list", async 
   expect(save).toHaveBeenCalledWith(DEFAULT_CONFIG);
 });
 
+it("disables create-time Thinking when Claude model discovery fails", async () => {
+  const { type, spawn } = installed();
+  const Model = type.CreateModel;
+  const Thinking = type.CreateThinking;
+  if (!Model || !Thinking) throw new Error("Missing create controls");
+  const original = spawn.getMockImplementation();
+  if (!original) throw new Error("Missing process fixture");
+  spawn.mockImplementation(async (id, options = {}) => {
+    if (options.args?.includes("--input-format"))
+      throw new Error("model catalog unavailable");
+    return original(id, options);
+  });
+  const config = { ...DEFAULT_CONFIG, model: "sonnet", effort: "high" };
+  const onChange = vi.fn();
+  render(
+    <>
+      <Model config={config} onChange={onChange} disabled={false} />
+      <Thinking config={config} onChange={onChange} disabled={false} />
+    </>,
+  );
+  const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "model catalog unavailable",
+  );
+  expect(thinking).toBeDisabled();
+  expect(thinking).toHaveTextContent("High");
+  expect(thinking).not.toHaveTextContent("High (unavailable)");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 it("keeps Save focused while saving, and lets a failed save be retried", async () => {
   const Settings = tab(installed().type, 0);
   let fail: (error: Error) => void = () => undefined;
@@ -1053,6 +1083,78 @@ it("starts a new agent with finite model choices and preserves its other setting
   expect(onChange).toHaveBeenLastCalledWith({
     ...config,
     instructions: "Plan.",
+  });
+});
+
+it("uses Claude's effort catalog at creation and reopens the saved choice", async () => {
+  let releaseCatalog!: () => void;
+  const catalogReady = new Promise<void>((resolve) => {
+    releaseCatalog = resolve;
+  });
+  const loads = vi.spyOn(ClaudeSetup.prototype, "loadModels");
+  const { type } = installed({
+    catalog: { listed: true, ready: catalogReady },
+  });
+  const Thinking = type.CreateThinking;
+  const Model = type.CreateModel;
+  const Settings = tab(type, 0);
+  if (!Thinking || !Model) throw new Error("Missing create controls");
+  const config = { ...DEFAULT_CONFIG, model: "sonnet" };
+  const onChange = vi.fn();
+  const view = render(
+    <>
+      <Model config={config} onChange={onChange} disabled={false} />
+      <Thinking config={config} onChange={onChange} disabled={false} />
+    </>,
+  );
+  const control = await screen.findByRole("combobox", { name: "Thinking" });
+  try {
+    await waitFor(() => expect(loads).toHaveBeenCalled());
+    const model = await screen.findByRole("combobox", { name: "Model" });
+    await waitFor(() => expect(model).toBeDisabled());
+    expect(control).toBeDisabled();
+  } finally {
+    releaseCatalog();
+  }
+  await waitFor(() => expect(control).toBeEnabled());
+  expect(control).toHaveTextContent("Automatic · Default");
+
+  const user = userEvent.setup();
+  await user.click(control);
+  expect(
+    (await screen.findAllByRole("option")).map((option) => option.textContent),
+  ).toEqual(["Automatic · Default", "Low", "Medium", "High", "Extra high"]);
+  await user.click(screen.getByRole("option", { name: "Extra high" }));
+  expect(onChange).toHaveBeenLastCalledWith({ ...config, effort: "xhigh" });
+  view.unmount();
+
+  render(
+    <Settings
+      agent={agent({ ...config, effort: "xhigh" })}
+      save={vi.fn(async () => undefined)}
+    />,
+  );
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "Extra high",
+  );
+});
+
+it("clears a create-time Claude effort the newly selected model does not support", async () => {
+  const Model = installed().type.CreateModel;
+  if (!Model) throw new Error("Missing model control");
+  const config = { ...DEFAULT_CONFIG, model: "sonnet", effort: "xhigh" };
+  const onChange = vi.fn();
+  render(<Model config={config} onChange={onChange} disabled={false} />);
+  const control = await screen.findByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(control).toBeEnabled());
+
+  const user = userEvent.setup();
+  await user.click(control);
+  await user.click(await screen.findByRole("option", { name: "Haiku 4.5" }));
+  expect(onChange).toHaveBeenCalledWith({
+    ...config,
+    model: "haiku",
+    effort: "",
   });
 });
 
