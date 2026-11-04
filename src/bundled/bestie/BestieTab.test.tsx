@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Agent, AgentChange, Agents } from "../../features/agents/service";
 import type { RelayData } from "../../features/relay/service";
 import { readView, writeView } from "../../shared/view-state";
+import { setDefaultAgent } from "../../features/solo/default-agent";
 import { onBestieMade } from "../agents/BestieChoice";
 import { bestieTab, formerBestieTab } from "./BestieTab";
 import { validateObject } from "../../features/agents/attention";
@@ -34,18 +35,20 @@ const member = (name: string, digit: string): Agent =>
 const ada = member("Ada", "a");
 const bea = member("Bea", "b");
 
-/** Agents that save as a synced editor would: the agent's next config. */
-function host(types = ["test/echo"]) {
+/** Agents that save as a synced editor would: the agent's next config.
+ * `listed` are the agents it finds, Ada and Bea, both on this device. */
+function host(types = ["test/echo"], listed: Agent[] = [ada, bea]) {
   const save = vi.fn<Agents["save"]>(async () => {});
   const agents = {
     save,
     types: () => types.map((key) => ({ key, adopt: () => ({}) })),
-  } as unknown as Pick<Agents, "save" | "types">;
+    find: (pubkey: string) => listed.find((each) => each.pubkey === pubkey),
+  } as unknown as Pick<Agents, "save" | "types" | "find">;
   return { agents, save };
 }
 
-function community(saved: string | undefined, agents = [ada, bea]) {
-  let record = saved;
+function community(saved: string | null | undefined, agents = [ada, bea]) {
+  let record: string | null | undefined = saved;
   const choice = (agent: Agent) => ({
     pubkey: agent.pubkey,
     name: agent.name,
@@ -61,7 +64,8 @@ function community(saved: string | undefined, agents = [ada, bea]) {
   };
   const mainAgent = {
     read: vi.fn(async () => record),
-    write: vi.fn(async (agent: string) => {
+    // None reads back as a saved none, as the account's reader does.
+    write: vi.fn(async (agent: string | null) => {
       record = agent;
     }),
   };
@@ -199,6 +203,69 @@ it("puts this device back when a Change still saving fails after the panel close
   stop?.();
 });
 
+it("offers a remote agent in Change, and says what it can't do before switching", async () => {
+  const user = userEvent.setup();
+  const cara = { ...member("Cara", "c"), place: "hosted" } as Agent;
+  const { relay, mainAgent } = community(ada.pubkey, [ada, bea, cara]);
+  const Tab = bestieTab(relay, host([], [ada, bea, cara]).agents).component;
+  await act(async () => {
+    render(<Tab agent={ada} />);
+  });
+  await user.click(screen.getByRole("button", { name: "Change" }));
+  expect(await screen.findByRole("menuitem", { name: "Bea" })).toBeVisible();
+  await user.click(screen.getByRole("menuitem", { name: "Cara" }));
+  // One question: the replacement, with what a remote Bestie can't do.
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Cara your bestie?",
+  });
+  expect(confirmation).toHaveTextContent(
+    "Your existing chats with Ada will still be available in your DMs. Some bestie features aren’t available with remote agents.",
+  );
+  expect(mainAgent.write).not.toHaveBeenCalled();
+  await user.click(
+    within(confirmation).getByRole("button", { name: "Switch to Cara" }),
+  );
+  expect(mainAgent.write).toHaveBeenCalledWith(cara.pubkey);
+});
+
+it("says nothing of remote agents when switching to one on this device", async () => {
+  const user = userEvent.setup();
+  const { relay } = community(ada.pubkey);
+  const Tab = bestieTab(relay, host([]).agents).component;
+  await act(async () => {
+    render(<Tab agent={ada} />);
+  });
+  await user.click(screen.getByRole("button", { name: "Change" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Bea" }));
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Make Bea your bestie?",
+  });
+  expect(confirmation).not.toHaveTextContent("remote");
+});
+
+it("shows a remote Bestie's switches as unavailable, and saves nothing", async () => {
+  const remote = {
+    ...ada,
+    place: "hosted",
+    type: "block.builderlab/builderlab",
+  } as Agent;
+  const { relay } = community(ada.pubkey);
+  const { agents, save } = host(["block.builderlab/builderlab"], [remote, bea]);
+  const Tab = bestieTab(relay, agents).component;
+  await act(async () => {
+    render(<Tab agent={remote} />);
+  });
+  // Its instructions and timers are its provider's: nothing to switch here.
+  expect(screen.getByText("Remembers you")).toBeVisible();
+  expect(screen.queryAllByRole("switch")).toEqual([]);
+  expect(
+    screen.getAllByText("Not available with remote agents yet.").length,
+  ).toBeGreaterThan(0);
+  expect(save).not.toHaveBeenCalled();
+  // It can still stop being Bestie.
+  expect(screen.getByRole("button", { name: "Remove" })).toBeEnabled();
+});
+
 it("keeps Change unavailable while there is no other agent to choose", async () => {
   const { relay } = community(ada.pubkey, [ada]);
   const Tab = bestieTab(relay, host().agents).component;
@@ -206,6 +273,43 @@ it("keeps Change unavailable while there is no other agent to choose", async () 
     render(<Tab agent={ada} />);
   });
   expect(screen.getByRole("button", { name: "Change" })).toBeDisabled();
+});
+
+it("asks before making a remote former Bestie your Bestie again, and Cancel changes nothing", async () => {
+  const user = userEvent.setup();
+  // Saved none: there is no Bestie to replace.
+  const { relay, mainAgent } = community(null);
+  const remote = {
+    ...ada,
+    place: "elsewhere",
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  const Tab = formerBestieTab(relay, host([], [bea, remote]).agents).component;
+  await act(async () => {
+    render(<Tab agent={remote} />);
+  });
+  const again = screen.getByRole("button", { name: "Make my Bestie again" });
+  expect(again).toBeEnabled();
+  await user.click(again);
+  const ask = await screen.findByRole("alertdialog", {
+    name: "Use Ada as your bestie?",
+  });
+  expect(ask).toHaveTextContent(
+    "Some bestie features aren’t available with remote agents.",
+  );
+  await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(mainAgent.write).not.toHaveBeenCalled();
+  await user.click(again);
+  await user.click(
+    within(
+      await screen.findByRole("alertdialog", {
+        name: "Use Ada as your bestie?",
+      }),
+    ).getByRole("button", { name: "Use as bestie" }),
+  );
+  expect(mainAgent.write).toHaveBeenCalledWith(ada.pubkey);
+  await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
 });
 
 it("tells the host only when the Bestie or its community changes", async () => {
@@ -546,7 +650,12 @@ it("offers to remove a timer left without its section when undoing fails too", a
   rerender(<Tab agent={left} />);
   expect(screen.getByRole("switch", { name: "Every hour" })).not.toBeChecked();
   save.mockClear();
-  await user.click(screen.getByRole("button", { name: "Remove" }));
+  await user.click(
+    screen.getByRole("button", {
+      name: "Remove",
+      description: "Every hour's timer is still saved",
+    }),
+  );
   expect(save.mock.calls[0]).toEqual([
     ada.key,
     { attention: { [INTEREST]: null, [TIMER]: null } },
@@ -632,6 +741,104 @@ it("shows a Former Bestie tab while a former Bestie has a setting on, with a way
   await vi.waitFor(() => expect(tab.when?.(remembering)).toBe(false));
   stopMade();
   stop?.();
+});
+
+it("removes the Bestie after asking, and shows the agent as a Former Bestie", async () => {
+  const user = userEvent.setup();
+  const { relay, mainAgent } = community(ada.pubkey);
+  const agents = host().agents;
+  const tab = bestieTab(relay, agents);
+  const former = formerBestieTab(relay, agents);
+  const remembering = {
+    ...ada,
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  const stop = tab.subscribe?.(() => {});
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(true));
+  expect(former.when?.(remembering)).toBe(false);
+  const Tab = tab.component;
+  render(<Tab agent={remembering} />);
+  // A failed save says so and keeps the Bestie.
+  mainAgent.write.mockRejectedValueOnce(new Error("offline"));
+  await user.click(screen.getByRole("button", { name: "Remove" }));
+  let ask = await screen.findByRole("alertdialog", {
+    name: "Remove Ada as your Bestie?",
+  });
+  expect(ask).toHaveTextContent("Ada stays in Agents");
+  expect(ask).toHaveTextContent("Its check-ins stop.");
+  expect(ask).toHaveTextContent("memory rules and private channels stay");
+  await user.click(
+    within(ask).getByRole("button", { name: "Remove as Bestie" }),
+  );
+  expect(await within(ask).findByRole("alert")).toHaveTextContent(
+    "Removing your Bestie couldn't be saved to your account. Try again.",
+  );
+  expect(tab.when?.(ada)).toBe(true);
+  await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "Remove" }));
+  ask = await screen.findByRole("alertdialog", {
+    name: "Remove Ada as your Bestie?",
+  });
+  await user.click(
+    within(ask).getByRole("button", { name: "Remove as Bestie" }),
+  );
+  expect(mainAgent.write).toHaveBeenLastCalledWith(null);
+  await vi.waitFor(() => expect(tab.when?.(ada)).toBe(false));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  // With no Bestie known, the agent with memory on is a Former Bestie.
+  expect(former.when?.(remembering)).toBe(true);
+  expect(former.when?.(bea)).toBe(false);
+  stop?.();
+});
+
+it("shows no Former Bestie tab while the account's choice is unread or unreadable", async () => {
+  const { relay, mainAgent } = community(undefined);
+  mainAgent.read.mockRejectedValueOnce(new Error("offline"));
+  const former = formerBestieTab(relay, host().agents);
+  const remembering = {
+    ...ada,
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  const stop = former.subscribe?.(() => {});
+  await act(async () => {});
+  expect(former.when?.(remembering)).toBe(false);
+  stop?.();
+});
+
+it("shows a Former Bestie tab on an account that saved none, not on one with no record", async () => {
+  const remembering = {
+    ...ada,
+    config: { instructions: withFeature("Be brief.", memory, true) },
+  } as Agent;
+  for (const [record, shows] of [
+    [undefined, false],
+    [null, true],
+  ] as const) {
+    const { relay, mainAgent } = community(record);
+    const former = formerBestieTab(relay, host().agents);
+    const stop = former.subscribe?.(() => {});
+    await act(async () => {});
+    expect(mainAgent.read).toHaveBeenCalled();
+    expect(former.when?.(remembering)).toBe(shows);
+    stop?.();
+    cleanup();
+  }
+});
+
+it("offers no Remove without an account to save none to", async () => {
+  const { relay } = community(undefined);
+  // A device-only session would pick another agent at once.
+  delete (relay.snapshot() as { session: { mainAgent?: unknown } }).session
+    .mainAgent;
+  setDefaultAgent(SCOPE, ada.pubkey);
+  const Tab = bestieTab(relay, host().agents).component;
+  await act(async () => {
+    render(<Tab agent={ada} />);
+  });
+  expect(screen.getByRole("button", { name: "Change" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
 });
 
 it("lets a former Bestie's leftover check-in be turned off", async () => {
