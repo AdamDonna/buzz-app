@@ -607,7 +607,10 @@ impl NsecBackupHost {
             config,
             &pubkey,
         )?;
-        if consent.automatic != Some(true) {
+        // A key with no saved choice is backed up, as first run's notice says;
+        // only a saved opt-out stops it. Enrollment still requires the key
+        // bound to the signed-in account.
+        if consent.automatic == Some(false) {
             return Ok(Outcome::Waiting(Waiting::NoConsent));
         }
         // Hold consent's shared lease until this pass ends, including persisted retries.
