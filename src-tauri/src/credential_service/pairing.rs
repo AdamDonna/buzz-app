@@ -105,6 +105,9 @@ struct State {
     owed: bool,
     /// The NIP-FI retirements already revoked for (see [`Pairings::follow`]).
     retirements: u64,
+    /// Sign-outs and changes of account recorded but not yet over; see
+    /// [`Pairings::record_retirement`].
+    retiring: usize,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -159,6 +162,9 @@ impl Pairings {
     /// is admitted or issued.
     pub(crate) async fn settled(&self) -> Result<(), String> {
         let _write = self.write.lock().await;
+        if self.state().retiring > 0 {
+            return Err("Paired tools are being revoked".into());
+        }
         self.loaded_locked().await?;
         if self.state().owed {
             self.clear_locked()
@@ -440,12 +446,24 @@ impl Pairings {
     /// of account commits, so a run that ends before [`Pairings::follow`]'s
     /// revoke is saved still finishes it next launch. A transition that then
     /// fails leaves it owed: a refused pairing is safe, a reused one is not.
+    /// Until `release` (which the returned guard calls), nothing settles the
+    /// marker and no pairing is approved or admitted, so none can be saved
+    /// under the old account behind a marker already used up.
     pub(crate) async fn record_retirement(&self) -> Result<(), String> {
         let _write = self.write.lock().await;
         let keychain = self.keychain.clone();
         tokio::task::spawn_blocking(move || keychain.set_owed(true))
             .await
-            .unwrap_or_else(|_| Err("Paired tools could not be revoked".into()))
+            .unwrap_or_else(|_| Err("Paired tools could not be revoked".into()))?;
+        self.state().retiring += 1;
+        Ok(())
+    }
+    /// Ends a [`Pairings::record_retirement`]: after a commit,
+    /// [`Pairings::follow`] fences as for any retirement; after a failure,
+    /// the marker stays for the next launch.
+    pub(crate) fn release(&self) {
+        let mut state = self.state();
+        state.retiring = state.retiring.saturating_sub(1);
     }
 
     fn fence(&self, state: &mut State) {

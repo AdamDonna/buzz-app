@@ -128,12 +128,15 @@ struct Inner {
     retiring: Mutex<Option<Retiring>>,
 }
 /// Records durably, before a sign-out or change of account commits, what
-/// else that retirement revokes; see [`FederatedIdentity::on_retire`].
+/// else that retirement revokes; see [`FederatedIdentity::on_retire`]. The
+/// change holds what it returns until it has committed or failed.
 pub(crate) type Retiring = Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
-        + Send
+    dyn Fn() -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<RetiringGuard>, String>> + Send>,
+        > + Send
         + Sync,
 >;
+pub(crate) type RetiringGuard = Box<dyn Send + Sync>;
 #[derive(Clone)]
 pub(crate) struct FederatedIdentity(Arc<Inner>);
 
@@ -231,7 +234,7 @@ impl FederatedIdentity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(retiring);
     }
-    pub(crate) async fn record_retirement(&self) -> Result<(), String> {
+    pub(crate) async fn record_retirement(&self) -> Result<Option<RetiringGuard>, String> {
         let retiring = self
             .0
             .retiring
@@ -240,7 +243,7 @@ impl FederatedIdentity {
             .clone();
         match retiring {
             Some(retiring) => retiring().await,
-            None => Ok(()),
+            None => Ok(None),
         }
     }
     fn publish(&self, state: &State) {
@@ -879,11 +882,14 @@ impl FederatedIdentity {
             state.renewal = None;
         }
         let changing = matches!(&self.state().account, Some(previous) if *previous != record.email);
-        if changing {
+        // Held until this renewal installs or fails.
+        let _retiring = if changing {
             self.record_retirement()
                 .await
-                .map_err(|_| Failure::from("storage-unavailable"))?;
-        }
+                .map_err(|_| Failure::from("storage-unavailable"))?
+        } else {
+            None
+        };
         let prepared = agent::AgentTokens::preparing_session(self, record.email.clone())
             .await
             .map_err(|_| Failure::from("storage-unavailable"))?;

@@ -144,6 +144,15 @@ impl Drop for Issued {
     }
 }
 
+/// Held while a recorded retirement is under way; see
+/// [`Pairings::record_retirement`].
+struct Releasing(Arc<Inner>);
+impl Drop for Releasing {
+    fn drop(&mut self) {
+        self.0.pairings.release();
+    }
+}
+
 impl CredentialService {
     pub(crate) fn new(
         agents: AppAgentHost,
@@ -167,10 +176,11 @@ impl CredentialService {
         service.0.session.on_retire(Arc::new(move || {
             let inner = weak.upgrade();
             Box::pin(async move {
-                match inner {
-                    Some(inner) => inner.pairings.record_retirement().await,
-                    None => Ok(()),
-                }
+                let Some(inner) = inner else {
+                    return Ok(None);
+                };
+                inner.pairings.record_retirement().await?;
+                Ok(Some(Box::new(Releasing(inner)) as Box<dyn Send + Sync>))
             })
         }));
         service

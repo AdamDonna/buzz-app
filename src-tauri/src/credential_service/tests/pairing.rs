@@ -544,3 +544,44 @@ async fn an_account_change_whose_revoke_cannot_be_recorded_does_not_happen() {
     let reply = ask(&fixture, &token, "get_public_key", &[]).await;
     assert_eq!(reply.1["result"], human_pubkey().await);
 }
+
+/// While a recorded sign-out or change of account is under way, an owner
+/// that has not loaded yet neither uses up the marker nor approves a pairing
+/// under the old account; once it commits, a restart still revokes.
+#[tokio::test]
+async fn nothing_pairs_while_a_recorded_retirement_is_under_way() {
+    let mut fixture = fixture();
+    let token = paired(&fixture).await;
+    // A fresh run's owner, not yet loaded.
+    fixture.service = service_over(
+        &fixture.host,
+        &fixture.identity,
+        &fixture.keychain,
+        &fixture.notices,
+        IdentityHost::fixture(),
+    );
+    let recorded = fixture.identity.record_retirement().await.unwrap();
+    assert!(recorded.is_some());
+    let (_, reply) = pair_request(&fixture.service, &[CLIENT, RELAY]).await;
+    assert_eq!(reply["error"], "unavailable", "{reply}");
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "unavailable");
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst), "marker kept");
+
+    // The change commits, and the run ends before anything follows it.
+    fixture.identity.same_account_again_for_test();
+    drop(recorded);
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst));
+    let session = testing::restoring();
+    session.finish_restore_for_test();
+    fixture.service = service_over(
+        &fixture.host,
+        &session,
+        &fixture.keychain,
+        &fixture.notices,
+        IdentityHost::fixture(),
+    );
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "revoked");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}
