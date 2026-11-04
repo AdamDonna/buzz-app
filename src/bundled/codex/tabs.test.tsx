@@ -83,6 +83,7 @@ function fixture({
   configured?: { model?: string; model_reasoning_effort?: string };
 } = {}) {
   const processes: { end: ReturnType<typeof vi.fn> }[] = [];
+  const items = new Map<string, unknown[]>();
   // Buzz's copy, as its launcher answers: its `login` step runs until it ends.
   const disk = { signedIn, installed };
   const logins: ReturnType<typeof deferred<number | null>>[] = [];
@@ -114,10 +115,21 @@ function fixture({
         if (wire.id == null) return;
         if (wire.method === "thread/turns/list") {
           const reply = turns((wire.params as { threadId: string }).threadId);
+          // Kept for `thread/items/list`, which Buzz reads them through.
+          const listed = reply.result as { data?: Record<string, unknown>[] };
+          for (const turn of listed?.data ?? [])
+            items.set(String(turn.id), turn.items as unknown[]);
           options?.onStdout?.(`${JSON.stringify({ id: wire.id, ...reply })}\n`);
           return;
         }
         let result: unknown = {};
+        if (wire.method === "thread/items/list") {
+          const { turnId } = wire.params as { turnId: string };
+          result = {
+            data: (items.get(turnId) ?? []).map((item) => ({ item, turnId })),
+            nextCursor: null,
+          };
+        }
         if (wire.method === "config/read") result = { config: configured };
         if (wire.method === "thread/list") {
           if (typeof threads === "string") {

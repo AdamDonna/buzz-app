@@ -10,12 +10,15 @@ import {
 } from "../../features/agents/activity-transcript";
 import type { AgentKey } from "../../features/agents/membership";
 import { sessionTag, sessionTitle } from "./prompt";
-import { AppServer, type Spawn } from "./rpc";
+import { AppServer, Oversized, type Spawn } from "./rpc";
 import { readFile } from "../../buzz-mcp/app-client";
 import { restoreRecordedTools } from "./recorded-tools";
 
 /** The latest turns shown; earlier ones stay in Codex's own history. */
 export const TURN_LIMIT = 20;
+/** Items per `thread/items/list` request, which fit app-server's frame unless
+ * they average over 80 KiB. */
+const ITEM_PAGE = 50;
 
 type Json = Record<string, unknown>;
 type Turn = {
@@ -315,7 +318,10 @@ export async function findConversation(
 ) {
   return withServer(spawn, signal, async (rpc) => {
     for (const thread of await findThreads(rpc, lookup))
-      if (!thread.legacy || startedFor(await turns(rpc, thread.id, 1), lookup))
+      if (
+        !thread.legacy ||
+        startedFor(await turns(rpc, thread.id, 1, signal), lookup)
+      )
         return { threadId: thread.id, at: thread.updatedAt * 1000 };
     return undefined;
   });
@@ -324,31 +330,84 @@ export async function findConversation(
 type Page = { data: Turn[]; nextCursor: string | null };
 
 /** A thread's latest `limit` turns, newest first, and whether it has earlier
- * ones, or undefined when Codex no longer has it. Read a turn per request:
- * app-server's output frame bounds one full turn, not a page of them. */
-async function page(rpc: AppServer, threadId: string, limit: number) {
+ * ones, or undefined when Codex no longer has it. Turns are listed without
+ * their items, which are read a page at a time: app-server's output frame
+ * bounds a page of items, while one long turn can exceed it. */
+async function page(
+  rpc: AppServer,
+  threadId: string,
+  limit: number,
+  signal: AbortSignal,
+) {
   const data: Turn[] = [];
   let cursor: string | null = null;
   try {
     do {
       const next: Page = await rpc.request<Page>("thread/turns/list", {
         threadId,
-        limit: 1,
+        limit: limit - data.length,
         sortDirection: "desc",
-        itemsView: "full",
+        itemsView: "notLoaded",
         ...(cursor ? { cursor } : {}),
       });
       data.push(...next.data);
       cursor = next.data.length ? next.nextCursor : null;
     } while (cursor && data.length < limit);
+    // Each turn's items start at the page size the previous one ended on.
+    let size = ITEM_PAGE;
+    for (const turn of data)
+      [turn.items, size] = await items(rpc, threadId, turn.id, size, signal);
   } catch (error) {
     if (missing(error)) return undefined;
     throw error;
   }
-  return { data: data.slice(0, limit), more: !!cursor };
+  return { data, more: !!cursor };
 }
-const turns = async (rpc: AppServer, threadId: string, limit: number) =>
-  (await page(rpc, threadId, limit))?.data ?? [];
+
+/** A turn's items, oldest first, a page of `limit` per request, and the page
+ * size it ended on. A page over app-server's frame closes the connection, so
+ * it is read again from its cursor on a fresh one, at half the size, as is the
+ * rest of the turn. */
+async function items(
+  rpc: AppServer,
+  threadId: string,
+  turnId: string,
+  limit: number,
+  signal: AbortSignal,
+): Promise<[Json[], number]> {
+  const all: Json[] = [];
+  let cursor: string | null = null;
+  for (;;) {
+    let next: { data: { item: Json }[]; nextCursor: string | null };
+    try {
+      next = await rpc.request("thread/items/list", {
+        threadId,
+        turnId,
+        limit,
+        ...(cursor ? { cursor } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof Oversized) || limit === 1) throw error;
+      limit = Math.ceil(limit / 2);
+      // An abort while closing opens no fresh connection.
+      await rpc.close();
+      signal.throwIfAborted();
+      await rpc.reopen();
+      // An abort while reopening closed the connection it replaced.
+      signal.throwIfAborted();
+      continue;
+    }
+    all.push(...next.data.map((entry) => entry.item));
+    cursor = next.data.length ? next.nextCursor : null;
+    if (!cursor) return [all, limit];
+  }
+}
+const turns = async (
+  rpc: AppServer,
+  threadId: string,
+  limit: number,
+  signal: AbortSignal,
+) => (await page(rpc, threadId, limit, signal))?.data ?? [];
 
 /** Runs `use` with a short-lived app-server, closed when it ends or `signal`
  * aborts. */
@@ -394,7 +453,7 @@ export async function readTranscript(
     let more = false;
     let working = false;
     for (const [threadId, legacy] of threads) {
-      const read = await page(rpc, threadId, TURN_LIMIT);
+      const read = await page(rpc, threadId, TURN_LIMIT, signal);
       if (!read || (legacy && !startedFor(read.data, lookup))) continue;
       found = true;
       more ||= read.more;

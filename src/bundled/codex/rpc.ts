@@ -33,6 +33,12 @@ export type ToolReply = {
 
 /** Codex's answer refusing a request, which it therefore did not carry out. */
 export class Refused extends Error {}
+/** A line over the connection's frame, which closes it. */
+export class Oversized extends Error {
+  constructor() {
+    super("Codex output frame is too large");
+  }
+}
 
 /** One request owner for the JSONL app-server connection. No Node sidecar. */
 export class AppServer {
@@ -52,6 +58,7 @@ export class AppServer {
   private listeners = new Set<(message: Wire) => void>();
   private closing?: Promise<void> | undefined;
   private gone = false;
+  private opened?: [Spawn, string | undefined, boolean];
 
   constructor(
     private readonly toolCall?: (call: ToolCall) => Promise<ToolReply>,
@@ -59,6 +66,7 @@ export class AppServer {
 
   async open(spawn: Spawn, cwd?: string, protectedRuntime = false) {
     if (this.failure) throw this.failure;
+    this.opened = [spawn, cwd, protectedRuntime];
     this.process = await spawn("app-server", {
       ...(cwd ? { cwd } : {}),
       onStdout: (data) => this.read(data),
@@ -107,6 +115,18 @@ export class AppServer {
     await this.send({ method: "initialized" });
     return this;
   }
+  /** Closes this connection and opens a fresh app-server as before. */
+  async reopen() {
+    if (!this.opened) throw new Error("Codex is not connected");
+    const [spawn, cwd, protectedRuntime] = this.opened;
+    await this.close();
+    delete this.process;
+    delete this.failure;
+    this.closing = undefined;
+    this.gone = false;
+    this.buffer = this.stderr = "";
+    return this.open(spawn, cwd, protectedRuntime);
+  }
   /** Whether the process has exited. */
   get exited() {
     return this.gone;
@@ -124,8 +144,7 @@ export class AppServer {
       this.buffer += data;
       let newline = this.buffer.indexOf("\n");
       while (newline >= 0) {
-        if (newline > 4 * 1024 * 1024)
-          throw new Error("Codex output frame is too large");
+        if (newline > 4 * 1024 * 1024) throw new Oversized();
         const line = this.buffer.slice(0, newline);
         this.buffer = this.buffer.slice(newline + 1);
         newline = this.buffer.indexOf("\n");
@@ -157,8 +176,7 @@ export class AppServer {
           }).catch((error) => this.fail(error));
         } else this.emit(message);
       }
-      if (this.buffer.length > 4 * 1024 * 1024)
-        throw new Error("Codex output frame is too large");
+      if (this.buffer.length > 4 * 1024 * 1024) throw new Oversized();
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)));
       void this.close();
