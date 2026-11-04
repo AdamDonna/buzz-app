@@ -27,6 +27,7 @@ import {
   MessageManagementItems,
   MessageManagementStatus,
   MessageReadStateItem,
+  useMessageKeyActions,
 } from "./MessageManagement";
 import { createRelaySession } from "../relay/session";
 import { readJournal, type ReadJournal } from "../relay/read-state-storage";
@@ -1239,6 +1240,55 @@ it("waits for confirmed membership before entering a restored channel visit", as
   expect(screen.queryByRole("alert")).toBeNull();
   mounted.unmount();
   expect(leaveChannel).toHaveBeenCalledExactlyOnceWith("room");
+});
+
+it("offers no read action on an agents-audience message", async () => {
+  const h = await fixture(false, true);
+  cleanup();
+  const row = h.owner.session.channels.window("room").rows[0];
+  assert.exists(row);
+  render(
+    <MessageManagement session={h.owner.session} channelId="room">
+      <MenuRoot>
+        <MenuTrigger>Read actions</MenuTrigger>
+        <MenuPopup>
+          <MessageReadStateItem
+            row={{ ...row, audience: "agents" }}
+            session={h.owner.session}
+          />
+          <MessageReadStateItem row={row} session={h.owner.session} />
+        </MenuPopup>
+      </MenuRoot>
+    </MessageManagement>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Read actions" }));
+  expect(
+    await screen.findAllByRole("menuitem", { name: /^Mark (un)?read$/ }),
+  ).toHaveLength(1);
+});
+
+it("offers no keyboard unread action on an agents-audience message", async () => {
+  const h = await fixture(false, true);
+  cleanup();
+  const row = h.owner.session.channels.window("room").rows[0];
+  assert.exists(row);
+  await h.owner.session.unread.markMessageRead("room", row.id);
+  const seen: boolean[] = [];
+  const Probe = () => {
+    const actions = useMessageKeyActions(h.owner.session);
+    assert.exists(actions);
+    seen.push(
+      actions.canMarkUnread(row),
+      actions.canMarkUnread({ ...row, audience: "agents" }),
+    );
+    return null;
+  };
+  render(
+    <MessageManagement session={h.owner.session} channelId="room">
+      <Probe />
+    </MessageManagement>,
+  );
+  expect(seen.slice(-2)).toEqual([true, false]);
 });
 
 async function heldUnreadAction(action: "read" | "unread") {

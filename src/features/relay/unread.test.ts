@@ -3989,7 +3989,7 @@ it("agent-audience messages never count, earn attention, list in Inbox or activi
   expect(unread.inbox().items).toHaveLength(1);
 });
 
-it("catch-up and explicit unread intent still apply to agent-audience rows", async () => {
+it("catch-up applies to agent-audience rows, and unread intent cannot make them unread", async () => {
   const h = setup();
   h.grant("room");
   const unread = h.session.unread;
@@ -4009,17 +4009,29 @@ it("catch-up and explicit unread intent still apply to agent-audience rows", asy
   await lease.catchUp(progress.id, root.id);
   expect(h.journal()?.state.frontiers[`thread-activity:${root.id}`]).toBe(12);
   lease.dispose();
-  // Mark unread is honored, as for any reply outside the viewer's conversations.
-  await unread.markMessageUnread("room", progress.id);
-  expect(unread.attention("room", progress.id)).toMatchObject({
-    status: "ineligible",
-    unread: true,
-    forced: true,
-  });
-  expect(h.snapshot()).toMatchObject({ observedCount: 1, attentionCount: 0 });
+  // Unread intent cannot be saved for coordination between agents.
+  await expect(unread.markMessageUnread("room", progress.id)).rejects.toThrow(
+    "Messages between agents cannot be marked unread",
+  );
+  await expect(
+    unread.markUnreadLocal({
+      kind: "message",
+      channelId: "room",
+      messageId: bottom.id,
+    }),
+  ).rejects.toThrow("Messages between agents cannot be marked unread");
+  expect(h.journal()?.localUnread).toEqual({});
+  expect(h.snapshot().manual).toBe("none");
+  for (const id of [progress.id, bottom.id])
+    expect(unread.attention("room", id)).toMatchObject({
+      status: "ineligible",
+      unread: false,
+      forced: false,
+    });
+  expect(h.snapshot()).toMatchObject({ observedCount: 0, attentionCount: 0 });
   expect(
     unread.snapshot({ kind: "thread", channelId: "room", rootId: root.id }),
-  ).toMatchObject({ observedCount: 1, attentionCount: 0 });
-  await unread.markMessageRead("room", progress.id);
-  expect(h.snapshot()).toMatchObject({ observedCount: 0 });
+  ).toMatchObject({ observedCount: 0, attentionCount: 0 });
+  expect(unread.activity("room").items).toHaveLength(0);
+  expect(unread.inbox().items).toHaveLength(0);
 });

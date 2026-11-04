@@ -267,8 +267,9 @@ everyone. It never counts toward channel or thread counts, never earns attention
 appears as an Inbox item or thread activity, and never queues a conversation
 lookup. This is the rule the [notification pipeline](notifications.md#running-app-behavior)
 already applies. The row stays in evidence, so it is still `latestMessage` and
-the live bottom that catch-up reads through, and explicit **Mark unread** still
-applies to it. The tag is self-declared by the sender. Older clients, mobile and
+the live bottom that catch-up reads through. Unread intent does not change the
+rule: the message has no **Mark read** / **Mark unread** action, and channel or
+thread **Mark unread** leaves it read. The tag is self-declared by the sender. Older clients, mobile and
 the relay's read-state and push rules do not apply the exemption yet.
 
 **Follow thread** / **Unfollow thread** in a message's menu records an explicit

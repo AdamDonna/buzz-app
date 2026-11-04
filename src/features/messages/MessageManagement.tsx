@@ -132,7 +132,8 @@ export function useMessageKeyActions(session: RelaySession) {
         management.remove(row, undefined, () => editor?.focusTarget() ?? null);
       },
       canMarkUnread(row: ChannelMessage) {
-        if (!joined(row)) return false;
+        // Coordination between agents is never unread, so it has no read state.
+        if (!joined(row) || row.audience === "agents") return false;
         const attention = session.unread.attention(row.channelId, row.id);
         return !attention.unread && !attention.forced;
       },
@@ -354,7 +355,8 @@ export function MessageReadStateItem({
     (listener) => session.unread.subscribe(target, listener),
     () => session.unread.snapshot(target),
   );
-  if (!management) return null;
+  // Coordination between agents is never unread, so it has no read state.
+  if (!management || row.audience === "agents") return null;
   const attention = session.unread.attention(row.channelId, row.id);
   const unread = attention.unread || attention.forced;
   return (
