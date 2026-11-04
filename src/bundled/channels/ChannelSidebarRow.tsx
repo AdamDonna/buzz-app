@@ -1,4 +1,5 @@
 import { FadingLabel } from "./FadingLabel";
+import { activeChannelRows } from "../../features/channel-navigation/active-channel-rows";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { BellSlashIcon, XIcon } from "../../shared/design-system/icons/index";
@@ -107,11 +108,7 @@ export function ChannelSidebarRow({
               const section = event.currentTarget.closest(
                 "[data-sidebar-section]",
               );
-              const rows = [
-                ...(section?.querySelectorAll<HTMLElement>(
-                  "button[data-channel-id]",
-                ) ?? []),
-              ];
+              const rows = activeChannelRows(section);
               const index = rows.findIndex(
                 (row) => row.dataset.channelId === channel.id,
               );

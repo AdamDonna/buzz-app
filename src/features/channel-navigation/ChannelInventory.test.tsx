@@ -528,7 +528,9 @@ it("uses relay section filters across navigation and remount, and offers only hi
     expect.objectContaining({ kind: "conversation", channelId: "beta" }),
   );
   mounted.rerender(h.view("beta"));
-  expect(screen.getByRole("button", { name: "beta" })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "beta" })).toBeVisible(),
+  );
   expect(screen.queryByRole("button", { name: "alpha" })).toBeNull();
   mounted.rerender(h.view("not-in-this-section"));
   expect(screen.queryByText("0 matches")).toBeNull();
@@ -548,15 +550,19 @@ it("uses relay section filters across navigation and remount, and offers only hi
   expect(screen.queryByText("0 matches")).toBeNull();
   expect(screen.queryByRole("button", { name: "beta" })).toBeNull();
   restored.rerender(h.view("alpha"));
-  expect(screen.getByRole("button", { name: "alpha" })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "alpha" })).toBeVisible(),
+  );
   expect(screen.queryByRole("button", { name: "gamma" })).toBeNull();
   await user.click(
     screen.getByRole("button", { name: "More actions for Channels" }),
   );
   await user.click(await screen.findByRole("menuitem", { name: "Filter" }));
   fireEvent.click(await screen.findByRole("menuitemradio", { name: "All" }));
-  expect(screen.getByRole("button", { name: "beta" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "gamma" })).toBeVisible();
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "beta" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "gamma" })).toBeVisible();
+  });
   await user.click(
     screen.getByRole("button", { name: "More actions for Channels" }),
   );
@@ -770,6 +776,25 @@ it("rebuilds only the changed row on a list publish", async () => {
   expect(rowRender.mock.calls.map(([props]) => props.channel.id)).toEqual([
     "beta",
   ]);
+});
+
+it("closes a removed DM's menu and focuses its neighbor before the exit ends", async () => {
+  const h = fixture(undefined, "ready", [
+    { id: "alice", name: "Alice", channelType: "dm" },
+    { id: "bob", name: "Bob", channelType: "dm" },
+  ]);
+  render(h.view("alice"));
+  const alice = await screen.findByRole("button", { name: "Alice" });
+  const bob = screen.getByRole("button", { name: "Bob" });
+  fireEvent.keyDown(alice, { key: "ContextMenu" });
+  await screen.findByRole("menu", { name: "Actions for Alice" });
+  fireEvent.click(screen.getByRole("menuitem", { name: "Remove from Team" }));
+  // Assert synchronously while the retained row's exit is still mounted.
+  expect(alice.closest("[inert]")).not.toBeNull();
+  expect(screen.queryByRole("menu", { name: "Actions for Alice" })).toBeNull();
+  await act(async () => {});
+  expect(alice).toBeInTheDocument();
+  expect(bob).toHaveFocus();
 });
 
 it("copies a channel link that opens the same channel", async () => {
@@ -1413,6 +1438,49 @@ it("clears only the removed section's collapsed intent after confirmation, never
     preferences.dispose();
   }
 });
+it("restores lifecycle focus to the active row while an inert copy is exiting", async () => {
+  const h = fixture();
+  const channel = h.list.channels[1];
+  assert(channel);
+  h.session.channelLifecycle = {
+    ...h.session.channelLifecycle,
+    available: true,
+  };
+  function Start() {
+    const navigation = useChannelNavigation();
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          assert(channel);
+          navigation?.openLifecycle(channel, "archive");
+        }}
+      >
+        Start action
+      </button>
+    );
+  }
+  render(h.view("beta", <Start />));
+  const active = await screen.findByRole("button", { name: "beta" });
+  const leaving = active.cloneNode(true) as HTMLButtonElement;
+  const retired = document.createElement("div");
+  retired.setAttribute("inert", "");
+  retired.append(leaving);
+  active.before(retired);
+  // Both copies have layout during popLayout exit; geometry alone is insufficient.
+  const rects = [active.getBoundingClientRect()] as unknown as DOMRectList;
+  vi.spyOn(active, "getClientRects").mockReturnValue(rects);
+  vi.spyOn(leaving, "getClientRects").mockReturnValue(rects);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Start action" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Archive channel: beta",
+  });
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(active).toHaveFocus());
+  expect(leaving).not.toHaveFocus();
+});
+
 it.each(["archive", "unarchive", "delete"] as const)(
   "%s completion preserves focus moved during pending work and retains required navigation",
   async (action) => {
@@ -1972,7 +2040,7 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     const view = render(tree(), { reactStrictMode: true });
     await screen.findByRole("button", { name: "Pollen" });
     await waitFor(() => expect(row("fizz-dm")).not.toBeNull());
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     expect(row("group-dm")).not.toBeNull();
     expect(row("namesake")).not.toBeNull();
     await waitFor(() => expect(readView(scope, "hidden-dms", [])).toEqual([]));
@@ -1982,7 +2050,10 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     });
     await screen.findByRole("button", { name: "Fizz" });
     expect(row("pollen-dm")).not.toBeNull();
-    expect(row("fizz-dm")).toBeNull();
+    // Promotion immediately removes the DM from accessible navigation; its
+    // inert exit copy must also leave the DOM when the fade completes.
+    expect(screen.queryByRole("button", { name: "Fizz DM" })).toBeNull();
+    await waitFor(() => expect(row("fizz-dm")).toBeNull());
     act(() => {
       forgetDefaultAgent(fizz);
     });
@@ -1992,27 +2063,27 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     act(() => {
       setDefaultAgent(scope, pollen);
     });
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     view.unmount();
     const reopened = render(tree(), { reactStrictMode: true });
     await waitFor(() => expect(row("fizz-dm")).not.toBeNull());
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     reopened.rerender(tree(false));
     expect(row("pollen-dm")).not.toBeNull();
     reopened.rerender(tree());
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     // A retained name is not enough to suppress a conversation whose exact
     // membership or chosen-agent eligibility is no longer established.
     h.publish("pollen-dm", { members: [viewer, pollen, fizz] });
     expect(row("pollen-dm")).not.toBeNull();
     h.publish("pollen-dm", { members: [viewer, pollen] });
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     // Source failure removes its candidates but does not release an explicit
     // account choice whose exact verified DM still exists.
     act(() => {
       native.set({ status: "error", agents: [], error: "Agents unavailable" });
     });
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     expect(screen.getByRole("button", { name: "Bestie" })).toBeInTheDocument();
     // A settled successful inventory proving the saved agent is gone releases it.
     act(() => {
