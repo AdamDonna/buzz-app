@@ -880,13 +880,6 @@ describe("creator proof reads", () => {
       ["t", "stream"],
       ["P", creator],
     ]);
-  const creation = (channel: string, n = 0) =>
-    signed(alice, {
-      kind: 9007,
-      created_at: 1_700_000_000 - n,
-      content: "",
-      tags: [["h", channel]],
-    });
   type Pending = ReturnType<typeof setup>["pending"];
   /** Answer metadata reads with stream metadata and every other read with
    * nothing, until only creator proofs are pending; return those. */
@@ -959,32 +952,57 @@ describe("creator proof reads", () => {
     }
   });
 
-  it("reads again only the channels a filter cut at its limit left unproved", async () => {
-    const { store, queries, pending } = await listed(["a", "b"]);
-    try {
-      const [first] = await proofs(pending);
-      assert.exists(first);
-      expect(first.filters).toMatchObject([{ "#h": ["a", "b"], limit: 4 }]);
-      pending.splice(pending.indexOf(first), 1);
-      // Four creations for a fill the limit; b's may have been cut.
-      first.respond([0, 1, 2, 3].map((n) => creation("a", n)));
-      await flush();
-      queries.refreshList?.();
-      pending
-        .shift()
-        ?.respond([
-          roster(relay, "a", [viewer.pubkey]),
-          stream("a"),
-          roster(relay, "b", [viewer.pubkey]),
-          stream("b"),
-        ]);
-      const [again] = await proofs(pending);
-      assert.exists(again);
-      expect(again.filters).toMatchObject([{ "#h": ["b"], limit: 2 }]);
-    } finally {
-      store.dispose();
-    }
-  });
+  it.each(["missing", "cross-author", "ambiguous-coordinate"])(
+    "retries a %s proof after a filter reaches its limit",
+    async (receipt) => {
+      const { store, queries, pending } = await listed(["a", "b"]);
+      const creators = new Map([["a", viewer.pubkey]]);
+      try {
+        const [first] = await proofs(pending, creators);
+        assert.exists(first);
+        expect(first.filters).toMatchObject([{ "#h": ["a", "b"], limit: 4 }]);
+        pending.splice(pending.indexOf(first), 1);
+        // The shared author set admits viewer's creation in b, whose creator is
+        // alice. Neither that cross match nor an ambiguous coordinate proves b.
+        first.respond(
+          [0, 1, 2, 3].map((n) =>
+            signed(
+              receipt === "ambiguous-coordinate" && n > 0 ? alice : viewer,
+              {
+                kind: 9007,
+                created_at: 1_700_000_000 - n,
+                content: "",
+                tags:
+                  n === 0 || receipt === "missing"
+                    ? [["h", "a"]]
+                    : receipt === "cross-author"
+                      ? [["h", "b"]]
+                      : [
+                          ["h", "outside"],
+                          ["h", "b"],
+                        ],
+              },
+            ),
+          ),
+        );
+        await flush();
+        queries.refreshList?.();
+        pending
+          .shift()
+          ?.respond([
+            roster(relay, "a", [viewer.pubkey]),
+            stream("a", viewer.pubkey),
+            roster(relay, "b", [viewer.pubkey]),
+            stream("b"),
+          ]);
+        const [again] = await proofs(pending);
+        assert.exists(again);
+        expect(again.filters).toMatchObject([{ "#h": ["b"], limit: 2 }]);
+      } finally {
+        store.dispose();
+      }
+    },
+  );
 });
 
 it("settles a metadata retry during quota cooldown without issuing another read", async () => {

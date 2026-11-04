@@ -1217,6 +1217,7 @@ export function createChannelStore(
       return [{ id, creator: identity.creator }];
     });
     if (!wanted.length) return;
+    const creators = new Map(wanted.map(({ id, creator }) => [id, creator]));
     // One filter names many channels and their creators. Discovery accepts a
     // creation only from its own channel's creator, so a cross match is ignored.
     const filters = [];
@@ -1254,12 +1255,23 @@ export function createChannelStore(
         if (disposed || generation !== epoch || controller.signal.aborted)
           throw new DOMException("Stale creation resolution", "AbortError");
         const creations = receipts.filter((event) => event.kind === 9007);
-        const proved = new Set(creations.map((event) => tag(event, "h")));
+        const proved = new Set(
+          creations.flatMap((event) => {
+            const coordinates = event.tags.filter(([name]) => name === "h");
+            const id =
+              coordinates.length === 1 && coordinates[0]?.length === 2
+                ? coordinates[0][1]
+                : undefined;
+            return id && event.pubkey === creators.get(id) ? [id] : [];
+          }),
+        );
         for (const filter of filters.slice(offset, offset + 4)) {
           // A filter cut at its limit may have left a channel's creation out.
           const cut =
             creations.filter((event) =>
-              filter["#h"].includes(tag(event, "h") ?? ""),
+              event.tags.some(
+                ([name, id]) => name === "h" && filter["#h"].includes(id ?? ""),
+              ),
             ).length >= filter.limit;
           for (const id of filter["#h"]) {
             const read = pending.get(id);
