@@ -96,6 +96,8 @@ describe("typed public keys", () => {
     ["uppercase hex", first.toUpperCase()],
     ["an npub", npub],
     ["a nostr: npub", `nostr:${npub}`],
+    ["an uppercase npub", npub.toUpperCase()],
+    ["an uppercase nostr: npub", `NOSTR:${npub.toUpperCase()}`],
     ["text padded with spaces", `  ${npub} `],
   ])("reads %s as the hex key", (_case, text) => {
     expect(typedPublicKey(text)).toBe(first);
@@ -103,6 +105,7 @@ describe("typed public keys", () => {
 
   it.each([
     ["a partly typed npub", npub.slice(0, 12)],
+    ["a mixed-case npub", `NPUB1${npub.slice(5)}`],
     ["the nsec with the same key bytes", nsecEncode(hexToBytes(first))],
     ["a note", noteEncode(first)],
     ["an npub of 20 bytes", "npub1qurswpc8qurswpc8qurswpc8qurswpc86nz8sw"],

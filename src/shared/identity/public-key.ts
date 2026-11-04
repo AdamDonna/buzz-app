@@ -60,13 +60,13 @@ export function abbreviatedPublicKey(pubkey: string): string | undefined {
 }
 
 /** The hex public key that typed text names exactly: 64 hex characters in
- * either case, or an npub with or without `nostr:`. Undefined for anything
- * else, including a key still being typed. */
+ * either case, or a lowercase or uppercase npub with or without `nostr:`.
+ * Undefined for anything else, including a key still being typed. */
 export function typedPublicKey(text: string): string | undefined {
   const value = text.trim();
   if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
   const npub = value.replace(/^nostr:/i, "");
-  if (!npub.startsWith("npub1")) return undefined;
+  if (!/^npub1/i.test(npub)) return undefined;
   try {
     const decoded = decode(npub);
     // nip19 does not check an npub's payload length.
