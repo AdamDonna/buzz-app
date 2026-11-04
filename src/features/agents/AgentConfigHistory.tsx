@@ -249,7 +249,7 @@ export function AgentConfigHistory({
   );
   const index = segment?.revisions.findIndex(({ id }) => id === open) ?? -1;
   const event = segment?.revisions[index];
-  const current = event?.id === head?.id;
+  const current = !!event && event.id === head?.id;
   const deleted = event && artifactOp(event) === "delete";
   const restorable =
     event &&

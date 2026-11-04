@@ -291,6 +291,24 @@ it("opens a version by keyboard, shows a missing predecessor honestly, and resto
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+it("does not mark a missing revision current when the track has no head", async () => {
+  render(
+    <AgentConfigHistory
+      expected={expected}
+      head={undefined}
+      selected="missing"
+      onSelect={vi.fn()}
+      read={async () => []}
+      onRevert={vi.fn()}
+    />,
+  );
+  expect(
+    await screen.findByText("This version isn't in the loaded history."),
+  ).toBeVisible();
+  expect(screen.getByRole("dialog", { name: "History version" })).toBeVisible();
+  expect(within(screen.getByRole("dialog")).queryByText("Current")).toBeNull();
+});
+
 it("shows deletion details without offering to restore the deletion itself", async () => {
   const deleted = {
     ...rev("r1", "r0", ""),
