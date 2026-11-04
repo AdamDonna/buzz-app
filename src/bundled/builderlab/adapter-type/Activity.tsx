@@ -12,6 +12,8 @@ import { activityTranscript } from "../../../features/agents/activity-transcript
 import { ActivityTranscript } from "../../../features/agents/ActivityTranscript";
 import type { Agent, AgentViewProps } from "../../../features/agents/service";
 import { SettingsSectionLink } from "../../../features/navigation/SettingsSectionLink";
+import type { IdentityNameView } from "../../../features/identity-names/service";
+import { useIdentityNames } from "../../../features/identity-names/react";
 
 export type AgentActivity = RelaySession["agentActivity"];
 
@@ -33,6 +35,9 @@ export function createActivityTab(
             : undefined
         }
         openSettings={openSettings}
+        names={
+          connection.status === "ready" ? connection.session.names : undefined
+        }
       />
     );
   };
@@ -43,12 +48,15 @@ export function ActivityPanel({
   activity,
   openSettings,
   openConversation,
+  names,
 }: {
   agent: Agent;
   /** Absent while the owner's session connects. */
   activity: AgentActivity | undefined;
   openSettings?: ((section: string) => void) | undefined;
   openConversation?: AgentViewProps["openConversation"];
+  /** Names the people whose messages prompted the turns. */
+  names?: IdentityNameView | undefined;
 }) {
   if (!activity) return <Note>Activity shows once Buzz is connected.</Note>;
   return (
@@ -57,6 +65,7 @@ export function ActivityPanel({
       activity={activity}
       openSettings={openSettings}
       openConversation={openConversation}
+      names={names}
     />
   );
 }
@@ -68,12 +77,15 @@ function ActivityFeed({
   activity,
   openSettings,
   openConversation,
+  names,
 }: {
   agent: Agent;
   activity: AgentActivity;
   openSettings: ((section: string) => void) | undefined;
   openConversation: AgentViewProps["openConversation"];
+  names: IdentityNameView | undefined;
 }) {
+  const resolve = useIdentityNames(names);
   // The Agent Activity plugin owns the feed's lease; this only reads it.
   const snapshot = useSyncExternalStore(
     activity.subscribe,
@@ -85,8 +97,9 @@ function ActivityFeed({
       activityTranscript(
         snapshot.records.filter((record) => record.agent === agent.pubkey),
         { agent: agent.pubkey },
+        (pubkey) => resolve(pubkey, "") || undefined,
       ),
-    [snapshot.records, agent.pubkey],
+    [snapshot.records, agent.pubkey, resolve],
   );
   if (snapshot.status === "unavailable") return <Note>{UNAVAILABLE}</Note>;
   if (snapshot.status === "disabled")

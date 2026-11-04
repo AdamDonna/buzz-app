@@ -366,9 +366,10 @@ it("hands an owner's mention to its thread's Pi conversation", async () => {
   });
   const text = String(delivered?.params.text);
   expect(text).toContain(`Thread root: ${root.id}`);
-  expect(JSON.parse(promptSections(text)[1]?.body ?? "")).toMatchObject([
-    { pubkey: alice, author: "Alice", content: "Build is red" },
-  ]);
+  expect(text).toMatch(/^<thread-context>\n/);
+  expect(text).toContain(`"pubkey":"${alice}"`);
+  expect(text).toContain("Build is red");
+  expect(text).toContain('Request: "@Pi can you look?"');
   expect(promptMessage(promptSections(text)).text).toBe("@Pi can you look?");
   expect(String(delivered?.params.steer)).toContain("@Pi can you look?");
   expect(String(delivered?.params.instructions)).toContain(self);

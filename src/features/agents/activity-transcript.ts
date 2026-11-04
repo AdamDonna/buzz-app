@@ -1,5 +1,7 @@
 /** Owner-only display projection of observer telemetry into turns and items.
  * Raw session retention is unchanged; this reads allowlisted ACP fields only. */
+import { readEventBody } from "../agent-harness/turn-records";
+
 type Source = Readonly<{
   id: string;
   agent: string;
@@ -117,6 +119,10 @@ const TITLES = new Map(
 /** A prompt section's readable title; an unknown tag shows as it is. */
 export const sectionTitle = (tag: string) => TITLES.get(tag) ?? tag;
 
+/** A steer's section holds its event, or before exact records, a whole turn. */
+export const STEER = "new-message-arrived-while-you-were-working";
+const EVENT_TAGS = new Set(["buzz-event", STEER]);
+
 /** Split top-level `<tag attrs>` … `</tag>` prompt framing; other text is kept. */
 export function promptSections(text: string): PromptSection[] {
   const sections: PromptSection[] = [];
@@ -141,16 +147,26 @@ export function promptSections(text: string): PromptSection[] {
   return sections;
 }
 
-/** The triggering Buzz event(s): author label and content, without tags. */
-export function promptMessage(sections: PromptSection[]) {
-  const events = sections.filter(
-    (section) => section.tag === "buzz-event" || section.tag === "buzz-events",
-  );
+/** The triggering Buzz event(s): author label and content, without tags.
+ * An event sent as an exact record names its author by `name`, if known. */
+export function promptMessage(
+  sections: PromptSection[],
+  name: (pubkey: string) => string | undefined = () => undefined,
+) {
   const authors: string[] = [];
   const contents: string[] = [];
-  for (const { body } of events) {
-    // Current harnesses serialize the event as escaped JSON. Never parse its
-    // decoded content again as framing; old saved transcripts use the lines below.
+  for (const { tag, body } of sections) {
+    const record = EVENT_TAGS.has(tag) ? readEventBody(body) : undefined;
+    if (record) {
+      contents.push(record.request);
+      const author = name(record.pubkey);
+      if (author) authors.push(author);
+      continue;
+    }
+    if (tag !== "buzz-event" && tag !== "buzz-events") continue;
+    // Turns from before exact records serialized the event as escaped JSON.
+    // Never parse its decoded content again as framing; older saved
+    // transcripts use the lines below.
     let event: Json | undefined;
     try {
       event = object(JSON.parse(body));
@@ -245,8 +261,12 @@ const transcripts = new WeakMap<object, Map<string, Transcript>>();
 export function activityTranscript(
   records: readonly Source[],
   scope: TranscriptScope,
+  /** Names an exact-record prompt's author, if known. */
+  name?: (pubkey: string) => string | undefined,
 ): Transcript {
-  if (!Object.isFrozen(records)) return buildTranscript(records, scope);
+  // The cache is per records, agent and channel, not per `name`.
+  if (name || !Object.isFrozen(records))
+    return buildTranscript(records, scope, name);
   let byScope = transcripts.get(records);
   if (!byScope) {
     byScope = new Map();
@@ -263,6 +283,7 @@ export function activityTranscript(
 function buildTranscript(
   records: readonly Source[],
   scope: TranscriptScope,
+  name?: (pubkey: string) => string | undefined,
 ): Transcript {
   const events: { id: string; at: number; order: number; event: Json }[] = [];
   for (const record of records) {
@@ -428,7 +449,7 @@ function buildTranscript(
           .filter(Boolean)
           .join("\n");
         const sections = promptSections(text);
-        const message = promptMessage(sections);
+        const message = promptMessage(sections, name);
         const thread = promptThread(sections);
         if (thread !== undefined) turn.promptThread = thread;
         turn.items.push({
