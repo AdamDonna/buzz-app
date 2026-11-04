@@ -5,6 +5,9 @@
   overflow: hidden;
   background: var(--surface-panel);
 }
+.preview[data-custom-palette] {
+  background: var(--bg-app);
+}
 .scene {
   display: grid;
   grid-template-columns: 25% minmax(0, 1fr);
@@ -19,6 +22,7 @@
   opacity: 0.45;
 }
 .sidebar {
+  background: var(--surface-sidebar);
   min-width: 0;
   padding-block: var(--space-2);
   padding-inline-end: var(--space-4);
@@ -56,6 +60,7 @@
   color: var(--text-sidebar-selected);
 }
 .conversation {
+  background: var(--surface-panel);
   min-width: 0;
 }
 .heading {

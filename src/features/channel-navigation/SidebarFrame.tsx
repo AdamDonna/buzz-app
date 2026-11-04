@@ -22,6 +22,7 @@ export function SidebarFrame({
   return (
     <Panel
       as="aside"
+      data-sidebar-surface=""
       aria-label={label}
       aria-busy={busy}
       data-buzz-launch-pending={launchPending}

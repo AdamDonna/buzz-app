@@ -1,9 +1,33 @@
+import type { CSSProperties } from "react";
+import { paletteRuntime, type CustomPalette } from "../shared/theme/palette";
 import styles from "./AppearancePreview.module.css";
 
 /** Decorative app sketch using the same semantic colors as the live interface. */
-export function AppearancePreview() {
+export function AppearancePreview({
+  palette,
+  mode = "light",
+  contrast = "low",
+}: {
+  palette?: CustomPalette | null;
+  mode?: "light" | "dark";
+  contrast?: "low" | "high";
+}) {
   return (
-    <figure className={styles.preview} aria-label="Appearance preview">
+    <figure
+      className={`${styles.preview} ${palette ? mode : ""}`}
+      data-custom-palette={palette ? "" : undefined}
+      data-color-mode={palette ? mode : undefined}
+      data-accent={palette ? "citrus" : undefined}
+      data-color-level={
+        palette ? (contrast === "low" ? "touch" : "high") : undefined
+      }
+      style={
+        palette
+          ? (paletteRuntime.properties(palette) as CSSProperties)
+          : undefined
+      }
+      aria-label="Appearance preview"
+    >
       <div className={styles.scene} inert aria-hidden="true">
         <div className={styles.sidebar}>
           <div className={styles.workspace}>

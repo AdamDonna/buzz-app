@@ -16,7 +16,7 @@ function browser(stored: string | null = null, systemDark = false) {
   const listeners = new Set<(event: StorageEvent) => void>();
   const root = {
     dataset: {} as Record<string, string>,
-    style: { setProperty: vi.fn() },
+    style: { setProperty: vi.fn(), removeProperty: vi.fn() },
   };
   const meta = { setAttribute: vi.fn() };
   const storage = {
@@ -110,6 +110,8 @@ it.each([
       error: null,
       fontScale: 1,
       fontError: null,
+      palette: null,
+      paletteError: null,
       accent: "citrus",
       accentError: null,
       contrast: "low",
@@ -446,4 +448,45 @@ it("keeps contrast active on storage failure, retries, and follows other windows
   app.dispose();
   app.setContrast("high");
   expect(b.root.dataset.colorLevel).toBe("touch");
+});
+
+it("saves, restores and resets custom palettes atomically; storage events re-read latest values", async () => {
+  const { DEFAULT_CUSTOM_PALETTE, paletteRuntime } = await import("./palette");
+  const b = browser();
+  Object.assign(b.storage, {
+    removeItem: vi.fn((key: string) => b.values.delete(key)),
+  });
+  const appearance = createAppearance(b.host);
+  appearance.setPalette(DEFAULT_CUSTOM_PALETTE);
+  expect(JSON.parse(b.values.get(paletteRuntime.key) ?? "null")).toEqual(
+    DEFAULT_CUSTOM_PALETTE,
+  );
+  expect(b.root.dataset.customPalette).toBe("");
+  const latest = structuredClone(DEFAULT_CUSTOM_PALETTE);
+  latest.light.accent = "#663399";
+  b.values.set(paletteRuntime.key, JSON.stringify(latest));
+  b.change(paletteRuntime.key);
+  expect(appearance.snapshot().palette).toEqual(latest);
+  appearance.setPalette(null);
+  expect(b.values.has(paletteRuntime.key)).toBe(false);
+  expect(b.root.dataset.customPalette).toBeUndefined();
+  expect(b.root.style.removeProperty).toHaveBeenCalledWith("--accent-9-light");
+  appearance.dispose();
+});
+
+it("retains session-active custom colors on failed save and supports retry", async () => {
+  const { DEFAULT_CUSTOM_PALETTE, paletteRuntime } = await import("./palette");
+  const b = browser();
+  const appearance = createAppearance(b.host);
+  b.storage.setItem.mockImplementationOnce(() => {
+    throw new Error("denied");
+  });
+  appearance.setPalette(DEFAULT_CUSTOM_PALETTE);
+  expect(appearance.snapshot().palette).toEqual(DEFAULT_CUSTOM_PALETTE);
+  expect(appearance.snapshot().paletteError).toContain("active");
+  expect(b.values.has(paletteRuntime.key)).toBe(false);
+  appearance.setPalette(appearance.snapshot().palette);
+  expect(appearance.snapshot().paletteError).toBeNull();
+  expect(b.values.has(paletteRuntime.key)).toBe(true);
+  appearance.dispose();
 });

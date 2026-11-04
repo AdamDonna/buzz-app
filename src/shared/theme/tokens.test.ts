@@ -1,3 +1,8 @@
+import {
+  paletteRuntime,
+  DEFAULT_CUSTOM_PALETTE,
+  type CustomPalette,
+} from "./palette";
 import { ACCENTS, DEFAULT_ACCENT, type Accent } from "./accent";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
@@ -18,6 +23,7 @@ function resolvedPalette(
   mode: "light" | "dark",
   accent: Accent = DEFAULT_ACCENT,
   contrastMode: "low" | "high" = "low",
+  custom: CustomPalette | null = null,
 ) {
   const source = (
     readFileSync("src/shared/design-system/styles/tokens.css", "utf8") +
@@ -29,6 +35,13 @@ function resolvedPalette(
     /([^{}]+)\{([^{}]*)\}/g,
   )) {
     if (!selector.includes(":root") && !selector.includes(".dark")) continue;
+    if (
+      selector
+        .split(",")
+        .every((part) => part.includes("data-custom-palette")) &&
+      !custom
+    )
+      continue;
     if (
       selector.includes('data-accent="') &&
       !selector.includes(`data-accent="${accent}"`)
@@ -49,6 +62,7 @@ function resolvedPalette(
     ))
       values[name] = value.trim();
   }
+  Object.assign(values, paletteRuntime.properties(custom));
   return resolveAliases(values);
 }
 
@@ -171,7 +185,8 @@ it("a scoped dark surface rebinds glass roles inherited from a light app", () =>
   for (const [, selector = "", body = ""] of source.matchAll(
     /([^{}]+)\{([^{}]*)\}/g,
   )) {
-    if (!selector.includes(".dark")) continue;
+    if (!selector.includes(".dark") || selector.includes("data-custom-palette"))
+      continue;
     for (const [, name = "", value = ""] of body.matchAll(
       /(--[\w-]+):\s*([^;]+);/g,
     ))
@@ -375,3 +390,40 @@ it.each(ACCENTS)(
       }
   },
 );
+
+it("custom palettes separate shell/sidebar selection from neutral reading surfaces and built-in controls", () => {
+  for (const mode of ["light", "dark"] as const) {
+    for (const vibe of ["low", "high"] as const) {
+      const custom = structuredClone(DEFAULT_CUSTOM_PALETTE);
+      custom[mode].selection = "#663399";
+      const defaults = resolvedPalette(mode, DEFAULT_ACCENT, vibe);
+      const resolved = resolvedPalette(mode, DEFAULT_ACCENT, vibe, custom);
+      const effective = paletteRuntime.resolve(custom, mode).effective;
+      expect(resolved["--bg-app"]).toBe(effective.window);
+      expect(resolved["--surface-sidebar"]).toBe(effective.sidebar);
+      expect(resolved["--surface-sidebar-selected"]).toBe(effective.selection);
+      for (const role of [
+        "--surface-panel",
+        "--surface-message",
+        "--surface-popover",
+        "--text-standard",
+        "--text-subtle",
+        "--affordance-prominent",
+        "--text-on-prominent",
+      ])
+        expect(resolved[role], role).toBe(defaults[role]);
+      expect(
+        contrast(
+          resolved["--text-message-own"],
+          resolved["--surface-message-own"],
+        ),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrast(
+          resolved["--text-sidebar-selected"],
+          resolved["--surface-sidebar-selected"],
+        ),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  }
+});

@@ -1386,6 +1386,7 @@
 .light,
 :root {
   --bg-app: var(--neutral-quiet-hover);
+  --surface-sidebar: var(--surface-panel);
 }
 
 :root {
@@ -1532,6 +1533,7 @@
 :root[data-color-mode="dark"],
 .dark {
   --bg-app: var(--neutral-2);
+  --surface-sidebar: var(--surface-panel);
   --bg-panel: var(--surface-panel);
   --border-image: var(--image-rim);
   --bg-float: var(--surface-popover);
@@ -1944,6 +1946,7 @@
 
 /* Vibe changes bubble contrast only. Shared controls retain their neutral roles. */
 :root[data-color-level="touch"],
+[data-custom-palette][data-color-level="touch"].light,
 [data-color-level="touch"] .light {
   --surface-message-own: var(--accent-4);
   --text-message-own: var(--accent-12);
@@ -1951,6 +1954,7 @@
 }
 
 :root[data-color-level="touch"][data-color-mode="dark"],
+[data-custom-palette][data-color-level="touch"].dark,
 [data-color-level="touch"] .dark {
   --surface-message-own: var(--accent-4);
   --text-message-own: var(--accent-12);
@@ -1958,6 +1962,7 @@
 }
 
 :root[data-color-level="high"],
+[data-custom-palette][data-color-level="high"].light,
 [data-color-level="high"] .light {
   --affordance-mention-own: var(--accent-overlay);
   --affordance-mention-own-hover: var(--accent-overlay-hover);
@@ -1977,6 +1982,7 @@
 }
 
 :root[data-color-level="high"][data-color-mode="dark"],
+[data-custom-palette][data-color-level="high"].dark,
 [data-color-level="high"] .dark {
   --affordance-mention-own: var(--accent-overlay);
   --affordance-mention-own-hover: var(--accent-overlay-hover);
@@ -2002,6 +2008,30 @@
   --affordance-subtle: var(--neutral-5);
   --affordance-subtle-hover: var(--neutral-6);
   --affordance-subtle-pressed: var(--neutral-7);
+}
+
+/* Personal custom palettes are separate from built-in accent selection.
+   The runtime supplies validated opaque fills and paired ink for both modes.
+   Rebind aliases here: inherited custom properties are already resolved. */
+:root[data-custom-palette][data-color-mode="light"],
+[data-custom-palette].light,
+[data-custom-palette] .light {
+  --bg-app: var(--bg-app-custom-light);
+  --surface-sidebar: var(--surface-sidebar-custom-light);
+  --surface-sidebar-selected: var(--surface-sidebar-selected-custom-light);
+  --text-sidebar-selected: var(--text-sidebar-selected-custom-light);
+  --affordance-sidebar-hover: var(--affordance-sidebar-hover-custom-light);
+  --text-sidebar-hover: var(--text-sidebar-hover-custom-light);
+}
+:root[data-custom-palette][data-color-mode="dark"],
+[data-custom-palette].dark,
+[data-custom-palette] .dark {
+  --bg-app: var(--bg-app-custom-dark);
+  --surface-sidebar: var(--surface-sidebar-custom-dark);
+  --surface-sidebar-selected: var(--surface-sidebar-selected-custom-dark);
+  --text-sidebar-selected: var(--text-sidebar-selected-custom-dark);
+  --affordance-sidebar-hover: var(--affordance-sidebar-hover-custom-dark);
+  --text-sidebar-hover: var(--text-sidebar-hover-custom-dark);
 }
 
 /* ============================================================

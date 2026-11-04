@@ -1651,7 +1651,15 @@ their own link pairing. The composer uses the existing `accentButtonStyle` on
 Send; other prominent actions use the neutral prominent roles.
 
 Reuse the existing twelve-step ramps in each mode. Keep the fill and its paired
-ink together. Never recolor the whole shell. Nested dark scopes resolve their
+ink together. Built-in accent choices keep the shell neutral. Personal Custom
+palettes are a separate host-owned setting: Window and Sidebar inputs generate
+mode-safe opaque tints, Selection controls sidebar selected-row fill, and Accent
+supplies the message/Send ramp. Conversation panels, shared controls, status and
+media roles retain their existing owners. Show adjusted effective colors in the
+editor. Validate generated text pairs against WCAG AA and APCA, including bubble
+interaction overlays. Drafts stay in their preview until Save; imported data uses
+the same bounded versioned parser and resolver as startup and persistence.
+Nested dark scopes resolve their
 own ramp. Media pixels, the black viewing canvas, and white-on-dark media glass
 never follow the accent.
 

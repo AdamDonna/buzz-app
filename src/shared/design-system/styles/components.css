@@ -1817,6 +1817,9 @@
 
   /* SidebarNavigation copies main's compact sidebar appearance. Keep this global:
      applying nested shared selectors inside CSS Modules would rename their targets. */
+  .panel[data-sidebar-surface] {
+    background: var(--surface-sidebar);
+  }
   .buzz-sidebar-navigation {
     display: contents;
     --affordance-navigation-quiet: var(--affordance-sidebar-hover);

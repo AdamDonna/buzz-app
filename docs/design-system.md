@@ -463,3 +463,22 @@ exception. Existing UI palettes, Appearance preference IDs and semantic roles
 are unchanged. The mapping does not preserve the original fixed luminance,
 chroma, contrast or 35-degree hue sweep. Inspect real catalog captures in both
 themes; artwork and lighting also affect the resulting tiles.
+
+## Personal custom palettes
+
+Appearance can save one device-local version 1 Buzz palette with separate Light
+and Dark Window, Sidebar, Selection and Accent inputs. Window and Sidebar are
+converted to mode-safe tints so existing neutral controls remain readable;
+Selection colors sidebar selection independently of Accent. Strong fill/ink
+pairs reserve contrast for message interaction overlays. The editor shows the
+effective adjusted colors and supports draft preview, Save/Cancel/Reset and text
+import/export. Default accent neutrality remains unchanged.
+
+`shared/theme/palette-runtime.js` owns data validation and resolution. The public
+`appearance-palette.js` symlink lets the parser-blocking bootstrap use that exact
+implementation before CSS/React; the live appearance service bundles the same
+owner. Both modes are supplied together and semantic aliases rebind in mode
+scopes. Drafts are local to the editor. External saves retain an open draft;
+Cancel returns to the latest committed state. Failed saves remain session-active
+with retry. Reset removes the stored document and every custom inline override.
+Conversation panels, status colors, media and companion windows are unchanged.

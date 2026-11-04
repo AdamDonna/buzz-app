@@ -326,6 +326,13 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "bg-surface-sidebar",
+        variable: "--surface-sidebar",
+        pointsAt: "surface-panel, or a validated personal custom tint",
+        use: "Channel sidebar frame; separate from conversation panels.",
+        status: "core",
+      },
+      {
         token: "bg-surface-composer",
         variable: "--surface-composer",
         pointsAt: "surface-panel light / neutral-4 dark",

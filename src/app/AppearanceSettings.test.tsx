@@ -521,3 +521,72 @@ it.each([
     ).toBe(shown);
   },
 );
+
+it("custom palette drafts preview without saving, survive external changes and cancel to latest", async () => {
+  const { DEFAULT_CUSTOM_PALETTE, paletteRuntime } = await import(
+    "../shared/theme/palette"
+  );
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  render(<AppearanceSettings appearance={appearance} />);
+  fireEvent.click(screen.getByRole("button", { name: "Create custom theme" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Accent hex color" }), {
+    target: { value: "#663399" },
+  });
+  expect(appearance.snapshot().palette).toBeNull();
+  expect(localStorage.getItem(paletteRuntime.key)).toBeNull();
+  act(() => appearance.setPalette(DEFAULT_CUSTOM_PALETTE));
+  expect(screen.getByRole("textbox", { name: "Accent hex color" })).toHaveValue(
+    "#663399",
+  );
+  expect(screen.getByText(/The saved theme changed/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit custom theme" }));
+  expect(screen.getByRole("textbox", { name: "Accent hex color" })).toHaveValue(
+    DEFAULT_CUSTOM_PALETTE.light.accent,
+  );
+  fireEvent.change(screen.getByRole("textbox", { name: "Accent hex color" }), {
+    target: { value: "bad" },
+  });
+  expect(screen.getByRole("button", { name: "Save theme" })).toBeDisabled();
+  fireEvent.change(screen.getByRole("textbox", { name: "Accent hex color" }), {
+    target: { value: "#663399" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save theme" }));
+  expect(appearance.snapshot().palette?.light.accent).toBe("#663399");
+  fireEvent.click(screen.getByRole("button", { name: "Export palette text" }));
+  expect(
+    paletteRuntime.parse(
+      (
+        screen.getByRole("textbox", {
+          name: "Palette text",
+        }) as HTMLTextAreaElement
+      ).value,
+    ),
+  ).toEqual(appearance.snapshot().palette);
+  fireEvent.click(screen.getByRole("button", { name: "Reset theme" }));
+  expect(appearance.snapshot().palette).toBeNull();
+});
+
+it("rejects invalid imported themes and stages valid imports until Save", async () => {
+  const { DEFAULT_CUSTOM_PALETTE } = await import("../shared/theme/palette");
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  render(<AppearanceSettings appearance={appearance} />);
+  const transfer = screen.getByRole("textbox", { name: "Palette text" });
+  fireEvent.change(transfer, { target: { value: '{"version":2}' } });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Preview imported palette" }),
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent("version 1");
+  fireEvent.change(transfer, {
+    target: { value: JSON.stringify(DEFAULT_CUSTOM_PALETTE) },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Preview imported palette" }),
+  );
+  expect(appearance.snapshot().palette).toBeNull();
+  expect(screen.getByRole("button", { name: "Save theme" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Save theme" }));
+  expect(appearance.snapshot().palette).toEqual(DEFAULT_CUSTOM_PALETTE);
+});

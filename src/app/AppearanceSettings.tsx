@@ -1,3 +1,4 @@
+import { CustomPaletteSettings } from "./CustomPaletteSettings";
 import { Select } from "../shared/design-system/ui/Select";
 import { ACCENTS, accentButtonStyle } from "../shared/theme/accent";
 
@@ -64,6 +65,10 @@ export function AppearanceSettings({
     pendingFocus.current = null;
     if (target?.isConnected) target.focus();
   });
+  const snapshot = useSyncExternalStore(
+    appearance.subscribe,
+    appearance.snapshot,
+  );
   const {
     preference,
     mode,
@@ -74,7 +79,7 @@ export function AppearanceSettings({
     accentError,
     contrast,
     contrastError,
-  } = useSyncExternalStore(appearance.subscribe, appearance.snapshot);
+  } = snapshot;
   return (
     <section aria-labelledby="appearance-settings-title">
       <Header id="appearance-settings-title" title="Appearance" />
@@ -159,6 +164,11 @@ export function AppearanceSettings({
           />
           <PreferenceRow
             title="Accent color"
+            subtitle={
+              snapshot.palette
+                ? "Custom theme overrides these presets. Reset the custom theme to use them."
+                : undefined
+            }
             trailing={(label) => (
               <fieldset
                 {...label}
@@ -235,6 +245,11 @@ export function AppearanceSettings({
           />
         </SettingsGroup>
       </div>
+      <CustomPaletteSettings
+        appearance={appearance}
+        snapshot={snapshot}
+        active={active}
+      />
       <div className="mt-section-gap">
         <InlineHeader title="Conversations" />
         <SettingsGroup>

@@ -1,3 +1,4 @@
+import { paletteRuntime, type CustomPalette } from "./palette";
 import {
   ACCENT_KEY,
   CONTRAST_KEY,
@@ -42,6 +43,8 @@ export interface AppearanceSnapshot {
   readonly accentError: string | null;
   readonly contrast: Contrast;
   readonly contrastError: string | null;
+  readonly palette: CustomPalette | null;
+  readonly paletteError: string | null;
   readonly error: string | null;
 }
 
@@ -58,6 +61,8 @@ export function createAppearance(
   let state: AppearanceSnapshot = {
     preference: "system",
     mode: "light",
+    palette: null,
+    paletteError: null,
     error: null,
     fontScale: 1,
     fontError: null,
@@ -69,12 +74,14 @@ export function createAppearance(
   let disposed = false;
   let paletteGuard = 0;
   const listeners = new Set<() => void>();
+  let appliedPalette: CustomPalette | null | undefined;
   const apply = () => {
     if (!host) return;
     const root = host.document.documentElement;
     const changingPalette =
       root.dataset.colorMode &&
-      (root.dataset.colorMode !== state.mode ||
+      (appliedPalette !== state.palette ||
+        root.dataset.colorMode !== state.mode ||
         root.dataset.accent !== state.accent ||
         root.dataset.colorLevel !==
           (state.contrast === "low" ? "touch" : state.contrast));
@@ -86,6 +93,10 @@ export function createAppearance(
     // Preserve the existing soft-bubble selector for Chillin’.
     root.dataset.colorLevel =
       state.contrast === "low" ? "touch" : state.contrast;
+    if (appliedPalette !== state.palette) {
+      paletteRuntime.apply(root, state.palette);
+      appliedPalette = state.palette;
+    }
     if (guard) {
       // Commit the new palette before restoring interactive transitions.
       void root.offsetHeight;
@@ -189,8 +200,27 @@ export function createAppearance(
     }
     notify();
   };
+  const restorePalette = () => {
+    try {
+      state = {
+        ...state,
+        palette: paletteRuntime.parse(
+          host?.localStorage.getItem(paletteRuntime.key),
+        ),
+        paletteError: null,
+      };
+    } catch {
+      state = {
+        ...state,
+        paletteError:
+          "Custom theme could not be restored. Try saving it again.",
+      };
+    }
+    notify();
+  };
   const onStorage = (event: StorageEvent) => {
     if (
+      event.key !== paletteRuntime.key &&
       event.key !== APPEARANCE_KEY &&
       event.key !== FONT_SCALE_KEY &&
       event.key !== ACCENT_KEY &&
@@ -202,6 +232,8 @@ export function createAppearance(
     // Re-read the current value: an older queued event must not undo a newer save.
     try {
       if (event.storageArea !== host?.localStorage) return;
+      if (event.key === null || event.key === paletteRuntime.key)
+        restorePalette();
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
@@ -212,6 +244,8 @@ export function createAppearance(
       )
         restoreAccent();
     } catch {
+      if (event.key === null || event.key === paletteRuntime.key)
+        restorePalette();
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
@@ -227,6 +261,7 @@ export function createAppearance(
   restoreFont();
   restoreAccent();
   restoreContrast();
+  restorePalette();
   host?.addEventListener("storage", onStorage);
   systemScheme?.addEventListener("change", onSystemSchemeChange);
   return {
@@ -237,6 +272,27 @@ export function createAppearance(
       return () => {
         listeners.delete(listener);
       };
+    },
+    setPalette(value: CustomPalette | null) {
+      if (disposed) return;
+      const palette =
+        value === null ? null : paletteRuntime.parse(JSON.stringify(value));
+      if (value !== null && !palette) return;
+      let paletteError: string | null = null;
+      try {
+        if (!host) throw new Error("No browser storage");
+        if (palette)
+          host.localStorage.setItem(
+            paletteRuntime.key,
+            JSON.stringify(palette),
+          );
+        else host.localStorage.removeItem(paletteRuntime.key);
+      } catch {
+        paletteError =
+          "This custom theme is active, but could not be saved on this device. Try again.";
+      }
+      state = { ...state, palette, paletteError };
+      notify();
     },
     setMode(preference: ColorModePreference) {
       if (

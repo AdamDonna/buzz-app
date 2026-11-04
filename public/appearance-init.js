@@ -55,6 +55,16 @@
   }
   document.documentElement.dataset.colorLevel =
     contrast === "low" ? "touch" : contrast;
+  try {
+    globalThis.BuzzPalette?.apply(
+      document.documentElement,
+      globalThis.BuzzPalette.parse(
+        localStorage.getItem(globalThis.BuzzPalette.key),
+      ),
+    );
+  } catch {
+    /* Invalid or inaccessible custom data retains the built-in palette. */
+  }
   let scale = 1;
   try {
     const value = Number(localStorage.getItem("buzz-font-scale.v1"));
