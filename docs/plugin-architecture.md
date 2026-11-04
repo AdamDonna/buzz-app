@@ -1199,11 +1199,13 @@ SIGKILL three seconds later; the group is always killed once the process exits,
 so descendants do not outlive it. At most 64 processes run at once. Processes
 run with the user's full access by default; the import preview says so.
 `protection: { readOnlyPaths, hiddenPaths }` adds macOS containment for the worker
-and descendants. Both arrays contain existing paths, absolute or under the user's
-home written `~/…`. Read-only paths reject writes; hidden paths reject reads and
-writes. The host adds its application, plugin storage and actual Agents folder,
-blocks Apple Events, and refuses mutable development frontends or unsupported
-operating systems.
+and descendants. Both arrays contain paths, absolute or under the user's home
+written `~/…`. Hidden paths must exist; a read-only path may lack only its last
+component, under an existing parent other than `/`. Read-only paths reject writes,
+including creating a missing one; hidden paths reject reads and writes. The host
+adds its application, plugin storage and actual Agents folder, blocks Apple
+Events, and refuses mutable development frontends or unsupported operating
+systems.
 
 Contained launches require an app-bundled executable or an `artifact` descriptor;
 PATH-only entrypoints are refused. Artifact descriptors name an executable, absolute

@@ -3,9 +3,10 @@ import {
   type Choice,
   REQUEST_TIMEOUT_MS,
   type ServeMcp,
+  type Spawn,
   type ToolServer,
 } from "./goose";
-import { fakeSpawn, flush } from "./goose-testing";
+import { fakeSpawn, flush, gated } from "./goose-testing";
 import {
   AgentSessions,
   IDLE_MS,
@@ -32,6 +33,7 @@ const setup = (
     silent,
     onChange,
     store,
+    wrap,
   }: Readonly<{
     pool?: ServerPool;
     onChange?: () => void;
@@ -39,6 +41,8 @@ const setup = (
     /** Wraps the fake's `serve`. */
     serve?: (serve: ServeMcp) => ServeMcp;
     silent?: readonly string[];
+    /** Wraps the fake's `spawn`, as `gated(…).wrap` does. */
+    wrap?: (spawn: ReturnType<typeof fakeSpawn>["spawn"]) => Spawn;
   }> = {},
 ) => {
   const fake = fakeSpawn({
@@ -48,7 +52,7 @@ const setup = (
     providers: [{ providerId: "openai", defaultModel: "gpt-default" }],
   });
   const process = new SharedProcess(
-    fake,
+    wrap ? { ...fake, spawn: wrap(fake.spawn) } : fake,
     serve ? serve(fake.serve) : fake.serve,
   );
   /** Another agent in the same goose. */
@@ -95,6 +99,7 @@ const setup = (
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 /** A host that, like the app's, counts a server until its close finishes and
@@ -124,6 +129,31 @@ const host = (cap: number) => {
 };
 
 describe("AgentSessions", () => {
+  it("maps conversation and one-off keys to their native session IDs", async () => {
+    const { fake, sessions, process } = setup({}, true);
+    const delivery = sessions.deliver("thread", "one", 1);
+    const once = sessions.runOnce("watch", () => "two");
+    try {
+      await vi.waitFor(() => expect(fake.geese[0]?.turns).toHaveLength(2));
+      const turns = fake.geese[0]?.turns ?? [];
+      const normal = turns.find((turn) => turn.text === "one");
+      const standalone = turns.find((turn) => turn.text === "two");
+      expect(normal?.sessionId).toBeDefined();
+      expect(standalone?.sessionId).toBeDefined();
+      expect(sessions.sessionId("thread")).toBe(normal?.sessionId);
+      expect(sessions.sessionId("watch #1")).toBe(standalone?.sessionId);
+      expect(sessions.sessionId("missing")).toBeUndefined();
+      for (const turn of turns) turn.finish();
+      await Promise.all([delivery, once]);
+      expect(sessions.sessionId("watch #1")).toBeUndefined();
+    } finally {
+      sessions.dispose();
+      await process.shutdown();
+      await Promise.all([delivery, once]);
+    }
+    expect(sessions.sessionId("thread")).toBeUndefined();
+  });
+
   it("serves each conversation from its own session in one process", async () => {
     const { fake, sessions } = setup();
     await sessions.deliver("a", "one", 1);
@@ -882,6 +912,190 @@ describe("AgentSessions", () => {
     });
     expect(other.sessions.snapshot().map((live) => live.key)).toEqual(["a"]);
   });
+});
+
+/** `work`, and whether it has settled. */
+const tracked = <T>(work: Promise<T>) => {
+  const state = { settled: false, work };
+  const settle = () => {
+    state.settled = true;
+  };
+  work.then(settle, settle);
+  return state;
+};
+
+describe("AgentSessions shutdown", () => {
+  it.each(["a conversation", "a one-off turn", "a one-off turn given up"])(
+    "waits for a session still opening for %s, and closes it once open",
+    async (kind) => {
+      const held = gated("session/new");
+      const { fake, sessions } = setup({}, false, { wrap: held.wrap });
+      const abort = new AbortController();
+      const turn =
+        kind === "a conversation"
+          ? sessions.deliver("a", "one", 1)
+          : sessions.runOnce("watch/x", () => "look", {
+              signal: abort.signal,
+            });
+      await vi.waitFor(() => expect(held.waiting()).toHaveLength(1));
+      if (kind === "a one-off turn given up")
+        abort.abort(new Error("The agent was removed"));
+      const shutdown = tracked(sessions.shutdown());
+      await flush(30);
+      expect(shutdown.settled).toBe(false);
+      held.release();
+      await shutdown.work;
+      expect(fake.geese[0]?.closed).toEqual(["session-1"]);
+      expect(fake.geese[0]?.turns).toEqual([]);
+      await turn;
+    },
+  );
+
+  it("creates no session for a delivery still rebuilding its text", async () => {
+    const { fake, sessions, change } = setup();
+    await sessions.deliver("a", "one", 1);
+    change({ systemPrompt: "newer" });
+    let release!: () => void;
+    const rebuilding = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const late = sessions.deliver("a", "two", 2, {
+      fresh: async () => {
+        await rebuilding;
+        return "two again";
+      },
+    });
+    await flush(30);
+    await sessions.shutdown();
+    release();
+    await expect(late).resolves.toEqual({
+      ok: false,
+      error: "goose was stopped",
+      undelivered: true,
+    });
+    expect(fake.geese[0]?.opened).toHaveLength(1);
+    expect(fake.servers).toHaveLength(1);
+  });
+
+  it("waits for every close, then rejects with the one that failed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const held = gated("session/close", (id) => id === "session-1");
+    const { sessions } = setup({}, false, { wrap: held.wrap });
+    await sessions.deliver("a", "one", 1);
+    await sessions.deliver("b", "two", 2);
+    const shutdown = tracked(sessions.shutdown());
+    await vi.waitFor(() =>
+      expect(held.waiting()).toEqual(["session-1", "session-2"]),
+    );
+    held.release("session-1");
+    await flush(30);
+    expect(shutdown.settled).toBe(false);
+    held.release();
+    await expect(shutdown.work).rejects.toThrow("No active run");
+  });
+
+  it("waits for a close an idle session's eviction started", async () => {
+    const held = gated("session/close");
+    const { sessions, change } = setup({}, false, { wrap: held.wrap });
+    await sessions.deliver("a", "one", 1);
+    change({ systemPrompt: "newer" });
+    await vi.waitFor(() => expect(held.waiting()).toEqual(["session-1"]));
+    const shutdown = tracked(sessions.shutdown());
+    await flush(30);
+    expect(shutdown.settled).toBe(false);
+    held.release();
+    await shutdown.work;
+  });
+
+  it("fails again on retry while a close stays failed, and passes once goose has exited", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const held = gated("session/close", () => true);
+    const { fake, sessions, change } = setup({}, false, { wrap: held.wrap });
+    await sessions.deliver("a", "one", 1);
+    change({ systemPrompt: "newer" });
+    await vi.waitFor(() => expect(held.waiting()).toEqual(["session-1"]));
+    held.release();
+    await expect(sessions.shutdown()).rejects.toThrow("No active run");
+    await expect(sessions.shutdown()).rejects.toThrow("No active run");
+    fake.geese[0]?.exit(null);
+    await flush(30);
+    await expect(sessions.shutdown()).resolves.toBeUndefined();
+  });
+});
+
+it("keeps a worker whose initialize failed until it has exited, though its start fails at the time limit", async () => {
+  vi.useFakeTimers();
+  const fake = fakeSpawn();
+  let kills = 0;
+  const spawn: typeof fake.spawn = async (id, options = {}) => {
+    const process = await fake.spawn(id, options);
+    return {
+      ...process,
+      write: async (data) => {
+        if (!data.includes('"method":"initialize"')) return process.write(data);
+        const { id: request } = JSON.parse(data);
+        options.onStdout?.(
+          `${JSON.stringify({
+            jsonrpc: "2.0",
+            id: request,
+            error: { code: -32603, message: "init failed" },
+          })}\n`,
+        );
+      },
+      // Asked to stop, it exits only once the test lets it.
+      kill: async () => void kills++,
+    };
+  };
+  const process = new SharedProcess({ ...fake, spawn }, fake.serve);
+  const starting = tracked(process.get());
+  // A failed start waits 5 s for its worker to exit, then fails anyway.
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(kills).toBe(1);
+  expect(starting.settled).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(starting.settled).toBe(true);
+  await expect(starting.work).rejects.toThrow("init failed");
+  // Asked for again while it is exiting, it is the same failed start.
+  const again = process.get();
+  expect(again).toBe(starting.work);
+  await flush(30);
+  expect(fake.geese).toHaveLength(1);
+  const shutdown = tracked(process.shutdown());
+  await vi.advanceTimersByTimeAsync(5_000);
+  await flush(30);
+  expect(shutdown.settled).toBe(false);
+  expect(kills).toBe(2);
+  fake.geese[0]?.exit(null);
+  await shutdown.work;
+  await expect(again).rejects.toThrow("init failed");
+  // Once it has exited, the next call starts another.
+  const retry = process.get();
+  retry.catch(() => undefined);
+  await flush(30);
+  expect(fake.geese).toHaveLength(2);
+  fake.geese[1]?.exit(null);
+  await expect(retry).rejects.toThrow("init failed");
+});
+
+it("repeats a failed kill on the next retirement", async () => {
+  const fake = fakeSpawn();
+  let kills = 0;
+  const spawn: typeof fake.spawn = async (id, options) => ({
+    ...(await fake.spawn(id, options)),
+    // The first kill fails; it exits only once the test lets it.
+    kill: async () => {
+      if (++kills === 1) throw new Error("kill failed");
+    },
+  });
+  const process = new SharedProcess({ ...fake, spawn }, fake.serve);
+  await process.get();
+  await expect(process.shutdown()).rejects.toThrow("kill failed");
+  const shutdown = tracked(process.shutdown());
+  await flush(30);
+  expect(kills).toBe(2);
+  expect(shutdown.settled).toBe(false);
+  fake.geese[0]?.exit(null);
+  await shutdown.work;
 });
 
 it("keeps saved conversations per agent in storage, most recent first", () => {
