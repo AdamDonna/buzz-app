@@ -16,13 +16,15 @@ export function useActivityIndicator(
   participants?: readonly string[],
   requestId?: string,
 ) {
+  // Only the row that owns the live signal reads it; other rows must not
+  // re-render on every typing pulse or activity step.
   const typing = useSyncExternalStore(
-    session?.typing?.subscribe ?? noSubscribe,
-    session?.typing?.snapshot ?? noTyping,
+    (eligible && session?.typing?.subscribe) || noSubscribe,
+    (eligible && session?.typing?.snapshot) || noTyping,
   );
   const activity = useSyncExternalStore(
-    session?.agentActivity?.subscribe ?? noSubscribe,
-    session?.agentActivity?.snapshot ?? noActivity,
+    (eligible && session?.agentActivity?.subscribe) || noSubscribe,
+    (eligible && session?.agentActivity?.snapshot) || noActivity,
   );
   const represented = new Set(participants ?? [row.authorId]);
   const detail = eligible

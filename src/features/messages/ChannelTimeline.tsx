@@ -1,5 +1,5 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The history region must support keyboard scrolling.
-import { TypingIndicator, useConversationAgents } from "./TypingIndicator";
+import { TypingIndicator, useLiveConversationAgents } from "./TypingIndicator";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
 import { ActivityExpansion } from "./ActivityExpansion";
 import { useChannelIdentityNames } from "../identity-names/react";
@@ -16,6 +16,7 @@ import {
 import {
   activityDisplayRows,
   useActivityPresentation,
+  useStableRowActivity,
 } from "./activity-presentation";
 import { DayDivider } from "./MessageTimestamp";
 import type { ConversationExtensions } from "../conversation/contracts";
@@ -291,7 +292,8 @@ function Timeline({
     pinnedIds,
   );
   const activity = presentation.groups;
-  const { agents: liveAgents } = useConversationAgents(
+  const stableActivity = useStableRowActivity();
+  const liveAgents = useLiveConversationAgents(
     queries,
     channelId,
     undefined,
@@ -302,15 +304,24 @@ function Timeline({
     (navigation?.target.kind === "conversation"
       ? navigation.target.messageId
       : undefined);
-  const rows = useMemo(
-    () =>
-      activityDisplayRows(
-        chronologicalRows,
-        activity,
-        targetId ?? revealMessageId,
-      ),
-    [chronologicalRows, activity, targetId, revealMessageId],
-  );
+  // Activity updates rebuild the hidden-row filter without changing its
+  // result; keep the same rows so positioning effects keyed on them stay idle.
+  const displayedRows = useRef(chronologicalRows);
+  const rows = useMemo(() => {
+    const next = activityDisplayRows(
+      chronologicalRows,
+      activity,
+      targetId ?? revealMessageId,
+    );
+    const prior = displayedRows.current;
+    if (
+      next.length === prior.length &&
+      next.every((row, index) => row === prior[index])
+    )
+      return prior;
+    displayedRows.current = next;
+    return next;
+  }, [chronologicalRows, activity, targetId, revealMessageId]);
   const lastPublicMessage = publicMessageNeighbor(rows, rows.length, -1);
   const intent = useRef(0);
   // Keep expansion pending with scroll restoration until the saved row arrives.
@@ -1451,16 +1462,17 @@ function Timeline({
                   ).toDateString() !==
                   new Date(row.createdAt * 1000).toDateString();
             const renderMessage = (row: ChannelMessage, inside = false) => {
-              const recordedActivity = presentation.byRow.get(row.id);
               return (
                 <MessageRow
-                  representedAgents={presentation.representedAgents.get(row.id)}
-                  recordedActivity={
-                    recordedActivity && {
-                      ...recordedActivity,
-                      container: "history",
-                    }
-                  }
+                  representedAgents={stableActivity.agents(
+                    row.id,
+                    presentation.representedAgents.get(row.id),
+                  )}
+                  recordedActivity={stableActivity.activity(
+                    row.id,
+                    presentation.byRow.get(row.id),
+                    "history",
+                  )}
                   stackPrevious={
                     inside ||
                     (!!previousRow &&

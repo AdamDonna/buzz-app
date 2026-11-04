@@ -1,11 +1,12 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The thread region supports keyboard scrolling and Escape.
-import { TypingIndicator, useConversationAgents } from "./TypingIndicator";
+import { TypingIndicator, useLiveConversationAgents } from "./TypingIndicator";
 import { ActivityExpansion } from "./ActivityExpansion";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
 import {
   activityPresentation,
   activityDisplayRows,
-  useActivitySnapshot,
+  useChannelActivitySnapshot,
+  useStableRowActivity,
 } from "./activity-presentation";
 import { activityRuns } from "./activity-groups";
 import { DayDivider } from "./MessageTimestamp";
@@ -585,7 +586,12 @@ function ThreadMessages({
     view.snapshot,
     view.snapshot,
   );
-  const activitySnapshot = useActivitySnapshot(session.agentActivity);
+  const threadChannels = useMemo(() => new Set([channelId]), [channelId]);
+  const activitySnapshot = useChannelActivitySnapshot(
+    session.agentActivity,
+    threadChannels,
+  );
+  const stableActivity = useStableRowActivity();
   const resolvedRoot = snapshot.root?.id;
   const reportRoot = useRef(onResolvedRoot);
   reportRoot.current = onResolvedRoot;
@@ -1042,20 +1048,20 @@ function ThreadMessages({
     request: number;
   }>();
   const rootId = snapshot.root?.id;
-  const rootPresentation = activityPresentation(
-    snapshot.root?.audience === "agents"
-      ? [snapshot.root, ...snapshot.replies]
-      : snapshot.replies,
-    activitySnapshot,
-    agentPubkeys,
-    rootId,
+  const rootPresentation = useMemo(
+    () =>
+      activityPresentation(
+        snapshot.root?.audience === "agents"
+          ? [snapshot.root, ...snapshot.replies]
+          : snapshot.replies,
+        activitySnapshot,
+        agentPubkeys,
+        rootId,
+      ),
+    [snapshot.root, snapshot.replies, activitySnapshot, agentPubkeys, rootId],
   );
   const rootActivity = rootId ? rootPresentation.byRow.get(rootId) : undefined;
-  const { agents: liveAgents } = useConversationAgents(
-    session,
-    channelId,
-    rootId,
-  );
+  const liveAgents = useLiveConversationAgents(session, channelId, rootId);
   const lastMessage = publicMessageNeighbor(rows, rows.length, -1);
   const joinsLive =
     !!lastMessage &&
@@ -1521,15 +1527,15 @@ function ThreadMessages({
         return (
           <MessageRow
             keepMounted={keepActivityMounted}
-            representedAgents={presentation.representedAgents.get(row.id)}
-            recordedActivity={
-              recordedActivity && {
-                ...recordedActivity,
-                container: groupedIds.has(row.id)
-                  ? "history"
-                  : recordedActivity.container,
-              }
-            }
+            representedAgents={stableActivity.agents(
+              row.id,
+              presentation.representedAgents.get(row.id),
+            )}
+            recordedActivity={stableActivity.activity(
+              row.id,
+              recordedActivity,
+              groupedIds.has(row.id) ? "history" : recordedActivity?.container,
+            )}
             viewer={session.viewer}
             extensions={extensions}
             session={session}
@@ -1852,12 +1858,15 @@ function ThreadMessages({
               onReply={soloConversation ? undefined : focusReply}
               stackNext={joinsLive && snapshot.root.id === lastMessage?.id}
               row={snapshot.root}
-              representedAgents={rootPresentation.representedAgents.get(
+              representedAgents={stableActivity.agents(
                 snapshot.root.id,
+                rootPresentation.representedAgents.get(snapshot.root.id),
               )}
-              recordedActivity={
-                rootActivity && { ...rootActivity, container: "history" }
-              }
+              recordedActivity={stableActivity.activity(
+                snapshot.root.id,
+                rootActivity,
+                "history",
+              )}
               profile={profiles.get(snapshot.root.authorId)}
               participantProfiles={profiles}
               agentPubkeys={agentPubkeys}

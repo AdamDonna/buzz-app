@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useLayoutEffect,
   useMemo,
@@ -32,12 +33,18 @@ function createPresentation() {
         listeners.delete(listener);
       };
     },
-    register(value: Replacement) {
-      const token = Symbol();
-      entries.set(token, value);
+    /** One publish per batch: every mounted row re-reads on each publish. */
+    register(...values: Replacement[]) {
+      const tokens = values.map((value) => {
+        const token = Symbol();
+        entries.set(token, value);
+        return token;
+      });
       publish();
       return () => {
-        if (entries.delete(token)) publish();
+        let removed = false;
+        for (const token of tokens) removed = entries.delete(token) || removed;
+        if (removed) publish();
       };
     },
   };
@@ -50,7 +57,6 @@ const Presentation = createContext<
   | undefined
 >(undefined);
 const empty: readonly Replacement[] = [];
-const emptySnapshot = () => empty;
 const noopSubscribe = () => () => {};
 
 /** Mounted conversation presentation only; no data, timers, or plugin identity checks. */
@@ -116,18 +122,15 @@ function useReplacement(
   useLayoutEffect(() => {
     if (!active || !enabled || !session || !channelId || !participantKeys)
       return;
-    const releases = participantKeys.split(":").map((pubkey) =>
-      store?.register({
+    return store?.register(
+      ...participantKeys.split(":").map((pubkey) => ({
         session,
         channelId,
         threadRootId,
         pubkey,
         requestId,
-      }),
+      })),
     );
-    return () => {
-      for (const release of releases) release?.();
-    };
   }, [
     store,
     active,
@@ -146,39 +149,45 @@ export function useReplacedTypers(
 ) {
   const context = useContext(Presentation);
   const activityStore = useContext(ActivityPresentation);
-  const activityEntries = useSyncExternalStore(
-    activityStore?.subscribe ?? noopSubscribe,
-    activityStore?.snapshot ?? emptySnapshot,
-    emptySnapshot,
+  const store = context?.store;
+  const active = context?.active;
+  // Select this conversation's keys: unrelated registrations must not
+  // re-render every mounted row.
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const stops = [
+        store?.subscribe(listener),
+        activityStore?.subscribe(listener),
+      ];
+      return () => {
+        for (const stop of stops) stop?.();
+      };
+    },
+    [store, activityStore],
   );
-  const entries = useSyncExternalStore(
-    context?.store.subscribe ?? noopSubscribe,
-    context?.store.snapshot ?? emptySnapshot,
-    emptySnapshot,
-  );
-  return useMemo(
-    () =>
-      new Set(
-        [...(context?.active ? entries : []), ...activityEntries]
-          .filter(
-            (entry) =>
-              !entry.requestId &&
-              entry.session === session &&
-              entry.channelId === channelId &&
-              entry.threadRootId === threadRootId,
-          )
-          .map((entry) => entry.pubkey),
-      ),
-    [
-      context?.active,
-      entries,
-      activityEntries,
-      session,
-      channelId,
-      threadRootId,
-    ],
-  );
+  const getKey = () =>
+    keysOf(
+      [
+        ...(active ? (store?.snapshot() ?? empty) : empty),
+        ...(activityStore?.snapshot() ?? empty),
+      ],
+      (entry) =>
+        !entry.requestId &&
+        entry.session === session &&
+        entry.channelId === channelId &&
+        entry.threadRootId === threadRootId,
+    );
+  const key = useSyncExternalStore(subscribe, getKey, emptyKey);
+  return useMemo(() => keySet(key), [key]);
 }
+const emptyKey = () => "";
+const keysOf = (
+  entries: readonly Replacement[],
+  matches: (entry: Replacement) => boolean,
+) =>
+  [...new Set(entries.filter(matches).map((entry) => entry.pubkey))].join(":");
+const keySet = (key: string): ReadonlySet<string> =>
+  new Set(key ? key.split(":") : []);
 
 /** Recorded history owns request controls only while that history is mounted. */
 export function useRecordedActivityAgents(
@@ -187,20 +196,19 @@ export function useRecordedActivityAgents(
   requestId: string | undefined,
 ) {
   const store = useContext(ActivityPresentation);
-  const entries = useSyncExternalStore(
+  const getKey = () =>
+    keysOf(
+      store?.snapshot() ?? empty,
+      (entry) =>
+        entry.session === session &&
+        entry.channelId === channelId &&
+        !!requestId &&
+        entry.requestId === requestId,
+    );
+  const key = useSyncExternalStore(
     store?.subscribe ?? noopSubscribe,
-    store?.snapshot ?? emptySnapshot,
-    emptySnapshot,
+    getKey,
+    emptyKey,
   );
-  return new Set(
-    entries
-      .filter(
-        (entry) =>
-          entry.session === session &&
-          entry.channelId === channelId &&
-          !!requestId &&
-          entry.requestId === requestId,
-      )
-      .map((entry) => entry.pubkey),
-  );
+  return useMemo(() => keySet(key), [key]);
 }

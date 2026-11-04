@@ -1,4 +1,4 @@
-import { useMemo, useRef, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ChannelMessage } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import { requestWork } from "../agents/request-work";
@@ -29,12 +29,50 @@ export type ActivityRowPresentation = {
   container: "history" | "bubble" | "standalone";
 };
 const noSubscribe = () => () => {};
-const noActivity = () => undefined;
-export function useActivitySnapshot(activity: Activity | undefined) {
-  return useSyncExternalStore(
-    activity?.subscribe ?? noSubscribe,
-    activity?.snapshot ?? noActivity,
+
+const sameItems = <T>(a: readonly T[], b: readonly T[]) =>
+  a.length === b.length && a.every((item, index) => item === b[index]);
+/** Whether two snapshots agree on everything a request projection in these
+ * channels reads: their records, turns and local work, status and trimming. */
+function sameChannelActivity(
+  a: Snapshot | undefined,
+  b: Snapshot | undefined,
+  channels: ReadonlySet<string>,
+) {
+  if (a === b) return true;
+  if (!a || !b || a.status !== b.status || a.trimmed !== b.trimmed)
+    return false;
+  const records = (snapshot: Snapshot) =>
+    snapshot.records.filter((record) =>
+      record.channelIds.some((id) => channels.has(id)),
+    );
+  const local = (snapshot: Snapshot) =>
+    (snapshot.local ?? []).filter((work) => channels.has(work.channelId));
+  const turns = (snapshot: Snapshot) =>
+    JSON.stringify(
+      snapshot.turns.filter(
+        (turn) => !!turn.channelId && channels.has(turn.channelId),
+      ),
+    );
+  return (
+    sameItems(records(a), records(b)) &&
+    sameItems(local(a), local(b)) &&
+    turns(a) === turns(b)
   );
+}
+/** The activity snapshot, changing only when these channels' evidence does:
+ * work elsewhere in the session does not re-render this conversation. */
+export function useChannelActivitySnapshot(
+  activity: Activity | undefined,
+  channels: ReadonlySet<string>,
+) {
+  const held = useRef<Snapshot | undefined>(undefined);
+  const read = () => {
+    const live = activity?.snapshot();
+    if (!sameChannelActivity(held.current, live, channels)) held.current = live;
+    return held.current;
+  };
+  return useSyncExternalStore(activity?.subscribe ?? noSubscribe, read, read);
 }
 
 /** Status belongs to the triggering request, never to all work in its thread. */
@@ -221,7 +259,11 @@ export function useActivityPresentation(
   rootId?: string,
   pinnedIds?: ReadonlyMap<string, number>,
 ) {
-  const snapshot = useActivitySnapshot(activity);
+  const channels = useMemo(
+    () => new Set(rows.map((row) => row.channelId)),
+    [rows],
+  );
+  const snapshot = useChannelActivitySnapshot(activity, channels);
   const projection = useMemo(
     () => activityPresentation(rows, snapshot, agents, rootId),
     [rows, snapshot, agents, rootId],
@@ -265,4 +307,53 @@ export function activityDisplayRows<T extends ChannelMessage>(
   return hiddenIds.size
     ? rows.filter((row) => row.id === revealedId || !hiddenIds.has(row.id))
     : rows;
+}
+
+/** Each activity projection allocates fresh row values. Reuse the previous ones
+ * while they are equal, so memoized rows skip unrelated activity updates. */
+export function useStableRowActivity() {
+  const [stable] = useState(() => {
+    const activities = new Map<string, ActivityRowPresentation>();
+    const agents = new Map<string, readonly string[]>();
+    return {
+      activity(
+        id: string,
+        next: ActivityRowPresentation | undefined,
+        container = next?.container,
+      ) {
+        if (!next || !container) {
+          activities.delete(id);
+          return undefined;
+        }
+        const prior = activities.get(id);
+        if (
+          prior &&
+          prior.requestId === next.requestId &&
+          prior.active === next.active &&
+          prior.ownsLive === next.ownsLive &&
+          prior.container === container
+        )
+          return prior;
+        const value = { ...next, container };
+        activities.set(id, value);
+        return value;
+      },
+      agents(id: string, next: readonly string[] | undefined) {
+        if (!next) {
+          agents.delete(id);
+          return undefined;
+        }
+        const prior = agents.get(id);
+        if (
+          prior &&
+          prior.length === next.length &&
+          prior.every((agent, index) => agent === next[index])
+        )
+          return prior;
+        agents.set(id, next);
+        return next;
+      },
+    };
+  });
+  return stable;
 }

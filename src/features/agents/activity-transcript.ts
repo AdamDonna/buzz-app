@@ -238,7 +238,29 @@ function configLabels(options: unknown) {
   });
 }
 
+// Snapshot record arrays are frozen and replaced on change, while indicators,
+// stop controls and previews read the same agent/channel on every tick.
+const transcripts = new WeakMap<object, Map<string, Transcript>>();
+
 export function activityTranscript(
+  records: readonly Source[],
+  scope: TranscriptScope,
+): Transcript {
+  if (!Object.isFrozen(records)) return buildTranscript(records, scope);
+  let byScope = transcripts.get(records);
+  if (!byScope) {
+    byScope = new Map();
+    transcripts.set(records, byScope);
+  }
+  const key = `${scope.agent}\n${scope.channelId ?? ""}`;
+  const cached = byScope.get(key);
+  if (cached) return cached;
+  const transcript = buildTranscript(records, scope);
+  byScope.set(key, transcript);
+  return transcript;
+}
+
+function buildTranscript(
   records: readonly Source[],
   scope: TranscriptScope,
 ): Transcript {

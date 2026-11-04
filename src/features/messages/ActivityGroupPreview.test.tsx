@@ -18,6 +18,7 @@ import { createRelaySession } from "../relay/session";
 import { keypair } from "../relay/testing";
 import type { ChannelMessage } from "../relay/contracts";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
+import { ActivityGroupActions } from "./ActivityGroupActions";
 import {
   activityPresentation,
   useActivityPresentation,
@@ -347,6 +348,47 @@ it("uses channel-qualified names for the excerpt and participant avatars", () =>
   } finally {
     cleanup();
     names.dispose();
+    owner.dispose();
+  }
+});
+
+it("follows live work for collapsed request controls only once they are shown", () => {
+  const owner = createRelaySession({
+    viewer: keypair().pubkey,
+    relayAuthor: keypair().pubkey,
+    media: () => undefined,
+    query: async () => [],
+  });
+  try {
+    const subscribe = vi.fn(owner.session.agentActivity.subscribe);
+    const session = {
+      ...owner.session,
+      agentActivity: { ...owner.session.agentActivity, subscribe },
+    };
+    const group = activityPresentation([step], undefined, new Set(["agent"]))
+      .groups[0];
+    if (!group) throw new Error("Missing activity group");
+    const view = render(
+      <ActivityGroupActions
+        session={session}
+        group={group}
+        profiles={new Map()}
+        returnFocus={{ current: null }}
+        active={false}
+      />,
+    );
+    expect(subscribe).not.toHaveBeenCalled();
+    view.rerender(
+      <ActivityGroupActions
+        session={session}
+        group={group}
+        profiles={new Map()}
+        returnFocus={{ current: null }}
+        active
+      />,
+    );
+    expect(subscribe).toHaveBeenCalled();
+  } finally {
     owner.dispose();
   }
 });

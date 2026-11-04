@@ -38,7 +38,10 @@ import { useKnownAgentPubkeys } from "../agents/use-known";
 import { MessageComposer } from "./MessageComposer";
 import { ImageReviewStage } from "./ImageReviewStage";
 import { MessageRow } from "./MessageRow";
-import { useActivityPresentation } from "./activity-presentation";
+import {
+  useActivityPresentation,
+  useStableRowActivity,
+} from "./activity-presentation";
 import { parseMediaTimeReply } from "./media-timecode";
 import { VideoReviewReactions } from "./VideoReviewReactions";
 import styles from "./Messages.module.css";
@@ -611,6 +614,7 @@ function ReviewComments({
     session.agentActivity,
     agentPubkeys,
   );
+  const stableActivity = useStableRowActivity();
   const comments = useRef<HTMLElement>(null);
   useEffect(() => {
     if (selectedComment)
@@ -638,7 +642,6 @@ function ReviewComments({
         aria-label="Media comments"
       >
         {replies.map((row, index) => {
-          const recordedActivity = activity.byRow.get(row.id);
           return (
             <div
               key={row.id}
@@ -648,12 +651,11 @@ function ReviewComments({
             >
               <MessageRow
                 row={row}
-                recordedActivity={
-                  recordedActivity && {
-                    ...recordedActivity,
-                    container: "history",
-                  }
-                }
+                recordedActivity={stableActivity.activity(
+                  row.id,
+                  activity.byRow.get(row.id),
+                  "history",
+                )}
                 extensions={extensions}
                 session={session}
                 scope={scope}

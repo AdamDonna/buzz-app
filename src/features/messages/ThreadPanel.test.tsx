@@ -35,7 +35,7 @@ import { formatPublicKey } from "../../shared/identity/public-key";
 // Activity rendering/subscriptions have their own mounted integration suite.
 vi.mock("./TypingIndicator", () => ({
   TypingIndicator: () => null,
-  useConversationAgents: () => ({ agents: [] }),
+  useLiveConversationAgents: () => [],
 }));
 vi.mock("../relay/react", () => {
   const profiles = new Map();

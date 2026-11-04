@@ -1045,3 +1045,44 @@ it.each([0, 1])(
     }
   },
 );
+
+it("keeps positioning idle when an unrelated activity update leaves the shown rows unchanged", () => {
+  const { owner, updates, content } = activityFixture();
+  try {
+    const history = updates(2);
+    const last = history.at(-1);
+    if (!last) throw new Error("Missing activity");
+    const { audience: _audience, ...reply } = last;
+    const listeners = new Set<() => void>();
+    let snapshot = owner.session.agentActivity.snapshot();
+    const queries = {
+      ...owner.session,
+      agentActivity: {
+        ...owner.session.agentActivity,
+        snapshot: () => snapshot,
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    };
+    render(
+      content(
+        [...history, { ...reply, id: "reply", content: "Main reply" }],
+        undefined,
+        true,
+        queries,
+      ),
+    );
+    expect(screen.queryByText("Update 0")).toBeNull();
+    const positioned = vi.mocked(requestAnimationFrame).mock.calls.length;
+    act(() => {
+      snapshot = { ...snapshot, records: Object.freeze([]) };
+      for (const listener of listeners) listener();
+    });
+    expect(screen.queryByText("Update 0")).toBeNull();
+    expect(vi.mocked(requestAnimationFrame).mock.calls.length).toBe(positioned);
+  } finally {
+    owner.dispose();
+  }
+});

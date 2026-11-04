@@ -154,6 +154,7 @@ export function ActivityGroupPreview({
                 session={session}
                 group={group}
                 returnFocus={disclosure}
+                active={expanded}
                 profiles={profiles}
                 open={openActivity}
                 canOpen={canOpenActivity}

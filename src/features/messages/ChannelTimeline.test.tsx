@@ -27,7 +27,7 @@ import type { ChannelMessage, ChannelWindow } from "../relay/contracts";
 // Activity rendering/subscriptions have their own mounted integration suite.
 vi.mock("./TypingIndicator", () => ({
   TypingIndicator: () => null,
-  useConversationAgents: () => ({ agents: [] }),
+  useLiveConversationAgents: () => [],
 }));
 vi.mock("./use-reading", () => ({
   useReading: vi.fn(),

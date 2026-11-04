@@ -529,3 +529,22 @@ it("splits prompt sections and keeps unterminated framing as text", () => {
     { tag: "text", body: "intro\n<x>\nopen" },
   ]);
 });
+
+it("reuses a transcript for the same frozen records and scope", () => {
+  const records = Object.freeze([
+    record([event("t1", "turn_started", { prompt: "go" })]),
+  ]);
+  const first = activityTranscript(records, { agent, channelId: "alpha" });
+  expect(activityTranscript(records, { agent, channelId: "alpha" })).toBe(
+    first,
+  );
+  expect(activityTranscript(records, { agent, channelId: "beta" })).not.toBe(
+    first,
+  );
+  expect(
+    activityTranscript([...records], { agent, channelId: "alpha" }),
+  ).toEqual(first);
+  expect(
+    activityTranscript([...records], { agent, channelId: "alpha" }),
+  ).not.toBe(first);
+});

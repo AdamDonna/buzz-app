@@ -3,6 +3,8 @@ import type { MessageLinkOrigin } from "./MessageRow";
 import {
   useCallback,
   useContext,
+  useMemo,
+  useRef,
   useSyncExternalStore,
   type RefObject,
 } from "react";
@@ -19,9 +21,11 @@ import {
 import type { RelaySession } from "../relay/session";
 import type { Profile } from "../relay/contracts";
 import {
-  useActivitySnapshot,
+  useChannelActivitySnapshot,
   type ActivityPresentation,
 } from "./activity-presentation";
+
+const noSubscribe = () => () => {};
 
 /** The visible history owns navigation and controls for its exact request. */
 export function ActivityGroupActions({
@@ -31,8 +35,11 @@ export function ActivityGroupActions({
   open,
   canOpen,
   returnFocus,
+  active,
 }: {
   returnFocus: RefObject<HTMLButtonElement | null>;
+  /** False while the history is collapsed; a pending stop keeps tracking. */
+  active: boolean;
   session: RelaySession;
   group: ActivityPresentation;
   profiles: ReadonlyMap<string, Profile>;
@@ -60,9 +67,18 @@ export function ActivityGroupActions({
     },
     [returnFocus],
   );
-  const snapshot = useActivitySnapshot(session.agentActivity);
+  // Collapsed controls are hidden; follow live work only while shown or
+  // while a stop awaits its evidence, so its pending state still resolves.
+  const stopping = useRef(false);
+  const tracking = active || stopping.current;
+  const channelId = group.latest.channelId;
+  const channels = useMemo(() => new Set([channelId]), [channelId]);
+  const snapshot = useChannelActivitySnapshot(
+    tracking ? session.agentActivity : undefined,
+    channels,
+  );
   const choices = useSyncExternalStore(
-    session.agentChoices.subscribe,
+    tracking ? session.agentChoices.subscribe : noSubscribe,
     session.agentChoices.snapshot,
   );
   const resolveName = useChannelIdentityNames(session, group.latest.channelId);
@@ -74,7 +90,7 @@ export function ActivityGroupActions({
         agent.slice(0, 10),
     );
   const agents = useContext(AgentsContext);
-  useAgentsSnapshot(agents);
+  useAgentsSnapshot(tracking ? agents : undefined);
   const { requestId, latest, participants } = group;
   const work =
     snapshot && requestId
@@ -95,6 +111,7 @@ export function ActivityGroupActions({
     return control ? [{ control, agent: entry.agent }] : [];
   });
   const { pending, stop } = useWorkStops(controls.map((row) => row.control));
+  stopping.current = pending.size > 0;
   return (
     <div className="flex flex-wrap items-center gap-2">
       {participants.map((agent) => {
