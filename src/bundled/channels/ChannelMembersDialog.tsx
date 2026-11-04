@@ -2280,7 +2280,12 @@ export function ChannelMembersDialog({
       {share.confirmation && chosen && (
         <AlertDialog
           title={`Share chat in ${channelText(chosen)}?`}
-          description={`This will change the chat from Private to View only and post its link in ${channelText(chosen)}. ${SOLO_ACCESS_DISCLOSURE}`}
+          description={
+            <>
+              {`This will change the chat from Private to View only and post its link in ${channelText(chosen)}. `}
+              <span className="mt-3 block">{SOLO_ACCESS_DISCLOSURE}</span>
+            </>
+          }
           pending={share.busy}
           onClose={share.cancelConfirmation}
           initialFocus={cancelShare}
