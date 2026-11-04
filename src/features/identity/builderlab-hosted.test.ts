@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import { relayOrigin } from "../communities/destination";
 import type { FoundCommunity } from "../communities/find-community";
-import { hostedByThisBuilderlab } from "./builderlab-hosted";
+import {
+  atPublicBuilderlab,
+  hostedByThisBuilderlab,
+} from "./builderlab-hosted";
 
 const PUBLIC = "https://app.builderlab.xyz";
 const PUBLIC_SELF =
@@ -59,4 +62,25 @@ it("falls back to the relay key when the hostname is unknown, on the default por
   expect(hosted("wss://buzz.example", "ab".repeat(32))).toBe(false);
   // An unknown relay with no `self` never matches, even with no build URL.
   expect(hostedByThisBuilderlab(found("wss://buzz.example"), "")).toBe(false);
+});
+
+it.each([
+  PUBLIC,
+  `${PUBLIC}/`,
+  // A federated-identity build at the public portal, as vite.config.ts
+  // derives it from an `apiBasePath` of /buzz/api/goose/.
+  `${PUBLIC}/buzz`,
+])("%s is the public Builderlab", (build) => {
+  expect(atPublicBuilderlab(build)).toBe(true);
+});
+
+it.each([
+  "",
+  "not a url",
+  "http://app.builderlab.xyz",
+  "https://app.builderlab.xyz:8443",
+  "https://staging.app.builderlab.xyz",
+  "https://builderlab.example",
+])("%s is not the public Builderlab", (build) => {
+  expect(atPublicBuilderlab(build)).toBe(false);
 });

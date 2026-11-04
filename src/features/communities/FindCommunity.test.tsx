@@ -236,6 +236,69 @@ it("holds the page while onJoin is pending and leaves a failed join's meaning to
   expect(onJoin).toHaveBeenCalledTimes(2);
 });
 
+it("with autoJoin a found community asking no consent joins at once, holding the page without Join Community, and Join Community follows a join that returns", async () => {
+  const request = relay(() => ({
+    "/": Response.json(buzz),
+    "/api/join-policy": new Response("missing", { status: 404 }),
+  }));
+  const pending = deferred<void>();
+  const onJoin = vi
+    .fn<(found: unknown, consent: unknown) => Promise<void>>()
+    .mockReturnValueOnce(pending.promise);
+  const onCancel = vi.fn();
+  const user = userEvent.setup();
+  render(
+    <FindCommunity
+      url={url}
+      onCancel={onCancel}
+      onJoin={onJoin}
+      autoJoin
+      request={request}
+    />,
+  );
+  await waitFor(() =>
+    expect(onJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ url, host }),
+      { adult: false, agreed: false },
+    ),
+  );
+  expect(
+    screen.getByRole("heading", { name: "Joining community" }),
+  ).toBeVisible();
+  expect(joinCommunity()).toBeNull();
+  expect(screen.queryByRole("button", { name: /join/i })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onCancel).not.toHaveBeenCalled();
+  // A join that returns without the caller moving on can be tried again.
+  await act(async () => pending.resolve());
+  expect(joinCommunity()).toBeVisible();
+  expect(join()).toBeEnabled();
+  expect(onJoin).toHaveBeenCalledTimes(1);
+});
+
+it("with autoJoin a policy's consent is still asked on Join Community", async () => {
+  const request = relay(() => ({
+    "/": Response.json(buzz),
+    "/api/join-policy": Response.json({ policy }),
+  }));
+  const onJoin = vi.fn();
+  render(
+    <FindCommunity
+      url={url}
+      onCancel={vi.fn()}
+      onJoin={onJoin}
+      autoJoin
+      request={request}
+    />,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Join Community" }),
+  ).toBeVisible();
+  expect(join()).toBeDisabled();
+  expect(onJoin).not.toHaveBeenCalled();
+});
+
 it("announces the lookup only after a second, and again a second after Retry", async () => {
   vi.useFakeTimers();
   try {

@@ -35,7 +35,13 @@ the interface unless an available tool actually supports that action.
   if backup fails temporarily, retry to complete setup. If backup is not supported
   by the build or account, choose **Continue without backup** to finish setup.
   Independent-community key imports
-  without Builderlab sign-in do not upload a backup. Existing community profiles
+  without Builderlab sign-in do not upload a backup. After signing in to the
+  public Builderlab, **Connect to a community** also offers **Create a
+  community** when that account is linked to this device’s key and may create one.
+  Choose an available address, then **Create community** joins it right away,
+  with no **Join Community** confirmation. Other Builderlab deployments do not
+  offer it during setup.
+  Existing community profiles
   are preserved and skip setup. A new profile needs a name; an avatar is optional. A returning account may restore
   its backed-up key where the build and account allow it. If the older Buzz app
   was used on this computer, a **Continue with your Buzz identity?** dialog
