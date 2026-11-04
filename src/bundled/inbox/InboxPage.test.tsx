@@ -2429,6 +2429,22 @@ it("a route that swaps Drafts keeps focus on the filter trigger", async () => {
   expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
 });
 
+it("a drafts route on a fresh Inbox leaves focus where navigation put it", async () => {
+  const h = fixture();
+  const focused: Element[] = [];
+  const record = (event: FocusEvent) => focused.push(event.target as Element);
+  document.addEventListener("focusin", record);
+  try {
+    render(viewAt(h, visit({ drafts: true })));
+    await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
+    expect(
+      focused.map((element) => element.getAttribute("aria-label")),
+    ).not.toContain("Inbox filters");
+  } finally {
+    document.removeEventListener("focusin", record);
+  }
+});
+
 it("a route that swaps Drafts leaves focus elsewhere alone", async () => {
   const h = fixture();
   const elsewhere = document.createElement("button");

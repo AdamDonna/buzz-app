@@ -356,10 +356,11 @@ function InboxList({
       return;
     appliedRoutes.add(navigation);
     // Like the menu, entering or leaving Drafts retires the Inbox action and
-    // restores focus the swapped surface dropped.
+    // restores focus the swapped surface dropped. Only focus inside this page
+    // can drop; a fresh open leaves focus where navigation put it.
     if (drafts !== "drafts" in route) {
       cancelRetry();
-      viewFocus.current = true;
+      viewFocus.current = !!split.ref.current?.contains(document.activeElement);
     }
     setDrafts("drafts" in route);
     if ("drafts" in route) return;
