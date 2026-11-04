@@ -45,9 +45,9 @@ export interface ProfileQueries {
   reserve?(members: number): () => void;
   /** Profiles the cache can hold now; one ensure may ask for at most this many. */
   limit?(): number;
-  /** Moves when the budget drops loaded profiles or a shrink cancels pending
-   * background reads. A view that requested names once and skips repeats must
-   * request again after it moves. */
+  /** Moves when the budget drops loaded profiles or a shrink cancels
+   * background reads asked for before the release. A view that requested names
+   * once and skips repeats must request again after it moves. */
   evictions?(): number;
   /** The community's current verified-profile authority, or undefined while
    * it advertises none. Subscribers are notified when it changes. */
@@ -98,6 +98,8 @@ export function createProfileDirectory(
     reading: boolean;
     refresh: boolean;
     cancel: AbortController;
+    // `releases` when it was last asked for.
+    releases: number;
   };
   const pending = new Map<string, Batch>();
   // The batch each read attempt's signal belongs to, so the session's accept
@@ -105,6 +107,9 @@ export function createProfileDirectory(
   const attempts = new WeakMap<AbortSignal, Batch>();
   // Background reads a shrink cancelled; counted with evictions.
   let cancelled = 0;
+  // Reservations released so far. A shrink cancels only background reads last
+  // asked for before the latest release.
+  let releases = 0;
   const listeners = new Set<() => void>();
   let snapshot: ReadonlyMap<string, Profile> = new Map();
   // Replaced, never mutated, so stores can compare it like `snapshot`.
@@ -333,6 +338,8 @@ export function createProfileDirectory(
     const missing = unique.filter((id) => {
       const batch = pending.get(id);
       if (batch) {
+        // A later requester keeps the read alive through a shrink.
+        batch.releases = releases;
         // Rejoin the equal read so the reader promotes it if still queued;
         // waiting on the old promise alone would leave it behind background work.
         if (priority === "foreground" && batch.priority === "background") {
@@ -369,6 +376,7 @@ export function createProfileDirectory(
         reading: false,
         refresh,
         cancel: new AbortController(),
+        releases,
         work: Promise.resolve(),
       };
       batch.work = retryRead(
@@ -450,12 +458,17 @@ export function createProfileDirectory(
     limit = next;
     verified?.resize(limit);
     let dropped = events.resize(limit, limit * PROFILE_ENTRY_BYTES) > 0;
-    // A read still in flight from the larger limit would land as the newest
-    // entries and push out names the next view just loaded. Foreground reads
-    // and reconnect refreshes keep going.
+    // A read asked for before the release would land as the newest entries
+    // and push out names the next view just loaded. The next view's own reads,
+    // foreground reads and reconnect refreshes keep going.
     if (shrink)
       for (const batch of new Set(pending.values())) {
-        if (batch.priority !== "background" || batch.refresh) continue;
+        if (
+          batch.priority !== "background" ||
+          batch.refresh ||
+          batch.releases === releases
+        )
+          continue;
         batch.cancel.abort();
         for (const id of batch.authors)
           if (pending.get(id) === batch) pending.delete(id);
@@ -476,6 +489,7 @@ export function createProfileDirectory(
     resize();
     return () => {
       if (!reservations.delete(reservation) || closed) return;
+      releases++;
       // Shrink after the current task: a view that releases and reserves again
       // in one commit (a roster count change, a remount) keeps its profiles.
       shrinking ??= setTimeout(resize);

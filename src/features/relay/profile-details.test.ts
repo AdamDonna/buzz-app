@@ -657,6 +657,64 @@ it("cancels background reads still in flight when it shrinks, but not foreground
   }
 });
 
+it("keeps background reads asked for after a release when the shrink runs", async () => {
+  vi.useFakeTimers();
+  const answers: {
+    authors: readonly string[];
+    resolve: (events: RelayEvent[]) => void;
+  }[] = [];
+  const read = vi.fn(
+    (
+      filters: readonly { authors?: readonly string[] | undefined }[],
+      options?: { signal?: AbortSignal },
+    ) =>
+      new Promise<RelayEvent[]>((resolve, reject) => {
+        answers.push({ authors: filters[0]?.authors ?? [], resolve });
+        options?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("Aborted", "AbortError")),
+        );
+      }),
+  );
+  const directory = createProfileDirectory({ read });
+  try {
+    const [stale, joined, fresh] = unsignedProfiles(3, "N") as [
+      RelayEvent,
+      RelayEvent,
+      RelayEvent,
+    ];
+    const release = directory.queries.reserve?.(1);
+    // The departing view's reads, both asked for before its release.
+    const departing = Promise.all([
+      directory.ensure([stale.pubkey], "background"),
+      directory.ensure([joined.pubkey], "background"),
+    ]);
+    const before = directory.queries.evictions?.() ?? 0;
+    release?.();
+    // The next view mounts before the shrink runs: one new read, and one
+    // author it joins on the departing view's pending read.
+    const next = directory.ensure([fresh.pubkey, joined.pubkey], "background");
+    expect(answers).toHaveLength(3);
+    await vi.runAllTimersAsync();
+    expect(directory.queries.limit?.()).toBe(1024);
+    // Only the stale read was cancelled.
+    expect(directory.queries.evictions?.()).toBe(before + 1);
+    for (const answer of answers)
+      answer.resolve(
+        [joined, fresh].filter((event) =>
+          answer.authors.includes(event.pubkey),
+        ),
+      );
+    await Promise.all([departing, next]);
+    const snapshot = directory.queries.snapshot();
+    expect(snapshot.has(fresh.pubkey)).toBe(true);
+    expect(snapshot.has(joined.pubkey)).toBe(true);
+    expect(snapshot.has(stale.pubkey)).toBe(false);
+  } finally {
+    directory.dispose();
+    vi.useRealTimers();
+  }
+});
+
 it("returns known-unnamed identities past the base when it shrinks", async () => {
   vi.useFakeTimers();
   const read = vi.fn(async () => []);
