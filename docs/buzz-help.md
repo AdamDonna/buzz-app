@@ -37,8 +37,9 @@ the interface unless an available tool actually supports that action.
   without Builderlab sign-in do not upload a backup. After signing in to the
   public Builderlab, **Connect to a community** also offers **Create a
   community** when that account is linked to this device’s key and may create one.
-  Choose an available address, then **Create community** joins it like an
-  entered address. Other Builderlab deployments do not offer it during setup.
+  Choose an available address, then **Create community** joins it right away,
+  with no **Join Community** confirmation. Other Builderlab deployments do not
+  offer it during setup.
   Existing community profiles
   are preserved and skip setup. A new profile needs a name; an avatar is optional. A returning account may restore
   its backed-up key where the build and account allow it. If the older Buzz app

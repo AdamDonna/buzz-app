@@ -36,6 +36,14 @@ const FAILURES: Record<FindFailure, { message: string; retry: boolean }> = {
   },
 };
 
+/** The consent Join Community asks for before `policy`'s community may be joined. */
+function consentAsked(policy: FoundCommunity["policy"]) {
+  return {
+    age: policy?.age_attestation_required === true,
+    agreement: Boolean(policy?.terms_markdown || policy?.privacy_markdown),
+  };
+}
+
 /**
  * Looks up a community at a canonical secure origin before any identity or
  * session exists. Owns nothing beyond the lookup: the caller either takes the
@@ -47,6 +55,7 @@ export function FindCommunity({
   onCancel,
   onFound,
   onJoin,
+  autoJoin = false,
   request = nativeRelayFetch,
   titleId,
   onboarding = false,
@@ -62,12 +71,19 @@ export function FindCommunity({
       /** Takes over a found community instead of showing Join Community; the lookup page stays until the caller moves on. */
       onFound: (found: FoundCommunity) => void;
       onJoin?: never;
+      autoJoin?: never;
     }
   | {
       onJoin: (
         found: FoundCommunity,
         consent: JoinConsent,
       ) => Promise<void> | void;
+      /**
+       * Joins a found community at once instead of showing Join Community,
+       * unless its policy asks for consent. Join Community still follows a
+       * join that returns without the caller moving on.
+       */
+      autoJoin?: boolean;
       onFound?: never;
     }
 )) {
@@ -75,11 +91,29 @@ export function FindCommunity({
   const [state, setState] = useState<State>({ status: "finding" });
   const [adult, setAdult] = useState(false);
   const [agreed, setAgreed] = useState(false);
-  const [joining, setJoining] = useState(false);
+  // How the pending `onJoin` began: from Join, or at once for `autoJoin`.
+  const [joining, setJoining] = useState<"confirmed" | "auto">();
   const inFlight = useRef<AbortController>(null);
+  const join = async (
+    found: FoundCommunity,
+    consent: JoinConsent,
+    how: "confirmed" | "auto",
+  ) => {
+    setJoining(how);
+    try {
+      await onJoin?.(found, consent);
+    } catch {
+      // The caller shows what a failed join means; here it only ends the wait.
+    } finally {
+      setJoining(undefined);
+    }
+  };
   const settle = useEffectEvent((found: FoundCommunity) => {
-    if (onFound) onFound(found);
-    else setState({ status: "found", found });
+    if (onFound) return onFound(found);
+    setState({ status: "found", found });
+    const asked = consentAsked(found.policy);
+    if (autoJoin && !asked.age && !asked.agreement)
+      void join(found, { adult: false, agreed: false }, "auto");
   });
   useEffect(() => {
     if (state.status !== "finding") return;
@@ -110,16 +144,24 @@ export function FindCommunity({
       {text}
     </h1>
   );
-  if (state.status === "finding")
+  // An automatic join holds the lookup's page, as Join Community holds while joining.
+  if (state.status === "finding" || joining === "auto")
     return (
       <>
-        {heading("Finding community")}
+        {heading(joining ? "Joining community" : "Finding community")}
         {/* An initial read: its status waits a second, the hostname and Cancel do not. */}
-        <LoadingRegion pending label={`Looking up ${host}…`}>
+        <LoadingRegion
+          pending
+          label={joining ? `Joining ${host}…` : `Looking up ${host}…`}
+        >
           <div className="flex flex-col gap-6">
             <p className="m-0 font-mono text-body text-subtle">{host}</p>
             <div>
-              <Button size={onboarding ? "lg" : "md"} onClick={cancel}>
+              <Button
+                size={onboarding ? "lg" : "md"}
+                onClick={cancel}
+                disabled={Boolean(joining)}
+              >
                 Cancel
               </Button>
             </div>
@@ -159,21 +201,8 @@ export function FindCommunity({
   const { found } = state;
   const name = communityName(found.name, found.host);
   const policy = found.policy;
-  const needsAge = policy?.age_attestation_required === true;
-  const needsAgreement = Boolean(
-    policy?.terms_markdown || policy?.privacy_markdown,
-  );
+  const { age: needsAge, agreement: needsAgreement } = consentAsked(policy);
   const consented = (!needsAge || adult) && (!needsAgreement || agreed);
-  const join = async () => {
-    setJoining(true);
-    try {
-      await onJoin?.(found, { adult, agreed });
-    } catch {
-      // The caller shows what a failed join means; here it only ends the wait.
-    } finally {
-      setJoining(false);
-    }
-  };
   return (
     <>
       {heading("Join Community")}
@@ -245,15 +274,15 @@ export function FindCommunity({
         <Button
           size={onboarding ? "lg" : "md"}
           onClick={cancel}
-          disabled={joining}
+          disabled={Boolean(joining)}
         >
           Cancel
         </Button>
         <Button
           variant="prominent"
           size={onboarding ? "lg" : "md"}
-          disabled={!consented || joining}
-          onClick={() => void join()}
+          disabled={!consented || Boolean(joining)}
+          onClick={() => void join(found, { adult, agreed }, "confirmed")}
         >
           Join
         </Button>

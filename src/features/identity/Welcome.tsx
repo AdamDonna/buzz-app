@@ -177,6 +177,9 @@ export function Welcome({
   // The code of the invite link `finding` came from, claimed on Join; "" for
   // a bare address. Every submit sets it with `finding`.
   const [inviteCode, setInviteCode] = useState("");
+  // Whether `finding` is the community just created, which its owner joins
+  // without Join Community. Every submit sets it with `finding`.
+  const [created, setCreated] = useState(false);
   const [joinError, setJoinError] = useState<{
     title: string;
     error: string;
@@ -458,9 +461,10 @@ export function Welcome({
     });
   };
   /** A submitted address or invite link: what to look up, and the code to claim. */
-  const find = (origin: string, code = "") => {
+  const find = (origin: string, code = "", justCreated = false) => {
     setFinding(origin);
     setInviteCode(code);
+    setCreated(justCreated);
   };
   /** Every way back to the landing, so a kept `finding` cannot re-enter discovery. */
   const backToLanding = () => {
@@ -973,19 +977,21 @@ export function Welcome({
             url={finding}
             onCancel={() => setFinding(undefined)}
             onJoin={(found, consent) => join(found, consent, inviteCode)}
+            autoJoin={created}
             titleId="welcome-title"
           />
         ) : creating && reads.current ? (
-          // The created community joins as an entered address does.
+          // The created community is looked up and joined as an entered
+          // address is, without Join Community.
           <CreateCommunityStep
             account={reads.current}
             quotaLimit={creatable?.quotaLimit}
             onCreated={(origin) => {
               setCreating(false);
-              // Kept in the field, as a typed address is, so a cancelled or
-              // failed join can find the new community again.
+              // Kept in the field, as a typed address is, so after Cancel its
+              // Continue finds the new community again, through Join Community.
               setEntered(new URL(origin).host);
-              find(origin);
+              find(origin, "", true);
             }}
             onBack={() => {
               returnFocus.current = "create";

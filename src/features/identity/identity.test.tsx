@@ -2537,7 +2537,7 @@ it("Connect to a community offers Create a community for an account the public B
   expect(relayCalls).toEqual([]);
   created.resolve("https://north-star.communities.buzz.xyz");
   await screen.findByRole("heading", { name: "Finding community" });
-  // The same unauthenticated lookup a typed address takes, then Join.
+  // The same unauthenticated lookup a typed address takes, then the join.
   expect(relayCalls).toEqual([
     {
       community: "https://north-star.communities.buzz.xyz",
@@ -2577,6 +2577,64 @@ it("Cancel on Finding community after a create returns to Connect to a community
     screen.getByRole("heading", { name: "Connect to a community" }),
   ).toBeVisible();
   expect(urlField()).toHaveValue("north-star.communities.buzz.xyz");
+  identity.dispose();
+});
+
+it("a created community is joined once found, without Join Community, and continues to the profile step", async () => {
+  vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://app.builderlab.xyz");
+  const member = keypair();
+  const relay = nativeRelay(member);
+  const gate = deferred<void>();
+  relay.query = gate.promise;
+  const identity = createIdentity();
+  const communities = communitiesFor(identity);
+  const user = userEvent.setup();
+  render(
+    <Welcome
+      identity={identity}
+      communities={communities}
+      invites={invites}
+      account={creatingWith({
+        communityAvailable: () => Promise.resolve(true),
+        createCommunity: () => Promise.resolve(relay.origin),
+      })}
+      connect={vi.fn().mockResolvedValue(credential)}
+    >
+      <p>Signed in</p>
+    </Welcome>,
+  );
+  await user.click(await screen.findByRole("button", { name: SIGN_IN }));
+  await createMyKey(user);
+  await user.click(
+    await screen.findByRole("button", { name: "Create a community" }),
+  );
+  await waitFor(() => expect(communities.snapshot().status).toBe("ready"));
+  await user.type(
+    screen.getByRole("textbox", { name: "Community address" }),
+    "relay",
+  );
+  await screen.findByText("That address is available.", {}, { timeout: 3_000 });
+  await user.click(screen.getByRole("button", { name: "Create community" }));
+  // The lookup, then the join's signed profile read, held: no Join Community
+  // between them, and the page holds still.
+  expect(
+    await screen.findByRole("heading", { name: "Joining community" }),
+  ).toBeVisible();
+  await waitFor(() => expect(relay.calls).toHaveLength(4));
+  expect(relay.calls.map(({ path }) => path)).toEqual([
+    "/",
+    "/api/join-policy",
+    "/",
+    "/query",
+  ]);
+  expect(screen.queryByRole("heading", { name: "Join Community" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  await act(async () => gate.resolve());
+  expect(
+    await screen.findByRole("heading", { name: "Set up your profile" }),
+  ).toBeVisible();
+  expect(screen.queryByText("Signed in")).toBeNull();
   identity.dispose();
 });
 
