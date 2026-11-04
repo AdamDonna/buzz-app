@@ -7,6 +7,7 @@ import {
   followupDraft,
 } from "./mention-draft";
 import { typedDraft } from "./composer-testing";
+import { composerMarkdown } from "./composer-markdown";
 const first = { pubkey: "a".repeat(64), name: "Honey", start: 0, end: 6 };
 const second = { pubkey: "b".repeat(64), name: "Honey", start: 7, end: 13 };
 it("inline Markdown delimiters end a mention as the timeline binds it, but an underscore extends the name", () => {
@@ -71,10 +72,48 @@ it("restores chat cards from drafts saved under the old sessionCards field", () 
       .chatCards,
   ).toEqual([link]);
 });
-it("text, chat cards or files are draft content; blank text alone is not", () => {
+it("restores staged GIFs as lone image Markdown, at most ten", () => {
+  const gif = (n: number) => `![Party ${n}](https://gif.test/${n}.gif)`;
+  expect(
+    mentionDraft({
+      text: "hi",
+      gifs: [gif(1), "prose ![x](https://gif.test/x.gif)", 7, gif(2)],
+    }).gifs,
+  ).toEqual([gif(1), gif(2)]);
+  expect(
+    mentionDraft({
+      text: "",
+      gifs: Array.from({ length: 12 }, (_, n) => gif(n)),
+    }).gifs,
+  ).toHaveLength(10);
+  expect(mentionDraft({ text: "hi", gifs: [gif(1), gif(1)] }).gifs).toEqual([
+    gif(1),
+  ]);
+  expect(mentionDraft({ text: "hi", gifs: [] })).not.toHaveProperty("gifs");
+  // A staged GIF is content: a tag-only follow-up with one is not discarded.
+  expect(
+    legacyFollowupDraft({ ...followupDraft([first]), gifs: [gif(1)] }),
+  ).toBe(false);
+  expect(addressingOnly({ ...followupDraft([first]), gifs: [gif(1)] })).toBe(
+    false,
+  );
+});
+it("sends staged GIFs after the caption, as their own paragraphs", () => {
+  expect(
+    composerMarkdown({
+      text: "look at this",
+      recipients: [],
+      gifs: ["![A](https://gif.test/a.gif)", "![B](https://gif.test/b.gif)"],
+    }),
+  ).toBe(
+    "look at this\n\n![A](https://gif.test/a.gif)\n\n![B](https://gif.test/b.gif)",
+  );
+});
+it("text, chat cards, GIFs or files are draft content; blank text alone is not", () => {
   const blank = mentionDraft({ text: "  ", recipients: [] });
   expect(hasDraftContent(blank)).toBe(false);
   expect(hasDraftContent({ ...blank, chatCards: ["card"] })).toBe(true);
+  expect(hasDraftContent({ ...blank, gifs: ["gif"] })).toBe(true);
   expect(hasDraftContent(blank, 1)).toBe(true);
   // A typed tag is text the person put there; the editor saves it with its
   // snapshot.

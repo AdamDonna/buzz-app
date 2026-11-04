@@ -26,7 +26,12 @@ test("removing a reaction from a tall message preserves the reading position", a
   );
   await expect(row).toBeVisible();
   await hoverMessage(row);
-  await row.getByRole("button", { name: "React with 👍", exact: true }).click();
+  await row.getByRole("button", { name: "Add reaction", exact: true }).click();
+  await page.locator('em-emoji-picker input[type="search"]').fill("thumbsup");
+  await page
+    .locator("em-emoji-picker")
+    .getByRole("button", { name: "👍", exact: true })
+    .click();
   const reaction = row.locator('button[data-reaction="👍"]');
   await expect(reaction).toHaveAttribute("aria-pressed", "true");
   app.edit(
@@ -208,16 +213,15 @@ test("message activity opens a grouped preview and the agent's profile without l
   });
   await expect(requestRow.locator('[data-reaction="✅"]')).toBeVisible();
   const eyes = requestRow.locator('[data-reaction="👀"]');
-  await expect(eyes).toHaveCount(2);
-  await expect(
-    requestRow.getByRole("button", { name: "👀: Agent 1", exact: true }),
-  ).toBeVisible();
-  await expect(
-    requestRow.getByRole("button", {
-      name: `👀: ${getPublicKey(human).slice(0, 10)}`,
-      exact: true,
-    }),
-  ).toBeVisible();
+  await expect(eyes).toHaveCount(1);
+  await expect(eyes).toHaveAccessibleName("👀: 2 people");
+  await eyes.hover();
+  const reactionPreview = page.locator(
+    '.buzz-preview-card[role="tooltip"][data-open]',
+  );
+  await expect(reactionPreview).toContainText("Agent 1");
+  await expect(reactionPreview).toContainText(getPublicKey(human).slice(0, 10));
+  await page.mouse.move(0, 0);
   await expect(requestRow.locator('[data-reaction="💬"]')).toBeVisible();
   const typingTags = [
     ["h", "alpha"],

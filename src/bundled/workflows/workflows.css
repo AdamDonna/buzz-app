@@ -107,13 +107,18 @@
 }
 .workflow-card-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
 }
 .workflow-card-row > .navigation-item {
-  flex: 1;
+  flex: 1 1 16rem;
+  flex-wrap: wrap;
   min-width: 0;
+}
+.workflow-card-row > .navigation-item > .navigation-item-label {
+  flex-basis: 12rem;
 }
 .workflow-row-copy {
   display: flex;
@@ -133,6 +138,10 @@
   align-items: baseline;
   min-width: 0;
   gap: var(--space-2);
+}
+.workflow-card-owner {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .workflow-card-meta > .workflow-card-name {
   min-width: 0;
@@ -178,6 +187,7 @@
 }
 .workflow-card-switch {
   flex: 0 0 auto;
+  margin-inline-start: auto;
 }
 .workflow-state-card {
   padding: var(--space-3) var(--space-4);

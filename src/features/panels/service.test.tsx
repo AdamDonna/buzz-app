@@ -64,6 +64,9 @@ it("independently unloads panels without removing the page or shared data", asyn
     expect(panels.resolve("https://github.com/block/buzz/pull/23")?.title).toBe(
       "GitHub",
     );
+    expect(
+      panels.resolve("https://github.com/block/buzz/pull/23")?.deferUntilShown,
+    ).toBe(true);
     const channelPanels = panels
       .snapshot()
       .filter((panel) => panel.pluginId === "channels");
@@ -264,6 +267,11 @@ it("validates and freezes launcher metadata without changing target resolution",
       expect(() => ctx.panels.register({ ...base, order } as never)).toThrow(
         "order",
       );
+    }
+    for (const deferUntilShown of [null, "true", 1, {}]) {
+      expect(() =>
+        ctx.panels.register({ ...base, deferUntilShown } as never),
+      ).toThrow("deferUntilShown");
     }
     for (const channelMenu of [
       null,

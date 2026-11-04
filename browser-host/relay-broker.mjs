@@ -610,6 +610,59 @@ export function validAgentEnrollment(event) {
     )
   );
 }
+/** Owner-signed agent listings; preserve prior settings and extension tags. */
+function validAgentRecord(event, viewer) {
+  if (
+    event?.kind !== 30177 ||
+    typeof event.content !== "string" ||
+    !Number.isSafeInteger(event.created_at) ||
+    event.created_at < 0 ||
+    !Array.isArray(event.tags) ||
+    !event.tags.every(
+      (tag) =>
+        Array.isArray(tag) && tag.every((value) => typeof value === "string"),
+    )
+  )
+    return false;
+  const coordinates = event.tags.filter(([name]) => name === "d");
+  if (
+    coordinates.length !== 1 ||
+    coordinates[0].length !== 2 ||
+    !/^[0-9a-f]{64}$/.test(coordinates[0][1])
+  )
+    return false;
+  // Admission must fit the complete socket frame, including the fixed-width
+  // hash and signature. This also fits the HTTP body and native signing bounds.
+  const frame = [
+    "EVENT",
+    {
+      id: "0".repeat(64),
+      pubkey: viewer,
+      created_at: event.created_at,
+      kind: event.kind,
+      tags: event.tags,
+      content: event.content,
+      sig: "0".repeat(128),
+    },
+  ];
+  if (Buffer.byteLength(JSON.stringify(frame)) > 64 * 1024) return false;
+  try {
+    const body = JSON.parse(event.content);
+    return (
+      body !== null &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      typeof body.name === "string" &&
+      !!body.name.trim() &&
+      Number.isSafeInteger(body.parallelism) &&
+      body.parallelism >= 0 &&
+      typeof body.respond_to === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Base Buzz agent delete: only removal of one member, relay-authorized. */
 /** The owner's NIP-09 deletion of one of their own kind 30177 agent records. */
 export function validAgentRecordDeletion(event, owner) {
@@ -857,6 +910,7 @@ export function relayBrokerPlugin({
         ...builderlabOptions,
       });
       server.httpServer?.once("close", () => {
+        builderlab.signOut();
         for (const { close } of streams.values()) close();
         archive?.close();
         key.fill(0);
@@ -906,9 +960,21 @@ export function relayBrokerPlugin({
         if (res.destroyed) release();
         try {
           if (url.pathname.startsWith("/api/builderlab/")) {
-            // Hosted communities plugin only; the session credential never leaves Node.
+            // One development sign-in for hosting, agents and apps; its credential stays in Node.
             const action = url.pathname.slice("/api/builderlab/".length);
             try {
+              if (action === "events" && req.method === "GET") {
+                res.writeHead(200, {
+                  "Content-Type": "text/event-stream",
+                  "Cache-Control": "no-store",
+                });
+                const send = (state) =>
+                  res.write(`data: ${JSON.stringify(state)}\n\n`);
+                const stop = builderlab.subscribe(send);
+                res.once("close", stop);
+                send(builderlab.snapshot());
+                return;
+              }
               if (action === "auth" && req.method === "GET")
                 return json(res, 200, { auth: await builderlab.auth() });
               if (req.method !== "POST")
@@ -917,12 +983,64 @@ export function relayBrokerPlugin({
               req.setEncoding("utf8");
               for await (const part of req) {
                 raw += part;
-                if (raw.length > 4096)
+                if (
+                  raw.length >
+                  (action === "decisions"
+                    ? 128 * 1024
+                    : action === "request"
+                      ? 1024 * 1024
+                      : 4096)
+                )
                   return json(res, 413, { error: "Request too large" });
               }
+              const input = raw ? JSON.parse(raw) : {};
+              const nativeRoute = {
+                // Native Decisions puts the public revision in its existing credential header.
+                decisions: [
+                  "/v3/builderlab/decisions",
+                  "x-bb-session-credential",
+                ],
+                viewer: [
+                  "/v1/auth/hosted-site/native-session",
+                  "x-buzz-builderlab-revision",
+                ],
+              }[action];
+              if (nativeRoute) {
+                const [path, header] = nativeRoute;
+                const reply = await builderlab.request(
+                  {
+                    revision: req.headers[header],
+                    path,
+                    method: "POST",
+                    body: raw,
+                    community: req.headers["x-buzz-community"],
+                  },
+                  cancel.signal,
+                  true,
+                );
+                res
+                  .writeHead(reply.status, {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                  })
+                  .end(reply.body);
+                return;
+              }
+              if (action === "request")
+                return json(
+                  res,
+                  200,
+                  await builderlab.request(input, cancel.signal),
+                );
+              // Scoped callers cannot submit an operation for a replacement account.
+              if (
+                input.revision !== undefined &&
+                input.revision !== builderlab.snapshot().revision
+              )
+                return json(res, 409, { error: "Builderlab session changed" });
               if (action === "login")
                 return json(res, 200, {
-                  auth: await builderlab.login(cancel.signal),
+                  auth: await builderlab.login(),
                 });
               if (action === "sign-out") {
                 builderlab.signOut();
@@ -930,10 +1048,7 @@ export function relayBrokerPlugin({
               }
               if (action === "bind")
                 return json(res, 200, await builderlab.bind());
-              const result = await builderlab.call(
-                action,
-                raw ? JSON.parse(raw) : {},
-              );
+              const result = await builderlab.call(action, input);
               return result
                 ? json(res, builderlabResponseStatus(result), result)
                 : json(res, 404, { error: "Unknown Builderlab route" });
@@ -1088,6 +1203,9 @@ export function relayBrokerPlugin({
                 ? null
                 : (await policyResponse.json()).policy;
             return json(res, 200, {
+              membershipRequired:
+                Array.isArray(info.supported_nips) &&
+                info.supported_nips.includes(43),
               name: info.name,
               icon: info.icon,
               policy: policy ?? null,
@@ -1437,6 +1555,7 @@ export function relayBrokerPlugin({
                 9001,
                 30078,
                 30175,
+                30177,
                 30178,
                 40100,
                 1984,
@@ -1560,14 +1679,16 @@ export function relayBrokerPlugin({
             const prioritizing = route === "/api/relay/stream-priority";
             const observing = route === "/api/relay/stream-observer";
             const updating = route === "/api/relay/stream-interests";
-            let raw = "";
+            let raw = "",
+              bytes = 0;
             req.setEncoding("utf8");
             for await (const part of req) {
               raw += part;
+              bytes += Buffer.byteLength(part);
               if (
-                Buffer.byteLength(raw) >
+                bytes >
                 (updating
-                  ? 450000
+                  ? 64 * 1024 * 1024
                   : watchingPresence
                     ? 20000
                     : prioritizing
@@ -1663,9 +1784,10 @@ export function relayBrokerPlugin({
               // Coalescing may hide a removal followed by re-add. Retire the old
               // wire before stamping the new revision; unchanged routes survive.
               if (removed.length) {
+                const removedIds = new Set(removed);
                 stream.traffic.update(
-                  stream.channels.filter((id) => !removed.includes(id)),
-                  stream.joined.filter((id) => !removed.includes(id)),
+                  stream.channels.filter((id) => !removedIds.has(id)),
+                  stream.joined.filter((id) => !removedIds.has(id)),
                 );
               }
               stream.interestRevision = interestRevision;
@@ -1680,11 +1802,13 @@ export function relayBrokerPlugin({
             return json(res, 200, { accepted: true });
           }
           if (route === "/api/relay/stream" && req.method === "POST") {
-            let raw = "";
+            let raw = "",
+              bytes = 0;
             req.setEncoding("utf8");
             for await (const part of req) {
               raw += part;
-              if (Buffer.byteLength(raw) > 300000)
+              bytes += Buffer.byteLength(part);
+              if (bytes > 64 * 1024 * 1024)
                 return json(res, 413, { error: "Live interests too large" });
             }
             let channels,
@@ -1692,9 +1816,11 @@ export function relayBrokerPlugin({
               priority,
               observer,
               interestRevision,
-              presenceAuthors;
+              presenceAuthors,
+              statusDeltas;
             try {
               const body = JSON.parse(raw);
+              statusDeltas = body.statusDeltas === true;
               channels = liveChannels(body.channels);
               joined = liveJoined(channels, body.joined ?? []);
               interestRevision = body.interestRevision ?? 0;
@@ -1732,7 +1858,7 @@ export function relayBrokerPlugin({
             // Bound slow-client buffering rather than retaining unbounded traffic.
             const write = (kind, value) => {
               if (res.destroyed) return;
-              if (res.writableLength > 2 * 1024 * 1024) {
+              if (res.writableLength > 8 * 1024 * 1024) {
                 res.destroy();
                 return;
               }
@@ -1747,12 +1873,12 @@ export function relayBrokerPlugin({
             let lastStateStatus;
             let lastObserverStatus;
             let liveChannelIds = new Set();
-            const flushState = () => {
+            const flushLegacyState = () => {
               const state = pendingState;
               pendingState = undefined;
               if (state) write("state", state);
             };
-            const writeState = (state) => {
+            const writeLegacyState = (state) => {
               const observerStatus = state.routes.find(
                 (route) => route.id === "observer",
               )?.status;
@@ -1777,6 +1903,128 @@ export function relayBrokerPlugin({
               if (replaceable && res.writableNeedDrain) pendingState = state;
               else write("state", state);
             };
+            let knownRoutes = new Map();
+            const dirtyRoutes = new Map();
+            const pendingEstablished = new Map();
+            let deltaHeader;
+            const sameRoute = (a, b) =>
+              a?.status === b.status &&
+              a?.replay === b.replay &&
+              a?.error === b.error;
+            const flushDeltas = () => {
+              if (!deltaHeader) return;
+              while (dirtyRoutes.size && !res.destroyed) {
+                const routes = [],
+                  removed = [];
+                for (const [id, route] of dirtyRoutes) {
+                  dirtyRoutes.delete(id);
+                  if (route) routes.push(route);
+                  else removed.push(id);
+                  if (routes.length + removed.length === 512) break;
+                }
+                write("state-delta", { ...deltaHeader, routes, removed });
+                if (res.writableNeedDrain) return;
+              }
+              while (pendingEstablished.size && !res.destroyed) {
+                const [first, entry] = pendingEstablished
+                  .entries()
+                  .next().value;
+                const { interestRevision, singleton } = entry;
+                if (singleton) {
+                  pendingEstablished.delete(first);
+                  write("established", { channelId: first, interestRevision });
+                } else {
+                  const channels = [];
+                  for (const [id, pending] of pendingEstablished) {
+                    if (
+                      pending.interestRevision !== interestRevision ||
+                      pending.singleton
+                    )
+                      continue;
+                    pendingEstablished.delete(id);
+                    channels.push(id);
+                    if (channels.length === 512) break;
+                  }
+                  write("established", { channels, interestRevision });
+                }
+                if (res.writableNeedDrain) return;
+              }
+            };
+            const writeState = statusDeltas
+              ? (state) => {
+                  const reset =
+                    !deltaHeader || state.status !== deltaHeader.status;
+                  if (reset) {
+                    dirtyRoutes.clear();
+                    pendingEstablished.clear();
+                    knownRoutes.clear();
+                    write("state-delta", {
+                      status: state.status,
+                      ...(state.error ? { error: state.error } : {}),
+                      interestRevision: state.interestRevision,
+                      reset: true,
+                      routes: [],
+                      removed: [],
+                    });
+                  }
+                  deltaHeader = {
+                    status: state.status,
+                    ...(state.error ? { error: state.error } : {}),
+                    interestRevision: state.interestRevision,
+                  };
+                  const next = new Map();
+                  const urgent = [];
+                  for (const route of state.routes) {
+                    next.set(route.id, route);
+                    const previous = knownRoutes.get(route.id);
+                    // The browser already owns the IDs and can construct pending rows.
+                    const implicit =
+                      !previous &&
+                      route.channelId &&
+                      route.status === "pending" &&
+                      route.replay === "unknown" &&
+                      !route.error;
+                    if (
+                      (!implicit || dirtyRoutes.get(route.id) === null) &&
+                      !sameRoute(previous, route)
+                    ) {
+                      dirtyRoutes.set(route.id, route);
+                      if (
+                        (previous?.status === "live" &&
+                          route.status !== "live") ||
+                        route.id === "observer"
+                      )
+                        urgent.push(route);
+                    }
+                  }
+                  for (const id of knownRoutes.keys())
+                    if (!next.has(id)) {
+                      dirtyRoutes.set(id, null);
+                      if (id.startsWith("channel:"))
+                        pendingEstablished.delete(id.slice(8));
+                    }
+                  for (let offset = 0; offset < urgent.length; offset += 512) {
+                    const routes = urgent.slice(offset, offset + 512);
+                    for (const route of routes) dirtyRoutes.delete(route.id);
+                    write("state-delta", {
+                      ...deltaHeader,
+                      routes,
+                      removed: [],
+                    });
+                  }
+                  if (knownRoutes.has("observer") && !next.has("observer")) {
+                    dirtyRoutes.delete("observer");
+                    write("state-delta", {
+                      ...deltaHeader,
+                      routes: [],
+                      removed: ["observer"],
+                    });
+                  }
+                  knownRoutes = next;
+                  if (!res.writableNeedDrain) flushDeltas();
+                }
+              : writeLegacyState;
+            const flushState = statusDeltas ? flushDeltas : flushLegacyState;
             res.on("drain", flushState);
             const stream = {
               relay,
@@ -1819,13 +2067,25 @@ export function relayBrokerPlugin({
                     ...state,
                     interestRevision: stream.interestRevision,
                   }),
-                established: (channelId) =>
-                  write("established", {
-                    ...(Array.isArray(channelId)
-                      ? { channels: channelId }
-                      : { channelId }),
-                    interestRevision: stream.interestRevision,
-                  }),
+                established: (channelId, global) => {
+                  if (statusDeltas && channelId !== undefined) {
+                    for (const id of typeof channelId === "string"
+                      ? [channelId]
+                      : channelId)
+                      pendingEstablished.set(id, {
+                        interestRevision: stream.interestRevision,
+                        singleton: typeof channelId === "string",
+                      });
+                    if (!res.writableNeedDrain) flushDeltas();
+                  } else
+                    write("established", {
+                      ...(Array.isArray(channelId)
+                        ? { channels: channelId }
+                        : { channelId }),
+                      ...(global ? { global } : {}),
+                      interestRevision: stream.interestRevision,
+                    });
+                },
                 recover: () => write("recover", {}),
                 denied: (channelId, reason) =>
                   write("denied", {
@@ -1854,6 +2114,9 @@ export function relayBrokerPlugin({
               closed = true;
               principal.streams--;
               pendingState = undefined;
+              dirtyRoutes.clear();
+              pendingEstablished.clear();
+              knownRoutes.clear();
               res.off("drain", flushState);
               traffic.dispose();
               clearInterval(keepAlive);
@@ -2630,6 +2893,12 @@ export function relayBrokerPlugin({
                   sent: false,
                 });
               }
+            } else if (filters?.kind === 30177) {
+              if (!validAgentRecord(filters, viewer))
+                return json(res, 400, {
+                  error: "Malformed agent record",
+                  sent: false,
+                });
             } else if ([30175, 30178].includes(filters?.kind)) {
               if (!validCatalogEnvelope(filters))
                 return json(res, 400, {

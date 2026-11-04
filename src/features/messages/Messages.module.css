@@ -167,14 +167,13 @@
   flex: 1;
   min-width: 0;
 }
-/* Reserve the opposing avatar column when space permits. At narrow widths or
-   enlarged text, keep enough of the row for readable words. The own avatar
-   remains outside this body in its existing flex column. */
+/* Long bubbles stop 32px before the opposite avatar's visible inner edge.
+   Avatars sit space-1 from their body, including the wider timeline gutter. */
 .message:has(> .messageGutter) > .messageBody {
-  max-width: min(
-    85%,
-    46rem,
-    max(60%, calc(100% - 2 * var(--message-side-space) - var(--space-4)))
+  /* The rem-based clearance grows with enlarged text; keep a readable floor. */
+  max-width: max(
+    60%,
+    calc(100% - 2 * var(--message-side-space) + var(--space-1) - var(--space-8))
   );
 }
 .message[data-viewer-message] > .messageBody {
@@ -207,7 +206,26 @@
 }
 .author {
   font-weight: var(--type-weight-medium);
+  flex-shrink: 0;
   min-width: 0;
+  max-width: 100%;
+}
+/* The name opens a profile but stays the byline's text at rest; the link
+   shows only under a fine pointer or keyboard focus. */
+.authorLink {
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .authorLink:hover {
+    color: var(--text-link);
+    text-decoration: underline;
+  }
+}
+html[data-keyboard-navigation] .authorLink:focus-visible {
+  color: var(--text-link);
+  text-decoration: underline;
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 .authorAgentIcon {
   display: inline-block;
@@ -249,11 +267,12 @@
   max-width: 100%;
   padding-inline: var(--space-1);
   border-radius: calc(var(--size-control-sm) / 2);
-  background: var(--affordance-backdrop-hover);
+  /* The strip follows the lightness of whatever it sits on, like a chip. */
+  background: var(--reaction-surface, var(--affordance-reaction));
 }
-.message[data-own] > .messageBody {
-  --reaction-surface: var(--surface-message-own);
-  --reaction-ink: var(--text-message-own);
+/* The add control's circle meets the strip's rounded end. */
+.reactions[data-populated]:has(> .inlineReactionTool:not(:empty):last-child) {
+  padding-inline-end: 0;
 }
 .reactions:empty {
   margin-top: 0;
@@ -289,6 +308,9 @@
 }
 .reactionCount {
   @apply text-caption;
+}
+.reactionItem [data-reaction] {
+  color: var(--reaction-ink, var(--text-standard));
 }
 @media (hover: hover) and (pointer: fine) and (
     prefers-reduced-motion: no-preference
@@ -448,7 +470,8 @@
 }
 .inlineReactionTool
   [data-icon-variant]:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  background: var(--affordance-backdrop-hover);
+  /* The strip's own overlay again, laid on top of it. */
+  background: var(--reaction-surface, var(--affordance-reaction));
   color: var(--reaction-ink, var(--text-standard));
 }
 .attachment {
@@ -668,10 +691,11 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   padding-inline-start: var(--space-1);
 }
 .composerInput {
+  box-sizing: border-box;
   position: relative;
   min-width: 0;
   width: 100%;
-  padding-inline: 0;
+  padding-inline: var(--space-1);
 }
 .composer .composerInput [data-placeholder]::before {
   color: var(--text-metadata);
@@ -907,6 +931,19 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+/* A thread notice keeps its recovery aligned beneath its text. */
+.threadNotice {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: var(--text-subtle);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  letter-spacing: var(--text-body-sm--letter-spacing);
 }
 .threadHistoryControls {
   flex-shrink: 0;
@@ -1747,6 +1784,38 @@ html[data-keyboard-navigation] .text pre code:focus-visible {
   font-style: italic;
 }
 
+/* Metadata after the body's last line; on its own line after a closing block
+   or plugin card, or after attachments when no body is drawn. A large-emoji
+   paragraph is itself `.text` and keeps its marker inline. */
+.edited {
+  color: var(--message-metadata, var(--text-metadata));
+  font-size: var(--text-caption);
+  letter-spacing: var(--text-caption--letter-spacing);
+}
+/* A plugin card's marker sits in its bubble, above the reactions. */
+.messagePayload > .edited,
+.messageBubble > .edited {
+  display: block;
+  margin-top: var(--space-1);
+}
+.audienceLine > .edited {
+  flex: none;
+  margin-inline-end: auto;
+}
+.text:not(p) > .edited {
+  display: block;
+}
+.text:not(p) > :has(+ .edited:last-child) {
+  margin-bottom: var(--space-1);
+}
+.message[data-viewer-message] .messagePayload > .edited {
+  text-align: end;
+}
+/* The edit marker follows a short preview and stays visible beside a long one. */
+.audiencePreview:has(+ .edited) {
+  flex: 0 1 auto;
+}
+
 .mention {
   display: inline;
   padding: 0 var(--space-half);
@@ -1767,6 +1836,7 @@ html[data-keyboard-navigation] .text pre code:focus-visible {
 }
 
 .membership {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1794,6 +1864,21 @@ html[data-keyboard-navigation] .text pre code:focus-visible {
 .membership .membershipName:hover,
 html[data-keyboard-navigation] .membership .membershipName:focus-visible {
   --link-text: var(--text-link);
+}
+.membershipPeople {
+  max-height: min(20rem, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: var(--space-2);
+  @apply text-body-sm text-standard;
+}
+.membershipPeople ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
 }
 .membershipAvatars,
 .mentionRecipients {
@@ -1911,42 +1996,7 @@ html[data-keyboard-navigation] .membership .membershipName:focus-visible {
   --floating-radius: var(--radius-control);
   --floating-inset: var(--space-half);
 }
-.quickReactionGlyph {
-  pointer-events: none;
-  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.quickReactionGlyph[data-emoji]::before {
-  content: attr(data-emoji);
-}
-@media (hover: hover) and (pointer: fine) and (
-    prefers-reduced-motion: no-preference
-  ) {
-  html:not([data-keyboard-input])
-    .quickReaction
-    button:enabled:hover
-    .quickReactionGlyph {
-    transform: translateY(-1px) scale(1.12);
-  }
-  html:not([data-keyboard-input])
-    .quickReaction
-    button:enabled:active
-    .quickReactionGlyph {
-    transform: scale(0.96);
-  }
-}
-html[data-keyboard-input] .quickReactionGlyph {
-  transition: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  .quickReactionGlyph {
-    transition: none;
-  }
-}
 @media (hover: hover) and (pointer: fine) {
-  /* Preserve main's author-line anchor without reserving extra message space. */
   .messageHeader {
     position: relative;
   }
@@ -2334,12 +2384,6 @@ html[data-keyboard-navigation] .replyBranchCollapse:focus-visible {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-}
-/* The picker retains every reaction when the shortcut strip cannot fit. */
-@container message-row (max-width: 16.25rem) {
-  .quickReaction {
-    display: none;
-  }
 }
 /* A persistent sidebar can leave less than one indent of spare reading space. */
 @container messages (max-width: 20rem) {
@@ -2758,13 +2802,13 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 
 .message[data-layout="timeline"],
 .feed .message[data-layout="continuation"] {
-  --message-side-space: calc(var(--size-control) + var(--space-3));
+  --message-side-space: calc(var(--size-control-sm) + var(--space-3));
 }
 .message[data-layout="timeline"] .messageGutter {
-  flex-basis: var(--size-control);
+  flex-basis: var(--size-control-sm);
 }
 .feed .message[data-layout="continuation"] .messageGutter {
-  flex-basis: var(--size-control);
+  flex-basis: var(--size-control-sm);
 }
 .text pre {
   text-wrap-style: auto;
@@ -2907,7 +2951,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   box-sizing: border-box;
   width: fit-content;
   font-size: var(--text-body-sm);
-  max-width: min(100%, calc(60ch + 2 * var(--space-4)));
+  max-width: 100%;
   min-width: 0;
   margin-top: var(--space-1);
   padding: var(--space-2) var(--space-4);
@@ -2916,19 +2960,25 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   color: var(--text-standard);
   overflow-wrap: anywhere;
 }
-/* Own bubbles retain their toolbar hover treatment; received bubbles stay
-   on the same quiet surface as their reaction strip. */
 @media (hover: hover) and (pointer: fine) {
-  .message[data-own][data-actions-revealed]
+  /* An arrival cue replaces hover on its bubble rather than stacking on it. */
+  .message[data-actions-revealed]:not(.messageHighlight)
     > .messageBody
     > .messageContent
-    .messageBubble:not([data-emoji-only])::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: var(--affordance-backdrop-hover);
-    pointer-events: none;
+    .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+      :has(> .text > table:only-child),
+      :has(> .text > table:first-child + .edited:last-child)
+    ) {
+    background: var(--surface-message-hover);
+  }
+  .message[data-own][data-actions-revealed]:not(.messageHighlight)
+    > .messageBody
+    > .messageContent
+    .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+      :has(> .text > table:only-child),
+      :has(> .text > table:first-child + .edited:last-child)
+    ) {
+    background: var(--surface-message-own-hover);
   }
 }
 .message[data-layout="continuation"] .messageBubble {
@@ -2955,22 +3005,17 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   width: 100%;
 }
 
+/* Keep sent and received avatars close to their message in every layout. */
 .messageAvatar {
   user-select: none;
   position: absolute;
   bottom: 0;
-  right: calc(100% + var(--space-3));
+  right: calc(100% + var(--space-1));
   display: flex;
-}
-.message:not([data-layout="timeline"]) .messageAvatar {
-  right: calc(100% + var(--space-2));
 }
 .message[data-viewer-message] .messageAvatar {
   right: auto;
-  left: calc(100% + var(--space-3));
-}
-.message[data-viewer-message]:not([data-layout="timeline"]) .messageAvatar {
-  left: calc(100% + var(--space-2));
+  left: calc(100% + var(--space-1));
 }
 .messageBubble > :is(.text, .plainText) {
   margin: 0;
@@ -2986,7 +3031,14 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 .messageBubble .text [data-mention-kind] {
   font-weight: var(--type-weight-medium);
   padding-inline: var(--space-1h);
-  border-radius: calc(var(--radius-chip) / 2);
+}
+/* Align the leading sigil with prose; its capsule paints into the gutter.
+   The renderer marks actual paragraph starts, not merely first elements. */
+.messageBubble
+  > .text
+  > p[data-leading-mention]
+  > [data-mention-kind]:first-child {
+  margin-inline-start: calc(-1 * var(--space-1h));
 }
 .messageBubble .text :is(pre, .codeBlock, table) {
   border-radius: var(--message-inner-radius);
@@ -2994,10 +3046,14 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   color: var(--text-standard);
   /* Neutral inset surfaces keep their own link palette inside colored bubbles. */
   --message-link: var(--text-link);
-  /* Neutral insets drop own-bubble mention pairing back to the shared role. */
+  /* Neutral insets drop own-bubble mention and state icon pairing back to the
+     shared roles. */
   --mention-fill: initial;
   --mention-hover: initial;
   --mention-text: initial;
+  --message-icon-subtle: initial;
+  --message-icon-success: initial;
+  --message-icon-categorical-purple: initial;
 }
 .messageContent {
   position: relative;
@@ -3038,6 +3094,15 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   --mention-fill: var(--affordance-mention-own);
   --mention-hover: var(--affordance-mention-own-hover);
   --mention-text: var(--text-mention-own);
+  /* Only reactions on your bubble take its ink and overlay. Reactions outside
+     it, under an emoji-only message, or under a table-only one, keep the panel's. */
+  --reaction-surface: var(--affordance-reaction-own);
+  --reaction-ink: var(--text-message-own);
+  /* State icons inside the bubble take their -own pair: the link ink at Buzzin’. */
+  --message-icon-subtle: var(--icon-subtle-own);
+  --message-metadata: var(--text-metadata-own);
+  --message-icon-success: var(--icon-success-own);
+  --message-icon-categorical-purple: var(--icon-categorical-purple-own);
 }
 /* Neutral content and unboxed renderers keep selection paired with their surface. */
 .messageBubble[data-emoji-only],
@@ -3051,6 +3116,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   background: transparent;
   color: var(--text-standard);
   --message-link: var(--text-link);
+  --message-metadata: initial;
 }
 
 .messageBubble[data-own] .text blockquote {
@@ -3073,10 +3139,14 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   background: var(--surface-panel);
   color: var(--text-standard);
   --message-link: var(--text-link);
-  /* Neutral insets drop own-bubble mention pairing back to the shared role. */
+  /* Neutral insets drop own-bubble mention and state icon pairing back to the
+     shared roles. */
   --mention-fill: initial;
   --mention-hover: initial;
   --mention-text: initial;
+  --message-icon-subtle: initial;
+  --message-icon-success: initial;
+  --message-icon-categorical-purple: initial;
 }
 
 .threadAvatar:nth-child(1) {
@@ -3114,11 +3184,16 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 }
 .message .messageBubble > .reactions {
   margin: var(--space-2) 0 0;
-  margin-inline-start: calc(-1 * var(--space-1));
-  /* Short prose still leaves room for a reaction and its add control. */
-  min-inline-size: calc(3 * var(--size-control-sm) + 2 * var(--space-1));
-  max-width: 100%;
+  margin-inline-start: calc(-1 * var(--space-2));
+  /* Short prose still leaves room for a reaction and its add control. The add
+     control ends the strip with no end padding, so only the start padding counts. */
+  min-inline-size: calc(3 * var(--size-control-sm) + var(--space-1));
+  max-width: calc(100% + 2 * var(--space-2));
   border: 0;
+}
+.messageBubble:has(> .reactions:is([data-populated], .reactionFallback)) {
+  border-end-start-radius: calc(var(--size-control-sm) / 2 + var(--space-2));
+  border-end-end-radius: calc(var(--size-control-sm) / 2 + var(--space-2));
 }
 .message
   .messageBubble
@@ -3269,6 +3344,7 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   outline-offset: -2px;
 }
 .audienceEntry {
+  position: relative;
   display: flex;
   align-items: flex-start;
   border-radius: var(--radius-control);
@@ -3349,8 +3425,8 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
 .audienceAvatar {
   display: grid;
   flex: none;
-  inline-size: calc(var(--size-control-sm) * 0.75);
-  block-size: calc(var(--size-control-sm) * 0.75);
+  inline-size: var(--space-4);
+  block-size: var(--space-4);
 }
 .audienceArrow {
   flex: none;
@@ -3389,12 +3465,24 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   }
 }
 
-/* Returning from a thread only paints its already-visible origin. The wash
-   extends into the feed's inset without changing the row's layout box. */
-.returnHighlight {
+/* Arriving at a message, by link, search or returning from its thread,
+   briefly marks it. A filled bubble takes a see-through layer, chosen like its
+   chips, so they stay readable on top. A row without one (membership lines,
+   emoji, attachments, tables, diffs) is washed instead; the wash extends into
+   the feed's inset without changing the row's layout box. */
+.messageHighlight {
   isolation: isolate;
 }
-.returnHighlight::after {
+.messageHighlight:not(
+  :has(
+    > .messageBody
+      > .messageContent
+      .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+        :has(> .text > table:only-child),
+        :has(> .text > table:first-child + .edited:last-child)
+      )
+  )
+)::after {
   content: "";
   position: absolute;
   inset-block: 0;
@@ -3403,12 +3491,37 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   border-radius: var(--radius-row);
   background: var(--surface-message-highlight);
   pointer-events: none;
-  animation: return-message-highlight calc(var(--duration-settle) * 5) ease-out
-    both;
+  animation: message-highlight calc(var(--duration-settle) * 10) ease-out both;
 }
-@keyframes return-message-highlight {
+.messageHighlight > .messageBody > .messageContent .messageBubble {
+  isolation: isolate;
+}
+.messageHighlight
+  > .messageBody
+  > .messageContent
+  .messageBubble:not([data-emoji-only], [data-diff-only]):not(
+    :has(> .text > table:only-child),
+    :has(> .text > table:first-child + .edited:last-child)
+  )::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--affordance-message-highlight);
+  pointer-events: none;
+  animation: message-highlight calc(var(--duration-settle) * 10) ease-out both;
+}
+.messageHighlight
+  > .messageBody
+  > .messageContent
+  .messageBubble[data-own]::after {
+  background: var(--affordance-message-own-highlight);
+}
+/* Held about a second so it reads as intentional, then a slow fade. */
+@keyframes message-highlight {
   0%,
-  35% {
+  45% {
     opacity: 1;
   }
   100% {
@@ -3416,8 +3529,32 @@ html[data-keyboard-navigation] .audienceLine:focus-visible {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .returnHighlight::after {
+  .messageHighlight::after,
+  .messageHighlight .messageBubble::after {
     animation-timing-function: steps(1, end);
+  }
+}
+
+/* A keyboard-selected message holds the same wash steady, ringed with the
+   focus colour, without changing the row's layout box. */
+html[data-keyboard-navigation] .message:focus-visible {
+  outline: none;
+  isolation: isolate;
+}
+html[data-keyboard-navigation] .message:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(-1 * var(--space-2));
+  z-index: -1;
+  border-radius: var(--radius-row);
+  background: var(--surface-message-highlight);
+  box-shadow: inset 0 0 0 2px var(--border-focus);
+  pointer-events: none;
+}
+@media (forced-colors: active) {
+  html[data-keyboard-navigation] .message:focus-visible {
+    outline: 2px solid Highlight;
   }
 }
 
@@ -3479,15 +3616,27 @@ html[data-keyboard-navigation]
 
 /* A standalone renderer already owns its surface. Mixed prose keeps its bubble. */
 .messageBubble[data-diff-only],
-.messageBubble:has(> .text > table:only-child) {
+.messageBubble:has(> .text > table:only-child),
+.messageBubble:has(> .text > table:first-child + .edited:last-child) {
   padding: 0;
   background: transparent;
   color: var(--text-standard);
   --message-link: var(--text-link);
+  /* A table's reactions stay in the bubble, which is now see-through, so they
+     sit on the panel and drop your bubble's pairing. */
+  --reaction-surface: initial;
+  --reaction-ink: initial;
+  /* An edited marker there sits on the panel too. */
+  --message-metadata: initial;
 }
-.messageBubble[data-diff-only]::after,
-.messageBubble:has(> .text > table:only-child)::after {
-  display: none;
+/* Unboxed renderers have no inner gutter for the reaction strip to outdent. */
+.message .messageBubble[data-diff-only] > .reactions,
+.message .messageBubble:has(> .text > table:only-child) > .reactions,
+.message
+  .messageBubble:has(> .text > table:first-child + .edited:last-child)
+  > .reactions {
+  margin-inline-start: 0;
+  max-width: 100%;
 }
 .workflowAttribution {
   display: inline-flex;

@@ -124,6 +124,12 @@ test("identity menus preserve modal focus and addition returns focus only to its
         dialog.getByRole("button", { name: "Clear search people and agents" }),
       ).toBeFocused();
       await page.keyboard.press("Tab");
+      // This fixture deliberately lacks verified role metadata. Error recovery
+      // follows the search controls before the collection's identity rows.
+      await expect(
+        dialog.getByRole("button", { name: "Retry member data" }),
+      ).toBeFocused();
+      await page.keyboard.press("Tab");
       await expect(identity).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(add).toBeFocused();
@@ -151,6 +157,68 @@ test("identity menus preserve modal focus and addition returns focus only to its
     await expect(
       moved ? dialog.getByRole("button", { name: "Close" }) : search,
     ).toBeFocused();
+  }
+  expect(errors).toEqual([]);
+});
+
+// Browser-only: retiring the idle section removes another pending Add button
+// from the native dialog focus trap. Each publish has its own explicit gate.
+test("overlapping idle additions restore focus when the suggestion list retires", async ({
+  page,
+}) => {
+  const { errors } = watchPageErrors(page);
+  for (const moved of [false, true]) {
+    for (const rejected of [false, true]) {
+      await page.goto(`${url}?idle-overlap`);
+      await page.getByRole("button", { name: "Access" }).click();
+      const dialog = page.getByRole("dialog", { name: "Manage members" });
+      const search = dialog.getByRole("searchbox");
+      const data = dialog.getByRole("region", { name: "Member list" });
+      await expect(data).toHaveAttribute("data-refreshing", "false");
+      const invitations = dialog.getByRole("region", {
+        name: "Not in this channel",
+        exact: true,
+      });
+      for (const index of [1, 2]) {
+        const add = invitations.getByRole("button", {
+          name: new RegExp(`^Add Agent ${index} `),
+        });
+        await add.focus();
+        await page.keyboard.press("Enter");
+        await expect
+          .poll(() => page.evaluate(() => window.focusFixture.additions.length))
+          .toBe(index);
+        await expect(add).toBeFocused();
+        await expect(add).toHaveAttribute("aria-disabled", "true");
+      }
+      const close = dialog.getByRole("button", { name: "Close", exact: true });
+      if (moved) await close.focus();
+      await page.evaluate(() => window.focusFixture.settleAddition(0));
+      await expect(
+        dialog.getByText("Agent 1 is in the channel.", { exact: true }),
+      ).toBeVisible();
+      await expect(invitations).toHaveCount(0);
+      await expect(moved ? close : search).toBeFocused();
+      await page.evaluate(
+        (failure) => window.focusFixture.settleAddition(1, failure),
+        rejected,
+      );
+      if (rejected) {
+        const recovery = dialog.getByRole("alert").filter({
+          hasText: "Agent 2: Addition rejected",
+        });
+        await expect(recovery).toBeVisible();
+        await expect(
+          recovery.getByRole("button", { name: "Retry", exact: true }),
+        ).toBeEnabled();
+      } else {
+        await expect(
+          dialog.getByText("Agent 2 is in the channel.", { exact: true }),
+        ).toBeVisible();
+      }
+      await expect(moved ? close : search).toBeFocused();
+      await expect(invitations).toHaveCount(0);
+    }
   }
   expect(errors).toEqual([]);
 });
@@ -430,10 +498,8 @@ for (const [width, reducedMotion] of [
         reducedMotion === "reduce" ? "none" : "spin",
       );
       await expect(
-        dialog
-          .getByRole("button", { name: "Refresh member data" })
-          .locator("svg"),
-      ).toHaveCSS("animation-name", "none");
+        dialog.getByRole("button", { name: "Refresh member data" }),
+      ).toHaveCount(0);
       await page.evaluate(() => window.focusFixture.releaseNames());
       await expect(status).toHaveCount(0);
       await expect(list.getByText("Carl (you)")).toBeVisible();
@@ -623,29 +689,34 @@ test("member search reuses unchanged rows and owner observations", async ({
   await page.getByRole("button", { name: "Access" }).click();
   const dialog = page.getByRole("dialog", { name: "Manage members" });
   const search = dialog.getByRole("searchbox");
-  const refresh = dialog.getByRole("button", { name: "Refresh member data" });
+  const data = dialog.getByRole("region", { name: "Member list" });
   await expect(
     dialog.getByRole("button", { name: /^Open owner profile:/ }),
-  ).toHaveCount(60);
-  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  ).toHaveCount(50);
+  await expect(data).toHaveAttribute("data-refreshing", "false");
+  await expect(
+    dialog
+      .getByRole("navigation", { name: "Agents member pages" })
+      .getByText("1 of 2"),
+  ).toBeVisible();
   const before = await page.evaluate(() => window.ownerChecks);
   const workBefore = await page.evaluate(() => ({
     ...window.focusFixture.searchWork,
   }));
   // Same roster and labels: a query-only update must not rerender avatar/menu trees.
   await search.fill("Agent");
-  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await expect(data).toHaveAttribute("data-refreshing", "false");
   await expect(
     dialog.getByRole("button", { name: /^Open owner profile:/ }),
-  ).toHaveCount(60);
+  ).toHaveCount(50);
   expect(await page.evaluate(() => window.focusFixture.searchWork.images)).toBe(
     workBefore.images,
   );
   await search.fill("");
-  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await expect(data).toHaveAttribute("data-refreshing", "false");
   await expect(
     dialog.getByRole("button", { name: /^Open owner profile:/ }),
-  ).toHaveCount(60);
+  ).toHaveCount(50);
   await page.evaluate(() => {
     window.searchFrames = [];
     window.searchSample = true;
@@ -659,10 +730,10 @@ test("member search reuses unchanged rows and owner observations", async ({
   });
   for (const query of ["Agent", "Agent 1", "Agent", "Agent 2", ""]) {
     await search.fill(query);
-    await expect(refresh).toHaveAttribute("aria-busy", "false");
+    await expect(data).toHaveAttribute("data-refreshing", "false");
     await expect(
       dialog.getByRole("button", { name: /^Open owner profile:/ }),
-    ).toHaveCount(query === "Agent 1" || query === "Agent 2" ? 11 : 60);
+    ).toHaveCount(query === "Agent 1" || query === "Agent 2" ? 11 : 50);
   }
   const sample = await page.evaluate(() => {
     window.searchSample = false;
@@ -696,8 +767,8 @@ test("large known-agent searches mount only the first invitation page", async ({
   await page.getByRole("button", { name: "Access" }).click();
   const dialog = page.getByRole("dialog", { name: "Manage members" });
   const search = dialog.getByRole("searchbox");
-  const refresh = dialog.getByRole("button", { name: "Refresh member data" });
-  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  const data = dialog.getByRole("region", { name: "Member list" });
+  await expect(data).toHaveAttribute("data-refreshing", "false");
   await page.evaluate(() => {
     window.searchFrames = [];
     window.searchSample = true;
@@ -712,7 +783,7 @@ test("large known-agent searches mount only the first invitation page", async ({
   const counts = [];
   for (const query of ["h", "he", "hel", "hell", "hello", ""]) {
     await search.fill(query);
-    await expect(refresh).toHaveAttribute("aria-busy", "false");
+    await expect(data).toHaveAttribute("data-refreshing", "false");
     counts.push(await dialog.getByRole("button", { name: /^Add / }).count());
   }
   const sample = await page.evaluate(() => {
@@ -735,7 +806,7 @@ test("large known-agent searches mount only the first invitation page", async ({
   expect(counts[3]).toBeLessThanOrEqual(4);
   expect(counts.slice(4)).toEqual([0, 0]);
   await search.fill("helper");
-  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await expect(data).toHaveAttribute("data-refreshing", "false");
   const more = dialog
     .getByRole("region", { name: "Your other agents", exact: true })
     .getByRole("button", { name: "Show more", exact: true });
@@ -797,9 +868,9 @@ test("final invitation expansion continues keyboard focus at the first new row",
   expect(errors).toEqual([]);
 });
 
-// Browser-only: shared Select/modal focus, animated search geometry and native
+// Browser-only: shared Menu/modal focus, attached search geometry and native
 // full-height row action hit testing cannot be established by jsdom.
-test("member identity dropdown fits beside search and preserves modal focus", async ({
+test("member identity filter sits inside search and preserves modal focus", async ({
   page,
 }) => {
   for (const width of [1280, 768, 390]) {
@@ -811,20 +882,27 @@ test("member identity dropdown fits beside search and preserves modal focus", as
       exact: true,
     });
     const search = dialog.getByRole("searchbox");
-    const filter = dialog.getByRole("combobox", {
-      name: "Filter people and agents",
+    const filter = dialog.getByRole("button", {
+      name: /^Filter people and agents:/,
     });
     await expect(filter).toBeVisible();
+    expect(
+      await filter.evaluate((node) =>
+        node
+          .closest(".buzz-input-group")
+          .contains(document.querySelector('input[type="search"]')),
+      ),
+    ).toBe(true);
     const searchBounds = await search.boundingBox();
     const filterBounds = await filter.boundingBox();
     expect(filterBounds.x).toBeGreaterThan(searchBounds.x + searchBounds.width);
     expect(filterBounds.x + filterBounds.width).toBeLessThan(width);
     await filter.focus();
     await page.keyboard.press("ArrowDown");
-    const all = page.getByRole("option", { name: "All · 61" });
-    const agents = page.getByRole("option", { name: "Agents · 60" });
+    const all = page.getByRole("menuitemradio", { name: "All · 61" });
+    const agents = page.getByRole("menuitemradio", { name: "Agents · 60" });
     await expect(all).toBeVisible();
-    const popup = page.locator(".buzz-select-popup");
+    const popup = page.locator(".buzz-menu-popup");
     await popup.evaluate(async (element) => {
       await Promise.all(element.getAnimations().map((a) => a.finished));
     });
@@ -842,8 +920,8 @@ test("member identity dropdown fits beside search and preserves modal focus", as
     // Reopening after every choice must retain both width and right edge,
     // including each identity group and its selection mark.
     for (const name of ["People · 1", "All · 61", "Agents · 60"]) {
-      await page.getByRole("option", { name, exact: true }).click();
-      await expect(popup).toBeHidden();
+      await page.getByRole("menuitemradio", { name, exact: true }).click();
+      await expect(popup).toHaveCount(0);
       await filter.click();
       await expect(popup).toBeVisible();
       await popup.evaluate(async (element) => {
@@ -858,25 +936,27 @@ test("member identity dropdown fits beside search and preserves modal focus", as
     }
     await agents.click();
     await expect(filter).toBeFocused();
-    await expect(filter).toHaveText("Agents");
+    await expect(filter).toHaveAccessibleName(
+      "Filter people and agents: Agents",
+    );
     await expect(
       dialog.getByRole("region", { name: "People", exact: true }),
     ).toHaveCount(0);
     await search.fill("Agent 12");
     await expect(dialog.getByRole("listitem")).toHaveCount(1);
     await expect(filter).toHaveCount(0);
-    const picker = dialog.locator('[inert][aria-hidden="true"]');
-    await expect(picker).toHaveCSS("width", "0px");
-    expect((await search.boundingBox()).width).toBeGreaterThan(
+    // Filter and Clear occupy the same trailing slot without shifting the input.
+    expect((await search.boundingBox()).width).toBeCloseTo(
       searchBounds.width,
+      0,
     );
     await expect(search).toBeFocused();
     await search.fill("");
     await expect(filter).toBeVisible();
-    await expect(filter).toHaveText("All");
-    await expect(dialog.getByRole("listitem")).toHaveCount(61);
+    await expect(filter).toHaveAccessibleName("Filter people and agents: All");
+    await expect(dialog.getByRole("listitem")).toHaveCount(51);
     await filter.click();
-    await expect(all).toHaveAttribute("aria-selected", "true");
+    await expect(all).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
     await expect(dialog).toBeVisible();
     await expect(filter).toBeFocused();
@@ -1235,9 +1315,7 @@ test("Solo adds an agent with pointer or Enter and retains the search focus", as
       name: "Search people, agents and channels",
     });
     await expect(search).toBeFocused();
-    await expect(search).toHaveAccessibleDescription(
-      /can read the full history/,
-    );
+    await expect(search).toHaveAccessibleDescription("");
     const add = dialog.getByRole("button", { name: /Add Morgan/ });
     await expect(add).toHaveCount(0);
     await expect(dialog).toHaveAccessibleDescription("");

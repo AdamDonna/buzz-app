@@ -56,7 +56,8 @@ test("a PR opens on its checklist, with failing checks linked and wrapping in a 
   await settle(page);
   app.append("primary", "alpha", target);
   const link = page.locator(`[data-message-id] a[href="${target}"]`);
-  await expect(link).toBeAttached();
+  // The inline link reads its state once before the panel opens.
+  await expect(link).toHaveAccessibleDescription("Pull request, open");
   await end(page);
   await link.click();
   const panel = page.getByRole("complementary", {
@@ -85,9 +86,11 @@ test("a PR opens on its checklist, with failing checks linked and wrapping in a 
     .toBe(true);
   // The description is readable alongside the checklist without expanding it.
   await expect(panel.getByRole("heading", { name: "Details" })).toBeVisible();
+  // The pull request is read for the inline link's state and for the panel.
   expect([...requests].sort()).toEqual([
     "/repos/sample/project/commits/head-sha/check-runs",
     "/repos/sample/project/commits/head-sha/status",
+    "/repos/sample/project/pulls/1",
     "/repos/sample/project/pulls/1",
   ]);
   for (const mode of ["light", "dark"]) {

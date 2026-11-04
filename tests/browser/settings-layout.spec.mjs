@@ -427,7 +427,7 @@ test("hosted settings empty and setup cards fit without covering their actions",
       await chooseColorMode(page, mode === "light" ? "Light" : "Dark");
       for (const width of [1440, 800, 390]) {
         await page.setViewportSize({ width, height: 1000 });
-        await selectSettingsSection(page, "Builderlab hosting");
+        await selectSettingsSection(page, "Builderlab");
         const card = page.locator(".buzz-empty-state").filter({
           has: page.getByRole("heading", {
             name: signedIn

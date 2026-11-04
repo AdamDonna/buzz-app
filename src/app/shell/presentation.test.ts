@@ -6,7 +6,6 @@ import {
   BellIcon,
   BrowserIcon,
   ChatsCircleIcon,
-  EyeIcon,
   RobotIcon,
 } from "../../shared/design-system/icons/index";
 import {
@@ -35,18 +34,11 @@ const messages = page("buzz.channels/channels", "Channels");
 const inbox = page("buzz.inbox/inbox", "Inbox");
 const bestie = page("buzz.bestie/bestie", "Bestie");
 const projects = page("fixture.projects/projects", "Projects");
-const attention = page("buzz.agents/attention", "Agent Attention");
 
 test("bundled page order ignores activation order without mutating the registry", () => {
-  const input = Object.freeze([attention, projects, bestie, messages, inbox]);
-  expect(orderPages(input)).toEqual([
-    messages,
-    inbox,
-    bestie,
-    projects,
-    attention,
-  ]);
-  expect(input).toEqual([attention, projects, bestie, messages, inbox]);
+  const input = Object.freeze([projects, bestie, messages, inbox]);
+  expect(orderPages(input)).toEqual([messages, inbox, bestie, projects]);
+  expect(input).toEqual([projects, bestie, messages, inbox]);
   expect(orderPages([messages, projects])).toEqual([messages, projects]);
   expect(orderPages([projects])).toEqual([projects]);
   expect(orderPages([])).toEqual([]);
@@ -87,7 +79,6 @@ test("other pages sort by label then full key and cannot claim bundled slots", (
 
 test("bundled pages get their own icons and Bestie's row shows its artwork", () => {
   expect(pagePresentation(inbox).icon).toBe(BellIcon);
-  expect(pagePresentation(attention).icon).toBe(EyeIcon);
   expect(pagePresentation(page("buzz.agents/agents", "Agents")).icon).toBe(
     RobotIcon,
   );

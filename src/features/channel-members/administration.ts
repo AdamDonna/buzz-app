@@ -15,6 +15,7 @@ import {
   validateMemberAdministrationTemplate,
   type MemberAuthority,
   type MemberChange,
+  type MemberRole,
 } from "./administration-protocol";
 
 export type MemberAdministrationState = Readonly<{
@@ -169,7 +170,13 @@ export function createMemberAdministration({
           });
       });
     },
-    async run(id: string, intent: MemberChange) {
+    /** `active` is checked synchronously right before publishing; false publishes nothing. */
+    async run(
+      id: string,
+      intent: MemberChange,
+      caller?: AbortSignal,
+      active?: () => boolean,
+    ) {
       if (!reader || !writer)
         throw new Error(
           "Member administration is unavailable on this connection.",
@@ -177,7 +184,8 @@ export function createMemberAdministration({
       if (snapshot(id).operation?.status === "uncertain")
         throw new Error(uncertain);
       const change = Object.freeze({ ...intent });
-      await perform(id, async (signal, current) => {
+      await perform(id, async (owned, current) => {
+        const signal = caller ? AbortSignal.any([owned, caller]) : owned;
         const previous = snapshot(id);
         let publicationStarted = false;
         emit(id, {
@@ -242,6 +250,8 @@ export function createMemberAdministration({
             throw new Error("Signer changed the member administration command");
           await authorize();
           signal.throwIfAborted();
+          if (active?.() === false)
+            throw new DOMException("Member change cancelled", "AbortError");
           publicationStarted = true;
           publishing.add(id);
           await writer.publish(signed, signal);
@@ -319,4 +329,55 @@ export function createMemberAdministration({
       listeners.clear();
     },
   };
+}
+
+type MemberAdministration = ReturnType<
+  typeof createMemberAdministration
+>["capability"];
+
+/** A member change's outcome. `uncertain`: published, but readback could not
+ * confirm it; it is not sent again. */
+export type MemberResult = Readonly<{
+  status: "confirmed" | "failed" | "uncertain";
+  error?: string;
+}>;
+
+/** One member change through `admin`, decided from a fresh roster read:
+ * `decide` gets the key's verified role and returns the change, or nothing
+ * when the roster already shows the result. `unavailable` is the error when
+ * the roster can't be read and says no more. */
+export async function administerMember(
+  admin: Pick<MemberAdministration, "refresh" | "snapshot" | "run">,
+  channel: string,
+  pubkey: string,
+  decide: (
+    role: MemberRole | undefined,
+  ) => Omit<MemberChange, "pubkey"> | undefined,
+  unavailable = "Roles unavailable",
+): Promise<MemberResult> {
+  await admin.refresh(channel);
+  const read = admin.snapshot(channel);
+  if (read.status !== "ready")
+    return { status: "failed", error: read.error ?? unavailable };
+  const intent = decide(read.authority.roles[pubkey]);
+  if (!intent) return { status: "confirmed" };
+  const change = { pubkey, ...intent };
+  try {
+    await admin.run(channel, change);
+  } catch (error) {
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const { operation, error } = admin.snapshot(channel);
+  if (
+    operation?.change.pubkey !== pubkey ||
+    operation.change.role !== change.role ||
+    operation.status === "pending"
+  )
+    return { status: "uncertain" };
+  return operation.status === "confirmed"
+    ? { status: "confirmed" }
+    : { status: operation.status, ...(error ? { error } : {}) };
 }

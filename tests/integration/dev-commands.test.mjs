@@ -22,6 +22,8 @@ function recipe(name, ...args) {
   const callsFile = path.join(directory, "calls.jsonl");
   const gooseFile = path.join(directory, "goose.jsonl");
   const commandFile = path.join(directory, "agent-command.jsonl");
+  const cliFile = path.join(directory, "buzz-cli.jsonl");
+  const openFile = path.join(directory, "open.jsonl");
   try {
     copyFileSync(
       new URL("../../justfile", import.meta.url),
@@ -49,6 +51,11 @@ function recipe(name, ...args) {
       path.join(directory, "scripts/build-agent-command.mjs"),
       `import { appendFileSync } from "node:fs";\nappendFileSync(process.env.BUZZ_TEST_AGENT_COMMAND, JSON.stringify(process.argv.slice(2)) + "\\n");\n`,
     );
+    // Record the bundled buzz CLI build instead of compiling it.
+    writeFileSync(
+      path.join(directory, "scripts/build-buzz-cli.mjs"),
+      `import { appendFileSync } from "node:fs";\nappendFileSync(process.env.BUZZ_TEST_BUZZ_CLI, JSON.stringify(process.argv.slice(2)) + "\\n");\n`,
+    );
     if (settings.local !== undefined)
       writeFileSync(path.join(directory, ".env.local"), settings.local);
     if (settings.mode !== undefined)
@@ -69,7 +76,13 @@ function recipe(name, ...args) {
       path.join(directory, "pnpm"),
       `#!${process.execPath}\nrequire("node:fs").appendFileSync(process.env.BUZZ_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");
 if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWER:" + JSON.stringify(process.env.BUZZ_DEV_VIEWER));
+if (process.argv[2] === "tauri") console.log("ENV:" + JSON.stringify({ fi: process.env.BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG, other: process.env.LOCAL_ONLY_SECRET, updater: process.env.BUZZ_UPDATER_ENDPOINT }));
 \n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(directory, "open"),
+      `#!${process.execPath}\nrequire("node:fs").appendFileSync(process.env.BUZZ_TEST_OPEN, JSON.stringify(process.argv.slice(2)) + "\\n");\n`,
       { mode: 0o755 },
     );
     // Set PATH inside the recipe shell: Hermit proxies restore their own PATH.
@@ -96,8 +109,14 @@ if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWE
           BUZZ_TEST_CALLS: callsFile,
           BUZZ_TEST_GOOSE: gooseFile,
           BUZZ_TEST_AGENT_COMMAND: commandFile,
+          BUZZ_TEST_BUZZ_CLI: cliFile,
+          BUZZ_TEST_OPEN: openFile,
           // Do not inherit the operator's public pin in isolated launcher tests.
           BUZZ_DEV_VIEWER: undefined,
+          BUZZ_DEV_SIGNING_IDENTITY: undefined,
+          BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: undefined,
+          LOCAL_ONLY_SECRET: undefined,
+          BUZZ_UPDATER_ENDPOINT: undefined,
           ...settings.env,
         },
         encoding: "utf8",
@@ -114,10 +133,25 @@ if (process.argv[2] === "tauri" && process.argv[3] === "dev") console.log("VIEWE
     const command = existsSync(commandFile)
       ? readFileSync(commandFile, "utf8").trim().split("\n").map(JSON.parse)
       : [];
+    const cli = existsSync(cliFile)
+      ? readFileSync(cliFile, "utf8").trim().split("\n").map(JSON.parse)
+      : [];
+    const opened = existsSync(openFile)
+      ? readFileSync(openFile, "utf8").trim().split("\n").map(JSON.parse)
+      : [];
     // The fixture is not a Git checkout, so the launcher hashes its own root for
     // its port; Node resolves that through symlinks when loading the script.
     const root = realpathSync(directory);
-    return { ...result, calls, goose, command, port: portForPath(root) };
+    return {
+      ...result,
+      calls,
+      goose,
+      command,
+      cli,
+      opened,
+      root,
+      port: portForPath(root),
+    };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -180,6 +214,7 @@ test("desktop builds the dev helpers first, and help does not", () => {
     const result = launched(target, ...args);
     assert.deepEqual(result.goose, expected);
     assert.deepEqual(result.command, expected);
+    assert.deepEqual(result.cli, expected);
   }
 });
 
@@ -354,6 +389,107 @@ test("desktop-bundle builds a debug app bundle with only the development identif
   assert.doesNotMatch(stdout, /Bundling with deep links/);
 });
 
+test("desktop-bundle --launch builds and opens the macOS app bundle", {
+  skip: process.platform !== "darwin",
+}, () => {
+  const result = launched("desktop-bundle", "--launch");
+  assert.deepEqual(result.call, [
+    "tauri",
+    "build",
+    "--debug",
+    "--bundles",
+    "app",
+    ...bundled,
+  ]);
+  const app = path.join(result.root, "target/debug/bundle/macos/Buzz.app");
+  assert.deepEqual(result.opened, [[app]]);
+  assert.match(result.stderr, /bundle is ad-hoc signed/);
+});
+
+test("desktop-bundle --launch does not warn for configured certificate signing", {
+  skip: process.platform !== "darwin",
+}, () => {
+  const result = launched(
+    "desktop-bundle",
+    { env: { BUZZ_DEV_SIGNING_IDENTITY: "development-cert" } },
+    "--launch",
+  );
+  assert.equal(
+    JSON.parse(result.call[6]).bundle.macOS.signingIdentity,
+    "development-cert",
+  );
+  assert.doesNotMatch(result.stderr, /ad-hoc signed/);
+});
+
+test("desktop-bundle --launch rejects bundle and artifact overrides", () => {
+  for (const [settings, args, message] of [
+    [{}, ["--launch", "--no-bundle"], /bundle flags/],
+    [{}, ["--launch", "--bundles", "dmg"], /bundle flags/],
+    [
+      {},
+      ["--launch", "--target", "aarch64-apple-darwin"],
+      /custom app artifact from --target/,
+    ],
+    [
+      {},
+      ["--launch", "--config", '{"productName":"Other"}'],
+      /custom app artifact from --config/,
+    ],
+    [
+      { env: { CARGO_TARGET_DIR: "somewhere-else" } },
+      ["--launch"],
+      /custom app artifact from CARGO_TARGET_DIR/,
+    ],
+  ]) {
+    const result = recipe("desktop-bundle", settings, ...args);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, message);
+    assert.deepEqual(result.calls, [["install", "--frozen-lockfile"]]);
+    assert.deepEqual(result.opened, []);
+  }
+});
+
+for (const [name, settings, expected] of [
+  [
+    "local certificate",
+    { local: "BUZZ_DEV_SIGNING_IDENTITY=local-cert\n" },
+    "local-cert",
+  ],
+  [
+    "environment precedence",
+    {
+      local: "BUZZ_DEV_SIGNING_IDENTITY=local-cert\n",
+      env: { BUZZ_DEV_SIGNING_IDENTITY: "environment-cert" },
+    },
+    "environment-cert",
+  ],
+  [
+    "empty environment override",
+    {
+      local: "BUZZ_DEV_SIGNING_IDENTITY=local-cert\n",
+      env: { BUZZ_DEV_SIGNING_IDENTITY: "" },
+    },
+    undefined,
+  ],
+]) {
+  test(`desktop-bundle signing: ${name}`, () => {
+    const explicit = JSON.stringify({
+      bundle: { macOS: { signingIdentity: "override-cert" } },
+    });
+    const { call } = launched("desktop-bundle", settings, "--config", explicit);
+    assert.deepEqual(JSON.parse(call[6]), {
+      identifier,
+      ...(process.platform === "darwin" && expected
+        ? { bundle: { macOS: { signingIdentity: expected } } }
+        : {}),
+    });
+    assert.deepEqual(call.slice(7), ["--config", explicit]);
+    // The certificate is scoped to bundling, even when it is exported.
+    const dev = launched("desktop", settings);
+    assert.equal(JSON.parse(dev.call[3]).bundle, undefined);
+  });
+}
+
 test("desktop-bundle keeps a chosen bundle format and forwards the rest", () => {
   const { call } = launched(
     "desktop-bundle",
@@ -431,3 +567,54 @@ for (const [name, settings, expected] of [
     );
   });
 }
+
+// `.env.local` is a launch environment source for `BUZZ_` names, so native
+// build inputs such as the FI descriptor can live there.
+const descriptor = '{"version":1,"id":"example"}';
+for (const target of ["desktop", "desktop-bundle"])
+  for (const [name, settings, expected] of [
+    [
+      "local value",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\nLOCAL_ONLY_SECRET=local\nBUZZ_UPDATER_ENDPOINT=https://updates.example\n`,
+      },
+      { fi: descriptor },
+    ],
+    [
+      "process override",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n`,
+        env: { BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: "process" },
+      },
+      { fi: "process" },
+    ],
+    [
+      "explicit empty override",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n`,
+        env: { BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG: "" },
+      },
+      { fi: "" },
+    ],
+    [
+      "literal dollar",
+      {
+        local: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='{"organization":"$LOCAL_ONLY_SECRET"}'\nLOCAL_ONLY_SECRET=local\n`,
+      },
+      { fi: '{"organization":"$LOCAL_ONLY_SECRET"}' },
+    ],
+    [
+      "mode file ignored",
+      { mode: `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG='${descriptor}'\n` },
+      {},
+    ],
+    ["unset", {}, {}],
+  ])
+    test(`${target} passes .env.local BUZZ_ values to Tauri: ${name}`, () => {
+      const result = recipe(target, settings);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.stdout.includes(`ENV:${JSON.stringify(expected)}`),
+        result.stdout,
+      );
+    });

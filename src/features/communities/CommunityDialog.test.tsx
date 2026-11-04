@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -13,6 +14,7 @@ import { CommunityDialog } from "./CommunityDialog";
 import { Context } from "@deepseek-ai/cordis";
 import { createCommunities, type Communities } from "./service";
 import { stubAvatarBrowserApis } from "../agents/avatar-testing";
+import { federatedFixture } from "../federated-identity/testing";
 
 stubAvatarBrowserApis();
 
@@ -20,7 +22,7 @@ const api = vi.hoisted(() => ({
   inspectProfile: vi.fn<typeof import("./api").inspectProfile>(),
   publishProfile: vi.fn<typeof import("./api").publishProfile>(),
 }));
-api.inspectProfile.mockRejectedValue(new Error("not admitted"));
+api.inspectProfile.mockRejectedValue(new Error("Relay read failed (403)"));
 api.publishProfile.mockResolvedValue();
 vi.mock("./api", async (actual) => ({
   ...(await actual<typeof import("./api")>()),
@@ -52,7 +54,8 @@ it("publishes a description-only edit to an existing community profile", async (
     vi.fn(async (url: string) => {
       const route = String(url).split("/").at(-1);
       if (route === "register") return Response.json({ id: "x" });
-      if (route === "info") return Response.json({ name: "Fixture" });
+      if (route === "info")
+        return Response.json({ name: "Fixture", membershipRequired: true });
       throw new Error(`Unexpected request: ${url}`);
     }),
   );
@@ -73,6 +76,9 @@ it("publishes a description-only edit to an existing community profile", async (
   ).toHaveAccessibleDescription(
     "Use your identity across communities. Your profile and conversations stay separate in each one.",
   );
+  await waitFor(() =>
+    expect(screen.getByLabelText("Community URL")).toHaveFocus(),
+  );
   // Continue contacts the destination with the viewer's identity before joining.
   expect(screen.getByLabelText("Community URL")).toHaveAccessibleDescription(
     "Paste your community link. Continue shares your Buzz identity with the community so you can preview it before joining.",
@@ -85,6 +91,10 @@ it("publishes a description-only edit to an existing community profile", async (
   const description = await screen.findByLabelText(
     "Profile description (optional)",
   );
+  await waitFor(() =>
+    expect(screen.getByLabelText("Display name")).toHaveFocus(),
+  );
+  expect(screen.queryByText("https://relay.example")).not.toBeInTheDocument();
   await user.clear(description);
   await user.type(description, "After");
   // A stray outside click keeps the dialog and the typed profile.
@@ -106,53 +116,78 @@ it("publishes a description-only edit to an existing community profile", async (
   await waitFor(() => expect(communities.joined).toHaveBeenCalledOnce());
 });
 
-it("opens with an unchanged over-limit profile and blocks publishing it", async () => {
-  const about = "a".repeat(800);
-  api.inspectProfile.mockResolvedValueOnce({
-    exists: true,
-    existing: { name: "Fixture", about },
-    profile: { name: "Fixture", picture: "", about },
-  });
-  const user = userEvent.setup();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      const route = String(url).split("/").at(-1);
-      if (route === "register") return Response.json({ id: "x" });
-      if (route === "info") return Response.json({ name: "Fixture" });
-      throw new Error(`Unexpected request: ${url}`);
-    }),
-  );
-  const communities = {
-    snapshot: () => ({
-      status: "ready",
-      relayAvailable: true,
-      profile: { name: "Local", picture: "" },
-    }),
-    joined: vi.fn(),
-  } as unknown as Communities;
-  render(
-    <CommunityDialog communities={communities} mode="join" close={() => {}} />,
-  );
-  await user.type(
-    screen.getByLabelText("Community URL"),
-    "wss://relay.example",
-  );
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  const name = await screen.findByLabelText("Display name");
-  await user.type(name, " Renamed");
-  expect(
-    screen.getByRole("button", { name: "Publish profile & open" }),
-  ).toBeDisabled();
-  await user.clear(name);
-  await user.type(name, "Fixture");
-  await user.click(screen.getByRole("button", { name: "Open community" }));
-  expect(api.publishProfile).not.toHaveBeenCalled();
-  expect(communities.joined).toHaveBeenCalledWith(
-    expect.objectContaining({ id: "https://relay.example" }),
-    { name: "Fixture", picture: "", about },
-  );
-});
+it.each([false, true])(
+  "opens with an unchanged over-limit profile and allows correction (onboarding=%s)",
+  async (onboarding) => {
+    const about = "a".repeat(800);
+    api.inspectProfile.mockResolvedValueOnce({
+      exists: true,
+      existing: { name: "Fixture", about },
+      profile: { name: "Fixture", picture: "", about },
+    });
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const route = String(url).split("/").at(-1);
+        if (route === "register") return Response.json({ id: "x" });
+        if (route === "info")
+          return Response.json({ name: "Fixture", membershipRequired: true });
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const communities = {
+      snapshot: () => ({
+        status: "ready",
+        relayAvailable: true,
+        profile: { name: "Local", picture: "" },
+      }),
+      joined: vi.fn(),
+    } as unknown as Communities;
+    render(
+      <CommunityDialog
+        communities={communities}
+        mode="join"
+        onboarding={onboarding}
+        close={() => {}}
+      />,
+    );
+    await user.type(
+      screen.getByLabelText("Community URL"),
+      "wss://relay.example",
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    const name = await screen.findByLabelText("Display name");
+    await user.type(name, " Renamed");
+    expect(
+      screen.getByRole("button", { name: "Publish profile & open" }),
+    ).toBeDisabled();
+    const description = screen.getByLabelText("Profile description (optional)");
+    expect(description).toHaveValue(about);
+    expect(
+      screen.getByText(
+        "Shorten the description to 500 characters before saving.",
+      ),
+    ).toBeVisible();
+    await user.clear(description);
+    await user.type(description, "Repaired");
+    expect(
+      screen.getByRole("button", { name: "Publish profile & open" }),
+    ).toBeEnabled();
+    // The correction field remains available after its validation error clears.
+    expect(description).toBeVisible();
+    await user.clear(description);
+    fireEvent.change(description, { target: { value: about } });
+    await user.clear(name);
+    await user.type(name, "Fixture");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(api.publishProfile).not.toHaveBeenCalled();
+    expect(communities.joined).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "https://relay.example" }),
+      { name: "Fixture", picture: "", about },
+    );
+  },
+);
 
 it("names exact relay claim refusals and keeps other failures generic", async () => {
   const user = userEvent.setup();
@@ -162,7 +197,8 @@ it("names exact relay claim refusals and keeps other failures generic", async ()
     vi.fn(async (url: string) => {
       const route = String(url).split("/").at(-1);
       if (route === "register") return Response.json({ id: "x" });
-      if (route === "info") return Response.json({ name: "Fixture" });
+      if (route === "info")
+        return Response.json({ name: "Fixture", membershipRequired: true });
       if (route === "claim")
         return Response.json({ error: refusal }, { status: 403 });
       throw new Error(`Unexpected request: ${url}`);
@@ -183,10 +219,8 @@ it("names exact relay claim refusals and keeps other failures generic", async ()
     "wss://relay.example",
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.type(
-    await screen.findByLabelText("Invite code (if required)"),
-    "v2.abc",
-  );
+  await user.type(await screen.findByLabelText("Invite code"), "v2.abc");
+  expect(screen.getByText("https://relay.example")).toBeVisible();
   for (const [code, shown] of [
     [
       "invite_exhausted",
@@ -210,7 +244,7 @@ it.each([
   async (picture) => {
     api.inspectProfile.mockResolvedValueOnce({
       exists: true,
-      existing: { name: "Fixture" },
+      existing: { name: "Fixture", membershipRequired: true },
       profile: {
         name: "Fixture",
         picture,
@@ -222,7 +256,8 @@ it.each([
       vi.fn(async (url: string) => {
         const route = String(url).split("/").at(-1);
         if (route === "register") return Response.json({ id: "x" });
-        if (route === "info") return Response.json({ name: "Fixture" });
+        if (route === "info")
+          return Response.json({ name: "Fixture", membershipRequired: true });
         throw new Error(`Unexpected request: ${url}`);
       }),
     );
@@ -247,9 +282,8 @@ it.each([
       "wss://relay.example",
     );
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.click(
-      await screen.findByRole("button", { name: "Open community" }),
-    );
+    await screen.findByLabelText("Display name");
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
     expect(api.publishProfile).not.toHaveBeenCalled();
     expect(communities.joined).toHaveBeenCalledWith(
       expect.objectContaining({ id: "https://relay.example" }),
@@ -279,7 +313,8 @@ it("explains an inherited invalid avatar when editing at join and recovers on re
     "fetch",
     vi.fn(async (url: string) => {
       if (url.endsWith("/register")) return Response.json({ id: "x" });
-      if (url.endsWith("/info")) return Response.json({ name: "Fixture" });
+      if (url.endsWith("/info"))
+        return Response.json({ name: "Fixture", membershipRequired: true });
       throw new Error(`Unexpected request: ${url}`);
     }),
   );
@@ -422,7 +457,8 @@ it("prefills an invite but requires explicit discovery and claim before membersh
   const requests = vi.fn(async (url: string, init?: RequestInit) => {
     const route = String(url).split("/").at(-1);
     if (route === "register") return Response.json({ id: "x" });
-    if (route === "info") return Response.json({ name: "Fixture" });
+    if (route === "info")
+      return Response.json({ name: "Fixture", membershipRequired: true });
     if (route === "claim") {
       expect(JSON.parse(String(init?.body))).toMatchObject({
         code: "v2.abc",
@@ -456,9 +492,7 @@ it("prefills an invite but requires explicit discovery and claim before membersh
   );
   expect(requests).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(await screen.findByLabelText("Invite code (if required)")).toHaveValue(
-    "v2.abc",
-  );
+  expect(await screen.findByLabelText("Invite code")).toHaveValue("v2.abc");
   expect(
     requests.mock.calls.some(([url]) => String(url).endsWith("/claim")),
   ).toBe(false);
@@ -517,7 +551,7 @@ it("renews policy acceptance after an expired receipt instead of replaying it", 
     />,
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  await screen.findByLabelText("Invite code (if required)");
+  await screen.findByLabelText("Invite code");
   await user.click(screen.getByRole("checkbox", { name: /I agree/ }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -526,7 +560,7 @@ it("renews policy acceptance after an expired receipt instead of replaying it", 
   version = "v2";
   await user.click(screen.getByRole("button", { name: "Back" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  await screen.findByLabelText("Invite code (if required)");
+  await screen.findByLabelText("Invite code");
   await user.click(screen.getByRole("checkbox", { name: /I agree/ }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() => expect(receipts).toEqual(["fresh-1", "fresh-2"]));
@@ -591,9 +625,8 @@ it("opens a checked connection address separately without replacing or removing 
     expect(address).toHaveValue("wss://new.example");
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(communities.snapshot().selected).toBe(original);
-    await user.click(
-      await screen.findByRole("button", { name: "Open community" }),
-    );
+    await screen.findByLabelText("Display name");
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() =>
       expect(communities.snapshot().selected).toBe("https://new.example"),
     );
@@ -607,3 +640,131 @@ it("opens a checked connection address separately without replacing or removing 
     localStorage.clear();
   }
 });
+
+it("offers federated sign-in when joining refuses for it, then lets Continue run the current step", async () => {
+  const user = userEvent.setup();
+  let refuse = true;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info" && refuse)
+        return Response.json(
+          { error: "Federated sign-in is required" },
+          { status: 401 },
+        );
+      if (route === "info")
+        return Response.json({ name: "Fixture", membershipRequired: true });
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+  );
+  const communities = {
+    snapshot: () => ({
+      status: "ready",
+      relayAvailable: true,
+      profile: { name: "Local", picture: "" },
+    }),
+  } as unknown as Communities;
+  const h = federatedFixture();
+  render(
+    <CommunityDialog
+      communities={communities}
+      federatedIdentity={h.service}
+      mode="join"
+      close={() => {}}
+    />,
+  );
+  await user.type(
+    screen.getByLabelText("Community URL"),
+    "wss://relay.example",
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  const signIn = await screen.findByRole("button", { name: "Sign in" });
+  refuse = false;
+  const requests = vi.mocked(fetch).mock.calls.length;
+  await user.click(signIn);
+  expect(h.service.signIn).toHaveBeenCalledOnce();
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull(),
+  );
+  // Completing login replays nothing captured before it.
+  expect(vi.mocked(fetch).mock.calls.length).toBe(requests);
+  await user.clear(screen.getByLabelText("Community URL"));
+  await user.type(
+    screen.getByLabelText("Community URL"),
+    "wss://other.example",
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(String(vi.mocked(fetch).mock.calls.at(-1)?.[0])).toContain(
+    "other.example",
+  );
+  expect(await screen.findByLabelText("Invite code")).toBeInTheDocument();
+});
+
+it.each(["edit", "close"])(
+  "replays nothing captured before a pending sign-in (%s)",
+  async (change) => {
+    const user = userEvent.setup();
+    const requests = vi.fn(async (url: string) => {
+      const route = String(url).split("/").at(-1);
+      if (route === "register") return Response.json({ id: "x" });
+      if (route === "info" && requests.mock.calls.length < 3)
+        return Response.json(
+          { error: "Federated sign-in is required" },
+          { status: 401 },
+        );
+      if (route === "info")
+        return Response.json({ name: "Fixture", membershipRequired: true });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", requests);
+    const communities = {
+      snapshot: () => ({
+        status: "ready",
+        relayAvailable: true,
+        profile: { name: "Local", picture: "" },
+      }),
+    } as unknown as Communities;
+    const h = federatedFixture();
+    let finish = () => {};
+    vi.mocked(h.service.signIn).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => {
+            h.publish({ status: "signed-in" });
+            resolve(h.service.snapshot());
+          };
+        }),
+    );
+    const view = render(
+      <CommunityDialog
+        communities={communities}
+        federatedIdentity={h.service}
+        mode="join"
+        close={() => {}}
+      />,
+    );
+    const field = screen.getByLabelText("Community URL");
+    await user.type(field, "wss://old.example");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    if (change === "close") view.unmount();
+    else {
+      await user.clear(field);
+      await user.type(field, "wss://new.example");
+    }
+    const before = requests.mock.calls.length;
+    await act(async () => finish());
+    expect(requests.mock.calls.length).toBe(before);
+    expect(api.publishProfile).not.toHaveBeenCalled();
+    if (change === "edit") {
+      await user.click(screen.getByRole("button", { name: "Continue" }));
+      await waitFor(() =>
+        expect(String(requests.mock.calls.at(-1)?.[0])).toContain(
+          "new.example",
+        ),
+      );
+    }
+  },
+);

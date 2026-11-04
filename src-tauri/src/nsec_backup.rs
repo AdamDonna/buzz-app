@@ -4,6 +4,7 @@ mod persistence;
 pub(crate) use persistence::root as storage_root;
 
 use crate::{
+    federated_identity::FederatedIdentity,
     identity::IdentityHost,
     nsec_backup_config::Config,
     oauth_callback::{OAuthCallbackHost, OAuthRequest},
@@ -19,14 +20,17 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::async_runtime::JoinHandle;
+use tauri::{async_runtime::JoinHandle, ipc::Channel};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
 const RETRY: &str = "Could not restore your identity. Try again.";
 const CANCELED: &str = "Restore was canceled. Try again.";
-const UNAVAILABLE: &str = "Backup recovery is unavailable. Try again later.";
+// The renderer matches these two to offer manual key entry instead of a retry
+// (`recoveryOff` in `src/features/identity/service.ts`).
+const UNAVAILABLE: &str = "Backup recovery is unavailable.";
+const REFUSED: &str = "Backup recovery is not offered for this account.";
 type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -44,10 +48,17 @@ impl Source {
     }
 }
 
+/// How a session authenticates to the backup service. A federated session
+/// keeps only the public NIP-FI revision; its token stays in `FederatedIdentity`.
+#[derive(Clone)]
+enum Auth {
+    Credential(Zeroizing<String>),
+    Federated(String),
+}
 #[derive(Clone)]
 struct Session {
     source: Source,
-    credential: Zeroizing<String>,
+    auth: Auth,
 }
 struct Candidate {
     handle: String,
@@ -91,6 +102,144 @@ impl Drop for Restore {
         let _ = self.callback.cancel(&self.callback_id);
     }
 }
+/// What the uploader last did for this device's key. `seq` orders snapshots
+/// against pushed messages; `pass` answers a handoff's ticket.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BackupStatus {
+    seq: u64,
+    pass: u64,
+    /// Storage root present and `source_allowed(Builderlab)`.
+    builderlab: bool,
+    #[serde(flatten)]
+    progress: Progress,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum Progress {
+    #[default]
+    Idle,
+    Running,
+    Waiting {
+        reason: Waiting,
+    },
+    Complete,
+    Failed {
+        kind: Failure,
+    },
+}
+/// A pass that stopped before upload; the next wake (consent, a session, a bind's
+/// retry) resolves it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Waiting {
+    NoConsent,
+    NoSession,
+    NotLinked,
+}
+/// Why a pass failed. Every kind is retried on the next wake; which ones the UI
+/// offers to retry, and their copy, belong to the renderer. No body crosses IPC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Failure {
+    Busy,
+    SignedOut,
+    NotOffered,
+    OtherKeyLinked,
+    InvalidService,
+    Refused,
+    Unreachable,
+    Unconfirmed,
+    Storage,
+}
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    Idle,
+    Complete,
+    Waiting(Waiting),
+}
+#[derive(Debug, PartialEq)]
+enum Stop {
+    /// Retired or closed; the pass reports nothing.
+    Canceled,
+    Failed(Failure),
+}
+impl From<&str> for Stop {
+    fn from(message: &str) -> Self {
+        match message {
+            CANCELED => Self::Canceled,
+            crate::nsec_backup_choice::BUSY => Self::Failed(Failure::Busy),
+            // Shared helpers fail with fixed strings for consent, record and key I/O.
+            _ => Self::Failed(Failure::Storage),
+        }
+    }
+}
+impl From<String> for Stop {
+    fn from(message: String) -> Self {
+        message.as_str().into()
+    }
+}
+/// Why an `Api` read failed. Recovery shows a refused account as `REFUSED` and
+/// anything else as `RETRY`; a backup pass reports a rejected session as signed
+/// out, a refused account as not offered and anything else as unreachable.
+#[derive(Debug)]
+enum ReadError {
+    /// kgoose answers 401 for every expired, revoked, unknown or missing session
+    /// credential on `me` and `current`; `me` also reports a session that has
+    /// expired by this device's clock.
+    SignedOut,
+    /// A 403 on `current` (`me` only ever answers 401): the session lacks the
+    /// Buzz user capability or the account its USER role (kgoose's
+    /// `unauthorized`), which no retry or new sign-in changes.
+    NotOffered,
+    Other,
+}
+impl From<&str> for ReadError {
+    fn from(_: &str) -> Self {
+        Self::Other
+    }
+}
+impl From<String> for ReadError {
+    fn from(_: String) -> Self {
+        Self::Other
+    }
+}
+impl From<ReadError> for String {
+    fn from(error: ReadError) -> Self {
+        match error {
+            ReadError::NotOffered => REFUSED,
+            // A new sign-in may clear a rejected session.
+            ReadError::SignedOut | ReadError::Other => RETRY,
+        }
+        .into()
+    }
+}
+impl From<ReadError> for Stop {
+    fn from(error: ReadError) -> Self {
+        Self::Failed(match error {
+            ReadError::SignedOut => Failure::SignedOut,
+            ReadError::NotOffered => Failure::NotOffered,
+            ReadError::Other => Failure::Unreachable,
+        })
+    }
+}
+/// Enrollment or upload errors, which keep the HTTP status but never the body.
+fn classify(error: buzz_nsec_backup::Error, upload: bool) -> Failure {
+    use buzz_nsec_backup::Error::*;
+    match error {
+        HttpStatus(401) => Failure::SignedOut,
+        HttpStatus(403) if upload => Failure::OtherKeyLinked,
+        HttpStatus(403 | 404) => Failure::NotOffered,
+        Transport | HttpStatus(429 | 500..) => Failure::Unreachable,
+        HttpStatus(400..) => Failure::Refused,
+        HttpStatus(_) => Failure::Unreachable,
+        InvalidResponse | BodyTooLarge(_) if upload => Failure::Unconfirmed,
+        InvalidServiceUrl | InvalidCredential | InvalidResponse | BodyTooLarge(_) => {
+            Failure::InvalidService
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     closed: bool,
@@ -101,6 +250,12 @@ struct State {
     rerun: bool,
     restore: Option<Restore>,
     restore_epoch: u64,
+    /// Wake counter: every ticket handed out, and the number of the pass it starts.
+    requested: u64,
+    seq: u64,
+    pass: u64,
+    progress: Progress,
+    watcher: Option<Channel<BackupStatus>>,
 }
 impl State {
     fn retire(&mut self) {
@@ -120,6 +275,7 @@ pub(crate) struct NsecBackupHost {
     state: Arc<Mutex<State>>,
     config: Arc<Option<Config>>,
     root: Option<PathBuf>,
+    federated: Option<FederatedIdentity>,
 }
 impl Default for NsecBackupHost {
     fn default() -> Self {
@@ -134,10 +290,15 @@ impl Default for NsecBackupHost {
             config: Arc::new(config),
             // Default test hosts never access the OS account's backup directory.
             root: if cfg!(test) { None } else { storage_root() },
+            federated: None,
         }
     }
 }
 impl NsecBackupHost {
+    pub(crate) fn with_federated_identity(mut self, federated: FederatedIdentity) -> Self {
+        self.federated = Some(federated);
+        self
+    }
     pub(crate) async fn set_choice(
         &self,
         identity: IdentityHost,
@@ -160,6 +321,10 @@ impl NsecBackupHost {
         state.sessions.clear();
         // Source counters restart with each renderer document.
         state.generations = [None, None];
+        // The watcher stays: a stale channel drops sends, and the new document registers.
+        if state.progress == Progress::Running {
+            self.publish(&mut state, Progress::Idle);
+        }
     }
     pub(crate) fn close(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -183,19 +348,41 @@ impl NsecBackupHost {
             Ok(())
         }
     }
-    fn source_allowed(&self, source: Source) -> bool {
-        let Some(config) = self.config.as_ref() else {
-            return false;
-        };
-        match source {
-            Source::Hosted => config.service_url == "https://app.builderlab.xyz/api/goose",
-            Source::Builderlab => url::Url::parse(&config.service_url)
-                .ok()
-                .is_some_and(|url| {
-                    !buzzodz_plugins::BUILDERLAB_ORIGIN.is_empty()
-                        && url.origin().ascii_serialization() == buzzodz_plugins::BUILDERLAB_ORIGIN
-                }),
+    fn builderlab(&self) -> bool {
+        self.root.is_some() && self.source_allowed(Source::Builderlab)
+    }
+    fn status(&self) -> BackupStatus {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.snapshot(&state)
+    }
+    fn snapshot(&self, state: &State) -> BackupStatus {
+        BackupStatus {
+            seq: state.seq,
+            pass: state.pass,
+            builderlab: self.builderlab(),
+            progress: state.progress.clone(),
         }
+    }
+    /// Callers hold the state lock, so pushed messages leave in `seq` order.
+    fn publish(&self, state: &mut State, progress: Progress) {
+        state.seq += 1;
+        state.progress = progress;
+        let status = self.snapshot(state);
+        if let Some(watcher) = &state.watcher {
+            // A reloaded webview's stale channel drops the message; the new page reads the snapshot.
+            let _ = watcher.send(status);
+        }
+    }
+    fn watch(&self, channel: Channel<BackupStatus>) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).watcher = Some(channel);
+    }
+    fn source_allowed(&self, source: Source) -> bool {
+        source_allowed_for(
+            source,
+            self.config.as_ref().as_ref(),
+            buzzodz_plugins::BUILDERLAB_ORIGIN,
+            buzzodz_plugins::BUILDERLAB_API_BASE_PATH,
+        )
     }
     fn session(
         &self,
@@ -203,116 +390,238 @@ impl NsecBackupHost {
         generation: u64,
         credential: Option<String>,
         identity: IdentityHost,
-    ) -> Result<()> {
-        // Reject a foreign service before copying a caller's already-held credential.
-        let credential = credential.map(Zeroizing::new);
-        if !self.source_allowed(source) {
-            return Ok(());
+    ) -> Result<Option<u64>> {
+        // Wrap before any check so a rejected credential is still zeroized.
+        let auth = credential.map(|c| Auth::Credential(Zeroizing::new(c)));
+        self.handoff(source, generation, auth, identity)
+    }
+    /// At most one of `credential` and `federated` (an FI session revision).
+    fn session_from_ipc(
+        &self,
+        source: Source,
+        generation: u64,
+        credential: Option<String>,
+        federated: Option<String>,
+        identity: IdentityHost,
+    ) -> Result<Option<u64>> {
+        match (credential, federated) {
+            (credential, None) => self.session(source, generation, credential, identity),
+            (None, Some(revision)) => {
+                let auth = Some(Auth::Federated(revision));
+                self.handoff(source, generation, auth, identity)
+            }
+            _ => Err("Invalid backup session".into()),
         }
-        if credential.as_ref().is_some_and(|c| !valid_credential(c)) {
+    }
+    fn handoff(
+        &self,
+        source: Source,
+        generation: u64,
+        auth: Option<Auth>,
+        identity: IdentityHost,
+    ) -> Result<Option<u64>> {
+        // Reject a foreign service before keeping a caller's already-held credential.
+        if !self.source_allowed(source) {
+            return Ok(None);
+        }
+        let invalid = match &auth {
+            Some(Auth::Credential(credential)) => !valid_credential(credential),
+            Some(Auth::Federated(revision)) => {
+                source != Source::Builderlab || !self.federated_current(revision)
+            }
+            None => false,
+        };
+        if invalid {
             return Err("Invalid backup session".into());
         }
         let mut state = self.state.lock().map_err(|_| "Backup unavailable")?;
         if state.closed {
-            return Ok(());
+            return Ok(None);
         }
         let previous = state.generations[source.index()];
         if previous.is_some_and(|seen| generation <= seen) {
-            return Ok(());
+            return Ok(None);
         }
         state.generations[source.index()] = Some(generation);
         let active = state.sessions.last().is_some_and(|s| s.source == source);
         state.sessions.retain(|s| s.source != source);
-        if credential.is_none() && !active {
-            return Ok(());
+        if auth.is_none() && !active {
+            return Ok(None);
         }
         state.retire();
-        if let Some(credential) = credential {
-            state.sessions.push(Session { source, credential });
+        if let Some(auth) = auth {
+            state.sessions.push(Session { source, auth });
         }
         drop(state);
-        self.trigger(identity);
-        Ok(())
+        Ok(self.trigger(identity))
     }
-    fn retry(&self, source: Source, identity: IdentityHost) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
-        let Some(index) = state.sessions.iter().position(|s| s.source == source) else {
-            return;
-        };
+    /// Stops a federated session as signed out once its revision is retired,
+    /// so a request built under it is not sent after a native sign-out.
+    fn still_signed_in(&self, session: &Session) -> std::result::Result<(), Stop> {
+        match &session.auth {
+            Auth::Federated(revision) if !self.federated_current(revision) => {
+                Err(Stop::Failed(Failure::SignedOut))
+            }
+            _ => Ok(()),
+        }
+    }
+    fn federated_current(&self, revision: &str) -> bool {
+        self.federated
+            .as_ref()
+            .is_some_and(|fi| fi.with_session(|_, current, _| current == revision) == Some(true))
+    }
+    /// The session's token and whether it is an FI bearer, resolved now. A
+    /// federated session whose revision is no longer current is signed out.
+    fn token(&self, session: &Session) -> Option<(Zeroizing<String>, bool)> {
+        match &session.auth {
+            Auth::Credential(credential) => Some((credential.clone(), false)),
+            Auth::Federated(revision) => self
+                .federated
+                .as_ref()?
+                .with_session(|token, current, _| (current == revision).then(|| token.clone()))
+                .flatten()
+                .map(|token| (token, true)),
+        }
+    }
+    fn api(&self, session: &Session, root: &str) -> std::result::Result<Api, Stop> {
+        let (token, bearer) = self
+            .token(session)
+            .ok_or(Stop::Failed(Failure::SignedOut))?;
+        if bearer {
+            Api::bearer(root, &token)
+        } else {
+            Api::new(root, &token)
+        }
+        .map_err(|_| Stop::Failed(Failure::Unreachable))
+    }
+    fn client(&self, session: &Session, root: &str) -> std::result::Result<Client, Stop> {
+        let (token, bearer) = self
+            .token(session)
+            .ok_or(Stop::Failed(Failure::SignedOut))?;
+        if bearer {
+            Client::bearer(root, &token)
+        } else {
+            Client::new(root, &token)
+        }
+        .map_err(|error| Stop::Failed(classify(error, false)))
+    }
+    fn retry(&self, source: Source, identity: IdentityHost) -> Option<u64> {
+        let mut state = self.state.lock().ok()?;
+        let index = state.sessions.iter().position(|s| s.source == source)?;
         if index + 1 != state.sessions.len() {
             state.retire();
             let session = state.sessions.remove(index);
             state.sessions.push(session);
         }
         drop(state);
-        self.trigger(identity);
+        self.trigger(identity)
     }
-    fn trigger(&self, identity: IdentityHost) {
+    /// Wake the uploader. The ticket is the number of a pass that starts after this
+    /// call, or `None` when no pass will.
+    fn trigger(&self, identity: IdentityHost) -> Option<u64> {
         if self.config.is_none() || self.root.is_none() {
-            return;
+            return None;
         }
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
+        let mut state = self.state.lock().ok()?;
         if state.closed {
-            return;
+            return None;
         }
         if state
             .worker
             .as_ref()
             .is_some_and(|task| !task.inner().is_finished())
         {
+            state.requested += 1;
             state.rerun = true;
-            return;
+            return Some(state.requested);
         }
         let Some(session) = state.sessions.last().cloned() else {
-            return;
+            // A pass retired by a null handoff ends here, with no outcome of its own;
+            // numbering it as the latest ticket settles a queued rerun's ticket too.
+            if state.progress == Progress::Running {
+                state.pass = state.requested;
+                self.publish(
+                    &mut state,
+                    Progress::Waiting {
+                        reason: Waiting::NoSession,
+                    },
+                );
+            }
+            return None;
         };
         let epoch = state.epoch;
         state.rerun = false;
+        state.requested += 1;
+        state.pass = state.requested;
+        self.publish(&mut state, Progress::Running);
         let host = self.clone();
         state.worker = Some(tauri::async_runtime::spawn(async move {
             loop {
-                if host.backup(&identity, &session, epoch).await.is_err() {
+                let outcome = host.backup(&identity, &session, epoch).await;
+                if outcome.is_err() {
                     eprintln!("Automatic identity backup deferred");
                 }
                 let Ok(mut state) = host.state.lock() else {
                     return;
                 };
+                // A retired pass never reports; the next pass's `running` replaces it.
                 if state.closed || state.epoch != epoch {
                     return;
                 }
+                let progress = match outcome {
+                    Ok(Outcome::Complete) => Progress::Complete,
+                    Ok(Outcome::Waiting(reason)) => Progress::Waiting { reason },
+                    Err(Stop::Failed(kind)) => Progress::Failed { kind },
+                    Ok(Outcome::Idle) | Err(Stop::Canceled) => Progress::Idle,
+                };
+                host.publish(&mut state, progress);
                 // Consume overlapping lifecycle events in this worker, without a timer.
                 if std::mem::take(&mut state.rerun) {
+                    state.pass = state.requested;
+                    host.publish(&mut state, Progress::Running);
                     continue;
                 }
                 state.worker = None;
                 return;
             }
         }));
+        Some(state.pass)
     }
-    async fn backup(&self, identity: &IdentityHost, session: &Session, epoch: u64) -> Result<()> {
+    async fn backup(
+        &self,
+        identity: &IdentityHost,
+        session: &Session,
+        epoch: u64,
+    ) -> std::result::Result<Outcome, Stop> {
         let config = self.config.as_ref().as_ref().ok_or(UNAVAILABLE)?;
         self.valid(epoch)?;
-        let pubkey = identity.viewer().await?;
+        let pubkey = match identity.saved_viewer().await {
+            Ok(Some(pubkey)) => pubkey,
+            // Without a local key there is nothing to describe.
+            Ok(None) => return Ok(Outcome::Idle),
+            // A denied, busy or locked store is not an absent key.
+            Err(_) => return Err(Stop::Failed(Failure::Storage)),
+        };
         let consent = crate::nsec_backup_choice::read(
             &self.root.as_ref().ok_or(UNAVAILABLE)?.join("choice.json"),
             config,
             &pubkey,
         )?;
         if consent.automatic != Some(true) {
-            return Ok(());
+            return Ok(Outcome::Waiting(Waiting::NoConsent));
         }
         // Hold consent's shared lease until this pass ends, including persisted retries.
         self.valid(epoch)?;
-        let api = Api::new(&config.service_url, &session.credential)?;
+        let api = self.api(session, &config.service_url)?;
         let account = api.me().await?;
         self.valid(epoch)?;
-        let current = api.current().await?;
-        if current.as_deref() != Some(&pubkey) {
-            return Err("Backup identity mismatch".into());
+        self.still_signed_in(session)?;
+        match api.current().await? {
+            None => return Ok(Outcome::Waiting(Waiting::NotLinked)),
+            Some(current) if current != pubkey => {
+                return Err(Stop::Failed(Failure::OtherKeyLinked))
+            }
+            Some(_) => {}
         }
         let locked = {
             let state = self.state.lock().map_err(|_| RETRY)?;
@@ -331,18 +640,26 @@ impl NsecBackupHost {
         if let Some(record) = record.as_ref() {
             record.matches_identity(config, &account.subject, &pubkey)?;
             if record.envelope.is_none() {
-                return Ok(());
+                return Ok(Outcome::Complete);
             }
         }
-        let client = Client::new(&config.service_url, &session.credential).map_err(|_| RETRY)?;
-        let enrollment = client.enroll().await.map_err(|_| RETRY)?;
+        let client = self.client(session, &config.service_url)?;
+        let enrollment = match client.enroll().await {
+            Ok(enrollment) => enrollment,
+            // Enrollment refuses an account with no binding; a later bind resolves it.
+            Err(buzz_nsec_backup::Error::HttpStatus(409)) => {
+                return Ok(Outcome::Waiting(Waiting::NotLinked))
+            }
+            Err(error) => return Err(Stop::Failed(classify(error, false))),
+        };
         self.valid(epoch)?;
         crypto::validate_enrollment(
             &enrollment,
             &config.namespace,
             &enrollment.owner_id,
             &pubkey,
-        )?;
+        )
+        .map_err(|_| Stop::Failed(Failure::InvalidService))?;
         let mut record = match record {
             Some(record) if record.matches(config, &account.subject, &enrollment)? => record,
             _ => {
@@ -355,9 +672,10 @@ impl NsecBackupHost {
                         if local != expected {
                             return Err("Backup identity mismatch".into());
                         }
-                        crypto::seal(&enrollment, &namespace, &owner, local, secret)
+                        Ok(crypto::seal(&enrollment, &namespace, &owner, local, secret))
                     })
-                    .await?;
+                    .await?
+                    .map_err(|_| Stop::Failed(Failure::InvalidService))?;
                 record.envelope = Some(String::from_utf8(bytes).map_err(|_| RETRY)?);
                 let state = self.state.lock().map_err(|_| RETRY)?;
                 if state.closed || state.epoch != epoch {
@@ -369,15 +687,16 @@ impl NsecBackupHost {
             }
         };
         let Some(envelope) = record.envelope.as_ref() else {
-            return Ok(());
+            return Ok(Outcome::Complete);
         };
         self.valid(epoch)?;
+        self.still_signed_in(session)?;
         let receipt = client
             .upload(envelope.as_bytes())
             .await
-            .map_err(|_| RETRY)?;
+            .map_err(|error| Stop::Failed(classify(error, true)))?;
         if !receipt.stored || receipt.backup_id != record.backup_id {
-            return Err("Backup receipt mismatch".into());
+            return Err(Stop::Failed(Failure::Unconfirmed));
         }
         let state = self.state.lock().map_err(|_| RETRY)?;
         if state.closed || state.epoch != epoch {
@@ -385,7 +704,7 @@ impl NsecBackupHost {
         }
         record.envelope = None;
         locked.write(&record)?;
-        Ok(())
+        Ok(Outcome::Complete)
     }
     fn valid_restore(&self, epoch: u64) -> Result<()> {
         let state = self.state.lock().map_err(|_| CANCELED)?;
@@ -511,6 +830,8 @@ impl NsecBackupHost {
         let client = Client::new(&config.service_url, &credential).map_err(|_| RETRY)?;
         let recovered = client.recover().await.map_err(|error| match error {
             buzz_nsec_backup::Error::HttpStatus(404) => UNAVAILABLE.to_owned(),
+            // Not a private org, or no Buzz user role: no retry changes it.
+            buzz_nsec_backup::Error::HttpStatus(403) => REFUSED.to_owned(),
             _ => RETRY.to_owned(),
         })?;
         let (candidates, failed_count) = candidates(recovered);
@@ -652,6 +973,28 @@ impl NsecBackupHost {
     }
 }
 
+fn source_allowed_for(
+    source: Source,
+    config: Option<&Config>,
+    builderlab_origin: &str,
+    builderlab_api_base_path: &str,
+) -> bool {
+    let Some(config) = config else {
+        return false;
+    };
+    match source {
+        Source::Hosted => config.service_url == "https://app.builderlab.xyz/api/goose",
+        Source::Builderlab => url::Url::parse(&config.service_url)
+            .ok()
+            .is_some_and(|url| {
+                let path = format!("{}/", url.path().trim_end_matches('/'));
+                !builderlab_origin.is_empty()
+                    && url.origin().ascii_serialization() == builderlab_origin
+                    && path == builderlab_api_base_path
+            }),
+    }
+}
+
 fn valid_credential(value: &str) -> bool {
     !value.is_empty() && value.len() <= 4096 && value.bytes().all(|c| (33..=126).contains(&c))
 }
@@ -722,16 +1065,33 @@ fn credential<'de, D: serde::Deserializer<'de>>(
 struct Api {
     http: reqwest::Client,
     root: String,
+    header: reqwest::header::HeaderName,
     credential: reqwest::header::HeaderValue,
 }
 impl Api {
     fn new(root: &str, credential: &str) -> Result<Self> {
-        let mut header = reqwest::header::HeaderValue::from_str(credential).map_err(|_| RETRY)?;
-        header.set_sensitive(true);
+        Self::build(
+            root,
+            reqwest::header::HeaderName::from_static("x-bb-session-credential"),
+            credential,
+        )
+    }
+    /// Authenticates with an FI session token as `Authorization: Bearer`.
+    fn bearer(root: &str, token: &str) -> Result<Self> {
+        Self::build(
+            root,
+            reqwest::header::AUTHORIZATION,
+            &Zeroizing::new(format!("Bearer {token}")),
+        )
+    }
+    fn build(root: &str, header: reqwest::header::HeaderName, credential: &str) -> Result<Self> {
+        let mut value = reqwest::header::HeaderValue::from_str(credential).map_err(|_| RETRY)?;
+        value.set_sensitive(true);
         Ok(Self {
             http: Self::http(root)?,
             root: root.to_owned(),
-            credential: header,
+            header,
+            credential: value,
         })
     }
     fn http(root: &str) -> Result<reqwest::Client> {
@@ -775,7 +1135,11 @@ impl Api {
             serde_json::from_slice(&Self::body(response).await?).map_err(|_| RETRY)?;
         Ok(value.session_credential)
     }
-    async fn request(&self, path: &str, post: bool) -> Result<Zeroizing<Vec<u8>>> {
+    async fn request(
+        &self,
+        path: &str,
+        post: bool,
+    ) -> std::result::Result<Zeroizing<Vec<u8>>, ReadError> {
         let url = format!("{}{path}", self.root);
         let request = if post {
             self.http
@@ -786,11 +1150,16 @@ impl Api {
             self.http.get(url)
         };
         let response = request
-            .header("X-BB-Session-Credential", &self.credential)
+            .header(&self.header, &self.credential)
             .send()
             .await
             .map_err(|_| RETRY)?;
-        Self::body(response).await
+        match response.status() {
+            reqwest::StatusCode::UNAUTHORIZED => return Err(ReadError::SignedOut),
+            reqwest::StatusCode::FORBIDDEN => return Err(ReadError::NotOffered),
+            _ => {}
+        }
+        Ok(Self::body(response).await?)
     }
     async fn body(mut response: reqwest::Response) -> Result<Zeroizing<Vec<u8>>> {
         if !response.status().is_success()
@@ -807,7 +1176,7 @@ impl Api {
         }
         Ok(body)
     }
-    async fn me(&self) -> Result<Account> {
+    async fn me(&self) -> std::result::Result<Account, ReadError> {
         let account: Account = serde_json::from_slice(&self.request("/v1/auth/me", false).await?)
             .map_err(|_| RETRY)?;
         let expiry = chrono::DateTime::parse_from_rfc3339(&account.expires_at)
@@ -820,13 +1189,16 @@ impl Api {
         if account.subject.is_empty()
             || account.subject.len() > 1024
             || account.subject.chars().any(char::is_control)
-            || expiry <= now as i64
         {
             return Err(RETRY.into());
         }
+        // Expired by this device's clock; a new sign-in clears it, a retry cannot.
+        if expiry <= now as i64 {
+            return Err(ReadError::SignedOut);
+        }
         Ok(account)
     }
-    async fn current(&self) -> Result<Option<String>> {
+    async fn current(&self) -> std::result::Result<Option<String>, ReadError> {
         let value: serde_json::Value = serde_json::from_slice(
             &self
                 .request("/v1/buzz/nostr-identities/current", true)
@@ -842,13 +1214,12 @@ impl Api {
             .is_some_and(|id| !id.is_empty());
         match value.get("identity") {
             Some(serde_json::Value::Null) if known => Ok(None),
-            Some(identity) => public_key(
+            Some(identity) => Ok(Some(public_key(
                 identity
                     .get("pubkey_hex")
                     .and_then(|key| key.as_str())
                     .ok_or(RETRY)?,
-            )
-            .map(Some),
+            )?)),
             None if known => Ok(None),
             _ => Err(RETRY.into()),
         }
@@ -859,6 +1230,7 @@ impl Api {
 pub(crate) fn nsec_backup_available(host: tauri::State<'_, NsecBackupHost>) -> bool {
     host.config.is_some()
 }
+/// The ticket of the pass this handoff starts, if any.
 #[tauri::command]
 pub(crate) fn nsec_backup_session(
     host: tauri::State<'_, NsecBackupHost>,
@@ -866,16 +1238,41 @@ pub(crate) fn nsec_backup_session(
     source: Source,
     generation: u64,
     credential: Option<String>,
-) -> Result<()> {
-    host.session(source, generation, credential, identity.inner().clone())
+    federated: Option<String>,
+) -> Result<Option<u64>> {
+    host.session_from_ipc(
+        source,
+        generation,
+        credential,
+        federated,
+        identity.inner().clone(),
+    )
 }
 #[tauri::command]
 pub(crate) fn nsec_backup_retry(
     host: tauri::State<'_, NsecBackupHost>,
     identity: tauri::State<'_, IdentityHost>,
     source: Source,
-) {
-    host.retry(source, identity.inner().clone());
+) -> Option<u64> {
+    host.retry(source, identity.inner().clone())
+}
+#[tauri::command]
+pub(crate) fn nsec_backup_state(host: tauri::State<'_, NsecBackupHost>) -> BackupStatus {
+    host.status()
+}
+/// Replace the status watcher. Register before reading `nsec_backup_state`, then keep
+/// whichever status has the higher `seq`.
+#[tauri::command]
+pub(crate) fn nsec_backup_watch<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    host: tauri::State<'_, NsecBackupHost>,
+    on_event: Channel<BackupStatus>,
+) -> Result<()> {
+    if window.label() != "main" {
+        return Err("Backup status belongs to the main window".into());
+    }
+    host.watch(on_event);
+    Ok(())
 }
 #[tauri::command]
 pub(crate) async fn nsec_restore_begin<R: tauri::Runtime>(

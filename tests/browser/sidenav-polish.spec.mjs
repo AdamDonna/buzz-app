@@ -306,9 +306,7 @@ test("top bar swaps its pages for an overflow menu when narrow", async ({
   await expect(dialog).toHaveCount(0);
   await expect(search).toBeFocused();
   await openPage(page, "Bestie");
-  await expect(
-    page.getByRole("heading", { name: "Meet your Bestie" }),
-  ).toBeVisible();
+  await expect(page.getByRole("region", { name: "Bestie" })).toBeVisible();
 });
 
 // Real responsive layout owns the Settings modal and the desktop sidebar.
@@ -815,7 +813,7 @@ test("non-ready sidebar keeps page rows and Retry reachable by pointer scrolling
     exact: true,
   });
   const retry = sidebar.getByRole("button", {
-    name: "Retry channels",
+    name: "Try again",
     exact: true,
   });
   await expect(retry).toBeAttached();

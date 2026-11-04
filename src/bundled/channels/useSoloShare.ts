@@ -1,5 +1,7 @@
+import { useProfileGeneration } from "../../features/relay/react";
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -21,8 +23,13 @@ import {
   soloChatLinkMessage,
 } from "../../features/solo/share";
 import { soloChatLinkName } from "../../features/solo/labels";
+import type { ChannelSummary } from "../../features/relay/contracts";
+import { channelText } from "../../features/channels/channel-icon";
 
-export type ShareChannel = { id: string; name: string };
+export type ShareChannel = Pick<
+  ChannelSummary,
+  "id" | "name" | "private" | "channelType"
+>;
 
 /** Sharing a Solo chat to a channel, inside the access dialog. People are added
  * one at a time like any member. A channel share gives the channel's members
@@ -89,14 +96,17 @@ export function useSoloShare({
   const chosen = list.channels.find(
     (item) => item.id === destination && item.id !== channelId,
   );
-  const destinationMembers =
+  const readyMembers =
     chosen &&
     destinationRoster?.id === chosen.id &&
     destinationRoster.status === "ready" &&
-    !chosen.cached &&
-    chosen.members
-      ? [...new Set(chosen.members)]
+    !chosen.cached
+      ? chosen.members
       : undefined;
+  const destinationMembers = useMemo(
+    () => (readyMembers ? [...new Set(readyMembers)] : undefined),
+    [readyMembers],
+  );
   useEffect(() => {
     void rosterReload;
     if (!enabled) return;
@@ -170,15 +180,20 @@ export function useSoloShare({
     })();
     return () => controller.abort();
   }, [enabled, chosenChannelId, session, signal, destinationReload]);
+  const profileGeneration = useProfileGeneration(session.profiles);
   const memberKeys =
     enabled && rosterState === "ready" && !source?.cached
       ? source?.members?.join(":")
       : "";
   useEffect(() => {
+    void profileGeneration;
+    if (memberKeys)
+      void session.profiles
+        .ensure(memberKeys.split(":"), "foreground")
+        .catch(() => {});
+  }, [session, memberKeys, profileGeneration]);
+  useEffect(() => {
     if (!memberKeys) return;
-    void session.profiles
-      .ensure(memberKeys.split(":"), "foreground")
-      .catch(() => {});
     // Reuse the existing verified role reader; unknown owner/agent classification
     // stays unlabeled rather than being represented as private.
     void session.memberAdministration.refresh(channelId).catch(() => {});
@@ -188,15 +203,19 @@ export function useSoloShare({
       ? destinationMembers?.join(":")
       : "";
   useEffect(() => {
+    void profileGeneration;
     if (destinationProfileKeys)
       void session.profiles
         .ensure(destinationProfileKeys.split(":"), "foreground")
         .catch(() => {});
-  }, [session, destinationProfileKeys]);
+  }, [session, destinationProfileKeys, profileGeneration]);
   const resolveName = useIdentityNames(session.names);
-  const displayKeys = [
-    ...new Set([...(source?.members ?? []), ...(destinationMembers ?? [])]),
-  ];
+  const displayKeys = useMemo(
+    () => [
+      ...new Set([...(source?.members ?? []), ...(destinationMembers ?? [])]),
+    ],
+    [source?.members, destinationMembers],
+  );
   const labels = new Map(
     displayKeys.map((key) => [
       key,
@@ -236,7 +255,12 @@ export function useSoloShare({
               .toLowerCase()
               .includes(query.trim().toLowerCase().replace(/^#/, "")),
         )
-        .map((item) => ({ id: item.id, name: item.name }));
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          ...(item.private ? { private: item.private } : {}),
+          ...(item.channelType ? { channelType: item.channelType } : {}),
+        }));
   const choose = (channel: ShareChannel) => {
     if (busy || !eligible || destination) return;
     setDestination(channel.id);
@@ -285,11 +309,11 @@ export function useSoloShare({
           viewer: session.viewer,
           communityOrigin: session.scope.slice(0, -(session.viewer.length + 1)),
         });
-      const name = session.channels
+      const shared = session.channels
         .list()
-        .channels.find((item) => item.id === target)?.name;
+        .channels.find((item) => item.id === target);
       notify(
-        name ? `Shared in #${name}` : "Shared",
+        shared ? `Shared in ${channelText(shared)}` : "Shared",
         "success",
         view && navigationController
           ? {

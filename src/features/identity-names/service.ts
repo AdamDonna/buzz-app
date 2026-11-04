@@ -9,7 +9,9 @@ import { createContributions } from "../../plugins/contributions";
 export type NamingPolicy = {
   id: string;
   /** Compare all displayed aliases across distinct keys; return each key's last
-   * supplied alias. Repeated configurations of one key are not namesakes. */
+   * supplied alias. Repeated configurations of one key are not namesakes.
+   * With `candidates`, the directory passes only the rows `scopeKeys` selects
+   * (the candidates and their agents' owners), not the whole cache. */
   resolve(
     identities: readonly NamingIdentity[],
     viewer?: string,
@@ -184,7 +186,8 @@ export function bindNames(
           qualifier: label.qualifier,
           source: "agent-directory",
         };
-      const name = source.profiles.snapshot().get(pubkey.toLowerCase())?.name;
+      const profile = source.profiles.snapshot().get(pubkey.toLowerCase());
+      const name = profile?.nameIsFallback ? undefined : profile?.name;
       return name ? { name, source: "public-profile" } : undefined;
     };
     last = { candidates, displayFacts, scoped };

@@ -1,22 +1,32 @@
+import { useChannelHistoryFocus } from "./useChannelHistoryFocus";
+import type { Conversation } from "../../features/conversation/service";
 import { StartLinkedChat, canStartLinkedChat } from "./StartLinkedChat";
 import {
   readLinkedChat,
   linkedDraftKey,
 } from "../../features/solo/linked-chat";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
+import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
+import { TypingDots } from "../../shared/design-system/ui/TypingDots";
 import { profileActivityViewTarget } from "../../features/profiles/target";
 import type { Agents } from "../../features/agents/service";
 import { SoloDraft } from "../../features/solo/SoloDraft";
 import { useChannelNavigation } from "../../features/channel-navigation/ChannelNavigationState";
 import { soloSuccessor } from "../../features/channel-navigation/solo-successor";
-import { useConversationTabs } from "./useConversationTabs";
+import { historyPanel, useConversationTabs } from "./useConversationTabs";
 import tabStyles from "./ChannelTabs.module.css";
 import panelStyles from "../../features/panels/Panels.module.css";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { useReturnHighlight } from "../../features/messages/use-return-highlight";
 import { ChannelBody } from "./ChannelBody";
-import { tabPane, useChannelTabState } from "./useChannelTabState";
+import {
+  entryPane,
+  panelTabId,
+  rootOfTab,
+  tabPane,
+  useChannelTabState,
+} from "./useChannelTabState";
 import { ChannelMembersDialog } from "./ChannelMembersDialog";
 import { ChannelMemberAvatars } from "./ChannelMemberAvatars";
 import {
@@ -37,6 +47,7 @@ import { ChannelLifecycleActions } from "./ChannelLifecycleActions";
 import { lifecycleNoun } from "./ChannelLifecycleDialog";
 import type { PageNavigation } from "../../features/navigation/service";
 import type { Navigation } from "../../features/navigation/controller";
+import { targetKey, type OpenTarget } from "../../features/navigation/targets";
 import {
   buzzLinkTarget,
   isBuzzLink,
@@ -47,6 +58,7 @@ import { ConvertToChannel } from "../../features/solo/ConvertToChannel";
 import { UnreadOptions } from "./UnreadBadge";
 import type { ConversationExtensions } from "../../features/conversation/contracts";
 import { LinkThreadTabContext } from "../../features/conversation/LinkLabelContext";
+import { placeExactOpening } from "../../features/conversation/exact-opening";
 import { flushSync } from "react-dom";
 import {
   useCallback,
@@ -61,14 +73,24 @@ import {
 import {
   SidebarRightIcon,
   PlugIcon,
+  CloudOffIcon,
+  LockIcon,
   ChatCircleIcon,
   GearIcon,
 } from "../../shared/design-system/icons/index";
 import { channelIcon } from "../../features/channels/channel-icon";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
-import { useChannelList, useRelayConnection } from "../../features/relay/react";
-import { panelOpening, type Panels } from "../../features/panels/service";
+import {
+  useChannelList,
+  useChannelRoster,
+  useRelayConnection,
+} from "../../features/relay/react";
+import {
+  panelOpening,
+  type PanelOpening,
+  type Panels,
+} from "../../features/panels/service";
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import { PanelDock } from "../../features/panels/PanelDock";
@@ -89,6 +111,8 @@ import { readView, writeView } from "../../shared/view-state";
 import { useChannelLabels } from "./useChannelLabels";
 import { useComposerSent } from "./useComposerSent";
 import { useSidebarPreferences } from "./useSidebarPreferences";
+import { channelHasUnread } from "./useSidebarFilters";
+import { inFieldOutsideComposer } from "./conversation-rows";
 import styles from "./Channels.module.css";
 import type { CommunityReader } from "../../features/communities/service";
 import { avatarMedia } from "../../shared/avatar-source";
@@ -98,8 +122,14 @@ export type ArchiveShortcut = {
   current?: { available(): boolean; run(): Promise<void> } | undefined;
 };
 
+/** The open conversation's Mark as read, published for the Escape shortcut while its visit is live. */
+export type ReadShortcut = {
+  current?: { available(): boolean; run(): Promise<void> } | undefined;
+};
+
 export function ChannelsPage({
   extensions,
+  chatMenus,
   relay,
   panels,
   companion,
@@ -108,8 +138,10 @@ export function ChannelsPage({
   agents,
   communities,
   archive,
+  read,
 }: {
   extensions?: ConversationExtensions | undefined;
+  chatMenus?: Conversation["chatMenus"] | undefined;
   /** For adding a whole team of the owner's agents from the members dialog. */
   agents?: Agents | undefined;
   communities?: CommunityReader | undefined;
@@ -119,46 +151,152 @@ export function ChannelsPage({
   panels: Panels;
   /** The open Solo conversation's Archive, for the Archive chat shortcut. */
   archive?: ArchiveShortcut | undefined;
+  /** The open conversation's Mark as read, for the Escape shortcut. */
+  read?: ReadShortcut | undefined;
   companion?: ReactNode;
 }) {
   const session = useRelayConnection(relay);
   const sessionNavigation = navigation?.forSession(relay, session);
+  // An opening visit's deadline bounds Connecting; once it has settled, a
+  // retrying connection is a failure that keeps trying, not a connection.
+  // Each attempt republishes the connection, so reading it here stays current.
+  const visitSettled = navigator.snapshot().status !== "opening";
+  const presentedSession = useRef<
+    | {
+        scope: typeof session.scope;
+        entryId: string;
+      }
+    | undefined
+  >(undefined);
+  // Rebuild read-only addresses within the same account/community, including
+  // reconnects and deliberate resets. Old session callbacks still expire.
+  const retireDetail = !!(
+    navigation?.target.kind === "conversation" &&
+    navigation.target.detail &&
+    presentedSession.current?.entryId === navigation.entryId &&
+    session.scope &&
+    presentedSession.current.scope !== session.scope
+  );
+  useLayoutEffect(() => {
+    if (retireDetail && navigation?.target.kind === "conversation") {
+      const { detail: _detail, ...target } = navigation.target;
+      navigation.resolve(target);
+    } else if (session.status === "ready" && navigation) {
+      presentedSession.current = {
+        scope: session.scope,
+        entryId: navigation.entryId,
+      };
+    }
+  }, [navigation, retireDetail, session.status, session.scope]);
   useEffect(() => {
     if (!navigation || !sessionNavigation) return;
     if (session.status === "disconnected" && navigation.target.kind === "page")
       sessionNavigation.complete({ status: "opened" });
-    else if (session.status === "error" && !session.cached)
-      sessionNavigation.complete({ status: "failed", reason: "unavailable" });
-  }, [navigation, sessionNavigation, session.status, session.cached]);
+    // A connection that is retrying on its own keeps the visit pending; the
+    // visit deadline bounds the wait and the host reopens it once connected.
+    else if (session.status === "error" && !session.cached && !session.retrying)
+      sessionNavigation.complete(
+        // A refusal is explained in place, beside its own Try again.
+        session.denied
+          ? { status: "failed", reason: "denied", presented: true }
+          : { status: "failed", reason: "unavailable" },
+      );
+  }, [
+    navigation,
+    sessionNavigation,
+    session.status,
+    session.cached,
+    session.retrying,
+    session.denied,
+  ]);
   return (
     <section className={styles.root} aria-label="Channels">
       {session.status !== "ready" && !session.cached ? (
         <PanelFrame companion={companion}>
-          <div className={styles.connect}>
-            <div className={styles.connectIcon}>
-              <PlugIcon size={30} />
+          {session.status === "disconnected" ? (
+            <div className={styles.connect}>
+              <div className={styles.connectIcon}>
+                <PlugIcon size={30} />
+              </div>
+              <h1>Your channels, one conversation.</h1>
+              <p>
+                Use the community picker in the header to choose or add a
+                community. Your profile and settings work without a community.
+              </p>
             </div>
-            <h1>Your channels, one conversation.</h1>
-            <p>
-              {session.status === "disconnected"
-                ? "Use the community picker in the header to choose or add a community. Your profile and settings work without a community."
-                : "Connection details and retry are in the sidebar. Your profile and settings work without a community."}
-            </p>
-          </div>
+          ) : session.status === "error" && session.denied ? (
+            <div role="alert" className={styles.failed}>
+              <EmptyState
+                icon={<LockIcon />}
+                title="You don’t have access to this"
+                description="It belongs to another account or a community you haven’t joined."
+                action={
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={() => relay.retry()}
+                  >
+                    Try again
+                  </Button>
+                }
+              />
+            </div>
+          ) : session.status === "error" &&
+            (!session.retrying || visitSettled) ? (
+            // Usually a failed visit's card covers this page, but a visit that
+            // already opened from cached content keeps it: say so plainly.
+            <div role="alert" className={styles.failed}>
+              <EmptyState
+                icon={<CloudOffIcon />}
+                title="Can’t connect"
+                description={
+                  session.retrying
+                    ? "Check your connection. We’ll keep trying."
+                    : "Check your connection, then try again."
+                }
+                action={
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={() => relay.retry()}
+                  >
+                    Try again
+                  </Button>
+                }
+              />
+            </div>
+          ) : (
+            // Only real connection work animates.
+            <div className={styles.connect}>
+              <LoadingRegion
+                pending
+                label={
+                  <span className={styles.connecting}>
+                    <TypingDots />
+                    Connecting…
+                  </span>
+                }
+              >
+                {null}
+              </LoadingRegion>
+            </div>
+          )}
         </PanelFrame>
       ) : (
         <ChannelWorkspace
+          chatMenus={chatMenus}
           extensions={extensions}
           key={`${session.scope ?? "disconnected"}:${session.generation}`}
           scope={session.scope ?? "disconnected"}
           cached={!!session.cached}
           queries={session.session}
           relay={relay}
-          navigation={sessionNavigation}
+          navigation={retireDetail ? undefined : sessionNavigation}
           navigator={navigator}
           viewer={session.viewer}
           panels={panels}
           archive={archive}
+          read={read}
           companion={companion}
           agents={agents}
           communities={communities}
@@ -168,8 +306,17 @@ export function ChannelsPage({
   );
 }
 
+/** Recent ordering reads activity, which the workspace's roster ignores. */
+function LiveNewMessage(
+  props: Omit<React.ComponentProps<typeof NewMessage>, "channels">,
+) {
+  const { channels } = useChannelList(props.session.channels);
+  return <NewMessage {...props} channels={channels} />;
+}
+
 function ChannelWorkspace({
   extensions,
+  chatMenus,
   queries,
   cached,
   relay,
@@ -182,8 +329,10 @@ function ChannelWorkspace({
   agents,
   communities,
   archive,
+  read,
 }: {
   extensions?: ConversationExtensions | undefined;
+  chatMenus?: Conversation["chatMenus"] | undefined;
   agents?: Agents | undefined;
   companion?: ReactNode;
   communities?: CommunityReader | undefined;
@@ -196,6 +345,7 @@ function ChannelWorkspace({
   relay: RelayData;
   panels: Panels;
   archive?: ArchiveShortcut | undefined;
+  read?: ReadShortcut | undefined;
 }) {
   const composingMessage =
     navigation?.target.kind === "page" &&
@@ -217,7 +367,7 @@ function ChannelWorkspace({
         : undefined,
     [draft?.linked, scope, navigation?.signal],
   );
-  const list = useChannelList(queries.channels);
+  const list = useChannelRoster(queries.channels);
   const initialList = useRef(list);
   const preferences = useSidebarPreferences(queries.sidebarPreferences);
   useEffect(() => {
@@ -237,8 +387,6 @@ function ChannelWorkspace({
   const [joiningChannel, setJoiningChannel] = useState<string>();
   const [membersChannel, setMembersChannel] = useState<string>();
   const membersTrigger = useRef<HTMLButtonElement>(null);
-  // Set while Members closes because it opened a destination, such as a profile.
-  const membersHandoff = useRef(false);
   const membersHeaderTrigger = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     void queries.emoji.ensure();
@@ -422,9 +570,11 @@ function ChannelWorkspace({
   useEffect(() => {
     if (!joiningChannel || !current) return;
     if (current.id !== joiningChannel) setJoiningChannel(undefined);
-    else if (!current.readOnly) {
+    else if (!current.readOnly || current.viewerRole === "guest") {
       setJoiningChannel(undefined);
-      setComposerFocus((value) => value + 1);
+      if (current.viewerRole === "guest")
+        historyContainer.current?.focus({ preventScroll: true });
+      else setComposerFocus((value) => value + 1);
     }
   }, [joiningChannel, current]);
   const CurrentChannelIcon = channelIcon(current);
@@ -516,8 +666,6 @@ function ChannelWorkspace({
     setMembersChannel((id) => (id === currentId ? id : undefined));
   }, [currentId]);
   const setMembersOpen = (open: boolean) => {
-    const handoff = membersHandoff.current;
-    membersHandoff.current = false;
     if (!navigator) {
       setMembersChannel(open ? currentId : undefined);
       return;
@@ -530,14 +678,11 @@ function ChannelWorkspace({
       navigator.snapshot().entry.id !== navigation.entryId
     )
       return;
-    // A profile keeps this conversation; a DM already owns a different visit.
-    // Modal cleanup must not overwrite that destination or its exact address,
-    // so a handoff replaces the Members visit instead of traversing back.
+    // Passive history retains Members; explicit dismissal retires its visit.
+    // The guard above keeps cleanup from overwriting a routed handoff.
     const { panel: _panel, ...target } = navigation.target;
-    void navigator.open(
-      open ? { ...target, panel: "members" } : target,
-      open ? undefined : handoff ? { replace: true } : { dismiss: true },
-    );
+    if (open) void navigator.open({ ...target, panel: "members" });
+    else navigator.dismiss([navigation.entryId], target);
   };
   const openMembers = (trigger: HTMLButtonElement) => {
     membersTrigger.current = trigger;
@@ -547,6 +692,7 @@ function ChannelWorkspace({
     currentId: string | undefined;
     queries: RelaySession;
     channelType: string | undefined;
+    archived: boolean;
   }>(undefined);
   const continuingVisit =
     committedVisit.current?.currentId === currentId &&
@@ -556,9 +702,15 @@ function ChannelWorkspace({
       currentId,
       queries,
       channelType: current?.channelType,
+      archived: !!current?.archived,
     };
-  }, [currentId, queries, current?.channelType]);
-  const tabState = useChannelTabState(queries, currentId);
+  }, [currentId, queries, current?.channelType, current?.archived]);
+  const tabState = useChannelTabState(
+    queries,
+    currentId,
+    "messages",
+    navigator,
+  );
   const { settings, setSettings, retireMenuEntries } = tabState;
   useEffect(() => {
     if (!currentId || composingMessage || draft) return;
@@ -687,10 +839,43 @@ function ChannelWorkspace({
       if (archive.current === shortcut) archive.current = undefined;
     };
   }, [archive, archivableId, lifecycle, navigation]);
+  // Escape marks the open conversation read, as its menu's Mark as read does:
+  // the same read-sync gate and call, and a toast only for a failure.
+  const notifyLatest = useRef(notify);
+  useLayoutEffect(() => {
+    notifyLatest.current = notify;
+  });
+  const readableId =
+    !composingMessage && current && !current.readOnly && !current.cached
+      ? current.id
+      : undefined;
+  useLayoutEffect(() => {
+    if (!read || !readableId) return;
+    const signal = navigation?.signal;
+    const shortcut = {
+      available: () =>
+        !signal?.aborted &&
+        queries.unread.sync().capability === "frontier-sync" &&
+        channelHasUnread(queries.unread, readableId) &&
+        !inFieldOutsideComposer(),
+      run: async () => {
+        try {
+          await queries.unread.markChannelRead(readableId);
+        } catch {
+          notifyLatest.current("Couldn’t mark as read.", "error");
+        }
+      },
+    };
+    read.current = shortcut;
+    return () => {
+      if (read.current === shortcut) read.current = undefined;
+    };
+  }, [read, readableId, queries, navigation]);
   const onComposerSend = useComposerSent(currentId, setSent);
   const [exactOpening, setExactOpening] = useState<{
     request: PageNavigation;
     inTimeline: boolean;
+    rootId?: string;
   }>();
   useEffect(() => {
     if (
@@ -713,13 +898,7 @@ function ChannelWorkspace({
       // live event must not move an already-opened thread into the timeline.
       setExactOpening({
         request: navigation,
-        inTimeline:
-          requestedThread !== requestedMessage &&
-          window.status === "ready" &&
-          window.freshness !== "cached" &&
-          window.rows.some(
-            (row) => row.id === requestedMessage && !row.threadRootId,
-          ),
+        ...placeExactOpening(window, requestedMessage),
       });
     };
     const stop = queries.channels.subscribeWindow(currentId, choose);
@@ -757,7 +936,7 @@ function ChannelWorkspace({
         ? {
             channelId: current.id,
             messageId: requestedMessage,
-            rootId: requestedThread ?? requestedMessage,
+            rootId: exact.rootId ?? requestedThread ?? requestedMessage,
             pane: threadPane,
             navigation,
           }
@@ -787,6 +966,112 @@ function ChannelWorkspace({
   const returnFocus = useRef<
     { trigger: HTMLElement; channelId: string | undefined } | undefined
   >(undefined);
+  const visitPanel = useCallback(
+    (entry: PanelOpening) => {
+      const target = navigator?.snapshot().entry.target;
+      if (!navigator || target?.kind !== "conversation") return;
+      if (
+        target.channelId === entry.channelId &&
+        target.detail?.target === entry.target &&
+        target.detail.rootId === entry.rootId
+      )
+        return;
+      tabState.leaveVisit();
+      void navigator.open({
+        version: 1,
+        kind: "conversation",
+        scope: target.scope,
+        channelId: entry.channelId,
+        detail: {
+          target: entry.target,
+          ...(entry.rootId ? { rootId: entry.rootId } : {}),
+        },
+      });
+    },
+    [navigator, tabState.leaveVisit],
+  );
+  // Closing selects locally first. Retire the closed content while preserving
+  // its surviving neighbour, including a panel beside a main-pane thread.
+  const closeTarget = (
+    pane: "main" | "side",
+    entries = tabState.entries,
+  ): OpenTarget | undefined => {
+    const target = navigator?.snapshot().entry.target;
+    if (target?.kind !== "conversation") return;
+    const selected =
+      pane === "main" ? tabState.getMainSelected() : tabState.getSelected();
+    const detail = entries.find(
+      (entry) => panelTabId(entry) === selected && historyPanel(entry),
+    );
+    const thread =
+      tabState.tabs.find((tab) => tab.id === selected) ??
+      (pane === "side"
+        ? tabState.tabs.find((tab) => tab.id === tabState.getMainSelected())
+        : undefined);
+    return {
+      version: 1,
+      kind: "conversation",
+      scope: target.scope,
+      channelId:
+        detail?.channelId ??
+        (thread?.kind === "thread" ? thread.channelId : undefined) ??
+        currentId ??
+        target.channelId,
+      ...(detail
+        ? {
+            detail: {
+              target: detail.target,
+              ...(detail.rootId ? { rootId: detail.rootId } : {}),
+            },
+          }
+        : thread?.kind === "thread"
+          ? {
+              messageId: thread.messageId,
+              threadRootId: rootOfTab(thread),
+            }
+          : {}),
+    };
+  };
+  const keptTabReturn = useRef<{
+    from: string;
+    target: string;
+    id: string;
+    pane: "main" | "side";
+  }>(undefined);
+  const dismissContent = (
+    visits: readonly string[],
+    fallback: OpenTarget,
+    pane: "main" | "side",
+    entries = tabState.entries,
+  ) => {
+    keptTabReturn.current = undefined;
+    if (!navigator) return;
+    const keep =
+      pane === "main" ? tabState.getMainSelected() : tabState.getSelected();
+    const keptTab = tabState.tabs.find((tab) => tab.id === keep);
+    const keptEntry = entries.find((entry) => panelTabId(entry) === keep);
+    const current = navigator.snapshot().entry;
+    if (
+      keep !== undefined &&
+      (keptTab ||
+        keptEntry ||
+        keep === "settings" ||
+        (pane === "side" && tabState.sidePanel)) &&
+      visits.includes(current.id) &&
+      keptTab?.kind !== "thread" &&
+      !(keptEntry && historyPanel(keptEntry))
+    ) {
+      // A local survivor has no routed address. Preserve it only for this
+      // dismissal's matching return, never for unrelated later navigation.
+      keptTabReturn.current = {
+        from: current.id,
+        target: targetKey(fallback),
+        id: keep,
+        pane,
+      };
+    }
+    navigator.dismiss(visits, fallback);
+  };
   const secondary = useConversationTabs({
     state: tabState,
     relay,
@@ -801,6 +1086,7 @@ function ChannelWorkspace({
     conversationToolbar: (channel, open) =>
       channel.channelType === "solo" && (
         <SoloToolbar
+          chatMenus={chatMenus}
           key={channel.id}
           session={queries}
           scope={scope}
@@ -820,17 +1106,61 @@ function ChannelWorkspace({
     mainPane: !solo,
     navigation: navigator,
     routed: routedThread,
+    onVisitPanel: visitPanel,
+    onCloseTabs: (tabs, entries, keep) => {
+      const remaining = tabState.entries.filter(
+        (entry) => panelTabId(entry) === keep,
+      );
+      const keptTab = tabState.tabs.find((tab) => tab.id === keep);
+      const keptEntry = remaining[0];
+      const pane = keptTab
+        ? tabPane(keptTab)
+        : keptEntry
+          ? entryPane(tabState.mainEntries, keptEntry)
+          : "main";
+      const fallback = closeTarget(pane, remaining);
+      if (!navigator || !fallback) return;
+      const visits = [
+        ...tabs.flatMap((tab) =>
+          tab.kind === "thread"
+            ? tabState.threadVisits(tab.channelId, rootOfTab(tab))
+            : [],
+        ),
+        ...entries.flatMap((entry) =>
+          historyPanel(entry)
+            ? tabState.detailVisits(entry.channelId, entry.target)
+            : [],
+        ),
+      ];
+      dismissContent(
+        visits,
+        fallback,
+        keep === "settings" ? "side" : pane,
+        remaining,
+      );
+    },
+    onClosePanel: (entry, remaining) => {
+      if (!historyPanel(entry)) return;
+      const pane = entryPane(tabState.mainEntries, entry);
+      const fallback = closeTarget(pane, remaining);
+      if (fallback)
+        dismissContent(
+          tabState.detailVisits(entry.channelId, entry.target),
+          fallback,
+          pane,
+          remaining,
+        );
+    },
     onCloseThread: (tab, active, last) => {
-      // Closing the addressed thread returns the route to its channel, so a
-      // later Back/Forward visit is the only way to reopen it.
-      // That channel visit keeps the tab selected in place of the closed one.
-      if (
-        routedThread?.channelId === tab.channelId &&
-        routedThread.messageId === tab.messageId
-      ) {
-        select(tab.channelId);
-        const entry = navigator?.snapshot().entry.id;
-        if (entry) tabState.enterVisit(`${entry}:channel`, undefined, true);
+      // X is explicit dismissal; Back/Forward never comes through this path.
+      // Retire this tab's addressed visits, including ones behind the cursor.
+      const fallback = closeTarget(tabPane(tab));
+      if (navigator && fallback) {
+        dismissContent(
+          tabState.threadVisits(tab.channelId, rootOfTab(tab)),
+          fallback,
+          tabPane(tab),
+        );
       }
       const trigger = threadTrigger.current;
       // While tabs remain, the opener takes focus only from within their pane.
@@ -975,10 +1305,45 @@ function ChannelWorkspace({
     // and a closed tab is not reopened by a re-render of the same visit. A
     // message still resolving its placement waits rather than recording.
     if (routedThread || !requestedMessage || exact?.inTimeline) {
+      const detail =
+        navigation.target.kind === "conversation"
+          ? navigation.target.detail
+          : undefined;
+      const kept = keptTabReturn.current;
+      const retained =
+        kept &&
+        (kept.pane === "main"
+          ? tabState.getMainSelected()
+          : tabState.getSelected()) === kept.id;
       tabState.enterVisit(
-        `${navigation.entryId}:${routedThread ? "thread" : "channel"}`,
-        routedThread,
+        `${navigation.entryId}:${detail ? "detail" : routedThread ? "thread" : "channel"}`,
+        detail ? undefined : routedThread,
+        !!detail,
+        detail && currentId
+          ? { channelId: currentId, target: detail.target }
+          : undefined,
       );
+      if (detail && currentId) {
+        const entry = panelOpening(
+          panels,
+          currentId,
+          detail.target,
+          detail.rootId,
+        );
+        if (entry && historyPanel(entry)) open(entry);
+        else navigation.complete({ status: "failed", reason: "unavailable" });
+      }
+      if (kept && navigation.entryId !== kept.from) {
+        keptTabReturn.current = undefined;
+        if (retained && targetKey(navigation.target) === kept.target) {
+          if (kept.pane === "main") tabState.selectMain(kept.id);
+          else {
+            tabState.select(kept.id);
+            tabState.setPaneOpen(true);
+          }
+          focusKept.current = kept.id;
+        }
+      }
       if (navigation.focus === "preserve") setPreservedVisit(navigation);
     }
     const activity = handoff?.activityThread.current;
@@ -994,7 +1359,7 @@ function ChannelWorkspace({
       handoff.activityThread.current = undefined;
     }
     const activityAgent = handoff?.activityAgent.current;
-    if (activityAgent && activityAgent.channelId === current?.id) {
+    if (activityAgent && activityAgent.channelId === currentId) {
       const target = profileActivityViewTarget(activityAgent.agent);
       const panel = target && panels.resolve(target);
       if (target && panel) {
@@ -1015,8 +1380,13 @@ function ChannelWorkspace({
     exact?.inTimeline,
     routedThread,
     tabState.enterVisit,
+    tabState.select,
+    tabState.selectMain,
+    tabState.setPaneOpen,
+    tabState.getSelected,
+    tabState.getMainSelected,
     handoff?.activityAgent,
-    current?.id,
+    currentId,
     panels,
     panelTrigger,
   ]);
@@ -1269,7 +1639,8 @@ function ChannelWorkspace({
             ? document.activeElement
             : null);
         // Thread-origin details cover the live thread instead of retiring it.
-        if (!fromThread && routedThread) select(channelId);
+        if (!fromThread && routedThread && !historyPanel(next))
+          select(channelId);
         open(next, fromThread);
         return true;
       }
@@ -1310,11 +1681,14 @@ function ChannelWorkspace({
   const hasPanel = companion || hasChannelPanel;
   const showingChannelPanel = tabState.paneOpen && hasChannelPanel;
   const showingPanel = companion || showingChannelPanel;
-  // An explicit channel opening resumes its visible selected thread. Passive
-  // restoration and another channel’s retained tab keep their existing focus.
+  // A plain channel visit reads its visible selected thread along with the
+  // conversation that holds focus. A link to a message or thread, passive
+  // restoration and another channel’s retained tab do not.
   const readingThread =
     showingChannelPanel &&
     !companion &&
+    !requestedMessage &&
+    !requestedThread &&
     !membersOpen &&
     !showingMediaReview &&
     (navigation?.focus ?? navigator?.snapshot().attempt.focus) !== "preserve" &&
@@ -1325,28 +1699,33 @@ function ChannelWorkspace({
         tab.channelId === currentId,
     );
   const split = usePanelSplit();
-  const readingVisit = useRef<AbortSignal | string | undefined>(undefined);
+  // A routed thread can mount behind a collapsed pane, where it cannot take
+  // focus, or already be selected, so its pane does not move focus. Once its
+  // tab shows, hand it focus nothing else took.
+  const routedTab =
+    routedThread && !membersOpen
+      ? tabState.tabs.find(
+          (tab) =>
+            tab.kind === "thread" &&
+            tab.channelId === routedThread.channelId &&
+            tab.messageId === routedThread.messageId &&
+            (tabPane(tab) === "main"
+              ? tabState.mainSelected === tab.id
+              : showingChannelPanel && !companion && selectedTab === tab.id),
+        )?.id
+      : undefined;
+  const routedVisit = useRef<AbortSignal | string | undefined>(undefined);
   useLayoutEffect(() => {
     const visit = navigation?.signal ?? currentId;
-    if (!readingThread || readingVisit.current === visit) return;
-    readingVisit.current = visit;
-    const focused = document.activeElement;
-    // Only hand off the channel opener. A person who moved focus while the
-    // retained pane mounted keeps their new target.
-    if (
-      focused !== document.body &&
-      (!(focused instanceof Element) ||
-        focused
-          .closest("[data-channel-id]")
-          ?.getAttribute("data-channel-id") !== currentId)
-    )
-      return;
+    if (!routedTab || routedVisit.current === visit) return;
+    routedVisit.current = visit;
+    if (document.activeElement !== document.body) return;
     split.ref.current
       ?.querySelector<HTMLElement>(
-        `[role="tab"][data-tab-value="${CSS.escape(selectedTab)}"]`,
+        `[role="tab"][data-tab-value="${CSS.escape(routedTab)}"]`,
       )
       ?.focus({ preventScroll: true });
-  }, [readingThread, navigation?.signal, currentId, selectedTab, split.ref]);
+  }, [routedTab, navigation?.signal, currentId, split.ref]);
   useEffect(() => {
     // Only an explicit settings click moves focus; restoring a visit does not.
     if (settingsFocus)
@@ -1364,7 +1743,7 @@ function ChannelWorkspace({
       setupTools={
         current &&
         handoff &&
-        !current.readOnly &&
+        (!current.readOnly || current.viewerRole === "guest") &&
         current.channelType !== "dm" && (
           <ChannelLifecycleActions
             key={`${current.id}:${!!current.archived}`}
@@ -1414,11 +1793,42 @@ function ChannelWorkspace({
         </Button>
       )}
       {queries.outbox ? (
-        <OutboxStatus outbox={queries.outbox} profiling={queries.profiling} />
+        <OutboxStatus
+          outbox={queries.outbox}
+          profiling={queries.profiling}
+          memberAdditions={queries.memberAdditions}
+        />
       ) : (
         <RelayTimings profiling={queries.profiling} />
       )}
     </ChannelSettingsPanel>
+  );
+  const focusArchivedHistory = useCallback(() => {
+    const history = historyContainer.current;
+    if (
+      !currentId ||
+      !queries.channels.get?.(currentId)?.archived ||
+      !history?.isConnected ||
+      history.closest("[inert]")
+    )
+      return;
+    (
+      history.querySelector<HTMLElement>("[data-message-scroller]") ?? history
+    ).focus({ preventScroll: true });
+  }, [currentId, queries.channels]);
+  const channelNotice =
+    !!current &&
+    (current.archived ||
+      (current.readOnly &&
+        (!current.cached || current.viewerRole === "guest")));
+  useChannelHistoryFocus(
+    historyContainer,
+    navigation,
+    current?.viewerRole === "guest" &&
+      !current.cached &&
+      !membersOpen &&
+      !showingMediaReview,
+    contentReadyChannel === currentId,
   );
   // The conversation: full width for Solo, or the first main-pane tab.
   const body = (
@@ -1440,7 +1850,9 @@ function ChannelWorkspace({
             key={current.id}
             cached={cached}
             // The composer below mounts TypingIndicator for members of a live channel.
-            activityLane={!current.readOnly && !current.cached}
+            activityLane={
+              !current.archived && !current.readOnly && !current.cached
+            }
             navigation={
               !requestedMessage || exact?.inTimeline ? navigation : undefined
             }
@@ -1461,11 +1873,15 @@ function ChannelWorkspace({
               : "Select a channel to read it."}
           </div>
         )}
-        {current?.readOnly && !current.cached && (
+        {current && channelNotice && (
           <ChannelJoinNotice
             key={`join:${current.id}`}
             ready={contentReadyChannel === current.id}
             channelId={current.id}
+            archived={!!current.archived}
+            place={solo ? "chat" : "channel"}
+            guest={current.viewerRole === "guest"}
+            joinRole={current.joinRole}
             lifecycle={queries.channelLifecycle}
             joinable={
               !current.archived &&
@@ -1488,7 +1904,7 @@ function ChannelWorkspace({
           onRecovered={
             current
               ? () => {
-                  if (current.readOnly && !current.cached) {
+                  if (channelNotice) {
                     const history = historyContainer.current;
                     const target =
                       history?.querySelector<HTMLElement>(
@@ -1503,44 +1919,46 @@ function ChannelWorkspace({
           }
         />
       )}
-      {current && (!current.readOnly || current.cached) && (
-        <ConversationComposer
-          key={`composer:${current.id}`}
-          autoFocus={
-            // Conversion remounts the body, but isn't a new conversation opening.
-            // Its dialog hands off focus after closing and releasing modality.
-            !(
-              continuingVisit &&
-              committedVisit.current?.channelType === "solo" &&
-              current.channelType !== "solo"
-            ) &&
-            // The bound request arrives after the composer's first render.
-            (navigation?.focus ?? navigator?.snapshot().attempt.focus) !==
-              "preserve" &&
-            !current.readOnly &&
-            !requestedMessage &&
-            !requestedThread &&
-            !routedThread &&
-            !readingThread
-          }
-          trailingTool={
-            solo ? (
-              <WorkspaceControl
-                session={queries}
-                channelId={current.id}
-                disabled={!!current.archived}
-              />
-            ) : undefined
-          }
-          onSend={onComposerSend}
-          focusRequest={composerFocus}
-        />
-      )}
+      {current &&
+        !current.archived &&
+        current.viewerRole !== "guest" &&
+        (!current.readOnly || current.cached) && (
+          <ConversationComposer
+            key={`composer:${current.id}`}
+            onFocusedRemoval={focusArchivedHistory}
+            autoFocus={
+              // Remote unarchive restores controls within the reader's current visit.
+              !(continuingVisit && committedVisit.current?.archived) &&
+              // Conversion remounts the body, but isn't a new conversation opening.
+              // Its dialog hands off focus after closing and releasing modality.
+              !(
+                continuingVisit &&
+                committedVisit.current?.channelType === "solo" &&
+                current.channelType !== "solo"
+              ) &&
+              // The bound request arrives after the composer's first render.
+              (navigation?.focus ?? navigator?.snapshot().attempt.focus) !==
+                "preserve" &&
+              !current.readOnly &&
+              !requestedMessage &&
+              !requestedThread &&
+              !routedThread
+            }
+            trailingTool={
+              solo ? (
+                <WorkspaceControl session={queries} channelId={current.id} />
+              ) : undefined
+            }
+            onSend={onComposerSend}
+            focusRequest={composerFocus}
+          />
+        )}
     </>
   );
   const workspace = (
     <div
       data-channel-workspace={currentId ?? ""}
+      data-reading-thread={readingThread ? "" : undefined}
       ref={split.ref}
       style={split.style}
       className={`${styles.board} ${panelStyles.splitMotion}`}
@@ -1551,6 +1969,8 @@ function ChannelWorkspace({
           session={queries}
           channelId={current.id}
           communities={communities}
+          // Routed Members is a navigation visit; without a navigator it is local.
+          visit={!!navigator}
           close={() => setMembersOpen(false)}
           trigger={
             membersTrigger.current?.isConnected
@@ -1559,9 +1979,7 @@ function ChannelWorkspace({
           }
           canOpenLink={canOpenLink}
           {...(agents ? { agents } : {})}
-          onOpenLink={(url, returnFocus) =>
-            (membersHandoff.current = openLink(url, { returnFocus }))
-          }
+          onOpenLink={(url, returnFocus) => openLink(url, { returnFocus })}
           onOpenConversation={
             navigator && viewer
               ? (id) => openLink(`buzz://channel/${encodeURIComponent(id)}`)
@@ -1579,17 +1997,15 @@ function ChannelWorkspace({
           className={`${styles.conversation}${solo ? ` ${styles.soloConversation}` : ""}`}
           style={
             {
-              "--channel-preview-inset":
-                current?.readOnly && !current.cached
-                  ? `calc(${joinNoticeHeight}px + var(--space-3))`
-                  : "0px",
+              "--channel-preview-inset": channelNotice
+                ? `calc(${joinNoticeHeight}px + var(--space-3))`
+                : "0px",
             } as React.CSSProperties
           }
           data-attachment-drop-zone=""
         >
           {composingMessage ? (
-            <NewMessage
-              channels={list.channels}
+            <LiveNewMessage
               host={{ relay, panels, navigation: navigator }}
               session={queries}
               scope={scope}
@@ -1654,6 +2070,7 @@ function ChannelWorkspace({
             <>
               {current && solo ? (
                 <SoloHeading
+                  chatMenus={chatMenus}
                   key={`${current.id}:${navigation?.entryId ?? ""}`}
                   session={queries}
                   scope={scope}
@@ -1790,7 +2207,8 @@ function ChannelWorkspace({
                               drawerContext.channelId !== channel?.id ||
                               !channel ||
                               channel.cached ||
-                              channel.readOnly ||
+                              (channel.readOnly &&
+                                channel.viewerRole !== "guest") ||
                               !channel.members?.includes(
                                 queries.viewer ?? "",
                               ) ||
@@ -1843,12 +2261,7 @@ function ChannelWorkspace({
                       {
                         id: "conversation",
                         label: current?.name ?? "Channels",
-                        icon:
-                          current?.channelType === "dm" ? (
-                            <ChatCircleIcon size="1rem" />
-                          ) : (
-                            <CurrentChannelIcon size="1rem" />
-                          ),
+                        icon: <CurrentChannelIcon size="1rem" />,
                         content: (
                           <div
                             ref={channelConversation}

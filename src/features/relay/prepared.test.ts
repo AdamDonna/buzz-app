@@ -280,6 +280,13 @@ it("byte LRU enforces both budgets and rejects a single oversize object", () => 
   expect(cache.stats().bytes).toBe(8);
   expect(cache.set("d", "D", 20)).toBe(false);
   expect(cache.keys()).toEqual(["a", "c"]);
+  // Replacing keeps recency, so the replaced entry is still evicted first.
+  expect(cache.replace("a", "A2", 5)).toBe(true);
+  expect(cache.replace("d", "D", 1)).toBe(false);
+  expect(cache.keys()).toEqual(["a", "c"]);
+  expect(cache.stats().bytes).toBe(9);
+  cache.set("e", "E", 1);
+  expect(cache.keys()).toEqual(["c", "e"]);
 });
 it("storage failure does not block foreground reads", async () => {
   const disk = memoryDisk();
@@ -463,6 +470,7 @@ it("hides DM channels behind the NIP-29 hidden tag", async () => {
       name: "DM",
       description: "",
       visibility: undefined,
+      joinRole: "member",
       hidden: true,
       members: [viewer.pubkey, alice.pubkey].sort(),
       preview: undefined,

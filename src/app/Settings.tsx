@@ -52,12 +52,17 @@ import { canRetryPlugin, type PluginManager } from "../plugins/manager";
 import type { Catalog, PluginInfo } from "../plugins/types";
 import type { Communities, Membership } from "../features/communities/service";
 import { PluginImport } from "./PluginImport";
+import { ManagedPluginUpdate, ManagedPlugins } from "./ManagedPlugins";
+import { managedBy, pendingManaged } from "../plugins/managed";
+import { RecommendationCount } from "./RecommendationCount";
+import type { PluginInstallRequests } from "../plugins/installer";
 import { PluginReadme } from "./PluginReadme";
 import { bundledReadmes } from "../bundled/readmes";
 import { bundledIcons } from "../bundled/icons";
 import type { Identity } from "../features/identity/service";
 import { ProfileSettings } from "./ProfileSettings";
 import { IdentitySettings } from "./IdentitySettings";
+import type { FederatedIdentity } from "../features/federated-identity/service";
 import { CommunityLocalSettings } from "./CommunityLocalSettings";
 
 import type { Appearance } from "../shared/theme/service";
@@ -197,21 +202,30 @@ function PluginIcon({
 function PluginProvenance({
   source,
   publisher,
+  managedBy,
   className,
 }: {
   source: "bundled" | "external";
   publisher?: string | null | undefined;
+  managedBy?: string | undefined;
   className?: string | undefined;
 }) {
-  if (source !== "bundled" && !publisher) return null;
+  const label = [
+    source === "bundled" ? "Buzz" : publisher,
+    managedBy && `Managed by ${managedBy}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  if (!label) return null;
   return (
     <span className={`${styles.pluginProvenance} ${className ?? ""}`}>
-      <span>{source === "bundled" ? "Buzz" : publisher}</span>
+      <span>{label}</span>
     </span>
   );
 }
 
 const noAccessSubscription = () => () => {};
+const noInstallRequest = () => undefined;
 
 function restrictedPlugin(plugin: PluginInfo) {
   return (
@@ -271,6 +285,7 @@ function pluginToggleDisabled(
 
 function PluginDetails({
   plugin,
+  managed,
   failure,
   retryable,
   busy,
@@ -286,8 +301,10 @@ function PluginDetails({
   reviewRequested,
   onReviewHandled,
   initialUpdateAvailable,
+  holdReview,
 }: {
   plugin: PluginInfo;
+  managed?: ReturnType<typeof managedBy>;
   failure: string | null;
   retryable: boolean;
   busy: boolean;
@@ -303,6 +320,7 @@ function PluginDetails({
   reviewRequested: boolean;
   onReviewHandled(): void;
   initialUpdateAvailable: boolean;
+  holdReview: (() => () => void) | undefined;
 }) {
   const accessReason = restrictedPlugin(plugin)
     ? accessMessage(plugin, access)
@@ -330,7 +348,8 @@ function PluginDetails({
       className={styles.pluginAside}
       aria-label={`${plugin.manifest.name} details`}
       onKeyDown={(event) => {
-        if (event.defaultPrevented || event.key !== "Escape") return;
+        if (event.defaultPrevented || event.key !== "Escape" || event.shiftKey)
+          return;
         event.stopPropagation();
         onClose();
       }}
@@ -378,6 +397,11 @@ function PluginDetails({
             <CheckCircleIcon size={14} aria-hidden="true" />
             Installed
           </span>
+          {managed && (
+            <span className={styles.pluginInstallBadge}>
+              Managed by {managed.source}
+            </span>
+          )}
           <span
             ref={setInstalledStatus}
             className={styles.pluginInstallBadge}
@@ -472,7 +496,19 @@ function PluginDetails({
           </span>
         )}
       </div>
-      {plugin.source === "external" && plugins.imports && (
+      {plugin.source === "external" && plugins.imports && managed && (
+        <ManagedPluginUpdate
+          plugins={plugins}
+          catalog={catalog}
+          busy={busy}
+          source={managed.source}
+          entry={managed.entry}
+          holdReview={holdReview}
+          returnFocus={() => close.current}
+          {...(authorizeGit ? { authorizeGit } : {})}
+        />
+      )}
+      {plugin.source === "external" && plugins.imports && !managed && (
         <PluginImport
           key={`${plugin.revision}:${JSON.stringify(plugin.updateSource)}`}
           initialUpdateAvailable={initialUpdateAvailable}
@@ -480,6 +516,7 @@ function PluginDetails({
           onUpdateAvailableChange={onUpdateAvailableChange}
           reviewRequested={reviewRequested}
           onReviewHandled={onReviewHandled}
+          holdReview={holdReview}
           statusTarget={installedStatus}
           returnFocus={() => close.current}
           updateId={plugin.manifest.id}
@@ -584,13 +621,17 @@ export function Settings({
   adminAccess,
   communities,
   identity,
+  federatedIdentity,
   appearance,
   shortcuts,
   shortcutBindings,
   notifications,
   updates,
   navigation,
+  installRequests,
   onSection,
+  onProvider,
+  onPluginImportClosed,
   navigationPane = false,
   onDeparturePending,
   onUnsavedChange,
@@ -602,6 +643,7 @@ export function Settings({
   adminAccess?: AdminAccessReader;
   communities: Communities;
   identity?: Identity | undefined;
+  federatedIdentity?: FederatedIdentity | undefined;
   appearance: Appearance;
   shortcuts: ShortcutsService;
   shortcutBindings: ShortcutBindings;
@@ -610,13 +652,32 @@ export function Settings({
   navigation?:
     | import("../features/navigation/service").PageNavigation
     | undefined;
+  installRequests?: PluginInstallRequests | undefined;
   onSection?: (section: string) => void;
+  onProvider?: ((provider?: string) => void) | undefined;
+  onPluginImportClosed?: (() => void) | undefined;
   navigationPane?: boolean;
   onDeparturePending?: (pending: boolean) => void;
   onUnsavedChange?: (unsaved: boolean) => void;
 }) {
   useEffect(() => cards.retainVisibility(), [cards]);
   useEffect(() => adminAccess?.ensure(), [adminAccess]);
+  const installRequest = useSyncExternalStore(
+    installRequests?.subscribe ?? noAccessSubscription,
+    installRequests?.snapshot ?? noInstallRequest,
+  );
+  const settingsMounted = useRef(false);
+  useEffect(() => {
+    settingsMounted.current = true;
+    return () => {
+      settingsMounted.current = false;
+      queueMicrotask(() => {
+        const waiting = installRequests?.snapshot();
+        if (!settingsMounted.current && waiting)
+          installRequests?.end(waiting.id);
+      });
+    };
+  }, [installRequests]);
   const membershipAccess = useSyncExternalStore(
     adminAccess?.subscribe ?? noAccessSubscription,
     () => adminAccess?.status("buzz.moderation") ?? "unavailable",
@@ -653,13 +714,22 @@ export function Settings({
     [contributed, departureCommunity],
   );
   const [selected, setSelected] = useState(defaultSection);
-  const departureFocus = useRef(false);
+  // Shortcuts lists every binding with its own controls, so it is built on
+  // first visit rather than with every Settings open, then kept like the rest.
+  const [shortcutsVisited, setShortcutsVisited] = useState(false);
+  if (selected === "shortcuts" && !shortcutsVisited) setShortcutsVisited(true);
+  // A switch made from inside the content hides or removes the control that
+  // made it, so focus moves into the section it opened.
+  const contentFocus = useRef<string>(undefined);
   useLayoutEffect(() => {
-    if (selected !== "profile" || !departureFocus.current) return;
-    departureFocus.current = false;
-    document
-      .getElementById(navigationPane ? "settings-content" : "main-content")
-      ?.focus({ preventScroll: true });
+    if (selected !== contentFocus.current) return;
+    contentFocus.current = undefined;
+    (selected === "plugins"
+      ? pluginSection.current
+      : document.getElementById(
+          navigationPane ? "settings-content" : "main-content",
+        )
+    )?.focus({ preventScroll: true });
   }, [selected, navigationPane]);
   useEffect(() => {
     if (
@@ -695,6 +765,8 @@ export function Settings({
   const ready = configuration.status === "ready" ? configuration : undefined;
   const catalog = ready?.catalog;
   const externalPluginsPaused = ready?.externalPluginsPaused;
+  const managed = ready?.managed;
+  const pendingCount = pendingManaged(managed).length;
   const [activationAttempt, setActivationAttempt] = useState<{
     id: string;
     revision: string;
@@ -913,6 +985,7 @@ export function Settings({
                 (running?.revision === plugin.revision ? running.error : null);
               const updateAvailable =
                 !!plugins.imports &&
+                !managedBy(managed, id) &&
                 updateChecks[id]?.revision === plugin.revision &&
                 !!updateChecks[id]?.available;
               const name = (
@@ -963,7 +1036,8 @@ export function Settings({
                           plugin.manifest.description
                             ? `plugin-description-${id}`
                             : null,
-                          plugin.source === "external" && plugin.publisher
+                          plugin.source === "external" &&
+                          (plugin.publisher || managedBy(managed, id))
                             ? `plugin-publisher-${id}`
                             : null,
                           isEssentialPlugin(plugin)
@@ -1019,6 +1093,7 @@ export function Settings({
                           <PluginProvenance
                             source={plugin.source}
                             publisher={plugin.publisher}
+                            managedBy={managedBy(managed, id)?.source}
                             className={styles.pluginRowAuthor}
                           />
                         </span>
@@ -1165,20 +1240,34 @@ export function Settings({
           />
         </div>
         <div hidden={selected !== "shortcuts"}>
-          <ShortcutSettings
-            shortcuts={shortcuts}
-            bindings={shortcutBindings}
-            plugins={plugins}
-          />
+          {shortcutsVisited && (
+            <ShortcutSettings
+              shortcuts={shortcuts}
+              bindings={shortcutBindings}
+              plugins={plugins}
+            />
+          )}
         </div>
         <div hidden={selected !== "agents"}>
-          <AgentSettings agents={agents} active={selected === "agents"} />
+          <AgentSettings
+            agents={agents}
+            active={selected === "agents"}
+            navigation={navigation}
+            onProvider={onProvider}
+          />
         </div>
         {decisions && (
           <div hidden={selected !== "decisions"}>
             <DecisionsSettings
               decisions={decisions}
               active={() => selected === "decisions"}
+              onSection={
+                onSection &&
+                ((id) => {
+                  contentFocus.current = id;
+                  onSection(id);
+                })
+              }
             />
           </div>
         )}
@@ -1217,7 +1306,7 @@ export function Settings({
               );
             }}
             onRemoved={() => {
-              departureFocus.current = true;
+              contentFocus.current = "profile";
               if (onSection) onSection("profile");
               else setSelected("profile");
             }}
@@ -1246,6 +1335,7 @@ export function Settings({
             key={client.viewer}
             viewer={client.viewer}
             identity={identity}
+            federatedIdentity={federatedIdentity}
           />
         )}
         {developerMode && (
@@ -1273,6 +1363,16 @@ export function Settings({
             <AnimatePresence initial={false} mode="popLayout">
               {coreGroup && renderPluginGroup(coreGroup)}
             </AnimatePresence>
+            {catalog && (
+              <ManagedPlugins
+                plugins={plugins}
+                managed={managed}
+                catalog={catalog}
+                busy={busy}
+                authorizeGit={authorizePluginGit}
+                holdReview={installRequests?.holdReview}
+              />
+            )}
             {catalog && (
               <motion.div {...layoutMotion} className={styles.pluginToolbar}>
                 <motion.div {...layoutMotion}>
@@ -1308,7 +1408,26 @@ export function Settings({
             )}
             {catalog ? (
               <PluginImport
+                key={
+                  navigation?.target.kind === "settings" &&
+                  navigation.target.pluginImport
+                    ? navigation.entryId
+                    : "add"
+                }
+                initialGit={
+                  navigation?.target.kind === "settings"
+                    ? navigation.target.pluginImport
+                    : undefined
+                }
+                requestSignal={navigation?.signal}
+                onClosed={() => onPluginImportClosed?.()}
                 actionTarget={pluginImportActions}
+                request={installRequest}
+                onRequestSettled={installRequests?.settle}
+                onRequestClaimed={installRequests?.claim}
+                onRequestConfirmed={installRequests?.confirm}
+                onRequestEnded={installRequests?.end}
+                holdReview={installRequests?.holdReview}
                 plugins={plugins}
                 catalog={catalog}
                 busy={busy}
@@ -1422,8 +1541,10 @@ export function Settings({
         <PluginDetails
           key={selectedPlugin.manifest.id}
           plugin={selectedPlugin}
+          managed={managedBy(managed, selectedPlugin.manifest.id)}
           catalog={catalog}
           initialUpdateAvailable={
+            !managedBy(managed, selectedPlugin.manifest.id) &&
             updateChecks[selectedPlugin.manifest.id]?.revision ===
               selectedPlugin.revision &&
             updateChecks[selectedPlugin.manifest.id]?.available === true
@@ -1431,6 +1552,7 @@ export function Settings({
           authorizeGit={authorizePluginGit}
           reviewRequested={reviewPluginId === selectedPlugin.manifest.id}
           onReviewHandled={() => setReviewPluginId(undefined)}
+          holdReview={installRequests?.holdReview}
           onUpdateAvailableChange={(available) =>
             setUpdateChecks((current) => {
               const id = selectedPlugin.manifest.id;
@@ -1511,6 +1633,13 @@ export function Settings({
                         label={label}
                         icon={Icon && <Icon aria-hidden="true" size={18} />}
                         selected={selected === id}
+                        {...(id === "plugins" && pendingCount > 0
+                          ? {
+                              trailing: (
+                                <RecommendationCount count={pendingCount} />
+                              ),
+                            }
+                          : {})}
                         type="button"
                         key={id}
                         aria-current={selected === id ? "page" : undefined}

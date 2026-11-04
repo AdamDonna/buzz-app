@@ -1,3 +1,4 @@
+import { pauseClock } from "./clock.mjs";
 import { chromium } from "@playwright/test";
 import { test, expect } from "./playwright-test.mjs";
 import { createServer } from "./vite-server.mjs";
@@ -423,46 +424,55 @@ test("capsule and companion presentation share mute and leave", async ({
           .map((animation) => animation.finished),
       );
     });
-    // A spring can briefly cross its final size before overshooting. Wait for
-    // Motion to remove the arrival/layout transform, not that transient crossing.
+    // A spring can briefly cross its final size before overshooting, and
+    // Motion can put a sub-pixel transform back on a settled avatar for a
+    // frame or two. Measure in the frame that shows no avatar transform, not
+    // a later one; a separate poll could pass and the snapshot still land on
+    // such a frame.
+    let geometry;
     await expect
-      .poll(() =>
-        roster.evaluate((el) =>
-          [...el.querySelectorAll("[data-huddle-avatar]")].every(
-            (avatar) => getComputedStyle(avatar).transform === "none",
-          ),
-        ),
+      .poll(
+        async () => {
+          geometry = await roster.evaluate((el) => {
+            if (
+              [...el.querySelectorAll("[data-huddle-avatar]")].some(
+                (avatar) => getComputedStyle(avatar).transform !== "none",
+              )
+            )
+              return null;
+            const area = el.getBoundingClientRect();
+            const bounds = (node) => {
+              const rect = node.getBoundingClientRect();
+              return {
+                left: rect.left - area.left,
+                top: rect.top - area.top,
+                right: rect.right - area.left,
+                bottom: rect.bottom - area.top,
+                center: rect.left + rect.width / 2 - area.left,
+              };
+            };
+            return {
+              width: area.width,
+              height: area.height,
+              self: bounds(el.querySelector("[data-self]")),
+              portraitGaps: [
+                ...el.querySelectorAll("[data-self], [data-participant]"),
+              ].map((person) =>
+                Math.abs(
+                  person.getBoundingClientRect().height -
+                    person
+                      .querySelector("[data-huddle-avatar]")
+                      .getBoundingClientRect().height,
+                ),
+              ),
+              peers: [...el.querySelectorAll("[data-participant]")].map(bounds),
+            };
+          });
+          return geometry !== null;
+        },
+        { message: "every huddle avatar settles with no transform" },
       )
       .toBe(true);
-    const geometry = await roster.evaluate((el) => {
-      const area = el.getBoundingClientRect();
-      const bounds = (node) => {
-        const rect = node.getBoundingClientRect();
-        return {
-          left: rect.left - area.left,
-          top: rect.top - area.top,
-          right: rect.right - area.left,
-          bottom: rect.bottom - area.top,
-          center: rect.left + rect.width / 2 - area.left,
-        };
-      };
-      return {
-        width: area.width,
-        height: area.height,
-        self: bounds(el.querySelector("[data-self]")),
-        portraitGaps: [
-          ...el.querySelectorAll("[data-self], [data-participant]"),
-        ].map((person) =>
-          Math.abs(
-            person.getBoundingClientRect().height -
-              person
-                .querySelector("[data-huddle-avatar]")
-                .getBoundingClientRect().height,
-          ),
-        ),
-        peers: [...el.querySelectorAll("[data-participant]")].map(bounds),
-      };
-    });
     const portraits = [geometry.self, ...geometry.peers];
     if (portraits.length > 3) {
       expect(geometry.self.center).toBeCloseTo(geometry.width / 2, 0);
@@ -534,7 +544,7 @@ test("capsule and companion presentation share mute and leave", async ({
     roster.getByRole("img", { name: /^1 more participants:/ }),
   ).toBeVisible();
   // Hold the 220ms speaking lifetime while checking its rendered contract.
-  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await pauseClock(page, 1000);
   await page.evaluate(() => window.huddleFixture.speak("cd".repeat(32)));
   const speaker = roster.locator(`[data-participant="${"cd".repeat(32)}"]`);
   const speakerHalo = roster.locator(`[data-speaker="${"cd".repeat(32)}"]`);
@@ -1588,7 +1598,7 @@ test("accepting preserves both request avatars until connected, then moves them 
   await expect
     .poll(() => page.evaluate(() => window.huddleFixture.stats.opens))
     .toBe(1);
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await pauseClock(page, 1000);
   await page.evaluate(() => {
     window.huddleMotionFrames = [];
     window.huddleFixture.connect();
@@ -1696,7 +1706,16 @@ test("audio settings mirror device choices between compact and window controls",
     page.getByRole("combobox", { name: "Microphone", exact: true }),
   ).toContainText("USB microphone");
   await page.getByRole("combobox", { name: "Speakers", exact: true }).click();
-  await page.getByRole("option", { name: "Headphones", exact: true }).click();
+  // The popup can flip between a pointer pick's press and release, and Base UI
+  // ignores that split click. The microphone pick above covers the pointer.
+  await expect(
+    page.getByRole("option", { name: "System default", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(
+    page.getByRole("option", { name: "Headphones", exact: true }),
+  ).toHaveAttribute("data-highlighted", "");
+  await page.keyboard.press("Enter");
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("dialog", { name: "Audio settings", exact: true }),
@@ -1872,7 +1891,7 @@ test("an inactive call error does not suppress the next incoming call", async ({
   ).toContainText("Previous call failed");
   // The real clip may finish while WebKit renders the request. Freeze the
   // repeat timer so the first-play assertion cannot race the next ring.
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await pauseClock(page, 1000);
   await page.evaluate(() =>
     window.huddleFixture.request("00000000-0000-4000-8000-000000000099"),
   );
@@ -1985,7 +2004,7 @@ test("portraits can be tossed within the stage and return home, with reduced mot
   // Measure the circular layout, not the rotated artwork's rectangular bounding box.
   const portrait = stage.locator("[data-huddle-avatar]");
   await expect(portrait).toBeVisible();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await pauseClock(page, 1000);
   await expect
     .poll(async () => {
       await page.clock.runFor(16);

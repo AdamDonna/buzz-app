@@ -2,6 +2,7 @@ import { createConsola } from "consola";
 import { Context } from "@deepseek-ai/cordis";
 import { HostService } from "../src/features/host/service.ts";
 import { authTagOwner } from "../src/features/agents/owner-attestation.ts";
+import { publishAgentRecord } from "../src/features/agents/relay-removal.ts";
 import { logSocketFrame } from "../src/features/developer/traffic.ts";
 import { getLogger, setLogLevel } from "../src/features/developer/logging.ts";
 import { brokerSocket, openBrokerSocket } from "../tests/broker-socket.mjs";
@@ -167,6 +168,7 @@ test.each([
           });
         if (path.endsWith("/v1/auth/me"))
           return Response.json({
+            subject: "auth0|owner",
             email: "fixture@example.com",
             expires_at: "2030",
           });
@@ -184,9 +186,15 @@ test.each([
         body: "{}",
       });
       const opened = new URL(await loginOpened);
-      const callback = opened.searchParams.get("returnTo");
+      const callback = opened.searchParams.get("redirect_uri");
       expect(callback).toBeTruthy();
-      expect((await fetch(`${callback}?code=fixture`)).status).toBe(200);
+      expect(
+        (
+          await fetch(
+            `${callback}?state=${opened.searchParams.get("state")}&code=fixture`,
+          )
+        ).status,
+      ).toBe(200);
       expect((await login).status).toBe(200);
       const response = await fetch(`${h.base}/api/builderlab/delete`, {
         method: "POST",
@@ -1231,7 +1239,7 @@ test.each([
   ],
   ["/api/relay/archive", 4096, "bytes", "Archive request too large"],
   ["/api/relay/stream-presence", 256, "bytes", "Live control too large"],
-  ["/api/relay/stream", 300000, "bytes", "Live interests too large"],
+  ["/api/relay/stream", 64 * 1024 * 1024, "bytes", "Live interests too large"],
   ["/api/relay/query", 65536, "chars", "Filter body too large"],
   ["/api/relay/presence-snapshot", 20 * 1024, "bytes", "Filter body too large"],
 ])(
@@ -1745,7 +1753,7 @@ test("real outbox creates, invites and sends", async () => {
   }
 });
 
-test("member addition works without channel creation, while role elevation remains rejected", async () => {
+test("member and guest additions work without channel creation, while role elevation remains rejected", async () => {
   const h = await harness(success);
   let traffic;
   let owner;
@@ -1769,7 +1777,36 @@ test("member addition works without channel creation, while role elevation remai
       ).toBe("accepted"),
     );
     expect(h.publications).toHaveLength(1);
-    for (const role of ["owner", "admin", "member"]) {
+    const participantId = owner.outbox.send({
+      kind: 9000,
+      content: "",
+      tags: [...tags, ["role", "member"]],
+    });
+    await vi.waitFor(() =>
+      expect(
+        owner.local.snapshot().find((row) => row.event.id === participantId)
+          ?.delivery,
+      ).toBe("accepted"),
+    );
+    expect(h.publications).toHaveLength(2);
+    // Bestie joins a private channel as a guest: the same template through
+    // the outbox, with its trailing client-id, is signed and published.
+    const guestId = owner.outbox.send({
+      kind: 9000,
+      content: "",
+      tags: [...tags, ["role", "guest"]],
+    });
+    await vi.waitFor(() =>
+      expect(
+        owner.local.snapshot().find((row) => row.event.id === guestId)
+          ?.delivery,
+      ).toBe("accepted"),
+    );
+    expect(h.publications).toHaveLength(3);
+    expect(h.publications[2].tags).toEqual(
+      expect.arrayContaining([["role", "guest"]]),
+    );
+    for (const role of ["owner", "admin"]) {
       const denied = await h.post("sign", {
         kind: 9000,
         content: "",
@@ -2017,6 +2054,171 @@ test("message/reaction deletions pass real signing and publication without admit
   }
 });
 
+test("agent profile saves publish owner-signed listings through the broker outbox", async () => {
+  const h = await harness(success);
+  let traffic;
+  let owner;
+  try {
+    const transport = await connectBrokerTransport(h.base);
+    traffic = await openBrokerSocket(transport);
+    owner = createOutbox(transport.viewer, transport.writer, {
+      load: () => [],
+      save: () => {},
+    });
+    const entry = {
+      pubkey: "ab".repeat(32),
+      name: "Renamed agent",
+      picture: "https://example.com/new.png",
+      runtime: "block.builderlab/builderlab",
+      prior: {
+        content: {
+          name: "Old name",
+          picture: "https://example.com/old.png",
+          parallelism: 2,
+          respond_to: "mentions",
+        },
+        tags: [
+          ["d", "ab".repeat(32)],
+          ["runtime", "block.builderlab/builderlab"],
+          ["legacy-setting", "kept"],
+        ],
+      },
+    };
+    const record = await publishAgentRecord(
+      { outbox: owner.outbox },
+      entry,
+      new AbortController().signal,
+    );
+    expect(h.publications).toHaveLength(1);
+    const published = h.publications[0];
+    expect(verifyEvent(published)).toBe(true);
+    expect(published).toMatchObject({
+      kind: 30177,
+      pubkey: transport.viewer,
+      content: JSON.stringify(record.content),
+    });
+    expect(JSON.parse(published.content)).toEqual({
+      name: entry.name,
+      picture: entry.picture,
+      parallelism: 2,
+      respond_to: "mentions",
+    });
+    expect(published.tags).toEqual([
+      ["d", entry.pubkey],
+      ["runtime", entry.runtime],
+      ["legacy-setting", "kept"],
+      ["client-id", expect.any(String)],
+    ]);
+    expect(owner.outbox.snapshot()).toEqual([]);
+    const stranger = finalizeEvent({ ...published }, generateSecretKey());
+    expect((await h.post("publish", stranger)).status).toBe(400);
+    expect(
+      (await h.post("publish", { ...published, sig: "00".repeat(64) })).status,
+    ).toBe(400);
+    expect(h.publications).toHaveLength(1);
+  } finally {
+    owner?.dispose();
+    traffic?.dispose();
+    await h.close();
+  }
+});
+
+test("agent record signing refuses malformed coordinates, content and timestamps", async () => {
+  const h = await harness(success);
+  const content = { name: "Agent", parallelism: 1, respond_to: "owner-only" };
+  const template = {
+    kind: 30177,
+    created_at: 1700000000,
+    content: JSON.stringify(content),
+    tags: [["d", "ab".repeat(32)]],
+  };
+  try {
+    const signed = await h.post("sign", template);
+    expect(signed.status).toBe(200);
+    expect(verifyEvent(await signed.json())).toBe(true);
+    for (const invalid of [
+      { tags: [] },
+      { tags: [...template.tags, ...template.tags] },
+      { tags: [["d", "AB".repeat(32)]] },
+      { tags: [["d", "agent"]] },
+      { tags: [["d", "ab".repeat(32), "extra"]] },
+      { tags: [null] },
+      { tags: [...template.tags, ["extra", 1]] },
+      { created_at: -1 },
+      { created_at: 1.5 },
+      { content: "not JSON" },
+      { content: "null" },
+      { content: "[]" },
+      ...[
+        { name: "Agent" },
+        { ...content, name: " " },
+        { ...content, parallelism: undefined },
+        { ...content, parallelism: -1 },
+        { ...content, parallelism: 1.5 },
+        { ...content, parallelism: "1" },
+        { ...content, respond_to: undefined },
+        { ...content, respond_to: null },
+        { ...content, respond_to: [] },
+      ].map((body) => ({ content: JSON.stringify(body) })),
+    ])
+      expect((await h.post("sign", { ...template, ...invalid })).status).toBe(
+        400,
+      );
+    expect(h.publications).toEqual([]);
+  } finally {
+    await h.close();
+  }
+});
+
+test.each(["a", "é"])(
+  "agent record signing admits publishable UTF-8 boundary frames with %s content",
+  async (character) => {
+    const h = await harness(success);
+    try {
+      await h.start();
+      const content = (prompt) =>
+        JSON.stringify({
+          name: "Agent",
+          parallelism: 0,
+          respond_to: "owner-only",
+          system_prompt: prompt,
+        });
+      const template = {
+        kind: 30177,
+        created_at: 1700000000,
+        content: content(""),
+        tags: [["d", "ab".repeat(32)]],
+      };
+      const baseline = await h.post("sign", template);
+      expect(baseline.status).toBe(200);
+      const signedTemplate = await baseline.json();
+      const size = (event) =>
+        Buffer.byteLength(JSON.stringify(["EVENT", event]));
+      const room = 64 * 1024 - size(signedTemplate);
+      const bytes = Buffer.byteLength(character);
+      const prompt =
+        character.repeat(Math.floor(room / bytes)) + "a".repeat(room % bytes);
+      const largest = { ...template, content: content(prompt) };
+      const signed = await h.post("sign", largest);
+      expect(signed.status).toBe(200);
+      const event = await signed.json();
+      expect(verifyEvent(event)).toBe(true);
+      expect(size(event)).toBe(64 * 1024);
+      expect((await h.post("publish", event)).status).toBe(200);
+      expect(h.publications).toEqual([JSON.parse(JSON.stringify(event))]);
+
+      const oversized = { ...template, content: content(`${prompt}a`) };
+      expect(size({ ...event, content: oversized.content })).toBe(
+        64 * 1024 + 1,
+      );
+      expect((await h.post("sign", oversized)).status).toBe(400);
+      expect(h.publications).toHaveLength(1);
+    } finally {
+      await h.close();
+    }
+  },
+);
+
 test("agent record deletions sign and publish only the viewer's own kind 30177 coordinate", async () => {
   const h = await harness((call) =>
     Response.json({ accepted: true, event_id: call.body.id }),
@@ -2137,6 +2339,13 @@ test("status signing and publication preserve scoped replacements and explicit c
           ["expiration", "1700086400"],
         ],
       },
+      {
+        content: "Celebrating",
+        tags: [
+          ["d", "general"],
+          ["emoji", ":party:", "https://emoji.test/party.svg"],
+        ],
+      },
       { content: "", tags: [["d", "general"]] },
     ]) {
       const response = await h.post("sign", {
@@ -2209,7 +2418,7 @@ test("status signing and publication preserve scoped replacements and explicit c
         (await h.post("publish", finalizeEvent(template, secret))).status,
       ).toBe(400);
     }
-    expect(h.publications).toHaveLength(2);
+    expect(h.publications).toHaveLength(3);
   } finally {
     await h.close();
   }
@@ -3464,7 +3673,20 @@ test("details routes are narrow, require the live owner, and do not widen lifecy
       expect(signed).toMatchObject(change);
       await transport.channelDetails.publish(signed, signal);
     }
+    for (const role of ["member", "guest"]) {
+      const change = {
+        ...template,
+        tags: [...template.tags, ["join_role", role]],
+      };
+      expect((await h.post("sign", change)).status).toBe(400);
+      expect((await h.post("channel-lifecycle-sign", change)).status).toBe(400);
+      const signed = await transport.channelDetails.sign(change, signal);
+      expect(signed).toMatchObject(change);
+      await transport.channelDetails.publish(signed, signal);
+    }
     for (const tags of [
+      [...template.tags, ["join_role", "admin"]],
+      [...template.tags, ["join_role", "guest"], ["join_role", "member"]],
       [...template.tags.slice(0, 3), ["ttl", "+1"]],
       [...template.tags.slice(0, 3), ["ttl", "1\n"]],
       [...template.tags.slice(0, 3), ["ttl", "1"], ["ttl", ""]],
@@ -3493,13 +3715,13 @@ test("details routes are narrow, require the live owner, and do not widen lifecy
     expect(reopened).toMatchObject(reopening);
     expect((await h.post("publish", reopened)).status).toBe(400);
     await transport.channelDetails.publish(reopened, signal);
-    expect(h.publications).toHaveLength(4);
+    expect(h.publications).toHaveLength(6);
     const foreign = finalizeEvent(
       structuredClone(template),
       new Uint8Array(32).fill(5),
     );
     expect((await h.post("channel-details-publish", foreign)).status).toBe(400);
-    expect(h.publications).toHaveLength(4);
+    expect(h.publications).toHaveLength(6);
   } finally {
     live?.dispose();
     await h.close();
@@ -3709,6 +3931,226 @@ test("inventory rejects foreign pages, ignores invalid heads and follows exact-k
     });
     expect(h.publications).toHaveLength(0);
   } finally {
+    await h.close();
+  }
+});
+
+test.each([[], [1, 42], [1, 42, 43]])(
+  "join discovery exposes membership enforcement for %j",
+  async (...nips) => {
+    const h = await harness((call) =>
+      Response.json(
+        call.url === fixtureRelayUrl
+          ? { name: "Community", supported_nips: nips }
+          : { policy: null },
+      ),
+    );
+    try {
+      expect(await (await h.get("info")).json()).toMatchObject({
+        membershipRequired: nips.includes(43),
+      });
+    } finally {
+      await h.close();
+    }
+  },
+);
+
+test("Builderlab HTTP accepts full agent instructions and isolates the fixed native routes", async () => {
+  let openLogin;
+  const opened = new Promise((resolve) => {
+    openLogin = resolve;
+  });
+  const instructions = "\\".repeat(20_000);
+  let received;
+  const nativeCalls = [];
+  const h = await harness(() => Response.json([]), {}, fixtureRelayUrl, {
+    open: async (url) => openLogin(new URL(url)),
+    fetch: async (url, init) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/v1/auth/login/exchange"))
+        return Response.json({
+          session_credential: "fixture-only",
+          expires_at: "2030",
+        });
+      if (path.endsWith("/v1/auth/me"))
+        return Response.json({
+          subject: "fixture-account",
+          expires_at: "2030",
+          capabilities: { can_use_remote_agents: true },
+        });
+      if (path.endsWith("/nostr-identities/challenge"))
+        return Response.json({
+          error: { code: "missing_mapping", setup_needed: true },
+        });
+      if (path.endsWith("/v3/beekeeper/update-agent")) {
+        received = JSON.parse(init.body);
+        return Response.json({ status: 1 });
+      }
+      if (
+        path.endsWith("/v3/builderlab/decisions") ||
+        path.endsWith("/v1/auth/hosted-site/native-session")
+      ) {
+        nativeCalls.push({
+          path,
+          body: JSON.parse(init.body),
+          headers: init.headers,
+        });
+        return Response.json({ fixture: "native reply" });
+      }
+      throw new Error(`Unexpected Builderlab request ${path}`);
+    },
+  });
+  try {
+    const login = fetch(`${h.base}/api/builderlab/login`, {
+      method: "POST",
+      body: "{}",
+    });
+    const authorization = await opened;
+    await fetch(
+      `${authorization.searchParams.get("redirect_uri")}?code=fixture&state=${authorization.searchParams.get("state")}`,
+    );
+    expect((await login).status).toBe(200);
+    const stream = await fetch(`${h.base}/api/builderlab/events`);
+    const reader = stream.body.getReader();
+    const decoder = new TextDecoder();
+    let event = "";
+    try {
+      while (!event.includes("\n\n")) {
+        const part = await reader.read();
+        if (part.done) throw new Error("Missing development session metadata");
+        event += decoder.decode(part.value, { stream: true });
+      }
+    } finally {
+      await reader.cancel();
+    }
+    const { revision } = JSON.parse(
+      event.slice("data: ".length).split("\n\n")[0],
+    );
+    const body = JSON.stringify({
+      agent_pubkey: "a".repeat(64),
+      agent_instructions: instructions,
+    });
+    const envelope = JSON.stringify({
+      revision,
+      path: "/v3/beekeeper/update-agent",
+      method: "POST",
+      body,
+    });
+    expect(envelope.length).toBeGreaterThan(64 * 1024);
+    const response = await fetch(`${h.base}/api/builderlab/request`, {
+      method: "POST",
+      body: envelope,
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).status).toBe(200);
+    expect(received.agent_instructions).toBe(instructions);
+    for (const [action, path, header] of [
+      ["decisions", "/v3/builderlab/decisions", "X-BB-Session-Credential"],
+      [
+        "viewer",
+        "/v1/auth/hosted-site/native-session",
+        "X-Buzz-Builderlab-Revision",
+      ],
+    ]) {
+      const refused = await fetch(`${h.base}/api/builderlab/request`, {
+        method: "POST",
+        body: JSON.stringify({ revision, path, method: "POST", body: "{}" }),
+      });
+      expect(await refused.json()).toEqual({
+        error: "Unsupported Builderlab request",
+      });
+      const forwarded = await fetch(`${h.base}/api/builderlab/${action}`, {
+        method: "POST",
+        headers: { [header]: revision, "X-Buzz-Community": "buzz.example" },
+        body: JSON.stringify({ fixture: action }),
+      });
+      expect(forwarded.status).toBe(200);
+      expect(await forwarded.json()).toEqual({ fixture: "native reply" });
+      expect(nativeCalls.at(-1)).toMatchObject({
+        path: `/api/goose${path}`,
+        body: { fixture: action },
+        headers: { "X-BB-Session-Credential": "fixture-only" },
+      });
+    }
+    expect(nativeCalls).toHaveLength(2);
+    expect(nativeCalls[0].headers["X-Buzz-Community"]).toBe("buzz.example");
+  } finally {
+    await h.close();
+  }
+});
+
+test("Builderlab pending sign-in survives its initiating page disconnecting", async () => {
+  let openLogin;
+  const opened = new Promise((resolve) => {
+    openLogin = resolve;
+  });
+  const h = await harness(() => Response.json([]), {}, fixtureRelayUrl, {
+    open: async (url) => openLogin(new URL(url)),
+    fetch: async (url) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/v1/auth/login/exchange"))
+        return Response.json({
+          session_credential: "fixture-only",
+          expires_at: "2030",
+        });
+      if (path.endsWith("/v1/auth/me"))
+        return Response.json({
+          subject: "fixture-account",
+          expires_at: "2030",
+        });
+      if (path.endsWith("/nostr-identities/challenge"))
+        return Response.json({
+          error: { code: "missing_mapping", setup_needed: true },
+        });
+      throw new Error(`Unexpected Builderlab request ${path}`);
+    },
+  });
+  const disconnected = new Promise((resolve) => {
+    h.server.on("request", (req, res) => {
+      if (req.url === "/api/builderlab/login") res.once("close", resolve);
+    });
+  });
+  const abort = new AbortController();
+  let reader;
+  try {
+    const login = fetch(`${h.base}/api/builderlab/login`, {
+      method: "POST",
+      body: "{}",
+      signal: abort.signal,
+    }).catch((error) => error);
+    const authorization = await opened;
+    abort.abort();
+    await login;
+    await disconnected;
+    const stream = await fetch(`${h.base}/api/builderlab/events`);
+    reader = stream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const next = async () => {
+      while (!buffered.includes("\n\n")) {
+        const part = await reader.read();
+        if (part.done) throw new Error("Development session stream ended");
+        buffered += decoder.decode(part.value, { stream: true });
+      }
+      const end = buffered.indexOf("\n\n");
+      const event = JSON.parse(buffered.slice("data: ".length, end));
+      buffered = buffered.slice(end + 2);
+      return event;
+    };
+    expect(await next()).toMatchObject({ pending: true, auth: null });
+    await fetch(
+      `${authorization.searchParams.get("redirect_uri")}?code=fixture&state=${authorization.searchParams.get("state")}`,
+    );
+    let signedIn;
+    do {
+      signedIn = await next();
+    } while (signedIn.pending);
+    expect(signedIn.auth).toMatchObject({ subject: "fixture-account" });
+    const auth = await (await fetch(`${h.base}/api/builderlab/auth`)).json();
+    expect(auth.auth).toMatchObject({ subject: "fixture-account" });
+  } finally {
+    abort.abort();
+    await reader?.cancel();
     await h.close();
   }
 });

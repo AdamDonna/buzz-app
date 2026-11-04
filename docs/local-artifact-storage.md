@@ -50,7 +50,8 @@ callback, saves the result, and rebuilds that row's indexes in one transaction.
 Preferences stay in a separate store. Values such as `false` and `null` remain
 explicit. The callback must return JSON and must not start asynchronous work.
 
-`importBatch` inserts absent local snapshots and preferences. Retries preserve
+`importBatch` inserts absent local snapshots and preferences. Import fills a missing
+local snapshot while preserving a saved shared revision. Retries preserve
 later edits. It does not invent a shared revision. A completion marker commits
 with the last batch. Keep migration source data until `imported(marker)` succeeds.
 

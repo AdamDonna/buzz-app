@@ -13,6 +13,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { GhUnavailable, GitHubError, type GitHubCli } from "./gh";
 import { GitHubPanel, REFRESH_MS } from "./index";
+import { createPullStates } from "./pull-states";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 
 afterEach(() => {
@@ -352,10 +353,11 @@ it.each([400])(
 );
 
 const pull = "https://github.com/block/private/pull/9";
-/** A `gh` answer for an open pull request, with `pull` overrides. */
+/** The store's `gh` answer for an open pull request, with `pull` overrides:
+ * the panel reads it as the first alias of the store's query. */
 function pullData(over: Record<string, unknown> = {}) {
   return {
-    repository: {
+    r0: {
       viewerDefaultMergeMethod: "SQUASH",
       squashMergeAllowed: true,
       mergeCommitAllowed: true,
@@ -892,8 +894,8 @@ it("keeps a required review pending while an approval is in", async () => {
 it("places each resolution action in its matching checklist row", async () => {
   const data = pullData({ mergeStateStatus: "DIRTY" });
   const check =
-    data.repository.pullRequest.commits.nodes[0]?.commit.statusCheckRollup
-      .contexts.nodes[0];
+    data.r0.pullRequest.commits.nodes[0]?.commit.statusCheckRollup.contexts
+      .nodes[0];
   if (!check) throw new Error("Missing fixture check");
   check.conclusion = "FAILURE";
   const gh = vi.fn(async () => data) as GitHubCli;
@@ -1142,4 +1144,137 @@ it("offers no review on the viewer's own pull request", async () => {
   expect(
     screen.queryByRole("button", { name: "Submit review" }),
   ).not.toBeInTheDocument();
+});
+
+it("retries a transient gh failure on opening quietly", async () => {
+  const gh = vi
+    .fn()
+    .mockRejectedValueOnce(new GitHubError("down", "SERVICE_UNAVAILABLE"))
+    .mockImplementation(async () => pullData());
+  vi.useFakeTimers();
+  try {
+    render(
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+      />,
+    );
+    await vi.waitFor(() => expect(gh).toHaveBeenCalledOnce());
+    // The first retry waits at most a second.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(gh).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Private change #9" }),
+      ).toBeVisible(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reads through the plugin's store, so a link and the panel on one pull request cost one read", async () => {
+  const gh = vi.fn(async (_query: string) => pullData());
+  const states = createPullStates(gh as unknown as GitHubCli);
+  const link = vi.fn();
+  const unwatch = states.watch(pull, link);
+  render(
+    <GitHubPanel
+      target={pull}
+      close={() => {}}
+      gh={gh as unknown as GitHubCli}
+      states={states}
+    />,
+  );
+  await screen.findByRole("heading", { name: "Private change #9" });
+  expect(gh).toHaveBeenCalledOnce();
+  // The one query carries what the panel shows beside the link's state.
+  expect(gh.mock.calls[0]?.[0]).toContain("reviewThreads");
+  expect(states.get(pull)).toMatchObject({ state: "open", head: "abc123" });
+  expect(link).toHaveBeenCalled();
+  unwatch();
+});
+
+it("reads GitHub each time the panel opens, even with the details just read", async () => {
+  const gh = vi.fn(async (_query: string) => pullData());
+  const states = createPullStates(gh as unknown as GitHubCli);
+  const panel = () => (
+    <GitHubPanel
+      target={pull}
+      close={() => {}}
+      gh={gh as unknown as GitHubCli}
+      states={states}
+    />
+  );
+  const first = render(panel());
+  await screen.findByRole("heading", { name: "Private change #9" });
+  first.unmount();
+  expect(gh).toHaveBeenCalledOnce();
+  render(panel());
+  await waitFor(() => expect(gh).toHaveBeenCalledTimes(2));
+});
+
+it("shows public checks the store read for the head, without gh", async () => {
+  const fetch = vi.fn(async (input: string) =>
+    Response.json(
+      input.endsWith("/pulls/3")
+        ? { title: "Public change", state: "open", head: { sha: "f00d" } }
+        : input.includes("/check-runs")
+          ? {
+              total_count: 1,
+              check_runs: [
+                { name: "unit", status: "completed", conclusion: "failure" },
+              ],
+            }
+          : { total_count: 0, statuses: [] },
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  render(
+    <GitHubPanel
+      target="https://github.com/example/project/pull/3"
+      close={() => {}}
+    />,
+  );
+  await screen.findByRole("heading", { name: "Public change #3" });
+  await waitFor(() => expect(row("Checks")).toHaveTextContent("1 failed"));
+  expect(
+    fetch.mock.calls.filter(([input]) => input.includes("/commits/f00d/")),
+  ).toHaveLength(2);
+});
+
+it("shows the latest the store read when a refresh fails, then what it reads next", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let answer: "first" | "fail" | "next" = "first";
+    const gh = vi.fn(async () => {
+      if (answer === "fail")
+        throw new GitHubError("Not found", "NOT_FOUND", {
+          r0: { pullRequest: null },
+        });
+      return pullData(answer === "next" ? { title: "Renamed" } : {});
+    });
+    render(
+      <GitHubPanel
+        target={pull}
+        close={() => {}}
+        gh={gh as unknown as GitHubCli}
+      />,
+    );
+    await screen.findByRole("heading", { name: "Private change #9" });
+    answer = "fail";
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await vi.waitFor(() => expect(gh).toHaveBeenCalledTimes(2));
+    expect(
+      screen.getByRole("heading", { name: "Private change #9" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    answer = "next";
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await screen.findByRole("heading", { name: "Renamed #9" });
+  } finally {
+    vi.useRealTimers();
+  }
 });

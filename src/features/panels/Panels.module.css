@@ -43,6 +43,11 @@
   min-width: 0;
   min-height: 0;
 }
+/* Only the frame and dock read the split width; see Channels .board. */
+.page,
+.dock > * {
+  --secondary-panel-width: initial;
+}
 .dock {
   width: max(18.75rem, var(--secondary-panel-width, 26.25rem));
   position: relative;

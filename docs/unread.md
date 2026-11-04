@@ -38,10 +38,18 @@ visible rows, and 300 ms dwell. Scroll/content/focus changes cancel/restart dwel
 scheduler when positioning finishes, even if an empty history page changes no
 rows or geometry.
 The list and its own composer share a reading surface; focus anywhere in an open
-thread panel also qualifies, including its selected owning tab header. Explicitly returning to a channel resumes reading in its visible selected thread for that channel; a hidden pane or another channel’s tab keeps the main conversation’s focus. Pane motion completion restarts observation after unchanged rows enter the viewport. Inactive
-or hidden tab content and passive restoration do not qualify. Another pane, a
-dialog, background window, preload,
-and mounted virtualizer overscan do not qualify.
+thread panel also qualifies, including its selected owning tab header. Explicitly
+returning to a channel reads both its main conversation and its visible selected
+side-pane thread tab for that channel: while focus stays anywhere in that
+channel's workspace (normally the main composer), that side-pane thread
+qualifies too. A thread in the main pane never borrows this grant. A link to
+a message or thread (Activity, a message link) is not a plain visit and reads
+only what holds focus. A hidden or collapsed pane, another channel's tab, a
+members or media-review view, and a passive restoration (`preserve` focus) keep
+the main conversation as the only reading surface. Inactive or hidden tab
+content does not qualify. Pane motion completion restarts observation after
+unchanged rows enter the viewport. Another pane, a dialog, background window,
+preload, and mounted virtualizer overscan do not qualify.
 
 Away from the bottom, observations mark individual fully visible messages. At the
 physical bottom, 300 ms visibility of the newest message's bottom edge also earns
@@ -60,7 +68,8 @@ catch-up (including a message taller than the viewport):
 - The same channel catch-up also writes `msg:` marks for the retained top-level
   mentions and broadcast replies through the bottom row, as in Slack and Discord,
   so a mention taller than the viewport is still read. Messages marked unread
-  keep their intent. Mobile and older desktop clients honor these marks.
+  keep their intent. These marks stay on this device: frontier-only sync never
+  publishes `msg:` marks, though it still reads them from older clients.
 - `thread-activity:<root>` acknowledges replies through the newest reply only in
   that thread. A collapsed newest reply, or one outside the bottom viewport in a
   branch-ordered thread, cannot earn catch-up; visible rows still read individually.
@@ -83,11 +92,34 @@ timeline and the thread being read, without reading unopened threads' replies.
   bound**: missing markers/deletions can overcount; missing history can undercount.
 - `coverage` and `freshness` describe message evidence, separately from `sync()`.
   Evidence is capped at 4,096 events / 8 MiB. Repair queries the membership roster
-  in sequential batches of at most 128 explicit channel IDs (the relay limit),
+  in sequential batches of at most 128 explicit channel IDs (the relay limit, in ID
+  order, so a rename does not move them),
   with up to 500 recent rows **per batch**, not a shared remainder or one head
   request per sidebar row. A 278-channel roster therefore makes three reads.
   Earlier results publish progressively and survive a later transport failure;
   capacity overflow retains the existing visible error/clear policy and stops repair.
+  A batch whose last read returned fewer rows than its limit (500), and at least one,
+  is read again only from sixteen minutes (960 s) before the newest of them: that read
+  saw everything in its window, and the relay accepts a `created_at` up to 900 s from
+  its own clock, so an event stored just after it can be backdated that far, and the
+  margin covers it, together with client clock skew and the relay's replica read budget.
+  "Fewer than its limit" means nothing was cut off because the relay applies the limit
+  to the rows it returns and does not filter repair kinds (9, 40002, 40008) out after
+  it. The mark never passes the present, so a skewed clock or a
+  future-dated event cannot hide history. A read that returned its full limit may have
+  cut off older rows (a later deletion frees a slot for one), so it installs no mark
+  and drops any existing one: the next repair of that batch reads in full, as it did
+  before. Retained evidence only grows between resets, so a bounded read adds what is
+  newer to what the earlier reads already returned. Cache clears, access changes,
+  capacity overflow and an explicit `refresh()` forget the marks and read every batch
+  in full. A repair still waiting for its answer when they do, or still accepting it
+  (a subscriber notified of the answer may refresh), installs no mark, and
+  after an overflow it also leaves the error and its refresh offer in place; `refresh()`
+  waits for it, then reads in full. An empty read installs no mark: a batch that has
+  never returned a row is read in full, and an existing mark stays, since its window
+  held nothing newer. Edits and deletions
+  of messages older than the window arrive through live traffic, as they do for the
+  unbounded read.
   Querying every ID does not mean observing every channel: busy channels can still
   consume their batch's sample, and missing thread roots can affect inherited markers.
   Repair evidence does not seed channel windows, alter cursors, or mark messages read.
@@ -124,7 +156,9 @@ timeline and the thread being read, without reading unopened threads' replies.
   the sweep; the first failure is rethrown afterwards. A channel whose grant is
   revoked before its turn is skipped, not failed; like a grant that arrives
   mid-sweep, it waits for the next explicit action. The community switcher's
-  Mark all as read uses it for the selected community only.
+  Mark all as read and the Shift+Escape shortcut (after a confirmation) use it
+  for the selected community only, through one shared action and toast copy.
+  Escape marks the open conversation through `markChannelRead`.
 - `markUnreadLocal(target)` is durable **on this browser profile/device only**.
   Automatic reading does not clear it. An explicit mark-through clears that
   target's local mark. `syncedManualUnread` is `false`.
@@ -134,10 +168,20 @@ timeline and the thread being read, without reading unopened threads' replies.
 
 The sidebar separates ordinary unread from directed attention. Ordinary backlog
 or local manual intent strengthens the channel label; protected attention alone
-retains its dot without bolding a caught-up channel. DMs retain unread bolding.
+retains its dot without bolding a caught-up, unmuted channel. Confirmed-muted channels
+suppress ordinary automatic unread styling and offscreen cues without clearing
+unread evidence; explicit manual unread can still strengthen the label.
+Pending or failed mute changes do not suppress these cues. Muted DMs also suppress
+automatic unread bolding; “N unread” offscreen counts and avatar previews remain. Muted
+channel and DM sidebar rows show a crossed-out bell immediately after their names,
+even with no unread activity. They hide all unread dots, including
+thread activity dots. Thread activity remains available through the row's activity popover,
+and its unread count remains accessible to assistive technology. Unmute restores
+the dots from retained unread evidence. The promoted Bestie DM also hides muted
+unread dots; its label follows the same mute rule.
 Solo chat labels strengthen for any observed unread message, including mentions,
-broadcasts and relevant replies, so Solo rows omit the attention dot.
-Ordinary unread renders no row marker. DMs, mentions, broadcasts, and
+broadcasts and relevant replies, even when muted, so Solo rows omit the attention dot.
+Ordinary unread renders no row marker. Unmuted DMs, mentions, broadcasts, and
 relevant thread replies add one accent dot; non-DM row numerals are omitted and DM
 avatars are reserved for promoted offscreen cues. Thread activity reuses that dot:
 its hover/focus/click popover groups unread replies by canonical thread root and
@@ -170,8 +214,9 @@ A partly visible row is not outside the fold. Activation scrolls and focuses the
 nearest row, retaining its ordinary focus preparation; it does not select the channel,
 prefer a farther DM, or acknowledge any messages.
 
-Thread buttons keep the summary's total reply count and add a dot when the shared
-thread selector has observed unread replies or explicit thread-unread intent.
+Thread buttons keep the relay's total reply count (plus replies this client has
+sent since that summary) and add a dot when the shared thread selector has observed
+unread replies or explicit thread-unread intent.
 Accessible names distinguish observed evidence, stale evidence and local-only
 intent; unknown/observed-zero omit the dot, not assert complete read history.
 Each mounted button subscribes to its own thread, without fetching thread history.
@@ -359,9 +404,21 @@ requires readback. A failed transaction is not acknowledged as saved. Timestamps
 are uint32 seconds; replaceable publication clocks advance monotonically with a
 bounded lead rather than running indefinitely into the future.
 
+Each installation publishes only the frontiers it advanced (`own`), never a peer's
+value or a `msg:` mark, across as many slots as they need: the primary `slot`, then
+`spill` slots, each a blob of at most 40 KiB plaintext. A key stays in the slot that
+carries it; new slots are saved before anything is published to them; only a slot
+missing one of its own values is republished, and one that drops a key goes after
+the key's new home. Every prefix of that order must fit the last complete snapshot
+(4096 events / 8 MiB) before the first send. Values the relay already holds in this
+installation's own slots are recovered into `own` on every observation, so a
+restored or cloned journal never republishes an older frontier. Frontiers at or
+below `now - 30d` are not published, and unread evaluation treats every message at
+or before that floor as read.
+
 Ordinary frontiers are **bounded recent hints, not everlasting read receipts**.
-The sync journal has a 96 KiB serialized-blob budget and wire publication a 40 KiB
-plaintext budget. Under pressure, up to three quarters of each budget keeps channel
+The sync journal has a 96 KiB serialized-blob budget. Under pressure, up to three
+quarters of that budget keeps channel
 marks (`<channel>`) first, then thread marks (`thread:`), then catch-up marks
 (`activity:`, `thread-activity:`), then message marks: a channel or thread mark covers
 many messages, so losing it makes much more old history unread, and recent catch-up
@@ -372,7 +429,7 @@ ranks marks within each group, which prioritizes newly read old history as well 
 current traffic. After the budget chooses what to keep, each save drops marks that a
 kept broader mark already covers, and gives the freed space to the next marks in line.
 A cover that did not fit replaces nothing. A dropped mark gives its interaction order to
-its cover, so the smaller wire budget protects the cover as it would have protected the
+its cover, so a smaller budget protects the cover as it would have protected the
 dropped read. Coverage uses retained evidence: a message mark under its channel mark, a thread mark under its
 channel mark, a catch-up mark under its channel or thread mark, and the mark of an
 ordinary top-level message under its channel's `activity:` mark. That last rule needs

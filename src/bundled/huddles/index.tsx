@@ -3,10 +3,13 @@ import { createHuddleRing } from "../../features/huddle/ring";
 import type { PluginModule } from "../../plugins/api";
 import { nativeHuddles } from "../../features/huddle/bridge";
 import { openHuddleAudio } from "../../features/huddle/audio";
-import { createHuddles } from "../../features/huddle/service";
+import {
+  createHuddles,
+  provideHuddleStatus,
+} from "../../features/huddle/service";
 import { createHuddleWindow } from "../../features/huddle/window";
 import { HuddleCapsule } from "./HuddleCapsule";
-import { HuddleLauncher } from "./HuddleLauncher";
+import { HuddleLauncher, SoloHuddleMenu } from "./HuddleLauncher";
 import { HuddleCard, huddleTarget, parseHuddleTarget } from "./HuddleCard";
 import { HuddlePanel } from "./HuddlePanel";
 
@@ -20,6 +23,7 @@ export const inject = [
 export const apply: PluginModule["apply"] = (ctx) => {
   if (!nativeHuddles.available) return;
   const huddles = createHuddles(ctx.relay, nativeHuddles, openHuddleAudio);
+  provideHuddleStatus(ctx, huddles);
   const stopRing = createHuddleRing(huddles);
   const openLink = (url: string) => {
     const connection = ctx.relay.snapshot();
@@ -67,6 +71,14 @@ export const apply: PluginModule["apply"] = (ctx) => {
     stopRing();
     await Promise.all([companion.dispose(), huddles.dispose()]);
   });
+  ctx.conversation.registerChatMenu((props) => (
+    <SoloHuddleMenu
+      {...props}
+      relay={ctx.relay}
+      huddles={huddles}
+      showWindow={companion.open}
+    />
+  ));
   ctx.panels.register({
     id: "huddles",
     title: "Huddles",

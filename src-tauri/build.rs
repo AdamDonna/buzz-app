@@ -6,11 +6,15 @@ mod enterprise_adapter_url;
 mod enterprise_auth_build;
 #[path = "src/enterprise_relay_url.rs"]
 mod enterprise_relay_url;
+#[path = "src/federated_identity/config.rs"]
+#[allow(dead_code)]
+mod federated_identity_config;
 #[path = "src/nsec_backup_config.rs"]
 mod nsec_backup_config;
 
 fn main() {
     configure_nsec_backup();
+    configure_federated_identity();
     configure_enterprise_auth();
     // Release builds enable the updater only when both values are supplied; its
     // `plugins.updater` config comes from the same values via `tauri build --config`.
@@ -22,7 +26,7 @@ fn main() {
         println!("cargo:rustc-cfg=buzz_updater_enabled");
     }
     // tauri-build watches only the resource files present when it ran, so watch
-    // the directory too: goose-acp is staged after a first `cargo check`.
+    // the directory too: the ordinary goose-acp is staged after a first `cargo check`.
     println!("cargo:rerun-if-changed=resources/bin");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         build_resources::prepare_executables(
@@ -68,10 +72,13 @@ fn main() {
             "identity_legacy_available",
             "identity_import_legacy",
             "identity_create",
+            "onboarding_preserve_window",
             "identity_export",
             "nsec_backup_available",
             "nsec_backup_session",
             "nsec_backup_retry",
+            "nsec_backup_state",
+            "nsec_backup_watch",
             "nsec_restore_begin",
             "nsec_restore_wait",
             "nsec_restore_install",
@@ -82,12 +89,24 @@ fn main() {
             "sign_out_wipe_refusal",
             "identity_prepare_remote_agent_authorization",
             "identity_sign_builderlab_binding",
-            "enterprise_login_gate",
+            "federated_identity_snapshot",
+            "federated_identity_sign_in",
+            "federated_identity_cancel_sign_in",
+            "federated_identity_sign_out",
+            "federated_identity_register",
+            "federated_identity_unregister",
+            "federated_identity_request",
+            "relay_socket_connect",
+            "relay_socket_start",
+            "relay_socket_send",
+            "relay_socket_close",
             "relay_sign",
             "relay_decode_read_state",
             "relay_sign_read_state",
             "relay_publish_read_state",
             "relay_http",
+            "relay_http_cancel",
+            "relay_verify_signatures",
             "relay_workflow_runs",
             "relay_admin_discover",
             "relay_admin_request",
@@ -119,6 +138,7 @@ fn main() {
             "media_download",
             "file_download",
             "media_copy_image",
+            "clipboard_write_text",
             "media_stream_base",
             "get_os_idle_seconds",
             "workspace_pick_folder",
@@ -136,12 +156,18 @@ fn main() {
             "plugin_module",
             "plugin_recover",
             "plugin_host_run_command",
+            "plugin_host_call_context",
             "plugin_host_request",
+            "plugin_host_request_bytes",
+            "plugin_host_upload_bytes_once",
+            "plugin_host_save_bytes",
+            "plugin_host_delete_managed_file",
             "plugin_host_upload",
             "plugin_host_process_spawn",
             "plugin_host_process_write",
             "plugin_host_process_kill",
             "plugin_host_mcp_serve",
+            "plugin_host_mcp_authorize",
             "plugin_host_mcp_reply",
             "plugin_host_mcp_close",
             "plugin_host_read_file",
@@ -149,7 +175,11 @@ fn main() {
             "oauth_callback_begin",
             "oauth_callback_wait",
             "oauth_callback_cancel",
+            "oauth_callback_complete",
             "app_agent_list",
+            "app_agent_set_protection",
+            "app_agent_protection_defaults",
+            "app_agent_set_protection_defaults",
             "app_agent_create",
             "app_agent_portable",
             "app_agent_port",
@@ -241,5 +271,28 @@ fn configure_enterprise_auth() {
     }
     if let Some(adapter) = configured.adapter.as_deref() {
         println!("cargo:rustc-env={ADAPTER}={adapter}");
+    }
+}
+
+fn configure_federated_identity() {
+    const NAME: &str = "BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG";
+    println!("cargo:rerun-if-env-changed={NAME}");
+    println!("cargo:rerun-if-env-changed=BUZZ_BUILDERLAB_URL");
+    if let Some(raw) = std::env::var(NAME).ok().filter(|raw| !raw.is_empty()) {
+        let config = federated_identity_config::Config::parse(&raw)
+            .unwrap_or_else(|error| panic!("{error}"));
+        for legacy in [
+            "BUZZ_BUILDERLAB_URL",
+            "BUZZ_BUILD_ENTERPRISE_AUTH_RELAYS",
+            "BUZZ_BUILD_ENTERPRISE_AUTH_ADAPTER_BASE_URL",
+        ] {
+            if std::env::var(legacy).is_ok_and(|value| !value.is_empty()) {
+                panic!("{legacy} must be removed when {NAME} is configured");
+            }
+        }
+        println!(
+            "cargo:rustc-env={NAME}={}",
+            serde_json::to_string(&config).expect("public descriptor")
+        );
     }
 }

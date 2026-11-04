@@ -45,6 +45,8 @@ const NATIVE_TRANSIENT = new Set([
   "Relay request could not be confirmed",
   "Relay response was interrupted",
   "Community discovery failed",
+  "network-unavailable",
+  "network-timeout",
 ]);
 /** True when trying the same read again can succeed without anyone acting:
  * the relay or network was unavailable, slow, or the read was cancelled. A

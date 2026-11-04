@@ -34,6 +34,7 @@ import type {
 import { pubkeyOf, type AgentKey } from "../../features/agents/membership";
 import type { Host } from "../../features/host/service";
 import type { EventData } from "../../features/relay/events";
+import type { ChannelLabel } from "../../features/channels/channel-icon";
 import { threadReference } from "../../features/relay/thread-reference";
 import {
   wakeAnchor,
@@ -44,6 +45,7 @@ import { appClient, readFile } from "../../buzz-mcp/app-client";
 import {
   MemoryReads,
   READ_TIMEOUT_MS,
+  recentNotesSection,
 } from "../../features/agent-harness/core-memory";
 import { readProject } from "../../features/agent-harness/project";
 import { SessionControls } from "../../features/agent-harness/session-control";
@@ -65,6 +67,7 @@ import {
   readTranscript,
   type Conversation,
 } from "./transcript";
+import { sessionPrompts } from "../../features/agents/session-prompts";
 
 /** The effort levels Claude lists, which a session can switch to between
  * turns. Claude runs `max` as `xhigh` in a stream-json session, so it is not
@@ -103,14 +106,14 @@ export const config = (value: unknown): Config => ({
   ...(value && typeof value === "object" ? (value as Partial<Config>) : {}),
 });
 
-/** A saved session, for the owner's transcript list. */
-export type SavedConversation = Conversation & {
-  key: string;
-  sessionId: string;
-  /** The channel's name, when this community lists it. */
-  name?: string;
-  at: number;
-};
+/** A saved session, for the owner's transcript list, with the channel's name
+ * and kind when this community lists it. */
+export type SavedConversation = Conversation &
+  Partial<ChannelLabel> & {
+    key: string;
+    sessionId: string;
+    at: number;
+  };
 
 const NAMES_TIMEOUT_MS = 2_000;
 const CHAT = [9, 40002];
@@ -158,6 +161,9 @@ const listing = (added: readonly AddedTool[]): Listing => ({
       ? { ...tool, _meta: { "anthropic/alwaysLoad": true } }
       : tool,
 });
+
+/** How long a session start waits for the agent's recent notes. */
+const NOTES_WAIT_MS = 2_000;
 
 export class ClaudeRuntime {
   private readonly agents = new Map<AgentKey, Entry>();
@@ -316,14 +322,13 @@ export class ClaudeRuntime {
       .list()
       .map(([key, saved]) => {
         const [channelId = key, root] = key.split("/");
-        const name = reads?.channelName(channelId);
         return {
           key,
           agent,
           sessionId: saved.id,
           channelId,
           ...(root ? { root } : {}),
-          ...(name ? { name } : {}),
+          ...reads?.channelLabel(channelId),
           at: saved.at,
         };
       });
@@ -335,7 +340,21 @@ export class ClaudeRuntime {
     working: boolean,
     signal: AbortSignal,
   ) {
-    return readTranscript(this.spawn, workspace, conversation, working, signal);
+    const prompts = this.prompts(conversation.agent);
+    return readTranscript(
+      this.spawn,
+      workspace,
+      conversation,
+      working,
+      signal,
+    ).then(
+      (transcript) =>
+        transcript && { ...transcript, turns: prompts.shown(transcript.turns) },
+    );
+  }
+  /** What each of the agent's sessions started with. */
+  private prompts(agent: AgentKey) {
+    return sessionPrompts(this.storage, "claude-code", agent);
   }
   /** The agent's latest session for a conversation that another build of the
    * app started, found in the workspace's Claude Code history. */
@@ -354,15 +373,18 @@ export class ClaudeRuntime {
     );
     const last = transcript?.turns.at(-1);
     if (!last?.sessionId) return undefined;
-    const name = this.reads(agent)?.channelName(place.channelId);
     return {
       key: place.root ? `${place.channelId}/${place.root}` : place.channelId,
       agent,
       sessionId: last.sessionId,
       ...place,
-      ...(name ? { name } : {}),
       at: last.endedAt ?? last.startedAt,
     };
+  }
+  /** The community's current name and kind for a channel, if it lists it;
+   * `useOpenedSession` gives them to a session `find` returned. */
+  channelLabel(agent: AgentKey, channelId: string) {
+    return this.reads(agent)?.channelLabel(channelId);
   }
   subscribe(listener: () => void) {
     this.listeners.add(listener);
@@ -919,6 +941,8 @@ export class ClaudeRuntime {
       spawn: (id, options) => this.spawn(id, options),
       spare: this.spare,
       store: localSessions(this.storage, agent),
+      started: (session, text) =>
+        void this.prompts(agent).save(session, [{ label: "", text }]),
       onChange: () => this.notify(),
       fingerprint: (key) =>
         JSON.stringify([
@@ -934,7 +958,14 @@ export class ClaudeRuntime {
         ]),
       launch: async (key) => {
         const { workspace, instructions, scope } = entry.config;
-        const memory = await this.core(agent);
+        // Read once per process: a new note doesn't restart a session, and a
+        // slow read starts it without them.
+        const [memory, notes] = await Promise.all([
+          this.core(agent),
+          recentNotesSection((slug) =>
+            this.memories(agent, slug, AbortSignal.timeout(NOTES_WAIT_MS)),
+          ),
+        ]);
         const directories = key ? entry.directories.get(key) : undefined;
         return {
           ...where(entry.config),
@@ -952,6 +983,7 @@ export class ClaudeRuntime {
             instructions,
             team: entry.team,
             ...(memory === undefined ? {} : { memory }),
+            notes,
           }),
         };
       },
@@ -961,14 +993,15 @@ export class ClaudeRuntime {
   }
 
   /** The agent's memory, or only entry `slug`, as its community's reads give
-   * it. */
-  private memories(agent: AgentKey, slug?: string) {
+   * it. `stop` ends the read sooner than its own limit. */
+  private memories(agent: AgentKey, slug?: string, stop?: AbortSignal) {
     const reads = this.reads(agent);
     if (!reads) return Promise.reject(new Error("Buzz is not connected"));
+    const limit = AbortSignal.timeout(READ_TIMEOUT_MS);
     return this.memoryReads.read(
       reads,
       pubkeyOf(agent),
-      AbortSignal.timeout(READ_TIMEOUT_MS),
+      stop ? AbortSignal.any([limit, stop]) : limit,
       slug,
     );
   }

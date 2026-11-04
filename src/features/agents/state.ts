@@ -12,6 +12,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CONFIG_STORAGE_KEY } from "./agent-config";
 import { CATCH_UP_KEY, CATCH_UP_PREFIX } from "./catch-up";
 import { INTERRUPTED_PREFIX } from "./interrupted";
+import { PROMPTS_PREFIX } from "./session-prompts";
 import { SYNCED_TEAMS_KEY } from "./team-config";
 import {
   localStore,
@@ -39,6 +40,8 @@ export function isAgentKey(key: string) {
     // The sessions the bundled agent types save.
     key.startsWith("buzz.claude-code.sessions.") ||
     key.startsWith("buzz.codex.sessions.") ||
+    // What each session started with, for its activity.
+    key.startsWith(PROMPTS_PREFIX) ||
     // The relay-synced copies of agent settings that starts use.
     key === CONFIG_STORAGE_KEY ||
     // The synced team rosters that starts use.

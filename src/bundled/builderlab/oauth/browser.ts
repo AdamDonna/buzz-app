@@ -34,6 +34,7 @@ export type Credential = Readonly<{
     subject: string;
     email: string;
     canUseRemoteAgents: boolean;
+    canUseBuilderlabDecisions: boolean;
   }>;
 }>;
 
@@ -48,11 +49,13 @@ export type BrowserBridge = {
   }): Promise<{ id: string; callbackUrl: string }>;
   wait(id: string): Promise<OAuthCallback>;
   cancel(id: string): Promise<void>;
+  complete(id: string): Promise<void>;
 };
 const nativeBridge: BrowserBridge = {
   begin: (options) => invoke("oauth_callback_begin", options),
   wait: (id) => invoke("oauth_callback_wait", { id }),
   cancel: (id) => invoke("oauth_callback_cancel", { id }),
+  complete: (id) => invoke("oauth_callback_complete", { id }),
 };
 
 function base64url(bytes: Uint8Array) {
@@ -71,6 +74,7 @@ export async function browserCredential(
   signal.throwIfAborted();
   const target = oauthTarget();
   let id: string | undefined;
+  let completion: Promise<void> | undefined;
   const path = `/callback/${crypto.randomUUID()}`;
   const login = new URL(`${target}/v1/auth/login`);
   const cancel = () => {
@@ -154,6 +158,9 @@ export async function browserCredential(
     const account = await request("/v1/auth/me", session_credential);
     if (typeof account?.subject !== "string" || !account.subject.trim())
       throw new Error("Builderlab did not return a valid account.");
+    signal.throwIfAborted();
+    // Focus return is best effort and must not delay verified login.
+    completion = bridge.complete(id).catch(() => {});
     return Object.freeze({
       value: session_credential,
       account: Object.freeze({
@@ -161,6 +168,8 @@ export async function browserCredential(
         email: typeof account.email === "string" ? account.email.trim() : "",
         canUseRemoteAgents:
           account.capabilities?.can_use_remote_agents === true,
+        canUseBuilderlabDecisions:
+          account.capabilities?.can_use_builderlab_decisions === true,
       }),
     });
   } catch (error) {
@@ -171,6 +180,8 @@ export async function browserCredential(
       : new Error("Could not complete Builderlab sign-in. Try again.");
   } finally {
     signal.removeEventListener("abort", cancel);
-    if (id) await bridge.cancel(id);
+    // Canceling before completion settles would retire its focus permission.
+    if (completion) void completion.then(cancel);
+    else if (id) await bridge.cancel(id);
   }
 }

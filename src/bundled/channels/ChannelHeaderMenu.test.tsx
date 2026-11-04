@@ -174,6 +174,27 @@ it.each([{ readOnly: true as const }, { cached: true as const }])(
     ).not.toBeInTheDocument();
   },
 );
+it("keeps Leave available for a joined guest without offering channel administration", async () => {
+  const h = harness({ ...channel, readOnly: true, viewerRole: "guest" });
+  h.lifecycleLoad.mockResolvedValue({
+    channelId: "alpha",
+    channelType: "stream",
+    canArchive: false,
+    canDelete: false,
+    canLeave: true,
+    canHide: false,
+  });
+  h.mount();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Channel actions" }));
+  expect(
+    await screen.findByRole("menuitem", { name: "Leave channel" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("menuitem", { name: "Archive channel" }),
+  ).not.toBeInTheDocument();
+  expect(h.run).not.toHaveBeenCalled();
+});
 it("does not offer lifecycle actions for archived channels", async () => {
   const h = harness({ ...channel, archived: true });
   h.lifecycleLoad.mockResolvedValue({

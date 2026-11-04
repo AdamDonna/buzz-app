@@ -1,9 +1,11 @@
-// What the panel shows for a GitHub link: read with the person's `gh` sign-in
-// when there is one, so private repositories work, else from the public API.
+// What the panel shows for a GitHub repository, issue or commit link: read
+// with the person's `gh` sign-in when there is one, so private repositories
+// work, else from the public API. Pull requests are the store's
+// (`pull-states`).
 import { isRetryableRead, retryRead } from "../../features/relay/read-retry";
 import { loadGitHubDetails, type GitHubDetails } from "./data";
 import { GhUnavailable, GitHubError, type GitHubCli } from "./gh";
-import { loadPull, type PullChecklist } from "./pull";
+import type { PullChecklist } from "./pull";
 import type { GitHubReference } from "./references";
 
 export type GitHubObject = Readonly<{
@@ -35,8 +37,6 @@ async function readGitHubObject(
 ): Promise<GitHubObject> {
   if (gh)
     try {
-      if (reference.kind === "pull")
-        return { ...(await loadPull(gh, reference, signal)), signedIn: true };
       return {
         details: await loadSignedIn(gh, reference, signal),
         signedIn: true,

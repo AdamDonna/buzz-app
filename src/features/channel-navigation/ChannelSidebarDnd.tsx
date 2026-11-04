@@ -21,7 +21,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { motion, useReducedMotion } from "motion/react";
+import { frame, motion, useReducedMotion } from "motion/react";
 import { SidebarSection } from "../../bundled/channels/SidebarSection";
 import { PlusIcon } from "../../shared/design-system/icons";
 import styles from "../../bundled/channels/Channels.module.css";
@@ -74,6 +74,11 @@ const sidebarCollisions: CollisionDetection = (args) => {
   return [];
 };
 
+// A click must still select the row; only a deliberate pull starts a move.
+// useSensor memoizes on this object, so an inline literal would rebuild the
+// sensors, and re-render every draggable row, on each sidebar render.
+const pointerSensorOptions = { activationConstraint: { distance: 6 } };
+
 /**
  * Pointer moves between sidebar sections (Messages groups, Starred and Channels,
  * or Solo projects and Chats), and reorders saved groups by their header. A drop
@@ -96,10 +101,7 @@ export function ChannelSidebarDnd({
   children: ReactNode;
 }) {
   const [dragging, setDragging] = useState<{ id: string; group: boolean }>();
-  const sensors = useSensors(
-    // A click must still select the row; only a deliberate pull starts a move.
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor, pointerSensorOptions));
   return (
     <DndContext
       sensors={sensors}
@@ -138,7 +140,7 @@ export function ChannelSidebarDnd({
 }
 
 function CreateSectionDropTarget() {
-  const { active } = useDndContext();
+  const { active, measureDroppableContainers } = useDndContext();
   const enabled =
     useContext(Writable) && !!active && !active.data.current?.group;
   const reducedMotion = useReducedMotion();
@@ -173,6 +175,11 @@ function CreateSectionDropTarget() {
       <motion.div
         className={styles.createSectionReveal}
         initial={false}
+        // The first resize delivery can include the reveal, and dnd-kit
+        // ignores it. Measure after Motion has committed the final height.
+        onAnimationComplete={() =>
+          frame.postRender(() => measureDroppableContainers([]))
+        }
         animate={{ height: open ? "auto" : 0, opacity: open ? 1 : 0 }}
         transition={{
           duration: reducedMotion ? 0 : open ? 0.22 : 0.12,

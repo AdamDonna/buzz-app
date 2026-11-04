@@ -648,58 +648,102 @@ it("carries owner-authorized GIF media into companion previews across searches",
   expect(next.remote.media(url)).toBeUndefined();
 });
 
-it("previews a selected GIF in the standalone composer and sends its Markdown", async () => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
-  vi.spyOn(relayGifRequests, "supports").mockResolvedValue(true);
-  const asset = {
-    url: "https://example.test/chosen.gif",
-    width: 100,
-    height: 100,
-    size: 20,
-  };
-  const gif = {
-    id: 1,
-    slug: "chosen",
-    title: "Chosen GIF",
-    preview: asset,
-    original: asset,
-  };
-  vi.spyOn(relayGifRequests, "search").mockResolvedValue([gif]);
+// Picked assets need no `.gif` suffix; only the thumbnail depends on it.
+it.each([
+  ["https://example.test/chosen.gif", true],
+  ["https://example.test/media/123", false],
+])(
+  "stages a selected GIF in the standalone composer and sends its Markdown: %s",
+  async (url, thumbnail) => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(relayGifRequests, "supports").mockResolvedValue(true);
+    const asset = {
+      url,
+      width: 100,
+      height: 100,
+      size: 20,
+    };
+    const gif = {
+      id: 1,
+      slug: "chosen",
+      title: "Chosen GIF",
+      preview: asset,
+      original: asset,
+    };
+    vi.spyOn(relayGifRequests, "search").mockResolvedValue([gif]);
+    const h = harness();
+    vi.spyOn(h.session, "media").mockImplementation((url) => url);
+    function Companion() {
+      return useHuddleComposer(h.owner.token);
+    }
+    render(createElement(Companion));
+    const draft = await screen.findByRole("textbox", {
+      name: "Message this Huddle",
+    });
+    fireEvent.keyDown(draft, { key: "g", ctrlKey: true });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose Chosen GIF" }),
+    );
+    const row = await screen.findByRole("region", { name: "Attachments" });
+    if (thumbnail)
+      await waitFor(() =>
+        expect(row.querySelector("img")).toHaveAttribute("src", asset.url),
+      );
+    else expect(row.querySelector("img")).toBeNull();
+    expect(draft).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Remove Chosen GIF" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Attachments" })).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    fireEvent.keyDown(draft, { key: "g", ctrlKey: true });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose Chosen GIF" }),
+    );
+    await screen.findByRole("button", { name: "Remove Chosen GIF" });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() =>
+      expect(h.send).toHaveBeenCalledWith(
+        "room",
+        gifMarkdown(gif),
+        [],
+        [],
+        undefined,
+        [],
+        {},
+      ),
+    );
+  },
+);
+
+it("carries the owner's profile purge generation so the companion rereads shown names", async () => {
   const h = harness();
-  vi.spyOn(h.session, "media").mockImplementation((url) => url);
-  function Companion() {
-    return useHuddleComposer(h.owner.token);
-  }
-  render(createElement(Companion));
-  const draft = await screen.findByRole("textbox", {
-    name: "Message this Huddle",
-  });
-  fireEvent.keyDown(draft, { key: "g", ctrlKey: true });
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Choose Chosen GIF" }),
-  );
-  await waitFor(() =>
-    expect(draft.querySelector("img[data-gif-preview]")).toHaveAttribute(
-      "src",
-      asset.url,
-    ),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-  await waitFor(() =>
-    expect(h.send).toHaveBeenCalledWith(
-      "room",
-      gifMarkdown(gif),
-      [],
-      [],
-      undefined,
-      [],
-      {},
-    ),
-  );
+  let generation = 0;
+  const ensure = vi.fn(async () => {});
+  h.session.profiles = {
+    ...h.session.profiles,
+    snapshot: () => new Map(),
+    ensure,
+    generation: () => generation,
+  };
+  const { client, remote } = await h.connect();
+  expect(remote.profiles.generation?.()).toBe(0);
+  const seen = vi.fn();
+  cleanup.push(remote.profiles.subscribe(seen));
+  await remote.profiles.ensure(["cd".repeat(32)], "background");
+  await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
+  // A purge in the main window advances its generation; the owner publishes.
+  generation = 1;
+  h.owner.refresh();
+  await vi.waitFor(() => expect(remote.profiles.generation?.()).toBe(1));
+  expect(client.snapshot().data?.profileGeneration).toBe(1);
+  expect(seen).toHaveBeenCalled();
+  await remote.profiles.ensure(["cd".repeat(32)], "background");
+  await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(2));
 });

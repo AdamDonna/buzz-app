@@ -39,7 +39,9 @@ type Item = {
   toolbar?: ReactNode;
 };
 type Identity = { label: string; icon?: ReactNode };
-type Local = { id: string; label: string; owner: string; close(): void };
+/** `keepOwner`: the owner stays open; only its detail tabs are cleared. */
+type Close = (options?: { keepOwner?: boolean }) => void;
+type Local = { id: string; label: string; owner: string; close: Close };
 const TabHost = createContext<{
   owner: string;
   register(tab: Local): () => void;
@@ -372,6 +374,7 @@ export function PanelWorkspace({
       onKeyDown={(event) => {
         if (
           event.key === "Escape" &&
+          !event.shiftKey &&
           !event.nativeEvent.isComposing &&
           event.nativeEvent.keyCode !== 229 &&
           !event.defaultPrevented &&
@@ -439,7 +442,7 @@ export function PanelWorkspace({
                     if (!closed && !details.length) return false;
                     // Focus follows the chosen detail's removal to its owner.
                     if (local) closingTab.current = local.id;
-                    for (const tab of details) tab.close();
+                    for (const tab of details) tab.close({ keepOwner: true });
                     return true;
                   }),
               }
@@ -545,7 +548,7 @@ export function PanelLocalTab({
   children,
 }: {
   title: string;
-  close(): void;
+  close: Close;
   children: ReactNode;
 }) {
   const host = usePanelTabHost();
@@ -560,7 +563,7 @@ export function PanelLocalTab({
       id,
       label: title,
       owner,
-      close: () => onClose.current(),
+      close: (options) => onClose.current(options),
     });
   }, [register, owner, id, title]);
   const slot = host?.slots.get(id);

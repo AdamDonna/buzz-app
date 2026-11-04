@@ -451,12 +451,17 @@ test.describe("public search destination", () => {
       "Joining this channel is not allowed",
     );
     expect(await height()).toBeGreaterThan(before);
+    // The notice grows before ResizeObserver updates the spacer and end-follow.
+    await expect
+      .poll(async () => {
+        const [row, overlay] = await Promise.all([
+          last.boundingBox(),
+          notice.boundingBox(),
+        ]);
+        return row.y + row.height - (overlay.y - 20);
+      })
+      .toBeLessThanOrEqual(0);
     await expect.poll(fromEnd).toBeLessThan(1);
-    const [row, overlay] = await Promise.all([
-      last.boundingBox(),
-      notice.boundingBox(),
-    ]);
-    expect(row.y + row.height).toBeLessThanOrEqual(overlay.y - 20);
   });
 });
 
@@ -604,11 +609,15 @@ test.describe("message search operators", () => {
     app,
   }) => {
     await page.goto(app.origin);
+    // The same unproven ordering mitigation for the WebKit lost-fill failure
+    // as the public search destination test above.
+    await expect(page.locator("[data-message-id]").first()).toBeVisible();
     await button(page, "Search Buzz").click();
     const input = page.getByRole("combobox", { name: "Search Buzz" });
-    await input.fill(
-      `crew-search in:${app.openChannelId} from:${app.searchTarget.pubkey} after:2023-11-14 before:2023-11-15`,
-    );
+    const query = `crew-search in:${app.openChannelId} from:${app.searchTarget.pubkey} after:2023-11-14 before:2023-11-15`;
+    await input.fill(query);
+    // Attribute a missing result to the typed query or to the search.
+    await expect(input).toHaveValue(query);
     await expect(
       page
         .locator("[data-search-result]")

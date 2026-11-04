@@ -748,7 +748,7 @@ it("keeps an agent's two communities' threads apart, each under its membership's
   await f.complete(0, "HERE");
   await vi.waitFor(() => expect(f.runtime.sessions(elsewhere)).toHaveLength(1));
   const saved = (key: string) =>
-    f.storage.get(`buzz.codex.sessions.v13:${scope}:${key}`);
+    f.storage.get(`buzz.codex.sessions.v17:${scope}:${key}`);
   expect(saved(pubkey)).toBeTruthy();
   expect(saved(elsewhere)).toBeTruthy();
   expect(f.runtime.conversations(pubkey)).toHaveLength(1);
@@ -2217,6 +2217,21 @@ it("reports an interruption cleanup failure when Codex reports surviving termina
   expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Needs attention");
   expect(f.process.end).toHaveBeenCalled();
 });
+/** The threads whose start prompt is saved, oldest first, and their parts. */
+const savedPrompts = (storage: Map<string, string>) => {
+  const value = [...storage].find(([key]) =>
+    key.startsWith("buzz.session-prompts.v1:codex:"),
+  )?.[1];
+  const { texts = [], sessions = [] } = JSON.parse(value ?? "{}") as {
+    texts?: string[];
+    sessions?: [string, [string, number][]][];
+  };
+  return sessions.map(([id, parts]) => [
+    id,
+    parts.map(([label, text]) => [label, texts[text]]),
+  ]);
+};
+
 it("restores a persisted binding after reload and starts fresh in a different workspace", async () => {
   const f = fixture();
   await f.runtime.run(f.delivery("work"));
@@ -2227,10 +2242,19 @@ it("restores a persisted binding after reload and starts fresh in a different wo
   );
   f.runtime.dispose();
   await f.exits.promise;
+  // A new thread saves what it started with: its developer instructions
+  // and its first turn's context.
+  const [[thread, parts] = []] = savedPrompts(f.storage);
+  expect(parts).toEqual([
+    ["base", expect.stringContaining("a coding agent in Buzz")],
+    ["each-turn", expect.stringContaining("<agent-instructions>")],
+  ]);
   const restored = fixture();
   for (const [key, value] of f.storage) restored.storage.set(key, value);
   await restored.runtime.run(restored.delivery("continue"));
   await vi.waitFor(() => expect(restored.starts()).toHaveLength(1));
+  // A resumed thread saves nothing over it.
+  expect(savedPrompts(restored.storage).map(([id]) => id)).toEqual([thread]);
   expect(
     restored.sent.find((w) => w.method === "thread/resume")?.params,
   ).toMatchObject({ excludeTurns: true });
@@ -2250,6 +2274,11 @@ it("restores a persisted binding after reload and starts fresh in a different wo
   });
   restored.complete();
   await vi.waitFor(() => expect(restored.publish).toHaveBeenCalledTimes(2));
+  // This fixture numbers threads afresh, so clear the restored record to
+  // see the new workspace's thread save its own.
+  for (const key of restored.storage.keys())
+    if (key.startsWith("buzz.session-prompts.v1:codex:"))
+      restored.storage.delete(key);
   const changed = restored.delivery("new workspace");
   await restored.runtime.run({
     ...changed,
@@ -2257,6 +2286,10 @@ it("restores a persisted binding after reload and starts fresh in a different wo
   });
   await vi.waitFor(() => expect(restored.starts()).toHaveLength(3));
   expect(restored.sent.some((w) => w.method === "thread/start")).toBe(true);
+  // A fresh thread in the new workspace saves its own.
+  await vi.waitFor(() =>
+    expect(savedPrompts(restored.storage)).toHaveLength(1),
+  );
   expect(restored.starts()[2]?.params).toMatchObject({
     model: "test-model",
     effort: "medium",
@@ -2501,7 +2534,7 @@ it.each(["/queue", "/stop", "/steer", "/reset"])(
     await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
   },
 );
-it.each(["v2", "v3", "v5", "v6", "v7"])(
+it.each(["v2", "v3", "v5", "v6", "v7", "v15", "v16"])(
   "starts fresh instead of restoring a %s binding, whose tools are out of date",
   async (version) => {
     const f = fixture();
@@ -2523,7 +2556,10 @@ it.each(["v2", "v3", "v5", "v6", "v7"])(
       ?.params as { dynamicTools: { tools: { name: string }[] }[] };
     expect(thread.dynamicTools[0]?.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
+        "channel_list",
+        "channel_get",
         "media_get",
+        "mem_rm",
         "notes_get",
         "notes_set",
         "notes_rm",
@@ -2568,7 +2604,13 @@ it("leaves a failed first startup unbound so the next mention can start fresh", 
   );
   f.complete();
   await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(2));
-  expect(JSON.parse([...f.storage.values()][0] ?? "{}")).toMatchObject({
+  expect(
+    JSON.parse(
+      [...f.storage].find(([key]) =>
+        key.startsWith("buzz.codex.sessions."),
+      )?.[1] ?? "{}",
+    ),
+  ).toMatchObject({
     [JSON.stringify(["channel", root])]: { threadId: "thread-2" },
   });
 });
@@ -2638,11 +2680,21 @@ it.each([
   expect(f.publish.mock.calls[1]?.[0]).toMatchObject({
     content: recover ? "DONE" : expect.stringContaining(error),
   });
-  expect(JSON.parse([...f.storage.values()][0] ?? "{}")).toMatchObject({
+  expect(
+    JSON.parse(
+      [...f.storage].find(([key]) =>
+        key.startsWith("buzz.codex.sessions."),
+      )?.[1] ?? "{}",
+    ),
+  ).toMatchObject({
     [JSON.stringify(["channel", root])]: {
       threadId: recover ? "thread-2" : "thread-1",
     },
   });
+  // Only a thread started in place of the missing one saves a new prompt.
+  expect(savedPrompts(f.storage).map(([id]) => id)).toEqual(
+    recover ? ["thread-1", "thread-2"] : ["thread-1"],
+  );
 });
 
 it("routes callbacks by thread and turn, rejecting stale, unknown and malformed tools without writes", async () => {
@@ -3289,7 +3341,7 @@ it("lists saved conversations newest first from storage, and moves a started one
   const channel = JSON.stringify(["channel", "channel"]);
   const elsewhere = JSON.stringify(["unlisted", root]);
   f.storage.set(
-    `buzz.codex.sessions.v13:${scope}:${pubkey}`,
+    `buzz.codex.sessions.v17:${scope}:${pubkey}`,
     JSON.stringify({
       [channel]: { threadId: "before-timestamps", workspace: "/w" },
       [thread]: { threadId: "older", workspace: "/w", at: 1 },
@@ -3309,6 +3361,7 @@ it("lists saved conversations newest first from storage, and moves a started one
       key: thread,
       channelId: "channel",
       name: "test",
+      channelType: "stream",
       root,
       threadId: "older",
       at: 1,
@@ -3317,6 +3370,7 @@ it("lists saved conversations newest first from storage, and moves a started one
       key: channel,
       channelId: "channel",
       name: "test",
+      channelType: "stream",
       threadId: "before-timestamps",
     },
   ]);
@@ -3326,7 +3380,7 @@ it("lists saved conversations newest first from storage, and moves a started one
   expect(latest?.at).toBeGreaterThan(2);
   const stored = Object.keys(
     JSON.parse(
-      f.storage.get(`buzz.codex.sessions.v13:${scope}:${pubkey}`) ?? "{}",
+      f.storage.get(`buzz.codex.sessions.v17:${scope}:${pubkey}`) ?? "{}",
     ),
   );
   expect(stored.at(-1)).toBe(latest?.key);
@@ -3393,7 +3447,7 @@ it("always offers the attention tools, on search, keeps the thread when attentio
   );
   const next = f.starts()[1]?.params as { input: { text: string }[] };
   expect(next.input[0]?.text).toMatch(
-    /<attention>\nYour owner has attention off/,
+    /<attention>\nAttention is off on this device/,
   );
   expect(next.input[0]?.text).not.toContain("Handle the work");
   const off = await f.tool("interest_show", { id: "ops" }, 1);
@@ -3447,7 +3501,7 @@ it("offers the tools plugins add, runs them as the agent here, and starts a new 
     1,
   );
   const saved = JSON.parse(
-    f.storage.get(`buzz.codex.sessions.v13:${scope}:${pubkey}`) ?? "{}",
+    f.storage.get(`buzz.codex.sessions.v17:${scope}:${pubkey}`) ?? "{}",
   );
   expect(Object.values(saved)).toEqual([
     expect.objectContaining({ tools: expect.any(String) }),
@@ -3666,7 +3720,7 @@ it("ends a queued mention with the attention note current when it starts", async
   const text = (
     f.starts()[1]?.params as { input: { text: string }[] } | undefined
   )?.input[0]?.text;
-  expect(text).toMatch(/<attention>\nYour owner has attention off/);
+  expect(text).toMatch(/<attention>\nAttention is off on this device/);
   await f.complete(1, "SECOND");
 });
 
@@ -4368,7 +4422,7 @@ it("delivers a rootless subscription to its channel without publishing its ancho
   expect(JSON.stringify(f.publish.mock.calls)).not.toContain(WAKE_ID);
 });
 
-it.each(["v7", "v12"])(
+it.each(["v7", "v12", "v13"])(
   "does not reuse %s persisted bindings with older built-in tool schemas",
   (version) => {
     const f = fixture();

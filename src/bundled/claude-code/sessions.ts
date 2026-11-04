@@ -52,6 +52,9 @@ export type SessionsOptions = Readonly<{
   fingerprint(key?: string): string;
   now?(): number;
   newId?(): string;
+  /** Told of each new session, never a resumed one, with the prompt it was
+   * started with. */
+  started?(sessionId: string, systemPrompt: string): void;
   /** Called when a conversation's process starts, is sent a message, or
    * stops. */
   onChange?(): void;
@@ -472,8 +475,11 @@ export class AgentSessions {
     const process = resume
       ? await ClaudeProcess.start(this.options.spawn, { ...launch, resume })
       : await this.fresh(launch, spawned);
-    if (fingerprint === this.options.fingerprint(key) || this.disposed)
+    if (fingerprint === this.options.fingerprint(key) || this.disposed) {
+      if (!resume && process.sessionId)
+        this.options.started?.(process.sessionId, launch.systemPrompt);
       return { process, fingerprint, used: this.now() };
+    }
     // Settings saved while it started: it would work with the old ones.
     void process.kill();
     return this.start(resume, key, spawned);
@@ -647,7 +653,10 @@ export class Spare {
       return undefined;
     }
     const process = await next.process;
-    if (process?.running) return process;
+    // A spare that ran a turn, such as one another Claude session's message
+    // starts, fixed its system prompt then; Claude ignores the prompt
+    // `initialize` brings it later, so the agent would run without it.
+    if (process?.running && !process.started) return process;
     void process?.kill();
     return undefined;
   }

@@ -5,12 +5,14 @@ import { Input } from "../../shared/design-system/ui/Input";
 import { OnboardingScreen } from "../identity/OnboardingScreen";
 import type { SettingsCards } from "../settings/service";
 import { CommunityDialog } from "./CommunityDialog";
+import type { FederatedIdentity } from "../federated-identity/service";
 import { type InviteLink, parsePastedInvite } from "./invite-link";
 import type { Communities } from "./service";
 
 /** First run with no community: joining replaces the empty shell. */
 export function CommunityLanding({
   communities,
+  federatedIdentity,
   invite,
   onInviteClose,
   settingsCards,
@@ -18,6 +20,7 @@ export function CommunityLanding({
   onCreate,
 }: {
   communities: Communities;
+  federatedIdentity?: FederatedIdentity | undefined;
   invite?: (InviteLink & { requestId: number }) | undefined;
   onInviteClose(requestId: number): void;
   settingsCards: Pick<SettingsCards, "subscribe" | "has">;
@@ -28,9 +31,26 @@ export function CommunityLanding({
   const [error, setError] = useState("");
   const [joining, setJoining] = useState<InviteLink>();
   const hostedAvailable = useSyncExternalStore(settingsCards.subscribe, () =>
-    settingsCards.has("block.hosted-communities/hosted"),
+    settingsCards.has("block.builderlab/login"),
   );
   const opened = invite ?? joining;
+  if (opened)
+    return (
+      <CommunityDialog
+        key={invite ? invite.requestId : `${opened.community} ${opened.code}`}
+        communities={communities}
+        federatedIdentity={federatedIdentity}
+        mode="join"
+        onboarding
+        submittedDestination={!invite}
+        invite={opened}
+        onJoined={onJoined}
+        close={() => {
+          setJoining(undefined);
+          if (invite) onInviteClose(invite.requestId);
+        }}
+      />
+    );
   return (
     <OnboardingScreen
       labelledBy="community-landing-title"
@@ -75,22 +95,9 @@ export function CommunityLanding({
       }
     >
       {hostedAvailable && (
-        <Button size="lg" variant="ghost" onClick={onCreate}>
+        <Button size="lg" variant="subtle" onClick={onCreate}>
           Create a community
         </Button>
-      )}
-      {opened && (
-        <CommunityDialog
-          key={invite ? invite.requestId : `${opened.community} ${opened.code}`}
-          communities={communities}
-          mode="join"
-          invite={opened}
-          onJoined={onJoined}
-          close={() => {
-            setJoining(undefined);
-            if (invite) onInviteClose(invite.requestId);
-          }}
-        />
       )}
     </OnboardingScreen>
   );

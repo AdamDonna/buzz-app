@@ -77,6 +77,22 @@ function luminance(hex: string | undefined) {
     0,
   );
 }
+/** A see-through `rgb(r g b / a%)` fill as the flat colour it makes on `base`. */
+function over(fill: string | undefined, base: string | undefined) {
+  const overlay = /^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)%\)$/.exec(fill ?? "");
+  if (!overlay || !base) return fill;
+  const alpha = Number(overlay[4]) / 100;
+  return `#${[1, 2, 3]
+    .map((i) =>
+      Math.round(
+        Number(overlay[i]) * alpha +
+          Number.parseInt(base.slice(i * 2 - 1, i * 2 + 1), 16) * (1 - alpha),
+      )
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
 function contrast(a: string | undefined, b: string | undefined) {
   const x = luminance(a);
   const y = luminance(b);
@@ -315,6 +331,16 @@ it.each(ACCENTS)(
       for (const mode of ["light", "dark"] as const) {
         const palette = resolvedPalette(mode, color, level);
         const where = `${color}/${level}/${mode}`;
+        // A chip is the colour its overlay makes on the bubble beneath it.
+        const chip = (fill: string) =>
+          over(
+            palette[fill],
+            palette[
+              fill.includes("-own")
+                ? "--surface-message-own"
+                : "--surface-message"
+            ],
+          );
         for (const [text, fill] of [
           ["--text-mention", "--affordance-mention"],
           ["--text-mention", "--affordance-mention-hover"],
@@ -324,30 +350,28 @@ it.each(ACCENTS)(
           ["--text-mention-self", "--affordance-mention-self-hover"],
         ] as const)
           expect(
-            contrast(palette[text], palette[fill]),
+            contrast(palette[text], chip(fill)),
             `${text} on ${fill} in ${where}`,
           ).toBeGreaterThanOrEqual(4.5);
         // The own chip never repaints the bubble it sits on.
-        expect(palette["--affordance-mention-own"], where).not.toBe(
+        expect(chip("--affordance-mention-own"), where).not.toBe(
           palette["--surface-message-own"],
         );
         // Hovering a chip in your own bubble always shows a change.
-        expect(palette["--affordance-mention-own-hover"], where).not.toBe(
-          palette["--affordance-mention-own"],
+        expect(chip("--affordance-mention-own-hover"), where).not.toBe(
+          chip("--affordance-mention-own"),
         );
         // Ordinary mentions stay neutral at every level; a mention of you
-        // takes the strong group (a fill in light, the mark as ink in dark).
+        // takes the strong fill in both modes.
         expect(palette["--affordance-mention"], where).toBe(
           resolvedPalette(mode, color, "low")["--affordance-mention"],
         );
-        if (mode === "light")
-          expect(palette["--affordance-mention-self"], where).toBe(
-            palette["--affordance-accent-prominent"],
-          );
-        else
-          expect(palette["--text-mention-self"], where).toBe(
-            palette["--accent-11"],
-          );
+        expect(palette["--affordance-mention-self"], where).toBe(
+          palette["--affordance-accent-prominent"],
+        );
+        expect(palette["--text-mention-self"], where).toBe(
+          palette["--text-on-accent"],
+        );
       }
   },
 );

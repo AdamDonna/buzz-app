@@ -25,13 +25,14 @@ export type IdentityArchives = ReturnType<
 
 /** Base Buzz discovery rule: known-archived identities leave forward-looking
  * choices, fail open while archive state is unknown, and never hide the viewer
- * from themself (NIP-IA archival stays visible to its subject). */
+ * from themself (NIP-IA archival stays visible to its subject). Visibility
+ * uses the last known archives; `state()` answers only from a fresh read. */
 export function archiveHides(
-  archives: Pick<IdentityArchives, "state"> | undefined,
+  archives: Pick<IdentityArchives, "snapshot"> | undefined,
   pubkey: string,
   viewer: string | undefined,
 ) {
-  return pubkey !== viewer && archives?.state(pubkey) === "archived";
+  return pubkey !== viewer && !!archives?.snapshot().archived.includes(pubkey);
 }
 const empty: readonly string[] = Object.freeze([]);
 const HEX = /^[0-9a-f]{64}$/;
@@ -76,7 +77,10 @@ export function createIdentityArchives(
       finish = resolve;
     });
     pending = completion;
-    publish({ status: "loading", archived: empty });
+    // Rereads keep the last known archives until the new snapshot replaces
+    // them, so a known-archived identity never briefly looks live.
+    const { error: _, ...known } = snapshot;
+    publish({ ...known, status: "loading" });
     void (async () => {
       try {
         if (closed || owned.signal.aborted) return;
@@ -135,8 +139,8 @@ export function createIdentityArchives(
       } catch {
         if (!closed && !owned.signal.aborted)
           publish({
+            ...snapshot,
             status: "error",
-            archived: empty,
             error:
               "Archive visibility is unknown. Retry to obtain a valid current relay snapshot (2 MiB limit).",
           });
@@ -243,19 +247,28 @@ export function createIdentityArchives(
         uncertain ?? new Error("The relay did not confirm the change. Retry.")
       );
   }
+  /** From the latest successful read only, so deletion and confirmation never
+   * act on retained evidence. */
   function state(pubkey: string): "unknown" | "archived" | "not-archived" {
     if (snapshot.status !== "ready" || !HEX.test(pubkey)) return "unknown";
     return snapshot.archived.includes(pubkey) ? "archived" : "not-archived";
   }
-  function clear() {
+  function stop() {
     for (const owned of requests) owned.abort();
     controller?.abort();
     controller = undefined;
     pending = undefined;
-    publish({
-      status: closed || !available ? "unavailable" : "idle",
-      archived: empty,
-    });
+    return closed || !available ? "unavailable" : "idle";
+  }
+  /** Forgets everything known, for a new identity or access. */
+  function clear() {
+    publish({ status: stop(), archived: empty });
+  }
+  /** After a reconnect: the next ensure() rereads, and until it replaces them
+   * the last known archives stay known. */
+  function stale() {
+    const { error: _, ...known } = snapshot;
+    publish({ ...known, status: stop() });
   }
   return {
     queries: Object.freeze({
@@ -278,6 +291,7 @@ export function createIdentityArchives(
       request,
     }),
     clear,
+    stale,
     dispose() {
       closed = true;
       clear();

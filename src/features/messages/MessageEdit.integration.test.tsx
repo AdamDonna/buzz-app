@@ -132,13 +132,19 @@ it("real ThreadPanel edits its own reply and recovers emoji preparation without 
     fireEvent.keyDown(input, { key: "Enter" });
     const form = within(screen.getByRole("form", { name: "Edit message" }));
     expect(form.getByRole("alert")).toHaveTextContent(
-      "Community emoji unavailable",
+      "Community emoji isn't ready",
     );
     expect(publish).not.toHaveBeenCalled();
-    emojiAvailable = true;
-    fireEvent.click(
-      screen.getByRole("button", { name: "Retry message preparation" }),
+    // The refused edit retried the catalog; recovery is offered once that fails.
+    const retry = await screen.findByRole("button", {
+      name: "Retry message preparation",
+    });
+    // The retained refusal stays accurate once that retry has failed.
+    expect(form.getByRole("alert")).toHaveTextContent(
+      "Community emoji isn't ready. Your draft is kept; try sending again shortly.",
     );
+    emojiAvailable = true;
+    fireEvent.click(retry);
     await waitFor(() =>
       expect(form.queryByRole("alert")).not.toBeInTheDocument(),
     );
@@ -399,7 +405,7 @@ it.each(["reject", "commit"] as const)(
       const input = screen.getByRole<ComposerInputElement>("textbox", {
         name: "Reply to thread",
       });
-      fireEvent.keyDown(input, { key: "ArrowUp" });
+      fireEvent.keyDown(input, { key: "ArrowUp", metaKey: true });
       act(() => {
         input.value = "Keep my revision";
         input.setSelectionRange(16, 16);
@@ -515,7 +521,7 @@ it.each(["thread", "exact"])(
       const input = screen.getByRole<ComposerInputElement>("textbox", {
         name: "Reply to thread",
       });
-      fireEvent.keyDown(input, { key: "ArrowUp" });
+      fireEvent.keyDown(input, { key: "ArrowUp", metaKey: true });
       expect(input).toHaveValue(edit.content);
       const content = `New caption\n\n![image](${url})`;
       act(() => {

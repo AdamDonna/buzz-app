@@ -1,3 +1,4 @@
+import { OnboardingBack } from "./OnboardingBack";
 import {
   useEffect,
   useRef,
@@ -20,6 +21,7 @@ import styles from "./IdentitySetup.module.css";
 import { OnboardingWordmark } from "./OnboardingWordmark";
 import { OnboardingScreen } from "./OnboardingScreen";
 
+/** Key import/create gate; the app's first launch now uses Welcome instead. */
 export function IdentitySetup({
   identity,
   children,
@@ -62,6 +64,8 @@ export function IdentitySetup({
   if (missing && !importing && !state.recovery) {
     return (
       <OnboardingScreen
+        key="welcome"
+        welcome
         labelledBy="identity-landing-title"
         intro={
           <>
@@ -214,19 +218,15 @@ export function IdentitySetup({
             >
               Import this identity
             </Button>
-            <Button
+            <OnboardingBack
               type="button"
-              size="lg"
-              variant="ghost"
               disabled={state.busy}
               onClick={() => {
                 setNsec("");
                 setImporting(false);
                 returning.current = true;
               }}
-            >
-              Back
-            </Button>
+            />
           </div>
         )}
       </section>

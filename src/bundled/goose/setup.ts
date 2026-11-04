@@ -87,6 +87,28 @@ const PREFIXES: Readonly<Record<string, readonly string[]>> = {
   databricks: ["databricks-", "goose-"],
 };
 
+const MODEL_FILTER = "DATABRICKS_MODEL_FILTER";
+
+/** Which Databricks models are listed, from goose's `DATABRICKS_MODEL_FILTER`
+ * (its environment, else its config): comma-separated patterns, each matched
+ * against a whole model ID, case-sensitively, with `*` for any characters and
+ * `?` for one. A model matching any pattern is listed; without patterns every
+ * model is. It only hides models: Databricks still decides access. */
+export function modelFilter(value: unknown): (id: string) => boolean {
+  const patterns = String(value ?? "")
+    .split(",")
+    .map((pattern) => pattern.trim())
+    .filter(Boolean);
+  if (!patterns.length) return () => true;
+  const glob = (pattern: string) =>
+    pattern
+      .replace(/[\\^$.+()[\]{}|/]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
+  const matcher = new RegExp(`^(?:${patterns.map(glob).join("|")})$`, "s");
+  return (id) => matcher.test(id);
+}
+
 const TEST_PROMPT = "Reply with exactly: OK";
 const TEST_TIMEOUT_MS = 60_000;
 
@@ -314,12 +336,27 @@ export class GooseSetup {
     let models = this.live.get(id);
     if (!models) {
       models = this.with(async (goose) => {
-        const { models } = (await goose.request(
-          "_goose/unstable/providers/supported-models/list",
-          { providerId: id },
-          REQUEST_TIMEOUT_MS,
-        )) as { models: string[] };
-        return models.map((model) => ({ id: model, label: model }));
+        const [{ models }, filter] = (await Promise.all([
+          goose.request(
+            "_goose/unstable/providers/supported-models/list",
+            { providerId: id },
+            REQUEST_TIMEOUT_MS,
+          ),
+          id.startsWith("databricks")
+            ? goose.request(
+                "_goose/unstable/config/read",
+                {
+                  key: MODEL_FILTER,
+                  isSecret: false,
+                },
+                REQUEST_TIMEOUT_MS,
+              )
+            : undefined,
+        ])) as [{ models: string[] }, { value?: unknown } | undefined];
+        const listed = modelFilter(filter?.value);
+        return models
+          .filter(listed)
+          .map((model) => ({ id: model, label: model }));
       });
       models.catch(() => this.live.delete(id));
       this.live.set(id, models);

@@ -1,8 +1,10 @@
-import { motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Input } from "../../shared/design-system/ui/Input";
 import {
+  Fragment,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -20,7 +22,9 @@ import type {
   Agent,
   Agents,
   AgentConversation,
+  AgentViewProps,
   RegisteredAgentType,
+  TranscriptRequest,
 } from "../../features/agents/service";
 import {
   AgentArchiveRetry,
@@ -66,6 +70,8 @@ import styles from "./AgentsPage.module.css";
 import { PackedAgentAvatar } from "./PackedAgentAvatar";
 import { ProfileBackdrop } from "../../features/profiles/ProfileBackdrop";
 import hero from "../../features/profiles/ProfileHero.module.css";
+import { writeClipboardText } from "../../shared/clipboard";
+import { SettingsSectionLink } from "../../features/navigation/SettingsSectionLink";
 
 export function AgentDetails({
   agents,
@@ -78,7 +84,11 @@ export function AgentDetails({
   messageAction,
   conversation,
   initialActivity,
+  initialTranscript,
+  close,
+  openConversation,
   communities,
+  openSettings,
 }: {
   agents: Agents;
   agent: Agent;
@@ -90,8 +100,15 @@ export function AgentDetails({
   messageAction: (variant: "glass" | "subtle") => ReactNode;
   conversation?: AgentConversation | undefined;
   initialActivity?: boolean;
+  initialTranscript?: TranscriptRequest | undefined;
+  /** Closes the panel showing the agent. */
+  close?: () => void;
+  /** Opens a turn's conversation from its activity; see AgentViewProps. */
+  openConversation?: AgentViewProps["openConversation"];
   communities?: CommunityReader | undefined;
+  openSettings?: ((section: string) => void) | undefined;
 }) {
+  const ProfileActions = type?.ProfileActions ?? Fragment;
   const { pack, src: backdrop } = useAgentPortraitSource(agent, agent.relay);
   const tabbed = !!usePanelTabHost();
   const reducedMotion = useReducedMotion();
@@ -113,18 +130,84 @@ export function AgentDetails({
   );
   usePanelTabTitle(agent.name, tabAvatar);
   const [saveFooter, setSaveFooter] = useState<HTMLDivElement | null>(null);
+  const [signInVisible, setSignInVisible] = useState(false);
+  const [footerVisible, setFooterVisible] = useState(false);
+  const [panelNotice, setPanelNotice] = useState<ReactNode>(null);
   const content = useRef<HTMLDivElement>(null);
+  const [panelFooter, setPanelFooter] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const footer = panelFooter;
+    const scroll = content.current;
+    if (!type?.PanelFooter || !footer || !scroll) {
+      setSignInVisible(false);
+      setFooterVisible(false);
+      return;
+    }
+    const measure = () => {
+      setFooterVisible(footer.childElementCount > 0);
+      setSignInVisible(
+        [...footer.children].some(
+          (sheet) =>
+            sheet.getAttribute("data-agent-access-required") !== "false",
+        ),
+      );
+      // Share the fields' usable width, excluding either side's scrollbar gutter.
+      footer.style.width = `${scroll.clientWidth}px`;
+      footer.style.left = `${scroll.offsetLeft + scroll.clientLeft}px`;
+      scroll.style.setProperty(
+        "--agent-footer-height",
+        `${footer.getBoundingClientRect().height}px`,
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      // Updating the scroll inset also resizes its content box; settle outside delivery.
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    });
+    observer.observe(footer);
+    observer.observe(scroll);
+    // Presence can replace equally tall sheets with different access semantics.
+    const changes = new MutationObserver((records) => {
+      measure();
+      // An exiting sheet becomes inert before its replacement mounts.
+      if (
+        document.activeElement === document.body &&
+        records.some((record) => record.addedNodes.length > 0)
+      )
+        footer
+          .querySelector<HTMLElement>(
+            ':scope > :not([inert]) :is(button:not(:disabled), [role="button"]:not([aria-disabled="true"]))',
+          )
+          ?.focus({ preventScroll: true });
+    });
+    changes.observe(footer, { childList: true });
+    return () => {
+      observer.disconnect();
+      changes.disconnect();
+      cancelAnimationFrame(frame);
+      scroll.style.removeProperty("--agent-footer-height");
+    };
+  }, [type?.PanelFooter, panelFooter]);
   useEffect(() => {
-    // Completing setup removes its focused button; continue in Identity.
-    if (document.activeElement === document.body)
+    // Setup or sign-in removes its focused button; continue in the selected tab.
+    if (!footerVisible && document.activeElement === document.body)
       content.current
         ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
         ?.focus();
-  }, []);
+  }, [footerVisible]);
   const [copied, setCopied] = useState(false);
   const [editingIdentity, setEditingIdentity] = useState(false);
   const identityMenu = useRef<HTMLButtonElement>(null);
   const [editingName, setEditingName] = useState(false);
+  useLayoutEffect(() => {
+    if (signInVisible) {
+      setEditingName(false);
+      setEditingIdentity(false);
+    }
+  }, [signInVisible]);
   const [name, setName] = useState(agent.name);
   const [namePending, setNamePending] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -189,6 +272,7 @@ export function AgentDetails({
     <AgentSaveFooter
       value={{
         target: saveFooter,
+        setPanelNotice,
         notice: (
           <SharedSettingsNotice
             agents={agents}
@@ -208,9 +292,34 @@ export function AgentDetails({
               onClick={onRemoved}
             />
           )}
-          <aside
-            className={`${hero.hero} ${hero.panelHero}`}
+          <motion.aside
+            className={`${hero.hero} ${hero.panelHero} ${styles.identityCard}`}
             aria-label={`${agent.name} identity`}
+            initial={false}
+            animate={{
+              "--agent-artwork-grayscale": signInVisible ? 1 : 0,
+              "--agent-artwork-scale":
+                signInVisible && !reducedMotion ? 0.85 : 1,
+              "--agent-artwork-opacity":
+                signInVisible && !reducedMotion ? 0.5 : 1,
+              "--agent-artwork-blur":
+                signInVisible && !reducedMotion ? "2px" : "0px",
+            }}
+            transition={
+              reducedMotion
+                ? { duration: 0 }
+                : signInVisible
+                  ? { duration: 10, ease: "linear" }
+                  : {
+                      duration: 0.8,
+                      ease: [0.23, 1, 0.32, 1],
+                      "--agent-artwork-scale": {
+                        type: "spring",
+                        duration: 1.1,
+                        bounce: 0.65,
+                      },
+                    }
+            }
           >
             <ProfileBackdrop src={backdrop}>
               {pack && <PackedAgentAvatar avatar={pack} fit="cover" />}
@@ -273,42 +382,42 @@ export function AgentDetails({
               )}
             </motion.div>
             <div className={hero.actions}>
-              {editingName ? (
-                <motion.div
-                  className={styles.nameActions}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{
-                    duration:
-                      reducedMotion ||
-                      document.documentElement.hasAttribute(
-                        "data-keyboard-navigation",
-                      )
-                        ? 0
-                        : 0.15,
-                  }}
-                >
-                  <Button
-                    size="sm"
-                    shape="control"
-                    disabled={namePending}
-                    onClick={finishName}
+              <ProfileActions>
+                {!editingName && messageAction(backdrop ? "glass" : "subtle")}
+                {editingName ? (
+                  <motion.div
+                    className={styles.nameActions}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{
+                      duration:
+                        reducedMotion ||
+                        document.documentElement.hasAttribute(
+                          "data-keyboard-navigation",
+                        )
+                          ? 0
+                          : 0.15,
+                    }}
                   >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    shape="control"
-                    variant="prominent"
-                    loading={namePending}
-                    onClick={() => void saveName()}
-                  >
-                    Save
-                  </Button>
-                </motion.div>
-              ) : (
-                <>
-                  {messageAction(backdrop ? "glass" : "subtle")}
+                    <Button
+                      size="sm"
+                      shape="control"
+                      disabled={namePending}
+                      onClick={finishName}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      shape="control"
+                      variant="prominent"
+                      loading={namePending}
+                      onClick={() => void saveName()}
+                    >
+                      Save
+                    </Button>
+                  </motion.div>
+                ) : (
                   <MenuRoot>
                     <MenuTrigger
                       render={
@@ -335,8 +444,8 @@ export function AgentDetails({
                       </MenuItem>
                     </MenuPopup>
                   </MenuRoot>
-                </>
-              )}
+                )}
+              </ProfileActions>
             </div>
             {editingName && nameMessage && (
               <p
@@ -356,15 +465,18 @@ export function AgentDetails({
                 onClose={() => setEditingIdentity(false)}
               />
             )}
-          </aside>
+          </motion.aside>
           <section
             className={styles.work}
             aria-label={`${agent.name} settings`}
           >
             {!type && (
               <p className="m-0 mb-4 text-body-sm text-secondary">
-                Enable the plugin that provides this agent's type to change its
-                settings. Its attention can still be edited.
+                Enable the plugin that provides this agent's type in{" "}
+                <SettingsSectionLink section="plugins" open={openSettings}>
+                  Manage plugins
+                </SettingsSectionLink>{" "}
+                to change its settings.
               </p>
             )}
             <AgentTabs
@@ -374,6 +486,9 @@ export function AgentDetails({
               channels={channels}
               conversation={conversation}
               initialActivity={initialActivity}
+              initialTranscript={initialTranscript}
+              close={close}
+              openConversation={openConversation}
               settingsHost={settings.settingsHost}
               onDiscard={settings.discard}
               memories={memories}
@@ -399,7 +514,7 @@ export function AgentDetails({
                             if (!npub) return;
                             setCopyError("");
                             void Promise.resolve()
-                              .then(() => navigator.clipboard.writeText(npub))
+                              .then(() => writeClipboardText(npub))
                               .then(() => setCopied(true))
                               .catch(() =>
                                 setCopyError(
@@ -485,6 +600,13 @@ export function AgentDetails({
           </section>
           <div ref={setSaveFooter} className={styles.saveFooter} />
         </div>
+        {type?.PanelFooter && (
+          <div ref={setPanelFooter} className={styles.panelFooter}>
+            <AnimatePresence mode="wait">
+              {panelNotice ?? <type.PanelFooter key="sign-in" />}
+            </AnimatePresence>
+          </div>
+        )}
       </div>
     </AgentSaveFooter>
   );

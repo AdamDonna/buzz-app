@@ -32,6 +32,7 @@ import { communityDestination } from "./destination";
 import { communityName } from "./names";
 import type { Membership } from "./service";
 import styles from "./Communities.module.css";
+import { writeClipboardText } from "../../shared/clipboard";
 
 /** The bundled moderation plugin's Membership card, addressed by contribution key. */
 export const MEMBERSHIP_SECTION = "buzz.moderation/membership";
@@ -46,6 +47,18 @@ export type SelectedSession = {
 };
 
 const noSubscription = () => () => {};
+
+/** Marks every conversation read and reports the outcome in a toast. Shared by
+ * the menu item and the Shift+Escape shortcut. */
+export function markAllRead(
+  unread: Pick<UnreadCapability, "markAllChannelsRead">,
+  notify: ReturnType<typeof useToastNotification>,
+) {
+  return unread.markAllChannelsRead().then(
+    () => notify("Marked all as read.", "success"),
+    () => notify("Couldn’t mark everything as read.", "error"),
+  );
+}
 
 /** One picker row and its context menu. Selection stays with the picker. */
 export function CommunityPickerItem({
@@ -129,7 +142,7 @@ export function CommunityPickerItem({
     onOpenTarget?.(target);
   };
   const copy = () =>
-    navigator.clipboard.writeText(origin).then(
+    writeClipboardText(origin).then(
       () => notify("Community URL copied.", "success"),
       () => notify("Couldn’t copy the community URL.", "error"),
     );
@@ -278,10 +291,7 @@ function MarkAllReadItem({
         aria-describedby={reason ? noteId : undefined}
         onClick={() => {
           if (!unread || reason) return;
-          void unread.markAllChannelsRead().then(
-            () => notify("Marked all as read.", "success"),
-            () => notify("Couldn’t mark everything as read.", "error"),
-          );
+          void markAllRead(unread, notify);
         }}
       >
         <MenuIcon>

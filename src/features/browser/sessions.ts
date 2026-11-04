@@ -1,3 +1,4 @@
+import type { BuilderlabViewerSession } from "./api";
 import type { BrowserBounds, BrowserPlatform } from "./platform";
 
 /** Native guests open at once; past this the least recently shown hidden one
@@ -16,6 +17,7 @@ export class BrowserSessions {
   /** Live guests, least recently shown first. */
   private live: string[] = [];
   private readonly shown = new Set<string>();
+  private readonly release = new Map<string, () => void>();
   private readonly parked = new Map<
     string,
     { sessionId: string; timer: ReturnType<typeof setTimeout> }
@@ -33,9 +35,10 @@ export class BrowserSessions {
     storage?: string,
     /** Adopts the guest parked under this key instead of opening `url`. */
     park?: string,
+    builderlab?: BuilderlabViewerSession,
   ): Promise<string | undefined> {
     return this.enqueue(async () => {
-      if (!current()) return undefined;
+      if (!current() || builderlab?.signal.aborted) return undefined;
       const parked = park === undefined ? undefined : this.parked.get(park);
       if (park !== undefined && parked) {
         clearTimeout(parked.timer);
@@ -43,9 +46,29 @@ export class BrowserSessions {
         return parked.sessionId;
       }
       while (this.live.length >= MAX_GUESTS) await this.close(this.victim());
-      const sessionId = await this.platform.attach(url, bounds, storage);
+      const sessionId = await this.platform.attach(
+        url,
+        bounds,
+        storage,
+        builderlab,
+      );
       this.live.push(sessionId);
-      if (current()) return sessionId;
+      if (current() && !builderlab?.signal.aborted) {
+        if (builderlab) {
+          // Revocation cannot wait behind another guest's network bootstrap. close removes
+          // ownership synchronously; queued lifecycle work then sees a closed session.
+          const invalidate = () => {
+            void this.close(sessionId);
+          };
+          builderlab.signal.addEventListener("abort", invalidate, {
+            once: true,
+          });
+          this.release.set(sessionId, () =>
+            builderlab.signal.removeEventListener("abort", invalidate),
+          );
+        }
+        return sessionId;
+      }
       await this.close(sessionId);
       return undefined;
     });
@@ -54,7 +77,19 @@ export class BrowserSessions {
   /** Closes the guest, or with `park` hides it for the next view that
    * attaches with that key. */
   detach(sessionId: string, park?: string): Promise<void> {
-    return this.enqueue(async () => {
+    // An unrelated attach can wait on network exchange; presentation must stop now.
+    const hidden = this.owns(sessionId)
+      ? this.platform.setBounds(sessionId, HIDDEN, false)
+      : Promise.resolve();
+    this.shown.delete(sessionId);
+    const detached = this.enqueue(async () => {
+      // Re-adoption must not overtake the old view's in-flight hide. A guest
+      // that failed to hide still closes rather than staying live or parked.
+      try {
+        await hidden;
+      } catch {
+        return this.close(sessionId);
+      }
       if (park === undefined || !this.owns(sessionId))
         return this.close(sessionId);
       this.shown.delete(sessionId);
@@ -70,8 +105,8 @@ export class BrowserSessions {
         PARK_MS,
       );
       this.parked.set(park, { sessionId, timer });
-      await this.platform.setBounds(sessionId, HIDDEN, false);
     });
+    return Promise.all([hidden, detached]).then(() => undefined);
   }
 
   /** The last title the page opened under `key` reported. */
@@ -112,6 +147,9 @@ export class BrowserSessions {
   }
 
   private close(sessionId: string): Promise<void> {
+    this.release.get(sessionId)?.();
+    this.release.delete(sessionId);
+    if (!this.owns(sessionId)) return Promise.resolve();
     this.live = this.live.filter((id) => id !== sessionId);
     this.shown.delete(sessionId);
     for (const [key, entry] of this.parked)

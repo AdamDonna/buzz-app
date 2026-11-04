@@ -704,7 +704,7 @@ test("landing scan survives channel presentation churn without restarting", asyn
       );
       await expect(
         page.getByRole("heading", {
-          name: `#${index % 2 ? "Z-last" : "A-first"} channel ${index}`,
+          name: `${index % 2 ? "Z-last" : "A-first"} channel ${index}`,
           exact: true,
         }),
       ).toBeVisible();
@@ -887,6 +887,52 @@ test("restricted cards and read-only editors keep keyboard controls without disc
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(url.replace("/fixture.html", "/session-fixture.html"));
+  // Owner text needs real layout: jsdom cannot detect a zero-width label at
+  // narrow widths with enlarged text and fixed artwork/action siblings.
+  const ownerLabel = page.locator(".workflow-card-owner");
+  for (const theme of ["dark", "light"]) {
+    for (const fontSize of [20, 32]) {
+      await page.evaluate(
+        ({ theme, fontSize }) => {
+          document.documentElement.dataset.colorMode = theme;
+          document.documentElement.style.fontSize = `${fontSize}px`;
+        },
+        { theme, fontSize },
+      );
+      await expect(ownerLabel).toBeVisible();
+      await expect
+        .poll(() =>
+          ownerLabel.evaluate(
+            (node) =>
+              node.clientWidth > 0 && node.scrollWidth <= node.clientWidth,
+          ),
+        )
+        .toBe(true);
+      // A short owner identifier may wrap, but must not become a tall column
+      // of single characters when artwork and controls consume its width.
+      await expect
+        .poll(() =>
+          ownerLabel.evaluate((node) => {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            return new Set([...range.getClientRects()].map((rect) => rect.top))
+              .size;
+          }),
+        )
+        .toBeLessThanOrEqual(2);
+      await page
+        .getByRole("button", { name: "Actions for Fixture A helper" })
+        .click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(
+        page.getByRole("button", { name: "Actions for Fixture A helper" }),
+      ).toBeFocused();
+    }
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "";
+  });
   const tab =
     browserName === "webkit" && process.platform === "darwin"
       ? "Alt+Tab"
@@ -950,6 +996,8 @@ test("restricted cards and read-only editors keep keyboard controls without disc
       },
     });
   });
+  await page.getByRole("button", { name: "Owner: My workflows" }).click();
+  await page.getByRole("radio", { name: "All channel workflows" }).click();
   await editorControls(page).open("Message helper");
   const dialog = page.getByRole("dialog", { name: "Message helper" });
   await expect(dialog.getByText("Read-only", { exact: true })).toHaveCount(0);

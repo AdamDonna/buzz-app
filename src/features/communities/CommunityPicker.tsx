@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -15,13 +21,15 @@ import { communityFromScope } from "../relay/gifs";
 import { useRelayConnection } from "../relay/react";
 import type { Communities, Membership } from "./service";
 import {
-  CommunityDepartureError,
-  leaveCleanupFailureText,
-  leaveCommunity,
-  leaveCommunityFailureText,
-  leftCommunityText,
+  departCommunity,
+  departedText,
+  departureFailureText,
+  type Departure,
+  type DepartureIntent,
+  leaveUnsettled,
 } from "./departure";
 import { CommunityDialog } from "./CommunityDialog";
+import type { FederatedIdentity } from "../federated-identity/service";
 import type { InviteLink } from "./invite-link";
 import { CommunityPickerItem, MEMBERSHIP_SECTION } from "./CommunityPickerItem";
 import { communityDestination } from "./destination";
@@ -45,6 +53,7 @@ const noSubscription = () => () => {};
 /** Shell navigation only: selecting a community remains owned by Communities. */
 export function CommunityPicker({
   communities,
+  federatedIdentity,
   invite,
   onInviteClose,
   onSelect,
@@ -52,6 +61,7 @@ export function CommunityPicker({
   settingsCards,
 }: {
   communities: Communities;
+  federatedIdentity?: FederatedIdentity | undefined;
   invite?: (InviteLink & { requestId: number }) | undefined;
   onInviteClose?: ((requestId: number) => void) | undefined;
   settingsCards?: Pick<SettingsCards, "subscribe" | "has"> | undefined;
@@ -71,6 +81,7 @@ export function CommunityPicker({
   // The confirm dialog belongs to the picker so it outlives the item it removes.
   const [leaving, setLeaving] = useState<{
     membership: Membership;
+    intent: DepartureIntent;
     pending: boolean;
   } | null>(null);
   const wasLeaving = useRef<Membership | null>(null);
@@ -109,7 +120,7 @@ export function CommunityPicker({
   );
   const hostedAvailable = useSyncExternalStore(
     settingsCards?.subscribe ?? noSubscription,
-    () => settingsCards?.has("block.hosted-communities/hosted") ?? false,
+    () => settingsCards?.has("block.builderlab/login") ?? false,
   );
   const invites = !!onOpenTarget && membershipAvailable;
   const role = useCommunityRole(invites ? session : undefined, client.viewer);
@@ -119,63 +130,55 @@ export function CommunityPicker({
     if (onSelect) onSelect(id);
     else communities.select(id);
   };
-  /** Publish first; the device forgets the community only once the relay has
-   * released the membership, reports it never held one, or refuses the viewer
-   * as banned. Anything else keeps the membership and the menu item for a
-   * retry. */
-  const leave = async () => {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const offeringRemoval = leaving?.intent === "remove" && !leaving.pending;
+  useLayoutEffect(() => {
+    // The confirm button kept focus through the failed leave; a repeated
+    // Enter must not remove the community without a fresh choice, so focus
+    // moves before the browser handles another key.
+    if (offeringRemoval) cancelRef.current?.focus();
+  }, [offeringRemoval]);
+  /** A leave publishes first; the device forgets the community only once the
+   * relay has released the membership, reports it never held one, or refuses
+   * the viewer as banned. If the relay never settles it, for example because
+   * its domain no longer resolves, the dialog offers to remove the community
+   * from this device instead, which needs no relay. */
+  const depart = async () => {
     if (!leaving || leaving.pending) return;
-    const { membership } = leaving;
-    setLeaving({ membership, pending: true });
-    let result: Awaited<ReturnType<typeof leaveCommunity>>;
+    const { membership, intent } = leaving;
+    setLeaving({ membership, intent, pending: true });
+    let result: Departure;
     try {
-      result = await leaveCommunity(communities, membership);
+      result = await departCommunity(communities, membership, intent);
     } catch (error) {
-      // Once the relay accepts the leave, a device persistence failure has
-      // different recovery copy from a request it never settled.
-      const departure =
-        error instanceof CommunityDepartureError ? error : undefined;
+      if (intent === "leave" && leaveUnsettled(error)) {
+        setLeaving({ membership, intent: "remove", pending: false });
+        return;
+      }
       notify(
-        departure?.phase === "device"
-          ? leaveCleanupFailureText(
-              communityActionLabel(membership),
-              departure.reason,
-              departure.outcome,
-            )
-          : leaveCommunityFailureText(
-              communityActionLabel(membership),
-              departure?.reason ?? error,
-            ),
+        departureFailureText(communityActionLabel(membership), intent, error),
         "error",
       );
       setLeaving(null);
       return;
     }
-    const { wasSelected, residue, outcome } = result;
     // The community is gone from this device whatever happens next, so only
     // the service call above may read as a cleanup failure.
-    if (wasSelected) {
+    if (result.wasSelected) {
       // The service already fell back to Personal space. Telling the host too
-      // gives the leave the same navigation and ingress recovery as clicking
-      // Personal space, instead of leaving a page scoped to a gone community.
+      // gives the departure the same navigation and ingress recovery as
+      // clicking Personal space, instead of a page scoped to a gone community.
       try {
         onSelect?.(null);
       } catch (error) {
         // A host that cannot navigate is the host's failure, not the device's.
         console.error(
-          `Couldn't select Personal space after leaving ${communityName(membership)}`,
+          `Couldn't select Personal space after removing ${communityName(membership)}`,
           error,
         );
       }
     }
-    notify(
-      leftCommunityText(
-        communityActionLabel(membership),
-        outcome,
-        residue.length > 0,
-      ),
-      outcome === "left" ? "success" : "info",
-    );
+    notify(...departedText(communityActionLabel(membership), result));
     setLeaving(null);
   };
   const active = client.memberships.find(
@@ -299,7 +302,11 @@ export function CommunityPicker({
                   onMenuOpen={selected && invites ? role.refresh : undefined}
                   onLeave={(target) => {
                     setSwitcherOpen(false);
-                    setLeaving({ membership: target, pending: false });
+                    setLeaving({
+                      membership: target,
+                      intent: "leave",
+                      pending: false,
+                    });
                   }}
                 />
               );
@@ -322,7 +329,7 @@ export function CommunityPicker({
                   onOpenTarget({
                     version: 1,
                     kind: "settings",
-                    section: "block.hosted-communities/hosted",
+                    section: "block.builderlab/login",
                   });
                 }}
               />
@@ -334,6 +341,7 @@ export function CommunityPicker({
         <CommunityDialog
           key={invite ? invite.requestId : "manual"}
           communities={communities}
+          federatedIdentity={federatedIdentity}
           mode="join"
           invite={invite}
           onJoined={(id) => select(id)}
@@ -345,8 +353,16 @@ export function CommunityPicker({
       )}
       {leaving && (
         <AlertDialog
-          title={`Leave ${communityDefaultName(leaving.membership)}?`}
-          description={`This sends a leave request to the community’s relay, then removes ${communityDefaultName(leaving.membership)} from this device along with its saved drafts and reading positions. Rejoining may need a new invite.`}
+          title={
+            leaving.intent === "leave"
+              ? `Leave ${communityDefaultName(leaving.membership)}?`
+              : `Couldn’t leave ${communityDefaultName(leaving.membership)}`
+          }
+          description={
+            leaving.intent === "leave"
+              ? `This sends a leave request to the community’s relay, then removes ${communityDefaultName(leaving.membership)} from this device along with its saved drafts and reading positions. Rejoining may need a new invite.`
+              : `Its relay didn’t confirm the leave, so you may still be a member. You can remove ${communityDefaultName(leaving.membership)} from this device instead, along with its saved drafts and reading positions. This doesn’t change your membership.`
+          }
           pending={leaving.pending}
           onClose={() => setLeaving(null)}
           // The picker's own effect places focus once the dialog is gone.
@@ -354,17 +370,20 @@ export function CommunityPicker({
           actions={
             <>
               <Button
+                ref={cancelRef}
                 disabled={leaving.pending}
                 onClick={() => setLeaving(null)}
               >
                 Cancel
               </Button>
               <Button
-                variant="destructive"
+                variant={leaving.intent === "leave" ? "destructive" : "primary"}
                 loading={leaving.pending}
-                onClick={() => void leave()}
+                onClick={() => void depart()}
               >
-                Leave community
+                {leaving.intent === "leave"
+                  ? "Leave community"
+                  : "Remove from this device"}
               </Button>
             </>
           }

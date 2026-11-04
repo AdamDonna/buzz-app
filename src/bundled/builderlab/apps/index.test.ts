@@ -24,7 +24,12 @@ async function setup(
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", url);
   const session = createOAuthSession(async () => ({
     value: "session",
-    account: { subject: "auth0|owner", email: "", canUseRemoteAgents },
+    account: {
+      subject: "auth0|owner",
+      email: "",
+      canUseRemoteAgents,
+      canUseBuilderlabDecisions: false,
+    },
   }));
   await session.signIn();
   const tools = new Map<string, AddedTool>();
@@ -55,7 +60,7 @@ async function setup(
     host: { request: respond, upload: respond },
     agents: { addTool: (tool: AddedTool) => tools.set(tool.name, tool) },
   };
-  applyApps(ctx as never, session);
+  applyApps(ctx as never, session, true, session);
   const call = (name: string, args: Record<string, unknown>, context = {}) => {
     const tool = tools.get(name);
     if (!tool) throw new Error(`No tool ${name}`);
@@ -108,7 +113,8 @@ it("adds the app tools only for a tenant with an Apps control plane", async () =
     "apps_deploy",
     "apps_status",
     "apps_list",
-    "apps_share",
+    "apps_visibility",
+    "apps_community",
     "apps_open",
   ]);
   const other = await setup("https://builderlab.example");
@@ -265,26 +271,134 @@ it("keeps Public workspace authorization failures visible and performs no mutati
   expect(respond).toHaveBeenCalledTimes(1);
 });
 
-it.each([APP, "https://tiny-counter--bpsites.apps.builderlab.xyz/"])(
-  "opens %s beside the conversation the agent works in",
-  async (url) => {
-    const { call, ctx } = await setup();
-    const panel = ctx.panels.register.mock.calls[0]?.[0];
-    expect(panel.matches(url)).toBe(true);
-    await expect(
-      call("apps_open", { url }, { channel: "c1", root: "r1" }),
-    ).resolves.toBe("Opened beside the conversation.");
-    expect(ctx.panels.requestOpen).toHaveBeenCalledWith({
-      target: url,
-      channelId: "c1",
-      rootId: "r1",
-    });
-    ctx.panels.requestOpen.mockReturnValue(false);
-    await expect(
-      call("apps_open", { url }, { channel: "c1" }),
-    ).resolves.toMatch(/^Not opened/);
-    await expect(
-      call("apps_open", { url: "https://example.org/" }, { channel: "c1" }),
-    ).rejects.toThrow(/not a Builderlab app URL/);
-  },
-);
+it.each([
+  APP,
+  "https://tiny-counter--bpsites.apps.builderlab.xyz/",
+  "https://demo--workspace.apps.acme.builderlabstaging.xyz/",
+])("opens %s beside the conversation the agent works in", async (url) => {
+  const { call, ctx } = await setup();
+  const panel = ctx.panels.register.mock.calls[0]?.[0];
+  expect(panel.matches(url)).toBe(true);
+  await expect(
+    call("apps_open", { url }, { channel: "c1", root: "r1" }),
+  ).resolves.toBe("Opened beside the conversation.");
+  expect(ctx.panels.requestOpen).toHaveBeenCalledWith({
+    target: url,
+    channelId: "c1",
+    rootId: "r1",
+  });
+  ctx.panels.requestOpen.mockReturnValue(false);
+  await expect(call("apps_open", { url }, { channel: "c1" })).resolves.toMatch(
+    /^Not opened/,
+  );
+  await expect(
+    call("apps_open", { url: "https://example.org/" }, { channel: "c1" }),
+  ).rejects.toThrow(/not a Builderlab app URL/);
+});
+
+it("says who can open an app after a visibility switch", async () => {
+  const { call, responses } = await setup();
+  responses.push(
+    json({
+      ok: true,
+      app_id: "demo",
+      owner: "auth0|owner",
+      visibility: "restricted",
+      effective_viewers: ["auth0|owner", "auth0|earlier"],
+      shared_community_ids: ["buzz-alpha"],
+    }),
+  );
+  expect(
+    JSON.parse(
+      String(
+        await call("apps_visibility", { app_id: "demo", audience: "only_you" }),
+      ),
+    ),
+  ).toEqual({
+    app_id: "demo",
+    audience: "only_you",
+    shared_community_ids: ["buzz-alpha"],
+    who_can_open:
+      "Only your owner. 1 other person can also open it. So can members of the Buzz community it is shared with.",
+  });
+  await expect(
+    call("apps_visibility", { app_id: "demo", audience: "private" }),
+  ).rejects.toThrow(/workspace or only_you/);
+});
+
+it("reports whether the community now shares the app", async () => {
+  const { call, responses } = await setup();
+  responses.push(
+    json({ lifecycle_id: "life-1", community_grant_revision: 2 }),
+    json({ ok: true, shared_community_ids: [], community_grant_revision: 3 }),
+  );
+  expect(
+    JSON.parse(
+      String(
+        await call("apps_community", {
+          app_id: "demo",
+          community_id: "buzz-alpha",
+          action: "revoke",
+        }),
+      ),
+    ),
+  ).toEqual({
+    app_id: "demo",
+    community_id: "buzz-alpha",
+    shared: false,
+    shared_community_ids: [],
+  });
+});
+
+it("reports a granted community and refuses an unknown action", async () => {
+  const { call, responses } = await setup();
+  responses.push(
+    json({ lifecycle_id: "life-1", community_grant_revision: 2 }),
+    json({
+      ok: true,
+      shared_community_ids: ["buzz-alpha", "buzz-beta"],
+      community_grant_revision: 3,
+    }),
+  );
+  expect(
+    JSON.parse(
+      String(
+        await call("apps_community", {
+          app_id: "demo",
+          community_id: "buzz-alpha",
+          action: "grant",
+        }),
+      ),
+    ),
+  ).toMatchObject({ shared: true });
+  await expect(
+    call("apps_community", {
+      app_id: "demo",
+      community_id: "buzz-alpha",
+      action: "add",
+    }),
+  ).rejects.toThrow(/grant or revoke/);
+});
+
+it("counts everyone else who can still open a private app", async () => {
+  const { call, responses } = await setup();
+  responses.push(
+    json({
+      ok: true,
+      app_id: "demo",
+      owner: "auth0|owner",
+      visibility: "restricted",
+      effective_viewers: ["auth0|owner", "auth0|a", "auth0|b"],
+      shared_community_ids: ["buzz-alpha", "buzz-beta"],
+    }),
+  );
+  expect(
+    JSON.parse(
+      String(
+        await call("apps_visibility", { app_id: "demo", audience: "only_you" }),
+      ),
+    ).who_can_open,
+  ).toBe(
+    "Only your owner. 2 other people can also open it. So can members of the 2 Buzz communities it is shared with.",
+  );
+});

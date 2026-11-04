@@ -17,9 +17,10 @@ const gh: GitHubCli = async (query) => {
   }
   if (!query.startsWith("query("))
     throw new Error("Unsupported fixture action");
+  // The plugin's store reads each pull request under an alias.
   return JSON.parse(
     JSON.stringify({
-      repository: {
+      r0: {
         viewerDefaultMergeMethod: "SQUASH",
         squashMergeAllowed: true,
         mergeCommitAllowed: true,

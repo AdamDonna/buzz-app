@@ -716,12 +716,49 @@ it("cancelling the confirmation keeps the membership and returns focus to the co
   expect(h.select).not.toHaveBeenCalled();
 });
 
+it("reports the relay owner's refusal without offering device removal", async () => {
+  const user = userEvent.setup();
+  const h = harness({
+    leaveResponse: () =>
+      Response.json(
+        { error: "invalid: relay owner cannot leave" },
+        { status: 400 },
+      ),
+  });
+  render(<CommunityPicker communities={h.communities} />);
+  const dialog = await askToLeave(user, "Secondary");
+  await user.click(confirmLeave(dialog));
+  await screen.findByText(
+    "The relay owner can’t leave Secondary — https://secondary.example.",
+  );
+  expect(h.leave).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(button("Secondary")).toBeInTheDocument();
+  await waitFor(() => expect(switcher()).toHaveFocus());
+});
+
+/** Leaves through a relay that never settles the request and waits for the
+ * dialog to offer device removal instead. */
+async function failLeave(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+) {
+  await user.click(confirmLeave(await askToLeave(user, name)));
+  return await screen.findByRole("alertdialog", {
+    name: `Couldn’t leave ${name}`,
+  });
+}
+const confirmRemove = (dialog: HTMLElement) =>
+  within(dialog).getByRole("button", { name: "Remove from this device" });
+
 it.each([
+  {
+    name: "the domain no longer resolves",
+    response: () => Promise.reject(new TypeError("Failed to fetch")),
+  },
   {
     name: "the relay is unreachable",
     response: () => Response.json({ error: "upstream" }, { status: 503 }),
-    toast:
-      "Couldn’t leave Secondary — https://secondary.example. Check your connection and try again.",
   },
   {
     name: "the relay rejects the request for an unknown reason",
@@ -730,37 +767,33 @@ it.each([
         { error: "invalid: database error: secret" },
         { status: 400 },
       ),
-    toast:
-      "Couldn’t leave Secondary — https://secondary.example. Check your connection and try again.",
-  },
-  {
-    name: "the viewer owns the relay",
-    response: () =>
-      Response.json(
-        { error: "invalid: relay owner cannot leave" },
-        { status: 400 },
-      ),
-    toast: "The relay owner can’t leave Secondary — https://secondary.example.",
   },
   {
     name: "the request times out",
     response: () =>
       Promise.reject(new DOMException("timed out", "TimeoutError")),
-    toast:
-      "Couldn’t leave Secondary — https://secondary.example. Check your connection and try again.",
   },
 ])(
-  "keeps the membership when $name and leaves the item usable",
-  async ({ response, toast }) => {
+  "offers device removal when $name, and Cancel keeps the membership",
+  async ({ response }) => {
     const user = userEvent.setup();
     const h = harness({ leaveResponse: response });
     render(<CommunityPicker communities={h.communities} />);
-    const dialog = await askToLeave(user, "Secondary");
-    await user.click(confirmLeave(dialog));
-    await screen.findByText(toast);
+    const dialog = await failLeave(user, "Secondary");
+    expect(dialog).toHaveTextContent(
+      "Its relay didn’t confirm the leave, so you may still be a member.",
+    );
+    expect(dialog).toHaveTextContent("This doesn’t change your membership.");
+    // The confirm button held focus through the leave; a repeated Enter must
+    // not remove the community without a fresh choice.
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    expect(screen.queryByText(/Check your connection/)).toBeNull();
     expect(h.leaveRequests()).toHaveLength(1);
     expect(h.leave).not.toHaveBeenCalled();
+    await user.click(cancel);
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(h.leave).not.toHaveBeenCalled();
     expect(button("Secondary")).toBeInTheDocument();
     await waitFor(() => expect(switcher()).toHaveFocus());
     // The item is back to its resting label for a retry.
@@ -772,6 +805,85 @@ it.each([
     expect(sessionRequests(h.fetch)).toEqual([]);
   },
 );
+
+it("removes a community whose relay cannot be reached from this device without contacting it again", async () => {
+  const user = userEvent.setup();
+  const h = harness({
+    leaveResponse: () => Promise.reject(new TypeError("Failed to fetch")),
+  });
+  render(<CommunityPicker communities={h.communities} onSelect={h.onSelect} />);
+  const dialog = await failLeave(user, "Secondary");
+  await user.click(confirmRemove(dialog));
+  const notice = await screen.findByText(
+    "Secondary — https://secondary.example was removed from this device. Its relay didn’t confirm the leave, so you may still be a member.",
+  );
+  expect(notice.closest(".buzz-toast")).toHaveAttribute("data-type", "success");
+  // Only the failed leave reached for the relay.
+  expect(h.leaveRequests()).toHaveLength(1);
+  expect(h.leave).toHaveBeenCalledExactlyOnceWith(secondary, { purge: true });
+  expect(h.onSelect).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(
+    screen.queryByRole("button", { name: "Switch to Secondary" }),
+  ).toBeNull();
+  expect(sessionRequests(h.fetch)).toEqual([]);
+  await waitFor(() => expect(switcher()).toHaveFocus());
+});
+
+it("keeps the membership uncertain when the relay may have applied a leave whose answer was lost", async () => {
+  const user = userEvent.setup();
+  // The request reached the relay, which may have applied it; only its answer
+  // was lost to the timeout.
+  const h = harness({
+    leaveResponse: () =>
+      Promise.reject(new DOMException("timed out", "TimeoutError")),
+    leaveResidue: [{ store: "outbox", error: new Error("blocked") }],
+  });
+  render(<CommunityPicker communities={h.communities} />);
+  await user.click(confirmRemove(await failLeave(user, "Secondary")));
+  await screen.findByText(
+    "Secondary — https://secondary.example was removed from this device. Its relay didn’t confirm the leave, so you may still be a member. Some saved data couldn’t be cleared.",
+  );
+  expect(h.leaveRequests()).toHaveLength(1);
+  expect(screen.queryByText(/membership wasn’t changed/)).toBeNull();
+});
+
+it("removing the selected community from this device tells the host to select Personal space", async () => {
+  const user = userEvent.setup();
+  const h = harness({
+    leaveResponse: () => Promise.reject(new TypeError("Failed to fetch")),
+  });
+  render(<CommunityPicker communities={h.communities} onSelect={h.onSelect} />);
+  await user.click(confirmRemove(await failLeave(user, "Primary")));
+  await screen.findByText(
+    "Primary — https://primary.example was removed from this device. Its relay didn’t confirm the leave, so you may still be a member.",
+  );
+  expect(h.leave).toHaveBeenCalledWith(primary, { purge: true });
+  expect(h.onSelect).toHaveBeenCalledExactlyOnceWith(null);
+  await waitFor(() => expect(switcher()).toHaveFocus());
+  expect(switcher()).toHaveAccessibleName("Community switcher: Personal space");
+});
+
+it("keeps the community when this device cannot save its removal", async () => {
+  const user = userEvent.setup();
+  const h = harness({
+    leaveResponse: () => Promise.reject(new TypeError("Failed to fetch")),
+    leaveError: new Error(
+      "Could not save this community on this device. Try again.",
+      { cause: new Error("Setting the value exceeded the quota.") },
+    ),
+  });
+  render(<CommunityPicker communities={h.communities} onSelect={h.onSelect} />);
+  await user.click(confirmRemove(await failLeave(user, "Secondary")));
+  const notice = await screen.findByText(
+    "Couldn’t remove Secondary — https://secondary.example from this device (Setting the value exceeded the quota). Try again.",
+  );
+  expect(notice.closest(".buzz-toast")).toHaveAttribute("data-type", "error");
+  expect(h.onSelect).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(button("Secondary")).toBeInTheDocument();
+  await waitFor(() => expect(switcher()).toHaveFocus());
+});
 
 const absent =
   "You were no longer a member of Secondary — https://secondary.example, so it was removed from this device.";
@@ -883,7 +995,7 @@ it("still reports a successful leave when the host's selection callback throws",
   expect(screen.queryByText(/couldn’t finish cleaning up/)).toBeNull();
   expect(onSelect).toHaveBeenCalledWith(null);
   expect(error).toHaveBeenCalledWith(
-    "Couldn't select Personal space after leaving Primary",
+    "Couldn't select Personal space after removing Primary",
     hostError,
   );
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -1125,7 +1237,7 @@ it("shows only the active community until opened and routes creation through Hos
       onOpenTarget={onOpenTarget}
       settingsCards={{
         subscribe: () => () => {},
-        has: (key) => key === "block.hosted-communities/hosted",
+        has: (key) => key === "block.builderlab/login",
       }}
     />,
     { wrapper: ToastProvider },
@@ -1153,7 +1265,7 @@ it("shows only the active community until opened and routes creation through Hos
   expect(onOpenTarget).toHaveBeenCalledWith({
     version: 1,
     kind: "settings",
-    section: "block.hosted-communities/hosted",
+    section: "block.builderlab/login",
   });
   expect(h.select).not.toHaveBeenCalled();
   await waitFor(() =>

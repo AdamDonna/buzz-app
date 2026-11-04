@@ -9,7 +9,6 @@ import {
 } from "./read-state-storage";
 import { eventDto, type RelayEvent } from "./events";
 import type { ThreadActivitySnapshot } from "./unread";
-import type { ChannelStoreOptions } from "./store";
 import type { SavedHead } from "./persistence";
 import type { ReadStateSigning } from "./read-state-host";
 import { retainReadState } from "./read-state-retention";
@@ -38,7 +37,7 @@ afterEach(() => {
 const clock = (seconds: number) =>
   vi.spyOn(Date, "now").mockReturnValue(seconds * 1000);
 function setup(
-  options: ChannelStoreOptions = {},
+  options: Parameters<typeof createRelaySession>[1] = {},
   signer = true,
   preloaded?: (journal: ReadJournal) => ReadJournal,
   workflowAuthority = false,
@@ -111,6 +110,7 @@ function setup(
       },
     },
     {
+      readStateFloor: () => 0,
       ...options,
       readStateStorage: storage,
       readPublisherLock: async (_signal, work) => work(),
@@ -223,6 +223,16 @@ it("production live evidence feeds stable snapshots; selection/prefetch do not r
   await flush();
   expect(h.journal()?.state.frontiers).toEqual({});
   expect(h.host.sign).not.toHaveBeenCalled();
+});
+
+it("messages at or before the retention floor count as read", () => {
+  const h = setup({ readStateFloor: () => 11 });
+  h.grant("room");
+  h.emit([
+    message(h.alice, "room", "expired", 11),
+    message(h.alice, "room", "fresh", 12),
+  ]);
+  expect(h.snapshot()).toMatchObject({ observedCount: 1 });
 });
 
 it("unread repair observes history without seeding the channel window or consuming its cursor", async () => {
@@ -2778,11 +2788,14 @@ it("inbox describes a row by its newest message within the same second", () => {
     metadata(h.relay, "dm", "DM", 11, [["t", "dm"]]),
   ]);
   // Done follows Working by its ms offset alone; its id sorts first.
+  // Re-sign both on each try, so each try succeeds with probability 1/2.
   const pair = (channel: string) => {
-    const done = message(h.alice, channel, "Done", 20, [["ms", "900"]]);
     for (let i = 0; ; i++) {
-      const working = message(h.alice, channel, `Working${"!".repeat(i)}`, 20, [
-        ["ms", "100"],
+      const working = message(h.alice, channel, "Working", 20, [
+        ["ms", String(100 + i)],
+      ]);
+      const done = message(h.alice, channel, "Done", 20, [
+        ["ms", String(900 + i)],
       ]);
       if (working.id > done.id) return [working, done];
     }
@@ -3767,6 +3780,7 @@ function sharedWindows(preloaded: (journal: ReadJournal) => ReadJournal) {
         },
       },
       {
+        readStateFloor: () => 0,
         readStateStorage: storage,
         readPublisherLock: async (_signal, work) => work(),
       },

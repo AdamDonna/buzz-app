@@ -1,5 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { statusOf, type DecisionsService } from "../features/decisions/service";
+import { SettingsSectionLink } from "../features/navigation/SettingsSectionLink";
 import { OwnedContribution } from "../plugins/OwnedContribution";
 import { Field } from "../shared/design-system/ui/Field";
 import { Header, InlineHeader } from "../shared/design-system/ui/Header";
@@ -18,12 +25,14 @@ const DISCLOSURE =
 export function DecisionsSettings({
   decisions,
   active,
+  onSection,
 }: {
   decisions: Pick<
     DecisionsService,
     "backend" | "subscribe" | "setBackend" | "providers"
   >;
   active(): boolean;
+  onSection?: ((section: string) => void) | undefined;
 }) {
   const backend = useSyncExternalStore(
     decisions.subscribe,
@@ -58,8 +67,43 @@ export function DecisionsSettings({
   const needsChoice = providers.length > 1 || backend === undefined;
   if (needsChoice && !offered) setOffered(true);
   const choosable = needsChoice || (offered && providers.length > 0);
+  // A provider can go away while its controls have focus, for example when
+  // a sign-out removes Builderlab. The service notifies before React
+  // re-renders, so the old controls are still in the page: note whether
+  // focus is in this section, then hand it to the selected provider's radio,
+  // or the section itself, if the update dropped it.
+  const section = useRef<HTMLElement>(null);
+  const hadFocus = useRef(false);
+  useEffect(
+    () =>
+      decisions.subscribe(() => {
+        hadFocus.current ||= !!section.current?.contains(
+          document.activeElement,
+        );
+      }),
+    [decisions],
+  );
+  useLayoutEffect(() => {
+    if (!hadFocus.current) return;
+    hadFocus.current = false;
+    const element = section.current;
+    const focused = document.activeElement;
+    if (
+      !element ||
+      (focused && focused !== document.body && focused.isConnected)
+    )
+      return;
+    const radio = element.querySelector<HTMLElement>(
+      '[role="radio"][aria-checked="true"]',
+    );
+    (radio ?? element).focus({ preventScroll: true });
+  });
   return (
-    <section aria-labelledby="decisions-settings-title">
+    <section
+      ref={section}
+      tabIndex={-1}
+      aria-labelledby="decisions-settings-title"
+    >
       <Header
         id="decisions-settings-title"
         title="Decisions API"
@@ -67,8 +111,11 @@ export function DecisionsSettings({
       />
       {providers.length === 0 ? (
         <p role="status" className="mt-4 text-body-sm text-secondary">
-          No decision provider is turned on. Turn one on in Settings &gt;
-          Plugins.
+          No decision provider is turned on. Turn one on in{" "}
+          <SettingsSectionLink section="plugins" open={onSection}>
+            Manage plugins
+          </SettingsSectionLink>
+          .
         </p>
       ) : (
         <div
@@ -116,14 +163,18 @@ export function DecisionsSettings({
               <InlineHeader title={shown.label} />
               {shown.Settings && (
                 // A provider's settings are plugin code: if they fail, only
-                // this part does, and Settings > Plugins can turn it off.
+                // this part does, and Manage plugins can turn it off.
                 <OwnedContribution
                   entry={shown}
                   registry={{ snapshot: decisions.providers }}
                   fallback={
                     <p role="alert" className="text-body-sm text-secondary">
                       {shown.label} settings are unavailable. You can turn its
-                      plugin off in Settings &gt; Plugins.
+                      plugin off in{" "}
+                      <SettingsSectionLink section="plugins" open={onSection}>
+                        Manage plugins
+                      </SettingsSectionLink>
+                      .
                     </p>
                   }
                 >

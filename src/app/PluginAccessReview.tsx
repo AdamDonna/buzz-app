@@ -96,6 +96,17 @@ function hostDeclarations(
       icon: GlobeIcon,
       details: <code className={styles.sourcePath}>{origin}</code>,
     })),
+    ...(manifest.host?.federatedIdentity?.operations ?? []).map(
+      (operation) => ({
+        key: `federated:${operation.method} ${operation.path}`,
+        signature: `Federated authority ${manifest.host?.federatedIdentity?.authority}: ${operation.method} ${operation.path}`,
+        title: `Federated authority ${manifest.host?.federatedIdentity?.authority}:`,
+        label: `${operation.method} ${operation.path}`,
+        hint: "Buzz can call this route with your community session for the plugin.",
+        icon: GlobeIcon,
+        details: <code className={styles.sourcePath}>{operation.path}</code>,
+      }),
+    ),
     ...(manifest.host?.processes ?? []).map((process) => ({
       key: `process:${process.id}`,
       signature: `Process ${process.id}: ${JSON.stringify([process.program, ...(process.args ?? [])])}${process.bundled ? " (bundled with Buzz)" : ""} and any further arguments · stdin, full user access`,
@@ -127,6 +138,29 @@ function hostDeclarations(
             details: (
               <p className="m-0">
                 Tools served to local agents over loopback HTTP.
+              </p>
+            ),
+          },
+        ]
+      : []),
+    ...(manifest.host?.managedFiles
+      ? [
+          {
+            key: "managedFiles",
+            signature:
+              "Managed files: temporary private saves · no file reading",
+            title: "Managed files:",
+            label: "Save temporary plugin files",
+            hint: "Save up to 16 MiB at a time in host-selected private storage, without file-reading access.",
+            icon: FolderOpenIcon,
+            details: (
+              <p className="m-0">
+                Shared storage is limited to 64 MiB and 16 files; any plugin can
+                fill it. Files normally remain for 24 hours, survive plugin
+                unload and app restart, and are removed on a later save after
+                expiry. Explicit app-data erase or user deletion can remove them
+                sooner. This does not grant file reading or arbitrary-path
+                writes.
               </p>
             ),
           },

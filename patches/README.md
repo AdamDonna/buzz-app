@@ -41,6 +41,21 @@ below the viewport are excluded, so a newly buffered row there that resizes (a
 video loading, say) cannot move the reading position. Rows above and in the
 viewport, including prepended history, are still corrected.
 
+A flushed correction holds the mounted range until that correction's own scroll
+event arrives. A correction that moves nothing, or that another write undoes in
+the same task, raises no such event, so the held range outlived idle. In CI run
+41120162311 (`history-loading.spec.mjs` "a held pointer keeps its place after
+the page's reader row unmounts") Linux WebKit went idle after a 91px correction
+with no buffer below the viewport, and a row just below it did not remount
+before the test failed; the trace does not show which write left the
+correction without its event. Scroll-end now releases the held range and
+re-renders, so idle buffers both sides as above. Before that release, the
+driver's scroll-end reads the native offset, as the viewport resize path does:
+a jump whose scroll event trails the 150ms timer is consumed as its own event,
+and the range is not re-rendered at the stale pre-jump offset. A correction
+flushed after scroll-end with no later scroll event still holds its range until
+the next one.
+
 In an isolated WKWebView over real channel history (images, video, live relay),
 fast alternating flicks were measured per frame. In two instrumented runs, all 46
 DOM-coverage gap frames moved downward while shift mode held an upward direction.
@@ -312,3 +327,16 @@ entry. Close timing is unchanged. The shared value lives in
 
 Remove this part when a pinned Base UI release rests before opening a preview
 card; `src/shared/design-system/ui/Tooltip.test.tsx` covers it.
+
+
+## Reader movement during height reconciliation
+
+The element driver's automatic correction emits a synchronous, non-bubbling
+`virtua-scroll-correction` event with normalized native `before` and `after`
+offsets. ChannelTimeline's existing anchor hold uses this boundary to distinguish
+reader movement from layout correction, even when the browser coalesces both into
+one scroll event. The notification adds no scrolling policy or scheduler. The
+hold consumes reader movement before reconciling list height and rebases after its
+own correction; browser range clamping remains layout movement. Mounted regressions
+cover both model/DOM orderings and coalesced movement, while installed-driver tests
+verify actual offsets, including fractional clamping.

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { decode } from "nostr-tools/nip19";
 import { communityFromScope } from "../../features/relay/gifs";
-import { useRelayConnection } from "../../features/relay/react";
+import {
+  useProfileGeneration,
+  useRelayConnection,
+} from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import {
@@ -46,6 +49,7 @@ import {
   type CommunityMembership,
 } from "./membership";
 import { avatarMedia } from "../../shared/avatar-source";
+import { writeClipboardText } from "../../shared/clipboard";
 
 const DAY = 24 * 60 * 60;
 const EXPIRY = [1, 3, 7, 30].map((days) => ({
@@ -144,10 +148,14 @@ function Members({
     session.profiles.subscribe,
     session.profiles.snapshot,
   );
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (members)
-      void session.profiles.ensure(members.map((member) => member.pubkey));
-  }, [members, session]);
+      void session.profiles
+        .ensure(members.map((member) => member.pubkey))
+        .catch(() => {});
+  }, [members, session, profileGeneration]);
   const refresh = membership.refresh;
   const role = membershipState.role;
   const stale = !!readError;
@@ -681,8 +689,7 @@ function InviteDialog({
                   return;
                 }
                 if (!url) return;
-                navigator.clipboard
-                  .writeText(url)
+                writeClipboardText(url)
                   .then(() => {
                     setCopied(true);
                     setNotice("Invite link copied.");

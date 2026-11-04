@@ -13,6 +13,11 @@ import {
   isBuzzLink,
 } from "../../features/navigation/buzz-links";
 import { useRelayConnection, useChannelList } from "../../features/relay/react";
+import { useReauthorizedRetry } from "../../features/relay/RecoveryNotice";
+import {
+  isSignInRefusal,
+  reauthorizedOnce,
+} from "../../features/relay/recovery";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import {
@@ -41,6 +46,7 @@ import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { CopyIcon, FileTextIcon } from "../../shared/design-system/icons";
 import "./repos.css";
+import { writeClipboardText } from "../../shared/clipboard";
 
 type Open = Navigation["open"];
 const labels = {
@@ -167,6 +173,8 @@ function Destination({
     owner: typeof owner;
     data?: Loaded;
     error?: OpenFailure;
+    /** The credential generation of a read refused for missing sign-in. */
+    refused?: number;
   }>();
   const heading = useRef<HTMLHeadingElement>(null);
   useChannelList(session.channels);
@@ -192,9 +200,15 @@ function Destination({
         return { owner, data: { ...metadata, gitError: "denied" } };
       });
   }, [revoked, owner]);
+  // A repository read refused while signed out reads again once sign-in lands.
+  const reauthorized = useReauthorizedRetry(session.recovery, () =>
+    setRefresh((n) => n + 1),
+  );
   useEffect(() => {
     if (request.signal.aborted) return;
     const controller = new AbortController();
+    const failed = reauthorized.begin();
+    const sent = session.recovery?.snapshot().reauthorized ?? 0;
     const signal = AbortSignal.any([controller.signal, request.signal]);
     async function load(): Promise<Loaded> {
       if (target.kind !== "page" || (target.route && !route))
@@ -237,6 +251,7 @@ function Destination({
       } catch (error) {
         signal.throwIfAborted();
         if (tab) throw error;
+        failed(error);
         return { detail, gitError: entityFailure(error) };
       }
     }
@@ -245,22 +260,36 @@ function Destination({
         if (!signal.aborted) setState({ owner, data });
       },
       (error) => {
-        if (!signal.aborted) setState({ owner, error: entityFailure(error) });
+        if (signal.aborted) return;
+        setState({
+          owner,
+          error: entityFailure(error),
+          ...(isSignInRefusal(error) ? { refused: sent } : {}),
+        });
+        failed(error);
       },
     );
     return () => controller.abort();
-  }, [owner, request, route, session, target, path]);
+  }, [owner, request, route, session, target, path, reauthorized]);
+  const recovery = session.recovery;
   useEffect(() => {
     if (current?.error || (gitRequired && data?.gitError))
       request.complete({
         status: "failed",
         reason: current?.error ?? data?.gitError ?? "unavailable",
+        // The page goes with the failure; navigation reopens it after sign-in.
+        ...(recovery && current?.refused !== undefined
+          ? {
+              reauthorize: (reopen: () => void) =>
+                reauthorizedOnce(recovery, current.refused ?? 0, reopen),
+            }
+          : {}),
       });
     else if (data) {
       heading.current?.focus({ preventScroll: true });
       request.complete({ status: "opened" });
     }
-  }, [current, data, gitRequired, request]);
+  }, [current, data, gitRequired, request, recovery]);
   const go = (next: EntityRoute) => {
     setPath(undefined);
     void open(entityTarget(next, scope));
@@ -573,7 +602,7 @@ function CopyLink({ route }: { route: EntityRoute }) {
         title="Copy link"
         icon={<CopyIcon size={18} />}
         onClick={() =>
-          void navigator.clipboard.writeText(entityHref(route)).then(
+          void writeClipboardText(entityHref(route)).then(
             () => setStatus("Link copied"),
             () => setStatus("Could not copy link"),
           )

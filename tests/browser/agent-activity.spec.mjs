@@ -28,18 +28,23 @@ const openWorkingNow = async (page, scope) => {
   await expect(popup).toBeVisible();
   return popup;
 };
-// Agents without a loaded profile fall back to their key prefix.
+// Agents without a loaded profile fall back to their key prefix. A row whose
+// conversation is already shown opens the agent's activity instead, so match
+// the row itself rather than its separate activity icon.
 const agentRow = (popup, agent) =>
-  popup.getByRole("button", {
-    name: new RegExp(
-      `^Open (?:thread|conversation) for .*${agent.slice(0, 10)}`,
-    ),
-  });
+  popup
+    .getByRole("button", {
+      name: new RegExp(
+        `^(?:Open (?:thread|conversation) for|View) .*${agent.slice(0, 10)}`,
+      ),
+    })
+    .and(popup.locator('[data-variant="row"]'));
 const agentActivityAction = (popup, agent) =>
   popup.getByRole("button", {
     name: new RegExp(`^View .*${agent.slice(0, 10)}.* activity$`),
   });
-// The activity icon is revealed by hovering or focusing its row, like the sidebar.
+// The activity icon is revealed by hovering or focusing its row, like the sidebar;
+// a row that opens activity itself is the action.
 const viewAgentActivity = async (page, scope, agent) => {
   const popup = await openWorkingNow(page, scope);
   await agentRow(popup, agent).hover();
@@ -204,28 +209,29 @@ test("channel activity consumes telemetry, opens each agent's profile, and reset
   await expect(
     popup.getByRole("heading", { name: "Working now", exact: true }),
   ).toBeVisible();
-  // Observer turns carry no thread identity: rows open the channel, not a guess.
+  // Observer turns carry no thread identity, and the channel is already shown:
+  // rows open each agent's activity instead of guessing a thread.
   for (const agent of [first, second]) {
     await expect(agentRow(popup, agent)).toHaveAccessibleName(
-      /^Open conversation for /,
+      /^View .+ activity$/,
     );
     await expect(agentRow(popup, agent)).toContainText("Working");
     await expect(agentRow(popup, agent)).toContainText(
       "Work with unconfirmed thread",
     );
-    await expect(agentActivityAction(popup, agent)).toBeVisible();
+    await expect(agentActivityAction(popup, agent)).toHaveCount(1);
   }
   await page.keyboard.press("Escape");
   await expect(popup).toHaveCount(0);
   await page.mouse.move(0, 0);
-  // Keyboard path: real key input opens the popup and reaches the activity icon.
+  // Keyboard path: real key input opens the popup and reaches the agent's row.
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(popup).toBeVisible();
   // Keyboard opening focuses the first row a frame later. Rows can be in either
-  // order, so wait for that focus, then Tab to this agent's icon.
+  // order, so wait for that focus, then Tab to this agent's row.
   await expect(
-    popup.getByRole("button", { name: /^Open conversation for / }).first(),
+    popup.getByRole("button", { name: /^View .+ activity$/ }).first(),
   ).toBeFocused();
   const firstAction = agentActivityAction(popup, first);
   for (let step = 0; step < 3 && !(await isFocused(firstAction)); step++)
@@ -583,10 +589,11 @@ test.describe("thread activity", () => {
       );
     };
     await expectAboveForm();
-    // The thread control's row names the exact thread; no channel-wide guess.
+    // The thread control's row is already in its thread, so it opens activity;
+    // no channel-wide guess.
     await openWorkingNow(page, thread);
     await expect(agentRow(popup, agent)).toHaveAccessibleName(
-      /^Open thread for /,
+      /^View .+ activity$/,
     );
     await expect(agentRow(popup, agent)).not.toContainText("Thread ·");
     await closePopup();
@@ -629,9 +636,13 @@ test.describe("thread activity", () => {
     await expect(agentRow(popup, agent)).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(popup).toHaveCount(0);
-    await expect(
-      thread.getByRole("region", { name: "Thread messages", exact: true }),
-    ).toContainText(root.content);
+    await expectProfile(page, agent);
+    await page
+      .locator(
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      )
+      .click();
+    await openThread();
     await page.setViewportSize({ width: 390, height: 844 });
     sendTyping(root.id);
     await expect(threadTrigger).toBeVisible();
@@ -678,10 +689,11 @@ test.describe("thread activity", () => {
     expect(workingBox).toEqual(
       expect.objectContaining({ width: 26, height: 15 }),
     );
-    // Channel-level work opens the channel conversation, never an inferred thread.
+    // Channel-level work is in the conversation already shown, never an
+    // inferred thread, so its row opens the agent's activity.
     await openWorkingNow(page, composer);
     await expect(agentRow(popup, agent)).toHaveAccessibleName(
-      /^Open conversation for /,
+      /^View .+ activity$/,
     );
     await expect(agentRow(popup, agent)).toContainText("Channel conversation");
     const channelStatus = composer.locator("[data-agent-working-status]");
@@ -807,7 +819,7 @@ test.describe("thread activity", () => {
     await openWorkingNow(page, thread);
     for (const name of ["Worker 1", "Worker 2"])
       await expect(
-        popup.getByRole("button", { name: `Open thread for ${name}` }),
+        popup.getByRole("button", { name: `View ${name} activity` }),
       ).toHaveCount(1);
     await closePopup();
     await expect(humanTyping(thread)).toHaveCount(0);
@@ -905,7 +917,7 @@ test.describe("thread activity", () => {
     await openWorkingNow(page, composer);
     for (const name of ["Worker 1", "Worker 2"])
       await expect(
-        popup.getByRole("button", { name: `Open conversation for ${name}` }),
+        popup.getByRole("button", { name: `View ${name} activity` }),
       ).toHaveCount(1);
     await closePopup();
     publish(human);

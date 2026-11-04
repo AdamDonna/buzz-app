@@ -74,7 +74,7 @@ import { AttachmentDownloadContext } from "./AttachmentDownloadContext";
 import { isNativeMediaSource, isProxySource } from "./attachment-source";
 import { FileAttachment } from "./FileAttachment";
 import { useReferenceDirectory } from "./ReferenceText";
-import { MessageMarkdown } from "./MessageMarkdown";
+import { EditedMarker, MessageMarkdown } from "./MessageMarkdown";
 import { safeMessageUrl } from "../relay/message-content";
 import styles from "./Messages.module.css";
 import { usesLargeEmojiPresentation } from "./emoji-size";
@@ -102,6 +102,9 @@ export type MessageRowProps = {
   row: ChannelMessage;
   getThreadRoot?: (() => ChannelMessage | undefined) | undefined;
   session?: RelaySession | undefined;
+  /** Resolves names, channels and mentions where the row is shown without
+   * `session`, which would also offer its controls. */
+  references?: RelaySession | undefined;
   scope?: string | undefined;
   unread?: UnreadCapability | undefined;
   extensions?: ConversationExtensions | undefined;
@@ -171,6 +174,7 @@ function MessageRowContent({
   renderMessage,
   getThreadRoot,
   session,
+  references = session,
   scope,
   unread,
   extensions,
@@ -203,8 +207,8 @@ function MessageRowContent({
   agentPubkeys,
 }: MessageContentProps) {
   const [avatarFocused, setAvatarFocused] = useState(false);
-  const resolveName = useChannelIdentityNames(session, row.channelId);
-  const directory = useReferenceDirectory(session, participantProfiles);
+  const resolveName = useChannelIdentityNames(references, row.channelId);
+  const directory = useReferenceDirectory(references, participantProfiles);
   const reactions = row.reactions;
   const threadUnread = useThreadUnread(
     row.replyCount > 0 && onOpenThread ? unread : undefined,
@@ -450,6 +454,14 @@ function MessageRowContent({
     bodyShown && messageRenderer !== failedRenderer
       ? messageRenderer?.ownsAttachment
       : undefined;
+  // The host's Markdown marks an edit after the caption's last line. Plugin
+  // cards are marked inside their bubble; diffs and captionless rows after the
+  // payload.
+  const editedInBody =
+    bodyShown &&
+    !row.diff &&
+    !!displayRow.content.trim() &&
+    (!messageRenderer || messageRenderer === failedRenderer);
   const claimed = (attachment: ChannelMessage["attachments"][number]) => {
     try {
       return !!claims?.call(messageRenderer, row, attachment);
@@ -457,17 +469,36 @@ function MessageRowContent({
       return false;
     }
   };
+  // A plugin may draw an image itself, such as a shared agent's card; it
+  // stands alone rather than joining the gallery around it.
+  const attachmentRenderers = useSyncExternalStore(
+    extensions?.attachments?.subscribe ?? noSubscribe,
+    extensions?.attachments?.snapshot ?? noActions,
+    extensions?.attachments?.snapshot ?? noActions,
+  );
+  const drawn = (attachment: ChannelMessage["attachments"][number]) =>
+    attachment.kind === "image" &&
+    attachmentRenderers.some((renderer) => {
+      try {
+        return renderer.matches(attachment);
+      } catch {
+        return false;
+      }
+    });
   // Gallery-backed images and videos share a group, preserving sender order.
   const attachmentGroups: ChannelMessage["attachments"][number][][] = [];
   for (const attachment of row.attachments) {
     if (!safeMessageUrl(attachment.url) || claimed(attachment)) continue;
     const previous = attachmentGroups.at(-1);
     if (
-      ((attachment.kind === "image" || attachment.kind === "file") &&
-        previous?.[0]?.kind === attachment.kind) ||
-      (onOpenMediaReview &&
-        (attachment.kind === "image" || attachment.kind === "video") &&
-        (previous?.[0]?.kind === "image" || previous?.[0]?.kind === "video"))
+      previous?.[0] &&
+      !drawn(attachment) &&
+      !drawn(previous[0]) &&
+      (((attachment.kind === "image" || attachment.kind === "file") &&
+        previous[0].kind === attachment.kind) ||
+        (onOpenMediaReview &&
+          (attachment.kind === "image" || attachment.kind === "video") &&
+          (previous[0].kind === "image" || previous[0].kind === "video")))
     )
       previous.push(attachment);
     else attachmentGroups.push([attachment]);
@@ -497,7 +528,7 @@ function MessageRowContent({
   ) : (
     <MessageMarkdown
       directory={directory}
-      session={session}
+      session={references}
       scope={scope}
       row={displayRow}
       extensions={extensions}
@@ -506,18 +537,33 @@ function MessageRowContent({
       canOpenLink={canOpenLink}
       participantProfiles={participantProfiles}
       largeEmoji={emojiOnly}
+      edited={editedInBody && displayRow.edited}
     />
   );
+  const avatarSize = compactAvatar
+    ? "tiny"
+    : layout === "timeline"
+      ? "default"
+      : "small";
+  const authorName = (
+    <>
+      {/* Inside the name, so the byline keeps the text baseline. */}
+      {agentAuthor && !stackPrevious && (
+        <RobotIcon aria-hidden="true" className={styles.authorAgentIcon} />
+      )}
+      {name}
+    </>
+  );
   const avatar = row.workflowOwnerId ? (
-    <Avatar
-      alt="Workflow"
-      fallback="Workflow"
-      fallbackContent={<LightningIcon size={20} />}
-      shape="squircle"
-      size={
-        compactAvatar ? "small" : layout === "timeline" ? "large" : "default"
-      }
-    />
+    <span className={styles.nestedAvatar}>
+      <Avatar
+        alt="Workflow"
+        fallback="Workflow"
+        fallbackContent={<LightningIcon size={16} />}
+        shape="squircle"
+        size={avatarSize}
+      />
+    </span>
   ) : clickable ? (
     <ProfilePeek
       key={`${scope}:${viewer}:${row.authorId}`}
@@ -533,7 +579,7 @@ function MessageRowContent({
       onFocusChange={setAvatarFocused}
       trigger={
         <IconButton
-          size={layout === "timeline" ? "default" : "sm"}
+          size="sm"
           shape="round"
           aria-label={`View ${name} profile`}
           aria-describedby={presence !== "unknown" ? presenceId : undefined}
@@ -543,7 +589,7 @@ function MessageRowContent({
                 src={picture}
                 alt=""
                 fallback={name}
-                size={compactAvatar ? "small" : "fill"}
+                size={avatarSize}
                 shape={avatarShape}
                 statusBadge={presence === "unknown" ? undefined : presence}
               />
@@ -558,7 +604,7 @@ function MessageRowContent({
       }
     />
   ) : (
-    <span className={compactAvatar ? styles.nestedAvatar : "contents"}>
+    <span className={styles.nestedAvatar}>
       <Avatar
         src={picture}
         alt={
@@ -569,9 +615,7 @@ function MessageRowContent({
               : `${name} avatar`
         }
         fallback={name}
-        size={
-          compactAvatar ? "small" : layout === "timeline" ? "large" : "default"
-        }
+        size={avatarSize}
         shape={avatarShape}
         statusBadge={presence === "unknown" ? undefined : presence}
       />
@@ -796,6 +840,8 @@ function MessageRowContent({
     !shownRow &&
     !emojiOnly &&
     !row.diff;
+  // A plugin card keeps reactions in its bubble, so its mark goes above them.
+  const editedInBubble = !editedInBody && reactionsInBubble;
   const reactionContent =
     session && scope && extensions ? (
       <MessageReactions
@@ -858,6 +904,7 @@ function MessageRowContent({
       <div
         ref={rowRef}
         className={styles.message}
+        data-highlight-surface=""
         data-layout={layout}
         data-stack-previous={stackPrevious || undefined}
         data-stack-next={stackNext || undefined}
@@ -909,14 +956,42 @@ function MessageRowContent({
                 ) : (
                   <span className={styles.authorWithStatus}>
                     <strong className={styles.author}>
-                      {/* Inside the name, so the byline keeps the text baseline. */}
-                      {agentAuthor && !stackPrevious && (
-                        <RobotIcon
-                          aria-hidden="true"
-                          className={styles.authorAgentIcon}
-                        />
+                      {clickable && !stackPrevious ? (
+                        // The avatar is the group's keyboard stop and preview;
+                        // the name only answers a click. Text, not a button, so
+                        // a selection can start on it and a copy keeps it as
+                        // plain prose (no profile target).
+                        // biome-ignore lint/a11y/useSemanticElements: a <button> would block starting a text selection on the name
+                        <span
+                          role="button"
+                          tabIndex={-1}
+                          data-message-author=""
+                          className={styles.authorLink}
+                          onClick={(event) => {
+                            // A click arriving with text selected (the end of
+                            // a drag, or the second click of a double-click)
+                            // is a selection, not a request. A double-click's
+                            // first click opens the profile like any click.
+                            const selection =
+                              event.currentTarget.ownerDocument.getSelection();
+                            if (selection && !selection.isCollapsed) return;
+                            // WebKit skips focusing on pointer click, so the
+                            // profile tab's close would have no origin.
+                            event.currentTarget.focus();
+                            openLink(target);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter" && event.key !== " ")
+                              return;
+                            event.preventDefault();
+                            openLink(target);
+                          }}
+                        >
+                          {authorName}
+                        </span>
+                      ) : (
+                        authorName
                       )}
-                      {name}
                     </strong>
                     {session && !stackPrevious && (
                       <UserStatusDisplay
@@ -984,7 +1059,7 @@ function MessageRowContent({
                     <MessageMarkdown
                       key={card.start}
                       directory={directory}
-                      session={session}
+                      session={references}
                       scope={scope}
                       row={{
                         ...shown,
@@ -1051,6 +1126,7 @@ function MessageRowContent({
                   ) : (
                     body
                   )}
+                  {editedInBubble && shown.edited && <EditedMarker />}
                   {reactionsInBubble && reactionContent}
                 </div>
               )}
@@ -1122,7 +1198,7 @@ function MessageRowContent({
                         );
                       }
                       if (attachment.kind === "image") {
-                        return (
+                        const image = (
                           <AttachmentImage
                             onOpenLink={
                               canOpenLink?.(attachment.url)
@@ -1161,6 +1237,19 @@ function MessageRowContent({
                                 }
                               : {})}
                           />
+                        );
+                        return source &&
+                          extensions?.attachments &&
+                          drawn(attachment) ? (
+                          <AttachmentView
+                            key={url}
+                            registry={extensions.attachments}
+                            attachment={{ ...attachment, url }}
+                            source={source}
+                            fallback={image}
+                          />
+                        ) : (
+                          image
                         );
                       }
                       return (
@@ -1209,7 +1298,9 @@ function MessageRowContent({
                         />
                       );
                     });
-                    return images && (imageOnly || group.length >= 4) ? (
+                    return images &&
+                      !(group[0] && drawn(group[0])) &&
+                      (imageOnly || group.length >= 4) ? (
                       <div className={styles.imageGroup} key={group[0]?.url}>
                         {/* biome-ignore lint/a11y/useSemanticElements: This labels related media links, not a fieldset of form controls. */}
                         <div
@@ -1230,6 +1321,9 @@ function MessageRowContent({
                     );
                   })}
                 </div>
+              )}
+              {!editedInBody && !editedInBubble && shown.edited && (
+                <EditedMarker />
               )}
             </MessageTimestampHint>
           </div>
@@ -1302,13 +1396,14 @@ export const MessageRow = memo(function AudienceMessageRow(
 
 function AgentsMessageRow(props: MessageRowProps) {
   const { row, session, media, participantProfiles, agentPubkeys } = props;
+  const references = props.references ?? session;
   const [open, setOpen] = useState(false);
   const keepMounted = props.keepMounted;
   useEffect(() => {
     if (open) return keepMounted?.(row.id);
   }, [open, keepMounted, row.id]);
-  const resolveName = useChannelIdentityNames(session, row.channelId);
-  const directory = useReferenceDirectory(session, participantProfiles);
+  const resolveName = useChannelIdentityNames(references, row.channelId);
+  const directory = useReferenceDirectory(references, participantProfiles);
   const { recipients, body } = useMemo(
     () =>
       addressedMessage(
@@ -1378,6 +1473,7 @@ function AgentsMessageRow(props: MessageRowProps) {
             open={open}
             onOpenChange={setOpen}
             className={styles.audienceEntry}
+            data-highlight-surface=""
             // One stable anchor survives both animation directions. Not the
             // button: revealing an anchor takes it out of the Tab order.
             data-message-id={row.id}
@@ -1401,7 +1497,7 @@ function AgentsMessageRow(props: MessageRowProps) {
               ref={trigger}
               data-buzz-ui=""
               className={styles.audienceLine}
-              aria-label={`${author.name}${to.length ? ` to ${to.map((who) => who.name).join(", ")}` : ""}: ${preview}`}
+              aria-label={`${author.name}${to.length ? ` to ${to.map((who) => who.name).join(", ")}` : ""}: ${preview}${row.edited ? " (edited)" : ""}`}
             >
               {avatar(author)}
               {to.length > 0 && (
@@ -1417,6 +1513,7 @@ function AgentsMessageRow(props: MessageRowProps) {
               {!open && (
                 <span className={styles.audiencePreview}>{preview}</span>
               )}
+              {!open && row.edited && <EditedMarker />}
             </Collapsible.Trigger>
             <Collapsible.Panel
               className={`${styles.audiencePanel} ${styles.activityExpansion} ${styles.audienceBody}`}

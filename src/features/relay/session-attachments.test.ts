@@ -148,11 +148,11 @@ it("blocks upload and attachment sending after membership loss or session dispos
     h.session.attachments.upload(file, "c", new AbortController().signal),
   ).rejects.toMatchObject({ code: "denied" });
   expect(() => h.session.messages.send("c", "", [], [attachment])).toThrow(
-    /Join/,
+    /write access/,
   );
   expect(upload).not.toHaveBeenCalled();
   h.dispose();
-  expect(() => h.session.messages.send("c", "hello")).toThrow(/Join/);
+  expect(() => h.session.messages.send("c", "hello")).toThrow(/write access/);
 });
 
 it("rejects other-community attachment URLs, invalid roots and genuinely empty messages before enqueue", async () => {

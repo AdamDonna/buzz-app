@@ -80,6 +80,9 @@ export type Panel = Readonly<{
   /** Tabs opened from links stay until closed, like a channel tool's, instead
    * of giving way to the next link or thread. */
   keepOpen?: boolean;
+  /** Mount tab content on first selection, then retain it for the workspace visit.
+   * Component-provided titles and local detail tabs are also deferred. */
+  deferUntilShown?: boolean;
   component: ComponentType<PanelProps>;
 }>;
 export type RegisteredPanel = Contribution<Panel>;
@@ -203,6 +206,11 @@ export class PanelsService extends Service implements Panels {
       throw new Error("A channel placement must be bottom, side or tab");
     if (panel.keepOpen !== undefined && typeof panel.keepOpen !== "boolean")
       throw new Error("A panel's keepOpen must be a boolean");
+    if (
+      panel.deferUntilShown !== undefined &&
+      typeof panel.deferUntilShown !== "boolean"
+    )
+      throw new Error("A panel's deferUntilShown must be a boolean");
     this.panels.register(this.ctx, {
       ...panel,
       ...(panel.launcher && { launcher: Object.freeze({ ...panel.launcher }) }),

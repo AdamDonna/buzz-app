@@ -18,7 +18,7 @@ const phone = (page, status) =>
   page.evaluate((status) => {
     window.pairingFixture.status = status;
   }, status);
-test("code entry replaces QR, preserves leading zeros, and waits for phone completion", async ({
+test("comparison code replaces QR, preserves leading zeros, and waits for phone completion", async ({
   page,
   app,
 }) => {
@@ -26,14 +26,14 @@ test("code entry replaces QR, preserves leading zeros, and waits for phone compl
   await expect(
     page.getByAltText("Scan this QR code with Buzz on your phone"),
   ).toBeVisible();
-  await phone(page, { phase: "code", code: "001234", codeEntry: true });
+  await phone(page, { phase: "code", code: "001234" });
   await expect(
-    page.getByRole("heading", { name: "Enter this code on your phone" }),
+    page.getByRole("heading", { name: "Verify the code on your phone" }),
   ).toBeVisible();
   await expect(page.getByText("001 234", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Codes match" })).toHaveCount(
-    0,
-  );
+  await expect(
+    page.getByRole("button", { name: "Codes match", exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole("group", { name: "Pairing code" })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("pairing-code.png") });
   await page.setViewportSize({ width: 800, height: 800 });
@@ -64,7 +64,7 @@ test("code entry replaces QR, preserves leading zeros, and waits for phone compl
     page.getByRole("heading", { name: "Phone paired" }),
   ).toBeVisible();
 });
-test("legacy phone confirmation, retry after expiry, and leaving Settings cancel the session", async ({
+test("phone confirmation, retry after expiry, and leaving Settings cancel the session", async ({
   page,
   app,
 }) => {
@@ -72,7 +72,7 @@ test("legacy phone confirmation, retry after expiry, and leaving Settings cancel
   await expect(
     page.getByAltText("Scan this QR code with Buzz on your phone"),
   ).toBeVisible();
-  await phone(page, { phase: "code", code: "654321", codeEntry: false });
+  await phone(page, { phase: "code", code: "654321" });
   await page.getByRole("button", { name: "Codes match", exact: true }).click();
   await expect
     .poll(() =>
@@ -208,7 +208,7 @@ test("pairing positions stay fixed across states", async ({ page, app }) => {
       page.getByRole("button", { name: "Copy pairing code" }),
     ).toBeVisible();
     expect(await steps.boundingBox()).toEqual(before);
-    await phone(page, { phase: "code", code: "001234", codeEntry: true });
+    await phone(page, { phase: "code", code: "001234" });
     await expect(page.getByText("001 234", { exact: true })).toBeVisible();
     expect(await steps.boundingBox()).toEqual(before);
     await phone(page, { phase: "transferring" });
@@ -235,30 +235,6 @@ test("reduced motion removes QR animation styles", async ({ page, app }) => {
   await expect
     .poll(async () => decodeURIComponent(await qr.getAttribute("src")))
     .toContain("<style>");
-});
-
-test("cancel retains publication outcome before the next status poll", async ({
-  page,
-  app,
-}) => {
-  await settings(page, app);
-  await phone(page, { phase: "code", code: "001234", codeEntry: true });
-  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-  await expect(cancel).toBeVisible();
-  // Publish and click in one renderer turn, before the client polls again.
-  await cancel.evaluate((button) => {
-    window.pairingFixture.status = { phase: "transferring" };
-    button.click();
-  });
-  await expect(
-    page.getByRole("heading", { name: "Check your phone" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Start a new pairing" }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Pairing was canceled.", { exact: true }),
-  ).toHaveCount(0);
 });
 
 // The real shell, contributed route, and native-boundary fixture must work

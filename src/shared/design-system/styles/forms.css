@@ -301,10 +301,21 @@
     inline-size: var(--space-5);
     block-size: var(--space-5);
   }
+  .buzz-select[data-appearance="link"] .buzz-button {
+    @apply text-body-sm;
+    align-items: flex-end;
+    min-height: var(--space-6);
+    padding: 0;
+  }
   /* Artwork provides its own visual inset; keep its edge closer to the frame. */
   .buzz-select .buzz-button:has(.buzz-select-leading),
   .buzz-select .buzz-select-trigger:has(.buzz-select-leading) {
     padding-inline-start: var(--space-2);
+  }
+  /* Give the trailing caret more breathing room than the leading artwork. */
+  .buzz-select[data-variant="compact"]:not([data-appearance="link"])
+  .buzz-button:has(.buzz-select-leading) {
+    padding-inline-end: var(--space-3);
   }
   .buzz-select-value {
     min-width: 0;
@@ -333,7 +344,8 @@
     max-width: 100%;
     color: var(--text-standard);
   }
-  .buzz-select[data-variant="compact"] .buzz-button:disabled {
+  .buzz-select[data-variant="compact"]
+    .buzz-button:is(:disabled, [data-disabled]):not([data-loading]) {
     color: var(--text-unavailable);
   }
   .buzz-select[data-variant="compact"] .buzz-button-label {
@@ -384,6 +396,22 @@
     width: var(--anchor-width);
     overflow-wrap: anywhere;
   }
+  /* Roughly four avatar-and-detail rows plus search. The viewport may make
+     the list shorter; keep search fixed and every result scrollable. */
+  .buzz-select-popup[data-combobox-size="compact"] {
+    display: flex;
+    flex-direction: column;
+    max-height: min(20rem, var(--available-height));
+    overflow: hidden;
+  }
+  .buzz-select-popup[data-combobox-size="compact"] > :not([role="listbox"]) {
+    flex-shrink: 0;
+  }
+  .buzz-select-popup[data-combobox-size="compact"] > [role="listbox"] {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
   .buzz-combobox-empty:not(:empty) {
     padding: var(--space-2) var(--space-3);
     color: var(--text-subtle);
@@ -413,6 +441,11 @@
   }
   .buzz-select-value[data-placeholder] {
     color: var(--text-metadata);
+  }
+  .buzz-select
+    :is(:disabled, [data-disabled])
+    .buzz-select-value[data-placeholder] {
+    color: inherit;
   }
 
   .buzz-input-group {
@@ -451,7 +484,7 @@
   }
   .buzz-input-trailing {
     display: flex;
-    width: var(--size-control-sm);
+    min-width: var(--size-control-sm);
     flex-shrink: 0;
   }
   .buzz-input-group:has(input:is([data-invalid], [aria-invalid="true"])) {

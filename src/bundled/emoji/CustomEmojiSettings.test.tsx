@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RelayEvent } from "../../features/relay/events";
@@ -31,12 +31,17 @@ function relayStore() {
     (!filter.kinds || filter.kinds.includes(event.kind)) &&
     (!filter.authors || filter.authors.includes(event.pubkey));
   const failures: Error[] = [];
+  const readFailures: Error[] = [];
   let publicationGate: Promise<void> | undefined;
   return {
     stored,
     /** Queue a relay rejection for the next publish. */
     rejectNext(error: Error) {
       failures.push(error);
+    },
+    /** Queue a relay failure for the next kind-30030 read. */
+    failNextRead(error: Error) {
+      readFailures.push(error);
     },
     holdNextPublication(gate: Promise<void>) {
       publicationGate = gate;
@@ -52,6 +57,12 @@ function relayStore() {
           scope: origin,
           media: (url) => url,
           async query(filters) {
+            const failure = filters.some((filter) =>
+              filter.kinds?.includes(30030),
+            )
+              ? readFailures.shift()
+              : undefined;
+            if (failure) throw failure;
             return stored.filter((event) =>
               filters.some((filter) => matches(event, filter)),
             );
@@ -90,9 +101,12 @@ function relayStore() {
         snapshot: () => value,
         subscribe: () => () => {},
       } as unknown as RelayData;
-      return render(<CustomEmojiSettings relay={relay} active={() => true} />, {
-        wrapper: ToastProvider,
-      });
+      return Object.assign(
+        render(<CustomEmojiSettings relay={relay} active={() => true} />, {
+          wrapper: ToastProvider,
+        }),
+        { session: owner.session },
+      );
     },
   };
 }
@@ -431,6 +445,24 @@ it("disables removal while pending, keeps rejected emoji and permits retry", asy
   expect(await screen.findByText("Removed :mine:")).toBeVisible();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.getByRole("img", { name: ":keep:" })).toBeVisible();
+});
+it("keeps a loaded collection listed beside a failed refresh until Retry recovers it", async () => {
+  const user = userEvent.setup();
+  const store = relayStore();
+  store.stored.push(emojiSet(keypair(), ["party_bee", "wave"]));
+  const view = store.connect(null);
+  await user.click(
+    await screen.findByRole("tab", { name: "Community emoji (2)" }),
+  );
+  store.failNextRead(new Error("relay offline"));
+  await act(() => view.session.emoji.refresh());
+  expect(screen.getByRole("alert")).toHaveTextContent("relay offline");
+  expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  await user.click(screen.getByRole("button", { name: "Retry emoji" }));
+  // ensure() returns the retry's read while it is pending.
+  await act(() => view.session.emoji.ensure());
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getAllByRole("listitem")).toHaveLength(2);
 });
 it("searches the read-only community collection, clears the query and handles no matches", async () => {
   const user = userEvent.setup();

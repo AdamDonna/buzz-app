@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,7 @@ import {
   SoloWorkspaces,
   type ChatListItem,
 } from "./SoloWorkspaces";
+import { createSoloRegionFixture } from "../../features/channel-navigation/solo-navigation-testing";
 import { readView } from "../../shared/view-state";
 
 const owners: ReturnType<typeof createRelaySession>[] = [];
@@ -454,6 +456,37 @@ it("toggles a deferred collapse intent and protects a failed rename from workspa
   ).not.toHaveAttribute("aria-disabled", "true");
 });
 
+it("opens the inline rename editor from the row actions menu", async () => {
+  const h = fixture();
+  Object.assign(h.details, {
+    available: true,
+    load: vi.fn(async () => ({
+      channelId: "chat",
+      name: "Planning",
+      description: "",
+      visibility: "private",
+      labels: ["buzz.solo"],
+      canEdit: true,
+      version: "one",
+    })),
+  });
+  const owner = h.store();
+  render(h.view(owner.queries));
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", { name: "Actions for Planning" }),
+  );
+  await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
+  const field = screen.getByRole("textbox", { name: "Chat name" });
+  await waitFor(() => expect(field).not.toHaveAttribute("readonly"));
+  expect(field).toHaveFocus();
+  expect(field).toHaveValue("Planning");
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("textbox", { name: "Chat name" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Planning" })).toHaveFocus();
+  owner.dispose();
+});
+
 it("prevents rename in a deleting workspace while other workspaces remain editable", async () => {
   const h = fixture();
   Object.assign(h.details, {
@@ -771,4 +804,59 @@ it("offers Show less for retained chats in a never-expanded workspace", async ()
   expect(
     screen.getByRole("button", { name: "Show more chats in Chats" }),
   ).toHaveFocus();
+});
+
+it("rejects a late personal move through the same owner used by menu selections and drops", async () => {
+  const h = createSoloRegionFixture();
+  const write = vi.fn(async () => ({
+    sections: [{ id: "work", name: "Work", order: 0 }],
+    assignments: { owned: "work" },
+    starred: [],
+    muted: [],
+  }));
+  const preferences = createSidebarPreferencesStore({
+    read: async () => ({
+      sections: [{ id: "work", name: "Work", order: 0 }],
+      assignments: {},
+      starred: [],
+      muted: [],
+    }),
+    available: true,
+    groupsOnly: true,
+    write,
+  });
+  try {
+    await preferences.queries.ensure();
+    Object.assign(h.session, { soloPreferences: preferences.queries });
+    const channel = h.session.channels
+      .list()
+      .channels.find((item) => item.id === "owned");
+    if (!channel) throw new Error("Missing owned channel");
+    h.roster([{ ...channel, labels: ["buzz.solo"] }]);
+    render(
+      <SoloWorkspaces
+        session={h.session}
+        scope={h.scope}
+        chats={[{ id: "owned", title: "Owned" }]}
+        renderChat={(item) => <button type="button">{item.title}</button>}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Actions for Owned" }));
+    (await screen.findByRole("menuitem", { name: "Move to" })).focus();
+    await user.keyboard("{ArrowRight}");
+    const target = await screen.findByRole("menuitem", { name: "Work" });
+    await act(async () => {
+      h.roster([channel]);
+      fireEvent.click(target);
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(
+      preferences.queries.snapshot().data?.assignments.owned,
+    ).toBeUndefined();
+  } finally {
+    cleanup();
+    preferences.dispose();
+    await h.dispose();
+  }
 });

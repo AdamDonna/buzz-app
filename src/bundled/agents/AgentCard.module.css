@@ -61,6 +61,7 @@
   }
 }
 .identity {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -373,18 +374,15 @@ html[data-keyboard-navigation] .card:focus-visible {
     display: none;
   }
 }
-.nameRow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  min-width: 0;
-  max-width: 100%;
-}
 .tag {
+  position: absolute;
+  inset-block-end: calc(100% + var(--space-2));
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  color: var(--text-subtle);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  color: var(--text-on-accent);
+  background: var(--affordance-accent-prominent);
   @apply text-caption;
 }

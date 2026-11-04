@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  promptMessage,
+  promptSections,
+} from "../../features/agents/activity-transcript";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
@@ -120,8 +124,9 @@ function setup(
   const core = vi.fn(async () => null as string | null | undefined);
   /** Whether `Agents.handle` gives the agent outside a run. */
   const connection = { live: true };
+  const desktop = { spawn: host.spawn };
   const runtime = new PiRuntime(
-    { spawn: host.spawn },
+    desktop,
     (key) => ownerReads(relay, pubkeyOf(key)),
     core,
     () => added,
@@ -202,6 +207,7 @@ function setup(
   return {
     runtime,
     host,
+    desktop,
     deliver,
     runOnce,
     settled,
@@ -213,6 +219,119 @@ function setup(
     core,
   };
 }
+
+it("contains delegated file reads with the current Pi handle's policy", async () => {
+  const f = setup();
+  const spawn = f.desktop.spawn;
+  const read = vi.fn(
+    async (
+      _id: string,
+      options: import("../../features/host/service").HostProcessOptions = {},
+    ) => {
+      options.onStdout?.(btoa("reviewed Pi file"));
+      return {
+        write: vi.fn(),
+        end: vi.fn(),
+        kill: vi.fn(),
+        exited: Promise.resolve(0),
+      };
+    },
+  );
+  f.desktop.spawn = (id, options) =>
+    id === "read-protected" ? read(id, options) : spawn(id, options);
+  try {
+    await f.deliver({ type: "mention", event: reply("2", "@Pi look") }).run;
+    const processProtection = {
+      readOnlyPaths: ["/controls"],
+      hiddenPaths: ["/approval"],
+    };
+    Object.assign(f.agent, {
+      protection: {
+        processProtection,
+        assertAvailable() {},
+        check: async () => {},
+      },
+    });
+    const result = await f.runtime.tool({
+      agent: self,
+      conversation: CONVERSATION,
+      context: { channel, root: root.id },
+      name: "send",
+      arguments: { path: "report.md", audience: "everyone" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      "read-protected",
+      expect.objectContaining({
+        args: ["report.md"],
+        cwd: DEFAULT_CONFIG.workspace,
+        protection: processProtection,
+      }),
+    );
+    expect(f.published.at(-1)?.content).toBe("reviewed Pi file");
+  } finally {
+    await f.runtime.dispose();
+  }
+});
+
+it("stops a protected file read when its tool call is aborted", async () => {
+  const f = setup();
+  const spawn = f.desktop.spawn;
+  const started = deferred();
+  const exit = deferred<number>();
+  const kill = vi.fn(async () => exit.resolve(143));
+  f.desktop.spawn = async (id, options) => {
+    if (id !== "read-protected") return spawn(id, options);
+    started.resolve();
+    return { write: vi.fn(), end: vi.fn(), kill, exited: exit.promise };
+  };
+  try {
+    await f.deliver({ type: "mention", event: reply("2", "@Pi look") }).run;
+    Object.assign(f.agent, {
+      protection: {
+        processProtection: { readOnlyPaths: [], hiddenPaths: [] },
+        assertAvailable() {},
+        check: async () => {},
+      },
+    });
+    const stop = new AbortController();
+    const result = f.runtime.tool(
+      {
+        agent: self,
+        conversation: CONVERSATION,
+        context: { channel, root: root.id },
+        name: "send",
+        arguments: { path: "report.md", audience: "everyone" },
+      },
+      stop.signal,
+    );
+    await started.promise;
+    expect(kill).not.toHaveBeenCalled();
+    stop.abort();
+    expect((await result).isError).toBe(true);
+    expect(kill).toHaveBeenCalled();
+  } finally {
+    exit.resolve(0);
+    await f.runtime.dispose();
+  }
+});
+
+it("never opens a protected agent's storage in the shared host before its handle arrives", async () => {
+  const { host, runtime } = setup();
+  runtime.sync([
+    {
+      key: self,
+      pubkey: self,
+      config: DEFAULT_CONFIG,
+      protection: { provider: "test", policy: {} },
+    },
+  ] as unknown as Agent[]);
+  await expect(runtime.places(self)).rejects.toThrow(
+    "The agent isn't connected yet",
+  );
+  expect(host.requests("places")).toEqual([]);
+  expect(host.processes).toEqual([]);
+});
 
 it("hands an owner's mention to its thread's Pi conversation", async () => {
   const { host, deliver, published } = setup();
@@ -247,9 +366,10 @@ it("hands an owner's mention to its thread's Pi conversation", async () => {
   });
   const text = String(delivered?.params.text);
   expect(text).toContain(`Thread root: ${root.id}`);
-  expect(text).toContain(`Alice (${alice})`);
-  expect(text).toContain("Build is red");
-  expect(text).toContain("Content: @Pi can you look?");
+  expect(JSON.parse(promptSections(text)[1]?.body ?? "")).toMatchObject([
+    { pubkey: alice, author: "Alice", content: "Build is red" },
+  ]);
+  expect(promptMessage(promptSections(text)).text).toBe("@Pi can you look?");
   expect(String(delivered?.params.steer)).toContain("@Pi can you look?");
   expect(String(delivered?.params.instructions)).toContain(self);
   expect(turn.workingUntil).toHaveBeenCalledTimes(1);
@@ -433,7 +553,6 @@ it("says which conversations a request works in, and lists the agent's places", 
       conversation: CONVERSATION,
       channelId: channel,
       root: root.id,
-      name: "general",
       at: 110_000,
     },
   ]);
@@ -2213,3 +2332,180 @@ it("keeps foreign-channel roots out of conversation context", async () => {
     "Private root",
   );
 });
+
+/** The owner's connection to the agent's community, as the relay has it: a
+ * session whose channel list the community changes, replaced when the relay
+ * reconnects. */
+function relayFixture() {
+  const session = () => {
+    const listeners = new Set<() => void>();
+    const unsubscribe = vi.fn();
+    let channels = [{ id: channel, name: "general", channelType: "stream" }];
+    return {
+      channels: {
+        list: () => ({ channels }),
+        subscribeList: (listener: () => void) => {
+          listeners.add(listener);
+          return () => {
+            unsubscribe();
+            listeners.delete(listener);
+          };
+        },
+      },
+      unsubscribe,
+      /** Whether a channel-list listener is attached now. */
+      listening: () => listeners.size > 0,
+      /** The community made the channel private. */
+      lock() {
+        channels = [{ ...channels[0], private: true } as (typeof channels)[0]];
+        for (const listener of listeners) listener();
+      },
+    };
+  };
+  const listeners = new Set<() => void>();
+  let snapshot: { status: string; session: ReturnType<typeof session> } = {
+    status: "connecting",
+    session: session(),
+  };
+  const relay = {
+    snapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as unknown as RelayData;
+  const runtime = new PiRuntime(
+    { spawn: fakeHost().spawn },
+    (key) => ownerReads(relay, pubkeyOf(key)),
+    vi.fn(async () => null),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (_key, listener) => relay.subscribe(listener),
+  );
+  return {
+    runtime,
+    session: () => snapshot.session,
+    /** Whether anything follows the relay's snapshot. */
+    followed: () => listeners.size > 0,
+    /** The relay is ready with a new session. */
+    connect() {
+      snapshot = { status: "ready", session: session() };
+      for (const listener of listeners) listener();
+    },
+    /** The relay's state changed without replacing its session. */
+    tick() {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+it("tells of channel changes once the agent's community connects after Activity subscribed", () => {
+  const relay = relayFixture();
+  const changed = vi.fn();
+  relay.runtime.subscribeChannels(self, changed);
+  expect(relay.session().listening()).toBe(false);
+  expect(relay.runtime.channelLabel(self, channel)).toBeUndefined();
+
+  relay.connect();
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(relay.session().listening()).toBe(true);
+  expect(relay.runtime.channelLabel(self, channel)).toEqual({
+    name: "general",
+    channelType: "stream",
+  });
+  relay.session().lock();
+  expect(changed).toHaveBeenCalledTimes(2);
+  expect(relay.runtime.channelLabel(self, channel)).toMatchObject({
+    private: true,
+  });
+});
+
+it("follows the community's connection when the relay replaces its session", () => {
+  const relay = relayFixture();
+  relay.connect();
+  const first = relay.session();
+  const changed = vi.fn();
+  relay.runtime.subscribeChannels(self, changed);
+  relay.tick();
+  expect(changed).not.toHaveBeenCalled();
+
+  relay.connect();
+  expect(first.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(changed).toHaveBeenCalledTimes(1);
+  first.lock();
+  expect(changed).toHaveBeenCalledTimes(1);
+  relay.session().lock();
+  expect(changed).toHaveBeenCalledTimes(2);
+  expect(relay.runtime.channelLabel(self, channel)).toMatchObject({
+    private: true,
+  });
+});
+
+it("lets go of whichever channel-list listener it holds when Activity unsubscribes", () => {
+  const relay = relayFixture();
+  relay.connect();
+  const changed = vi.fn();
+  const stop = relay.runtime.subscribeChannels(self, changed);
+  relay.connect();
+  const current = relay.session();
+  expect(current.listening()).toBe(true);
+
+  stop();
+  expect(current.unsubscribe).toHaveBeenCalledTimes(1);
+  expect(current.listening()).toBe(false);
+  expect(relay.followed()).toBe(false);
+  current.lock();
+  relay.connect();
+  expect(changed).toHaveBeenCalledTimes(1);
+});
+
+it.each(["stop", "retire"])(
+  "keeps a protected final answer local after %s",
+  async (mode) => {
+    const answered = deferred<unknown>();
+    const check = vi.fn(async () => {});
+    const f = setup({
+      wait: () => answered.promise,
+      abort: () => ({}),
+      runtime: () => ({
+        file: "/runtime/host.mjs",
+        node: "/node/bin/node",
+        codeRoot: "/runtime",
+        nodeRoot: "/node",
+        data: "/data",
+        auth: "/auth",
+      }),
+    });
+    let stop!: () => Promise<void>;
+    const turn = f.deliver(
+      { type: "mention", event: reply("2", "@Pi look") },
+      {
+        interruptible: (fn) => {
+          stop = fn;
+        },
+      },
+    );
+    await turn.run;
+    Object.assign(f.agent, {
+      protection: {
+        key: "test",
+        stateKey: "test",
+        processProtection: { readOnlyPaths: [], hiddenPaths: [] },
+        assertAvailable() {},
+        check,
+      },
+    });
+    if (mode === "stop") await stop();
+    else await f.runtime.retire(self);
+    answered.resolve({
+      status: "done",
+      answer: 5,
+      text: "The build is green.",
+    });
+    await f.settled(turn);
+    expect(f.published).toEqual([]);
+    expect(check).not.toHaveBeenCalled();
+  },
+);

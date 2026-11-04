@@ -21,7 +21,13 @@ import { metadata, roster } from "../features/relay/testing";
 import type { ComposerInputElement } from "../features/messages/composer-dom";
 import { composerDOMFixture } from "../features/messages/composer-testing";
 import * as communityApi from "../features/communities/api";
+import { communityDestination } from "../features/communities/destination";
+import { readView, writeView } from "../shared/view-state";
 import { sidebarFixtureState } from "./sidebar-plugin.fixture";
+
+/** Any variant of the App-owned "page couldn't open" card. */
+const pageFailure =
+  /^(This page isn’t available|Can’t connect|You don’t have access to this|This link doesn’t work)$/;
 
 composerDOMFixture();
 
@@ -266,8 +272,10 @@ it("retains an owned page sidebar and its draft through Settings sections and Cl
   });
   fireEvent.change(sidebarDraft, { target: { value: "keep this draft" } });
 
+  if (!services) throw new Error("Missing services");
+  const current = services;
   await act(async () => {
-    void services?.navigation.open({
+    void current.navigation.open({
       version: 1,
       kind: "settings",
       section: "appearance",
@@ -276,9 +284,19 @@ it("retains an owned page sidebar and its draft through Settings sections and Cl
   const settings = await screen.findByRole("dialog", { name: "Settings" });
   expect(sidebarDraft).toBeInTheDocument();
   expect(sidebarDraft).toHaveValue("keep this draft");
-  await user.click(
-    within(settings).getByRole("button", { name: "Notifications" }),
-  );
+  // A section button opens its section with the selected community's scope
+  // (openSettingsSection in App.tsx). Make that same navigation here; clicking
+  // the buttons is covered by the unsent-conversation journey below.
+  const { viewer, selected } = current.communities.snapshot();
+  if (!viewer || !selected) throw new Error("Missing selected community");
+  await act(async () => {
+    void current.navigation.open({
+      version: 1,
+      kind: "settings",
+      section: "notifications",
+      scope: { viewer, communityOrigin: communityDestination(selected).url },
+    });
+  });
   await within(settings).findByRole("heading", { name: "Notifications" });
   expect(sidebarDraft).toBeInTheDocument();
   await user.click(
@@ -358,6 +376,67 @@ it("recovers a failed sidebar registration after disabling and re-enabling its p
   }
 });
 
+it("shares its resizable width between a page sidebar and Messages, including the fallback", async () => {
+  await setup();
+  const appServices = services;
+  if (!appServices) throw new Error("Expected app services after setup");
+  const scope =
+    appServices.communities.relay.snapshot().scope ?? "disconnected";
+  act(() => writeView(scope, "channel-sidebar", { width: 344 }));
+  const sidebarColumn = () =>
+    screen.getByRole("separator", { name: "Resize sidebar" })
+      .previousElementSibling as HTMLElement;
+
+  await openSidebarPage("main", "first");
+  expect(await screen.findByText("Beacon page content")).toBeVisible();
+  expect(sidebarColumn()).toHaveStyle({ width: "344px" });
+  fireEvent.keyDown(screen.getByRole("separator", { name: "Resize sidebar" }), {
+    key: "End",
+  });
+  expect(sidebarColumn()).toHaveStyle({ width: "520px" });
+  expect(readView(scope, "channel-sidebar", null)).toMatchObject({
+    width: 520,
+  });
+
+  await act(async () => {
+    await appServices.navigation.open({
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.channels",
+      pageId: "channels",
+    });
+  });
+  expect(
+    await screen.findByRole("complementary", { name: "Sidebar" }),
+  ).toBeVisible();
+  expect(sidebarColumn()).toHaveStyle({ width: "520px" });
+  fireEvent.keyDown(screen.getByRole("separator", { name: "Resize sidebar" }), {
+    key: "Home",
+  });
+  expect(sidebarColumn()).toHaveStyle({ width: "220px" });
+  expect(readView(scope, "channel-sidebar", null)).toMatchObject({
+    width: 220,
+  });
+
+  await openSidebarPage("main", "second");
+  expect(
+    await within(
+      screen.getByRole("complementary", { name: "Beacon sidebar" }),
+    ).findByText("main:second"),
+  ).toBeVisible();
+  expect(sidebarColumn()).toHaveStyle({ width: "220px" });
+
+  await openSidebarPage("main", "broken-sidebar");
+  expect(
+    await screen.findByText("This page’s sidebar is unavailable."),
+  ).toBeVisible();
+  expect(sidebarColumn()).toHaveStyle({ width: "220px" });
+  fireEvent.keyDown(screen.getByRole("separator", { name: "Resize sidebar" }), {
+    key: "End",
+  });
+  expect(sidebarColumn()).toHaveStyle({ width: "520px" });
+});
+
 it.each([
   { when: "before leaving", action: "Dismiss", from: "Messages" },
   { when: "while away", action: "Retry", from: "Messages" },
@@ -421,7 +500,7 @@ it.each([
           screen.getByRole("dialog", { name: "Couldn’t mute Planning" }),
         ).toHaveTextContent("Relay request failed (503)");
       }
-      const returnToMessages = async () => {
+      const returnToMessages = async (muted = false) => {
         await act(async () => {
           await services?.navigation.open({
             version: 1,
@@ -433,7 +512,9 @@ it.each([
         const sidebar = await screen.findByRole("complementary", {
           name: "Sidebar",
         });
-        return within(sidebar).findByRole("button", { name: "Planning" });
+        return within(sidebar).findByRole("button", {
+          name: muted ? /^Planning\s*Muted$/ : "Planning",
+        });
       };
       const returnedRow =
         from === "Messages" ? await returnToMessages() : undefined;
@@ -471,7 +552,7 @@ it.each([
           screen.getByRole("complementary", { name: "Beacon sidebar" }),
         ).toBeVisible();
         expect(screen.getByText("Beacon page content")).toBeVisible();
-        await returnToMessages();
+        await returnToMessages(action === "Retry");
         expect(
           screen.queryByRole("dialog", { name: "Couldn’t mute Planning" }),
         ).toBeNull();
@@ -520,9 +601,7 @@ it.each([
     ).toMatchObject({ status: "failed", reason });
   });
   expect(
-    await screen.findByRole("heading", {
-      name: "This destination couldn’t open",
-    }),
+    await screen.findByRole("heading", { name: pageFailure }),
   ).toBeVisible();
   expect(screen.queryByText("Beacon page content")).not.toBeInTheDocument();
   expect(
@@ -587,26 +666,19 @@ it("opens profile settings from the account menu header", async () => {
   ).toHaveValue("Community name");
 });
 
-it("reopens profile settings from the same session cache while refreshing", async () => {
-  const user = await setup();
+// Startup has already cached the viewer's profile in this session, so the
+// first open is served from that cache.
+it("opens profile settings from the session cache while refreshing", async () => {
+  await setup();
   if (!services) throw new Error("Missing services");
   const current = services;
-  const openProfile = () =>
-    act(async () => {
-      void current.navigation.open({
-        version: 1,
-        kind: "settings",
-        section: "profile",
-      });
-    });
-  await openProfile();
-  const settings = await screen.findByRole("dialog", { name: "Settings" });
-  await within(settings).findByRole("textbox", { name: "Display name" });
-  await user.click(
-    within(settings).getByRole("button", { name: "Close Settings" }),
-  );
+  // ProfileButton fills that cache from its own background read, after the
+  // relay is ready. Settings seeds its loaded profile from the cache once, on
+  // mount, so wait for the fixture profile to land before opening.
   await waitFor(() =>
-    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull(),
+    expect(current.relay.snapshot().session?.profiles.event?.(viewer)?.id).toBe(
+      profile.id,
+    ),
   );
   let release = () => {};
   const read = new Promise<void>((resolve) => {
@@ -619,19 +691,36 @@ it("reopens profile settings from the same session cache while refreshing", asyn
       await read;
       return inspect(...args);
     });
+  // Reopening uses the cached value immediately. Control delayed loading
+  // feedback so a busy runner cannot cross its one-second boundary first.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    await openProfile();
+    await act(async () => {
+      void current.navigation.open({
+        version: 1,
+        kind: "settings",
+        section: "profile",
+      });
+    });
     expect(refresh).toHaveBeenCalledWith(
       origin,
       current.relay.snapshot().session,
     );
-    const reopened = screen.getByRole("dialog", { name: "Settings" });
+    const settings = screen.getByRole("dialog", { name: "Settings" });
     expect(
-      within(reopened).getByRole("textbox", { name: "Display name" }),
+      within(settings).getByRole("textbox", { name: "Display name" }),
     ).toHaveValue("Community name");
-    expect(within(reopened).queryByText(/Loading your profile/)).toBeNull();
+    expect(within(settings).queryByText(/Loading your profile/)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(within(settings).getByText(/Loading your profile/)).toBeVisible();
+    expect(
+      within(settings).getByRole("textbox", { name: "Display name" }),
+    ).toHaveValue("Community name");
   } finally {
     await act(async () => release());
+    vi.useRealTimers();
   }
 });
 
@@ -844,51 +933,176 @@ it("asks before any Settings dismissal discards unsaved profile edits", async ()
   ).toBeNull();
 }, 15_000);
 
-it("retires an open discard prompt once the pending save is sent", async () => {
+it.each(["pending", "unavailable"] as const)(
+  "retains a dirty Profile through a same-scope %s Settings destination",
+  async (state) => {
+    const user = await setup();
+    if (!services) throw new Error("Missing app services");
+    const current = services;
+    const profile = {
+      version: 1,
+      kind: "settings",
+      section: "profile",
+    } as const;
+    await act(async () => {
+      void current.navigation.open(profile);
+    });
+    await screen.findByRole("textbox", { name: "Display name" });
+    await act(async () => {
+      void current.navigation.open({
+        ...profile,
+        section: "agents",
+        provider: "test.sidebar/missing",
+      });
+    });
+    await screen.findByText(pageFailure);
+    act(() => current.navigation.back());
+    const name = await screen.findByRole("textbox", { name: "Display name" });
+    await waitFor(() => expect(name).toHaveValue("Community name"));
+    await user.clear(name);
+    await user.type(name, "Keep this draft");
+    if (state === "pending") {
+      const snapshot = current.plugins.snapshot();
+      const sidebar = snapshot.activation["test.sidebar"];
+      if (!sidebar) throw new Error("Missing sidebar plugin");
+      vi.spyOn(current.plugins, "snapshot").mockReturnValue({
+        ...snapshot,
+        activation: {
+          ...snapshot.activation,
+          "test.sidebar": {
+            ...sidebar,
+            status: "starting",
+          },
+        },
+      });
+    }
+    act(() => current.navigation.forward());
+    if (state === "pending")
+      await waitFor(() =>
+        expect(
+          document.querySelector('.page-status [aria-busy="true"]'),
+        ).not.toBeNull(),
+      );
+    else await screen.findByText(pageFailure);
+    expect(name).toBeInTheDocument();
+    expect(name).not.toBeVisible();
+    act(() => current.navigation.back());
+    expect(await screen.findByRole("textbox", { name: "Display name" })).toBe(
+      name,
+    );
+    expect(name).toHaveValue("Keep this draft");
+  },
+);
+
+it("drops the retained draft after an accepted departure to another account's unavailable Settings", async () => {
   const user = await setup();
-  let release = () => {};
-  const read = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const inspect = communityApi.inspectProfile;
-  let holding = false;
-  vi.spyOn(communityApi, "inspectProfile").mockImplementation(
-    async (...args) => {
-      if (holding) await read;
-      return inspect(...args);
-    },
-  );
-  const publish = vi
-    .spyOn(communityApi, "publishProfile")
-    .mockImplementation(() => new Promise(() => {}));
+  if (!services) throw new Error("Missing app services");
+  const current = services;
   await act(async () => {
-    void services?.navigation.open({
+    void current.navigation.open({
       version: 1,
       kind: "settings",
       section: "profile",
     });
   });
-  const settings = await screen.findByRole("dialog", { name: "Settings" });
-  const name = await within(settings).findByRole("textbox", {
-    name: "Display name",
-  });
+  const name = await screen.findByRole("textbox", { name: "Display name" });
   await waitFor(() => expect(name).toHaveValue("Community name"));
   await user.clear(name);
-  await user.type(name, "Pending name");
-  holding = true;
-  await user.click(within(settings).getByRole("button", { name: "Save" }));
+  await user.type(name, "Discard this draft");
+  act(() => {
+    void current.navigation.open({
+      version: 1,
+      kind: "settings",
+      section: "profile",
+      scope: { viewer: "a".repeat(64), communityOrigin: origin },
+    });
+  });
+  const prompt = await screen.findByRole("alertdialog", {
+    name: "Discard changes?",
+  });
   await user.click(
-    within(settings).getByRole("button", { name: "Close Settings" }),
+    within(prompt).getByRole("button", { name: "Discard changes" }),
   );
-  await screen.findByRole("alertdialog", { name: "Discard changes?" });
-  // The save is sent behind the prompt; nothing is left to discard.
-  holding = false;
-  await act(async () => release());
-  await waitFor(() => expect(publish).toHaveBeenCalledOnce());
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("alertdialog", { name: "Discard changes?" }),
-    ).toBeNull(),
-  );
-  expect(screen.getByRole("dialog", { name: "Settings" })).toBe(settings);
-}, 15_000);
+  await screen.findByText(pageFailure);
+  expect(name).not.toBeInTheDocument();
+  act(() => current.navigation.back());
+  expect(
+    await screen.findByRole("textbox", { name: "Display name" }),
+  ).toHaveValue("Community name");
+});
+
+it.each(["Close", "Back"] as const)(
+  "clears the %s discard prompt when the pending save is sent",
+  async (exit) => {
+    const user = await setup();
+    let release = () => {};
+    const read = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inspect = communityApi.inspectProfile;
+    let holding = false;
+    vi.spyOn(communityApi, "inspectProfile").mockImplementation(
+      async (...args) => {
+        if (holding) await read;
+        return inspect(...args);
+      },
+    );
+    const publish = vi
+      .spyOn(communityApi, "publishProfile")
+      .mockImplementation(async (_id, next) => {
+        vi.mocked(communityApi.inspectProfile).mockResolvedValue({
+          exists: true,
+          profile: next,
+          existing: {},
+        });
+      });
+    await act(async () => {
+      void services?.navigation.open({
+        version: 1,
+        kind: "settings",
+        section: "profile",
+      });
+    });
+    const settings = await screen.findByRole("dialog", { name: "Settings" });
+    const name = await within(settings).findByRole("textbox", {
+      name: "Display name",
+    });
+    await waitFor(() => expect(name).toHaveValue("Community name"));
+    await user.clear(name);
+    await user.type(name, "Pending name");
+    holding = true;
+    await user.click(within(settings).getByRole("button", { name: "Save" }));
+    if (exit === "Back") act(() => services?.navigation.back());
+    else
+      await user.click(
+        within(settings).getByRole("button", { name: "Close Settings" }),
+      );
+    await screen.findByRole("alertdialog", { name: "Discard changes?" });
+    // The save is sent behind the prompt; nothing is left to discard.
+    holding = false;
+    await act(async () => release());
+    await waitFor(() => expect(publish).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("alertdialog", { name: "Discard changes?" }),
+      ).toBeNull(),
+    );
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBe(settings);
+    await waitFor(() => expect(name).toBeEnabled());
+    await user.clear(name);
+    await user.type(name, "Another draft");
+    await user.click(
+      within(settings).getByRole("button", { name: "Close Settings" }),
+    );
+    const prompt = await screen.findByRole("alertdialog", {
+      name: "Discard changes?",
+    });
+    await user.click(
+      within(prompt).getByRole("button", { name: "Discard changes" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull(),
+    );
+  },
+  15_000,
+);

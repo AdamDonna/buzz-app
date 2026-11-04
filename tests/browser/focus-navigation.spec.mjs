@@ -369,8 +369,13 @@ test("covered panes and notifications preserve focus and F6 recovery", async ({
   const mainTab = main.getByRole("tab", { name: "Alpha", exact: true });
   await mainTab.evaluate((tab) => {
     const bounds = tab.getBoundingClientRect();
-    tab.closest("[data-shell-tone]").scrollLeft +=
-      bounds.x + bounds.width / 2 + 1;
+    const shell = tab.closest("[data-shell-tone]");
+    // How far the shell overflows depends on the pages in its header, so
+    // guarantee room to scroll the tab fully offscreen.
+    const room = document.createElement("div");
+    room.style.cssText = "flex:none;height:0;width:200vw";
+    shell.append(room);
+    shell.scrollLeft += bounds.x + bounds.width / 2 + 1;
   });
   await expect
     .poll(() =>

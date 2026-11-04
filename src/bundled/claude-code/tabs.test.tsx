@@ -34,6 +34,8 @@ import {
   type AgentStore,
 } from "../../features/agents/state";
 import type { HostProcessOptions } from "../../features/host/service";
+import type { ChannelSummary } from "../../features/relay/contracts";
+import type { RelayData } from "../../features/relay/service";
 import { ClaudeLogoIcon } from "../../shared/design-system/icons";
 import { manifestProcesses } from "./claude-testing";
 import { apply, inject } from "./index";
@@ -129,9 +131,12 @@ function applied({
   files = {},
   catalog = { listed: true },
   storage,
+  channels,
 }: {
   /** Agent storage; this page's localStorage without it. */
   storage?: AgentStore;
+  /** The community's channels; no community connection without them. */
+  channels?: readonly ChannelSummary[];
   loggedIn?: boolean;
   available?: boolean;
   version?: string;
@@ -255,7 +260,14 @@ function applied({
         type = registered;
       },
       snapshot: () => ({ status: "ready", agents: [], running: [] }),
-      relay: () => undefined,
+      relay: () =>
+        channels &&
+        ({
+          snapshot: () => ({
+            status: "ready",
+            session: { channels: { list: () => ({ channels }) } },
+          }),
+        } as unknown as RelayData),
       subscribe: () => () => undefined,
     },
     effect: vi.fn(),
@@ -282,6 +294,48 @@ async function choose(label: string, option: string) {
   await user.click(screen.getByRole("combobox", { name: label }));
   await user.click(await screen.findByRole("option", { name: option }));
 }
+
+it("shows each saved conversation's channel with the sidebar's icon", () => {
+  localStorage.setItem(
+    "buzz.claude-code.sessions.v1",
+    JSON.stringify({
+      [agent().key]: {
+        public: { id: "s1", seen: 0, at: 4 },
+        private: { id: "s2", seen: 0, at: 3 },
+        dm: { id: "s3", seen: 0, at: 2 },
+        solo: { id: "s4", seen: 0, at: 1 },
+      },
+    }),
+  );
+  const Activity = tab(
+    installed({
+      channels: [
+        { id: "public", name: "general", channelType: "stream" },
+        { id: "private", name: "plans", channelType: "stream", private: true },
+        { id: "dm", name: "Pinky", channelType: "dm", hidden: true },
+        { id: "solo", name: "Notes", channelType: "solo", private: true },
+      ],
+    }).type,
+    1,
+  );
+  render(<Activity agent={agent()} save={vi.fn()} />);
+  const shown = (row: HTMLElement) => {
+    const name = within(row).getByTitle(/ · channel$/);
+    const icon = name.querySelector("svg")?.getAttribute("class");
+    return `${icon?.match(/tabler-icon-[\w-]+/)?.[0]} ${name.textContent}`;
+  };
+  expect(
+    screen.getAllByRole("listitem").map((row) => shown(row as HTMLElement)),
+  ).toEqual([
+    "tabler-icon-hash general",
+    "tabler-icon-lock plans",
+    "tabler-icon-message-circle Pinky",
+    "tabler-icon-message-circle Notes",
+  ]);
+  expect(
+    screen.getByRole("button", { name: "View transcript: plans · channel" }),
+  ).toBeVisible();
+});
 
 it("lists saved conversations and shows one's transcript, or that it is gone", async () => {
   const thread = `channel/${"e".repeat(64)}`;
@@ -350,6 +404,87 @@ it("lists saved conversations and shows one's transcript, or that it is gone", a
   ).toBeVisible();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(save).not.toHaveBeenCalled();
+});
+
+it("opens the conversation's transcript when opened from its activity, once", async () => {
+  const root = "e".repeat(64);
+  localStorage.setItem(
+    "buzz.claude-code.sessions.v1",
+    JSON.stringify({
+      [agent().key]: { [`channel/${root}`]: { id: "kept", seen: 0, at: 2 } },
+    }),
+  );
+  const transcript = JSON.stringify({
+    type: "assistant",
+    uuid: "u1",
+    timestamp: "2026-10-09T10:00:05Z",
+    message: { content: [{ type: "text", text: "Two files." }] },
+  });
+  const Activity = tab(
+    installed({ files: { "./-Users-me--buzz/kept.jsonl": transcript } }).type,
+    1,
+  );
+  const conversation = { channelId: "channel", rootId: root };
+  const { unmount } = render(
+    <Activity
+      agent={agent()}
+      save={vi.fn()}
+      conversation={conversation}
+      initialTranscript={{ opening: 1, done: () => undefined }}
+    />,
+  );
+  const user = userEvent.setup();
+  expect(await screen.findByText("Two files.")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Back to profile" }));
+  expect(
+    screen.getByRole("button", {
+      name: "View transcript: channel",
+    }),
+  ).toBeVisible();
+  expect(screen.queryByText("Two files.")).toBeNull();
+  unmount();
+  // Opened from the profile itself, it lists conversations instead.
+  render(
+    <Activity agent={agent()} save={vi.fn()} conversation={conversation} />,
+  );
+  expect(
+    screen.getByRole("button", {
+      name: "View transcript: channel",
+    }),
+  ).toBeVisible();
+  expect(screen.queryByText("Two files.")).toBeNull();
+});
+
+it("opens a channel's session transcript when opened from one of its threads' activity", async () => {
+  // A Solo chat, DM or channel-scoped agent keeps one session per channel, so
+  // the thread's own lookup finds it only after the profile is shown.
+  localStorage.setItem(
+    "buzz.claude-code.sessions.v1",
+    JSON.stringify({
+      [agent().key]: { channel: { id: "kept", seen: 0, at: 2 } },
+    }),
+  );
+  const transcript = JSON.stringify({
+    type: "assistant",
+    uuid: "u1",
+    timestamp: "2026-10-09T10:00:05Z",
+    message: { content: [{ type: "text", text: "Two files." }] },
+  });
+  const Activity = tab(
+    installed({ files: { "./-Users-me--buzz/kept.jsonl": transcript } }).type,
+    1,
+  );
+  const done = vi.fn();
+  render(
+    <Activity
+      agent={agent()}
+      save={vi.fn()}
+      conversation={{ channelId: "channel", rootId: "e".repeat(64) }}
+      initialTranscript={{ opening: 1, done }}
+    />,
+  );
+  expect(await screen.findByText("Two files.")).toBeVisible();
+  expect(done).toHaveBeenCalledTimes(1);
 });
 
 it("shows the transcript and that sessions may be missing when some history cannot be read", async () => {
@@ -421,6 +556,11 @@ it("sets the conversation the profile was opened from apart from recent conversa
   expect(
     screen.getByRole("button", { name: "View transcript: channel · channel" }),
   ).toBeVisible();
+  // Unlisted by the community, their kind is unknown: no icon claims one.
+  expect(within(opened).getByTitle("channel").querySelector("svg")).toBeNull();
+  expect(
+    screen.getByTitle("channel · channel").querySelector("svg"),
+  ).toBeNull();
 });
 
 it("finds the thread's Claude session another build started", async () => {
@@ -460,6 +600,55 @@ it("finds the thread's Claude session another build started", async () => {
   await open();
   expect(searched).toBeGreaterThan(0);
   expect(searches()).toBe(searched);
+});
+
+it("shows the channel's current kind for a session another build started", async () => {
+  const root = "f".repeat(64);
+  const started = JSON.stringify({
+    type: "user",
+    uuid: "u1",
+    timestamp: "2026-10-09T10:00:00Z",
+    message: {
+      content: `<context>\nScope: thread\nSession scope: thread\nChannel: dev (#channel)\nThread root: ${root}\nAgent: ${agent().key}\n</context>\n\n<buzz-event>\nEvent ID: e\nContent: what changed?\nTags: []\n</buzz-event>`,
+    },
+  });
+  const channels: ChannelSummary[] = [
+    { id: "channel", name: "dev", channelType: "stream" },
+  ];
+  const { type, spawn } = installed({
+    files: { "./-Users-me--buzz/elsewhere.jsonl": started },
+    channels,
+  });
+  const Activity = tab(type, 1);
+  // A new element each time, so that rerendering renders the tab again.
+  const shown = () => (
+    <Activity
+      agent={agent()}
+      save={vi.fn()}
+      conversation={{ channelId: "channel", rootId: root }}
+    />
+  );
+  const view = render(shown());
+  const here = screen.getByRole("region", { name: "This thread" });
+  await within(here).findByRole("button", { name: /^View transcript/ });
+  expect(within(here).getByTitle("dev").querySelector("svg")).toHaveClass(
+    "tabler-icon-hash",
+  );
+  const searched = spawn.mock.calls.filter(([id]) => id === "starts").length;
+
+  channels[0] = {
+    id: "channel",
+    name: "plans",
+    channelType: "stream",
+    private: true,
+  };
+  view.rerender(shown());
+  expect(within(here).getByTitle("plans").querySelector("svg")).toHaveClass(
+    "tabler-icon-lock",
+  );
+  expect(spawn.mock.calls.filter(([id]) => id === "starts").length).toBe(
+    searched,
+  );
 });
 
 it("is an agent type on the desktop app", () => {
@@ -1123,6 +1312,9 @@ it.each(["Identity", "Settings"])(
     const agents = {
       save,
       configHistory: () => undefined,
+      addedTabs: () => [],
+      registerTab: () => {},
+      controlAttention: () => {},
       memberships: () => [],
       subscribe: () => () => {},
     } as unknown as Agents;
@@ -1322,4 +1514,30 @@ it("keeps same-channel recent threads visibly distinguishable", () => {
       expect.stringContaining("Thread ffffffff"),
     ]),
   );
+});
+
+it("focuses the code only when its compact sign-in disclosure is expanded", async () => {
+  const { type } = installed({ loggedIn: false });
+  const Model = type.CreateModel;
+  if (!Model) throw new Error("Missing model controls");
+  const user = userEvent.setup();
+  render(<Model config={DEFAULT_CONFIG} onChange={vi.fn()} disabled={false} />);
+  await user.click(await screen.findByRole("button", { name: "Sign in" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Sign in to Claude",
+  });
+  await user.click(within(dialog).getByRole("button", { name: "Sign in" }));
+  const expand = await screen.findByRole("button", { name: "Enter a code" });
+  expect(screen.queryByLabelText("Sign-in code")).toBeNull();
+  await user.click(expand);
+  const code = await screen.findByLabelText("Sign-in code");
+  await waitFor(() => expect(code).toHaveFocus());
+  await user.type(code, "retained-code");
+  await user.click(expand);
+  expect(screen.queryByLabelText("Sign-in code")).toBeNull();
+  await user.click(expand);
+  await waitFor(() =>
+    expect(screen.getByLabelText("Sign-in code")).toHaveFocus(),
+  );
+  expect(screen.getByLabelText("Sign-in code")).toHaveValue("retained-code");
 });

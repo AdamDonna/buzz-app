@@ -23,6 +23,7 @@ function browser(stored: string | null = null, systemDark = false) {
     getItem: vi.fn((key: string) => values.get(key) ?? null),
     setItem: vi.fn((key: string, value: string) => values.set(key, value)),
   };
+  let frames: (() => void)[] = [];
   let dark = systemDark;
   const schemeListeners = new Set<() => void>();
   const scheme = {
@@ -39,10 +40,8 @@ function browser(stored: string | null = null, systemDark = false) {
     document: {
       documentElement: root,
       querySelector: () => meta,
-      createElement: () => ({ textContent: "", remove: vi.fn() }),
-      head: { append: vi.fn() },
     },
-    requestAnimationFrame: (callback: () => void) => callback(),
+    requestAnimationFrame: (callback: () => void) => frames.push(callback),
     getComputedStyle: () => ({
       getPropertyValue: (name: string) =>
         name === "--bg-app"
@@ -64,6 +63,11 @@ function browser(stored: string | null = null, systemDark = false) {
     listeners,
     schemeListeners,
     values,
+    frame() {
+      const pending = frames;
+      frames = [];
+      for (const callback of pending) callback();
+    },
     systemDark(value: boolean) {
       dark = value;
       for (const fn of schemeListeners) fn();
@@ -137,6 +141,21 @@ it("persists a choice, applies the document, notifies, and restores on a new lif
   const next = createAppearance(b.host);
   expect(next.snapshot().mode).toBe("light");
   next.dispose();
+});
+
+it("suppresses transitions until two frames after the latest palette change", () => {
+  const b = browser();
+  const app = createAppearance(b.host);
+  expect(b.root.dataset.paletteChanging).toBeUndefined();
+  app.setMode("dark");
+  expect(b.root.dataset.paletteChanging).toBe("");
+  b.frame();
+  app.setAccent("cobalt");
+  b.frame();
+  expect(b.root.dataset.paletteChanging).toBe("");
+  b.frame();
+  expect(b.root.dataset.paletteChanging).toBeUndefined();
+  app.dispose();
 });
 
 it("denied reads do not crash either startup path; writes can fail visibly and retry", () => {

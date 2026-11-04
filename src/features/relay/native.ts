@@ -1,3 +1,8 @@
+import {
+  verifiedProfileAuthority,
+  verifiedProfileDiscovery,
+} from "./verified-profile";
+import { nativeSocket } from "./native-socket";
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { EventTemplate } from "nostr-tools";
 import { communityDestination, relayOrigin } from "../communities/destination";
@@ -94,7 +99,16 @@ export const nativeWriteKinds = [
   ...WORKFLOW_KINDS,
 ] as const;
 
-/** Cancellation fences JS results; a dispatched native write may still complete. */
+/** Searches and reads native code may abandon. Mirrors `cancellable_read` in
+ * `src-tauri/src/relay.rs`. */
+const CANCELLABLE_READS = new Set([
+  "/query",
+  "/profiles/search",
+  "/gifs/search",
+]);
+
+/** Cancellation stops a native read at once; a dispatched native write may
+ * still complete, so it only fences the JS result. */
 export async function nativeRelayRequest(
   community: string,
   path: string,
@@ -106,20 +120,33 @@ export async function nativeRelayRequest(
     AbortSignal.timeout(30_000),
   ]);
   bounded.throwIfAborted();
-  const result = await invoke<{
-    status: number;
-    headers: Record<string, string>;
-    body: string;
-  }>("relay_http", {
-    community: communityDestination(community).url,
-    path,
-    method: body === undefined ? "GET" : "POST",
-    body: body === undefined ? null : JSON.stringify(body),
-  });
-  // IPC cannot abort reqwest. Retain the shared admission slot until native work
-  // settles (bounded by its timeout), then reject any obsolete result.
-  bounded.throwIfAborted();
-  return nativeResponse(result);
+  const id =
+    body !== undefined && CANCELLABLE_READS.has(path)
+      ? crypto.randomUUID()
+      : undefined;
+  const cancel = () => {
+    invoke("relay_http_cancel", { id }).catch(() => {});
+  };
+  if (id) bounded.addEventListener("abort", cancel, { once: true });
+  try {
+    const result = await invoke<{
+      status: number;
+      headers: Record<string, string>;
+      body: string;
+    }>("relay_http", {
+      community: communityDestination(community).url,
+      path,
+      method: body === undefined ? "GET" : "POST",
+      body: body === undefined ? null : JSON.stringify(body),
+      ...(id ? { id } : {}),
+    });
+    // The shared admission slot stays held until native work settles: at
+    // once for a cancelled read, otherwise within its timeout.
+    bounded.throwIfAborted();
+    return nativeResponse(result);
+  } finally {
+    if (id) bounded.removeEventListener("abort", cancel);
+  }
 }
 
 function nativeResponse(result: {
@@ -308,16 +335,30 @@ export function nativeRelaySigner(community: string): Signer {
     },
     upload: (file, signal) => nativeUpload(origin, file, signal),
     media: nativeMediaUrl,
+    verifySignatures: (claims) =>
+      nativeReadInvoke<boolean[]>("relay_verify_signatures", { claims }),
   };
 }
+
+export const NOT_A_COMMUNITY_ERROR =
+  "That URL didn't look like a Buzz community. Enter a community URL like wss://communities.buzz.xyz.";
 
 export async function nativeRelayInfo(community: string, signal?: AbortSignal) {
   const response = await nativeRelayRequest(community, "/", undefined, signal);
   if (!response.ok) throw new Error("Community discovery failed");
-  const info: unknown = await response.json();
+  // A website's HTML would otherwise surface WebKit's opaque JSON parse error.
+  const info: unknown = await response.json().catch(() => undefined);
   if (!info || typeof info !== "object" || Array.isArray(info))
-    throw new Error("Invalid community information");
+    throw new Error(NOT_A_COMMUNITY_ERROR);
   return info as Record<string, unknown>;
+}
+
+/** The relay's own key as NIP-11 `self` publishes it: 64 lowercase hex, else absent. */
+export function relaySelf(info: Record<string, unknown>): string | undefined {
+  const self = info.self;
+  return typeof self === "string" && /^[a-f0-9]{64}$/.test(self)
+    ? self
+    : undefined;
 }
 
 export async function connectNativeTransport(
@@ -326,9 +367,8 @@ export async function connectNativeTransport(
 ): Promise<ReadTransport> {
   const origin = communityDestination(community).url;
   const info = await nativeRelayInfo(origin, signal);
-  const author = info.self;
-  if (typeof author !== "string" || !/^[a-f0-9]{64}$/.test(author))
-    throw new Error("Relay did not advertise its identity");
+  const author = relaySelf(info);
+  if (!author) throw new Error("Relay did not advertise its identity");
   const creation =
     Array.isArray(info.supported_nips) && info.supported_nips.includes(29);
   // NIP-CL: the relay keeps channel labels and answers label lookups.
@@ -346,6 +386,7 @@ export async function connectNativeTransport(
     nativeRelaySigner(origin),
     origin,
     author,
+    nativeSocket,
   );
   signal?.throwIfAborted();
   const writer = transport.writer;
@@ -779,6 +820,10 @@ export async function connectNativeTransport(
     ...(channelIdentity ? { channelIdentity: true as const } : {}),
     ...(searchSort ? { searchSort: true as const } : {}),
     ...(artifactSync ? { artifactSync: true as const } : {}),
+    verifiedProfiles: verifiedProfileAuthority(info),
+    async readVerifiedProfileAuthority(signal) {
+      return verifiedProfileDiscovery(await nativeRelayInfo(origin, signal));
+    },
     writer: {
       ...writer,
       kinds: creation ? [...nativeWriteKinds, 9007] : nativeWriteKinds,

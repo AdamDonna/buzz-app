@@ -30,7 +30,7 @@ import type { RelaySession } from "../relay/session";
 // its own mounted suites is reduced to the props this owner supplies.
 vi.mock("../relay/react", () => {
   const profiles = new Map();
-  return { useRowProfiles: () => profiles };
+  return { useProfileGeneration: () => 0, useRowProfiles: () => profiles };
 });
 vi.mock("../messages/MessageRow", () => ({
   MessageRow: ({ row, onOpenLink, onOpenMediaReview }: MessageRowProps) => (
@@ -172,7 +172,7 @@ function fixture(
       subscribe: () => () => {},
     },
     agentChoices: createAgentLibrary(undefined).queries,
-    messages: { retry() {} },
+    messages: { retry() {}, canRetry: () => true },
     media: () => undefined,
     unread,
     outbox,
@@ -412,4 +412,44 @@ it("the shared conversation host supplies live actions and retires them while it
   view.rerender(mount(true));
   fireEvent.click(screen.getByText("Open profile"));
   expect(screen.getByText("Linked content")).toBeVisible();
+});
+
+it("an open channel reserves profile room for its roster and returns it when it closes", () => {
+  const { props } = fixture();
+  const release = vi.fn();
+  const reserve = vi.fn(() => release);
+  const session = {
+    ...props.session,
+    profiles: { ...props.session.profiles, reserve },
+  } as RelaySession;
+  const interactions: ConversationInteractions = {
+    onOpenLink: () => true,
+    canOpenLink: () => false,
+    onOpenMediaReview: () => {},
+  };
+  const page = (id?: string, active?: boolean) => (
+    <ConversationChannel
+      session={session}
+      scope={props.scope}
+      extensions={props.extensions}
+      channel={id ? { id, name: "Channel" } : undefined}
+      active={active}
+      interactions={interactions}
+    >
+      <input aria-label="Page state" />
+    </ConversationChannel>
+  );
+  const view = render(page("c"));
+  expect(reserve).toHaveBeenCalledExactlyOnceWith(1);
+  view.rerender(page());
+  expect(release).toHaveBeenCalledOnce();
+  view.rerender(page("d"));
+  expect(reserve).toHaveBeenCalledTimes(2);
+  // A retained tab in the background gives the room back until it is shown.
+  view.rerender(page("d", false));
+  expect(release).toHaveBeenCalledTimes(2);
+  view.rerender(page("d", true));
+  expect(reserve).toHaveBeenCalledTimes(3);
+  view.unmount();
+  expect(release).toHaveBeenCalledTimes(3);
 });

@@ -13,6 +13,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { useSyncExternalStore } from "react";
 import { ConversationPresentation } from "../conversation/ConversationPresentation";
@@ -29,7 +30,11 @@ import {
 } from "./MessageManagement";
 import { createRelaySession } from "../relay/session";
 import { readJournal, type ReadJournal } from "../relay/read-state-storage";
-import { PublishRejected } from "../relay/outbox";
+import {
+  PublishRejected,
+  type OutboxStorage,
+  type OutgoingEvent,
+} from "../relay/outbox";
 import {
   keypair,
   message,
@@ -38,6 +43,7 @@ import {
   roster,
   bounds,
   signed,
+  type Key,
 } from "../relay/testing";
 import type { ReadStateSigning } from "../relay/read-state-host";
 import {
@@ -45,7 +51,7 @@ import {
   signReadState,
   // @ts-expect-error Exercise the production codec with disposable identities.
 } from "../../../browser-host/read-state.mjs";
-import type { RelayEvent } from "../relay/events";
+import { eventDto, type RelayEvent } from "../relay/events";
 
 composerDOMFixture();
 const owners: ReturnType<typeof createRelaySession>[] = [];
@@ -71,7 +77,14 @@ async function fixture(
   agentOwner: "viewer" | "other" | undefined = undefined,
   chatCard = false,
   shareRead?: Promise<RelayEvent[]>,
+  viewerRole: "member" | "guest" = "member",
+  {
+    outboxStorage = { load: () => [], save() {} },
+    viewer = keypair(),
+  }: { outboxStorage?: OutboxStorage; viewer?: Key } = {},
 ) {
+  let role = viewerRole,
+    rosterTime = 1700000000;
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -80,8 +93,7 @@ async function fixture(
     },
   );
   HTMLElement.prototype.scrollIntoView = vi.fn();
-  const viewer = keypair(),
-    relay = keypair(),
+  const relay = keypair(),
     peer = keypair(),
     agent = agentOwner ? keypair() : undefined,
     agentOwnerKey =
@@ -114,32 +126,34 @@ async function fixture(
       ...(originalMention ? [["p", peer.pubkey]] : []),
     ],
   );
-  const agentProfile =
+  let agentProfile =
     agent && agentOwnerKey
-      ? signed(agent, {
-          kind: 0,
-          content: JSON.stringify({ name: "Test agent" }),
-          tags: [
-            [
-              "auth",
-              agentOwnerKey.pubkey,
-              "kind=0&created_at<1700000001",
-              bytesToHex(
-                schnorr.sign(
-                  new Uint8Array(
-                    await crypto.subtle.digest(
-                      "SHA-256",
-                      new TextEncoder().encode(
-                        `nostr:agent-auth:${agent.pubkey}:kind=0&created_at<1700000001`,
+      ? eventDto(
+          signed(agent, {
+            kind: 0,
+            content: JSON.stringify({ name: "Test agent" }),
+            tags: [
+              [
+                "auth",
+                agentOwnerKey.pubkey,
+                "kind=0&created_at<1700000001",
+                bytesToHex(
+                  schnorr.sign(
+                    new Uint8Array(
+                      await crypto.subtle.digest(
+                        "SHA-256",
+                        new TextEncoder().encode(
+                          `nostr:agent-auth:${agent.pubkey}:kind=0&created_at<1700000001`,
+                        ),
                       ),
                     ),
+                    agentOwnerKey.secret,
                   ),
-                  agentOwnerKey.secret,
                 ),
-              ),
+              ],
             ],
-          ],
-        })
+          }),
+        )
       : undefined;
   const publications: {
     event: RelayEvent;
@@ -180,7 +194,15 @@ async function fixture(
         if (filter.kinds?.includes(39000) || filter.kinds?.includes(39002))
           return [
             metadata(relay, "room", "Room"),
-            roster(relay, "room", [viewer.pubkey, peer.pubkey]),
+            signed(relay, {
+              ...roster(relay, "room", [viewer.pubkey, peer.pubkey]),
+              created_at: rosterTime,
+              tags: [
+                ["d", "room"],
+                ["p", viewer.pubkey, "", role],
+                ["p", peer.pubkey, "", "member"],
+              ],
+            }),
           ];
         if (filter.kinds?.includes(0))
           return [
@@ -214,7 +236,8 @@ async function fixture(
       },
     },
     {
-      outboxStorage: { load: () => [], save() {} },
+      readStateFloor: () => 0,
+      outboxStorage,
       readPublisherLock: async (_signal, work) => work(),
       readStateStorage: {
         close() {},
@@ -287,6 +310,25 @@ async function fixture(
     owner,
     original,
     publications,
+    async setRole(next: "member" | "guest") {
+      role = next;
+      rosterTime++;
+      await owner.session.read([{ kinds: [39002], "#d": ["room"], limit: 1 }]);
+    },
+    async revokeOwner() {
+      assert.exists(agent);
+      agentProfile = eventDto(
+        signed(agent, {
+          kind: 0,
+          created_at: 1700000001,
+          tags: [],
+          content: JSON.stringify({ name: "Test agent" }),
+        }),
+      );
+      await owner.session.read([
+        { kinds: [0], authors: [agent.pubkey], limit: 1 },
+      ]);
+    },
     preview: () => view.rerender(<Surface composer={false} />),
     present: (presented: boolean) =>
       view.rerender(<Surface presented={presented} />),
@@ -348,32 +390,78 @@ it("edits in the composer, retains a rejected change and retries the same operat
   );
 });
 
-it("offers a confirmed NIP-09 deletion for an agent owned by the viewer", async () => {
-  const h = await fixture(false, false, false, false, false, "viewer");
-  const item = await screen.findByRole("menuitem", { name: "Delete message" });
-  expect(item).toBeVisible();
-  fireEvent.click(item);
-  const confirmation = await screen.findByRole("alertdialog", {
-    name: "Delete message?",
-  });
-  expect(confirmation).toHaveTextContent(
-    "This requests removal of this message from Buzz’s relay.",
-  );
-  expect(confirmation).toHaveTextContent("People may still have copies.");
-  expect(h.publications).toHaveLength(0);
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-  await waitFor(() => expect(h.publications).toHaveLength(1));
-  expect(h.publication(0).event.kind).toBe(5);
-  expect(h.publication(0).event.pubkey).toBe(h.owner.session.viewer);
-  expect(h.publication(0).event.tags).toContainEqual(["e", h.original.id]);
-  await act(async () => h.publication(0).result.resolve());
-});
+it.each(["member", "guest"] as const)(
+  "offers confirmed owner-agent deletion and retry to a joined %s",
+  async (role) => {
+    const h = await fixture(
+      false,
+      false,
+      false,
+      false,
+      false,
+      "viewer",
+      false,
+      undefined,
+      role,
+    );
+    const item = await screen.findByRole("menuitem", {
+      name: "Delete message",
+    });
+    await waitFor(() =>
+      expect(h.owner.session.profiles.owner?.(h.original.pubkey)).toBe(
+        h.owner.session.viewer,
+      ),
+    );
+    expect(item).toBeVisible();
+    fireEvent.click(item);
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: "Delete message?",
+    });
+    expect(confirmation).toHaveTextContent(
+      "This requests removal of this message from Buzz’s relay.",
+    );
+    expect(confirmation).toHaveTextContent("People may still have copies.");
+    expect(h.publications).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(h.publications).toHaveLength(1));
+    expect(h.publication(0).event.kind).toBe(5);
+    expect(h.publication(0).event.pubkey).toBe(h.owner.session.viewer);
+    expect(h.publication(0).event.tags).toContainEqual(["e", h.original.id]);
+    if (role === "guest") {
+      await act(async () =>
+        h.publication(0).result.reject(new PublishRejected("Deletion refused")),
+      );
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Deletion refused",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(h.publications).toHaveLength(2));
+      expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
+      await act(async () => h.publication(1).result.resolve());
+    } else await act(async () => h.publication(0).result.resolve());
+  },
+);
 
-it("does not offer agent-message deletion to a non-owner", async () => {
-  await fixture(false, false, false, false, false, "other");
-  await screen.findByRole("menuitem", { name: /Mark (unread|read)/ });
-  expect(screen.queryByRole("menuitem", { name: "Delete message" })).toBeNull();
-});
+it.each(["member", "guest"] as const)(
+  "does not offer agent-message deletion to a %s non-owner",
+  async (role) => {
+    await fixture(
+      false,
+      false,
+      false,
+      false,
+      false,
+      "other",
+      false,
+      undefined,
+      role,
+    );
+    await screen.findByRole("menuitem", { name: /Mark (unread|read)/ });
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete message" }),
+    ).toBeNull();
+  },
+);
 
 it("does not expose edit or delete for another person's message", async () => {
   await fixture(false);
@@ -564,32 +652,78 @@ it("reverses an own message force from its menu without changing notification el
   expect(h.publications).toHaveLength(0);
 });
 
-it("toggles actual unread state immediately without a dialog", async () => {
-  const h = await fixture(false, true);
-  const target = {
-    kind: "message" as const,
-    channelId: "room",
-    messageId: h.original.id,
-  };
-  expect(h.owner.session.unread.attention("room", h.original.id).unread).toBe(
-    true,
-  );
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Mark read" }));
-  await waitFor(() =>
-    expect(h.owner.session.unread.attention("room", h.original.id).unread).toBe(
+it.each(["member", "guest"] as const)(
+  "lets a joined %s toggle actual unread state and follow without writing",
+  async (role) => {
+    const h = await fixture(
       false,
-    ),
-  );
-  expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Mark unread" }));
-  await waitFor(() =>
+      true,
+      false,
+      false,
+      false,
+      undefined,
+      false,
+      undefined,
+      role,
+    );
+    const target = {
+      kind: "message" as const,
+      channelId: "room",
+      messageId: h.original.id,
+    };
     expect(h.owner.session.unread.attention("room", h.original.id).unread).toBe(
       true,
-    ),
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Mark read" }));
+    await waitFor(() =>
+      expect(
+        h.owner.session.unread.attention("room", h.original.id).unread,
+      ).toBe(false),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Mark unread" }),
+    );
+    await waitFor(() =>
+      expect(
+        h.owner.session.unread.attention("room", h.original.id).unread,
+      ).toBe(true),
+    );
+    expect(h.owner.session.unread.snapshot(target).observedCount).toBe(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Edit message" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete message" }),
+    ).toBeNull();
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Follow thread" }),
+    );
+    await waitFor(() =>
+      expect(h.owner.session.unread.following("room", h.original.id)).toBe(
+        true,
+      ),
+    );
+    expect(h.publications).toHaveLength(0);
+  },
+);
+
+it("keeps editing and ordinary deletion hidden from a Guest who authored an earlier message", async () => {
+  const h = await fixture(
+    true,
+    false,
+    false,
+    false,
+    false,
+    undefined,
+    false,
+    undefined,
+    "guest",
   );
-  expect(h.owner.session.unread.snapshot(target).observedCount).toBe(1);
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(h.owner.session.channels.get?.("room")?.viewerRole).toBe("guest");
+  expect(screen.queryByRole("menuitem", { name: "Edit message" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Delete message" })).toBeNull();
   expect(h.publications).toHaveLength(0);
 });
 
@@ -777,6 +911,289 @@ it("recovers an uncertain deletion after the row and dialog disappear", async ()
   await waitFor(() => expect(h.publications).toHaveLength(2));
   expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
   await act(async () => h.publication(1).result.resolve());
+});
+
+it.each(["failed", "unknown"] as const)(
+  "disables %s own-message deletion retry after demotion to Guest",
+  async (delivery) => {
+    const h = await fixture();
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Delete message" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(h.publications).toHaveLength(1));
+    await act(async () =>
+      h
+        .publication(0)
+        .result.reject(
+          delivery === "failed"
+            ? new PublishRejected("Deletion refused")
+            : new Error("Connection lost"),
+        ),
+    );
+    fireEvent.click(await screen.findByText("Close", { exact: true }));
+    const retry = await screen.findByRole("button", {
+      name: "Retry message update",
+    });
+    expect(retry).toBeEnabled();
+    await act(async () => h.setRole("guest"));
+    expect(h.owner.session.channels.get?.("room")?.viewerRole).toBe("guest");
+    await waitFor(() => expect(retry).toBeDisabled());
+    fireEvent.click(retry);
+    expect(h.publications).toHaveLength(1);
+  },
+);
+
+it("retries an owned-agent deletion without its row and disables retry when ownership is revoked", async () => {
+  const h = await fixture(
+    false,
+    false,
+    false,
+    false,
+    false,
+    "viewer",
+    false,
+    undefined,
+    "guest",
+  );
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Delete message" }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(h.publications).toHaveLength(1));
+  await act(async () =>
+    h.publication(0).result.reject(new Error("Connection lost")),
+  );
+  fireEvent.click(await screen.findByText("Close", { exact: true }));
+  expect(h.owner.session.channels.window("room").rows).toHaveLength(0);
+  const retry = await screen.findByRole("button", {
+    name: "Retry message update",
+  });
+  expect(retry).toBeEnabled();
+  fireEvent.click(retry);
+  await waitFor(() => expect(h.publications).toHaveLength(2));
+  expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
+  await act(async () =>
+    h.publication(1).result.reject(new PublishRejected("Deletion refused")),
+  );
+  const revokedRetry = await screen.findByRole("button", {
+    name: "Retry message update",
+  });
+  expect(revokedRetry).toBeEnabled();
+  await act(async () => h.revokeOwner());
+  await waitFor(() => expect(revokedRetry).toBeDisabled());
+  fireEvent.click(revokedRetry);
+  expect(h.publications).toHaveLength(2);
+});
+
+/** Sends a message the relay does not accept and opens that row's menu. */
+async function unsent(
+  h: Awaited<ReturnType<typeof fixture>>,
+  error: Error,
+  delivery: "failed" | "unknown",
+) {
+  fireEvent.keyDown(await screen.findByRole("menu"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  let id = "";
+  act(() => {
+    id = h.owner.session.messages.send("room", "Unsent message");
+  });
+  await waitFor(() => expect(h.publications).toHaveLength(1));
+  await act(async () => h.publication(0).result.reject(error));
+  await waitFor(() =>
+    expect(
+      h.owner.session.channels.window("room").rows.find((row) => row.id === id)
+        ?.delivery,
+    ).toBe(delivery),
+  );
+  const row = screen.getByText("Unsent message").parentElement;
+  assert.exists(row);
+  fireEvent.click(within(row).getByRole("button", { name: "Message actions" }));
+  return id;
+}
+
+it("deletes a failed send from this device without publishing, so no restart restores or retries it", async () => {
+  let saved: readonly OutgoingEvent[] = [];
+  let refusal: string | undefined;
+  const viewer = keypair();
+  const h = await fixture(
+    true,
+    false,
+    false,
+    false,
+    false,
+    undefined,
+    false,
+    undefined,
+    "member",
+    {
+      viewer,
+      outboxStorage: {
+        load: () => saved,
+        save(records) {
+          if (refusal) throw new Error(refusal);
+          saved = records;
+        },
+      },
+    },
+  );
+  const id = await unsent(h, new PublishRejected("Message refused"), "failed");
+  // A restart restores this journal, which retains the failed send for retry.
+  await waitFor(() =>
+    expect(saved).toContainEqual(
+      expect.objectContaining({
+        event: expect.objectContaining({ id }),
+        delivery: "failed",
+      }),
+    ),
+  );
+  const remove = await screen.findByRole("menuitem", {
+    name: "Delete message",
+  });
+  expect(screen.queryByRole("menuitem", { name: "Edit message" })).toBeNull();
+  expect(
+    screen.queryByRole("menuitem", { name: /Mark (unread|read)|Follow/ }),
+  ).toBeNull();
+  fireEvent.click(remove);
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Delete message?",
+  });
+  expect(confirmation).toHaveTextContent(
+    "This message wasn’t sent. Deleting it removes it from this device.",
+  );
+  refusal = "Storage unavailable";
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Delete" }));
+  expect(await within(confirmation).findByRole("alert")).toHaveTextContent(
+    "Storage unavailable",
+  );
+  expect(saved.some((item) => item.event.id === id)).toBe(true);
+  expect(screen.getByText("Unsent message")).toBeInTheDocument();
+  refusal = undefined;
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(screen.queryByText("Unsent message")).toBeNull();
+  expect(saved.some((item) => item.event.id === id)).toBe(false);
+  expect(
+    h.owner.session.outbox?.snapshot().some((item) => item.event.id === id),
+  ).toBe(false);
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+  // Neither a NIP-09 deletion nor a retry followed the refused send.
+  expect(h.publications).toHaveLength(1);
+  cleanup();
+  const restarted = await fixture(
+    true,
+    false,
+    false,
+    false,
+    false,
+    undefined,
+    false,
+    undefined,
+    "member",
+    { viewer, outboxStorage: { load: () => saved, save() {} } },
+  );
+  await restarted.owner.session.outbox?.ready();
+  expect(screen.queryByText("Unsent message")).toBeNull();
+});
+
+it("reports a failed send that started retrying instead of deleting it", async () => {
+  const h = await fixture();
+  const id = await unsent(h, new PublishRejected("Message refused"), "failed");
+  const delivery = () =>
+    h.owner.session.outbox?.snapshot().find((item) => item.event.id === id)
+      ?.delivery;
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Delete message" }),
+  );
+  const confirmation = await screen.findByRole("alertdialog", {
+    name: "Delete message?",
+  });
+  act(() => h.owner.session.outbox?.retry(id));
+  await waitFor(() => expect(h.publications).toHaveLength(2));
+  try {
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    );
+    expect(await within(confirmation).findByRole("alert")).toHaveTextContent(
+      "This message’s delivery changed.",
+    );
+    expect(delivery()).toBe("sending");
+  } finally {
+    await act(async () =>
+      h.publication(1).result.reject(new PublishRejected("Message refused")),
+    );
+  }
+  await waitFor(() => expect(delivery()).toBe("failed"));
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(delivery()).toBeUndefined();
+  expect(h.publications).toHaveLength(2);
+});
+
+it.each(["archived", "left"] as const)(
+  "deletes a failed send in a channel that was %s, which only gates relay changes",
+  async (state) => {
+    const h = await fixture();
+    const id = await unsent(
+      h,
+      new PublishRejected("invalid: channel is archived"),
+      "failed",
+    );
+    cleanup();
+    const live = h.owner.session.channels.list();
+    // A channel the viewer left is no longer listed at all.
+    const closed = {
+      ...live,
+      channels:
+        state === "left"
+          ? []
+          : live.channels.map((channel) => ({
+              ...channel,
+              archived: true as const,
+              readOnly: true as const,
+            })),
+    };
+    const session = {
+      ...h.owner.session,
+      channels: { ...h.owner.session.channels, list: () => closed },
+    };
+    const row = session.channels
+      .window("room")
+      .rows.find((item) => item.id === id);
+    assert.exists(row);
+    render(
+      <MessageManagement session={session} channelId="room">
+        <MenuRoot>
+          <MenuTrigger>Message actions</MenuTrigger>
+          <MenuPopup>
+            <MessageManagementItems row={row} session={session} />
+          </MenuPopup>
+        </MenuRoot>
+      </MessageManagement>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Delete message" }),
+    );
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: "Delete message?",
+    });
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "Delete" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(
+      session.outbox?.snapshot().some((item) => item.event.id === id),
+    ).toBe(false);
+    expect(h.publications).toHaveLength(1);
+  },
+);
+
+it("does not offer local deletion for an unconfirmed send, which may have reached the relay", async () => {
+  const h = await fixture();
+  await unsent(h, new Error("Connection lost"), "unknown");
+  await screen.findByRole("menu");
+  expect(screen.queryByRole("menuitem", { name: "Delete message" })).toBeNull();
 });
 
 it("waits for confirmed membership before entering a restored channel visit", async () => {

@@ -66,6 +66,25 @@ it("renders private channel links with the design-system lock icon", () => {
   expect(textOf(markup)).toBe("private");
 });
 
+it("shows a supplied icon in place of the service's, with the label intact", () => {
+  const href = "https://github.com/block/buzz/pull/1234";
+  const icon = <TableIcon data-supplied="" className={styles.icon} />;
+  const markup = renderToStaticMarkup(
+    <LinkLabel href={href} label="Fix the lab" icon={icon} />,
+  );
+  expect(markup).toContain(renderToStaticMarkup(icon));
+  expect(markup).not.toContain("tabler-icon-brand-github");
+  expect(textOf(markup)).toBe("Fix the lab");
+  // Authored formatting takes the supplied icon too.
+  const formatted = renderToStaticMarkup(
+    <LinkContentContext value={<em>Fix</em>}>
+      <LinkLabel href={href} label="Fix" icon={icon} />
+    </LinkContentContext>,
+  );
+  expect(formatted).toContain(renderToStaticMarkup(icon));
+  expect(formatted).toContain("<em>Fix</em>");
+});
+
 it.each([
   "javascript:alert(1)",
   "JaVaScRiPt:alert(1)",

@@ -60,6 +60,16 @@ type ResponseData = {
   default_branch?: string;
 };
 
+/** GitHub refused a public read for this hour's limit; `resetAt` is when it
+ * lifts, by its `x-ratelimit-reset` header, or an hour on without one. */
+export class GitHubRateLimited extends Error {
+  constructor(readonly resetAt: number) {
+    super(
+      "GitHub’s public API limit was reached. Try again later or open it on GitHub.",
+    );
+  }
+}
+
 export function branchLink(branch: BranchData, pullRepository: string): Branch {
   const repository = branch.repo?.full_name;
   return {
@@ -102,8 +112,9 @@ export async function loadGitHubDetails(
         "This is private or unavailable. Sign in to the gh CLI to see private repositories, or open it on GitHub.",
       );
     if (response.status === 403 || response.status === 429)
-      throw new Error(
-        "GitHub’s public API limit was reached. Try again later or open it on GitHub.",
+      throw new GitHubRateLimited(
+        Number(response.headers.get("x-ratelimit-reset")) * 1000 ||
+          Date.now() + 60 * 60_000,
       );
     const message = `GitHub couldn’t load this object (${response.status}).`;
     // `loadGitHubObject` retries server failures quietly.

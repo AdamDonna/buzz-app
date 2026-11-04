@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -89,7 +90,9 @@ function hostOverlayOpen(viewport: BrowserBounds): boolean {
 
 export function BrowserHostView({
   url,
-  storage,
+  storage: requestedStorage,
+  builderlab,
+  canResumeUrl,
   label,
   platform,
   sessions,
@@ -99,6 +102,7 @@ export function BrowserHostView({
   sessions: BrowserSessions;
   pollInterval?: number;
 }) {
+  const storage = builderlab?.storage ?? requestedStorage;
   const viewport = useRef<HTMLDivElement>(null);
   const session = useRef<string | undefined>(undefined);
   const retryAttach = useRef<(() => void) | undefined>(undefined);
@@ -113,6 +117,24 @@ export function BrowserHostView({
   useEffect(() => {
     if (!editing.current && status.url) setDraft(status.url);
   }, [status.url]);
+
+  // macOS mouse back/forward, sent here while this page has focus.
+  const historyAction = useEffectEvent((event: Event, value: BrowserAction) => {
+    event.preventDefault();
+    action(value);
+  });
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const back = (event: Event) => historyAction(event, "back");
+    const forward = (event: Event) => historyAction(event, "forward");
+    element.addEventListener("buzz:history-back", back);
+    element.addEventListener("buzz:history-forward", forward);
+    return () => {
+      element.removeEventListener("buzz:history-back", back);
+      element.removeEventListener("buzz:history-forward", forward);
+    };
+  }, []);
 
   // In a tab, the page's title names it, so several websites tell apart.
   const tabHost = usePanelTabHost();
@@ -214,7 +236,14 @@ export function BrowserHostView({
       try {
         const next = await platform.status(sessionId);
         if (!disposed && session.current === sessionId) {
-          if (next.url) resumeUrl.current = next.url;
+          // Restore app destinations, not temporary auth/consent pages or their one-use tickets.
+          if (
+            next.url &&
+            (canResumeUrl
+              ? canResumeUrl(next.url)
+              : !builderlab || new URL(next.url).origin === new URL(url).origin)
+          )
+            resumeUrl.current = next.url;
           sessions.rememberTitle(titleKey, next.title);
           setStatus(next);
         }
@@ -233,7 +262,7 @@ export function BrowserHostView({
     };
 
     const begin = () => {
-      if (attachStarted || disposed) return;
+      if (attachStarted || disposed || builderlab?.signal.aborted) return;
       const initialBounds = boundsFor(element);
       if (!visible(initialBounds)) return;
       attachStarted = true;
@@ -245,6 +274,7 @@ export function BrowserHostView({
           () => !disposed,
           storage,
           park,
+          builderlab,
         )
         .then((sessionId) => {
           if (!sessionId || disposed) return;
@@ -343,7 +373,16 @@ export function BrowserHostView({
       // say from another channel, so work in progress there survives.
       if (sessionId) void sessions.detach(sessionId, park);
     };
-  }, [platform, pollInterval, sessions, storage, titleKey, url]);
+  }, [
+    builderlab,
+    canResumeUrl,
+    platform,
+    pollInterval,
+    sessions,
+    storage,
+    titleKey,
+    url,
+  ]);
 
   async function run(operation: (sessionId: string) => Promise<void>) {
     const sessionId = session.current;

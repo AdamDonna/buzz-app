@@ -401,6 +401,9 @@ export async function readTranscript(
       if (threadId === lookup.threadId)
         working = read.data[0]?.status === "inProgress";
       const mapped = codexTurns([...read.data].reverse(), lookup, name);
+      for (const turn of mapped) turn.sessionId = threadId;
+      // With no earlier turns, the first read starts the thread.
+      if (mapped[0] && !read.more) mapped[0].newSession = true;
       try {
         const { thread } = await rpc.request<{
           thread?: { path: string | null };

@@ -5,14 +5,17 @@ import type { RelayProfiler } from "../../features/relay/profiling";
 import { RelayTimings } from "./RelayTimings";
 import { PRODUCT_FEEDBACK_KIND } from "../../features/relay/product-feedback";
 import type { Outbox } from "../../features/relay/outbox";
+import type { RelaySession } from "../../features/relay/session";
 
 /** Delivery belongs to the session, including messages from other pages or a previous launch. */
 export function OutboxStatus({
   outbox,
   profiling,
+  memberAdditions,
 }: {
   outbox: Outbox;
   profiling: RelayProfiler;
+  memberAdditions: Pick<RelaySession["memberAdditions"], "add">;
 }) {
   const operations = useSyncExternalStore(
     outbox.subscribe,
@@ -54,7 +57,39 @@ export function OutboxStatus({
               (item.delivery === "failed" || item.delivery === "unknown") && (
                 <Button
                   type="button"
-                  onClick={() => outbox.retry(item.event.id)}
+                  onClick={async () => {
+                    try {
+                      if (
+                        item.event.kind === 9000 &&
+                        (item.recovery?.key.startsWith("member-add:") ||
+                          !item.event.tags.some(([tag]) => tag === "role"))
+                      ) {
+                        const channelId = item.event.tags.find(
+                          ([tag]) => tag === "h",
+                        )?.[1];
+                        const pubkey = item.event.tags.find(
+                          ([tag]) => tag === "p",
+                        )?.[1];
+                        if (!channelId || !pubkey)
+                          throw new Error(
+                            "Reopen Members to check this addition.",
+                          );
+                        // A stale explicit role must never overwrite a newer admission.
+                        // A guest addition is retried as one, so it can finish
+                        // its own receipt and never sends a writing role.
+                        const guest = item.event.tags.some(
+                          ([tag, value]) => tag === "role" && value === "guest",
+                        );
+                        await memberAdditions.add(channelId, pubkey, {
+                          ...(guest ? { role: "guest" } : {}),
+                          retry: true,
+                        });
+                      } else outbox.retry(item.event.id);
+                      setError(undefined);
+                    } catch (reason) {
+                      setError(String(reason));
+                    }
+                  }}
                 >
                   Retry
                 </Button>
@@ -73,8 +108,8 @@ export function OutboxStatus({
                   try {
                     const shareReceipt =
                       item.event.kind === 9 &&
-                      // Saved receipts from earlier share flows.
-                      /^(snapshot-share:(agent|team)|solo-share-link:[^:]+):.+$/.test(
+                      // Share receipts, including those of earlier flows.
+                      /^(snapshot-share:(agent|team)|solo-share-link:[^:]+|agent-share:[^:]+):.+$/.test(
                         item.recovery?.key ?? "",
                       ) &&
                       (item.delivery === "accepted" ||

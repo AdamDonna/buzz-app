@@ -1,4 +1,6 @@
-//! Trusted build inputs for the desktop backup service. Unset means disabled.
+//! Trusted build inputs for the desktop backup service. Unset or empty means
+//! disabled: `build.rs` and the runtime's `option_env!` both read the
+//! process environment, where a workflow can only clear an input by emptying it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Config {
     pub(crate) service_url: String,
@@ -9,6 +11,8 @@ pub(crate) fn configured(
     service: Option<&str>,
     namespace: Option<&str>,
 ) -> Result<Option<Config>, String> {
+    let service = service.filter(|value| !value.is_empty());
+    let namespace = namespace.filter(|value| !value.is_empty());
     let (service, namespace) = match (service, namespace) {
         (None, None) => return Ok(None),
         (Some(service), Some(namespace)) => (service, namespace),
@@ -42,6 +46,9 @@ mod tests {
     #[test]
     fn backup_is_disabled_until_both_trusted_inputs_are_valid() {
         assert_eq!(configured(None, None).unwrap(), None);
+        assert_eq!(configured(Some(""), Some("")).unwrap(), None);
+        assert!(configured(Some(""), Some("buzz")).is_err());
+        assert!(configured(Some("https://service.example"), Some("")).is_err());
         assert!(configured(Some("https://service.example"), None).is_err());
         assert!(configured(None, Some("buzz")).is_err());
         for service in [

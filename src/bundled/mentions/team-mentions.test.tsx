@@ -43,6 +43,7 @@ function fixture({
   loading = false,
   failure = false,
   dm = false,
+  team = 1,
 } = {}) {
   const people = Array.from({ length: count }, (_, i) => ({
     pubkey: (i + 1).toString(16).padStart(64, "0"),
@@ -50,7 +51,11 @@ function fixture({
   }));
   const agent = people[0];
   if (!agent) throw new Error("Fixture needs at least one person");
-  const read = vi.fn(async () => ({ definitions: [], identities: [agent] }));
+  const teamAgents = people.slice(0, team);
+  const read = vi.fn(async () => ({
+    definitions: [],
+    identities: teamAgents,
+  }));
   if (failure) read.mockRejectedValueOnce(new Error("temporary read failure"));
   const library = createAgentLibrary(read);
   const choices = createAgentChoices({
@@ -92,7 +97,7 @@ function fixture({
           type: "team",
           id: "team",
           name: "Team",
-          agents: [agent.pubkey],
+          agents: teamAgents.map((person) => person.pubkey),
         },
       },
     },
@@ -165,6 +170,18 @@ function fixture({
     },
     notify() {
       act(() => {
+        listeners.forEach((f) => {
+          f();
+        });
+      });
+    },
+    /** Replace the channel summary, as a new message or metadata change does. */
+    update(patch: Partial<(typeof list.channels)[number]>) {
+      act(() => {
+        list = {
+          ...list,
+          channels: list.channels.map((c) => ({ ...c, ...patch })),
+        };
         listeners.forEach((f) => {
           f();
         });
@@ -344,6 +361,41 @@ it("teams retain installed membership through rerenders and stale acceptance unt
     expect(menu.team()?.detail).toContain("Adds 1");
   } finally {
     menu.view.unmount();
+    h.library.dispose();
+  }
+});
+
+it("a team pick in an agents-only audience replaces the audience with the team", async () => {
+  const h = fixture({ count: 2, team: 2 }),
+    user = userEvent.setup(),
+    only = vi.fn();
+  const view = render(
+    <MentionPicker
+      session={h.session}
+      scope="test"
+      channelId="parent"
+      disabled={false}
+      inviteAgents
+      audience={{ recipients: [], named: false, only, toggle: vi.fn() }}
+      select={() => true}
+      selectTeam={() => true}
+    />,
+  );
+  try {
+    await user.click(screen.getByRole("button", { name: "Choose agent" }));
+    const team = await screen.findByRole("button", {
+      name: /Team.*Saved team/,
+    });
+    await waitFor(() => expect(team).toBeEnabled());
+    await user.click(team);
+    const [first, second] = [
+      { pubkey: "1".padStart(64, "0"), name: "Person 00" },
+      { pubkey: "2".padStart(64, "0"), name: "Person 01" },
+    ];
+    expect(only).toHaveBeenCalledExactlyOnceWith([first, second]);
+    await waitFor(() => expect(screen.queryByRole("searchbox")).toBeNull());
+  } finally {
+    view.unmount();
     h.library.dispose();
   }
 });
@@ -594,10 +646,11 @@ it("directory pages rebuild the name index only for people they add", async () =
   const members = h.people.slice(1, 4);
   const outsider = { pubkey: "e".repeat(64), name: "Teal Outsider" };
   let page = members;
-  // Every settled search returns a new array.
+  // Every settled search returns a new array. Pages are truncated so each
+  // keystroke reads rather than deriving from the complete `p` page.
   vi.mocked(h.session.directMessages.people).mockImplementation(async () => ({
     people: [...page],
-    hasMore: false,
+    hasMore: true,
   }));
   const starts = vi.spyOn(personMatch, "nameStarts");
   function Chooser({ query }: { query: string }) {
@@ -621,7 +674,8 @@ it("directory pages rebuild the name index only for people they add", async () =
   // Pages of members change no row.
   await type("pe");
   await type("per");
-  expect(h.session.directMessages.people).toHaveBeenCalledTimes(3);
+  // `p` is too short to search; `pe` and `per` each read.
+  expect(h.session.directMessages.people).toHaveBeenCalledTimes(2);
   expect(starts).not.toHaveBeenCalled();
   // An outsider is a new choice set: one rebuild, then reused while it stays.
   page = [...members, outsider];
@@ -632,5 +686,122 @@ it("directory pages rebuild the name index only for people they add", async () =
   await type("person");
   expect(starts).not.toHaveBeenCalled();
   view.unmount();
+  h.library.dispose();
+});
+
+it("a mention keystroke checks longer names only on choices the query matches", async () => {
+  const h = fixture({ count: 300 });
+  // A running directory search leaves Space undecided, so the chooser asks
+  // whether a known name continues the query.
+  vi.mocked(h.session.directMessages.people).mockImplementation(
+    () => new Promise(() => {}),
+  );
+  const menu = inline(h.session);
+  try {
+    await waitFor(() => expect(menu.result()?.items.length).toBeGreaterThan(0));
+    const longer = vi.spyOn(personMatch, "extendsName");
+    // Team names are checked separately; count member names only.
+    const checked = () =>
+      longer.mock.calls
+        .map(([name]) => name)
+        .filter((name) => name.startsWith("Person"));
+    for (const query of ["zz", "Person 0"]) {
+      longer.mockClear();
+      menu.view.rerender(
+        <MentionCompletion
+          {...menu.props}
+          query={{ start: 0, end: query.length + 1, query }}
+        />,
+      );
+      await waitFor(() =>
+        expect(h.session.directMessages.people).toHaveBeenCalled(),
+      );
+      // `Person 0` is continued by the ten `Person 0x` names; `zz` by none.
+      if (query !== "zz")
+        await waitFor(() => expect(checked().length).toBeGreaterThan(0));
+      // Only names that start with the query can continue it.
+      expect(checked().every((name) => name.startsWith(query))).toBe(true);
+    }
+  } finally {
+    menu.view.unmount();
+    h.library.dispose();
+  }
+});
+
+it("Retry rereads members whose names a background read found missing", async () => {
+  const h = fixture({ count: 3 });
+  const nameless = h.people[2]?.pubkey ?? "";
+  (h.session.profiles.snapshot() as Map<string, unknown>).delete(nameless);
+  const ensure = vi.fn(async () => {});
+  Object.assign(h.session.profiles, { ensure });
+  const menu = inline(h.session);
+  try {
+    await waitFor(() => expect(menu.result()?.retry).toBeDefined());
+    expect(ensure).toHaveBeenLastCalledWith(
+      expect.arrayContaining([nameless]),
+      "background",
+    );
+    act(() => menu.result()?.retry?.());
+    // Background enrichment skips known absences; an explicit Retry does not.
+    await waitFor(() =>
+      expect(ensure).toHaveBeenLastCalledWith(
+        expect.arrayContaining([nameless]),
+        "foreground",
+      ),
+    );
+  } finally {
+    menu.view.unmount();
+    h.library.dispose();
+  }
+});
+
+it("an open chooser relabels choices when only names change", async () => {
+  const h = fixture();
+  let name = "Before";
+  let revision = 0;
+  const listeners = new Set<() => void>();
+  Object.assign(h.session, {
+    names: {
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      snapshot: () => revision,
+      scope: () => () => ({ name, source: "agent-directory" }),
+    },
+  });
+  function Chooser() {
+    const model = useMentionChoices(h.session, "parent", false, "", "open");
+    return <>{model.candidates.map((choice) => choice.label).join(",")}</>;
+  }
+  render(<Chooser />);
+  await waitFor(() => expect(screen.getByText("Before")).toBeInTheDocument());
+  act(() => {
+    name = "After";
+    revision++;
+    for (const listener of listeners) listener();
+  });
+  expect(screen.getByText("After")).toBeInTheDocument();
+  h.library.dispose();
+});
+
+it("keeps a closed chooser quiet when a message only changes the channel preview", () => {
+  const h = fixture();
+  let renders = 0;
+  let members: readonly string[] | undefined;
+  function Chooser() {
+    renders++;
+    members = useMentionChoices(h.session, "parent", false, "", "closed", false)
+      .channel?.members;
+    return null;
+  }
+  render(<Chooser />);
+  const settled = renders;
+  h.update({ preview: "New message", lastActivityAt: 2 });
+  h.update({ preview: "Another message", lastActivityAt: 3 });
+  expect(renders).toBe(settled);
+  h.update({ members: [h.agent.pubkey, "f".repeat(64)] });
+  expect(renders).toBe(settled + 1);
+  expect(members).toEqual([h.agent.pubkey, "f".repeat(64)]);
   h.library.dispose();
 });

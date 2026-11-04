@@ -15,6 +15,20 @@
   border-block-start: 1px solid var(--border-standard);
   color: var(--text-subtle);
 }
+.session {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--text-subtle);
+}
+.session::before,
+.session::after {
+  content: "";
+  flex: 1;
+  border-block-start: 1px solid var(--border-standard);
+}
+.session + .turn .turnHeader,
 .turn:first-of-type .turnHeader {
   padding-block-start: 0;
   border-block-start: 0;

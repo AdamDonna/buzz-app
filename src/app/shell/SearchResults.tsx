@@ -1,5 +1,8 @@
 import { workflowLabel } from "../../features/relay/workflow-attribution";
-import { useIdentityNames } from "../../features/identity-names/react";
+import {
+  useIdentityNames,
+  useNamesRevision,
+} from "../../features/identity-names/react";
 import { npubEncode } from "nostr-tools/nip19";
 import {
   useEffect,
@@ -11,9 +14,13 @@ import {
 import type { ChannelSummary, Profile } from "../../features/relay/contracts";
 import type { EventData } from "../../features/relay/events";
 import type { RelaySession } from "../../features/relay/session";
-import { useChannelList } from "../../features/relay/react";
+import {
+  useChannelList,
+  useProfileGeneration,
+} from "../../features/relay/react";
 import { useSavedHiddenDmIds } from "../../bundled/channels/useHiddenDms";
 import { useAgentChoices } from "../../features/agents/use-choices";
+import { canMessageAgent } from "../../features/agents/choices";
 import { useMentionArchives } from "../../features/messages/use-mention-archives";
 import { archiveHides } from "../../features/relay/identity-archives";
 import { foldProfiles } from "../../features/relay/profiles";
@@ -32,9 +39,13 @@ import {
   MenuRoot,
   MenuTrigger,
 } from "../../shared/design-system/ui/Menu";
-import type { SearchDestination, SearchInputProps } from "./SearchChoices";
+import type {
+  SearchDestination,
+  SearchGroup,
+  SearchInputProps,
+} from "./SearchChoices";
 import { SearchChoices } from "./SearchChoices";
-import { matchName, matchRank } from "../../features/search/match";
+import { MatchRank, matchName, matchRank } from "../../features/search/match";
 import {
   noSearchUsage,
   readSearchUsage,
@@ -43,6 +54,12 @@ import {
 } from "../../features/search/usage";
 import { usePublicChannelSearch } from "../../features/channels/usePublicChannelSearch";
 import { type SearchSort, useSearchMessages } from "./useSearchMessages";
+import {
+  MESSAGE_SEARCH_MIN_CHARS,
+  SEARCH_MIN_CHARS,
+  searchDebounce,
+  searchable,
+} from "../../shared/search-debounce";
 import { matchPerson } from "../../features/search/person-match";
 import {
   personKey,
@@ -59,6 +76,7 @@ import {
   parseSearchOperators,
 } from "./parseSearchOperators";
 import { avatarMedia } from "../../shared/avatar-source";
+import { useVerifiedNames } from "../../features/profiles/useVerifiedNames";
 import { sortParticipantNames } from "../../features/identity-names/participant-order";
 
 function conversationName(
@@ -83,6 +101,12 @@ function conversationName(
 
 /** The most rows the People and Agents groups each show. */
 const PERSON_ROWS = 6;
+const noMembers: readonly string[] = [];
+
+/** "Search in this conversation" narrows the search and "Show more messages"
+ * extends it; neither is a result. */
+const isSearchAction = (key: string) =>
+  key.startsWith("scope:") || key === "more-messages";
 
 export function SearchResults({
   session,
@@ -90,6 +114,7 @@ export function SearchResults({
   query,
   onQueryChange,
   input,
+  open,
   pages,
   scopedChannelId,
   currentChannelId,
@@ -319,7 +344,14 @@ export function SearchResults({
     peopleNeedle,
     peopleActive,
   );
+  // Typing cancels the page's read; the next settled page reads again.
+  const directoryVerified = useVerifiedNames(session, personDirectory.people, {
+    key: peopleNeedle,
+    settled: !personDirectory.loading,
+  });
   useMentionArchives(session, showAuthorPicker || peopleActive);
+  // People labels come from one names scope built each render.
+  useNamesRevision(session.names, peopleActive);
   // The viewer's own agents open a new chat, not a direct message: the
   // same agents the new-chat composer accepts. Their earlier chats
   // still show as conversations.
@@ -335,7 +367,7 @@ export function SearchResults({
   useEffect(() => {
     if (!showAuthorPicker) return;
     const controller = new AbortController();
-    const timer = setTimeout(() => {
+    const cancel = searchDebounce(() => {
       void (async () => {
         const members = effectiveChannelId
           ? (session.channels.get?.(effectiveChannelId)?.members ?? [])
@@ -350,7 +382,7 @@ export function SearchResults({
         }
         let remote: readonly EventData[] = [];
         let lookupFailed = false;
-        if (authorNeedle) {
+        if (searchable(authorNeedle)) {
           try {
             remote = await session.searchProfiles(authorNeedle, {
               limit: 40,
@@ -367,9 +399,9 @@ export function SearchResults({
         if (!controller.signal.aborted)
           setAuthorSuggestions({ query, remote: [], lookupFailed: true });
       });
-    }, 180);
+    });
     return () => {
-      clearTimeout(timer);
+      cancel();
       controller.abort();
     };
   }, [session, effectiveChannelId, query, authorNeedle, showAuthorPicker]);
@@ -495,17 +527,22 @@ export function SearchResults({
         message.authorId,
         ...(message.workflowOwnerId ? [message.workflowOwnerId] : []),
       ]),
+      ...personDirectory.people.flatMap((person) =>
+        person.ownerPubkey ? [person.ownerPubkey] : [],
+      ),
     ]),
   ]
     .sort()
     .slice(0, 1024)
     .join(":");
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (profileKey)
       void session.profiles
         .ensure(profileKey.split(":"), "background")
         .catch(() => {});
-  }, [session, profileKey]);
+  }, [session, profileKey, profileGeneration]);
   const needle = parsed.text.toLowerCase().replace(/^#/, "");
   // Read once per opening, so usage recorded while it is open cannot reorder it.
   const usage = useMemo(
@@ -514,18 +551,19 @@ export function SearchResults({
   );
   const choose = (key: string, run: () => void) => () => {
     if (usageScope) recordChoice(usageScope, needle, key);
+    cancelPersonOpen(key);
     run();
   };
-  const managedAgents = new Map(
+  const messageableAgents = new Map(
     agents.identities
-      .filter((agent) => agent.managed)
+      .filter(canMessageAgent)
       .map((agent) => [agent.pubkey, agent]),
   );
   const people: (PersonCandidate & { picture?: string | undefined })[] = [];
   if (peopleActive) {
     const relationships = peopleRelationships(
       list.channels,
-      new Set(managedAgents.keys()),
+      new Set(messageableAgents.keys()),
     );
     const knownAgents = knownAgentPubkeys(profiles, {
       definitions: [],
@@ -542,18 +580,42 @@ export function SearchResults({
     >();
     // Ties keep this order, as in New message: the directory's rows first, in
     // the relay's order, then cached profiles, then agents. A cached profile
-    // still supplies a directory row's facts.
+    // still supplies a directory row's facts. Where the shared profiles have
+    // not verified a row, a name verified for this page names it as they would.
     const cached = (pubkey: string) => {
       const profile = profiles.get(pubkey);
       return profile && (!profile.nameIsFallback || profile.username)
         ? profile
         : undefined;
     };
-    for (const person of personDirectory.people)
-      sources.set(person.pubkey, cached(person.pubkey) ?? person);
+    const pageVerified = (pubkey: string) =>
+      profiles.get(pubkey)?.verified
+        ? undefined
+        : directoryVerified.get(pubkey);
+    const verifiedOf = (pubkey: string) =>
+      profiles.get(pubkey)?.verified ?? pageVerified(pubkey);
+    const searched = new Map<string, readonly string[]>();
+    for (const person of personDirectory.people) {
+      const source = cached(person.pubkey) ?? person;
+      const found = pageVerified(person.pubkey);
+      // The relay matched these names; a verified name must not lose the row.
+      searched.set(
+        person.pubkey,
+        [person.name, person.username].filter((name) => name !== undefined),
+      );
+      sources.set(
+        person.pubkey,
+        found
+          ? { ...source, name: found.displayName, username: found.username }
+          : source,
+      );
+    }
     for (const [pubkey, profile] of profiles)
       if (!sources.has(pubkey) && cached(pubkey)) sources.set(pubkey, profile);
-    for (const agent of [...managedAgents.values(), ...sessionAgents.values()])
+    for (const agent of [
+      ...messageableAgents.values(),
+      ...sessionAgents.values(),
+    ])
       if (!sources.has(agent.pubkey))
         sources.set(agent.pubkey, {
           name: agent.name,
@@ -565,39 +627,60 @@ export function SearchResults({
         !!source.isAgent ||
         knownAgents.has(pubkey) ||
         sessionAgents.has(pubkey);
-      // As in New message, an agent is a destination only when this
-      // community's native control manages it.
+      // As in New message, agent DM eligibility comes from the shared choices.
       return pubkey === session.viewer ||
-        (agent && !managedAgents.has(pubkey) && !sessionAgents.has(pubkey)) ||
+        (agent &&
+          !messageableAgents.has(pubkey) &&
+          !sessionAgents.has(pubkey)) ||
         archiveHides(session.archives, pubkey, session.viewer)
         ? []
         : [{ pubkey, source, agent }];
     });
-    // Namesakes are told apart within these destinations. Directory rows are
-    // not in the shared profile cache, so they supply their own names.
+    // Namesakes are told apart within these destinations. Directory rows that
+    // the shared profile cache does not name supply their own names.
     const candidates = eligible.map(({ pubkey }) => pubkey);
-    const displayFacts = personDirectory.people
-      .filter((person) => sources.get(person.pubkey) === person)
-      .map((person) => ({
-        pubkey: person.pubkey,
-        name: person.name,
-        ...(person.isAgent ? { isAgent: true } : {}),
-      }));
+    const displayFacts = personDirectory.people.flatMap((person) => {
+      const source = sources.get(person.pubkey);
+      return source && source !== profiles.get(person.pubkey)
+        ? [
+            {
+              pubkey: person.pubkey,
+              name: source.name,
+              ...(person.isAgent ? { isAgent: true } : {}),
+              ...(person.ownerPubkey
+                ? { ownerPubkey: person.ownerPubkey }
+                : {}),
+            },
+          ]
+        : [];
+    });
+    const named = session.names?.scope(candidates, displayFacts);
     for (const { pubkey, source, agent } of eligible) {
       const dm = relationships.dm(pubkey);
       const agentName =
-        managedAgents.get(pubkey)?.name ?? sessionAgents.get(pubkey)?.name;
+        messageableAgents.get(pubkey)?.name ?? sessionAgents.get(pubkey)?.name;
+      // Without a naming policy the scope falls back to the public profile,
+      // which must not outrank a name verified for this page.
+      const found = named?.(pubkey);
+      const label =
+        (found?.source === "public-profile" && pageVerified(pubkey)
+          ? undefined
+          : found?.name) ?? source.name;
+      const fullName = verifiedOf(pubkey)?.fullName;
       people.push({
         pubkey,
-        label: resolveName(pubkey, source.name, candidates, displayFacts),
-        username: source.username,
+        label,
+        // A verified username or full name is often the label itself.
+        username: source.username !== source.name ? source.username : undefined,
+        fullName: fullName !== label ? fullName : undefined,
         agentName: agentName !== source.name ? agentName : undefined,
+        profileNames: searched.get(pubkey),
         agent,
         relationship: relationships.rank(pubkey),
         usageKeys: [personKey(pubkey), ...(dm ? [`channel:${dm}`] : [])],
         picture:
           source.picture ??
-          managedAgents.get(pubkey)?.avatar ??
+          messageableAgents.get(pubkey)?.avatar ??
           sessionAgents.get(pubkey)?.avatar,
       });
     }
@@ -619,11 +702,11 @@ export function SearchResults({
     ]),
   );
   // Rank before the limit, so an exact name beyond the first eight still shows.
-  // The relay matches public channels itself; keep its matches, ranked last.
+  // The store matches public channels by the same rule (`matchRank`).
   // The shared search order, with archived channels half a step behind live
   // ones in the same place.
   const rankOf = (label: string, key: string, archived?: boolean) => {
-    const rank = matchRank(label, needle) ?? 6;
+    const rank = matchRank(label, needle) ?? MatchRank.inOrder + 1;
     return searchOrder(usage, picked, { key, rank }) + (archived ? 0.5 : 0);
   };
   /** Whether a search order is an exact name, live (-2) or archived (-1.5). */
@@ -778,8 +861,12 @@ export function SearchResults({
         ? channel.channelType === "solo"
           ? "Archived chat"
           : "Archived channel"
-        : channel.readOnly && !channel.cached
-          ? "Public channel · not joined"
+        : channel.readOnly && !channel.cached && channel.viewerRole !== "guest"
+          ? channel.channelType === "solo"
+            ? channel.joinRole === "guest"
+              ? "View-only chat"
+              : "Public chat · not joined"
+            : "Public channel · not joined"
           : channel.channelType === "dm"
             ? "Direct message"
             : channel.channelType === "solo"
@@ -794,8 +881,22 @@ export function SearchResults({
     name: string;
     error?: string;
   }>();
-  const personAttempt = useRef<AbortController | undefined>(undefined);
-  useEffect(() => () => personAttempt.current?.abort(), []);
+  const personAttempt = useRef<
+    { key: string; controller: AbortController } | undefined
+  >(undefined);
+  useEffect(() => () => personAttempt.current?.controller.abort(), []);
+  // The newest choice wins: another choice cancels a DM that is still opening.
+  const cancelPersonOpen = (key?: string) => {
+    if (!personAttempt.current || personAttempt.current.key === key) return;
+    personAttempt.current.controller.abort();
+    personAttempt.current = undefined;
+    setPersonOpen(undefined);
+  };
+  // So does closing, or a reopen during the close animation would navigate.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cancelPersonOpen reads only refs and setters.
+  useEffect(() => {
+    if (open === false) cancelPersonOpen();
+  }, [open]);
   const openPerson = async (pubkey: string, name: string, agent: boolean) => {
     if (personAttempt.current) return;
     const existing = session.channels
@@ -820,7 +921,9 @@ export function SearchResults({
       !existing &&
       !session.agentChoices
         .snapshot()
-        .identities.some((item) => item.managed && item.pubkey === pubkey)
+        .identities.some(
+          (item) => canMessageAgent(item) && item.pubkey === pubkey,
+        )
     ) {
       setPersonOpen({
         name,
@@ -829,7 +932,7 @@ export function SearchResults({
       return;
     }
     const controller = new AbortController();
-    personAttempt.current = controller;
+    personAttempt.current = { key: personKey(pubkey), controller };
     setPersonOpen({ name });
     try {
       const channelId = await session.directMessages.open(
@@ -849,7 +952,7 @@ export function SearchResults({
               : "Could not open the conversation. Try again.",
         });
     } finally {
-      if (personAttempt.current === controller)
+      if (personAttempt.current?.controller === controller)
         personAttempt.current = undefined;
     }
   };
@@ -874,6 +977,7 @@ export function SearchResults({
       label: person.label,
       ...(matches?.length ? { matches } : {}),
       detail: [
+        person.fullName,
         person.username && `@${person.username}`,
         newSession
           ? "New chat"
@@ -907,7 +1011,9 @@ export function SearchResults({
   const recent: SearchDestination[] = channels
     .filter(
       (channel) =>
-        !channel.readOnly && !channel.archived && !sidebarHidden(channel),
+        (!channel.readOnly || channel.viewerRole === "guest") &&
+        !channel.archived &&
+        !sidebarHidden(channel),
     )
     .sort(
       (a, b) =>
@@ -930,7 +1036,10 @@ export function SearchResults({
             label: `Search ${currentChannel.channelType === "dm" ? "conversation with" : "in"} ${names.get(currentChannel.id) ?? currentChannel.name}`,
             detail: "Search messages in this conversation",
             icon: ChatCircleIcon,
-            run: () => onScopeChange(currentChannel.id),
+            run: () => {
+              cancelPersonOpen();
+              onScopeChange(currentChannel.id);
+            },
           },
         ]
       : [];
@@ -940,29 +1049,55 @@ export function SearchResults({
       displayId,
       profiles.get(displayId)?.name ?? displayId.slice(0, 10),
       list.channels.find((channel) => channel.id === message.channelId)
-        ?.members ?? [],
+        ?.members ?? noMembers,
     );
     return {
       key: message.id,
       label: message.preview,
       detail: `${names.get(message.channelId) ?? session.channels.get?.(message.channelId)?.name ?? "Conversation"} · ${message.workflowOwnerId ? workflowLabel(name) : name} · ${new Date(message.createdAt * 1000).toLocaleDateString()}`,
       icon: ChatCircleIcon,
-      run: () => openConversation(message.channelId, message.id),
+      run: () => {
+        cancelPersonOpen();
+        openConversation(message.channelId, message.id);
+      },
     };
   });
+  const messageRows: SearchDestination[] = search.hasMore
+    ? [
+        ...messages,
+        {
+          key: "more-messages",
+          label: search.loadingMore
+            ? "Loading more messages…"
+            : "Show more messages",
+          icon: ChatCircleIcon,
+          run: () => {
+            cancelPersonOpen();
+            search.loadMore();
+          },
+        },
+      ]
+    : messages;
   const operatorLookupPending =
     needsPublicLookup &&
     (list.status !== "ready" || operatorPublicChannels.loading);
   const operatorLookupError = needsPublicLookup
     ? operatorPublicChannels.error
     : undefined;
+  const directoryPending = publicChannels.loading || personDirectory.loading;
   const messageEmpty =
     operatorLookupPending || search.loading
       ? "Searching messages…"
       : operatorLookupError || search.error
         ? "Message search is unavailable."
         : query.trim()
-          ? "No matching messages in accessible conversations."
+          ? directoryPending
+            ? undefined
+            : search.tooShort
+              ? // Only the last word is matched as a prefix, so name it
+                // once earlier words make the whole query long enough.
+                `Type at least ${MESSAGE_SEARCH_MIN_CHARS} characters${/\s/.test(parsed.text.trim()) ? " in the last word" : ""} to search messages.`
+              : "No matching messages in accessible conversations."
           : scopedChannelId
             ? "Type to search messages in this conversation."
             : "Type to search messages in this community.";
@@ -972,7 +1107,7 @@ export function SearchResults({
     input.current?.focus();
     retry();
   };
-  const groups =
+  const groups: readonly SearchGroup[] =
     pickerPrompt || showAmbiguousPicker
       ? [
           {
@@ -984,9 +1119,11 @@ export function SearchResults({
                 ? "Searching people…"
                 : authorSuggestions.lookupFailed
                   ? "People search is unavailable. Try a longer name."
-                  : authorNeedle
-                    ? "No matching people. Try a different name."
-                    : "Type a name to search people.",
+                  : authorNeedle && !searchable(authorNeedle)
+                    ? `Type at least ${SEARCH_MIN_CHARS} characters to search people.`
+                    : authorNeedle
+                      ? "No matching people. Try a different name."
+                      : "Type a name to search people.",
           },
           {
             label: "Agents",
@@ -1000,19 +1137,7 @@ export function SearchResults({
               {
                 label: messageOrder,
                 rank: Infinity,
-                destinations: search.hasMore
-                  ? [
-                      ...messages,
-                      {
-                        key: "more-messages",
-                        label: search.loadingMore
-                          ? "Loading more messages…"
-                          : "Show more messages",
-                        icon: ChatCircleIcon,
-                        run: search.loadMore,
-                      },
-                    ]
-                  : messages,
+                destinations: messageRows,
                 empty: messageEmpty,
               },
             ]
@@ -1116,7 +1241,7 @@ export function SearchResults({
                 {
                   label: messageOrder,
                   rank: Infinity,
-                  destinations: messages,
+                  destinations: messageRows,
                   empty:
                     directMessageResults.length ||
                     chatResults.length ||
@@ -1194,6 +1319,27 @@ export function SearchResults({
           : undefined
       }
       groups={groups}
+      open={open}
+      // Enter before any row, or on search actions alone, waits for a
+      // channel or person row, or for the lookups to settle, rather than
+      // opening a message that lands first. A cold joined list has not yet
+      // started the open-channel lookup.
+      pending={
+        (directoryPending ||
+          operatorLookupPending ||
+          search.loading ||
+          (!scopedChannelId &&
+            !!query.trim() &&
+            list.status === "loading" &&
+            !list.channels.length)) &&
+        !groups.some(
+          (group) =>
+            group.rank !== Infinity &&
+            group.destinations !== scopeAction &&
+            group.destinations.length,
+        )
+      }
+      isAction={isSearchAction}
     >
       <div
         className="space-y-2 px-3 text-body-sm text-subtle"

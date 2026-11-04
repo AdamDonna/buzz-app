@@ -32,9 +32,11 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import lockfile from "proper-lockfile";
 import { AuthFile, serve } from "./host.mjs";
 import { Harness } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 const originalOpen = Harness.open;
-let openedHarness;
-Harness.open = async (...args) => { openedHarness = await originalOpen(...args); return openedHarness; };
+let openedHarness, report;
+Harness.open = async (...args) => { report = args[1].onReport; openedHarness = await originalOpen(...args); return openedHarness; };
 const data = process.argv[2];
 const faux = fauxProvider();
 const models = createModels();
@@ -110,6 +112,11 @@ try { out.cleanupFailure = await pi.rpc("wait", { agent, submission: b.submissio
 finally { openedHarness.commit = commit; }
 // What a transcript and usage read: the places, and the entries without schemas.
 out.places = (await pi.rpc("places", { agent })).places;
+// Another membership of the same identity has its own durable storage.
+const secondary = agent + "@secondary.example%3A7447";
+await pi.rpc("open", { agent: secondary, tools });
+out.secondaryPlaces = (await pi.rpc("places", { agent: secondary })).places;
+await pi.rpc("close", { agent: secondary });
 out.recorded = Object.keys((await pi.rpc("recorded", { agent, conversation: a.conversation })).models);
 out.entries = (await pi.rpc("entries", { agent, conversation: a.conversation })).entries.map((entry) => [entry.kind, ...(entry.model ?? []).map((message) => message.role + (message.usage ? "+usage" : ""))]);
 // A policy enabled after the process started blocks the same live tool path.
@@ -166,6 +173,17 @@ const g1 = await pi.rpc("deliver", turn("G", "ninth"));
 await asking.gate;
 await pi.rpc("abort", { agent, conversation: g1.conversation });
 out.aborted = await pi.rpc("wait", { agent, submission: g1.submission });
+// A run whose task Pi parked, as crashes cut it off too often, ends at the
+// next wait, with what is queued for it: each fails, saying why.
+const pk = held(), parking = held();
+faux.setResponses([async (_context, options) => { parking.release(); await abortable(pk.gate, options?.signal); return fauxAssistantMessage("never"); }]);
+const pk1 = await pi.rpc("deliver", turn("PK1", "parked"));
+await parking.gate;
+const pk2 = await pi.rpc("deliver", turn("PK2", "queued"));
+const { tasks } = await openedHarness.inspect(BACKGROUND_CONTEXT);
+const parkedTask = tasks.find(({ record }) => record.conversationId === pk1.conversation && !record.owner).record;
+report(new Error("Parked"), { type: "task_parked", task: { id: parkedTask.id, kind: parkedTask.kind, conversationId: pk1.conversation } });
+out.parked = await Promise.all([pk1, pk2].map((x) => pi.rpc("wait", { agent, submission: x.submission })));
 // Session controls act on a conversation key's Pi conversation.
 const s = held(), running = held();
 faux.setResponses([async (_context, options) => { running.release(); await abortable(s.gate, options?.signal); return fauxAssistantMessage("never"); }]);
@@ -189,6 +207,47 @@ await pi.rpc("session", { agent, key: "chan/root", action: "compact" });
 await pi.rpc("session", { agent, key: "chan/root", action: "new" });
 out.renewed = { place: await pi.rpc("place", { agent, key: "chan/root" }), kinds: (await pi.rpc("entries", { agent, conversation: s1.conversation })).entries.map((entry) => entry.kind).slice(0, 2) };
 out.unplaced = await pi.rpc("session", { agent, key: "chan/none", action: "compact" });
+// Which turn starts a session, and the session it starts, come from Pi's own
+// history: a reset's entry id, or 0 before any.
+const own = (request, text) => ({ ...turn(request, text), key: "chan/sessions" });
+const answer = async (request, text) => {
+  faux.setResponses([fauxAssistantMessage("ok")]);
+  const delivered = await pi.rpc("deliver", own(request, text));
+  await pi.rpc("wait", { agent, submission: delivered.submission });
+  return delivered;
+};
+const n0 = await answer("N0", "opens");
+const n1 = await answer("N1", "continues");
+await pi.rpc("session", { agent, key: "chan/sessions", action: "new" });
+const reset = (await pi.rpc("entries", { agent, conversation: n0.conversation })).entries.find((entry) => entry.kind === "pi.reset")?.id;
+const n2 = await answer("N2", "after new");
+// A host that stops after the session's first turn, before the app saved its
+// prompt, never offers a later turn as the first.
+await pi.stop();
+pi = start();
+await pi.rpc("open", { agent, tools });
+const n3 = await answer("N3", "after restart");
+// Enough turns that the reset is older than the first page of entries.
+for (let index = 0; index < 110; index++) await answer("M" + index, "more");
+// Count the entries Pi's storage reads, to see that naming a session reads
+// only its markers, not the history before them.
+const probe = await openNodeSqliteStorage(data + "/probe.sqlite");
+const storage = Object.getPrototypeOf(probe);
+await probe.close();
+const scan = storage.scanEntries;
+let read = 0;
+storage.scanEntries = async function (...args) {
+  const page = await scan.apply(this, args);
+  read += page.items.length;
+  return page;
+};
+const page = await pi.rpc("entries", { agent, conversation: n0.conversation });
+const pageRead = read;
+read = 0;
+const last = await answer("M110", "more");
+const deliverRead = read;
+storage.scanEntries = scan;
+out.sessions = { n0: n0.session, n1: n1.session, n2: n2.session, n3: n3.session, last: last.session, reset, page: page.session, more: !!page.next, oldest: page.entries.at(-1)?.id, shown: page.entries.length, pageRead, deliverRead };
 // A tool loaded on search is offered once tool_search finds it.
 const offered = [];
 /** The tools a request offers: its own, and those its system messages add. */
@@ -562,6 +621,14 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       text: "Plain answer",
     });
     expect(out.recorded).toEqual(["faux/faux-1"]);
+    expect(out.secondaryPlaces).toEqual([]);
+    expect(
+      (
+        await stat(
+          join(agents, `${"b".repeat(64)}@secondary.example%3A7447.sqlite`),
+        )
+      ).isFile(),
+    ).toBe(true);
     expect(out.places).toEqual([
       { key: "chan/root", conversation: out.a.conversation, seen: 100 },
     ]);
@@ -627,6 +694,12 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       status: "unanswered",
       reason: "aborted",
     });
+    const parked = {
+      status: "unanswered",
+      reason: "restart_limit",
+      detail: expect.stringContaining("crashed"),
+    };
+    expect(out.parked).toEqual([parked, parked]);
     expect(out.interrupted).toMatchObject({
       status: "unanswered",
       reason: "aborted",
@@ -640,6 +713,22 @@ describe.skipIf(!DEPS)("the Pi host on Pi durable", () => {
       aborted: true,
     });
     // A new session is shown the whole conversation at its next turn.
+    // The first turn of a conversation and of each reset names its session.
+    expect(out.sessions).toMatchObject({
+      n0: 0,
+      n2: out.sessions.reset,
+      more: true,
+    });
+    expect(out.sessions.n1).toBeUndefined();
+    expect(out.sessions.n3).toBeUndefined();
+    expect(out.sessions.oldest).toBeGreaterThan(out.sessions.reset);
+    expect(out.sessions.page).toBe(out.sessions.reset);
+    expect(out.sessions.last).toBeUndefined();
+    // Naming the page's session reads no entry beyond the page itself.
+    expect(out.sessions.pageRead).toBe(out.sessions.shown);
+    // A later turn's first-turn check stops at the session's first prompt,
+    // well short of the hundreds of entries since the reset.
+    expect(out.sessions.deliverRead).toBeLessThan(50);
     expect(out.renewed).toEqual({
       place: { seen: 0 },
       kinds: ["pi.reset", "pi.compaction"],

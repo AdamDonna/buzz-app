@@ -1,5 +1,12 @@
 const unavailable = '[hidden], [inert], [aria-hidden="true"]';
 
+/** The topmost available modal: the last open one in document order. */
+export function activeModal(document: Document) {
+  return [...document.querySelectorAll('[aria-modal="true"], dialog[open]')]
+    .filter((candidate) => !candidate.closest(unavailable))
+    .at(-1);
+}
+
 /**
  * Native top-layer hover surfaces paint above ordinary portals regardless of
  * z-index. Reuse popup semantics and Base UI's rendered lifetime, not a second
@@ -7,11 +14,7 @@ const unavailable = '[hidden], [inert], [aria-hidden="true"]';
  */
 export function behindActiveOverlay(element: Element) {
   const document = element.ownerDocument;
-  const modal = [
-    ...document.querySelectorAll('[aria-modal="true"], dialog[open]'),
-  ]
-    .filter((candidate) => !candidate.closest(unavailable))
-    .at(-1);
+  const modal = activeModal(document);
   if (modal && !modal.contains(element)) return true;
 
   const triggers = [

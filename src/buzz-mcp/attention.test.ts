@@ -12,6 +12,7 @@ import type { BuzzClient } from "./client";
 import { BUZZ_PROMPT } from "./prompt";
 import { respond } from "./rpc";
 import { turnNote } from "./session-tools";
+import { SOLO_WORKER_TOOLS } from "./solo-worker";
 import { TOOLS } from "./tools";
 
 const channel = "0b8e2a3c-1d4f-4a5b-8c6d-7e8f9a0b1c2d";
@@ -97,7 +98,9 @@ describe("the tool list", () => {
   it("always offers the attention tools with their guidance, and says each turn whether attention is on", async () => {
     // One list whatever the setting, so turning attention on or off never
     // replaces a session or its cached prompt prefix.
-    const names = [...TOOLS, ...ATTENTION_TOOLS].map((tool) => tool.name);
+    const names = [...TOOLS, ...ATTENTION_TOOLS, ...SOLO_WORKER_TOOLS].map(
+      (tool) => tool.name,
+    );
     expect(await list()).toEqual(names);
     for (const enabled of [true, false])
       expect(
@@ -125,7 +128,7 @@ describe("the tool list", () => {
       /^<attention>\nHandle the work/,
     );
     expect(turnNote({ attention: agent({ enabled: false }).api })).toMatch(
-      /^<attention>\nYour owner has attention off/,
+      /^<attention>\nAttention is off on this device/,
     );
     // A client whose host keeps no attention gets no note.
     expect(turnNote({})).toBeUndefined();
@@ -254,14 +257,12 @@ describe("the attention tools", () => {
       ...asks,
       name: "Asks",
       is_reply: false,
-      keywords: ["failed"],
       expected_state: ABSENT,
     });
-    expect(added.object).toMatchObject({ keywords: ["failed"] });
     const updated = await call("watch_update", {
       id: "asks",
       kinds: [9, 40002],
-      clear: ["is_reply", "keywords"],
+      clear: ["is_reply"],
       expected_state: added.expected_state,
     });
     expect(updated.object).toEqual({
@@ -282,6 +283,39 @@ describe("the attention tools", () => {
         expected_state: updated.expected_state,
       }),
     ).rejects.toThrow(/^invalid: Not a field of this watch type: prompt/);
+  });
+
+  it("refuses the removed keywords selector instead of dropping it", async () => {
+    const { call } = agent();
+    await call("interest_set", {
+      id: "triage",
+      instructions: "T.",
+      expected_state: ABSENT,
+    });
+    await expect(
+      call("watch_add", {
+        ...asks,
+        keywords: ["failed"],
+        expected_state: ABSENT,
+      }),
+    ).rejects.toThrow(/^invalid: keywords was removed from watches/);
+    expect((await call("watch_show", { id: "asks" })).object).toBeNull();
+    const added = await call("watch_add", {
+      ...asks,
+      enabled: false,
+      expected_state: ABSENT,
+    });
+    await expect(
+      call("watch_update", {
+        id: "asks",
+        enabled: true,
+        keywords: ["failed"],
+        expected_state: added.expected_state,
+      }),
+    ).rejects.toThrow(/^invalid: keywords was removed from watches/);
+    expect((await call("watch_show", { id: "asks" })).object).toMatchObject({
+      enabled: false,
+    });
   });
 
   it("requires since for an event watch", async () => {

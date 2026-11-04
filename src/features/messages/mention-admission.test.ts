@@ -26,6 +26,7 @@ function session(
     },
     archives: {
       state: (key: string) => (key === archived ? "archived" : "active"),
+      snapshot: () => ({ status: "ready", archived: [archived] }),
     },
   } as unknown as RelaySession;
 }

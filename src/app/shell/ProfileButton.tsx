@@ -1,15 +1,18 @@
+import { RecommendationCount } from "../RecommendationCount";
 import { formatPublicKey } from "../../shared/identity/public-key";
 import { usePresenceStatus } from "../../features/presence/react";
 import { useRelayConnection } from "../../features/relay/react";
 import { avatarMedia, avatarSource } from "../../shared/avatar-source";
 import { useUserStatus } from "../../features/user-status/useUserStatus";
 import { useStatusEditor } from "../../features/user-status/useStatusEditor";
+import { statusShortcut } from "../../features/user-status/status-shortcut";
 import { StatusEmoji } from "../../features/user-status/StatusEmoji";
 import { Button } from "../../shared/design-system/ui/Button";
 import { StatusEditor } from "../../features/user-status/StatusEditor";
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useId,
   useRef,
   useState,
@@ -65,19 +68,20 @@ const colorModes = {
   ColorModePreference,
   { label: string; Icon: typeof SunIcon }
 >;
-const noLiveSnapshot = () => undefined;
 
 export function ProfileButton({
   communities,
   accountActions,
   appearance,
   settingsSelected,
+  pluginRecommendations = 0,
   onSettings,
 }: {
   communities: Communities;
   accountActions: AccountActionsService;
   appearance: Appearance;
   settingsSelected: boolean;
+  pluginRecommendations?: number;
   /** Opens Settings, optionally at one of its own sections. */
   onSettings(section?: "profile" | "plugins"): void;
 }) {
@@ -151,13 +155,19 @@ export function ProfileButton({
     readProfile,
     readProfile,
   );
-  const live = useSyncExternalStore(
+  // Only the refresh inputs: live heads change on every message and prefetch.
+  const readRoster = () => session?.live.snapshot()?.roster;
+  const readLiveStatus = () => session?.live.snapshot()?.status;
+  const roster = useSyncExternalStore(
     session?.live.subscribe ?? noSubscription,
-    session?.live.snapshot ?? noLiveSnapshot,
-    session?.live.snapshot ?? noLiveSnapshot,
+    readRoster,
+    readRoster,
   );
-  const roster = live?.roster;
-  const liveStatus = live?.status;
+  const liveStatus = useSyncExternalStore(
+    session?.live.subscribe ?? noSubscription,
+    readLiveStatus,
+    readLiveStatus,
+  );
   useEffect(() => {
     if (
       !profiles ||
@@ -189,6 +199,18 @@ export function ProfileButton({
   const picture = selected ? avatarMedia(source, session?.media) : source;
   const status = useUserStatus(session?.statuses, viewer ?? "");
   const statusEditor = useStatusEditor(session, viewer ?? undefined);
+  // The Set status shortcut follows the menu item's availability.
+  const statusAvailable =
+    !!viewer && !!session?.statuses?.writable && !!connection.scope;
+  const openStatus = useEffectEvent(() => statusEditor.open());
+  useEffect(() => {
+    if (!statusAvailable) return;
+    const open = () => openStatus();
+    statusShortcut.current = open;
+    return () => {
+      if (statusShortcut.current === open) statusShortcut.current = undefined;
+    };
+  }, [statusAvailable]);
   const profileTrigger = useRef<HTMLButtonElement>(null);
   const appearanceTrigger = useRef<HTMLDivElement>(null);
   const openingStatus = useRef(false);
@@ -406,7 +428,11 @@ export function ProfileButton({
               >
                 {status ? (
                   <>
-                    <StatusEmoji session={session} value={status.emoji} />
+                    <StatusEmoji
+                      session={session}
+                      value={status.emoji}
+                      url={status.emojiUrl}
+                    />
                     <span className="min-w-0 truncate text-body-sm">
                       {status.text}
                     </span>
@@ -484,6 +510,11 @@ export function ProfileButton({
               <SquaresFourIcon aria-hidden="true" size={16} />
             </MenuIcon>
             Plugins
+            {pluginRecommendations > 0 && (
+              <MenuTrailing>
+                <RecommendationCount count={pluginRecommendations} />
+              </MenuTrailing>
+            )}
           </MenuItem>
           <MenuItem
             aria-current={settingsSelected ? "page" : undefined}

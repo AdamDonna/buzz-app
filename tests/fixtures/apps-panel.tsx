@@ -16,7 +16,7 @@ import { ProfilePeek } from "../../src/features/profiles/ProfilePeek";
 // The native adapter is substituted; Cordis, plugin registration, React view
 // identity and the four-guest pool are the production collaborators.
 const calls = {
-  attached: [] as { id: string; url: string }[],
+  attached: [] as { id: string; url: string; authenticated: boolean }[],
   detached: [] as string[],
   statuses: [] as { id: string; url: string }[],
   presentations: [] as { id: string; visible: boolean }[],
@@ -26,9 +26,9 @@ Object.assign(window, { appsPanelCalls: calls });
 const pages = new Map<string, string>();
 const platform: BrowserPlatform = {
   available: true,
-  async attach(url) {
+  async attach(url, _bounds, _storage, builderlab) {
     const id = `guest-${calls.attached.length + 1}`;
-    calls.attached.push({ id, url });
+    calls.attached.push({ id, url, authenticated: Boolean(builderlab) });
     pages.set(id, url);
     return id;
   },
@@ -57,11 +57,19 @@ ctx.provide("pluginStatus", {
 ctx.provide("agents", { addTool() {} });
 new BrowserService(ctx, platform);
 const panels = new PanelsService(ctx);
+const session = createOAuthSession(async () => ({
+  value: "synthetic-fixture-credential",
+  account: {
+    subject: "fixture|viewer",
+    email: "viewer@example.test",
+    canUseRemoteAgents: false,
+  },
+}));
+await session.signIn();
 applyApps(
   ctx.extend({ pluginOwner: { id: "fixture.apps", revision: "one" } }) as never,
-  createOAuthSession(async () => {
-    throw new Error("Sign-in is unused in this fixture");
-  }),
+  session,
+  true,
 );
 const urls = [1, 2, 3, 4, 5].map(
   (id) => `https://app${id}--bpsites.apps.builderlabstaging.xyz/`,

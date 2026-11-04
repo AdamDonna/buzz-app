@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -105,6 +105,13 @@ it.each(["bottom", "side"] as const)(
       screen.queryByRole("button", { name: "Close settings" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: label })).toBeVisible();
+    if (placement !== "side") return;
+    // Shift+Escape is Mark all as read; only plain Escape dismisses.
+    const region = screen.getByRole("region", { name: label });
+    fireEvent.keyDown(region, { key: "Escape", shiftKey: true });
+    expect(region).toBeInTheDocument();
+    fireEvent.keyDown(region, { key: "Escape" });
+    expect(region).not.toBeInTheDocument();
   },
 );
 
@@ -247,3 +254,41 @@ it.each(["bottom", "side"] as const)(
     expect(open).not.toHaveBeenCalled();
   },
 );
+
+it("keeps the linked PR immediately after the huddle regardless of registration order", () => {
+  const available = [
+    "other/tool",
+    "buzz.github/object",
+    "buzz.huddles/huddles",
+  ].map((key) => ({
+    key,
+    id: key,
+    pluginId: key,
+    revision: "1",
+    title: key,
+    matches: () => false,
+    component: () => null,
+    channelLauncher: () => <button type="button">{key}</button>,
+  }));
+  const panels: Panels = {
+    snapshot: () => available,
+    subscribe: () => () => {},
+    register: () => {},
+    resolve: () => undefined,
+    requestOpen: () => false,
+    handleOpenRequests: () => () => {},
+  };
+  function Harness() {
+    return useChannelPanels(panels, {
+      scope: "scope",
+      viewer: "viewer",
+      channelId: "solo",
+      channelName: "Solo",
+      relayUrl: "wss://example.com",
+    }).launchers;
+  }
+  render(<Harness />);
+  expect(
+    screen.getAllByRole("button").map((button) => button.textContent),
+  ).toEqual(["buzz.huddles/huddles", "buzz.github/object", "other/tool"]);
+});

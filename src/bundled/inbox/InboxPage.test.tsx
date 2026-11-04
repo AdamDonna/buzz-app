@@ -2,7 +2,7 @@ const emptyPanels: never[] = [];
 import type { ConversationHostServices } from "../../features/conversation/ConversationHost";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { StrictMode } from "react";
+import { cloneElement, StrictMode, type ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -25,6 +25,8 @@ import type { ComposerInputElement } from "../../features/messages/composer-dom"
 import { createRelaySession } from "../../features/relay/session";
 import type { RelaySnapshot, RelayData } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
+import type { PageNavigation } from "../../features/navigation/service";
+import { inboxRouteTarget, type InboxRoute } from "./route";
 import type { ReadFilter, RelayEvent } from "../../features/relay/events";
 import { matchesEvent } from "../../features/relay/projection";
 import {
@@ -641,7 +643,7 @@ it("offers no Archive shortcut while Drafts is shown", async () => {
   await waitFor(() => expect(h.archive.current).toBeUndefined());
 });
 
-it("archives from the row without opening it, remembers filters, and clears an empty unread archive", async () => {
+it("archives from the row without opening it, remembers filters, and resets an empty archive's filters, then its Status", async () => {
   const h = fixture();
   const view = render(h.view);
   await waitFor(() => expect(rows()).toHaveLength(2));
@@ -668,14 +670,78 @@ it("archives from the row without opening it, remembers filters, and clears an e
   expect(rows()).toHaveLength(1);
   await chooseFilter("DMs");
   await screen.findByText("No archived conversations match Unread only");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Show all archived conversations" }),
-  );
+  const filters = screen.getByRole("button", { name: "Inbox filters" });
+  // Clear filters resets Type, From and Unread only, keeping Archived.
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => expect(rows()).toHaveLength(1));
+  expect(filters).toHaveFocus();
+  expect(filters).toHaveTextContent(/^Archived$/);
   expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
     "aria-pressed",
     "false",
   );
+
+  const [archived] = rows();
+  if (!archived) throw new Error("Missing archived row");
+  fireEvent.click(within(archived).getByRole("button", { name: /^Restore / }));
+  await screen.findByText("No archived conversations in this view");
+  expect(
+    screen.queryByRole("button", { name: "Clear filters" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show Inbox" }));
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  expect(filters).toHaveFocus();
+  expect(filters).toHaveTextContent(/^All$/);
+
+  // An unfiltered, empty Inbox has nothing to reset.
+  for (const remaining of [1, 0]) {
+    const [row] = rows();
+    if (!row) throw new Error("Missing Inbox row");
+    const action = within(row).getByRole("button", { name: /^Archive / });
+    await waitFor(() => expect(action).toBeEnabled());
+    fireEvent.click(action);
+    await waitFor(() => expect(rows()).toHaveLength(remaining));
+  }
+  const empty = await screen.findByText("No recent activity in this view");
+  const status = empty.closest<HTMLElement>('[role="status"]');
+  if (!status) throw new Error("Missing empty state");
+  expect(within(status).queryAllByRole("button")).toEqual([]);
 });
+
+it.each([
+  ["DMs", "Activity type"],
+  ["Agents", "Sender"],
+  ["Unread only", "Attention"],
+] as const)(
+  "offers Clear filters when %s empties Inbox, keeping Status",
+  async (label, control) => {
+    const h = fixture();
+    render(h.view);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    if (control === "Attention")
+      await act(async () => {
+        await h.owner.session.unread.markChannelRead("room");
+      });
+    await chooseFilter(label, control);
+    await screen.findByText(
+      control === "Attention"
+        ? "No unread activity in this view"
+        : "No recent activity in this view",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Show Inbox" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    const filters = screen.getByRole("button", { name: "Inbox filters" });
+    expect(filters).toHaveFocus();
+    expect(filters).toHaveTextContent(/^All$/);
+    expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  },
+);
 
 it.each([
   ["button", true],
@@ -1517,6 +1583,7 @@ function fixture(
     soloChannel?: boolean;
     memberAgents?: 1 | 2;
     readCapability?: "read-only" | "unsupported";
+    guest?: boolean;
   } = {},
 ) {
   const viewer = keypair(),
@@ -1526,12 +1593,11 @@ function fixture(
     late = keypair(),
     unknown = keypair(),
     relayKey = keypair();
-  let releaseProfiles = () => {};
-  const profilesGate = options.holdProfiles
-    ? new Promise<void>((resolve) => {
-        releaseProfiles = resolve;
-      })
-    : undefined;
+  // Held profiles are unpublished until release, then arrive live. Holding a
+  // read open instead would occupy the one background read slot for good.
+  let profilesHeld = options.holdProfiles ?? false;
+  const unheld = (found: RelayEvent[]) =>
+    profilesHeld ? found.filter((event) => event.kind !== 0) : found;
   let rosterFailure = options.failRoster ?? false;
   let rosterGate: Promise<void> | undefined;
   let rosterStarted = false;
@@ -1666,6 +1732,18 @@ function fixture(
         ]
       : []),
   ];
+  if (options.guest) {
+    const roster = events[0];
+    if (!roster) throw new Error("Missing channel roster");
+    events[0] = signed(relayKey, {
+      ...roster,
+      tags: roster.tags.map((tag) =>
+        tag[0] === "p" && tag[1] === viewer.pubkey
+          ? ["p", viewer.pubkey, "", "guest"]
+          : tag,
+      ),
+    });
+  }
   if (options.readCapability) {
     journal = {
       ...newReadJournal(),
@@ -1704,8 +1782,6 @@ function fixture(
           await auxGate;
           if (failAux) throw new Error("auxiliary history unavailable");
         }
-        if (profilesGate && filters.some((filter) => filter.kinds?.includes(0)))
-          await profilesGate;
         if (filters.some((filter) => filter.kinds?.includes(39002))) {
           rosterStarted = true;
           if (rosterGate) await rosterGate;
@@ -1727,7 +1803,7 @@ function fixture(
               throw new Error("history offline");
           }
         }
-        return filters.flatMap(answer);
+        return unheld(filters.flatMap(answer));
       },
       // The real sizing rewrite behind a pass-through proxy, so rows resolve
       // relay-hosted pictures to the variant they actually requested.
@@ -1784,6 +1860,7 @@ function fixture(
           }),
     },
     {
+      readStateFloor: () => 0,
       outboxStorage: { load: () => [], save: () => {} },
       readStateStorage: {
         async update(change) {
@@ -1818,7 +1895,7 @@ function fixture(
     },
   );
   owners.push(owner);
-  if (!options.failRoster) emit(events);
+  if (!options.failRoster) emit(unheld(events));
   const scope = {
     viewer: viewer.pubkey,
     communityOrigin: "https://relay.test",
@@ -1986,7 +2063,11 @@ function fixture(
       };
     },
     rosterStarted: () => rosterStarted,
-    releaseProfiles,
+    releaseProfiles() {
+      if (!profilesHeld) return;
+      profilesHeld = false;
+      emit(events.filter((event) => event.kind === 0));
+    },
     agent,
     unknown,
     late,
@@ -2121,6 +2202,150 @@ async function archiveOpened(h: { archive: ArchiveShortcut }) {
   await waitFor(() => expect(h.archive.current).toBeDefined());
   act(() => h.archive.current?.());
 }
+/** A visit's presentation: every open, even of the same address, is a new object. */
+function visit(params?: InboxRoute): PageNavigation {
+  return {
+    entryId: "entry",
+    target: params
+      ? inboxRouteTarget(params)
+      : {
+          version: 1,
+          kind: "page",
+          pluginId: "buzz.inbox",
+          pageId: "inbox",
+        },
+    signal: new AbortController().signal,
+  } as unknown as PageNavigation;
+}
+/** The fixture's page, handed a navigation like the host's PageView does. */
+function viewAt(h: ReturnType<typeof fixture>, navigation: PageNavigation) {
+  const page = (
+    h.view.props as {
+      children: ReactElement<{ navigation?: PageNavigation }>;
+    }
+  ).children;
+  return cloneElement(h.view, {}, cloneElement(page, { navigation }));
+}
+const savedFilters = (h: ReturnType<typeof fixture>) =>
+  JSON.parse(
+    localStorage.getItem(
+      `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    ) ?? "null",
+  );
+const filterSummary = () =>
+  screen.getByRole("button", { name: "Inbox filters" });
+const unreadToggle = () => screen.getByRole("button", { name: "Unread only" });
+
+it.each([
+  [{ activity: "all", attention: "unread" }, "All", "true"],
+  [{ activity: "threads" }, "Threads", "false"],
+  [{ activity: "mentions" }, "Mentions", "false"],
+  [{ activity: "dms" }, "DMs", "false"],
+] as const)(
+  "a shortcut open with %j applies and saves its filters, leaving the others",
+  async (params, label, unread) => {
+    const h = fixture({ withDm: true });
+    localStorage.setItem(
+      `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+      JSON.stringify({
+        show: "archived",
+        activity: "all",
+        sender: "agents",
+        attention: "all",
+      }),
+    );
+    render(viewAt(h, visit(params)));
+    await waitFor(() => expect(filterSummary()).toHaveTextContent(label));
+    expect(filterSummary()).not.toHaveTextContent("Archived");
+    expect(unreadToggle()).toHaveAttribute("aria-pressed", unread);
+    expect(savedFilters(h)).toEqual({
+      show: "inbox",
+      sender: "agents",
+      attention: unread === "true" ? "unread" : "all",
+      ...params,
+    });
+  },
+);
+
+it("keeps the saved attention when a shortcut names only an activity", async () => {
+  const h = fixture();
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify({ attention: "unread" }),
+  );
+  render(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  expect(unreadToggle()).toHaveAttribute("aria-pressed", "true");
+  expect(savedFilters(h)).toMatchObject({ attention: "unread" });
+});
+
+it("re-applies a repeated shortcut open after the filters were changed by hand", async () => {
+  const h = fixture({ withDm: true });
+  const view = render(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await chooseFilter("Mentions");
+  await chooseFilter("Unread only", "Attention");
+  expect(filterSummary()).toHaveTextContent("Mentions");
+  // A rerender of the same presentation is not a new visit.
+  const same = visit({ activity: "threads" });
+  view.rerender(viewAt(h, same));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await chooseFilter("DMs");
+  view.rerender(viewAt(h, same));
+  expect(filterSummary()).toHaveTextContent("DMs");
+  // The host presents a repeated open of an identical address as a new object.
+  view.rerender(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  expect(savedFilters(h)).toMatchObject({ activity: "threads" });
+});
+
+it("Back/Forward to a shortcut visit keeps the filters chosen since", async () => {
+  const h = fixture({ withDm: true });
+  const view = render(viewAt(h, visit({ activity: "threads" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Threads"));
+  await chooseFilter("Mentions");
+  // Traversal presents the visit as a new object carrying the same address.
+  view.rerender(
+    viewAt(h, { ...visit({ activity: "threads" }), traversal: true }),
+  );
+  expect(filterSummary()).toHaveTextContent("Mentions");
+  expect(savedFilters(h)).toMatchObject({ activity: "mentions" });
+});
+
+it("a shortcut open leaves the Drafts view", async () => {
+  const h = fixture();
+  const view = render(viewAt(h, visit()));
+  await waitFor(() => expect(rows()).toHaveLength(2));
+  await chooseFilter("Drafts");
+  expect(filterSummary()).toHaveTextContent("Drafts");
+  view.rerender(viewAt(h, visit({ activity: "mentions" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
+  expect(filterSummary()).not.toHaveTextContent("Drafts");
+  expect(
+    screen.getByRole("list", { name: "Inbox conversations" }),
+  ).toBeVisible();
+});
+
+it("a plain open leaves saved filters alone", async () => {
+  const h = fixture();
+  const saved = {
+    show: "archived",
+    activity: "mentions",
+    sender: "humans",
+    attention: "unread",
+  };
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify(saved),
+  );
+  const view = render(viewAt(h, visit()));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
+  expect(unreadToggle()).toHaveAttribute("aria-pressed", "true");
+  view.rerender(viewAt(h, visit()));
+  expect(savedFilters(h)).toEqual(saved);
+  expect(filterSummary()).toHaveTextContent("Archived");
+});
+
 async function chooseFilter(label: string, control = "Activity type") {
   if (control === "Attention") {
     const toggle = screen.getByRole("button", { name: "Unread only" });
@@ -2138,12 +2363,13 @@ async function chooseFilter(label: string, control = "Activity type") {
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: "Inbox filters" });
   await user.click(trigger);
-  await screen.findByRole("menu", { name: "Inbox filters" });
+  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
+  const items = within(menu);
   if (control === "Show") {
-    await user.click(screen.getByRole("menuitemradio", { name: label }));
+    await user.click(items.getByRole("menuitemradio", { name: label }));
   } else if (control === "Sender") {
-    const people = screen.getByRole("menuitemcheckbox", { name: "People" });
-    const agents = screen.getByRole("menuitemcheckbox", { name: "Agents" });
+    const people = items.getByRole("menuitemcheckbox", { name: "People" });
+    const agents = items.getByRole("menuitemcheckbox", { name: "Agents" });
     // Enable the desired sender before disabling the other: never select none.
     if (label !== "Agents" && people.getAttribute("aria-checked") !== "true")
       await user.click(people);
@@ -2156,7 +2382,7 @@ async function chooseFilter(label: string, control = "Activity type") {
     await user.keyboard("{Escape}");
   } else {
     await user.click(
-      screen.getByRole("menuitemradio", {
+      items.getByRole("menuitemradio", {
         name: label === "All activity" ? "All" : label,
       }),
     );
@@ -2259,6 +2485,37 @@ it("Mentions orders and classifies matching senders and reads only through match
       .inbox()
       .items.find((item) => item.id.endsWith(root.id)),
   ).toMatchObject({ messageId: progress.id, unreadCount: 1 });
+});
+
+it("lets a joined Guest read an Inbox item and change its personal unread state", async () => {
+  const h = fixture({ guest: true });
+  render(h.view);
+  await screen.findByText("Please review this");
+  await chooseFilter("Mentions");
+  expect(h.session.channels.get?.("room")).toMatchObject({
+    viewerRole: "guest",
+    readOnly: true,
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open Alice in #Design" }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("img", { name: "Unread" }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(
+    screen.queryByText(
+      "Inbox action expired. Close and reopen the conversation.",
+    ),
+  ).not.toBeInTheDocument();
+  fireEvent.click(await openRowMenu());
+  await waitFor(() =>
+    expect(h.journal()?.localUnread[`msg:${h.mention.id}`]).toBeTypeOf(
+      "number",
+    ),
+  );
+  expect(h.session.channels.get?.("room")?.viewerRole).toBe("guest");
 });
 
 async function openRowMenu(
@@ -3466,7 +3723,9 @@ it.each([true, false])(
     await screen.findByText("Please review this");
     await chooseFilter("Mentions");
     fireEvent.click(
-      screen.getByRole("button", { name: "Open Alice in #Design" }),
+      screen.getByRole("button", {
+        name: soloChannel ? "Open Alice in Design" : "Open Alice in #Design",
+      }),
     );
     const editor = await screen.findByRole("textbox", {
       name: soloChannel ? "Message this conversation" : "Reply to thread",
@@ -3515,9 +3774,7 @@ it("Inbox Solo chat activity shared with a person sends without a tag", async ()
   render(h.view);
   await screen.findByText("Please review this");
   await chooseFilter("Mentions");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open Alice in #Design" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Open Alice in Design" }));
   const editor = await screen.findByRole("textbox", {
     name: "Message this conversation",
   });
@@ -3552,9 +3809,7 @@ it("Inbox keeps an open Solo chat timeline when a late reply regroups its mentio
   render(h.view);
   await screen.findByText("Please review this");
   await chooseFilter("Mentions");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open Alice in #Design" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Open Alice in Design" }));
   const editor = await screen.findByRole("textbox", {
     name: "Message this conversation",
   });

@@ -56,7 +56,8 @@ performs DNS verification. Ordinary human profiles have no agent fields.
 
 ## Boundaries
 
-- Shared message UI recognizes author-avatar targets and identity-bound mentions.
+- Shared message UI recognizes author-avatar and byline-name targets and
+  identity-bound mentions.
   Ordinary `canOpenLink` / `onOpenLink` props advertise availability and dispatch.
   Channels resolves active contributions at click time and owns the right slot.
 - `nostr:npub…` is the exact public-key target, with no relay hint or authority.
@@ -105,12 +106,24 @@ navigates to the relay-confirmed channel in the scope captured at click time. A
 confirmed open also clears that DM's local sidebar hide. The person's
 self-published NIP-38 `general` status (kind 30315, emoji tag plus text) uses the
 session's shared live status owner, including expiration and clear events.
-Custom `:shortcode:` emoji use the community emoji catalog with a text fallback.
-Set or clear your own status from the top-right profile menu. Shared design-system
-Avatar and Button use the host-loaded styles directly. The profile content marks its
-`data-buzz-ui` boundary and uses shared heading/body/mono roles; its stylesheet
-owns layout, not component overrides. No new theme owner, second global reset or
-shell migration. Designers own later refinement.
+A custom `:shortcode:` status saves its catalog image URL as the emoji tag's third
+value (`["emoji", ":code:", url]`) so it renders without the viewer's catalog;
+unicode keeps the two-value tag, and older two-value custom statuses use the
+catalog. While the catalog loads, an unresolved shortcode reserves the emoji's
+space. Once settled, sidebar rows, bylines and the editor's emoji button show the
+default 💬. Rows and bylines keep the full status in their label and tooltip, and
+the editor's button names the shortcode in its hint; tooltips and profiles show
+the shortcode as status text.
+Set or clear your own status from the top-right profile menu. When the community
+accepts status updates, your own profile also opens the same editor from a button
+above **Edit profile**: **Update status** when you have one, **Set a status** when
+you don't. It saves to that profile's community, closes if the community or
+identity changes, and returns focus to the button, whose label follows the result.
+A status wider than the profile column ends in an ellipsis.
+Shared design-system Avatar and Button use the host-loaded styles directly. The
+profile content marks its `data-buzz-ui` boundary and uses shared heading/body/mono
+roles; its stylesheet owns layout, not component overrides. No new theme owner,
+second global reset or shell migration. Designers own later refinement.
 
 Agent hints change avatar shape, not authority:
 

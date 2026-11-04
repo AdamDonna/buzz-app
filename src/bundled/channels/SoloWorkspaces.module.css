@@ -308,7 +308,12 @@
     inset-inline-end: var(--session-trailing-end);
     margin: 0;
   }
-  .organizedRow:has([data-channel-activity]) [data-solo-shared],
+  /* Separate rules: the build wraps a list of :has() selectors in :is(), and
+     WebKit restyles the whole document for each change under a non-subject
+     :has() inside :is(). */
+  .organizedRow:has([data-channel-activity]) [data-solo-shared] {
+    opacity: 0;
+  }
   .organizedRow:has([data-solo-working-indicator]:not(:empty))
     :is([data-channel-activity], [data-solo-shared]) {
     opacity: 0;

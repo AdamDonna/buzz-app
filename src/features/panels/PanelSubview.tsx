@@ -68,7 +68,8 @@ export function PanelSubviewHost({
 export function PanelSubview(props: {
   title: string;
   backLabel: string;
-  onBack(): void;
+  /** `keepOwner`: a tabbed host is clearing the owner's detail tabs. */
+  onBack(options?: { keepOwner?: boolean }): void;
   children: ReactNode;
 }) {
   const tabbed = !!usePanelTabHost();
@@ -107,7 +108,7 @@ function InlinePanelSubview({
       className={host ? styles.subview : styles.inlineSubview}
       aria-label={title}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
+        if (event.key === "Escape" && !event.shiftKey) {
           event.stopPropagation();
           onBack();
         }

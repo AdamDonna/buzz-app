@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
-import type { ChannelMessage, Profile } from "./contracts";
+import type {
+  ChannelList,
+  ChannelMessage,
+  ChannelQueries,
+  Profile,
+} from "./contracts";
 import type { ProfileQueries } from "./profile-directory";
-import { useRowProfiles } from "./react";
+import { useChannelRoster, useRowProfiles } from "./react";
 
 afterEach(cleanup);
 
@@ -81,4 +86,52 @@ it("replaces the seed for swapped authors, updates, removal and a new source", (
   expect([...result.current]).toEqual([["b", { name: "Other Bob" }]]);
   unmount();
   expect(other.listeners.size).toBe(0);
+});
+
+it("keeps the roster through preview and activity changes only while ready", () => {
+  let list: ChannelList = { status: "loading", channels: [] };
+  const listeners = new Set<() => void>();
+  const queries = {
+    list: () => list,
+    subscribeList(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    ensureList: () => {},
+  } as unknown as ChannelQueries;
+  const publish = (next: ChannelList) => {
+    list = next;
+    for (const listener of listeners) listener();
+  };
+  const { result } = renderHook(() => useChannelRoster(queries));
+  const ready = {
+    status: "ready" as const,
+    channels: [{ id: "c", name: "general", preview: "hi" }],
+  };
+  act(() => publish(ready));
+  expect(result.current).toBe(ready);
+  act(() =>
+    publish({
+      ...ready,
+      channels: [
+        {
+          id: "c",
+          name: "general",
+          preview: "next",
+          lastActivityAt: 2,
+          activityKnown: true,
+        },
+      ],
+    }),
+  );
+  expect(result.current).toBe(ready);
+  const renamed = { ...ready, channels: [{ id: "c", name: "renamed" }] };
+  act(() => publish(renamed));
+  expect(result.current).toBe(renamed);
+  // An error retry is a new attempt even with identical fields.
+  const failed = { status: "error" as const, channels: [], error: "x" };
+  act(() => publish(failed));
+  const retried = { ...failed };
+  act(() => publish(retried));
+  expect(result.current).toBe(retried);
 });

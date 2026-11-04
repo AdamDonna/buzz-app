@@ -1,4 +1,5 @@
 // Installed fixture code only; app composition, manager, contributions and UI remain production.
+import { soloRegionFixture } from "./solo-region-fixture";
 import { companionPlugins } from "./companion-fixture";
 import * as shortcutCounter from "../../examples/plugins/shortcut-counter/plugin.js";
 import shortcutManifest from "../../examples/plugins/shortcut-counter/manifest.json";
@@ -131,6 +132,36 @@ function SidebarWorkIcon() {
 }
 
 export const fixturePlugins: readonly BundledPlugin[] = [
+  soloRegionFixture,
+  {
+    manifest: {
+      id: "fixture.provider",
+      name: "Provider fixture",
+      apiVersion: 1,
+    },
+    enabledByDefault: false,
+    module: {
+      inject: ["agents"],
+      apply(ctx) {
+        const state = { readiness: "ready" as const };
+        ctx.agents.register({
+          id: "sample",
+          title: "Fixture provider",
+          defaults: () => ({ config: {} }),
+          provider: {
+            snapshot: () => state,
+            subscribe: () => () => {},
+            check() {},
+            DialogBody: ({ onClose }) => (
+              <button type="button" onClick={onClose}>
+                Done
+              </button>
+            ),
+          },
+        });
+      },
+    },
+  },
   {
     manifest: {
       id: "fixture.sidebar-sections",
@@ -303,7 +334,7 @@ export const fixturePlugins: readonly BundledPlugin[] = [
   {
     manifest: { id: "fixture.session", name: "Session fixture", apiVersion: 1 },
     module: {
-      inject: ["pages", "relay"],
+      inject: ["pages", "relay", "conversation"],
       apply(ctx) {
         const relay = ctx.relay;
         window.fixtureRelay = relay;
@@ -322,6 +353,56 @@ export const fixturePlugins: readonly BundledPlugin[] = [
             <p>Session pending reconnect</p>
           );
         }
+        function ThreadFocusPage({ navigation }: PageProps) {
+          const connection = useSyncExternalStore(
+            relay.subscribe,
+            relay.snapshot,
+          );
+          const Tabs = ctx.conversation.ui.Tabs;
+          const target = navigation?.target;
+          const threadId =
+            target?.kind === "page" ? target.route?.params : undefined;
+          useEffect(() => {
+            navigation?.complete({ status: "opened" });
+          }, [navigation]);
+          if (
+            connection.status !== "ready" ||
+            !Tabs ||
+            typeof threadId !== "string"
+          )
+            return null;
+          return (
+            <Tabs
+              id="focus-fixture"
+              session={connection.session}
+              scope={connection.scope}
+              label="Focus fixture"
+            >
+              {(open) => (
+                <>
+                  <input aria-label="Page draft" />
+                  <button
+                    type="button"
+                    onClick={() => open({ channelId: "beta", threadId })}
+                  >
+                    Open cold thread
+                  </button>
+                </>
+              )}
+            </Tabs>
+          );
+        }
+        ctx.pages.register({
+          id: "thread-focus",
+          title: "Thread focus fixture",
+          primary: true,
+          handlesNavigation: true,
+          route: {
+            version: 1,
+            validate: (params) => typeof params === "string",
+          },
+          component: ThreadFocusPage,
+        });
         ctx.pages.register({
           id: "session",
           title: "Session fixture",
@@ -335,7 +416,7 @@ export const fixturePlugins: readonly BundledPlugin[] = [
   {
     manifest: { id: "fixture.delayed", name: "Delayed fixture", apiVersion: 1 },
     module: {
-      inject: ["pages"],
+      inject: ["pages", "agents"],
       async apply(ctx) {
         const gate = window.delayFixture;
         if (gate)
@@ -343,6 +424,18 @@ export const fixturePlugins: readonly BundledPlugin[] = [
             gate.started = true;
             gate.release = resolve;
           });
+        const state = { readiness: "ready" as const };
+        ctx.agents.register({
+          id: "provider",
+          title: "Delayed provider",
+          defaults: () => ({ config: {} }),
+          provider: {
+            snapshot: () => state,
+            subscribe: () => () => {},
+            check() {},
+            DialogBody: () => <p>Delayed provider controls</p>,
+          },
+        });
         ctx.pages.register({
           id: "slow",
           title: "Delayed fixture",

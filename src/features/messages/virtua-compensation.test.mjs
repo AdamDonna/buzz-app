@@ -673,6 +673,64 @@ it("holds the top rows when a removal past the held range lands before a flushed
   c.driver.R();
 });
 
+// A flushed correction holds the mounted range until its own scroll event. A
+// correction that moves nothing, or that another write undoes in the same task,
+// raises none. Idle must still buffer both sides, or a held row just below the
+// viewport stays unmounted until the next scroll (history-loading.spec.mjs:334).
+it("releases a flushed correction's held range at scroll-end when another write undoes it", () => {
+  const c = setup({ platform: "Linux x86_64", offset: 1000 });
+  c.viewport.scrollTop = 900;
+  c.viewport.dispatchEvent(new Event("scroll")); // upward: buffers only above
+  expect(c.store.$(200)).toEqual([7, 14]);
+  c.store.h(3, [
+    [1, 60],
+    [2, 60],
+  ]); // rows above shrink: one -80 correction
+  c.store.$(200);
+  c.driver.U();
+  expect(c.calls.map(({ options }) => options.top)).toEqual([-80]);
+  // Another write restores the offset before the correction's scroll event,
+  // so the only event reports the offset the store already holds.
+  c.viewport.scrollTop = 900;
+  c.viewport.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersByTime(150); // the driver's inferred scroll-end
+  expect(c.store.O()).toBe(false);
+  expect(c.store.$(200)).toEqual([7, 16]);
+  c.driver.R();
+});
+
+it("keeps a jump's held range when scroll-end fires before the jump's scroll event", () => {
+  const c = setup({ vendor: "Google Inc.", offset: 400 }); // Chromium
+  c.viewport.scrollTop = 300;
+  c.viewport.dispatchEvent(new Event("scroll")); // arms the 150ms scroll-end
+  vi.advanceTimersByTime(140);
+  c.prepend(40); // a 2000px shift jump: the viewport is now 2300–2800
+  expect(c.store.$(1600)).toEqual([7, 39]);
+  // Scroll-end fires before the jump's scroll event. Releasing the hold at the
+  // pre-jump offset would mount rows 0–24 and leave most of the viewport blank.
+  vi.advanceTimersByTime(10);
+  expect(c.store.O()).toBe(false);
+  expect(c.store.$(1600)).toEqual([7, 39]);
+  c.driver.R();
+});
+
+it("re-renders at scroll-end for a held range even when the direction is already idle", () => {
+  const c = setup({ platform: "Linux x86_64", offset: 1000 });
+  c.store.h(2); // idle before the correction
+  c.store.$(200);
+  c.store.h(3, [
+    [1, 60],
+    [2, 60],
+  ]);
+  c.store.$(200);
+  c.driver.U();
+  const renders = vi.fn();
+  c.store.L(1, renders);
+  c.store.h(2);
+  expect(renders).toHaveBeenCalledTimes(1);
+  c.driver.R();
+});
+
 it("delivers the latest resize per target outside native observer delivery", () => {
   const h = resizeHarness();
   const first = h.node(),
@@ -825,5 +883,39 @@ it("removes cancellation listeners on disposal and reattaches on remount", async
   c.store.h(3, [[19, 120]]);
   await vi.advanceTimersByTimeAsync(0);
   expect(c.calls).toEqual([]);
+  c.driver.R();
+});
+
+it("reports actual correction writes separately from coalesced reader movement", () => {
+  const c = setup({ platform: "Linux x86_64", offset: 1300 });
+  const corrections = [];
+  c.viewport.addEventListener("virtua-scroll-correction", (event) =>
+    corrections.push(event.detail),
+  );
+  c.viewport.scrollTop -= 50; // wheel before its native scroll notification
+  c.prepend();
+  expect(corrections).toEqual([{ before: 1250, after: 3250 }]);
+  c.viewport.scrollTop -= 40; // wheel after correction, same native event frame
+  c.viewport.dispatchEvent(new Event("scroll"));
+  expect(c.viewport.scrollTop).toBe(3210);
+  c.driver.U();
+  expect(corrections).toHaveLength(1);
+  c.driver.R();
+});
+
+it("reports clamped fractional correction offsets, not requested deltas", () => {
+  const c = setup({ platform: "Linux x86_64", offset: 1490 });
+  const corrections = [];
+  c.viewport.addEventListener("virtua-scroll-correction", (event) =>
+    corrections.push(event.detail),
+  );
+  c.viewport.max = 1420.5;
+  c.store.h(3, [
+    [1, 60.25],
+    [2, 60.25],
+  ]);
+  c.driver.U();
+  expect(corrections).toEqual([{ before: 1490, after: c.viewport.scrollTop }]);
+  expect(c.viewport.scrollTop).toBe(1410);
   c.driver.R();
 });

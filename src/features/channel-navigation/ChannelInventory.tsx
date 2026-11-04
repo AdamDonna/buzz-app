@@ -41,7 +41,8 @@ import {
 import type { ChannelSummary } from "../relay/contracts";
 import { useChannelRowMenu } from "../../bundled/channels/useChannelRowMenu";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
-import { useRecoveryShown } from "../relay/RecoveryNotice";
+import { useRecoveryOwns } from "../relay/RecoveryNotice";
+import { rosterRecovering } from "../relay/live-recovery";
 import { clientMetrics } from "../developer/client-metrics";
 import {
   BellIcon,
@@ -94,6 +95,7 @@ import {
 import { splitPartition } from "../relay/partition";
 import styles from "../../bundled/channels/Channels.module.css";
 import { avatarMedia } from "../../shared/avatar-source";
+import { useBestieConversation } from "../../app/shell/bestie-context";
 
 type Inventory = {
   sidebar: ReturnType<typeof useSidebarView>;
@@ -150,7 +152,9 @@ export function ChannelInventory({
     contributedSections?.snapshot ?? noSidebarSections,
   );
   const list = useChannelList(queries.channels);
-  const recoveryShown = useRecoveryShown(queries.recovery);
+  const rosterRecovers = useRecoveryOwns(queries, (live) =>
+    rosterRecovering(live.roster),
+  );
   const preferences = useSidebarPreferences(queries.sidebarPreferences);
   const startup = useSidebarStartup(queries, list, preferences);
   const [activityErrorDismissed, setActivityErrorDismissed] = useState(false);
@@ -167,6 +171,13 @@ export function ChannelInventory({
     queries.channelKit.snapshot,
   );
   const hiddenDms = useHiddenDms(scope, queries, list);
+  const promotedDm = useBestieConversation(queries);
+  // Promotion is presentation, not hiding. Clear an earlier local removal so
+  // releasing this destination restores the ordinary DM row.
+  const showDm = hiddenDms.show;
+  useEffect(() => {
+    if (promotedDm) showDm([promotedDm]);
+  }, [promotedDm, showDm]);
   const lifecycle = queries.channelLifecycle;
   const dmVisibility = useSyncExternalStore(
     lifecycle.subscribe,
@@ -244,6 +255,7 @@ export function ChannelInventory({
   const preparingDm = composingMessage ? handoff?.preparingDm : undefined;
   const sidebarChannels = channels.filter(
     (channel) =>
+      channel.id !== promotedDm &&
       !channel.huddle &&
       !channel.metadataPending &&
       inTeamInventory(channel) &&
@@ -1191,10 +1203,7 @@ export function ChannelInventory({
             if (!channel) return null;
             const Icon = channelIcon(channel);
             return (
-              <div
-                className={styles.channelDragOverlay}
-                data-section-creation-preview=""
-              >
+              <div className={styles.channelDragOverlay}>
                 <Icon size={16} />
                 <span>{channel.name}</span>
               </div>
@@ -1465,7 +1474,7 @@ export function ChannelInventory({
             Loading your sidebar…
           </p>
         )}
-        {list.status === "error" && !recoveryShown && (
+        {list.status === "error" && !rosterRecovers && (
           <p role="alert" className={styles.empty}>
             {list.error}
           </p>

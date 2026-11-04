@@ -134,11 +134,14 @@ for those separate requirements.
 `session.emoji` owns the current community's kind-30030 `d=buzz:custom-emoji`
 member sets. `snapshot()` / `subscribe()` provide an immutable catalog; `ensure()`
 is lazy and background-priority, and `refresh()` explicitly retries. The shared
-composer warms it on mount. Each author's newest complete set replaces their old
+composer warms it on mount. Opening autocomplete or a picker uses foreground
+demand to promote a pending cold load or retry a failed passive load, without reloading
+a ready catalog. A failed foreground attempt keeps its error and explicit Retry action across autocomplete edits. Budget overflow still waits for explicit Retry. Each author's newest complete set replaces their old
 one (including empty removal sets); the union picks newer sets, then smaller URLs,
-for shortcode conflicts. The directory retains at most 500 member sets / 2 MiB;
-read caps and overflow expose errors rather than silently evicting replacements.
-An explicit retry after overflow starts a fresh bounded catalog read.
+for shortcode conflicts. The directory retains at most 500 member sets / 2 MiB.
+A read that reaches the 500-set cap stays usable with an incompleteness error;
+overflow exposes an error rather than silently evicting replacements. Only an
+explicit retry after overflow starts a fresh bounded catalog read.
 
 `snapshot().mine` lists the viewer's own set. When the session has an attachment
 uploader and its writer admits kind 30030, the directory also exposes `upload()`
@@ -155,6 +158,8 @@ broker admits kind 30030 only for the canonical own-set template
 Live kind-30030 updates share the existing profile route, not another socket or
 subscription slot. Global establishment repairs an already requested catalog;
 cache/access clearing and disposal cancel its reads and fence stale results.
+A loaded catalog stays ready while that repair or any refresh reads, and a failed
+refresh keeps it ready with the error attached.
 The development broker imports the live subscription code at startup: an already
 running broker needs one coordinated restart to gain the new filter. Reopening
 the picker reuses its ready catalog; it is not a manual refresh fallback for an
@@ -162,8 +167,10 @@ older broker.
 
 `session.messages.send`, `reply`, `edit`, and `react` resolve referenced `:shortcodes:`
 into original-URL emoji tags **before** the outbox assigns identity or signs. Text
-without shortcode candidates does not wait. A cold/unavailable catalog throws
-synchronously, so a composer retains its draft; plugins can await `ensure()` or
+without shortcode candidates does not wait. A catalog that has not loaded yet,
+or failed before loading, throws synchronously, so a composer retains its draft.
+A refused send after a failed read starts one shared retry; mounts and pickers do
+not, and overflow waits for an explicit retry. Plugins can await `ensure()` or
 explicitly retry `refresh()`. Unknown codes in a ready catalog remain literal.
 Retries retain the exact original event and URL even if the palette changes.
 Low-level `outbox.send` remains raw intent; callers supply its tags themselves.
@@ -301,6 +308,13 @@ cannot grant a preview; read/capacity failures remain visible rather than becomi
 an empty successful page. Other search entities and feed queries retain their
 existing finite-read behavior.
 
+Message search text reaches the relay only once its last word has three
+characters, with or without `from:`/`in:` operators: the relay prefix-matches
+that word and ranks every match, so it answers a shorter one with no hits. Until
+then the palette says how many characters to type. Operators without text still
+read newest history, and people and channel lookups keep the shared
+two-character minimum.
+
 Only relay-authored explicit `public` metadata without `private`, `hidden`, or
 DM type grants nonmember reading. Signed membership still owns the joined roster.
 `channels.get(id)` exposes separately resolved summaries (`readOnly: true`), while
@@ -333,30 +347,67 @@ The relay has no text search for channel metadata. For a typed, unscoped palette
 or `#` completion query, `channels.searchPublic(query)` reads relay-authored
 `39000` metadata without applying it, in pages of 500 through the relay's
 `(until, before_id)` cursor until the relay runs out or 20,000 events are read.
+Cold searches and the first search after five minutes replace the full directory.
+Between those full reads, expired searches request changes with `since`, starting
+two minutes before the previous successful read began. Newer signed metadata
+replaces older versions per channel; an empty delta retains unchanged candidates.
+Only complete reads advance that watermark. A failed read keeps the previous
+directory and watermark. Incomplete directories, clock rollback, and a delta
+merge exceeding 20,000 channels fall back to a full read.
 It matches names locally and keeps only explicit active public channels the
 viewer has not joined. Every query in the same session epoch shares one read:
 a query that stops waiting leaves it running for the next, and a finished read
-is reused for 30 seconds, so typing reads the directory once. Matches are ranked exact, prefix, word start, then substring,
-and the best eight are resolved through the same exact `resolve` path as
-message hits; the page itself never grants access. So
+is reused for 30 seconds, so typing reads the directory once. After expiry,
+the prior directory also supplies candidates while fresh pages arrive. Each
+candidate still needs fresh exact resolution, including a name-match check;
+the completed full read or merged delta supplies the final answer. A completed
+directory read cancels unfinished provisional lookups. A failed provisional
+lookup waits for the directory's final answer rather than failing the search.
+If the directory fails, an in-flight provisional lookup can still supply rows
+before the error; a stalled lookup then waits for its existing transport timeout.
+Names match by
+the joined-channel rule (`matchRank`: exact, prefix, word start, substring,
+word runs, then letters in order), so `buzz community` finds `buzz-community`.
+The best eight are resolved through the same exact `resolve` path as message
+hits; the page itself never grants access. So
 `channels.get(id)` returns a `readOnly` summary and `channels.list()` stays
 joined-only. Reaching the 20,000-event bound reports partial coverage; read
 failures show a retry.
 The search waits for a ready channel list.
 
+Private/deleted channels may disappear from delta results without a tombstone.
+Contradicted exact matches repair or prune the saved candidates. A delta answer
+that finds a contradiction forces full reconciliation; other verified answers
+can finish, and repaired full reads remain reusable. One local invalidation
+restarts the search immediately. Further invalidations use the
+existing bounded read retry policy. Caller cancellation, cache clearing and
+disposal never trigger this restart. Periodic full reads also repair omissions
+caused by clock skew or replica lag beyond the overlap. The directory remains
+session-local; it is not persisted to disk.
+
 A finished read also names every open channel for `#name` prose in messages
 and drafts, through `channels.openDirectory()`, until a later read completes,
 the cache is cleared, or the session's access changes (dropped names link
 again after the next search); a refresh that is still reading, or that fails,
-keeps the prior names. Rendering never starts the read: a name the joined list
-lacks stays prose on a cold directory and links once a search has warmed it.
+keeps the prior names. Names a delta cannot retract, such as deleted or newly
+private channels, stay until the next successful full read. Until then, such a
+name shared with a newer open channel is ambiguous, so neither links. Rendering
+never starts the read: a name the joined list lacks stays prose on a cold
+directory and links once a search has warmed it.
 The joined list owns a name both carry. Opening such a link resolves the
 channel through `refer`, as any channel-only link does. Raw
 `buzz://channel/<id>` links never take a directory name: outside the joined
 list, their label follows the exact reference, so a rename or lost access
 shows at once rather than the directory's older name.
 
-A public preview offers **Join channel**. It sends the NIP-29 `9021` join request
+A Member-default public preview offers **Join channel**. Guest-default previews
+keep history and thread links readable without Join or writing controls, and
+opening a link creates no membership. After Leave, fresh signed public metadata
+can restore preview reading while retained membership stays denied; stale or
+private metadata cannot reopen reading. Missing defaults mean Member; malformed
+explicit defaults mean Guest.
+
+Join sends the NIP-29 `9021` join request
 through the purpose-bound channel-lifecycle sign/publish route; generic signing
 rejects `9021`. Before signing, the lifecycle owner re-reads signed metadata and
 the viewer roster: a current roster entry needs no request, and only active public
@@ -459,6 +510,18 @@ The timeline, channel-list preview and filtered plugin views share that operatio
   are visible; unconfirmed operations are never silently evicted. Plugins can
   explicitly `dismiss(id)` to remove an operation's local contribution.
 - Reactive filtered views: at most 64 owned handles; dispose with the plugin.
+- Reminders: the viewer's list is read in pages of 200, newest first, until a
+  page comes back short, up to 10,000 reminders. Each page asks for one event
+  past it, which tells a full page from the end of the list and heads the next
+  page. Pages show as they land, but the list stays loading until the last one.
+  Past 10,000 the pages read so far show under "Some reminders could not be
+  loaded" with Retry (a list of exactly 10,001 is in fact complete, but cannot
+  be told from a longer one), anything older stays hidden, the reminders
+  plugin's saved check time does not advance (so pending reminders due since
+  then notify again on each launch), and every refresh reads all the pages
+  again. Handled
+  reminders carry an expiration the relay does not enforce yet, so the list
+  grows with use.
 - Existing fetched channel history, profile, media and disk budgets remain in place.
   Local overlays have their separate journal budget and can extend a visible window.
   Shared verified observations retain up to 4,096 events / 8 MiB; owned filtered views
@@ -519,8 +582,10 @@ its management snapshot still exposes those operations, while read overlays hide
 them until access returns. Confirmed evidence is not pending intent and is dropped
 when inaccessible. If revocation races initial outbox hydration, that load's entire
 confirmed cache is discarded conservatively; pending signed records are preserved.
-Shared signed profile projections and already-opened disk-head caches are also
-cleared conservatively because they can include cross-channel evidence. Disk-cache
+Already-opened disk-head caches are also cleared conservatively because they can
+include cross-channel evidence. Signed profiles (kind 0 and NIP-FI kind 30382) are
+kept: they are global relay events, not channel evidence, so a profile read in
+flight finishes too. Only a full cache clear empties the profile directory. Disk-cache
 failure does not reauthorize in-memory views. This does not erase copies already
 made by trusted plugins, cancel/re-sign durable writes, or replace relay-side checks.
 
@@ -574,7 +639,24 @@ The signed host and opt-in broker subscribe to authenticated Nostr traffic. Veri
 incoming events, finite reads and own echoes enter the same session reconciliation
 path. Reconnect performs bounded replay and revalidates retained channel heads and
 filtered views. History bounds still come from finite channel reads; replay does
-not claim complete history. Decryption, uploads and server-derived aggregate calculations remain domain capabilities.
+not claim complete history. Each global route reports at establishment whether it
+stayed continuous: it resumed from an earlier connection's cursor and its replay
+ended below the limit. Held profiles and the roster are read in full again only
+when their route (`profiles`, `membership`) was not continuous, failed or went
+unreported, or when the last full read has not succeeded yet. Continuity is a skip
+rule, not a delivery proof: the relay can drop a live frame for a slow client
+without telling it, and a replay does not reach a frame dropped long before the
+disconnect. Window focus does not read the roster. Decryption, uploads and server-derived aggregate calculations remain domain capabilities.
+
+The same rule covers the other reads a global route replays. After a continuous
+profiles replay, statuses and the emoji catalog are not read again; after a
+continuous membership replay, the read-state markers and the reminders list are
+not read again. Each owner returns to the state the drop interrupted once the
+replay is in, and reads again when that state was incomplete, failed, or still
+loading. A cut replay or no cursor keeps the earlier reads, even after an earlier
+report on the same connection; a route that fails before it establishes, or a
+host that reports no route, keeps them once per connection. The unread repair
+still runs on each connection.
 
 `session.messages.send(channelId, text)`, `.reply(channelId, resolvedRootId, text)`,
 `.edit(messageId, text)` and `.retry(id)`
@@ -590,8 +672,12 @@ receipt, as Buzz desktop does. Nothing is persisted or restored; a rejection or
 10-second timeout rejects the call and the dialog keeps its input for retry. The
 method is undefined unless the writer supports kind 1984.
 
-In an empty composer, unmodified Up arrow opens the latest eligible own message
-from that channel or thread in the same editor. Enter/the send arrow saves;
+In an empty composer, unmodified Up arrow selects the newest message in the
+channel timeline or thread beside it, as in Slack; E then opens a selected
+eligible own message in the same editor, and on macOS ⌘↑ still opens the latest eligible
+own message directly (elsewhere, Up then E). Surfaces without a selectable message
+list (media review, Huddles), or a timeline scrolled away from its newest
+message, keep Up opening the latest eligible own message directly. Enter/the send arrow saves;
 Escape or × cancels. Edits retain raw attachment Markdown and leave original
 notification recipients unchanged. Edit text never overwrites the new-message
 draft or its undo history. Pending edits lock the editor until delivery; failed
@@ -699,12 +785,18 @@ cooperative batch yields, not just signature CPU. These development-React/jsdom
 measurements prove neither startup nor browser paint, native performance, actual
 IndexedDB durability or live relay latency.
 
-The HTTP verifier retains at most 2,048 event-ID/signature pairs per transport
+The HTTP verifier retains at most 8,192 event-ID/signature pairs per transport
 using the existing byte-bounded LRU. A hit requires fresh envelope validation,
 a fresh hash of signed fields and the exact previously verified signature. It
 still returns newly owned frozen data and performs every HTTP read and access
-check. It is not an event/query cache or authorization proof; WebSocket and other
-`eventDto` callers remain uncached. `event-proof.test.ts` covers tampering,
+check. It is not an event/query cache or authorization proof. Live subscriptions
+retain up to 16,384 proofs across reconnects; direct `eventDto` calls are uncached.
+Desktop finite reads and live events send signature batches to the existing Rust
+libsecp256k1 verifier off the renderer thread. JavaScript still checks wire shape
+and content hashes. Live EVENT/EOSE/CLOSED delivery stays ordered, with bounded
+pending work; overflow or host failure reconnects from before unprocessed frames.
+Browser and broker callers retain JavaScript signature verification.
+`event-proof.test.ts` covers tampering,
 connection isolation, eviction and actual HTTP wiring. `events.ts` also belongs
 to the dev broker's native-config import graph: new runtime imports there must
 retain explicit extensions and pass `browser-host/vite-config.test.mjs`.
@@ -791,45 +883,117 @@ for outstanding work. These manual fixtures are not part of `pnpm test`; see
 The session's `live` capability exposes connection/route state independently from
 finite-read readiness. A connected socket is not proof that every route is live.
 Global profile and self-scoped membership-hint routes are separate from channel
-traffic. The logical interest capacity remains 1,022 channels plus those two globals
-(one fewer channel while agent observation is enabled); omitted routes and partial
-roster coverage remain visible. Joined background channels share stable wires of
-at most 10 channels. Initial replay uses singleton channel filters, matching the
-relay's per-REQ filter cap; live-only replacements use one equivalent filter.
-Public previews and foreground interests admitted as singletons remain separate;
-navigation prioritizes pending work without rebuilding healthy wires. Joined
-versus preview classification travels atomically with interests.
+traffic. Joined channels share stable wires of up to 2,048 IDs, the relay's
+explicit channel bound. There is no fixed roster count limit. New members fill
+empty slots in existing batches. Initial live setup takes priority over renewal
+and replay. Priority changes setup order and preserves healthy wires.
+Preview channels use separate wires. Admission reserves room for global routes,
+observer and presence, replay requests, artifact syncs, the silence probe, and
+replacement wires within the relay's limit of 1,024 subscriptions. Omitted channels stay visible as limited routes.
+Joined versus preview classification travels with the interest snapshot.
 
-Initial replay is opportunistic and capped at 500 events **per channel filter**,
-preserving the previous singleton replay allowance. A busy channel cannot consume
-another channel's sample. This reduces REQ frames and route-state publications,
-not historical database queries. Aggregate replay status stays conservative:
-500 received events can mark a batch limited but never prove any channel complete.
-EOSE establishes streaming, **not complete historical replay**. Retained channel
+The 100,000-channel scale case uses 49 persistent channel wires. Replay uses a
+separate queue with at most 10 singleton filters per request. Each filter requests
+up to 500 recent events. At most four setup requests run at once. A busy channel
+cannot consume another channel's replay allowance. A failed replay is visible to
+recovery and Retry. A local failure does not stop other queued channels. Shared
+quota failures pause admission. Replay stays quiet; one later live copy can emit
+one incoming-message signal.
+
+The broker accepts interest records up to 64 MiB. Status deltas and establishment
+notices contain at most 512 channel changes per frame and obey backpressure.
+Frames and the write buffer retain their 8 MiB bound. Channel IDs have at most
+128 characters. Discovery retains up to 256 MiB of signed records. The startup
+cache retains its 8 MiB bound. Larger rosters require fresh discovery on restart.
+Replay status stays conservative and never proves a channel complete.
+EOSE establishes streaming, **not complete historical replay**. A first connect
+replays the last five minutes. After a drop, a route that had reached EOSE on that
+connection resumes sixteen minutes (960 s) before the connection last heard the
+relay (a silent stall counts from its last frame, not from when it was detected;
+a frame counts as of the recovery tick before the latest, since one handled after
+a sleep may have waited through it), never earlier than the session's first five-minute window. A renewal, pending or
+failed, that still keeps its established source counts as reached for the channels
+it still covers. The margin is the relay's
+900 s `created_at` tolerance plus 60 s: an event stored just after the close can be
+backdated that far. Every route created later, including one rebuilt mid-connection
+when a batch's membership changes, resumes from the same cursor. The cursor is kept
+across reconnects that never re-establish the route and is dropped when a rebuild no
+longer routes that channel. A route that had
+not reached EOSE, and the observer and presence routes, replay as a first connect
+does. A batch resumes from its slowest channel. Retained channel
 windows get finite, signed-bounds head catch-up after establishment/reconnect;
 unopened channels defer it until demand. `live.snapshot().heads` distinguishes
 pending, verified, deferred and failed obligations. Verification covers the
-bounded current head, not all history or every event missed while disconnected.
-Catch-up merges into paged readers without resetting older pages or their cursor.
+bounded current head and its continuity with the rows the reader kept across
+the drop, not all history. Those rows are snapshotted when the stream drops, or
+at a window's head read before the stream is up (a channel opened before the
+first connection or during a disconnect, a window evicted and reopened while
+down, a restored head revalidated before connecting); the rows the
+re-established stream replays before catch-up (its last five minutes) are newer
+than any gap, so a head overlapping only them is not continuity evidence. The
+healthy renewal is unchanged: a head sharing any row with the snapshot verifies
+the window in that one read, and only a channel with more than a page of rows
+across the drop and replay pays pages. When the head has more history and shares
+no row with the snapshot, catch-up pages back from it (up to five pages),
+merging each page as it lands. Past that bound, or when a page fails or the
+stream drops mid-fill, the snapshotted rows it never reached are dropped and the
+window continues from the last page read (verified at the bound, cached after an
+interruption or a drop mid-fill), so a long disconnect never shows a gap as
+history and the next head's overlap is truthful: a fill the drop interrupted
+leaves the settled rows as the next catch-up's snapshot, and a second drop
+before any catch-up completes keeps the first snapshot. Replayed rows, rows
+the stream delivers meanwhile, and older pages read during the disconnect stay
+(the last below the settled range until paging reaches them). Catch-up merges
+into paged readers without resetting older pages or their cursor. An open
+thread view refreshes the same way: it snapshots its replies at the drop, or
+at its first read before the stream is up, and only the refresh after the
+stream is back clears that snapshot (a refresh completing while it is down
+keeps it); the re-read pages past the retained range until it reaches one of
+them, within the thread page bound. Past it, the replies it never reached go
+and the view settles back on the range the reader had, so later refreshes stay
+proportional to it.
 
 Removing a batch member rebuilds only that batch's survivor scope. One established
 source overlaps its zero-replay replacement until EOSE; another removal supersedes
 the pending replacement, not that established source. Removed IDs are fenced
-immediately, including after re-addition. Original source scopes stay immutable;
+immediately, including after re-addition. A batch with new members requests a
+fresh replay sample only for those members. Survivor filters request no replay.
+Their events stay live before EOSE. The old wire can deliver only for survivors.
+Original source scopes stay immutable;
 ambiguous auxiliary events never gain invented alert attribution. Replacements
-use fresh wire IDs, preserve `since`, and request `limit: 0`, so their events are
+without added members use fresh wire IDs, preserve `since`, and request `limit: 0`. Their events are
 live even before EOSE. Pending setup alone does not prove continuity. Narrowed-scope
 failure, denial and disposal release both sources. An undecodable event is dropped
-and logged; its route stays. For an
-unchanged scope, a renewal timeout or transient relay error retires only the
-replacement and retains the established source, with the error visible until
+and logged; its route stays. A temporary failure retains the established source
+when its full scope stays allowed. This also applies when a replacement adds
+members. The error stays visible until
 fresh EOSE. The existing minute timer retries that renewal; quota failures retain
 the same source but obey the existing cooldown and three-retry limit. Exhausted
 or unsupported quota retries require manual Retry, not a reset each minute.
 
-One 60-second recovery timer renews established joined batches and hints the
-existing roster and unread owners to repair finite evidence. It does not renew
-singleton previews or add per-channel background history reads. When the socket
+Signed grant notices renew joined batches that contain the affected channel.
+One 60-second recovery timer checks for batches whose last REQ is at least
+15 minutes old. It also hints the roster and unread owners to repair finite
+evidence. The roster hint starts a full channel-list read only when the last
+one is still owed or failed, or when no full read has completed for 15 minutes
+(`ROSTER_BACKSTOP_INTERVAL`). Membership notices carry joins and removals live.
+The read also covers changes with no notice: a channel delete, a moderation
+kick or DM, and a dropped frame. The unread hint runs while a repair is owed,
+and otherwise at most every 15 minutes (`UNREAD_BACKSTOP_INTERVAL`), counted
+from that owner's last full
+repair, which each connection's first establishment also asks for. A covered
+resume (a continuous membership replay) reads no read-state snapshot, so it does
+not restart that interval. The live stream carries every unread change; this
+backstop only repairs what it lost with no signal (a channel the relay pruned
+from a batch, or a dropped frame). A repair is owed while either of two debts
+is open, and each clears only its own way. Evidence debt (a failed evidence
+repair, an evidence overflow, or a drop) clears only when an evidence repair
+completes; a live message that marks the evidence observed again does not clear
+it. Marker debt (a failed snapshot read, a live marker that failed to apply, or
+a drop) clears only on a successful snapshot read or a covered resume. A
+snapshot read cannot clear evidence debt, and an evidence repair cannot clear
+marker debt. It does not
+renew singleton previews or add per-channel background history reads. When the socket
 delivered no frame for a whole interval, the timer also sends one empty probe
 REQ; if no frame arrives within the setup timeout, the socket is replaced through
 the ordinary reconnect, with its backoff and replay. An open socket can stop
@@ -890,8 +1054,12 @@ outcomes retain their exact signed event and are never transparently re-signed.
 
 The relay WebSocket keeps retrying transient disconnects and authentication
 timeouts while its session is active. Its exponential delay starts at 250–500ms
-and caps at 15–30s, with jitter on each attempt. A full minute authenticated resets
-that backoff; a brief successful authentication does not. Authentication rejection
+and caps at 15–30s, with jitter on each attempt. A full minute authenticated
+resets that backoff; a brief successful authentication does not. After a close with
+code 1012 (Service Restart) or 1001 (Going Away), as a rolling deploy sends to every
+client at once, the first attempt instead waits a uniform random time up to 10 s
+(more once repeated bounces have grown the backoff past that), so a fleet the relay
+closed at once does not return at once. Authentication rejection
 or signing failure keeps its error visible and reconnects on a slow timer, 60 s
 doubling to 10 minutes, because access or a locked signer can change later; a
 signer that does not match the viewer stays terminal. A route the relay CLOSED

@@ -16,6 +16,8 @@ export interface MemoryEntry {
 }
 export interface MemoryListing {
   entries: readonly MemoryEntry[];
+  /** Deleted entries' tombstones, which a write recreating one must follow. */
+  deleted?: readonly Readonly<{ slug: string; createdAt: number }>[];
   partial: boolean;
 }
 /** Reads every entry, or only entry `slug` when given. */
@@ -80,7 +82,9 @@ export function memoryListing(input: unknown): MemoryListing {
     !value ||
     typeof value.partial !== "boolean" ||
     !Array.isArray(value.entries) ||
-    value.entries.length > LISTING_ENTRIES
+    value.entries.length > LISTING_ENTRIES ||
+    !Array.isArray(value.deleted ?? []) ||
+    (value.deleted?.length ?? 0) > LISTING_ENTRIES
   )
     throw new Error("Invalid memory listing");
   const slugs = new Set<string>();
@@ -108,10 +112,23 @@ export function memoryListing(input: unknown): MemoryListing {
       throw new Error("Memory listing exceeds budget");
     return Object.freeze(copy);
   });
+  const deleted = (value.deleted ?? []).map((entry) => {
+    if (
+      !entry ||
+      !memorySlug(entry.slug) ||
+      !Number.isSafeInteger(entry.createdAt) ||
+      entry.createdAt < 0 ||
+      slugs.has(entry.slug)
+    )
+      throw new Error("Invalid memory entry");
+    slugs.add(entry.slug);
+    return Object.freeze({ slug: entry.slug, createdAt: entry.createdAt });
+  });
   return Object.freeze({
     entries: Object.freeze(
       entries.sort((a, b) => a.slug.localeCompare(b.slug)),
     ),
+    ...(deleted.length ? { deleted: Object.freeze(deleted) } : {}),
     partial: value.partial,
   });
 }

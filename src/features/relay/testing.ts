@@ -1,3 +1,5 @@
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { hexToBytes } from "nostr-tools/utils";
 import {
   finalizeEvent,
   generateSecretKey,
@@ -20,6 +22,13 @@ export function signed(
 ): RelayEvent {
   return finalizeEvent({ created_at: 1_700_000_000, ...template }, key.secret);
 }
+/** The native `relay_verify_signatures` command, with real BIP-340 checks. */
+export const nativeSignatureChecks = (args: unknown) =>
+  (
+    args as { claims: { id: string; pubkey: string; sig: string }[] }
+  ).claims.map(({ id, pubkey, sig }) =>
+    schnorr.verify(hexToBytes(sig), hexToBytes(id), hexToBytes(pubkey)),
+  );
 /** Production-shaped host signer: the host authenticates and sends the exact
  * bytes, as the native adapter does. The default host forwards to the test's
  * stubbed `fetch`; credentials never reach JavaScript. */
@@ -124,20 +133,52 @@ export function profile(
   });
 }
 
+/** Unsigned kind 0s named `${label}${index}` for large rosters. The profile
+ * directory folds without checking signatures, and signing thousands of
+ * profiles makes a test slow under a loaded run. Use only where nothing
+ * checks the signature. */
+export function unsignedProfiles(count: number, label = "P"): RelayEvent[] {
+  return Array.from({ length: count }, (_, index) => {
+    const tag = [...label].map((c) => c.charCodeAt(0).toString(16)).join("");
+    const pubkey = tag.padEnd(32, "0") + index.toString(16).padStart(32, "0");
+    return {
+      id: pubkey,
+      pubkey,
+      kind: 0,
+      created_at: 1_700_000_000,
+      tags: [],
+      content: JSON.stringify({ name: `${label}${index}` }),
+      sig: "0".repeat(128),
+    } as unknown as RelayEvent;
+  });
+}
+
 export type Scripted = {
   filters: readonly ReadFilter[];
   respond: (events: RelayEvent[]) => void;
   fail: (error: unknown) => void;
   signal: AbortSignal | undefined;
 };
-/** A transport whose responses the test releases explicitly, so ordering and cancellation are observable. */
-export function scriptedTransport(viewer: string, relayAuthor: string) {
+/** A window's separate membership notice read (see `noticeFilter`). */
+export const isNoticeRead = (filters: readonly ReadFilter[]) =>
+  filters.length > 0 &&
+  filters.every(
+    (filter) => filter.kinds?.length === 1 && filter.kinds[0] === 40099,
+  );
+/** A transport whose responses the test releases explicitly, so ordering and cancellation are observable.
+ * Membership notice reads answer empty at once unless `notices` scripts them too. */
+export function scriptedTransport(
+  viewer: string,
+  relayAuthor: string,
+  { notices = false }: { notices?: boolean } = {},
+) {
   const pending: Scripted[] = [];
   const transport: ReadTransport = {
     viewer,
     relayAuthor,
     media: (url) => (/^https:\/\//.test(url) ? url : undefined),
     query(filters, signal) {
+      if (!notices && isNoticeRead(filters)) return Promise.resolve([]);
       return new Promise<RelayEvent[]>((resolve, reject) => {
         const entry: Scripted = {
           filters,

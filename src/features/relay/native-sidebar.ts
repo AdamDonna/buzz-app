@@ -32,15 +32,31 @@ const coordinates = [
   "channel-mutes",
   "channel-sort",
   "channel-filter",
+  "main-agent",
 ] as const;
 type Coordinate = (typeof coordinates)[number];
 type Head = { payload: Record<string, unknown>; createdAt: number };
 const empty = (coordinate: Coordinate): Record<string, unknown> =>
-  coordinate === "channel-sections"
-    ? { version: 1, sections: [], assignments: {} }
-    : coordinate === "channel-sort" || coordinate === "channel-filter"
-      ? { version: 1, groups: {} }
-      : { version: 1, channels: {} };
+  coordinate === "main-agent"
+    ? { version: 1, agent: null }
+    : coordinate === "channel-sections"
+      ? { version: 1, sections: [], assignments: {} }
+      : coordinate === "channel-sort" || coordinate === "channel-filter"
+        ? { version: 1, groups: {} }
+        : { version: 1, channels: {} };
+const agentKey = /^[0-9a-f]{64}$/;
+/** The main agent the viewer chose. A null one, written by development
+ * builds that cleared it, is read as none. */
+function mainAgent(value: Record<string, unknown>) {
+  const { version, agent, ...rest } = value;
+  if (
+    version !== 1 ||
+    Object.keys(rest).length ||
+    (agent !== null && !(typeof agent === "string" && agentKey.test(agent)))
+  )
+    throw new Error("Invalid main agent record");
+  return agent ?? undefined;
+}
 const cancelled = (signal: AbortSignal) => signal.throwIfAborted();
 const same = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -93,7 +109,8 @@ export function nativeSidebar(transport: ReadTransport) {
       throw new Error("Invalid sidebar record");
     // The Rust decoder checks signature, author, coordinate and plaintext budget.
     const value = payload as Record<string, unknown>;
-    project(coordinate, value);
+    if (coordinate === "main-agent") mainAgent(value);
+    else project(coordinate, value);
     return {
       payload:
         coordinate === "channel-sections" ||
@@ -133,9 +150,15 @@ export function nativeSidebar(transport: ReadTransport) {
   ): Promise<T> {
     const current = await head(coordinate, signal);
     const draft = prepare(current.payload, current.createdAt);
-    if (same(current.payload, draft.next)) return draft.result;
+    // A saved main agent of none matches the empty value but is still a
+    // record, unlike none at all, so it is written even then.
+    const unchanged =
+      same(current.payload, draft.next) &&
+      (current.createdAt > 0 || coordinate !== "main-agent");
+    if (unchanged) return draft.result;
     // Reject unsupported/over-budget writes at the existing projection boundary.
-    project(coordinate, draft.next);
+    if (coordinate === "main-agent") mainAgent(draft.next);
+    else project(coordinate, draft.next);
     if (
       new TextEncoder().encode(JSON.stringify(draft.next)).length >
       128 * 1024
@@ -160,6 +183,40 @@ export function nativeSidebar(transport: ReadTransport) {
   }
   return {
     decodeSidebarPreferences: decode,
+    async readMainAgent(signal: AbortSignal) {
+      const current = await head("main-agent", signal);
+      // A record of none reads as null, apart from no record at all.
+      return current.createdAt
+        ? (mainAgent(current.payload) ?? null)
+        : undefined;
+    },
+    async writeMainAgent(agent: string | null, signal: AbortSignal) {
+      if (agent !== null && !agentKey.test(agent))
+        throw new Error("Invalid main agent intent");
+      await mutate(
+        "main-agent",
+        signal,
+        () => ({ next: { version: 1, agent }, result: undefined }),
+        (value) => value.agent === agent,
+        "The main agent changed on another device; reload and try again",
+      );
+    },
+    async clearMainAgent(expected: string, signal: AbortSignal) {
+      if (!agentKey.test(expected))
+        throw new Error("Invalid main agent intent");
+      return mutate(
+        "main-agent",
+        signal,
+        (current) => {
+          const agent = mainAgent(current);
+          return agent === expected
+            ? { next: { version: 1, agent: null }, result: undefined }
+            : { next: current, result: agent };
+        },
+        (value) => mainAgent(value) !== expected,
+        "The main agent changed on another device; reload and try again",
+      );
+    },
     async removeSidebarSection(
       sectionId: string,
       signal: AbortSignal,

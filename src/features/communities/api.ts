@@ -6,16 +6,14 @@ import { settledRefusal, type SettledRefusal } from "./leave-protocol";
 import { registerBrokerCommunity } from "../relay/transport";
 import type { EventData } from "../relay/events";
 import type { RelaySession } from "../relay/session";
+import type { JoinPolicy } from "./join-policy";
 import type { PersonalProfile } from "./service";
 export type CommunityInfo = {
+  /** NIP-43 is advertised only when Buzz enforces relay membership. */
+  membershipRequired?: boolean;
   name?: string;
   icon?: string;
-  policy: {
-    version: string;
-    terms_markdown?: string;
-    privacy_markdown?: string;
-    age_attestation_required: boolean;
-  } | null;
+  policy: JoinPolicy | null;
 };
 export async function communityRequest<T>(
   id: string,

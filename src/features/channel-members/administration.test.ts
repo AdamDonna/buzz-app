@@ -9,12 +9,17 @@ import { PublishRejected } from "../relay/outbox";
 import { createRelaySession } from "../relay/session";
 import { matchesEvent } from "../relay/projection";
 import { SOLO_LABEL } from "../solo/labels";
-import { createMemberAdministration } from "./administration";
+import {
+  administerMember,
+  createMemberAdministration,
+  type MemberAdministrationState,
+} from "./administration";
 import {
   authorizeMemberChange,
   memberAuthority,
   validateMemberAdministrationTemplate,
   type MemberChange,
+  type MemberRole,
 } from "./administration-protocol";
 
 const key = new Uint8Array(32).fill(2);
@@ -133,6 +138,74 @@ it.each(["admin", "remove"] as const)(
   },
 );
 
+it.each(["guest", "admin", "member"] as const)(
+  "adds an absent person directly as %s with exact signed readback",
+  async (role) => {
+    const h = harness();
+    h.setRoles("owner");
+    await h.owner.capability.run(id, {
+      ...change,
+      expectedRole: "absent",
+      role,
+    });
+    expect(h.publish).toHaveBeenCalledOnce();
+    expect(h.publish.mock.calls[0]?.[0].tags).toEqual([
+      ["h", id],
+      ["p", target],
+      ["role", role],
+    ]);
+    expect(h.owner.capability.snapshot(id).operation?.status).toBe("confirmed");
+    expect(h.owner.capability.snapshot(id).authority.roles[target]).toBe(role);
+  },
+);
+
+it.each(["member", "guest", "bot", "unknown"])(
+  "refuses explicit-role additions by a %s",
+  async (actor) => {
+    const h = harness(actor);
+    h.setRoles(actor);
+    await h.owner.capability.run(id, { ...change, expectedRole: "absent" });
+    expect(h.sign).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["guest", "member", "admin", "owner", "bot", "unknown"])(
+  "never treats an existing %s as an absent addition",
+  async (role) => {
+    const h = harness("owner", role);
+    await h.owner.capability.run(id, { ...change, expectedRole: "absent" });
+    expect(h.sign).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["membership", "authority"])(
+  "rechecks %s after signing an explicit-role addition",
+  async (changed) => {
+    const h = harness();
+    h.setRoles("owner");
+    const sign = required(h.sign.getMockImplementation());
+    h.sign.mockImplementationOnce(async (template) => {
+      if (changed === "membership") h.setRoles("owner", "member");
+      else h.setRoles("member");
+      return sign(template);
+    });
+    await h.owner.capability.run(id, { ...change, expectedRole: "absent" });
+    expect(h.sign).toHaveBeenCalledOnce();
+    expect(h.publish).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects removal with an absent expectation", async () => {
+  const h = harness();
+  await h.owner.capability.run(id, {
+    ...change,
+    expectedRole: "absent",
+    role: "remove",
+  });
+  expect(h.sign).not.toHaveBeenCalled();
+});
+
 it.each(["admin", "member", "guest", "remove"] as const)(
   "confirms %s from exact fresh signed state, never acknowledgement alone",
   async (role) => {
@@ -214,6 +287,70 @@ it.each(["admin", "guest"] as const)(
     expect(h.owner.capability.snapshot(id).operation?.status).toBe("uncertain");
   },
 );
+it("publishes no member change once the caller's guard turns false during signing", async () => {
+  const h = harness();
+  let eligible = true;
+  const active = vi.fn(() => eligible);
+  const sign = required(h.sign.getMockImplementation());
+  h.sign.mockImplementationOnce(async (template) => {
+    eligible = false;
+    return sign(template);
+  });
+  await h.owner.capability.run(id, change, undefined, active);
+  expect(active).toHaveBeenCalled();
+  expect(h.publish).not.toHaveBeenCalled();
+  expect(h.owner.capability.snapshot(id)).toMatchObject({
+    operation: { status: "failed" },
+    error: "Member change cancelled",
+  });
+  // Nothing reached the relay, so a later eligible change is not fenced as uncertain.
+  await h.owner.capability.run(id, change);
+  expect(h.owner.capability.snapshot(id).operation?.status).toBe("confirmed");
+});
+it("checks the guard only after the final re-authorization read settles", async () => {
+  const h = harness();
+  let eligible = true;
+  const active = vi.fn(() => eligible);
+  const started = deferred(),
+    gate = deferred();
+  const sign = required(h.sign.getMockImplementation());
+  h.sign.mockImplementationOnce(async (template) => {
+    h.read.mockImplementationOnce(async () => {
+      started.resolve();
+      await gate.promise;
+      return h.events();
+    });
+    return sign(template);
+  });
+  const running = h.owner.capability.run(id, change, undefined, active);
+  try {
+    await started.promise;
+    expect(active).not.toHaveBeenCalled();
+    eligible = false;
+  } finally {
+    gate.resolve();
+  }
+  await running;
+  expect(active).toHaveBeenCalledOnce();
+  expect(h.publish).not.toHaveBeenCalled();
+  expect(h.owner.capability.snapshot(id).operation?.status).toBe("failed");
+  eligible = true;
+  await h.owner.capability.run(id, change, undefined, active);
+  expect(h.publish).toHaveBeenCalledOnce();
+  expect(h.owner.capability.snapshot(id).operation?.status).toBe("confirmed");
+});
+it("publishes nothing when the caller's signal aborts during signing", async () => {
+  const h = harness();
+  const controller = new AbortController();
+  const sign = required(h.sign.getMockImplementation());
+  h.sign.mockImplementationOnce(async (template) => {
+    controller.abort();
+    return sign(template);
+  });
+  await h.owner.capability.run(id, change, controller.signal);
+  expect(h.publish).not.toHaveBeenCalled();
+  expect(h.owner.capability.snapshot(id).operation?.status).toBe("failed");
+});
 it.each(["owner", "bot", "unknown"])(
   "never coerces %s target roles",
   async (role) => {
@@ -1031,4 +1168,98 @@ it("authorizes a system-channel add only for a non-member other than the viewer 
   expect(add({ role: "owner" as never })).toThrow(
     /Membership or permissions changed/,
   );
+});
+
+it("administers one member change from a fresh roster read", async () => {
+  const roles: Record<string, string> = { [target]: "member" };
+  let after: object = {};
+  const state = (value: object) => value as MemberAdministrationState;
+  const admin = {
+    refresh: vi.fn(async () => {}),
+    run: vi.fn(async () => {}),
+    snapshot: vi.fn(() =>
+      state(
+        admin.run.mock.calls.length
+          ? { status: "ready", authority: { roles }, ...after }
+          : { status: "ready", authority: { roles } },
+      ),
+    ),
+  };
+  const remove = (role: MemberRole | undefined) =>
+    role ? ({ expectedRole: role, role: "remove" } as const) : undefined;
+  const settled = (status: string, error?: string) => {
+    after = {
+      operation: { change: { pubkey: target, role: "remove" }, status },
+      ...(error ? { error } : {}),
+    };
+  };
+
+  settled("confirmed");
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "confirmed",
+  });
+  expect(admin.refresh).toHaveBeenCalledWith(id);
+  expect(admin.run).toHaveBeenCalledWith(id, {
+    pubkey: target,
+    expectedRole: "member",
+    role: "remove",
+  });
+
+  // The roster already shows the result: nothing is sent.
+  admin.run.mockClear();
+  await expect(administerMember(admin, id, otherId, remove)).resolves.toEqual({
+    status: "confirmed",
+  });
+  expect(admin.run).not.toHaveBeenCalled();
+
+  settled("failed", "Rejected");
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "failed",
+    error: "Rejected",
+  });
+  settled("uncertain", "May have taken effect");
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "uncertain",
+    error: "May have taken effect",
+  });
+  // A pending, or someone else's, operation is no confirmation.
+  settled("pending");
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "uncertain",
+  });
+  after = {
+    operation: {
+      change: { pubkey: otherId, role: "remove" },
+      status: "confirmed",
+    },
+  };
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "uncertain",
+  });
+
+  admin.run.mockRejectedValueOnce(new Error("Offline"));
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "failed",
+    error: "Offline",
+  });
+
+  admin.snapshot.mockReturnValue(
+    state({ status: "error", authority: { roles } }),
+  );
+  admin.run.mockClear();
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "failed",
+    error: "Roles unavailable",
+  });
+  await expect(
+    administerMember(admin, id, target, remove, "Try again."),
+  ).resolves.toEqual({ status: "failed", error: "Try again." });
+  admin.snapshot.mockReturnValue(
+    state({ status: "error", authority: { roles }, error: "Read failed" }),
+  );
+  await expect(administerMember(admin, id, target, remove)).resolves.toEqual({
+    status: "failed",
+    error: "Read failed",
+  });
+  expect(admin.run).not.toHaveBeenCalled();
 });

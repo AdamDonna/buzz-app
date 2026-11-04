@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { Context } from "@deepseek-ai/cordis";
+import type { ReactNode } from "react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   DEFAULT_DECISION_PROVIDER,
+  DecisionsService,
   type DecisionProviderStatus,
   type RegisteredProvider,
 } from "../features/decisions/service";
@@ -69,10 +72,25 @@ function fake(
   };
 }
 
-it("says to turn a provider on when none is", () => {
-  render(<DecisionsSettings decisions={fake([])} active={() => true} />);
+it("says to turn a provider on when none is, linking to Manage plugins", async () => {
+  const user = userEvent.setup();
+  const onSection = vi.fn();
+  render(
+    <DecisionsSettings
+      decisions={fake([])}
+      active={() => true}
+      onSection={onSection}
+    />,
+  );
   expect(screen.getByRole("heading", { name: "Decisions API" })).toBeVisible();
-  expect(screen.getByRole("status")).toHaveTextContent("Settings > Plugins");
+  const status = screen.getByRole("status");
+  expect(status).toHaveTextContent(
+    "No decision provider is turned on. Turn one on in Manage plugins.",
+  );
+  await user.click(
+    within(status).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("plugins");
 });
 
 it("shows a lone provider's settings, with no provider choice", () => {
@@ -170,6 +188,7 @@ it("keeps a provider's failing settings inside its own part, even while hidden",
     { key: "b", status: "ready" },
   ]);
   let selected = "plugins";
+  const onSection = vi.fn();
   // Settings mounts the Decisions section while another one is shown.
   const page = () => (
     <>
@@ -178,6 +197,7 @@ it("keeps a provider's failing settings inside its own part, even while hidden",
         <DecisionsSettings
           decisions={decisions}
           active={() => selected === "decisions"}
+          onSection={onSection}
         />
       </div>
     </>
@@ -186,9 +206,14 @@ it("keeps a provider's failing settings inside its own part, even while hidden",
   expect(screen.getByRole("button", { name: "Turn plugin off" })).toBeVisible();
   selected = "decisions";
   rerender(page());
-  expect(screen.getByRole("alert")).toHaveTextContent(
-    "Provider typesafe settings are unavailable. You can turn its plugin off in Settings > Plugins.",
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(
+    "Provider typesafe settings are unavailable. You can turn its plugin off in Manage plugins.",
   );
+  await user.click(
+    within(alert).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("plugins");
   // The rest of the section still works.
   await user.click(screen.getByRole("radio", { name: /Provider b/ }));
   expect(decisions.chosen()).toBe("b");
@@ -249,4 +274,91 @@ it("offers a lone other provider when TypeSafe is off, and sets it up before cho
   const radio = screen.getByRole("radio", { name: /Provider b/ });
   expect(radio).toBeChecked();
   expect(radio).toHaveFocus();
+});
+
+/** The real service with TypeSafe and a provider the test can remove, as a
+ * Builderlab sign-out does. Its settings have a Sign out button that does. */
+async function withdrawable(typesafe = true) {
+  const root = new Context();
+  root.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const decisions = new DecisionsService(root, undefined);
+  const provider = (id: string, Settings?: () => ReactNode) => ({
+    id,
+    label: id,
+    description: `About ${id}.`,
+    status: () => "ready" as const,
+    subscribe: () => () => {},
+    decide: async () => ({
+      outcome: "failed" as const,
+      reason: "unavailable" as const,
+    }),
+    ...(Settings ? { Settings } : {}),
+  });
+  let remove = () => {};
+  const register = (plugin: string, entry: ReturnType<typeof provider>) =>
+    root
+      .extend({ pluginOwner: { id: plugin, revision: "one" } })
+      .plugin((ctx) => {
+        const stop = ctx.decisions.registerProvider(entry);
+        if (plugin === "block.builderlab") remove = stop;
+      })
+      .await();
+  if (typesafe) await register("buzz.typesafe", provider("typesafe"));
+  await register(
+    "block.builderlab",
+    provider("builderlab", () => (
+      <button type="button" onClick={() => remove()}>
+        Sign out
+      </button>
+    )),
+  );
+  return { decisions, withdraw: () => act(() => remove()) };
+}
+
+it("hands focus to the selected radio when a sign-out removes the focused provider", async () => {
+  const user = userEvent.setup();
+  const { decisions } = await withdrawable();
+  render(<DecisionsSettings decisions={decisions} active={() => true} />);
+  const signOut = screen.getByRole("button", { name: "Sign out" });
+  signOut.focus();
+  await user.keyboard("{Enter}");
+  expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  expect(screen.getByRole("radio", { name: /typesafe/ })).toHaveFocus();
+});
+
+it("hands focus to the selected radio when the focused provider's own radio goes", async () => {
+  const { decisions, withdraw } = await withdrawable();
+  render(<DecisionsSettings decisions={decisions} active={() => true} />);
+  screen.getByRole("radio", { name: /builderlab/ }).focus();
+  await withdraw();
+  expect(screen.queryByRole("radio", { name: /builderlab/ })).toBeNull();
+  expect(screen.getByRole("radio", { name: /typesafe/ })).toHaveFocus();
+});
+
+it("leaves focus elsewhere alone when a provider is removed, as by a 401", async () => {
+  const { decisions, withdraw } = await withdrawable();
+  render(
+    <>
+      <button type="button">Elsewhere</button>
+      <DecisionsSettings decisions={decisions} active={() => true} />
+    </>,
+  );
+  const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+  elsewhere.focus();
+  await withdraw();
+  expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  expect(elsewhere).toHaveFocus();
+});
+
+it("hands focus to the section when the removed provider was the only one", async () => {
+  const user = userEvent.setup();
+  const { decisions } = await withdrawable(false);
+  render(<DecisionsSettings decisions={decisions} active={() => true} />);
+  screen.getByRole("button", { name: "Sign out" }).focus();
+  await user.keyboard("{Enter}");
+  expect(screen.getByRole("status")).toHaveTextContent("Manage plugins");
+  expect(screen.getByRole("region", { name: "Decisions API" })).toHaveFocus();
 });

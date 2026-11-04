@@ -1,14 +1,15 @@
 # Solo
 
-Solo is a private channel whose only human member is its owner, talking with
-their agents. It is not a separate page, message store or relay-enforced privacy
-mode: a Solo chat is a channel, opened in Messages like any other, and signed
-channel membership remains access authority.
+Solo starts as a private channel whose only human member is its owner, talking with
+their agents. Its owner can share membership or open it for community viewing.
+It is not a separate page, message store or relay-enforced privacy
+mode: a Solo chat is a channel, opened in Messages like any other. Ordinary
+channel visibility and signed membership determine access.
 
 ## Model
 
 - **The `buzz.solo` channel label is the one Solo fact.** It is a NIP-CL label
-  on the private channel's relay metadata, so every member and agent, including
+  on the channel's relay metadata, so every member and agent, including
   remote agents without the owner's encrypted state, reads the same answer.
   Discovery derives `channelType: "solo"` from it alone. A Solo channel gets
   the chat treatment for everyone: a timeline that loads history on scroll and
@@ -62,14 +63,30 @@ behavior on the label, so a rename touches copy only.
   admission as any Solo send: missing tagged agents are added, then the message
   is queued. Nothing about the start is saved separately. A retry in the same
   view reuses the requested channel; after an interruption the chat exists with
-  the text still in its composer. Setup that fails or is interrupted leaves a
-  working chat without that setup; it never holds the message. Draft settings
-  remain local until first send and use Solo's defaults namespace.
+  the text still in its composer. A start the relay refuses makes no chat: the
+  chat and what was sent in it are withdrawn, and an error says why. If New
+  chat is still blank (no text beyond tags, no files, settings and workspace
+  unchanged, Chat settings closed), the prompt, its mentions or the agents
+  picked for it, its files, the draft settings and the workspace go back into
+  it. A draft begun since is kept, even one that couldn't be saved or an
+  earlier refused prompt, and the new prompt is lost, as it is when it can't
+  be saved on this device. The error says which happened, and names anything
+  else of the prompt's that couldn't be saved. Setup that fails or is
+  interrupted leaves a working chat without that setup; it never holds the
+  message. Draft settings remain local until first send and use Solo's
+  defaults namespace.
 - New Solo chats are created with the `buzz.solo` label and no `about` text, so
   a relay without NIP-CL labels cannot start one. The label is a routing hint for
   agents: answer as one channel-scoped, top-level conversation. It is not access
   authority. The in-app agent harness reads it from the channel list; remote
   harnesses that only read `about` need to learn the label.
+- The Buzz tools' `channel_create` with `solo` sends the same create for any
+  caller, including the standalone stdio server: signed by the caller, with the
+  label and any `members` it names. The caller is the creator, so an agent's
+  key makes a chat its human members see as shared, not their own. It sends no
+  message, so no agent turn starts, and it does not file the chat in a
+  workspace. It cannot check NIP-CL support first, so on a relay that drops the
+  label it reports an ordinary private channel instead.
 - **Share** opens the same access dialog from Solo and Messages. This flow
   preserves channel ID, history, Canvas, existing members,
   Solo label and workspace filing. It neither promotes a conversation nor
@@ -86,15 +103,16 @@ behavior on the label, so a rename touches copy only.
   evidence, not privacy inference or a required role refresh. See
   [sharing](sharing.md).
 - Naming and lifetime belong to [Chat settings](#chat-lifetime),
-  not Share. Backend read-only roles,
-  dynamic inheritance/revocation and synced grant provenance remain deferred or
-  blocked in this checkpoint. Sharing does not expose owner-private detailed agent
+  not Share. Solo's View only / Private choices reuse channel policy;
+  View only uses the relay-enforced Guest default;
+  individual invitation role choices, dynamic inheritance/revocation and synced
+  grant provenance remain deferred. Sharing does not expose owner-private detailed agent
   activity or start an agent. Proposal documents remain design history, not
   implemented behavior.
 - Solo chats and drafts use the full conversation pane. Right-click,
   Shift+F10 and overflow share one sidebar action list: Mark as unread, then
-  Edit…, Move to and Copy, then Share… and Convert to channel (where eligible),
-  then Archive chat and Delete chat. Opening a row
+  Rename (where editable), Chat settings and Move to, then Share access, Copy link
+  and Convert to channel (where eligible), then Archive chat and Delete chat. Opening a row
   menu does not select the row.
   A chat can also be dragged with a pointer onto another workspace or **Chats**;
   the drop is the same Move to intent, with the same gate, optimistic placement,
@@ -116,16 +134,45 @@ behavior on the label, so a rename touches copy only.
   recipient tags for both owners and guests. Saved chats offer the chat's people
   and your available agents; an untagged message never infers an agent recipient.
   Only available agents can be enrolled through tagging—outside humans must
-  already have been shared into the chat. Empty new-chat drafts start tagged with the device's main
-  agent for this account/community. **Agents → right-click or "..." → Make main
-  agent** changes that choice; its card shows **Main agent**. The choice stays
-  until it is changed or the agent is deleted, and it is still tagged when its
-  runtime is signed out or broken. Without a choice, or after the chosen agent
-  is deleted, the first managed agent, then the first selectable agent, becomes
-  the main agent and is saved, only after agent evidence is complete and the
-  requested archive read has settled. A chosen agent missing for another reason
-  is stood in for without replacing the choice; the stand-in can be made main.
-  An available explicit choice does not wait for fallback evidence.
+  already have been shared into the chat. Empty new-chat drafts start tagged with
+  the default agent for this account/community. **Agents → right-click or "..." →
+  Make my bestie** explicitly saves that agent as the bestie; its card then shows
+  **Bestie**. That choice is saved to the account as a private `main-agent` record,
+  so every install adopts it once per session. Explicit choices and **Remove as
+  Bestie** write the record. Removing saves a record of none, which is not the
+  same as no record: a saved none means the account chose to have no Bestie, and
+  no record means it never chose. A finished deletion writes no Bestie when a
+  fresh account read still names the deleted agent. A different choice visible
+  to that read stays; the read/replace cannot protect a concurrent choice on
+  another device before publish.
+  The choice stays until it is changed or the agent is deleted, and it is still
+  tagged when its runtime is signed out or broken. Without a choice, or after the
+  chosen agent is deleted, the first managed agent, then the first selectable
+  agent, becomes the default agent and is saved on this device only, after the
+  account record has been read, agent evidence is complete and the requested
+  archive read has settled. A chosen agent missing for another reason is stood in
+  for without replacing the choice. Until an agent is explicitly saved as the
+  bestie, including for an automatic pick, a stand-in or a failed save, **Make my
+  bestie** stays offered. When the Bestie plugin is enabled, the explicit
+  account-saved choice also owns its pinned sidebar destination; automatic and
+  stand-in defaults do not. The pinned destination reuses the newest verified
+  one-to-one DM whose only other member is that exact agent, opening one through
+  the shared DM service only when none exists. It is an ordinary DM with the same
+  history, draft, threads and unread state—not a Solo chat or a second message
+  store. While promoted, that DM is omitted from the ordinary Messages inventory;
+  replacing or deleting the Bestie, disabling the plugin, or losing the exact
+  roster match restores the ordinary row. The pinned navigation row adopts the
+  agent's name and avatar. Global search shows the same identity with **Bestie**
+  as supporting text and matches either name; the separate agent result remains
+  a **New chat** action rather than another route to the pinned DM.
+
+  Nothing is picked until the account record has been read and its archive read
+  has settled, so a new chat is never tagged for a stale pick. A new chat tags the
+  current default once each time it is shown; the tag isn't saved until the draft
+  is edited, so showing an untouched new chat again uses the current default.
+  Archive rereads, failed rereads and reconnects keep the last known archives, so
+  a known deletion is never forgotten and a live
+  choice never disappears.
   Follow-ups keep all exact agents notified by the previous send, just like
   Team threads, including the shared Remember mentioned agents preference.
   The account default never replaces recipients in an existing chat.
@@ -185,11 +232,13 @@ Solo workspaces use one bounded 16 KiB recipe record. Only workspace assignments
 occupy it, so unfiled chats cost nothing; a full record refuses the filing and
 keeps the chat. **Convert to channel** is a
 separate, owner/admin-confirmed action for Solo chats, available from
-Share and the existing menus. Its Private/Public choice defaults to Private and
-warns that Public exposes the full existing history to the community. It appears
-in Messages with the same ID, history, Canvas, membership, labels and lifetime.
+Share and the existing menus. Its Private / View only / Public choice starts from
+the chat's current access, with the same descriptions as channel general access.
+It appears in Messages with the same ID, history, Canvas, membership, labels and
+lifetime.
 Conversion is one signed details edit that clears `buzz.solo` (keeping any other
-labels) and applies the chosen visibility; the chat moves to Team for everyone.
+labels) and applies the chosen visibility and admission policy; the chat moves to
+Team for everyone.
 It then removes the chat's workspace assignment, if any, and opens the channel in
 Messages. Share alone never does this. If unfiling fails, Finish conversion
 retries only that step. The existing preference owner preserves other workspaces
@@ -215,11 +264,11 @@ there is no create-then-edit. Local settings store name, Canvas and lifetime
 together. Invalid stored durations are visible failures, not implicit Ongoing.
 
 The **Chat settings** gear in the header opens the form directly; Solo chat
-row menus offer the same form as **Edit…**. Both open one
+row menus offer the same form as **Chat settings**. Both open one
 scrollable dialog, with **Chat name** above Workspace/Canvas
 (optional for a new draft),
-**Lifetime** below it, and one **Save changes** action. The separate Rename editor
-and menu action have been removed. There is no separate lifetime menu or tab.
+**Lifetime** below it, and one **Save changes** action. There is no separate
+lifetime menu or tab.
 Changed Canvas confirms first, then changed name/lifetime use one fresh signed
 channel-details operation. The Solo label, privacy, history, membership and
 workspace filing remain unchanged. A no-op closes without writing. If details fail
@@ -252,7 +301,8 @@ The shared fresh-details owner remains edit authority.
 
 ## Optional naming
 
-Double-click an editable Solo chat’s sidebar row to rename it inline. The current
+Double-click an editable Solo chat’s sidebar row, or choose **Rename** from its
+actions menu, to rename it inline. The current
 name is selected; Enter or clicking away saves, and Escape cancels. Empty or
 unchanged names keep the confirmed title. Errors retain the draft below the field;
 uncertain saves offer **Check save status** without republishing. This uses the

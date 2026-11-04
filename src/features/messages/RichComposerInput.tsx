@@ -1,13 +1,14 @@
 import { useGifDraftPreview } from "../../bundled/emoji/GifDraftPreview";
 import { useMentionArchives } from "./use-mention-archives";
-import { useContext, type ReactNode } from "react";
+import { memo, useContext, type ReactNode } from "react";
 import { DraftMentionRoster } from "./draft-mention-roster";
 import { archivedMention } from "./mention-admission";
 import { useLayoutEffect, useMemo, useRef } from "react";
-import { useIdentityNames } from "../identity-names/react";
+import { useNamesRevision } from "../identity-names/react";
 import { useListedChannel } from "../relay/listed-channel";
 import { InlineChip } from "../../shared/design-system/ui/InlineChip";
 import type { ConversationExtensions } from "../conversation/contracts";
+import type { Profile } from "../relay/contracts";
 import type { CustomEmoji } from "../relay/emoji";
 import type { ComposerSession } from "./composer-session";
 import { profileKey } from "../profiles/target";
@@ -22,6 +23,87 @@ import {
 import { messageLinkParts } from "./message-link-parts";
 import { messageReferences } from "./message-references";
 import { EditableInput, type EditableInputProps } from "./EditableInput";
+
+/** Token artwork with props that hold across keystrokes, so typing prose does
+ * not re-render every link chip in a long draft. */
+const TokenMarkdown = memo(function TokenMarkdown({
+  source,
+  channelId,
+  emoji,
+  directory,
+  profiles,
+  session,
+  scope,
+  extensions,
+}: {
+  source: string;
+  channelId: string;
+  emoji: readonly CustomEmoji[];
+  directory: ReturnType<typeof useReferenceDirectory>;
+  profiles: ReadonlyMap<string, Profile>;
+  session: ComposerSession;
+  scope: string;
+  extensions: ConversationExtensions | undefined;
+}) {
+  return (
+    <MessageMarkdown
+      row={{
+        id: "composer",
+        authorId: "",
+        createdAt: 0,
+        channelId,
+        content: source,
+        mentions: [],
+        emoji,
+        participants: [],
+        attachments: [],
+        reactions: [],
+        replyCount: 0,
+      }}
+      directory={directory}
+      participantProfiles={profiles}
+      session={session}
+      scope={scope}
+      extensions={extensions}
+      media={session.media}
+      onOpenLink={() => false}
+      interactive={false}
+    />
+  );
+});
+
+/** Identity chip artwork from primitive props, so typing prose does not
+ * re-render every mention in a long draft. */
+const TokenChip = memo(function TokenChip({
+  kind,
+  id,
+  label,
+  qualifier,
+  reveal,
+}: {
+  kind: "agent" | "person";
+  id: string;
+  label: string;
+  qualifier: string | undefined;
+  reveal: boolean;
+}) {
+  return (
+    <InlineChip
+      address={{ kind, id }}
+      face={{ label, loading: false, resolved: true }}
+      qualifier={
+        qualifier
+          ? {
+              text: `· ${qualifier}`,
+              reveal,
+              accessibleLabel: `public key ending ${qualifier.split("").join(" ")}`,
+            }
+          : undefined
+      }
+      interactive={false}
+    />
+  );
+});
 
 /** Decorations never change source text or infer notification recipients from names. */
 export function RichComposerInput({
@@ -48,15 +130,17 @@ export function RichComposerInput({
     (channel) => channel?.members,
   );
   const archives = useMentionArchives(session);
-  const roster = useContext(DraftMentionRoster);
-  const resolveName = useIdentityNames(session.names);
+  const roster = useContext(DraftMentionRoster)?.recipients;
   // Recipients, not keystrokes, change chip names: typing prose must not
   // copy every profile or scan every member of a large channel.
   const recipientKey = JSON.stringify(
     draft.recipients.map(({ pubkey, name }) => [pubkey, name]),
   );
+  // Chip labels and facts come from names.lookup.
+  const names = useNamesRevision(session.names, recipientKey !== "[]");
   const { profiles, qualifiers, labels } = useMemo(() => {
     void archives;
+    void names;
     const recipients = JSON.parse(recipientKey) as [string, string][];
     const profiles = new Map(directory.profiles);
     for (const [pubkey, name] of recipients)
@@ -91,7 +175,7 @@ export function RichComposerInput({
       labels: new Map(
         recipients.map(([pubkey, name]) => [
           pubkey,
-          resolveName(pubkey, name, candidates, displayFacts),
+          session.names?.lookup(pubkey, candidates, displayFacts)?.name ?? name,
         ]),
       ),
     };
@@ -102,7 +186,7 @@ export function RichComposerInput({
     roster,
     members,
     archives,
-    resolveName,
+    names,
   ]);
   const previous = useRef(labels);
   const revealed = useRef(
@@ -126,6 +210,17 @@ export function RichComposerInput({
       ),
     [draft, labelState],
   );
+  // Media URLs derive from the URL alone, so this list changes with the catalog.
+  const renderableEmoji = useMemo(
+    () => emoji.filter((entry) => !!session.media(entry.url)),
+    [emoji, session],
+  );
+  // The normalizer, the render and the token reconcile decorate the same
+  // document in one keystroke; parse its Markdown once.
+  const scanned = useRef<{
+    text: string;
+    scan: ReturnType<typeof scanMarkdown>;
+  }>(undefined);
   useLayoutEffect(() => {
     previous.current = labels;
     if (!draft.text) revealed.current.clear();
@@ -137,7 +232,12 @@ export function RichComposerInput({
     const context = doc
       ? composerMarkdownContext(doc)
       : { text: draft.text, protected: [] };
-    const { tree, links, tooDeep } = scanMarkdown(context.text);
+    if (scanned.current?.text !== context.text)
+      scanned.current = {
+        text: context.text,
+        scan: scanMarkdown(context.text),
+      };
+    const { tree, links, tooDeep } = scanned.current.scan;
     const literals: { start: number; end: number }[] = [...context.protected];
     const gifPreviews = new Map<number, { end: number; content: ReactNode }>();
     const pending = [tree];
@@ -233,7 +333,6 @@ export function RichComposerInput({
       directory.agents,
     ))
       add(reference.start, reference.end, undefined, true);
-    const renderableEmoji = emoji.filter((entry) => !!session.media(entry.url));
     const shortcodes = new Set(
       renderableEmoji.map((entry) => entry.shortcode.toLowerCase()),
     );
@@ -262,54 +361,28 @@ export function RichComposerInput({
           end,
           editAsText: !!editAsText,
           content: identity ? (
-            <InlineChip
-              address={{
-                kind:
-                  directory.profiles.get(identity)?.isAgent ||
-                  directory.agents.some((agent) => agent.pubkey === identity)
-                    ? "agent"
-                    : "person",
-                id: identity,
-              }}
-              face={{
-                label: faceLabel,
-                loading: false,
-                resolved: true,
-              }}
-              qualifier={
-                qualifier
-                  ? {
-                      text: `· ${qualifier}`,
-                      reveal: !!mention && reveal.has(mention),
-                      accessibleLabel: `public key ending ${qualifier.split("").join(" ")}`,
-                    }
-                  : undefined
+            <TokenChip
+              kind={
+                directory.profiles.get(identity)?.isAgent ||
+                directory.agents.some((agent) => agent.pubkey === identity)
+                  ? "agent"
+                  : "person"
               }
-              interactive={false}
+              id={identity}
+              label={faceLabel}
+              qualifier={qualifier}
+              reveal={!!mention && reveal.has(mention)}
             />
           ) : (
-            <MessageMarkdown
-              row={{
-                id: "composer",
-                authorId: "",
-                createdAt: 0,
-                channelId,
-                content: draft.text.slice(start, end),
-                mentions: mention ? [mention] : [],
-                emoji: renderableEmoji,
-                participants: [],
-                attachments: [],
-                reactions: [],
-                replyCount: 0,
-              }}
+            <TokenMarkdown
+              source={draft.text.slice(start, end)}
+              channelId={channelId}
+              emoji={renderableEmoji}
               directory={directory}
-              participantProfiles={profiles}
+              profiles={profiles}
               session={session}
               scope={scope}
               extensions={extensions}
-              media={session.media}
-              onOpenLink={() => false}
-              interactive={false}
             />
           ),
         };

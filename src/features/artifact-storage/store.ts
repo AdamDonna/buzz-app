@@ -208,7 +208,8 @@ export function createArtifactStore(viewer: string, relay: string) {
     let disposed = false;
     const lifetime = new AbortController();
     const listeners = new Set<() => void>();
-    const channel = new BroadcastChannel(`${DB}:${JSON.stringify(prefix)}`);
+    const channelName = `${DB}:${JSON.stringify(prefix)}`;
+    const channel = new BroadcastChannel(channelName);
     const changed = () => {
       for (const listener of listeners)
         queueMicrotask(() => {
@@ -220,6 +221,10 @@ export function createArtifactStore(viewer: string, relay: string) {
       if (!disposed) {
         changed();
         channel.postMessage(null);
+      } else {
+        const notification = new BroadcastChannel(channelName);
+        notification.postMessage(null);
+        notification.close();
       }
     };
     function reindex(
@@ -510,7 +515,7 @@ export function createArtifactStore(viewer: string, relay: string) {
                 record.id,
                 (row) => ({
                   row:
-                    row.record.local !== undefined || row.record.current
+                    row.record.local !== undefined
                       ? row
                       : {
                           ...row,

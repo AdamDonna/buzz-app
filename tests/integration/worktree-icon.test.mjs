@@ -21,6 +21,7 @@ function fixture(t) {
   const directory = mkdtempSync(path.join(tmpdir(), "buzz-worktree-icon-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const env = { ...process.env };
+  delete env.BUZZ_DEV_SIGNING_IDENTITY;
   // Git hooks export repository selectors; never let fixtures touch the real repo.
   for (const key of [
     "GIT_DIR",
@@ -98,6 +99,8 @@ function fixture(t) {
         path.join(cwd, "scripts", file),
       );
     }
+    // Desktop development builds this helper before launching Tauri.
+    writeFileSync(path.join(cwd, "scripts/build-agent-command.mjs"), "");
   }
   const run = (cwd, args) => {
     const result = spawnSync(process.execPath, args, {
@@ -243,6 +246,20 @@ test("macOS launchers preserve icon, port, explicit config and runner arguments"
     bundle: config.bundle,
   });
   assert.deepEqual(bundle.slice(7), forwarded);
+  writeFileSync(
+    path.join(linked, ".env.local"),
+    'BUZZ_DEV_SIGNING_IDENTITY="Apple Development: Local Test"\n',
+  );
+  const signed = JSON.parse(
+    run(linked, ["scripts/desktop-build.mjs"]).stdout.trim(),
+  );
+  assert.deepEqual(JSON.parse(signed[6]), {
+    identifier: config.identifier,
+    bundle: {
+      ...config.bundle,
+      macOS: { signingIdentity: "Apple Development: Local Test" },
+    },
+  });
   // A failed icon generation leaves the rest of the overlay in place.
   render("process.exit(1);");
   const fallback = launch();

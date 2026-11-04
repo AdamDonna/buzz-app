@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -482,7 +483,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-it("retires pending PR loads, retries errors, and clears media when navigating", async () => {
+it("ignores retired PR loads, retries errors, and clears media when navigating", async () => {
   const first = deferred<Response>();
   const second = deferred<Response>();
   const retry = deferred<Response>();
@@ -496,10 +497,10 @@ it("retires pending PR loads, retries errors, and clears media when navigating",
     <GitHubPanel target={url} close={() => {}} />,
   );
   expect(screen.getByRole("status")).toHaveTextContent("Loading");
-  expect(fetch).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   rerender(<GitHubPanel target={`${url}0`} close={() => {}} />);
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(fetch.mock.calls[0]?.[1].signal.aborted).toBe(true);
+  // The store reads one batch at a time: the next PR is read once the
+  // retired one's read is in.
   await act(async () => {
     first.resolve(
       new Response(
@@ -512,6 +513,7 @@ it("retires pending PR loads, retries errors, and clears media when navigating",
     );
     await first.promise;
   });
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
   expect(
     screen.queryByRole("heading", { name: "Retired PR #327" }),
   ).not.toBeInTheDocument();

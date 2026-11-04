@@ -37,6 +37,44 @@ const MEDIA_FILE_LIMIT = 500 * 1024 * 1024;
 /** Images an agent can be shown. */
 const SHOWN_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
+/** The relay's own key, as its NIP-11 document at `relay` advertises it in
+ * `self` (the operator-contact `pubkey` is not one): what relay-signed records,
+ * such as channel rosters, are checked against.
+ * `undefined` when it cannot be learned; the tools that need it then refuse. */
+export async function relayAuthority(relay: string) {
+  try {
+    const response = await fetch(httpBase(relay), {
+      headers: { Accept: "application/nostr+json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return undefined;
+    const nip11 = (await response.json()) as { self?: unknown } | null;
+    const author = nip11?.self;
+    return typeof author === "string" && /^[0-9a-f]{64}$/.test(author)
+      ? author
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `relayAuthority` that asks again until the relay answers with a key, then
+ * keeps it: a relay unreachable at startup does not disable its tools until restart. */
+export function relayAuthorityLookup(relay: string) {
+  let known: string | undefined;
+  return async () => {
+    if (known) return known;
+    // An overlapping lookup may have learned the key while this one failed.
+    const found = await relayAuthority(relay);
+    known ??= found;
+    return known;
+  };
+}
+
+const httpBase = (relay: string) =>
+  relay.replace(/^ws/, "http").replace(/\/+$/, "");
+
 export function nodeClient(
   options: Readonly<{
     relay: string;
@@ -54,7 +92,7 @@ export function nodeClient(
     ? (decode(options.key as `nsec1${string}`).data as Uint8Array)
     : hexToBytes(options.key);
   const pubkey = getPublicKey(secret);
-  const base = options.relay.replace(/^ws/, "http").replace(/\/+$/, "");
+  const base = httpBase(options.relay);
   const auth = options.auth
     ? (JSON.parse(options.auth) as string[])
     : undefined;
@@ -299,20 +337,26 @@ export function nodeClient(
           heads.set(d, event);
       }
       const entries: Memory[] = [];
+      const deleted: { slug: string; createdAt: number }[] = [];
       for (const event of heads.values()) {
         try {
           const entry = JSON.parse(decrypt(event.content, key));
           const body = entry.slug === "core" ? entry.profile : entry.value;
-          if (typeof entry.slug === "string" && typeof body === "string")
+          if (typeof entry.slug !== "string") continue;
+          if (typeof body === "string")
             entries.push({
               slug: entry.slug,
               body,
               createdAt: event.created_at,
             });
+          // A write that recreates a deleted slug must follow its tombstone.
+          else if (body === null && entry.slug !== "core")
+            deleted.push({ slug: entry.slug, createdAt: event.created_at });
         } catch {}
       }
       return {
         entries: entries.sort((a, b) => a.slug.localeCompare(b.slug)),
+        ...(deleted.length ? { deleted } : {}),
         partial: events.length >= MEMORY_LIMIT,
       };
     },

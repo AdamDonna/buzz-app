@@ -14,9 +14,8 @@ export type EditableMemberRole = (typeof editableMemberRoles)[number];
 export type MemberRole = EditableMemberRole | "owner" | "bot" | "unknown";
 export type MemberChange = Readonly<{
   pubkey: string;
-  /** `none`: the key holds no role, so the change adds it (system channels
-   * only). A missing role never stands in for this. */
-  expectedRole: MemberRole | "none";
+  /** `none` is reserved for system setup; `absent` is an explicit role addition. */
+  expectedRole: MemberRole | "none" | "absent";
   role: EditableMemberRole | "remove";
 }>;
 export type MemberAuthority = Readonly<{
@@ -146,7 +145,7 @@ export function authorizeMemberChange(
   owner?: string,
 ) {
   if (change.expectedRole === "none") {
-    // Ordinary channels add members only through `addChannelMember`.
+    // This sentinel is reserved for the system-channel setup path.
     if (
       !state.system ||
       !state.canManage ||
@@ -161,10 +160,17 @@ export function authorizeMemberChange(
     return;
   }
   if (
-    !(change.role === "remove"
-      ? canRemoveMember(state, viewer, change.pubkey, owner)
-      : canManageMember(state, viewer, change.pubkey)) ||
-    state.roles[change.pubkey] !== change.expectedRole ||
+    !(change.expectedRole === "absent"
+      ? change.role !== "remove" &&
+        state.canManage &&
+        PUBKEY.test(change.pubkey) &&
+        change.pubkey !== viewer &&
+        !(change.pubkey in state.roles)
+      : change.role === "remove"
+        ? canRemoveMember(state, viewer, change.pubkey, owner)
+        : canManageMember(state, viewer, change.pubkey)) ||
+    (change.expectedRole !== "absent" &&
+      state.roles[change.pubkey] !== change.expectedRole) ||
     (change.role !== "remove" &&
       (change.expectedRole === change.role ||
         !editableMemberRoles.includes(change.role)))

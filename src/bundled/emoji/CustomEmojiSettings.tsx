@@ -369,14 +369,15 @@ function Editor({
             {removeError}
           </p>
         )}
-        {catalog.status === "error" ? (
+        {catalog.error && (
           <>
             <p role="alert">{catalog.error}</p>
             <Button onClick={() => void session.emoji.refresh()}>
               Retry emoji
             </Button>
           </>
-        ) : catalog.status !== "ready" ? (
+        )}
+        {catalog.status === "error" ? null : catalog.status !== "ready" ? (
           <p className="text-body-sm text-muted">Loading…</p>
         ) : !entries.length ? (
           showingCommunity ? (

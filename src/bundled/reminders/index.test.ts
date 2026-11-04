@@ -148,6 +148,35 @@ it("notifies a reminder from slow history even after a live update moved the clo
   expect(submit).toHaveBeenCalledTimes(1);
 });
 
+it.each([
+  "The answer is ||Rosebud||",
+  "The answer is ||Rosebud…",
+  "The answer is ||decoy || Rosebud || more||",
+])(
+  "submits redacted text when an old reminder becomes due: %s",
+  async (preview) => {
+    const event = {
+      ...wire("spoiler", 110),
+      content: JSON.stringify({
+        target: { ...target, preview },
+        status: "pending",
+      }),
+    } as RelayEvent;
+    const { submit, connect, dispose } = mount();
+    try {
+      connect(`origin:${viewer}`, session(Promise.resolve([event])).capability);
+      await flush();
+      at(120);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(submit).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ body: "The answer is [Spoiler]" }),
+      );
+    } finally {
+      dispose();
+    }
+  },
+);
+
 it("suppresses reminders already due when a community is first bound, and fires late timers", async () => {
   const { submit, connect } = mount();
   const first = session(Promise.resolve([wire("old", 50), wire("soon", 110)]));
@@ -379,9 +408,32 @@ it("seeds a first launch to now and keeps communities apart", async () => {
   );
 });
 
+it("notifies a reminder only a later history page holds, saving only after the last page", async () => {
+  const rest = deferred();
+  const full = Array.from({ length: 201 }, (_, i) => wire(`old${i}`, 50));
+  const reads = [Promise.resolve(full), rest.promise];
+  const model = session(() => reads.shift() as Promise<RelayEvent[]>);
+  const { submit, connect } = mount();
+  connect(`a:${viewer}`, model.capability);
+  at(105);
+  await flush();
+  expect(model.capability.snapshot()).toMatchObject({
+    status: "loading",
+    hydrated: true,
+  });
+  expect(checked("a")).toBe("100");
+  at(106);
+  rest.resolve([wire("late", 103)]);
+  await flush();
+  expect(submit).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ sourceKey: "late:103" }),
+  );
+  expect(checked("a")).toBe("106");
+});
+
 // Roster pages per launch shape: "two" puts the channel on page two of 501,
-// "capped" overflows discovery's retained cap on the third page.
-const ROSTERS = { one: 1, empty: 1, two: 2, capped: 3 } as const;
+// "capped" exhausts the discovery byte budget on page two.
+const ROSTERS = { one: 1, empty: 1, two: 2, capped: 2 } as const;
 
 type Launch = Readonly<{
   /** Which loads first at startup: reminder history or the channel list. */
@@ -482,7 +534,11 @@ async function launch(options: Launch) {
         },
       },
     },
-    { prepared: true, warm: false },
+    {
+      prepared: true,
+      warm: false,
+      ...(options.roster === "capped" ? { maxDiscoveryBytes: 240_000 } : {}),
+    },
   );
   // The live subscription is established on launch, before any test step.
   if (options.offline) live?.state({ status: "retrying", routes: [] });
@@ -562,7 +618,7 @@ async function launch(options: Launch) {
         : shape === "capped"
           ? page === 0
             ? [room(2e6), ...filler(0, 499)]
-            : filler(page, page === 1 ? 500 : 25)
+            : filler(page, 500)
           : [room(1e6)];
   let served = 0;
   return {
@@ -698,6 +754,8 @@ it.each<[string, Launch["first"], Launch["banners"], Partial<Launch>]>([
     };
     app.seed();
     at(5_000);
+    // Polling advances timers without changing this case's checkpoint time.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(5_000_000);
     try {
       if (first === "history") {
         await app.start();
@@ -736,9 +794,11 @@ it.each<[string, Launch["first"], Launch["banners"], Partial<Launch>]>([
       await app.refresh();
       expect(app.show).toHaveBeenCalledTimes(banners);
     } finally {
+      clock.mockRestore();
       await app.close();
     }
   },
+  60_000,
 );
 
 it("does not replay a caught-up reminder after closing and reopening", async () => {

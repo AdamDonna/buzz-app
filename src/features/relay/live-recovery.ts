@@ -5,7 +5,11 @@ import type { LiveSnapshot } from "./live";
 export type LiveRecoveryView = LiveSnapshot &
   Readonly<{
     roster: Readonly<{ state: string; transient?: true }>;
-    heads: readonly Readonly<{ state: string; transient?: true }>[];
+    heads: readonly Readonly<{
+      channelId?: string;
+      state: string;
+      transient?: true;
+    }>[];
     previews?: "checking" | "suspended";
   }>;
 
@@ -66,4 +70,27 @@ export function liveRecoveryStatus(view: LiveRecoveryView): RecoveryStatus {
     routes.some((route) => route.status === "pending")
     ? "busy"
     : "settled";
+}
+
+type LiveRead = Readonly<{ state: string; transient?: true }>;
+/** True while session recovery retries the roster read (failed or busy in
+ * liveRecoveryStatus), so recovery reports a list error. A denial is not. */
+export const rosterRecovering = (roster: LiveRead) =>
+  roster.state === "deferred" ||
+  roster.state === "pending" ||
+  (roster.state === "error" && !!roster.transient);
+/** The same for one channel's timeline: true while the live source is not
+ * settled for that channel. That covers its head read failing transiently or
+ * in flight, and the handoff after a dropped stream: catch-up entries are
+ * cleared until the channel's route re-establishes, which reads its head
+ * again. */
+export function headRecovering(view: LiveRecoveryView, channelId: string) {
+  return (
+    liveRecoveryStatus({
+      status: view.status,
+      routes: view.routes.filter((route) => route.channelId === channelId),
+      roster: { state: "verified" },
+      heads: view.heads.filter((head) => head.channelId === channelId),
+    }) !== "settled"
+  );
 }

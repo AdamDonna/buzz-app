@@ -173,7 +173,7 @@ it("typed names create no recipient tags; unconfirmed or forged membership canno
   );
   await h.members(undefined, 1700000000, namesake);
   expect(() => h.session.messages.send("c", "@Honey", [honey.pubkey])).toThrow(
-    "Join the conversation before posting",
+    "You don’t have write access to this conversation.",
   );
   expect(h.sign).not.toHaveBeenCalled();
   expect(h.publish).not.toHaveBeenCalled();

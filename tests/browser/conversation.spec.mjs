@@ -352,21 +352,10 @@ test("independent packed author consumer and native-installed contribution survi
     await page.keyboard.press("Escape");
     expect(await textarea.evaluate((el) => el.isConnected)).toBe(true);
     await expect(draft).toHaveJSProperty("value", "Channels draft");
-    // Plugin-independent recovery when the catalog is unavailable.
+    // A failed refresh keeps the loaded catalog; plugin-independent sends
+    // still resolve its tags without asking for message preparation retry.
     await page.evaluate(() => window.conversationFixture.fail(true));
     await draft.fill(":party:");
-    await draft.press("Enter");
-    await expect(
-      page.getByRole("button", { name: "Retry message preparation" }),
-    ).toBeVisible();
-    await page.evaluate(() => window.conversationFixture.fail(false));
-    await page
-      .getByRole("button", { name: "Retry message preparation" })
-      .click();
-    await expect(
-      page.getByRole("button", { name: "Retry message preparation" }),
-    ).toHaveCount(0);
-    await expect(draft).toHaveJSProperty("value", ":party:");
     await draft.press("Enter");
     await expect
       .poll(() =>
@@ -379,17 +368,23 @@ test("independent packed author consumer and native-installed contribution survi
       ),
     ).toContainEqual(["emoji", "party", "https://a.test/media/current.png"]);
     await expect(
+      page.getByRole("button", { name: "Retry message preparation" }),
+    ).toHaveCount(0);
+    await page.evaluate(() => window.conversationFixture.fail(false));
+    await expect(
       page.getByRole("button", { name: "Emoji and GIFS", exact: true }),
     ).toHaveCount(1);
     await expect(historic).toHaveCount(1);
     await draft.fill("reject :party:");
     await draft.press("Enter");
     // Delivery feedback intentionally waits 10 seconds; leave time for the UI timer.
-    await expect(page.getByRole("button", { name: /Retry/ })).toBeVisible({
-      timeout: 15_000,
+    const retryDelivery = page.getByRole("button", {
+      name: "Retry",
+      exact: true,
     });
+    await expect(retryDelivery).toBeVisible({ timeout: 15_000 });
     await page.evaluate(() => window.conversationFixture.replace());
-    await page.getByRole("button", { name: /Retry/ }).click();
+    await retryDelivery.click();
     await expect
       .poll(() =>
         page.evaluate(() => window.conversationFixture.report.published.length),

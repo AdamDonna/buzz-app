@@ -41,8 +41,9 @@ the usual Create agent form, may edit the name, runtime and settings, and create
 only by submitting it. Closing the form discards the request. Requests are local,
 bounded to 16 and do not survive reload or a change of signed-in owner.
 Approval binds the identity to the requesting agent's owner and community, even
-when another community is selected. Use `members` separately after creation to add
-it to a conversation. Agent tools do not expose draft approval.
+when another community is selected. Add the agent to a conversation separately
+after creation; see the [shared tool definitions](../src/buzz-mcp/tools.ts) for
+the available operations and arguments. Agent tools do not expose draft approval.
 
 `agent_update` submits an unsaved draft of changes to one of the owner's local
 agents in the same community, named by pubkey or exact name: a new name, a type
@@ -55,15 +56,102 @@ requests share the creation requests' local bound and lifetime.
 Keys stay in native custody. Hosted-provider provisioning and standalone tool
 servers do not support these operations.
 
+## External app authorization
+
+The build flag `BUZZ_EXTERNAL_MCP_COMMUNITIES` lists the allowed community
+origins. It defaults to no access. Desktop preview releases enable bb-block only.
+Consent and Settings use this list. The Agents service also checks it before
+opening a connection and on each tool call. See [configuration](configuration.md#external-mcp-community-flag).
+
+Buzz desktop accepts `buzz://mcp-authorize` requests from local apps. Opening a
+link only shows consent. The owner selects a community and an app-held,
+unprotected agent, then selects **Authorize** or **Deny**. No plugin specific
+to the external app is required. The bundled Agents plugin owns the native MCP
+permission. **Settings > External apps** shows the connection and **Revoke access**.
+Keys stay in Buzz. Closing Settings keeps access active.
+
+Version 1 links contain `version=1`, the requesting `client` display name,
+`callback`, random `state`, `scope` (`read`, `post`, or both), `code_challenge`,
+and `code_challenge_method=S256`. The callback must be exactly
+`http://127.0.0.1:<port>/buzz/authorize`, with a port from 1024 through 65535.
+State and challenge each encode 32 bytes as unpadded base64url. The client name
+is supplied by the requesting app; Buzz does not attest its identity.
+Requests expire after five minutes. Duplicate or unknown parameters are rejected.
+
+After consent, Buzz sends a JSON POST to the callback with `version: 1`, `state`,
+and `outcome: "authorized"`, plus `code` and `exchange_url`. Denial sends
+`outcome: "denied"` with no code. A code lasts 60 seconds. The client sends a
+JSON POST with `version: 1`, `state`, `code`, and `code_verifier` to the exact
+`http://127.0.0.1:<port>/authorize/exchange` URL. S256 verification consumes the
+code once and returns `{version: 1, url, token}`. The URL is that listener's
+`/mcp` endpoint. Neither a link nor a callback carries the MCP bearer or a key.
+Native callback requests do not follow redirects. Failed callbacks close the grant.
+A redeemed grant also expires if it does not initialize within the code deadline.
+
+The MCP endpoint accepts JSON POST messages with MCP `2025-06-18`. Initialization
+returns `Mcp-Session-Id`; later requests need that header and `Authorization:
+Bearer <token>`. Notifications return 202. There is no SSE or DELETE endpoint.
+Each grant admits one upstream session; the external app shares it among its
+agents. A second initialization stops the grant. Revocation, a community or
+identity change, or the end of the owning agent runtime, plugin, or app also
+stops it. Start setup again in the external app after a connection ends.
+
+The read scope allows `channel_list`, `channel_get`, and `read`. The post scope
+allows `send` and `reply_in_subthread`. Buzz classifies each built-in tool through
+its trusted external-access policy. Unclassified tools cannot run. Runtime plugin
+tools cannot enroll in this policy.
+
+`tools/list` returns all classified tools in one page. It rejects a supplied
+`cursor`. Each tool has `_meta["buzz/requiredScopes"]`. The list result has
+`_meta["buzz/grantedScopes"]` and `_meta["buzz/supportedScopes"]`; the supported
+set is `read` and `post`. Tool discovery does not grant access. Each call checks
+the grant against the trusted policy. A missing scope returns `isError: true`
+and `_meta["buzz/error"]: {code: "authorization_required", required_scopes: [...]}`.
+`required_scopes` lists the missing scopes. Each approval replaces the previous
+grant. The external app must request all scopes it still needs, including scopes
+it already has. For example, an app with `read` that needs `post` requests
+`scope=read post`. Use `buzz/grantedScopes` from discovery to retain current access.
+The app must not retry the call automatically after approval. New classified tools
+use this same contract.
+
+The shared schemas apply with explicit
+targets: `read` needs `channel`, `thread`, or `message_url`. A `message_url` uses
+the linked message's channel and thread; it cannot combine with `channel` or
+`thread`. Searches with `q` need `channel` or `message_url`;
+`channel_get` needs `channel`; `send` needs `channel`, `text`, and `audience`;
+`reply_in_subthread` needs `parent`, `text`, and `audience`. Posts accept
+`mentions`, and `send` accepts `reply`. Posts reject `path`, `files`, and `final`.
+Unknown fields are rejected. File access, commands, Git credentials, and plugin
+tools are unavailable. Connection credentials must stay out of logs and messages.
+
+## Product help for agents
+
+The read-only `buzz_help` tool returns [the Buzz quick guide](buzz-help.md), bundled
+with this app version. The shared agent prompt tells agents to read it when someone
+asks how to use Buzz; the full guide is not added to every session's initial context.
+Claude, Codex, Goose and Pi use the shared tools. This repository's standalone MCP
+server exposes the same tool and supplies the hint in its server instructions.
+Other remote hosts must adopt the tool themselves. No repository checkout or web
+request is needed to read it.
+
+Keep the guide current in the same change as user-facing behavior. It describes
+implemented features, not plans or internal support procedures. Existing sessions
+may retain their previous prompt or tool list; use **Start a new session** to pick
+up the new guidance. Installing a new build updates the bundled guide, not every
+older app or remote host.
+
 ## Agent Attention
 
-The Agent Attention tab groups the selected community's local agents' subscriptions by Interest. It shows instructions, listening and delivery destinations, enabled state and available wake history. Ask an agent to create watches through its Attention tools; pausing or removing one preserves the other saved objects. Empty Interests remain visible and can be deleted after their watches are removed.
+Attention itself (the runtime, tools, storage and sources) is core, but it runs on this device only while a plugin that shows it is on. The bundled Attention plugin (`buzz.watching`, on by default) adds an Attention tab to the settings of every agent running on this device, whatever its type. The tab explains Attention, holds the switch that lets this device run the agent's watches, then groups that agent's subscriptions by Interest. It shows instructions, listening and delivery destinations, enabled state and available wake history, and suggests asks while the agent has none. Ask an agent to create watches through its Attention tools; pausing or removing one preserves the other saved objects. Empty Interests remain visible and can be deleted after their watches are removed. Turning the plugin off hides the tab and turns every agent's Attention off on this device; mentions still wake agents, and each agent keeps its saved switch for when the plugin is back on. The former standalone Agent Attention page is gone, so an old link to `buzz.agents/attention` opens as an unavailable destination.
 
 ## Agent types and providers
 
 Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run
-behavior for its agents. The host appends the shared Attention tab.
+behavior for its agents. Plugins can add a tab to every local agent with
+`ctx.agents.registerTab`, or to some of them with its optional `when(agent)`;
+the Attention plugin's Attention tab holds the device Attention switch, and the
+Bestie plugin's Bestie tab shows only on your Bestie.
 
 Attention is shared by every harness, and a harness has no attention code.
 `src/buzz-mcp/session-tools.ts` exports `BUZZ_SESSION`: the Buzz tools and the
@@ -105,20 +193,93 @@ tool's name, description or schema changes, so edit those deliberately.
 `addedKey` covers only plugins' tools, so a resumed Codex thread keeps the Buzz
 tools, and their `load`, that it started with.
 
-On desktop the GitHub plugin adds `github_watch_pr`, so an agent can wait on a pull
-request without a model checking it. An agent calls it with a pull request URL,
-from a thread or a Solo chat. While the app is open the plugin reads the pull
-request through the signed-in `gh` CLI once a minute. It wakes the agent when CI
+The GitHub plugin keeps one store of pull request data (`pull-states.ts`), and
+it is the only place the plugin reads pull requests from GitHub. Links, the Solo
+sidebar, the side panel, watches and agents' lookups each ask it for a level:
+`state`, `feedback` (reviews and comments with their text) or `details` (what
+the side panel shows and acts on). It reads
+each pull request once for all of them, in one batched `gh` query, at every
+level asked of it. It drops a level's data at the first read without that
+level, and forgets a pull request nobody follows at the first read 15 minutes
+after its last poll; with no later read, the data stays in memory.
+Each reader also says how often it wants its pull request read again; the
+store reads each one as often as its most eager reader wants, and every poll
+reads all that are due together.
+
+On desktop the GitHub plugin adds `github_pr_state`, so an agent can read a pull
+request's state as its owner's links show it: open, draft, merged or closed,
+checks, failed check names and conflicts, with when it was read. With
+`details: true` it also gives what the side panel shows: title, branches, files
+changed, the review decision and reviewers, unresolved review threads, the
+merge state and auto-merge. The answer is at most a minute old unless the agent
+asks for a fresh read, or the last read failed: then the answer says so, and
+how old it is.
+
+The GitHub plugin also adds `github_watch_pr`, so an agent can wait on a pull
+request without a model checking it. An agent calls it with a pull request URL
+and the id of one of its own Interests, from a thread or a Solo chat. The tool is a
+convenience over `watch_add`: it adds an `attention/github-pr` source watch to that
+Interest through the same attention tool code, and refuses an Interest that does
+not exist. The plugin never writes an Interest. While the app is open the watch asks the store to
+follow the pull request's feedback, which it reads through the signed-in `gh`
+CLI once a minute, also while the window is hidden. It wakes the agent when CI
 settles on the head commit, once per commit and result, or when new feedback has
-been quiet for 90 seconds. The tool creates an Attention source subscription. Attention delivers the wake
+been quiet for 90 seconds, and once more when the pull request merges or closes,
+so the agent can finish and retire its Interest. Attention delivers the wake
 in the conversation where it called the tool: no message is sent, and the agent
 is told its text is data. It quotes the failed checks' names and the new
 comments, line by line, each clipped, with GitHub's links. Agents comment as the
-`gh` account, as their owner does, so GitHub cannot tell them apart: a comment of
-that account that starts with 🤖, as an agent's do, wakes nobody, and the owner's
-other comments wake the agent. A watch is saved in Attention on the device and respects its on/off switch. Existing device-local GitHub watches are imported once with their feedback cursor and destination. It ends when the
-pull request merges or closes, after 20 wakes, after 30 failed polls in a row,
-or when the agent calls it with `stop: true`.
+`gh` account, as their owner does, so GitHub cannot tell them apart: by default
+a comment of that account that starts with 🤖, as an agent's do, wakes nobody,
+and the owner's other comments wake the agent. A watch is saved in Attention on the device and respects its on/off switch. Device-local GitHub watches saved before Attention are dropped, not imported: they name no Interest. It ends when the
+pull request merges or closes, after 20 wakes, after 30 minutes without a
+successful read, or when the agent calls it with `stop: true`.
+
+Settings → Plugins → GitHub comment authors decides whose feedback wakes agents,
+since anyone can comment on a public pull request. It holds rules, one per
+line, saved on the device. Each starts with `allow` or `deny`, followed by any
+of these conditions, all of which must hold:
+
+- `author:login`, an exact login, or `author:@me`, the signed-in `gh` account.
+  A bot's login ends in `[bot]`.
+- `author:/pattern/`, a JavaScript regular expression the login must match.
+- `org:name`, membership of a GitHub organization, named exactly.
+- `body:/pattern/`, a regular expression the comment's first 1,000 characters
+  must match. That is the most of a comment a wake quotes.
+- `prefix:text`, what the comment starts with, leading space aside. It runs to
+  the end of the line, spaces included, so it comes last.
+
+A bare `allow` or `deny`, with no conditions, matches everyone.
+
+Logins match case aside, so an author pattern always has the `i` flag; a
+pattern may also use `m`, `s` and `u`. Patterns take JavaScript's syntax but not
+backreferences, lookaround or escapes that mean something else alone, such as
+`\c1`, `\U0041` or `\q`, and `src/bundled/github/pattern.ts` matches them
+as an automaton, in time the text's length bounds, so a pattern like
+`/^(a+)+$/` cannot stall the app on a hostile comment. The first rule that matches decides, and
+When no rule matches decides the rest: Wake the agent or Don't wake it.
+Saving compiles every pattern and rejects the rules, naming the line, when one
+is not a rule, or when they name more organizations than one membership read
+can ask about. Saved rules that no longer parse, such as a pattern with
+lookaround an earlier build accepted, stay in Settings with their error, and
+hold all feedback until they are fixed rather than falling back to the defaults. The defaults keep the behavior from before rules: agents'
+comments wake nobody, and everyone else's wake the agent.
+
+```text
+deny author:@me prefix:🤖
+```
+
+with When no rule matches set to Wake the agent. Adding, say,
+`allow org:block` and `allow author:copilot-pull-request-reviewer[bot]` and choosing Don't wake it
+limits feedback to those. Membership is asked of `gh` only for organizations the rules
+name, and kept for an hour; feedback whose author's membership cannot be read
+waits for a later poll, until ten polls in a row fail for that login alone and
+it counts as no member. While GitHub answers no membership read, not even about
+the signed-in account, no failure counts, so an outage holds feedback rather
+than letting it past an `org:` deny rule. A membership hidden from the `gh` account, or a
+misspelled organization, counts as none, and bots and deleted accounts are in
+no organization. Each poll reads the rules again, so a change applies to
+running watches. CI and pull request state are not limited.
 
 The Agents runner starts a mention run from a `p` tag, or from any new message
 by the other member of a one-to-one DM the agent is in; group DMs still need
@@ -285,6 +446,10 @@ from its saved identities (deleted ones omitted), so it carries Agents' own
 loading and error state. Agents' `snapshot()` is different: it holds only the
 selected community's agents, with their settings.
 
+The source can also carry a separate `hosted` array of completed owned agents
+shown in the selected community. These are DM eligibility evidence for
+`agentChoices`, not local identities for name precedence or process control.
+
 `app/services.ts` composes consumers before Agents exists, through
 `createLocalAgents()`. Until `bind` connects `agents.local`, the snapshot is
 `unavailable`; unbinding returns it there. Two consumers read it directly:
@@ -316,6 +481,45 @@ shown the mention's thread, including what it already posted there.
 Mentions queued behind a working turn, watch turns and other types are not
 kept.
 
+### Saved Solo follow-ups
+
+The queued rows above the Solo composer are unsent messages, separate from the
+agent runner's interrupted turns. They are saved on this device in view storage,
+partitioned by account and community. Text, recipients, uploaded attachments,
+references, and model/effort choices survive a reload or app restart. An upload
+still in progress has not yet entered this queue.
+
+Restored rows remain paused with **Send** and **Remove** while the owner decides.
+**Resume** also unpauses saved follow-ups in the chats whose interrupted requests
+are being resumed. Each chat waits for those exact requests to settle, including
+the read/startup gap, then sends one queued message per completed turn. An old
+observer turn associated with the resumed request does not hold the queue forever;
+fresh local completion is required. Uncertain or unreadable requests keep waiting.
+If a type cannot resume or the relay confirms a request is gone, its saved follow-ups
+return to paused; fresh follow-ups are not marked as restored, and other agents’ waits
+remain intact. Resume does not establish channel admission: an incomplete empty roster
+keeps saved rows until discovery or an explicit removal establishes their status. Incomplete recipient discovery
+defers release until availability can be determined. A predecessor removed by another
+window pauses only its successors when this window cannot establish its completion;
+earlier rows continue draining. Automatic release rechecks saved FIFO order under a
+chat-scoped lock. A durable handoff marker records the sent event and its confirmed completion,
+including completion after Resume. Explicit dismissal or abandonment retires the
+matching marker under the chat lock. A window-liveness Web Lock prevents a closed
+window’s stale marker from pausing fresh rows. It survives removal of the sent row; a
+window that cannot establish that predecessor's completion pauses its competing
+rows for explicit Send rather than starting overlapping work. The paused rows explain that an earlier message was
+handled in another window.
+**Don’t resume** leaves the saved follow-ups paused. Other chats remain paused.
+Every release rechecks membership and recipient availability. A failed save keeps the
+composer draft; a failed removal keeps the row. Delivery transfers to the existing
+Outbox only after its journal is durable. Once Outbox owns a message, Remove stays
+disabled even if saving its recovery receipt fails; Send retries that same receipt.
+Remove is disabled during an active handoff;
+a per-row lock also prevents another window from removing it mid-send. If another window has begun sending,
+reload to recover its original receipt rather than publishing a second message.
+If a handoff was interrupted before a receipt was saved, the row remains available
+for inspection; check the conversation before removing it and sending again.
+
 ## Shared agent selection
 
 `session.agentChoices` is the canonical read-only selection projection. Mention
@@ -327,6 +531,17 @@ sources, deduplicated by public key:
   the host's saved Buzz library plus the owner's relay-published records; and
 - the viewer's local agents for this exact community, flagged `managed` with a
   `managedName`.
+
+The same app-owned source also supplies completed hosted agents shown in the
+selected community, separately from local identities. The projection checks their
+owner and community and gives hosted choices `messageable: true`. As with local
+agents, archived identities remain in `identities`; `selectable` and each action's
+existing archive policy govern forward-looking choices.
+`canMessageAgent` accepts that flag or local `managed` evidence. Profile Message,
+search, the DM picker and fresh-send validation use this predicate; hosted agents
+never gain local custody or template-management status from it. Library presence
+alone does not grant DM eligibility. Existing DMs can reopen without agent-control
+evidence, through the normal relay-confirmed DM open.
 
 A snapshot exposes `identities`, `selectable`, `archives`, `definitions`, `status`,
 `pending`, `complete` and a separate `templates` projection. `status: ready` means
@@ -395,7 +610,23 @@ chooser is unavailable because activation failed.
 The picker shows keys alongside names (namesakes remain separate), reads optional
 profiles only on demand, and keeps selected identity spans in scoped drafts.
 Typing a name alone does not notify anyone. Plain Space after a unique exact name
-selects its recipient; ambiguous names require Tab, Enter or click. Editing a
+selects its recipient; ambiguous names require Tab, Enter or click. While the
+chooser is still waiting on members, names, agents or a directory search, Space
+holds the name as a pending chip (a spinner in place of its `@`) and applies the
+same rule once the evidence arrives, within 8 s, or returns it to prose; sending
+waits for a pending chip, and when one it waited for returns to prose it keeps
+the draft and says which name was not tagged and why (not confirmed as one
+person or agent, not taggable here, the recipient limit or the message
+length), so the next send sends the text knowingly. A name already known to
+continue the query (`Mira Example` for `mira`) is a declined Space, not a
+pending one, so the next word
+can still complete it; a longer name learned only after the chip was held
+extends the chip over the words typed after it when they spell one of those
+names up to a name boundary, the longest they complete (`@mira Example hi`
+tags `Mira Example`), and otherwise returns it to prose, where the reopened
+chooser answers the rest of the name from the page already read for the chip
+(a complete directory page settles every query extending its own, with no
+further read), so the Space that completes the name selects it. Editing a
 selected span removes its notification intent. Native beforeinput ranges preserve untouched spans; missing
 range evidence, IME/history edits and collapsed deletions clear selections rather
 than guess. Even a same-text replacement drops the edited identity. Selected mentions appear as inline identity chips in the composer. Namesakes
@@ -465,7 +696,8 @@ append below the rows already shown, so a late page never moves a visible row.
 While a new query waits or loads, still-matching people from the last settled
 page of the same chooser stay visible (one picker, or one inline `@` token; inline
 completion remounts per keystroke, so the page is kept per session outside it) and the chooser shows "Searching community…". Uncached queries
-reach the network only after a 200 ms typing pause. Settled first pages are cached
+reach the network only after a 300 ms typing pause, and only once
+the query has at least two characters. Settled first pages are cached
 per session and query (100 queries); errors are not cached, and Retry reads the
 current query again. Chooser identity naming uses eligible candidates plus the
 current draft recipients, not every cached profile. Composer chips name their
@@ -473,10 +705,17 @@ recipients among the destination's members plus the draft recipients.
 
 Plain Space selects only a unique exact name/alias/label across the full uncapped
 candidate set, and only if that identity is displayed and still eligible. A known
-longer name beginning with that name plus a space prevents selection. Partial
-names, ambiguous names, modified Space, IME composition, code and protected literal
-ranges keep ordinary editing behavior. Selection rechecks available evidence and
-stores only `{pubkey, name}`; qualifiers are presentation, not wire data.
+longer name beginning with that name plus a space prevents selection, unless it is
+another name of that same identity. Partial names, ambiguous names, modified Space,
+IME composition, code and protected literal ranges keep ordinary editing behavior. Selection rechecks available evidence and
+stores only `{pubkey, name}`; qualifiers are presentation, not wire data. A Space
+the chooser cannot decide yet, because its evidence is still loading, holds the
+name as a pending chip that the plugin's headless resolver settles by the same
+rule (`resolve-space-mention.ts`); a known longer name declines Space outright
+rather than holding it, while one found after the chip was held extends the
+chip over the typed words that complete it or returns it to prose; the host
+admits the result like any selection, and a pending chip is never stored in a
+draft or sent as a tag.
 
 The composer rejects already-known archived recipients (never the viewer) at
 send entry. The next draft keeps only agents that the sent message notified. This is not an archive transaction: archive
@@ -679,9 +918,10 @@ in its home record and applies everywhere.
   agent's memory in that community stay, so they come back if it is added again;
   its attention there does not.
 - **Teams** work like agents: a team shows in every community where it has a
-  member (or in all of them while it has none), but has one home community. A
-  local team is shared by every community; a member's roster lists only teammates
-  in the same community, and the editor keeps members that are only elsewhere.
+  member (or in all of them while it has none), and a synced team always shows
+  in its one home community. A local team is shared by every community; a
+  member's roster lists only teammates in the same community, and the editor
+  keeps members that are only elsewhere.
   Where the community's relay supports config channels, a new team, or one
   imported from old Buzz, is synced: its NIP-AP config channel (name and
   instructions) is created only in the community it was made in, and its members
@@ -695,6 +935,17 @@ in its home record and applies everywhere.
   one at a time per team, and report anything left part way. Existing local
   teams are not migrated.
 - **Hosted agents** stay in one community, as their provider holds the key.
+  Only a synced team homed there can have them as members, so the team editor
+  offers them only for such a team, or for a new one that will sync there. One
+  picked in a community Save doesn't put the team in, as when another is
+  selected before a new team's first Save, is left off unless the team already
+  has it. One picked where Save puts the team stays, shown checked, while that
+  community's agent list is read again, but Save refuses it until the list is
+  read, and refuses it once the list is read without it. Unchecking it leaves
+  it off. They do not get its instructions, but rosters name them.
+  Until the community's agent list is read, which tells hosted agents from
+  ones on other devices, the team's roster there names each member not on this
+  device by npub alone.
 
 `removeRelayAgent` applies the same steps to a relay-only agent: archive when
 consent exists, delete the owner's kind 30177 record (NIP-09), then remove it from
@@ -785,6 +1036,13 @@ direction. Agent-elided strings and payloads are labeled, not hidden. Turns whos
 `turn_started` frame is not loaded are marked as partial. Posted chat messages are
 not joined here; the transcript shows the agent's ACP output.
 
+The shared Claude, Goose, and Pi turn formatter encodes conversation history and
+the triggering event as JSON with escaped markup delimiters. Message text,
+display names, and tags therefore cannot create extra request sections. The
+transcript reads that JSON directly and retains support for older line-based
+`buzz-event` and `buzz-events` records; it never parses decoded message content
+as another prompt.
+
 The plugin's activation leases `session.agentActivity` for the live display;
 disabling the plugin clears its live evidence. While demanded, the shared live
 connection carries one dedicated owner (`#p=viewer`) route for kind 24200, with no
@@ -860,8 +1118,10 @@ The Identity Naming plugin (`buzz.identity-naming`) registers its policy with th
 app-owned identity-name service (`features/identity-names`). Each relay session binds
 its own view. A ready local agent takes precedence only in its matching community;
 otherwise a signed public agent profile's name, then the library's saved name, then
-the public profile. With no policy registered, public-profile names and caller
-fallbacks apply. These labels never change identity keys, membership, credentials,
+the public profile. Synthetic profile-name placeholders are excluded from naming
+and collision checks; caller fallbacks apply when no meaningful name is available.
+With no policy registered, public-profile names and caller fallbacks apply.
+These labels never change identity keys, membership, credentials,
 or runtime admission. Messages, mention choices, activity, conversation labels and
 new notifications consume this view. Mention parsing still uses signed identity
 evidence before resolving its visible label. The portable policy is specified in
@@ -901,9 +1161,13 @@ the agent would share now, and publishes that, still shared.
 
 **Export agent** saves `{name}.agent.png` or, by **File format**,
 `{name}.agent.json` in the `buzz-agent-snapshot` version 1 format that block/buzz
-and earlier Buzz write, without memory. The PNG is the picture redrawn at
-512×512, or a transparent pixel when it is missing or takes over 5 seconds to
-load, with the manifest in a `buzz_agent_snapshot` tEXt chunk. Desktop saves it
+and earlier Buzz write, without memory. The PNG is an 820×1230 agent card
+(`src/features/agents/share-card.ts`): foil around the picture, the name, and
+its harness and model, with the letter tile when the picture is missing, takes
+over 5 seconds to load, or can't be read back, and a transparent pixel when no
+card can be drawn. The manifest is in a `buzz_agent_snapshot` tEXt chunk.
+Exporting the card previews it first and saves the bytes shown; sending the
+agent uploads the same card. Desktop saves it
 to Downloads through `file_download` (`src-tauri/src/relay.rs`), as media is
 saved, since WKWebView cannot save a `blob:` link cleanly, and returns the
 saved path, which the dialog shows. It takes only
@@ -960,6 +1224,29 @@ precedes it to name the harness, as Pi's card chip does, and the chip leaves
 the thinking level and "Default" to its menu and accessible label so the model
 name keeps its room. Goose device defaults have no reset action: omitting a
 model in Goose retains its stored provider model.
+
+### Databricks model names
+
+Goose's Databricks providers list workspace endpoints (`databricks-*`,
+`goose-*`) and Unity Catalog model services (`catalog.schema.model`). The
+pickers show their model names, such as `GPT-6.1 Sol` for
+`system.ai.gpt-6-1-sol`; endpoints without a known prefix keep their IDs. Models
+whose names would read the same keep their IDs. Saved and requested models keep their
+full IDs. An agent's one-line summary shows the ID.
+
+`DATABRICKS_MODEL_FILTER`, read through goose's config (its environment
+variable, else the same key in goose's `config.yaml`), narrows the listing of
+`databricks` and `databricks_v2`: comma-separated patterns, each matched against
+a whole ID, case-sensitively, with `*` for any characters and `?` for one, for
+example `goose-*,acme_models.goose.*`. A listed model matching any
+pattern stays listed. Without patterns, the provider's full listing stays,
+which for `databricks` is still only its `databricks-` and `goose-` endpoints,
+so a filter cannot widen it. A filter that matches nothing lists none. It only hides
+models: a saved model the filter hides is kept, and its menu marks it as a
+"Custom model" in pickers that accept one (profiles, cards, new agents) or an
+"Unavailable model" in the Goose default model picker. Databricks still decides
+access. Buzz does not pass its own `BUZZ_*` variables to goose, so the filter
+uses goose's name.
 
 ## Usage
 
@@ -1048,11 +1335,9 @@ Use `watch_add` with `type: "source"`, a `provider` in `plugin/source` form and 
 
 Source output accepts the same optional classifier questions as event watches. Classification preserves output ordering and completion until the resulting delivery settles. `agents.attentionProviders()` lists active registered provider keys with their optional `description` and `configExample`, including providers from unrelated plugins. Disabled and unloaded registrations disappear from discovery.
 
-The bundled Agents plugin owns the command producer and discovery tool. The GitHub plugin owns the GitHub PR producer. Saved provider IDs remain `attention/command` and `attention/github-pr`, and discovery marks them `builtIn: true`. The bundled Agents plugin also owns the Agent Attention overview and controls for existing watches. The GitHub source uses the same PR parser and feedback policy as `github_watch_pr`; it requires the signed-in `gh` CLI. The tool configures Attention subscriptions rather than owning a separate polling loop. Other plugins can register their own source producers through the same lifecycle. Legacy Monitor command registrations and pending wakes are not imported; recreate needed command watches in Attention.
+The bundled Agents plugin owns the command producer and discovery tool. The GitHub plugin owns the GitHub PR producer. Saved provider IDs remain `attention/command` and `attention/github-pr`, and discovery marks them `builtIn: true`. The bundled Attention plugin owns the per-agent overview and controls for existing watches. The GitHub source uses the same PR parser and feedback policy as `github_watch_pr`; it requires the signed-in `gh` CLI. The tool configures Attention subscriptions rather than owning a separate polling loop. Other plugins can register their own source producers through the same lifecycle. Legacy Monitor command registrations and pending wakes are not imported; recreate needed command watches in Attention.
 
 ## Attention delivery destinations
-
-Event watches can filter content with `keywords`: 1 to 32 nonblank literal strings, up to 256 bytes each. Matching is case-insensitive and passes when any keyword occurs anywhere in the event content. Keywords combine with the other deterministic selectors and do not require a classifier.
 
 Event watches and timers accept an optional delivery `channel` and thread `root`. The event watch's `channels` still selects where to listen. With an address, the wake continues that conversation with the Interest's instructions. A thread root must be readable by the agent in that destination channel; a missing or mismatched root stops delivery before the harness builds context. Claude, Codex, Goose and Pi accept these Attention triggers. A channel without a root defaults to channel-level posting, while explicit reporting instructions in the Interest can direct another thread or channel within the agent's existing authority. Solo chats retain their personal-chat framing and reply restriction. The address owns the execution conversation and default destination; the Interest owns explicit reporting policy.
 
@@ -1066,8 +1351,14 @@ Subscription runtime history stays on this device, outside configuration: the la
 
 ## Commands using an agent's identity
 
-An Attention source run receives `spawn(processId, { args, cwd, env, onStdout, onStderr })`. Buzz binds it to the watch's owning agent, destination and lifetime. There is no public agent connection or caller-selected agent identity. The process must be declared in the calling plugin's `host.processes`, and the plugin must declare `host.mcp` (and `host.files` when its tools read local paths). The host retains process permission checks and signing keys. The bundled command helper initializes one MCP session, adds an agent-scoped `buzz` to PATH and passes that session to the command and its children. `buzz tools` lists tools; `buzz <tool> --field value` and `buzz call <tool> '<JSON object>'` invoke them. There is no owner-identity fallback.
+An Attention source run receives `spawn(processId, { args, cwd, env, onStdout, onStderr })`. Buzz binds it to the watch's owning agent, destination and lifetime. Attention sources do not accept a caller-selected agent identity. The process must be declared in the calling plugin's `host.processes`, and the plugin must declare `host.mcp` (and `host.files` when its tools read local paths). The host retains process permission checks and signing keys. The bundled command helper initializes one MCP session, adds an agent-scoped `buzz` to PATH and passes that session to the command and its children. `buzz tools` lists tools; `buzz <tool> --field value` and `buzz call <tool> '<JSON object>'` invoke them. There is no owner-identity fallback.
 
 Source return or failure, cancellation, Attention off, agent stop, plugin unload, command exit or closing the MCP transport revokes command access. Successful queued output remains valid after the source returns. Killing a command uses the existing host process group/job cleanup for descendants. OS access is the same as the app user's. Buzz owns batching, queue retries and final output draining for its built-in command sources. Other source plugins retain their own producer policies. See the [executable scheduled-source example](../tests/fixtures/agent-command/README.md), including the scope of its fixture-based custody evidence.
+
+## Tools for the user's other local agents
+
+A plugin can offer MCP tools to agents Buzz did not start, such as Claude Code, Codex, Pi or Nexus sessions. It serves a dedicated `host.serveMcp` server and declares the bundled helper as a process, for example `{ "id": "agent-access", "program": "buzz-agent-command", "bundled": true, "args": ["--advertise"] }`. `spawn("agent-access", { mcp: server })` lets the helper claim that server's one session and save it to `~/.buzz-foundation/agent-connections`, then exit. The plugin keeps the server open after the helper exits and spawns it once per server: a second spawn on the same server stops it. Every local agent of this user can then call that server's tools. On macOS and Linux the directory and files are private to the user and the helper ignores files others could have written; on Windows they rely on the profile's inherited permissions. The plugin handler must not assume a particular caller, and protected workers that must not reach these tools need that directory in `hiddenPaths`.
+
+An agent runs the installed helper by absolute path, with no inherited connection, configuration or token: `/Applications/Buzz.app/Contents/Resources/bin/buzz-agent-command tools` on macOS (inside the app's installed name, such as `Buzz Foundation.app`), `…\bin\buzz-agent-command.exe` on Windows and `/usr/lib/Buzz Foundation/bin/buzz-agent-command` on Linux. `tools`, `<tool> --field value` and `call <tool> '<JSON object>'` behave as `buzz` does inside an agent command, and `--help` prints that usage with the path it was run as. The agent's own sandbox must allow loopback connections: Codex's read-only and workspace-write modes, for example, block them unless network access is enabled, and the helper then reports `Could not reach Buzz` and leaves the advertisement in place. The helper uses the newest advertised session that still answers and offers the tool, so a second Buzz window's tools are still reached; when two plugins offer the same tool name, the newer advertisement wins. A tool call stops asking older advertisements once it finds that session, so a stalled older server does not delay it; `tools` asks every advertisement. Before sending a saved session, the helper connects and confirms, by numeric user ID, that a process of this user has accepted that same connection (`lsof` on macOS, `/proc/net/tcp` on Linux), then sends the request on it. If that is not confirmed within about a second, as when another user's process holds a closed server's port, the server receives nothing and the advertisement stays. Windows does not support advertised sessions; the helper reports that instead. An advertisement lasts as long as its server. Closing the server, reloading the page, unloading the plugin or quitting Buzz ends it, and the next caller that asks it removes the file once its server refuses the connection or the session. An inherited `BUZZ_AGENT_CONNECTION` always takes precedence.
 
 Native agent hook callbacks are described in [Agent hook callbacks](agent-tool-hooks.md).

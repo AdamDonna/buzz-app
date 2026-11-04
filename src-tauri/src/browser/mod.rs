@@ -1,5 +1,6 @@
 //! Remote website content embedded in the main window without a Tauri bridge.
 
+mod builderlab;
 mod platform;
 mod policy;
 
@@ -218,14 +219,17 @@ fn build_contents(
     target: &str,
     bounds: BrowserBounds,
     storage: Option<&str>,
+    defer_navigation: bool,
 ) -> Result<BrowserSession, String> {
     let policy = NavigationPolicy::new(app.config().build.dev_url.clone());
     let target = policy.validate(target)?;
     bounds.validate()?;
     let storage = storage.map(storage_identifier).transpose()?;
     let host = app
-        .get_webview("main")
-        .ok_or("Buzz main webview is unavailable")?;
+        .get_webview_window("main")
+        .ok_or("Buzz main webview is unavailable")?
+        .as_ref()
+        .clone();
     let snapshot = Rc::new(RefCell::new(BrowserSnapshot::default()));
     let navigation_policy = policy.clone();
     let title_snapshot = snapshot.clone();
@@ -270,7 +274,9 @@ fn build_contents(
         policy,
     };
     platform::resize_guest(&browser.guest, &browser.host, bounds)?;
-    browser.navigate(target.as_str())?;
+    if !defer_navigation {
+        browser.navigate(target.as_str())?;
+    }
     Ok(browser)
 }
 
@@ -280,12 +286,24 @@ pub async fn browser_attach(
     url: String,
     bounds: BrowserBounds,
     storage: Option<String>,
+    builderlab: Option<builderlab::ViewerAuth>,
+    federated_identity: tauri::State<'_, crate::federated_identity::FederatedIdentity>,
 ) -> Result<String, String> {
     let generation = DOCUMENT_GENERATION.load(Ordering::SeqCst);
+    let defer_navigation = builderlab.is_some();
+    let bootstrap = match builderlab {
+        Some(auth) => builderlab::prepare(&url, auth, &federated_identity).await?,
+        None => None,
+    };
     let handle = app.clone();
-    on_main_thread(&app, move || {
+    let (session_id, pending) = on_main_thread(&app, move || {
         with_current_document(&DOCUMENT_GENERATION, generation, || {
-            let browser = build_contents(&handle, &url, bounds, storage.as_deref())?;
+            let browser =
+                build_contents(&handle, &url, bounds, storage.as_deref(), defer_navigation)?;
+            let pending = bootstrap
+                .as_ref()
+                .map(|value| platform::install_builderlab_cookie(&browser.guest, value))
+                .transpose()?;
             let session_id = browser.instance.clone();
             BROWSERS.with(|browsers| {
                 let mut browsers = browsers.borrow_mut();
@@ -293,10 +311,38 @@ pub async fn browser_attach(
                 let excess = browsers.len().saturating_sub(MAX_GUESTS);
                 browsers.drain(..excess);
             });
-            Ok(session_id)
+            Ok((session_id, pending))
         })
     })
-    .await
+    .await?;
+    if let Some(mut pending) = pending {
+        let installed =
+            tokio::time::timeout(std::time::Duration::from_secs(5), pending.recv()).await;
+        let id = session_id.clone();
+        on_main_thread(&app, move || {
+            if !matches!(installed, Ok(Some(()))) {
+                BROWSERS.with(|browsers| {
+                    browsers
+                        .borrow_mut()
+                        .retain(|browser| browser.instance != id)
+                });
+                return Err("Builderlab viewer cookie could not be installed".into());
+            }
+            let result = with_current_document(&DOCUMENT_GENERATION, generation, || {
+                with_browser(&id, |_| Ok(()))
+            });
+            if result.is_err() {
+                BROWSERS.with(|browsers| {
+                    browsers
+                        .borrow_mut()
+                        .retain(|browser| browser.instance != id)
+                });
+            }
+            result
+        })
+        .await?;
+    }
+    Ok(session_id)
 }
 
 #[tauri::command]

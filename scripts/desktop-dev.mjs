@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadEnv } from "vite";
-import { desktopOverlay, options } from "./desktop-config.mjs";
+import {
+  desktopOverlay,
+  launchEnvironment,
+  options,
+} from "./desktop-config.mjs";
 import { worktreePort } from "./worktree-port.mjs";
 
 const args = process.argv.slice(2);
@@ -18,10 +22,16 @@ if (
 const port = values.port === undefined ? undefined : Number(values.port);
 
 const help = forwarded.some((arg) => arg === "--help" || arg === "-h");
-// Build the bundled goose-acp before Tauri compiles, so a cold build does not
-// count against its dev-server timeout. Local runs skip the size optimizations.
+const root = fileURLToPath(new URL("../", import.meta.url));
+const env = launchEnvironment(root);
+// Give Rust the development frontend's effective public pin (including an
+// explicit empty override), so native agent starts select the signer the
+// frontend actually uses.
+env.BUZZ_DEV_VIEWER =
+  loadEnv("development", root, "BUZZ_DEV_VIEWER").BUZZ_DEV_VIEWER ?? "";
+// Stage the bundled helpers before Tauri compiles, outside its dev-server timeout.
 if (!help) {
-  // Build for the target Tauri is given, as Tauri tells beforeBuildCommand.
+  // Stage for the target Tauri is given, as Tauri tells beforeBuildCommand.
   const at = forwarded.findIndex((arg) => arg === "--target" || arg === "-t");
   const triple =
     at === -1
@@ -35,9 +45,7 @@ if (!help) {
     ],
     {
       stdio: "inherit",
-      env: triple
-        ? { ...process.env, TAURI_ENV_TARGET_TRIPLE: triple }
-        : process.env,
+      env: triple ? { ...env, TAURI_ENV_TARGET_TRIPLE: triple } : env,
     },
   );
   if (helper.error) throw helper.error;
@@ -47,9 +55,7 @@ if (!help) {
     [fileURLToPath(new URL("./build-goose-acp.mjs", import.meta.url)), "--dev"],
     {
       stdio: "inherit",
-      env: triple
-        ? { ...process.env, TAURI_ENV_TARGET_TRIPLE: triple }
-        : process.env,
+      env: triple ? { ...env, TAURI_ENV_TARGET_TRIPLE: triple } : env,
     },
   );
   if (goose.error) console.error(goose.error.message);
@@ -57,9 +63,20 @@ if (!help) {
   // Work that never touches Goose should still start; Goose then says
   // goose-acp is missing.
   if (goose.status !== 0)
-    console.warn("goose-acp did not build; Goose agents will not start.");
+    console.warn("goose-acp did not stage; Goose agents will not start.");
+  const cli = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("./build-buzz-cli.mjs", import.meta.url)), "--dev"],
+    {
+      stdio: "inherit",
+      env: triple ? { ...env, TAURI_ENV_TARGET_TRIPLE: triple } : env,
+    },
+  );
+  if (cli.error) console.error(cli.error.message);
+  if (cli.signal) process.kill(process.pid, cli.signal);
+  if (cli.status !== 0)
+    console.warn("buzz did not stage; the bundled buzz CLI will be missing.");
 }
-const root = fileURLToPath(new URL("../", import.meta.url));
 const config = desktopOverlay(root);
 // Tauri's own --port controls its static-file server, not our Vite server.
 // Without --port, each worktree derives its own stable port; vite.config.ts
@@ -81,15 +98,9 @@ if (!help)
 forwarded.unshift("--config", JSON.stringify(config));
 // Runner/application arguments after -- belong to Tauri, including any --port.
 forwarded.push(...rest);
-// Vite normally reads .env.local only in its own process. Give Rust the same
-// effective public pin (including an explicit empty override), so native agent
-// starts select the signer that the development frontend actually uses.
-const viewer =
-  loadEnv("development", process.cwd(), "BUZZ_DEV_VIEWER").BUZZ_DEV_VIEWER ??
-  "";
 const result = spawnSync("pnpm", ["tauri", "dev", ...forwarded], {
   stdio: "inherit",
-  env: { ...process.env, BUZZ_DEV_VIEWER: viewer },
+  env,
 });
 if (result.error) console.error(result.error.message);
 if (result.signal) process.kill(process.pid, result.signal);

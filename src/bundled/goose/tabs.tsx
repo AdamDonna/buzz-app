@@ -122,10 +122,6 @@ type Row = Readonly<{
   root?: string;
   at?: number;
 }>;
-const modelLabel = (provider: string | undefined, model: string | undefined) =>
-  provider?.startsWith("databricks")
-    ? model?.replace(/^(?:databricks|goose)-/i, "")
-    : model;
 const placeOf = (key: string): Place => {
   const [channelId = key, root] = key.split("/");
   return { channelId, ...(root ? { root } : {}) };
@@ -456,7 +452,7 @@ export function createTabs({
             models={models.value ?? []}
             loading={models.status === "loading"}
             value={value.model}
-            defaultLabel={modelLabel(id, modelDefault) || "Provider model"}
+            defaultLabel={modelDefault || "Provider model"}
             {...(!provider.configured
               ? { description: `Available once ${provider.name} is set up.` }
               : models.status === "error"
@@ -719,10 +715,12 @@ export function createTabs({
     agent,
     row,
     working,
+    openConversation,
   }: {
     agent: AgentViewProps<Config>["agent"];
     row: Row;
     working?: string | undefined;
+    openConversation: AgentViewProps<Config>["openConversation"];
   }) {
     const workspace = readConfig(agent.config).workspace;
     const [read, setRead] = useState<
@@ -751,7 +749,13 @@ export function createTabs({
         .then(
           (transcript) =>
             transcript
-              ? ({ status: "ready", transcript } as const)
+              ? ({
+                  status: "ready",
+                  transcript: {
+                    ...transcript,
+                    turns: runtime.prompts(agent.key).shown(transcript.turns),
+                  },
+                } as const)
               : ({ status: "missing" } as const),
           (reason: unknown) =>
             ({ status: "error", error: message(reason) }) as const,
@@ -792,6 +796,7 @@ export function createTabs({
           <ActivityTranscript
             transcript={read.transcript}
             agentName={agent.name}
+            openConversation={openConversation}
             state={() => (working ? "working" : undefined)}
             before={
               read.transcript.more && (
@@ -811,9 +816,15 @@ export function createTabs({
   function ActivityTab({
     agent,
     conversation,
+    initialTranscript,
+    close,
+    openConversation,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation?: AgentViewProps<Config>["conversation"];
+    initialTranscript?: AgentViewProps<Config>["initialTranscript"];
+    close?: AgentViewProps<Config>["close"];
+    openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
     const workspace = readConfig(agent.config).workspace;
     const live = useSyncExternalStore(
@@ -862,7 +873,12 @@ export function createTabs({
       row.title
         ? titled(agent.name, row.title)
         : `${row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
-    const { open, show, back } = useOpenTranscript(conversation, label);
+    const { open, show, back } = useOpenTranscript(
+      conversation,
+      label,
+      initialTranscript && { initial: here, searching, ...initialTranscript },
+      close,
+    );
     const rows = (recent.value ?? [])
       .filter((row) => row.sessionId !== here?.sessionId)
       .slice(0, RECENT_LIMIT)
@@ -955,9 +971,11 @@ export function createTabs({
             onBack={back}
           >
             <TranscriptView
+              key={open.key}
               agent={agent}
               row={open}
               working={busy(open.sessionId) ? open.sessionId : undefined}
+              openConversation={openConversation}
             />
           </PanelSubview>
         )}
@@ -1126,7 +1144,7 @@ export function createTabs({
             models={choices}
             value={current.model}
             defaultModel={fallback}
-            defaultLabel={modelLabel(provider, fallback) || "Choose model"}
+            defaultLabel={fallback || "Choose model"}
             effort={current.effort}
             // A card's chip keeps its room for the model name; its menu
             // still shows and sets the level.

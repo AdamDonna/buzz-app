@@ -28,6 +28,7 @@ function rows(
     ...mentionCandidates(session, "c", false, undefined, directory, elsewhere),
   ].sort((a, b) => a.recipient.pubkey.localeCompare(b.recipient.pubkey));
 }
+const archives = { status: "ready", archived: [key(5)] };
 function fresh() {
   return {
     viewer: key(1),
@@ -39,11 +40,7 @@ function fresh() {
     },
     agentChoices: { snapshot: () => ({ identities: agents }) },
     profiles: { snapshot: () => profiles },
-    archives: {
-      snapshot: () => ({}),
-      state: (pubkey: string) =>
-        pubkey === key(5) ? "archived" : "not-archived",
-    },
+    archives: { snapshot: () => archives },
     outbox: { supports: () => true },
   } as unknown as ComposerSession;
 }
@@ -98,4 +95,33 @@ it("directory people that change nothing can be left out", () => {
     expect(rows(changes.filter((other) => other !== person))).not.toEqual(
       rows(changes),
     );
+});
+
+it("carries verified full names and the profile names a verified person was found by", () => {
+  const session = fresh();
+  const verifiedProfiles = new Map<string, unknown>([
+    ...profiles,
+    [key(4), { name: "cy", verified: { fullName: "Cy Test" } }],
+  ]);
+  Object.assign(session, { profiles: { snapshot: () => verifiedProfiles } });
+  const found = rows(
+    [
+      {
+        pubkey: key(8),
+        name: "fname",
+        fullName: "Fake Name",
+        profileNames: ["Fake"],
+      },
+    ],
+    session,
+  );
+  const byKey = new Map(found.map((row) => [row.recipient.pubkey, row]));
+  expect(byKey.get(key(8))).toMatchObject({
+    recipient: { name: "fname" },
+    fullName: "Fake Name",
+    aliases: ["fname", "Fake Name", "Fake"],
+  });
+  // A member's full name comes from the shared verified profile.
+  expect(byKey.get(key(4))?.fullName).toBe("Cy Test");
+  expect(byKey.get(key(1))).not.toHaveProperty("fullName");
 });

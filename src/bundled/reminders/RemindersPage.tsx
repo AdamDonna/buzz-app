@@ -22,7 +22,10 @@ import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import type { Reminder, Reminders } from "../../features/relay/reminders";
 import type { Navigation } from "../../features/navigation/controller";
-import { useChannelList } from "../../features/relay/react";
+import {
+  useChannelList,
+  useProfileGeneration,
+} from "../../features/relay/react";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { useIdentityNames } from "../../features/identity-names/react";
 import { messagePreview } from "../../features/notifications/content";
@@ -72,6 +75,7 @@ import {
 import { scopeOf, useReminders } from "./react";
 import styles from "./Reminders.module.css";
 import { avatarMedia } from "../../shared/avatar-source";
+import { channelText } from "../../features/channels/channel-icon";
 
 type Clock = { subscribe(listener: () => void): () => void; read(): number };
 
@@ -307,7 +311,7 @@ function ReminderSections({
       channel?.channelType === "dm"
         ? "Direct message"
         : channel?.name
-          ? `#${channel.name}`
+          ? channelText(channel)
           : undefined;
     return (
       <ReminderRow
@@ -458,10 +462,12 @@ function useProfiles(session: RelaySession, ids: readonly string[]) {
     selection.snapshot,
     selection.snapshot,
   );
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
     if (ids.length)
       void session.profiles.ensure(ids, "background").catch(() => {});
-  }, [session, ids]);
+  }, [session, ids, profileGeneration]);
   return profiles;
 }
 
@@ -506,7 +512,7 @@ function ReminderRow({
   const overdue =
     pending && reminder.notBefore !== undefined && reminder.notBefore <= now;
   const preview = reminder.target?.preview
-    ? messagePreview(reminder.target.preview)
+    ? messagePreview(reminder.target.preview, { storedPreview: true })
     : reminder.note;
   const note = reminder.target?.preview ? reminder.note : undefined;
   const fullDue =
