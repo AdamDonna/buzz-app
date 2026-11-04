@@ -29,15 +29,25 @@ import {
   useFollowUpBehaviorPreference,
   setFollowUpBehaviorPreference,
 } from "../features/messages/follow-up-preference";
+import {
+  setMessageAutocorrectPreference,
+  useMessageAutocorrectPreference,
+} from "../features/messages/autocorrect-preference";
+import { macWebKit } from "../features/messages/mac-webkit";
+import { SwitchPreferenceRow } from "../shared/design-system/ui/SwitchPreferenceRow";
 
 export function AppearanceSettings({
   appearance,
   active = true,
+  autocorrectAvailable = macWebKit(),
 }: {
   appearance: Appearance;
   active?: boolean;
+  /** Only Mac WebKit applies the composer's autocorrect attribute. */
+  autocorrectAvailable?: boolean;
 }) {
   const followUp = useFollowUpBehaviorPreference();
+  const autocorrect = useMessageAutocorrectPreference();
   const { placement, unsaved } = useThreadPlacementPreference();
   const increaseButton = useRef<HTMLButtonElement>(null);
   const pendingFocus = useRef<HTMLButtonElement | null>(null);
@@ -277,6 +287,14 @@ export function AppearanceSettings({
               />
             }
           />
+          {autocorrectAvailable && (
+            <SwitchPreferenceRow
+              label="Allow automatic spelling correction"
+              description="Lets macOS correct misspelled words in messages. Turn correction on or off from the message box’s Spelling and Grammar menu."
+              checked={autocorrect.enabled}
+              onCheckedChange={setMessageAutocorrectPreference}
+            />
+          )}
         </SettingsGroup>
         {active && followUp.unsaved && (
           <ToastNotice
@@ -288,6 +306,22 @@ export function AppearanceSettings({
               onClick={() => setFollowUpBehaviorPreference(followUp.behavior)}
             >
               Retry saving follow-up behavior
+            </Button>
+          </ToastNotice>
+        )}
+        {active && autocorrect.unsaved && (
+          <ToastNotice
+            title="Spelling preference wasn’t saved"
+            description="This choice is active, but could not be saved on this device. Try again."
+          >
+            <Button
+              type="button"
+              size="sm"
+              onClick={() =>
+                setMessageAutocorrectPreference(autocorrect.enabled)
+              }
+            >
+              Retry saving spelling correction
             </Button>
           </ToastNotice>
         )}

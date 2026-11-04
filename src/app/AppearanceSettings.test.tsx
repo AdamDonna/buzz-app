@@ -23,6 +23,10 @@ import {
   followUpBehaviorPreference,
   setFollowUpBehaviorPreference,
 } from "../features/messages/follow-up-preference";
+import {
+  messageAutocorrectPreference,
+  setMessageAutocorrectPreference,
+} from "../features/messages/autocorrect-preference";
 
 const preferenceAppearances: ReturnType<typeof createAppearance>[] = [];
 function preferencesPage() {
@@ -38,7 +42,9 @@ afterEach(() => {
     appearance.dispose();
   setThreadPlacementPreference("side");
   setFollowUpBehaviorPreference("immediate");
+  setMessageAutocorrectPreference(false);
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 it("hidden settings do not portal errors; returning retains both save recovery actions", async () => {
@@ -429,3 +435,89 @@ it("switches contrast through the shared select and restores it", async () => {
   }
   appearance.dispose();
 });
+
+it("offers message spelling correction only on Mac WebKit, off until this device opts in", async () => {
+  const user = userEvent.setup();
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  const page = (autocorrectAvailable: boolean) => (
+    <AppearanceSettings
+      appearance={appearance}
+      autocorrectAvailable={autocorrectAvailable}
+    />
+  );
+  const toggle = () =>
+    screen.getByRole("switch", { name: "Allow automatic spelling correction" });
+  const view = render(page(false), { wrapper: ToastProvider });
+  expect(
+    screen.queryByRole("switch", {
+      name: "Allow automatic spelling correction",
+    }),
+  ).not.toBeInTheDocument();
+  view.rerender(page(true));
+  expect(toggle()).not.toBeChecked();
+  await user.click(toggle());
+  expect(messageAutocorrectPreference()).toBe(true);
+  expect(localStorage.getItem("buzz-message-autocorrect.v1")).toBe("on");
+  cleanup();
+  render(page(true), { wrapper: ToastProvider });
+  expect(toggle()).toBeChecked();
+  act(() => {
+    localStorage.setItem("buzz-message-autocorrect.v1", "off");
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "buzz-message-autocorrect.v1" }),
+    );
+  });
+  expect(toggle()).not.toBeChecked();
+});
+
+it("keeps an unsaved spelling opt-in active and retries the same choice", async () => {
+  const user = userEvent.setup();
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  render(<AppearanceSettings appearance={appearance} autocorrectAvailable />, {
+    wrapper: ToastProvider,
+  });
+  const write = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw new Error("unavailable");
+    });
+  await user.click(
+    screen.getByRole("switch", { name: "Allow automatic spelling correction" }),
+  );
+  expect(messageAutocorrectPreference()).toBe(true);
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "Spelling preference wasn’t saved",
+  );
+  write.mockRestore();
+  await user.click(
+    screen.getByRole("button", { name: "Retry saving spelling correction" }),
+  );
+  expect(localStorage.getItem("buzz-message-autocorrect.v1")).toBe("on");
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+
+it.each([
+  ["Mac WebKit", "MacIntel", "Apple Computer, Inc.", 0, true],
+  ["desktop-mode iPad", "MacIntel", "Apple Computer, Inc.", 5, false],
+  ["Chrome on Mac", "MacIntel", "Google Inc.", 0, false],
+  ["Linux WebKitGTK", "Linux x86_64", "Apple Computer, Inc.", 0, false],
+] as const)(
+  "detects whether %s can offer message spelling correction",
+  (_browser, platform, vendor, maxTouchPoints, shown) => {
+    vi.stubGlobal("navigator", {
+      platform,
+      vendor,
+      maxTouchPoints,
+    });
+    render(preferencesPage(), { wrapper: ToastProvider });
+    expect(
+      screen.queryByRole("switch", {
+        name: "Allow automatic spelling correction",
+      }) !== null,
+    ).toBe(shown);
+  },
+);

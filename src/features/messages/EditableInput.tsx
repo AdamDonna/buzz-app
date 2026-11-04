@@ -91,6 +91,7 @@ import {
 } from "./composer-dom";
 import { isApplePlatform } from "../shortcuts/format";
 import { macWebKit, webKit } from "./mac-webkit";
+import { useMessageAutocorrectPreference } from "./autocorrect-preference";
 import { composerLinkUrl } from "./composer-link";
 import { messageLinkParts } from "./message-link-parts";
 import { updatePlainLinks, type PlainLink } from "./composer-link-edit";
@@ -404,6 +405,7 @@ export function EditableInput({
 }) {
   const mount = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  const { enabled: autocorrect } = useMessageAutocorrectPreference();
   const current = useRef({
     draft,
     decorationsFor,
@@ -415,6 +417,7 @@ export function EditableInput({
     acceptRecipient,
     disabled,
     placeholder,
+    autocorrect,
   });
   current.current = {
     draft,
@@ -427,6 +430,7 @@ export function EditableInput({
     acceptRecipient,
     disabled,
     placeholder,
+    autocorrect,
   };
   const tokenClassName = styles.token ?? "";
   const tokenClass = useRef(tokenClassName);
@@ -1681,17 +1685,19 @@ export function EditableInput({
       {
         state: state(),
         editable,
-        attributes: {
+        attributes: () => ({
           role: "textbox",
           "aria-multiline": "true",
           class: styles.input ?? "",
-          // Keep spelling hints, but do not let native suggestions rewrite rich text.
+          // Keep spelling hints, but do not let native suggestions rewrite rich
+          // text unless this device opts in. WebKit greys out its Correct
+          // Spelling Automatically menu item while the root says "off".
           spellcheck: "true",
-          autocorrect: "off",
+          autocorrect: current.current.autocorrect ? "on" : "off",
           autocapitalize: "off",
           autocomplete: "off",
           writingsuggestions: "false",
-        },
+        }),
         dispatchTransaction(tr: Transaction) {
           if (tr.docChanged && separateHistory) {
             closeHistory(tr);
@@ -2388,10 +2394,12 @@ export function EditableInput({
     if (!editor) return;
     if (draft !== emitted.current && !composing.current)
       api.current?.sync(draft);
-    // setProps recomputes the decorations that read this committed hint.
+    // setProps recomputes the decorations and root attributes that read these
+    // committed props.
     current.current.placeholder = placeholder;
+    current.current.autocorrect = autocorrect;
     editor.setProps({ editable: () => !disabled && !locked.current });
-  }, [draft, disabled, placeholder]);
+  }, [draft, disabled, placeholder, autocorrect]);
 
   const projection =
     view.current && projectComposerDocument(view.current.state.doc);

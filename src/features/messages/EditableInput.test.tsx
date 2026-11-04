@@ -35,6 +35,7 @@ import {
   type MentionDraft,
 } from "./mention-draft";
 import { messageLinkParts } from "./message-link-parts";
+import { setMessageAutocorrectPreference } from "./autocorrect-preference";
 import { profileMentionParts } from "./profile-mentions";
 import {
   serializeNode,
@@ -191,6 +192,25 @@ it("keeps exactly one typed colon when the conversion exceeds the limit", () => 
   expect([h.input.selectionStart, h.input.selectionEnd]).toEqual([3, 3]);
   act(() => h.input.undo(false));
   expect(h.input).toHaveValue(":x");
+});
+
+it("keeps native autocorrection off until this device opts in, then follows the choice live", async () => {
+  try {
+    const h = mount("teh");
+    expect(h.input).toHaveAttribute("spellcheck", "true");
+    expect(h.input).toHaveAttribute("autocorrect", "off");
+    act(() => setMessageAutocorrectPreference(true));
+    expect(h.input).toHaveAttribute("autocorrect", "on");
+    expect(h.input).toHaveAttribute("spellcheck", "true");
+    expect(h.input.selectionStart).toBe(3);
+    await h.user.keyboard("!");
+    expect(h.markdown()).toBe("teh!");
+    act(() => setMessageAutocorrectPreference(false));
+    expect(h.input).toHaveAttribute("autocorrect", "off");
+  } finally {
+    act(() => setMessageAutocorrectPreference(false));
+    localStorage.removeItem("buzz-message-autocorrect.v1");
+  }
 });
 
 it("reads value and selection from one projection per document", async () => {
