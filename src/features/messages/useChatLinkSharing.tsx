@@ -156,7 +156,7 @@ export function useChatLinkSharing(
                 ? "Check access and send"
                 : pending.error
                   ? "Retry share and send"
-                  : "Share as View only"}
+                  : "Share"}
             </Button>
           </>
         }

@@ -61,7 +61,7 @@ picks, so a choice in either surface can improve its order in the other.
 While searching, eligible stream/forum channels appear in a **Channels** group.
 Each result has a **Share** action. It checks current access and opens a
 confirmation for a Private chat, explaining community reading of the full history
-and Canvas and link delivery to that channel. **Share as View only** saves that
+and Canvas and link delivery to that channel. **Share** saves that
 access and posts the link in one step. Public (existing) and View only chats keep
 their access and post the link directly. Cancel returns focus to the same Share
 result and preserves the search. The toast **Shared in #channel** offers **View**,
@@ -139,7 +139,7 @@ notifications. Unconfirmed publication uses **Check save status**, without autom
 
 Pasting a recognized Solo chat link into a composer stages it as a chat card.
 Sending the card into a channel, thread or DM uses the same policy as Share.
-For a Private chat you own, **Share as View only** confirms community access to
+For a Private chat you own, **Share** confirms community access to
 its full history and Canvas, opens reading, then sends your original message.
 **Cancel** leaves access and the draft unchanged.
 

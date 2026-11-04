@@ -409,7 +409,7 @@ test.describe("View only channel share", () => {
       });
       await expect(cancel).toBeFocused();
       const confirmShare = confirmation.getByRole("button", {
-        name: "Share as View only",
+        name: "Share",
         exact: true,
       });
       await reachable(confirmShare);
@@ -430,7 +430,7 @@ test.describe("View only channel share", () => {
     }
     await share.press("Enter");
     await confirmation
-      .getByRole("button", { name: "Share as View only", exact: true })
+      .getByRole("button", { name: "Share", exact: true })
       .click();
     await expect(dialog).not.toBeVisible();
     expect(app.report.detailsPublications).toHaveLength(1);
@@ -507,7 +507,7 @@ test.describe("View only channel share", () => {
       name: "Change general access?",
     });
     const primary = confirmation.getByRole("button", {
-      name: "Share as View only",
+      name: "Share",
       exact: true,
     });
     for (const [mode, width, scale] of [

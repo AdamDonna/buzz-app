@@ -774,7 +774,7 @@ it.each(["member", "guest"] as const)(
     confirmation = await screen.findByRole("alertdialog");
     await user.click(
       within(confirmation).getByRole("button", {
-        name: "Share as View only",
+        name: "Share",
       }),
     );
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
@@ -823,9 +823,7 @@ it("shares to the current result after cancelling a different destination", asyn
     name: "Share chat in Review?",
   });
   expect(confirmation).toHaveTextContent("its link will be posted in Review");
-  await user.click(
-    within(confirmation).getByRole("button", { name: "Share as View only" }),
-  );
+  await user.click(within(confirmation).getByRole("button", { name: "Share" }));
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
   await waitFor(() =>
     expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
@@ -871,7 +869,7 @@ it("a refused access change posts nothing and retry asks for confirmation again"
   t.failDetails(true);
   await user.click(
     within(await screen.findByRole("alertdialog")).getByRole("button", {
-      name: "Share as View only",
+      name: "Share",
     }),
   );
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
@@ -884,7 +882,7 @@ it("a refused access change posts nothing and retry asks for confirmation again"
   );
   await user.click(
     within(await screen.findByRole("alertdialog")).getByRole("button", {
-      name: "Share as View only",
+      name: "Share",
     }),
   );
   await waitFor(() =>
@@ -906,7 +904,7 @@ it("checks an uncertain access save before posting, without resending the access
   t.loseDetailsResponse(true);
   await user.click(
     within(await screen.findByRole("alertdialog")).getByRole("button", {
-      name: "Share as View only",
+      name: "Share",
     }),
   );
   await within(dialog).findByRole("button", {
@@ -944,7 +942,7 @@ it("retains View only when link enqueue fails and retries just the link", async 
   );
   await user.click(
     within(await screen.findByRole("alertdialog")).getByRole("button", {
-      name: "Share as View only",
+      name: "Share",
     }),
   );
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
@@ -995,7 +993,7 @@ it.each(["abort", "unmount"] as const)(
       );
       await user.click(
         within(await screen.findByRole("alertdialog")).getByRole("button", {
-          name: "Share as View only",
+          name: "Share",
         }),
       );
       await signingStarted;
@@ -1050,7 +1048,7 @@ it.each(["settings", "authority"] as const)(
     else t.setSourceMembers([t.aria.pubkey]);
     await user.click(
       within(confirmation).getByRole("button", {
-        name: "Share as View only",
+        name: "Share",
       }),
     );
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
@@ -1414,9 +1412,7 @@ it("Back never walks history behind a pending Share, and the dialog still closes
     expect(dialog).toBeInTheDocument();
     t.holdRoster(undefined);
     release();
-    await user.click(
-      await screen.findByRole("button", { name: "Share as View only" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Share" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Settings refused",
     );

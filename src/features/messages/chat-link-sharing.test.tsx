@@ -216,9 +216,7 @@ async function fixture(
 const send = () =>
   userEvent.click(screen.getByRole("button", { name: "Send message" }));
 const confirm = async () =>
-  userEvent.click(
-    await screen.findByRole("button", { name: "Share as View only" }),
-  );
+  userEvent.click(await screen.findByRole("button", { name: "Share" }));
 
 it.each([false, true])(
   "confirms community reading before posting exactly once, without grants (thread=%s)",

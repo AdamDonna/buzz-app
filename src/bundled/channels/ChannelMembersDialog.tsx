@@ -2303,7 +2303,7 @@ export function ChannelMembersDialog({
                 loading={share.busy}
                 onClick={() => void share.confirm()}
               >
-                Share as View only
+                Share
               </Button>
             </>
           }
