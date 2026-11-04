@@ -22,6 +22,20 @@
 .ownActions {
   flex-direction: column;
 }
+.verifiedName {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+.verifiedName > span {
+  min-width: 0;
+}
+.verificationIcon {
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+}
 .portrait {
   flex: 0 0 auto;
   width: 5rem;

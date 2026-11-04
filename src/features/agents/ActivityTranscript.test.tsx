@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ActivityTranscript } from "./ActivityTranscript";
 import type { TranscriptTurn } from "./activity-transcript";
+import { withSessionPrompts } from "./session-prompts";
 import { codexTurns } from "../../bundled/codex/transcript";
 import { restoreRecordedTools } from "../../bundled/codex/recorded-tools";
 import { formatItemTimestamp } from "../../shared/datetime";
@@ -468,4 +469,50 @@ it("opens at the latest turn and follows new ones until the reader scrolls up", 
   expect(shared.scrollTop).toBe(0);
   view.remove();
   shared.remove();
+});
+
+it("divides sessions, and shows each one's prompt once at its top", () => {
+  const turn = (
+    turnId: string,
+    sessionId: string,
+    newSession: boolean,
+  ): TranscriptTurn => ({
+    turnId,
+    channelId: "channel",
+    threadRootId: null,
+    triggeringEventIds: [],
+    sessionId,
+    newSession,
+    config: [],
+    startedAt: 1,
+    endedAt: 2,
+    partial: false,
+    items: [],
+  });
+  const turns = withSessionPrompts(
+    [turn("1", "old", false), turn("2", "new", true), turn("3", "new", false)],
+    (session) =>
+      session === "new"
+        ? [
+            {
+              label: "",
+              text: "<agent-instructions>\nBe kind\n</agent-instructions>",
+            },
+          ]
+        : undefined,
+  );
+  render(
+    <ActivityTranscript
+      transcript={{ turns }}
+      agentName="Agent"
+      state={() => "ended"}
+    />,
+  );
+  expect(
+    screen
+      .getAllByText(/^(New session|Session continued)/)
+      .map((line) => line.textContent),
+  ).toEqual(["Session continued; earlier turns not shown", "New session"]);
+  expect(screen.getAllByText(/System prompt/)).toHaveLength(1);
+  expect(screen.getByText("Agent instructions")).toBeInTheDocument();
 });

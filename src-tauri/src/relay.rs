@@ -688,6 +688,37 @@ async fn admit_app_data(
     Ok(())
 }
 
+/// An incoming event's signature claim: the webview checks shape and that `id`
+/// hashes the event, then asks libsecp256k1 whether `sig` signs `id` for `pubkey`.
+#[derive(serde::Deserialize)]
+pub(crate) struct SignatureClaim {
+    id: String,
+    pubkey: String,
+    sig: String,
+}
+
+/// BIP-340 checks off the webview's main thread; one result per claim, in order.
+#[tauri::command]
+pub(crate) async fn relay_verify_signatures(claims: Vec<SignatureClaim>) -> Result<Vec<bool>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let secp = secp256k1::Secp256k1::verification_only();
+        claims.iter().map(|claim| signs(&secp, claim)).collect()
+    })
+    .await
+    .map_err(|_| "Signature verification could not complete".into())
+}
+
+fn signs(secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>, claim: &SignatureClaim) -> bool {
+    let (Ok(id), Ok(pubkey), Ok(sig)) = (
+        nostr::event::EventId::from_hex(&claim.id),
+        claim.pubkey.parse::<secp256k1::XOnlyPublicKey>(),
+        claim.sig.parse::<secp256k1::schnorr::Signature>(),
+    ) else {
+        return false;
+    };
+    secp.verify_schnorr(&sig, id.as_bytes(), &pubkey).is_ok()
+}
+
 fn verify_signature(event: &serde_json::Value) -> Result<()> {
     let parsed: nostr::event::Event =
         serde_json::from_value(event.clone()).map_err(|_| "Invalid outgoing signature")?;
@@ -1456,7 +1487,7 @@ async fn upload_file_authorized(
             .timeout(Duration::from_secs(600))
             .header("Authorization", auth)
             .header("Content-Type", kind)
-            .header("X-SHA-256", hash)
+            .header("X-SHA-256", &hash)
             .header(reqwest::header::CONTENT_LENGTH, size)
             .body(reqwest::Body::wrap_stream(file_chunks(
                 file,
@@ -1486,7 +1517,20 @@ async fn upload_file_authorized(
         {
             return Err(reason.into());
         }
-        read_response(response, 8192).await
+        let response = read_response(response, 8192).await?;
+        if (200..300).contains(&response.status) {
+            // Only this host knows the final bytes when preparation converted
+            // the source. Bind the returned descriptor before JavaScript can
+            // use it in the user's signed message.
+            let descriptor: serde_json::Value = serde_json::from_str(&response.body)
+                .map_err(|_| "Upload response is not a valid descriptor")?;
+            if descriptor["sha256"].as_str() != Some(hash.as_str())
+                || descriptor["size"].as_u64() != Some(size as u64)
+            {
+                return Err("Upload response does not match uploaded bytes".into());
+            }
+        }
+        Ok(response)
     };
     if let (Some(fi), Some(assertion)) = (authorization.fi, authorization.assertion) {
         fi.during_admitted_operation(host, assertion, true, operation)

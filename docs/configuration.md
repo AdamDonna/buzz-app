@@ -8,6 +8,7 @@ Build defaults are readable binary data, **never secret storage**.
 
 | Input | Consumer and boundary |
 | --- | --- |
+| `BUZZ_EXTERNAL_MCP_COMMUNITIES` | Frontend build: space-separated secure community origins allowed to authorize external MCP access. Empty disables access. See below. |
 | `BUZZ_BUILDERLAB_URL` | Shared frontend/native build: public login URL and the bundled plugin's native grants; no runtime override. |
 | `BUZZ_BUILDERLAB_APPS_DOMAIN` | Shared frontend/native build: exact Apps cookie domain paired with the login origin for native viewer SSO; no runtime override. |
 | `BUZZ_DEFAULT_COMMUNITY_URL` | Packaged frontend build: secure relay origin to select once, after identity setup, only when this viewer has no saved community record. Saved choices, including Personal space, always win. Unset in OSS builds. |
@@ -27,6 +28,19 @@ configuration; they do not configure Agents. Restart Vite to change broker or
 routing configuration. Production frontend builds never load the dev broker or
 expose its auto-open seed. They can separately opt into the packaged community
 default below.
+
+## External MCP community flag
+
+`BUZZ_EXTERNAL_MCP_COMMUNITIES` is a space-separated list of `https://` or
+`wss://` community origins. The default is empty, which disables external MCP
+access in all communities. Invalid origins fail the build. The value is
+compiled into the frontend; a launched app cannot change it through its environment.
+
+The desktop preview workflow sets this flag to
+`https://buzz.block.builderlab.xyz` for bb-block only. Community names do not
+grant access. The Agents service compares the exact canonical origin before
+opening a connection and on each tool call. Consent disables other communities,
+and Settings hides External apps there. Normal agent MCP servers are unchanged.
 
 ## Packaged community default
 
@@ -89,7 +103,9 @@ nonempty `BUZZ_BUILDERLAB_URL` fails the build.
 
 `BUZZ_BUILD_FEDERATED_IDENTITY_CONFIG` is a public JSON descriptor supplied to
 Cargo through the build environment. It is validated and compiled into native
-code, with no runtime override or credential field:
+code, with no runtime override or credential field. For `just desktop` and
+`just desktop-bundle`, it can be set in `.env.local` (single-quote the JSON);
+see [launch environment](#launch-environment).
 
 ```json
 {
@@ -112,10 +128,8 @@ opens and again whenever the session ends (see
 used in that sign-in copy, up to 64 characters. Neither is part of the deployment
 fingerprint, so changing them keeps saved sessions.
 
-The first-run welcome screen does not yet support FI builds: its **Sign in
-with email** needs the bundled Builderlab plugin's own network grant, which an
-FI build does not have, so sign-in fails after the browser step (see
-[identity](identity.md)).
+The first-run welcome screen's **Sign in with email** is the native
+organization sign-in in an FI build (see [identity](identity.md)).
 
 Vite uses its existing environment loader; the native plugin-manager build reads
 repository-root `.env.local` and process values using the native dotenv pattern.
@@ -255,3 +269,19 @@ copied here.
 Ignored `.env.local` can contain unrelated development settings. Only the inputs
 with current consumers listed above have an effect. Do not use any build input
 for private keys, tokens or raw agent configuration.
+
+## Launch environment
+
+`just desktop` and `just desktop-bundle` add every `BUZZ_` value from
+repository-root `.env.local` to the environment of Tauri, Cargo and the native
+app. Values are read as the frontend's Builderlab URL reader reads them (Node
+`parseEnv`): `$VAR` is never expanded, quoted or not, so a value needs no
+escaping. Vite's `.env` and mode-specific files are not read for this. Because
+the Vite dev server inherits this environment, a `.env.local` value also beats
+the same name in a mode file for the frontend, so frontend and native agree. A
+value already in the process environment wins, including an explicit empty
+one. Names without the `BUZZ_` prefix stay out, because `.env.local` can hold
+unrelated settings and credentials, and so do the release-only
+`BUZZ_UPDATER_*` inputs. `BUZZ_` values reach child processes of the app, so keep them
+to public configuration. Direct `pnpm tauri build` and `cargo` runs do not load
+`.env.local` this way.

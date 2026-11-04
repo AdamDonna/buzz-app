@@ -18,7 +18,7 @@ import {
   unsupportedSynced,
   unverifiedSynced,
 } from "../../features/agents/agent-config";
-import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import { fromOwner } from "../../features/agents/owner-attestation";
 import type { AgentReads } from "../../features/agents/reads";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import type {
@@ -67,6 +67,7 @@ import {
   readTranscript,
   type Conversation,
 } from "./transcript";
+import { sessionPrompts } from "../../features/agents/session-prompts";
 
 /** The effort levels Claude lists, which a session can switch to between
  * turns. Claude runs `max` as `xhigh` in a stream-json session, so it is not
@@ -339,7 +340,21 @@ export class ClaudeRuntime {
     working: boolean,
     signal: AbortSignal,
   ) {
-    return readTranscript(this.spawn, workspace, conversation, working, signal);
+    const prompts = this.prompts(conversation.agent);
+    return readTranscript(
+      this.spawn,
+      workspace,
+      conversation,
+      working,
+      signal,
+    ).then(
+      (transcript) =>
+        transcript && { ...transcript, turns: prompts.shown(transcript.turns) },
+    );
+  }
+  /** What each of the agent's sessions started with. */
+  private prompts(agent: AgentKey) {
+    return sessionPrompts(this.storage, "claude-code", agent);
   }
   /** The agent's latest session for a conversation that another build of the
    * app started, found in the workspace's Claude Code history. */
@@ -465,11 +480,7 @@ export class ClaudeRuntime {
     // Claude runs commands as you; mentions need owner or delegated authority.
     if (
       trigger.type === "mention" &&
-      !(await fromOwner(
-        trigger.event,
-        agent.owner,
-        workflowOf(this.reads(agent.key), agent.pubkey),
-      ))
+      !(await fromOwner(trigger.event, agent.owner))
     ) {
       ignored?.();
       return;
@@ -926,6 +937,8 @@ export class ClaudeRuntime {
       spawn: (id, options) => this.spawn(id, options),
       spare: this.spare,
       store: localSessions(this.storage, agent),
+      started: (session, text) =>
+        void this.prompts(agent).save(session, [{ label: "", text }]),
       onChange: () => this.notify(),
       fingerprint: (key) =>
         JSON.stringify([

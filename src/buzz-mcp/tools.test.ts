@@ -7,7 +7,7 @@ import { respond } from "./rpc";
 import { ATTENTION_TOOLS } from "./attention";
 import { createHash } from "node:crypto";
 import { callTool, memoryVersion, TOOLS } from "./tools";
-import { callSessionTool } from "./session-tools";
+import { callSessionTool, sessionTools } from "./session-tools";
 import { SOLO_WORKER_TOOLS } from "./solo-worker";
 import { Context } from "@deepseek-ai/cordis";
 import { AgentProtectionService } from "../features/agent-protection/service";
@@ -618,6 +618,11 @@ it.each([
   ["search", { q: "hello" }],
   ["current thread", {}],
   ["explicit thread", { thread: nested }],
+  ["message link", { message_url: `buzz://message?channel=chan&id=${nested}` }],
+  [
+    "message search",
+    { message_url: `buzz://message?channel=chan&id=${nested}`, q: "hello" },
+  ],
 ] as const)(
   "keeps agent ownership and nested reply context in a %s read",
   async (_, args) => {
@@ -2031,6 +2036,268 @@ it("publishes the first canvas only after finding visible channel metadata", asy
   ]);
 });
 
+it("lists canvas revisions newest first, a page at a time", async () => {
+  const rows = Array.from({ length: 26 }, (_, i) =>
+    event({
+      kind: 40100,
+      id: `${i}`.padStart(64, "0"),
+      created_at: 100 + i,
+      content: `# Plan ${i}\nbody`,
+    }),
+  );
+  const { client } = fake(rows);
+  const page = await callTool(
+    client,
+    { channel: "chan" },
+    "canvas_history",
+    {},
+  );
+  const lines = (page as string).split("\n");
+  expect(lines).toHaveLength(28);
+  expect(lines[0]).toBe(`version: ${rows[25]?.id}`);
+  expect(lines[2]).toBe(
+    `${rows[25]?.id} 1970-01-01T00:02Z ${alice} 14B # Plan 25`,
+  );
+  expect(lines[27]).toBe(
+    `Older revisions may remain; continue with ${JSON.stringify({ channel: "chan", before: 101, before_id: rows[1]?.id })}`,
+  );
+  await expect(
+    callTool(client, {}, "canvas_history", {
+      channel: "chan",
+      before: 101,
+      before_id: rows[1]?.id,
+    }),
+  ).resolves.toBe(`${rows[0]?.id} 1970-01-01T00:01Z ${alice} 13B # Plan 0`);
+  await expect(
+    callTool(client, {}, "canvas_history", {
+      channel: "chan",
+      before_id: root,
+    }),
+  ).rejects.toThrow("before_id needs before");
+  await expect(
+    callTool(client, {}, "canvas_history", { channel: "chan", before: 1e12 }),
+  ).rejects.toThrow("Unix seconds");
+  // Only the first page is read from the writer.
+  const filters = (client.query as ReturnType<typeof vi.fn>).mock.calls.map(
+    ([[filter]]) => filter,
+  );
+  expect(filters[0]).toEqual({
+    kinds: [40100],
+    "#h": ["chan"],
+    limit: 25,
+    consistency: "strong",
+  });
+  expect(filters[1]).not.toHaveProperty("consistency");
+});
+
+it("pages canvas revisions that share a timestamp without gaps", async () => {
+  const rows = Array.from({ length: 30 }, (_, i) =>
+    event({
+      kind: 40100,
+      id: `${i}`.padStart(64, "0"),
+      created_at: 100,
+      content: `${i}`,
+    }),
+  );
+  const { client } = fake(rows);
+  const first = (await callTool(client, {}, "canvas_history", {
+    channel: "chan",
+  })) as string;
+  const cursor = JSON.parse(first.split("continue with ")[1] ?? "");
+  const second = (await callTool(
+    client,
+    {},
+    "canvas_history",
+    cursor,
+  )) as string;
+  const ids = [...first.split("\n").slice(2, 27), ...second.split("\n")].map(
+    (line) => line.split(" ")[0],
+  );
+  expect(ids).toEqual(rows.map((row) => row.id));
+});
+
+it("restores a canvas revision guarded by the head it read", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const old = event({ kind: 40100, id: root, content: "# Old" });
+    const head = event({ kind: 40100, id: nested, created_at: 200 });
+    const { client, published } = fake([old, head], { keep: true });
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: nested,
+      }),
+    ).resolves.toBe(`restored ${root} as ${"1".padStart(64, "e")}`);
+    expect(published).toEqual([
+      {
+        kind: 40100,
+        content: "# Old",
+        tags: [
+          ["h", "chan"],
+          ["expected-revision", nested],
+        ],
+      },
+    ]);
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_get", {}),
+    ).resolves.toBe("# Old");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("refuses to restore what is not a revision of this canvas", async () => {
+  const { client, published } = fake([
+    event({ kind: 9, id: root }),
+    event({ kind: 40100, id: nested, tags: [["h", "other"]] }),
+  ]);
+  for (const id of [root, nested, "f".repeat(64)])
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_restore", {
+        id,
+        expected: root,
+      }),
+    ).rejects.toThrow(`No canvas revision ${id} in chan`);
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_restore", {
+      id: "x",
+      expected: root,
+    }),
+  ).rejects.toThrow("64-character");
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_restore", { id: root }),
+  ).rejects.toThrow("expected");
+  expect(published).toEqual([]);
+});
+
+it("refuses to restore over a canvas saved since the agent read it", async () => {
+  const old = event({ kind: 40100, id: root, content: "# Old" });
+  const seen = event({ kind: 40100, id: nested, created_at: 200 });
+  const { client, published } = fake([old, seen]);
+  await callTool(client, { channel: "chan" }, "canvas_history", {});
+  // A collaborator saves after the agent read the history.
+  (client.query as ReturnType<typeof vi.fn>).mockImplementation(
+    async ([filter]: readonly { ids?: string[] }[]) =>
+      filter?.ids
+        ? [old]
+        : [event({ kind: 40100, id: "c".repeat(64), created_at: 300 })],
+  );
+  await expect(
+    callTool(client, { channel: "chan" }, "canvas_restore", {
+      id: root,
+      expected: nested,
+    }),
+  ).rejects.toThrow(`The canvas changed since version ${nested}`);
+  expect(published).toEqual([]);
+});
+
+it("restores only revisions within the canvas size limit", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const head = event({ kind: 40100, id: nested, created_at: 200 });
+    for (const [content, ok] of [
+      ["", true],
+      ["x".repeat(24 * 1024), true],
+      ["x".repeat(24 * 1024 + 1), false],
+    ] as const) {
+      const old = event({ kind: 40100, id: root, content });
+      const { client, published } = fake([old, head], { keep: true });
+      const restore = callTool(client, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: nested,
+      });
+      if (ok) await expect(restore).resolves.toMatch(/^restored /);
+      else await expect(restore).rejects.toThrow("over the canvas limit");
+      expect(published).toHaveLength(ok ? 1 : 0);
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("annotates the canvas history and restore tools", () => {
+  const find = (name: string) => TOOLS.find((item) => item.name === name);
+  expect(find("canvas_history")?.annotations).toEqual({ readOnlyHint: true });
+  expect(find("canvas_restore")?.annotations).toEqual({
+    readOnlyHint: false,
+    destructiveHint: true,
+  });
+});
+
+it("reports a restore that another canvas write overtook", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const old = event({ kind: 40100, id: root, content: "# Old" });
+    const later = event({ kind: 40100, id: nested, created_at: 999 });
+    const { client } = fake([old]);
+    const publish = client.publish;
+    client.publish = vi.fn(async (template) => {
+      const signed = await publish(template);
+      (client.query as ReturnType<typeof vi.fn>).mockResolvedValue([later]);
+      return signed;
+    });
+    await expect(
+      callTool(client, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: root,
+      }),
+    ).resolves.toBe("That revision is already the canvas.");
+    const { client: other } = fake([
+      old,
+      event({ kind: 40100, id: "d".repeat(64), created_at: 200 }),
+    ]);
+    const otherPublish = other.publish;
+    other.publish = vi.fn(async (template) => {
+      const signed = await otherPublish(template);
+      (other.query as ReturnType<typeof vi.fn>).mockResolvedValue([later]);
+      return signed;
+    });
+    await expect(
+      callTool(other, { channel: "chan" }, "canvas_restore", {
+        id: root,
+        expected: "d".repeat(64),
+      }),
+    ).rejects.toThrow(
+      `conflict: the restore was received, but another canvas (${nested})`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reports an accepted restore whose read-back fails", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(300_000);
+    const old = event({ kind: 40100, id: root, content: "# Old" });
+    const head = event({ kind: 40100, id: nested, created_at: 200 });
+    const { client } = fake([old, head]);
+    const publish = client.publish;
+    let saved = "";
+    client.publish = vi.fn(async (template) => {
+      const signed = await publish(template);
+      saved = signed.id;
+      (client.query as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("socket closed"),
+      );
+      return signed;
+    });
+    const restore = callTool(client, { channel: "chan" }, "canvas_restore", {
+      id: root,
+      expected: nested,
+    });
+    await expect(restore).rejects.toThrow(/^restored /);
+    await expect(restore).rejects.toThrow(
+      `restored ${root} as ${saved}, but the canvas could not be read back to confirm it is current: socket closed`,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("reads and replaces the canvas of a named channel or the current one", async () => {
   const { client, published } = fake([
     event({ kind: 40100, content: "# Existing" }),
@@ -3222,10 +3489,10 @@ const repo = (
     id: d.padEnd(64, "0"),
     tags: [["d", d], ...channels.map((c) => ["buzz-channel", c]), ...extra],
   });
-const git = (client: BuzzClient) => {
+const git = (client: BuzzClient, header = "Authorization: Nostr abc") => {
   const gitAuth = vi.fn(async (owner: string, name: string) => ({
     url: `https://relay/git/${owner}/${name}.git`,
-    header: "Authorization: Nostr abc",
+    header,
   }));
   client.gitAuth = gitAuth;
   return gitAuth;
@@ -3264,9 +3531,22 @@ it("gives the channel's repository and a Git header signed for it", async () => 
   expect(answer).toBe(
     [
       `hive: ${url}`,
-      "For the next 60 seconds, pass this header to each git command (call again for a new one; never save it):",
+      "For the next 60 seconds, pass these headers to each git command (call again for a new one; never save it):",
       `git -c http.${url}.extraHeader='Authorization: Nostr abc' clone ${url}`,
     ].join("\n"),
+  );
+});
+
+it("passes each Git header line, sign-in evidence included", async () => {
+  const { client } = fake([
+    hive({ [bob]: "admin" }),
+    repo(bob, "hive", ["chan"]),
+  ]);
+  git(client, "Authorization: Nostr abc\nNostr-Federated-Identity: Bearer xyz");
+  const answer = await callTool(client, { channel: "chan" }, "repo", {});
+  const url = `https://relay/git/${bob}/hive.git`;
+  expect(answer).toContain(
+    `git -c http.${url}.extraHeader='Authorization: Nostr abc' -c http.${url}.extraHeader='Nostr-Federated-Identity: Bearer xyz' clone ${url}`,
   );
 });
 
@@ -3816,5 +4096,48 @@ it("needs the message to reply under", async () => {
       text: "hi",
     }),
   ).rejects.toThrow("parent is required");
+  expect(published).toEqual([]);
+});
+
+it("deletes only the given message, one target per deletion", async () => {
+  const mine = event({ id: root, pubkey: me, created_at: 100 });
+  const copy = event({
+    id: nested,
+    pubkey: me,
+    created_at: 101,
+    tags: [
+      ["h", "chan"],
+      ["buzz:copy-of", root],
+    ],
+  });
+  const { client, published } = fake([mine, copy]);
+  expect(
+    await callTool(client, { channel: "chan" }, "delete", { id: nested }),
+  ).toContain("deleted");
+  expect(published).toEqual([
+    {
+      kind: 5,
+      content: "",
+      tags: [
+        ["h", "chan"],
+        ["e", nested],
+        ["k", "9"],
+      ],
+    },
+  ]);
+});
+
+it("marks delete as destructive, also as a session lists it", () => {
+  for (const tools of [TOOLS, sessionTools()])
+    expect(tools.find((tool) => tool.name === "delete")).toMatchObject({
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    });
+});
+
+it("refuses to delete another author's message", async () => {
+  const { client, published } = fake([event({ id: root, pubkey: alice })]);
+  await expect(
+    callTool(client, { channel: "chan" }, "delete", { id: root }),
+  ).rejects.toThrow("Only your own messages can be deleted.");
   expect(published).toEqual([]);
 });

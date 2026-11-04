@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { finalizeEvent, nip44 } from "nostr-tools";
 import { connectNativeTransport } from "./native";
 import { createSidebarPreferencesStore } from "./sidebar-preferences-store";
-import { keypair } from "./testing";
+import { keypair, nativeSignatureChecks } from "./testing";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -70,6 +70,8 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (command, args) => {
       if (command === "identity_restore") return viewer.pubkey;
+      if (command === "relay_verify_signatures")
+        return nativeSignatureChecks(args);
       if (command === "relay_sign")
         return finalizeEvent(
           (args as { event: Parameters<typeof finalizeEvent>[0] }).event,
@@ -166,6 +168,30 @@ it("saves and reads back the account's main agent", async () => {
   expect(await transport.readMainAgent?.(signal)).toBeUndefined();
   await transport.writeMainAgent?.("a".repeat(64), signal);
   expect(await transport.readMainAgent?.(signal)).toBe("a".repeat(64));
+  const signedBeforeMismatch = vi
+    .mocked(invoke)
+    .mock.calls.filter(([command]) => command === "relay_sign_sidebar").length;
+  expect(await transport.clearMainAgent?.("b".repeat(64), signal)).toBe(
+    "a".repeat(64),
+  );
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "relay_sign_sidebar"),
+  ).toHaveLength(signedBeforeMismatch);
+  expect(await transport.readMainAgent?.(signal)).toBe("a".repeat(64));
+  expect(
+    await transport.clearMainAgent?.("a".repeat(64), signal),
+  ).toBeUndefined();
+  // A cleared choice leaves a record of none, read as null.
+  expect(await transport.readMainAgent?.(signal)).toBeNull();
+  await transport.writeMainAgent?.("a".repeat(64), signal);
+  await transport.writeMainAgent?.(null, signal);
+  expect(await transport.readMainAgent?.(signal)).toBeNull();
+  expect(invoke).toHaveBeenCalledWith(
+    "relay_sign_sidebar",
+    expect.objectContaining({ payload: { version: 1, agent: null } }),
+  );
   await expect(
     transport.writeMainAgent?.("A".repeat(64), signal),
   ).rejects.toThrow("Invalid main agent intent");
@@ -175,15 +201,33 @@ it("saves and reads back the account's main agent", async () => {
   );
 });
 
-it("reads a cleared main agent from development builds as none, and replaces it", async () => {
+it("reads a main agent record of none as null, and replaces it", async () => {
   const transport = await connectNativeTransport(community);
   records.set(
     "main-agent",
     signedRecord("main-agent", { version: 1, agent: null }),
   );
-  expect(await transport.readMainAgent?.(signal)).toBeUndefined();
+  expect(await transport.readMainAgent?.(signal)).toBeNull();
   await transport.writeMainAgent?.("b".repeat(64), signal);
   expect(await transport.readMainAgent?.(signal)).toBe("b".repeat(64));
+});
+
+it("saves none as the account's main agent, and reads it back as none, not as no record", async () => {
+  const transport = await connectNativeTransport(community);
+  // Never saved: no record.
+  expect(await transport.readMainAgent?.(signal)).toBeUndefined();
+  await transport.writeMainAgent?.("a".repeat(64), signal);
+  await transport.writeMainAgent?.(null, signal);
+  expect(await transport.readMainAgent?.(signal)).toBeNull();
+  await transport.writeMainAgent?.("b".repeat(64), signal);
+  expect(await transport.readMainAgent?.(signal)).toBe("b".repeat(64));
+});
+
+it("saves none on an account with no record, so it reads back as none", async () => {
+  const transport = await connectNativeTransport(community);
+  expect(await transport.readMainAgent?.(signal)).toBeUndefined();
+  await transport.writeMainAgent?.(null, signal);
+  expect(await transport.readMainAgent?.(signal)).toBeNull();
 });
 
 it("prepends a drag-created section through native encrypted readback", async () => {

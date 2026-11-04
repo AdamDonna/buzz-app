@@ -91,6 +91,8 @@ export type AttachmentRenderer = Readonly<{
   id: string;
   title: string;
   matches(attachment: Attachment): boolean;
+  /** Claim strength when several renderers match an attachment; see `MatchOrder`. */
+  order?: MatchOrder<Attachment> | undefined;
   component: ComponentType<AttachmentRendererProps>;
 }>;
 export type ReactionToolProps = Readonly<{

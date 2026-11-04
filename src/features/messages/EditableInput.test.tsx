@@ -90,6 +90,7 @@ function mount(
   initial: string | MentionDraft = "",
   options: {
     maxLength?: number;
+    onPasteTooLong?: () => void;
     links?: boolean;
     acceptRecipient?: EditableInputProps["acceptRecipient"];
   } = {},
@@ -108,6 +109,9 @@ function mount(
         disabled={false}
         placeholder="Draft"
         maxLength={options.maxLength ?? 16000}
+        {...(options.onPasteTooLong
+          ? { onPasteTooLong: options.onPasteTooLong }
+          : {})}
         // Explicit recipients render as mention tokens, as in RichComposerInput.
         decorationsFor={(current) =>
           [
@@ -4630,4 +4634,82 @@ it("rejects adding a recipient when retained duplicate mentions fill the limit",
     ).toBe(false),
   );
   expect(h.input).toHaveValue(text);
+});
+
+it("toggles inline code, quote and code block with Slack's chords as well as Buzz's", async () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  try {
+    const h = mount();
+    await h.user.keyboard("{Meta>}{Shift>}c{/Shift}{/Meta}");
+    expect(h.formats()).toContain("code");
+    await h.user.keyboard("{Meta>}{Shift>}c{/Shift}{/Meta}");
+    expect(h.formats()).not.toContain("code");
+    fireEvent.keyDown(h.input, {
+      key: "(",
+      code: "Digit9",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(h.formats()).toContain("blockquote");
+    fireEvent.keyDown(h.input, {
+      key: "Ç",
+      code: "KeyC",
+      metaKey: true,
+      altKey: true,
+      shiftKey: true,
+    });
+    expect(h.formats()).toContain("code_block");
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+describe("oversized paste feedback", () => {
+  it.each([16000, 16001])("checks the %i-character boundary", (length) => {
+    const onPasteTooLong = vi.fn();
+    const h = mount("", { onPasteTooLong });
+    paste(h.input, "x".repeat(length));
+    expect(h.markdown()).toBe(length === 16000 ? "x".repeat(length) : "");
+    expect(onPasteTooLong).toHaveBeenCalledTimes(length === 16000 ? 0 : 1);
+  });
+
+  it("preserves the draft and selection, then accepts a replacement that fits", () => {
+    const onPasteTooLong = vi.fn();
+    const h = mount("keep replace", { maxLength: 12, onPasteTooLong });
+    act(() => h.input.setSelectionRange(5, 12));
+    paste(h.input, "abcdefgh");
+    expect(onPasteTooLong).toHaveBeenCalledOnce();
+    expect(h.markdown()).toBe("keep replace");
+    expect([h.input.selectionStart, h.input.selectionEnd]).toEqual([5, 12]);
+    paste(h.input, "abcdefg");
+    expect(h.markdown()).toBe("keep abcdefg");
+    expect(onPasteTooLong).toHaveBeenCalledOnce();
+    act(() => h.input.undo(false));
+    expect(h.markdown()).toBe("keep replace");
+  });
+
+  it("reports plain-text shortcut pastes without reporting other rejected edits", () => {
+    const onPasteTooLong = vi.fn();
+    const h = mount("keep", { maxLength: 5, onPasteTooLong });
+    act(() => h.input.insertText("too long"));
+    expect(onPasteTooLong).not.toHaveBeenCalled();
+    pasteRaw(h.input, "xx", "<p>x</p>");
+    expect(onPasteTooLong).toHaveBeenCalledOnce();
+    expect(h.markdown()).toBe("keep");
+  });
+
+  it("uses serialized length for copied blocks and external links", () => {
+    const onPasteTooLong = vi.fn();
+    const h = mount("", { maxLength: 10, onPasteTooLong });
+    paste(
+      h.input,
+      "abcdefg",
+      copyHtml("<blockquote><p>abcdefghi</p></blockquote>"),
+    );
+    expect(h.markdown()).toBe("");
+    expect(onPasteTooLong).toHaveBeenCalledOnce();
+    paste(h.input, "Docs", '<a href="https://example.com/docs">Docs</a>');
+    expect(h.markdown()).toBe("");
+    expect(onPasteTooLong).toHaveBeenCalledTimes(2);
+  });
 });

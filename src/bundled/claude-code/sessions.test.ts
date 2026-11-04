@@ -43,6 +43,7 @@ function sessions(
     /** The shared spare its new conversations look for. */
     spare: Spare;
     tools: ToolServer;
+    started: (sessionId: string, systemPrompt: string) => void;
   }> = {},
 ) {
   const fake = fakeSpawn(options.known);
@@ -80,6 +81,7 @@ function sessions(
     },
     fingerprint: () => model,
     newId: () => `new-${++ids}`,
+    ...(options.started ? { started: options.started } : {}),
   });
   const claudes = () =>
     fake.processes.filter((process) => process.id === "claude");
@@ -375,7 +377,8 @@ it("opens one process for messages that arrive together in a new conversation", 
 it("resumes a saved conversation after its process stops", async () => {
   vi.useFakeTimers();
   const store = memoryStore();
-  const { pool, claudes } = sessions({ store });
+  const started = vi.fn();
+  const { pool, claudes } = sessions({ store, started });
   await pool.deliver("c/root", "first", 1);
   const first = claudes()[0];
   vi.advanceTimersByTime(IDLE_MS + 1);
@@ -387,6 +390,8 @@ it("resumes a saved conversation after its process stops", async () => {
   expect(resumed?.options.args).toContain("new-1");
   expect(resumed?.prompts).toEqual(["later"]);
   expect(store.get("c/root")).toMatchObject({ id: "new-1", seen: 5 });
+  // Only the new session tells what it started with; the resume does not.
+  expect(started.mock.calls).toEqual([["new-1", "prompt"]]);
 });
 
 it("bounds a channel session's thread history while retaining recently used threads", async () => {

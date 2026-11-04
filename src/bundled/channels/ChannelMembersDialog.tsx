@@ -1,3 +1,7 @@
+import {
+  useVerifiedNames,
+  withVerifiedNames,
+} from "../../features/profiles/useVerifiedNames";
 import { useProfileGeneration } from "../../features/relay/react";
 import { archiveHides } from "../../features/relay/identity-archives";
 import { Button as BaseButton } from "@base-ui/react/button";
@@ -105,6 +109,7 @@ import {
 import { writeClipboardText } from "../../shared/clipboard";
 
 const INVITATION_GROUP_SIZE = 4;
+const MEMBER_PAGE_SIZE = 50;
 
 const additionRoles = [
   {
@@ -168,6 +173,7 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
   place,
   pubkey,
   name,
+  fullName,
   keyLabel,
   qualified,
   adding,
@@ -202,6 +208,8 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
   place: "chat" | "channel";
   pubkey: string;
   name: string;
+  /** A community-verified full name, shown beside the name. */
+  fullName: string | undefined;
   keyLabel: string | undefined;
   /** Another shown row has the same name; show the key so Add picks the right one. */
   qualified: boolean;
@@ -289,6 +297,11 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
               {name}
               {pubkey === session.viewer ? " (you)" : ""}
             </span>
+            {fullName && fullName !== name && (
+              <span className="min-w-0 truncate text-caption text-subtle">
+                {fullName}
+              </span>
+            )}
             {qualified && keyLabel && (
               <span className="shrink-0 text-caption text-subtle">
                 {keyLabel}
@@ -533,6 +546,7 @@ export function ChannelMembersDialog({
   communities,
   navigator,
   signal,
+  visit = false,
 }: {
   session: RelaySession;
   channelId: string;
@@ -545,6 +559,8 @@ export function ChannelMembersDialog({
   navigator?: Navigation | undefined;
   /** The visit that opened this dialog; leaving it retires late results. */
   signal?: AbortSignal | undefined;
+  /** Opened as its own navigation visit, so Back closes it; local opens are not. */
+  visit?: boolean;
 } & MemberNavigation) {
   const presenceId = useId();
   const openingDestination = useRef(false);
@@ -680,11 +696,15 @@ export function ChannelMembersDialog({
     session.channels.get?.(channelId);
   const solo = channel?.channelType === "solo";
   const place = solo ? "chat" : "channel";
+  const readOnlyAccess =
+    channel?.viewerRole === "guest" ||
+    (channel?.readOnly && channel.joinRole === "guest");
+  const soloSharing = solo && !channel?.readOnly && !readOnlyAccess;
   const share = useSoloShare({
     session,
     navigator,
     channelId,
-    enabled: solo,
+    enabled: soloSharing,
     signal,
     query,
     setQuery,
@@ -698,19 +718,19 @@ export function ChannelMembersDialog({
     session.channelWrites.available;
   const canAddPeople = solo ? share.eligible : canAddMembers(session, channel);
   const canAdd = canAddPeople || canAddSoloAgents;
-  const readOnlyAccess =
-    !solo &&
-    (channel?.viewerRole === "guest" ||
-      (channel?.readOnly && channel.joinRole === "guest"));
   const generalAccess =
     channel &&
-    (channel.channelType === "stream" || channel.channelType === "forum") &&
+    (solo ||
+      channel.channelType === "stream" ||
+      channel.channelType === "forum") &&
     !channel.cached &&
     !channel.archived &&
     (channel.readOnly || session.channelDetails.available);
-  // Solo access is verified by the sharing roster read; channels read 39002.
-  const rosterBusy = solo ? share.rosterState === "loading" : rosterReading;
-  const rosterError = solo
+  // Sharing verifies joined Solo rosters; read-only previews use ordinary 39002 reads.
+  const rosterBusy = soloSharing
+    ? share.rosterState === "loading"
+    : rosterReading;
+  const rosterError = soloSharing
     ? share.rosterState === "error"
       ? share.rosterError
       : ""
@@ -754,7 +774,7 @@ export function ChannelMembersDialog({
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly retries the roster read.
   useEffect(() => {
     void session.archives.ensure();
-    if (solo) return;
+    if (soloSharing) return;
     let current = true;
     setRosterReading(true);
     setRosterReadError("");
@@ -789,8 +809,9 @@ export function ChannelMembersDialog({
     return () => {
       current = false;
     };
-  }, [session, channelId, refresh, solo]);
+  }, [session, channelId, refresh, soloSharing]);
   const memberKey = channel?.members?.join(":") ?? "";
+  const largeRoster = (channel?.members?.length ?? 0) > MEMBER_PAGE_SIZE;
   const administration = useMemberAdministration(
     session,
     channelId,
@@ -803,30 +824,6 @@ export function ChannelMembersDialog({
   )
     busy.add(administration.operation.change.pubkey);
   const profileGeneration = useProfileGeneration(session.profiles);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh retries missing names with the other dialog reads; a purge generation rereads.
-  useEffect(() => {
-    setNameError("");
-    setNamesSettledFor(undefined);
-    if (!memberKey) {
-      setNamesSettledFor({ session, memberKey });
-      return;
-    }
-    let current = true;
-    void session.profiles
-      .ensure(memberKey.split(":"), "foreground")
-      .catch(() => {
-        if (current)
-          setNameError(
-            "Some names could not load. Public keys still identify members. Try again.",
-          );
-      })
-      .finally(() => {
-        if (current) setNamesSettledFor({ session, memberKey });
-      });
-    return () => {
-      current = false;
-    };
-  }, [session, memberKey, refresh, profileGeneration]);
   const namesBusy =
     namesSettledFor?.session !== session ||
     namesSettledFor?.memberKey !== memberKey;
@@ -850,28 +847,64 @@ export function ChannelMembersDialog({
     // The authority hook may have started a new roster's read in this effect
     // flush. Do not reveal using the previous render's settled role snapshot.
     const status = session.memberAdministration.snapshot(channelId).status;
-    if (!rosterBusy && !namesBusy && rolesSettled && status !== "loading")
+    if (
+      !rosterBusy &&
+      (!namesBusy || largeRoster) &&
+      rolesSettled &&
+      status !== "loading"
+    )
       setRevealedFor(session);
-  }, [session, channelId, rosterBusy, namesBusy, rolesSettled]);
+  }, [session, channelId, rosterBusy, namesBusy, largeRoster, rolesSettled]);
   const initialLoading = revealedFor !== session;
   const known = useMemo(
     () =>
       new Map(agentChoices.identities.map((agent) => [agent.pubkey, agent])),
     [agentChoices.identities],
   );
+  const search = useMemberSearch(
+    session,
+    query,
+    canAddPeople || (largeRoster && !solo && channel?.channelType !== "dm"),
+  );
+  // Searched people the community verified carry their verified names.
+  const searchVerified = useVerifiedNames(session, search.people, {
+    key: query,
+    settled: !search.loading,
+  });
+  const searchPeople = useMemo(
+    () => withVerifiedNames(search.people, searchVerified, profiles),
+    [search.people, searchVerified, profiles],
+  );
+  const searchProfiles = new Map(
+    searchPeople.map((person) => [person.pubkey, person]),
+  );
   const members = new Set(channel?.members ?? []);
   const archived = new Set(archives.archived);
   const label = (key: string, fallback?: string) =>
+    // A name verified for this search is the label where the shared profiles
+    // show another, so the row reads as Command-K and mentions do.
+    (profiles.get(key)?.verified
+      ? undefined
+      : searchVerified.get(key)?.displayName) ??
     resolveName(
       key,
       profiles.get(key)?.name ??
+        searchProfiles.get(key)?.name ??
         fallback ??
         known.get(key)?.name ??
         formatPublicKey(key) ??
         "Unknown member",
     );
-  // Filters the fully loaded member list.
+  // Filters every roster identity using its currently available label.
   const matches = (key: string, name: string) =>
+    !text ||
+    [
+      searchProfiles.get(key)?.name,
+      searchProfiles.get(key)?.username,
+      searchProfiles.get(key)?.fullName ??
+        profiles.get(key)?.verified?.fullName,
+      ...(searchProfiles.get(key)?.profileNames ?? []),
+    ].some((name) => name && matchPerson(name, query)) ||
     `${name} ${key} ${npubEncode(key)}`
       .toLowerCase()
       .includes(query.trim().toLowerCase());
@@ -885,10 +918,15 @@ export function ChannelMembersDialog({
       typed === npubEncode(key)
     );
   };
+  // Label once per member: a fallback label bech32-encodes the key, too costly
+  // to repeat for every member of a large roster on each render.
+  const memberLabels = new Map([...members].map((key) => [key, label(key)]));
+  const memberLabel = (key: string) => memberLabels.get(key) ?? label(key);
   const currentMembers = [...members].sort(
-    (a, b) => label(a).localeCompare(label(b)) || a.localeCompare(b),
+    (a, b) =>
+      memberLabel(a).localeCompare(memberLabel(b)) || a.localeCompare(b),
   );
-  const groups = ["People", "Agents"].map((name) => {
+  const currentGroups = ["People", "Agents"].map((name) => {
     const keys = currentMembers.filter((key) => {
       const group =
         known.has(key) || profiles.get(key)?.isAgent ? "Agents" : "People";
@@ -897,9 +935,56 @@ export function ChannelMembersDialog({
     return {
       name,
       count: keys.length,
-      keys: keys.filter((key) => matches(key, label(key))),
+      keys,
     };
   });
+  // Optional profile updates change labels, not the identities being browsed.
+  // Reopening or refreshing takes a new paging order. Live roster changes
+  // retain surviving identities and append new members in their current order.
+  const [memberOrder, setMemberOrder] = useState({
+    session,
+    channelId,
+    memberKey,
+    refresh,
+    initialLoading,
+    groups: currentGroups,
+  });
+  const resetOrder =
+    memberOrder.session !== session ||
+    memberOrder.channelId !== channelId ||
+    memberOrder.refresh !== refresh ||
+    memberOrder.initialLoading !== initialLoading;
+  const previousMembers = new Set(
+    memberOrder.groups.flatMap((group) => group.keys),
+  );
+  const orderedGroups =
+    resetOrder || !largeRoster
+      ? currentGroups
+      : memberOrder.memberKey !== memberKey
+        ? memberOrder.groups.map((group) => {
+            const keys = [
+              ...group.keys.filter((key) => members.has(key)),
+              ...(
+                currentGroups.find((current) => current.name === group.name)
+                  ?.keys ?? []
+              ).filter((key) => !previousMembers.has(key)),
+            ];
+            return { ...group, keys, count: keys.length };
+          })
+        : memberOrder.groups;
+  if (resetOrder || memberOrder.memberKey !== memberKey)
+    setMemberOrder({
+      session,
+      channelId,
+      memberKey,
+      refresh,
+      initialLoading,
+      groups: orderedGroups,
+    });
+  const groups = (largeRoster ? orderedGroups : currentGroups).map((group) => ({
+    ...group,
+    keys: group.keys.filter((key) => matches(key, memberLabel(key))),
+  }));
   const presentGroups = groups.filter((group) => group.count > 0);
   const roleFilter =
     query.length === 0 &&
@@ -918,10 +1003,81 @@ export function ChannelMembersDialog({
       (roleFilter === "All" || group.name === roleFilter) &&
       group.keys.length > 0,
   );
-  const search = useMemberSearch(session, query, canAddPeople);
-  const relayKeys = new Set(search.people.map((person) => person.pubkey));
+  const [memberPages, setMemberPages] = useState({
+    text,
+    roleFilter,
+    pages: {} as Record<string, number>,
+  });
+  let pages =
+    memberPages.text === text && memberPages.roleFilter === roleFilter
+      ? memberPages.pages
+      : {};
+  for (const group of groups) {
+    const lastPage = Math.max(
+      0,
+      Math.ceil(group.keys.length / MEMBER_PAGE_SIZE) - 1,
+    );
+    if ((pages[group.name] ?? 0) > lastPage)
+      pages = { ...pages, [group.name]: lastPage };
+  }
+  if (pages !== memberPages.pages) setMemberPages({ text, roleFilter, pages });
+  const pendingMemberPage = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const group = pendingMemberPage.current;
+    pendingMemberPage.current = null;
+    if (group === null) return;
+    const heading = document.getElementById(`${presenceId}-${group}-page`);
+    heading?.focus({ preventScroll: true });
+    heading?.parentElement?.scrollIntoView({ block: "start" });
+  });
+  const changeMemberPage = (group: string, page: number) => {
+    pendingMemberPage.current = group;
+    setMemberPages({
+      text,
+      roleFilter,
+      pages: { ...pages, [group]: page },
+    });
+  };
+  const profileKey = !largeRoster
+    ? memberKey
+    : filteredGroups
+        .flatMap((group) => {
+          const page = Math.min(
+            pages[group.name] ?? 0,
+            Math.ceil(group.keys.length / MEMBER_PAGE_SIZE) - 1,
+          );
+          return group.keys.slice(
+            page * MEMBER_PAGE_SIZE,
+            (page + 1) * MEMBER_PAGE_SIZE,
+          );
+        })
+        .join(":");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh retries missing names with the other dialog reads; a purge generation rereads.
+  useEffect(() => {
+    let current = true;
+    setNameError("");
+    setNamesSettledFor(undefined);
+    void session.profiles
+      .ensure(
+        profileKey ? profileKey.split(":") : [],
+        largeRoster ? "background" : "foreground",
+      )
+      .catch(() => {
+        if (current)
+          setNameError(
+            "Some names could not load. Public keys still identify members. Try again.",
+          );
+      })
+      .finally(() => {
+        if (current) setNamesSettledFor({ session, memberKey });
+      });
+    return () => {
+      current = false;
+    };
+  }, [session, memberKey, profileKey, refresh, largeRoster, profileGeneration]);
+  const relayKeys = new Set(searchPeople.map((person) => person.pubkey));
   const candidates = new Map(
-    search.people.map((person) => [person.pubkey, person]),
+    searchPeople.map((person) => [person.pubkey, person]),
   );
   // Default suggestions use this client's agents; searches also include the
   // viewer's non-client inventory after people and other community agents.
@@ -1122,7 +1278,7 @@ export function ChannelMembersDialog({
   const refreshMembers = () => {
     if (refreshing || mutationPending) return;
     setChangeError(undefined);
-    if (solo) share.reloadRoster();
+    if (soloSharing) share.reloadRoster();
     else setRosterReading(true);
     setRefresh((value) => value + 1);
     setInvitationPage({
@@ -1153,11 +1309,16 @@ export function ChannelMembersDialog({
       ? [{ team, missing }]
       : [];
   });
-  const keys = publicKeyLabels([...members, ...candidates.keys()]);
+  // Suffix search scans the whole roster; redo it only when the keys change.
+  const keyList = [...members, ...candidates.keys()].join(":");
+  const keys = useMemo(
+    () => publicKeyLabels(keyList ? keyList.split(":") : []),
+    [keyList],
+  );
   // A naming plugin is optional: same-named rows still need a visible difference.
   const shownNames = new Map<string, number>();
   for (const name of [
-    ...currentMembers.map((key) => label(key)),
+    ...currentMembers.map(memberLabel),
     ...visibleCandidates.map((person) => label(person.pubkey, person.name)),
   ])
     shownNames.set(name, (shownNames.get(name) ?? 0) + 1);
@@ -1380,6 +1541,10 @@ export function ChannelMembersDialog({
         place={place}
         pubkey={key}
         name={name}
+        fullName={
+          profiles.get(key)?.verified?.fullName ??
+          searchProfiles.get(key)?.fullName
+        }
         keyLabel={keys.get(key)}
         qualified={(shownNames.get(name) ?? 0) > 1}
         adding={adding}
@@ -1488,6 +1653,38 @@ export function ChannelMembersDialog({
   const memberCount = (count: number) =>
     `${count} member${count === 1 ? "" : "s"}`;
   const chosen = share.chosen;
+  const searchFeedback = (
+    <>
+      {search.loading && (
+        <p role="status" className="px-control-inset text-body-sm text-subtle">
+          Searching…
+        </p>
+      )}
+      {search.error && (
+        <p role="alert" className="px-control-inset text-body-sm text-danger">
+          {search.error}
+        </p>
+      )}
+      {search.more && (
+        <div className="flex justify-center border-t border-standard pt-4">
+          <Button
+            variant="subtle"
+            size="sm"
+            onClick={() => {
+              setInvitationPage((old) => ({
+                ...old,
+                revealRelay: true,
+              }));
+              search.next();
+            }}
+            disabled={search.loading}
+          >
+            Find more matches
+          </Button>
+        </div>
+      )}
+    </>
+  );
   const copyAction = (
     <Tooltip
       content="Copying a link does not grant access."
@@ -1504,7 +1701,6 @@ export function ChannelMembersDialog({
     <div className={styles.memberSearch}>
       <SearchField
         inputRef={input}
-        aria-describedby={solo ? `${presenceId}-solo-help` : undefined}
         label={
           solo
             ? canAddSoloAgents
@@ -1586,11 +1782,17 @@ export function ChannelMembersDialog({
       recovery={session.recovery}
       channelId={channelId}
       channel={channel}
+      mayHaveGuestMembers={
+        administration.status !== "ready" ||
+        Object.values(administration.authority.roles).includes("guest")
+      }
     />
   ) : null;
   const dialog = (
     <Dialog
       open
+      // Its confirmation step is a nested surface, not part of the visit.
+      visit={visit && !selection}
       dismissOnOutsideClick
       preventClose={share.busy}
       step={
@@ -1612,11 +1814,13 @@ export function ChannelMembersDialog({
               ? "Add member?"
               : `Change access to ${memberAccessLabel(selection.role)}?`
           : (title ??
-            (solo
-              ? "Share access"
-              : readOnlyAccess
-                ? "Channel access"
-                : "Manage members"))
+            (solo && readOnlyAccess
+              ? "Chat access"
+              : solo
+                ? "Share access"
+                : readOnlyAccess
+                  ? "Channel access"
+                  : "Manage members"))
       }
       height={selection ? "content" : generalAccess ? "stable-tall" : "stable"}
       bodyLayout={selection ? "flow" : "flex"}
@@ -1720,16 +1924,6 @@ export function ChannelMembersDialog({
       ) : (
         <div className={styles.layout}>
           <div className={styles.searchControls}>{searchField}</div>
-          {solo && (
-            <p
-              id={`${presenceId}-solo-help`}
-              className="shrink-0 text-body-sm text-subtle"
-            >
-              {canAddSoloAgents
-                ? "People and agents with access can read the full history and participate in new messages. Adding an agent won’t start a run."
-                : "People with access can read the full history and participate in new messages."}
-            </p>
-          )}
           {(administrationError ||
             rosterError ||
             nameError ||
@@ -1857,25 +2051,77 @@ export function ChannelMembersDialog({
               )
             ) : (
               <>
-                {filteredGroups.map((group) => (
-                  <section key={group.name} aria-label={group.name}>
-                    <h3
-                      className={`${styles.groupHeading} pb-2 text-caption text-subtle`}
-                    >
-                      {group.name} · {text ? group.keys.length : group.count}
-                    </h3>
-                    <ul aria-busy={refreshing}>
-                      {group.keys.map((key) => row(key, label(key), false))}
-                    </ul>
-                  </section>
-                ))}
-                {!filteredGroups.length && !rosterBusy && !offering && (
-                  <p className="px-control-inset text-body-sm text-subtle">
-                    {query
-                      ? "No members match your search."
-                      : "No members to show."}
-                  </p>
-                )}
+                {filteredGroups.map((group) => {
+                  const pageCount = Math.ceil(
+                    group.keys.length / MEMBER_PAGE_SIZE,
+                  );
+                  const page = Math.min(pages[group.name] ?? 0, pageCount - 1);
+                  return (
+                    <section key={group.name} aria-label={group.name}>
+                      <h3
+                        id={`${presenceId}-${group.name}-page`}
+                        tabIndex={-1}
+                        className={`${styles.groupHeading} pb-2 text-caption text-subtle`}
+                      >
+                        {group.name} · {text ? group.keys.length : group.count}
+                      </h3>
+                      <ul aria-busy={refreshing}>
+                        {group.keys
+                          .slice(
+                            page * MEMBER_PAGE_SIZE,
+                            (page + 1) * MEMBER_PAGE_SIZE,
+                          )
+                          .map((key) => row(key, memberLabel(key), false))}
+                      </ul>
+                      {pageCount > 1 && (
+                        <nav
+                          aria-label={`${group.name} member pages`}
+                          className="flex items-center justify-between gap-2 px-control-inset"
+                        >
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={page === 0}
+                            onClick={() =>
+                              changeMemberPage(group.name, page - 1)
+                            }
+                          >
+                            Previous
+                          </Button>
+                          <span
+                            className="text-caption text-subtle"
+                            aria-live="polite"
+                          >
+                            <span className="sr-only">Page </span>
+                            {page + 1} of {pageCount}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={page + 1 === pageCount}
+                            onClick={() =>
+                              changeMemberPage(group.name, page + 1)
+                            }
+                          >
+                            Next
+                          </Button>
+                        </nav>
+                      )}
+                    </section>
+                  );
+                })}
+                {!filteredGroups.length &&
+                  !rosterBusy &&
+                  !offering &&
+                  !search.loading &&
+                  !search.error &&
+                  !search.more && (
+                    <p className="px-control-inset text-body-sm text-subtle">
+                      {query
+                        ? "No members match your search."
+                        : "No members to show."}
+                    </p>
+                  )}
               </>
             )}
             {offering && (
@@ -1999,24 +2245,16 @@ export function ChannelMembersDialog({
                     </section>
                   ) : null,
                 )}
-                {search.loading && (
-                  <p
-                    role="status"
-                    className="px-control-inset text-body-sm text-subtle"
-                  >
-                    Searching…
-                  </p>
-                )}
                 {!search.loading && !search.error && !available.length && (
                   <p className="px-control-inset text-body-sm text-subtle">
-                    {search.tooShort
-                      ? `Type at least ${SEARCH_MIN_CHARS} characters to search people.`
-                      : !solo
-                        ? "No other matching people or agents."
-                        : !canAddSoloAgents
-                          ? "No other matching people."
-                          : agentChoices.pending
-                            ? "Loading agents…"
+                    {solo && canAddSoloAgents && agentChoices.pending
+                      ? "Loading agents…"
+                      : search.tooShort
+                        ? `Type at least ${SEARCH_MIN_CHARS} characters to search people.`
+                        : !solo
+                          ? "No other matching people or agents."
+                          : !canAddSoloAgents
+                            ? "No other matching people."
                             : "No other matching people or agents."}
                   </p>
                 )}
@@ -2025,34 +2263,10 @@ export function ChannelMembersDialog({
                     To add an agent, mention it in the chat.
                   </p>
                 )}
-                {search.error && (
-                  <p
-                    role="alert"
-                    className="px-control-inset text-body-sm text-danger"
-                  >
-                    {search.error}
-                  </p>
-                )}
-                {search.more && (
-                  <div className="flex justify-center border-t border-standard pt-4">
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => {
-                        setInvitationPage((old) => ({
-                          ...old,
-                          revealRelay: true,
-                        }));
-                        search.next();
-                      }}
-                      disabled={search.loading}
-                    >
-                      Find more matches
-                    </Button>
-                  </div>
-                )}
+                {searchFeedback}
               </section>
             )}
+            {!initialLoading && !offering && searchFeedback}
             {shareChannels.length > 0 && (
               <section className={styles.memberGroup} aria-label="Channels">
                 <h3

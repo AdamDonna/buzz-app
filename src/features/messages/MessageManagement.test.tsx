@@ -236,6 +236,7 @@ async function fixture(
       },
     },
     {
+      readStateFloor: () => 0,
       outboxStorage,
       readPublisherLock: async (_signal, work) => work(),
       readStateStorage: {
