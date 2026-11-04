@@ -989,10 +989,11 @@ not restart that interval. The live stream carries every unread change; this
 backstop only repairs what it lost with no signal (a channel the relay pruned
 from a batch, or a dropped frame). A repair is owed while either of two debts
 is open, and each clears only its own way. Evidence debt (a failed evidence
-repair, an evidence overflow, or a drop) clears only when an evidence repair
-completes; a live message that marks the evidence observed again does not clear
-it. Marker debt (a failed snapshot read, a live marker that failed to apply, or
-a drop) clears only on a successful snapshot read or a covered resume. A
+repair, one that dropped a read, or a drop) clears only when an evidence repair
+completes with every read landed; a live message that marks the evidence
+observed again does not clear it. Marker debt (a failed snapshot read, a live
+marker that failed to apply, or a drop) clears only on a successful snapshot
+read or a covered resume. A
 snapshot read cannot clear evidence debt, and an evidence repair cannot clear
 marker debt. It does not
 renew singleton previews or add per-channel background history reads. When the socket

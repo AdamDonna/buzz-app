@@ -1150,6 +1150,74 @@ it("a covered reconnect pays the drop's debt: the next recovery tick reads nothi
   }
 });
 
+it("a pass that drops a window chunk leaves unread owed: the next recovery tick reads it again, not the 15-minute backstop, and the tick after that reads nothing", async () => {
+  vi.useFakeTimers({ toFake: ["Date"], now: 1_700_000_000_000 });
+  try {
+    // Two window requests: the viewer's page with 127 of the roster's
+    // windows, then the other two windows on their own.
+    const h = setup(129);
+    const answer = h.query.getMockImplementation();
+    assert(answer);
+    let refuse = false;
+    const lastChunk = (filters: readonly ReadFilter[]) =>
+      filters.length > 0 &&
+      filters.every(
+        (filter) =>
+          filter["#h"]?.length === 1 &&
+          filter.since !== undefined &&
+          !filter["#e"] &&
+          !filter.authors,
+      );
+    h.query.mockImplementation(async (filters, signal) => {
+      if (filters[0]?.kinds?.includes(39002))
+        return h.ids.flatMap((id) => [
+          roster(h.relay, id, [h.viewer.pubkey], 10),
+          metadata(h.relay, id, id, 10),
+        ]);
+      if (refuse && lastChunk(filters))
+        throw new Error("Transient evidence failure");
+      return answer(filters, signal);
+    });
+    const asked = () =>
+      h.query.mock.calls.filter(([filters]) => lastChunk(filters)).length;
+    await h.session.unread.ensure();
+    h.reconnect();
+    await vi.waitFor(() => expect(asked()).toBe(2));
+    await vi.waitFor(() =>
+      expect(h.session.unread.sync().status).toBe("reconciled"),
+    );
+    await h.session.unread.ensure();
+    // A covered reconnect resumes the markers, so only the evidence is
+    // owed, and its last window request fails twice and is dropped.
+    refuse = true;
+    h.reconnectCovered();
+    await vi.waitFor(() => expect(asked()).toBe(4));
+    await h.session.unread.ensure();
+    expect(h.session.unread.inbox()).toMatchObject({
+      freshness: "observed",
+      partial: true,
+    });
+    // A minute later the relay answers, and the tick reads it again.
+    refuse = false;
+    vi.setSystemTime(Date.now() + 60_000);
+    h.recover();
+    await vi.waitFor(() => expect(asked()).toBe(5));
+    await h.session.unread.ensure();
+    expect(h.session.unread.inbox().partial).toBeUndefined();
+    // Paid, the next tick waits for the backstop. A sync settles after any
+    // read-state refresh the tick began, and `ensure()` then waits for the
+    // repair it chains.
+    const before = tickReads(h).evidence;
+    vi.setSystemTime(Date.now() + 60_000);
+    h.recover();
+    await h.session.unread.retrySync();
+    await h.session.unread.ensure();
+    expect(tickReads(h).evidence).toBe(before);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("a covered reconnect does not postpone the recovery tick's full unread repair", async () => {
   vi.useFakeTimers({ toFake: ["Date"], now: 1_700_000_000_000 });
   try {

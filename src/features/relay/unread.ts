@@ -244,8 +244,9 @@ export function createUnread({
   let requested = false;
   let repairAgain = false;
   let freshness: UnreadSnapshot["freshness"] = "unknown";
-  /** A repair failed or the stream dropped, and no repair has completed
-   * since. Live traffic marks evidence observed again but does not pay this. */
+  /** A repair failed, dropped a read or the stream dropped, and no repair
+   * has completed with every read landed since. Live traffic marks evidence
+   * observed again but does not pay this. */
   let owing = false;
   let error: string | undefined;
   let refresh: Promise<void> | undefined;
@@ -2651,10 +2652,11 @@ export function createUnread({
         // queued its read for a pool that had finished; it is the follow-up's.
         if (requests.length) void followUp(run);
         // A dropped request leaves its channels or threads as they were; the
-        // Inbox says so until the next repair, with no automatic retry.
+        // Inbox says so, and the repair stays owed, so the next recovery tick
+        // reads them again, as it does after a repair that fails.
         partial = unchecked;
         freshness = "observed";
-        owing = false;
+        owing = unchecked;
         error = undefined;
         publish();
         void findHomes(generation);
