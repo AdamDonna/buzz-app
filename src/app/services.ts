@@ -52,6 +52,7 @@ import { bundledPlugins } from "../bundled";
 import { bundledFederatedIdentity } from "../bundled/builderlab/oauth/first-run";
 import { nativeBuilderlab } from "../bundled/builderlab/session";
 import { conversationFeatures } from "./conversation-features";
+import { PluginDevelopmentService } from "../features/plugin-development/service";
 import { createPluginManager } from "../plugins/manager";
 import {
   createPluginInstallCore,
@@ -79,6 +80,7 @@ export function createServices() {
     bundled: bundledPlugins,
     builtIn: conversationFeatures,
   });
+  new PluginDevelopmentService(ctx, () => plugins);
   const localAgents = createLocalAgents();
   const localActivity = createLocalAgentActivity();
   const navigationHost = provideNavigation(ctx);

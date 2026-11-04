@@ -61,6 +61,8 @@ import relayStaffManifest from "./relay-staff/manifest.json";
 import * as relayStaff from "./relay-staff";
 import typesafeManifest from "./typesafe/manifest.json";
 import * as typesafe from "./typesafe";
+import pluginDevelopmentManifest from "./plugin-development/manifest.json";
+import * as pluginDevelopment from "./plugin-development";
 
 import relayNotesManifest from "./relay-notes/manifest.json";
 import * as relayNotes from "./relay-notes";
@@ -224,6 +226,11 @@ export const bundledPlugins: readonly BundledPlugin[] = [
   {
     manifest: { ...typesafeManifest, apiVersion: 1 },
     module: typesafe,
+    enabledByDefault: true,
+  },
+  {
+    manifest: { ...pluginDevelopmentManifest, apiVersion: 1 },
+    module: pluginDevelopment,
     enabledByDefault: true,
   },
 ];
