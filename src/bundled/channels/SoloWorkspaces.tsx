@@ -48,7 +48,10 @@ import {
   DotsThreeIcon,
   PlusIcon,
 } from "../../shared/design-system/icons";
-import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
+import {
+  NavigationCard,
+  NavigationItem,
+} from "../../shared/design-system/ui/NavigationItem";
 import type { Navigation } from "../../features/navigation/controller";
 import { NewWorkspaceDialog, SoloChatMenuItems } from "./SoloChatMenu";
 import styles from "./SoloWorkspaces.module.css";
@@ -511,7 +514,7 @@ export function SoloWorkspaces({
                 }}
               />
             );
-          return (
+          const row = (
             <ChatActionsMenu
               key={item.id}
               id={item.id}
@@ -564,6 +567,17 @@ export function SoloWorkspaces({
                 {renderChat(item, rename)}
               </DraggableChannel>
             </ChatActionsMenu>
+          );
+          return compose && project.id ? (
+            <NavigationCard
+              key={item.id}
+              tone="tonal"
+              className={styles.composedChat}
+            >
+              {row}
+            </NavigationCard>
+          ) : (
+            row
           );
         })}
         {(project.hidden > 0 || project.foldable) && (
