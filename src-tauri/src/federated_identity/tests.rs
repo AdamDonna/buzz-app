@@ -661,7 +661,7 @@ fn expiry_watch_follows_the_wall_clock_across_sleep() {
     assert_eq!(due(5_000, warn, expires, false), Due::Expire);
 }
 
-fn signed_in_at(
+pub(super) fn signed_in_at(
     store: Arc<Memory>,
     base: String,
     email: &str,

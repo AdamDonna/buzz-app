@@ -497,3 +497,50 @@ async fn an_unrecorded_revoke_all_is_reported_and_stops_a_sign_out() {
     assert!(fixture.service.clear_pairings().await.unwrap_err().recorded);
     assert!(fixture.keychain.owed.load(Ordering::SeqCst));
 }
+
+/// A renewal into another account records the revoke-all before it
+/// installs, so a run that ends before anything follows the change still
+/// revokes next launch, even back under the original account.
+#[tokio::test]
+async fn an_account_change_then_a_restart_before_its_revoke_still_revokes() {
+    let mut fixture = fixture_signed_in(testing::renewing_into_another_account().await);
+    let token = paired(&fixture).await;
+    fixture.identity.renew_for_test().await.unwrap();
+    assert_eq!(
+        fixture.identity.email_for_test().as_deref(),
+        Some("b@example.com")
+    );
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst));
+    assert!(fixture.keychain.value.lock().unwrap().is_some());
+
+    // The next run, back under the original account, knows nothing of it.
+    let session = testing::renewing_into_another_account().await;
+    fixture.service = service_over(
+        &fixture.host,
+        &session,
+        &fixture.keychain,
+        &fixture.notices,
+        IdentityHost::fixture(),
+    );
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "revoked");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}
+
+/// A renewal into another account whose revoke-all cannot be recorded does
+/// not change the account.
+#[tokio::test]
+async fn an_account_change_whose_revoke_cannot_be_recorded_does_not_happen() {
+    let fixture = fixture_signed_in(testing::renewing_into_another_account().await);
+    let token = paired(&fixture).await;
+    fixture.keychain.fail_owed.store(true, Ordering::SeqCst);
+    let before = fixture.identity.retirements();
+    assert!(fixture.identity.renew_for_test().await.is_err());
+    assert_eq!(
+        fixture.identity.email_for_test().as_deref(),
+        Some("a@example.com")
+    );
+    assert_eq!(fixture.identity.retirements(), before);
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(reply.1["result"], human_pubkey().await);
+}

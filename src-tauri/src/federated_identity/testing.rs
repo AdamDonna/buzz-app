@@ -25,7 +25,29 @@ fn undiscovered(adapter_base: String, relay: &str) -> FederatedIdentity {
     owner
 }
 
+/// Signed in as a@example.com, through a loopback adapter that renews the
+/// session once, into b@example.com (see `renew_for_test`).
+pub(crate) async fn renewing_into_another_account() -> FederatedIdentity {
+    let (base, _server) = tests::adapter(vec![
+        serde_json::json!({"session_token":"other-session-token","expires_at":"2099-02-01T00:00:00Z"}),
+        serde_json::json!({"expires_at":"2099-02-01T00:00:00Z","email":"b@example.com"}),
+    ])
+    .await;
+    tests::signed_in_at(Arc::new(tests::Memory::default()), base, "a@example.com").0
+}
+
 impl FederatedIdentity {
+    /// Finishes a renewal through this session's adapter.
+    pub(crate) async fn renew_for_test(&self) -> Result<(), String> {
+        let revision = self.snapshot().revision;
+        let cancel = self.state().cancellation.child_token();
+        self.finish_login("code", "secret", &revision, &cancel)
+            .await
+            .map_err(|failure| failure.code.to_owned())
+    }
+    pub(crate) fn email_for_test(&self) -> Option<String> {
+        self.snapshot().email
+    }
     fn install(&self, session: Arc<super::Session>) {
         let mut state = self.state();
         state.session = Some(session);

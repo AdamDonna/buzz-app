@@ -18,6 +18,11 @@ pub(crate) struct Fixture {
 }
 
 pub(crate) fn fixture() -> Fixture {
+    fixture_signed_in(FederatedIdentity::unconfigured())
+}
+
+/// A fixture whose NIP-FI session is `identity`.
+pub(crate) fn fixture_signed_in(identity: FederatedIdentity) -> Fixture {
     let key = Secret::generate().unwrap();
     let agent = AppAgent {
         pubkey: key.pubkey().into(),
@@ -36,7 +41,6 @@ pub(crate) fn fixture() -> Fixture {
         protection: None,
         protection_revision: 0,
     };
-    let identity = FederatedIdentity::unconfigured();
     let tokens = AgentTokens::in_memory(identity.clone());
     fixture_with(agent, key, identity, tokens)
 }
