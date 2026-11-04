@@ -227,7 +227,8 @@ The owner tag identifies the identity that scheduled the workflow, not the autho
 of every rendered word. Templates can include trigger-controlled values; those
 values do not acquire the owner's prompt authority.
 
-Claude Code and Codex also use this proof to authorize delegated workflow mentions.
+Claude Code, Codex, Pi and Goose also use this proof to authorize delegated
+workflow mentions. Agent types that plugins bring do not.
 The receiving agent's ready community session must supply the explicit relay
 authority. The workflow owner must be that agent's owner, or an agent whose
 admitted kind-0 profile cryptographically proves the same owner through NIP-OA.

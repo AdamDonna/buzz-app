@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
+import { fromOwner } from "../agents/owner-attestation";
 import type { AgentHandle, Delivery } from "../agents/service";
-import type { EventData, RelayEvent } from "../relay/events";
+import { eventDto, type EventData, type RelayEvent } from "../relay/events";
 import type { RelayData } from "../relay/service";
+import { keypair, signed } from "../relay/testing";
 import { harnessKit } from "./kit";
 
 const self = "c".repeat(64);
 const alice = "a".repeat(64);
 const mallory = "f".repeat(64);
 const channel = "chan-1";
+const workflowKey = keypair();
 
 const message = (
   id: string,
@@ -77,6 +80,7 @@ function setup(
     channelWrites: { startingCanvas: () => undefined },
     canvas: { available: false, read: vi.fn(async () => null) },
     agentMemories: { open: vi.fn() },
+    workflowAuthority: workflowKey.pubkey,
   };
   const relay = {
     snapshot: () => ({
@@ -175,18 +179,47 @@ describe("harnessKit.conversation", () => {
     expect(
       await kit.conversation(delivery({ type: "mention", event }), "thread"),
     ).toBeUndefined();
-    const workflow = message("3", "@Ampy go", {
-      tags: [
-        ["h", channel],
-        ["buzz:workflow", "w"],
-      ],
-    });
+    // A relay workflow mention the bundled harnesses would run: signed by
+    // the community's workflow key, owned by the owner, aimed at this agent.
+    const workflow = eventDto(
+      signed(workflowKey, {
+        kind: 9,
+        content: "@Ampy go",
+        tags: [
+          ["h", channel],
+          ["p", self],
+          ["buzz:workflow", "true"],
+          ["buzz:workflow-owner", alice],
+          ["buzz:workflow-mention", self],
+        ],
+      }),
+    );
+    expect(
+      await fromOwner(workflow, alice, {
+        agent: self,
+        authority: workflowKey.pubkey,
+      }),
+    ).toBe(true);
     expect(
       await kit.conversation(
         delivery({ type: "mention", event: workflow }),
         "thread",
       ),
     ).toBeUndefined();
+    // A workflow marker does not revoke the owner's own mention.
+    const marked = message("3", "@Ampy go", {
+      tags: [
+        ["h", channel],
+        ["p", self],
+        ["buzz:workflow", "true"],
+      ],
+    });
+    expect(
+      await kit.conversation(
+        delivery({ type: "mention", event: marked }),
+        "thread",
+      ),
+    ).toBeDefined();
     expect(
       await kit.conversation(
         delivery({
