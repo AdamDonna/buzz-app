@@ -74,6 +74,11 @@
     :is(.buzz-accordion-trigger, .buzz-accordion-content) {
     padding-inline: var(--settings-group-inset);
   }
+  .buzz-settings-group[data-layout="rows"]
+    > .buzz-accordion[data-variant="settings"]
+    .buzz-accordion-content {
+    padding-block-start: 0;
+  }
   .buzz-settings-group[data-layout="form"] {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
