@@ -33,7 +33,10 @@ import type { Communities, PersonalProfile } from "../communities/service";
 import { readErrorKind } from "../relay/errors";
 import { Button } from "../../shared/design-system/ui/Button";
 import { BackupError } from "./backup";
-import { hostedByThisBuilderlab } from "./builderlab-hosted";
+import {
+  atPublicBuilderlab,
+  hostedByThisBuilderlab,
+} from "./builderlab-hosted";
 import {
   builderlabAccount,
   federatedBuilderlabAccount,
@@ -43,6 +46,7 @@ import {
 } from "./builderlab-account";
 import { CommunityUrlField } from "./CommunityUrlField";
 import { ConnectChoice } from "./ConnectChoice";
+import { CreateCommunityStep } from "./CreateCommunityStep";
 import { InviteCodeField } from "./InviteCodeField";
 import styles from "./IdentitySetup.module.css";
 import { parseFirstRunAccountSeed } from "./first-run-seed";
@@ -62,6 +66,7 @@ import {
   backUp,
   checkAccount,
   checkBackup,
+  checkCreation,
   createKey,
   createSetup,
   findCommunities,
@@ -155,6 +160,10 @@ export function Welcome({
   const known = useRef<readonly string[] | undefined>(undefined);
   // Backup status belongs to this signed-in account and is cleared on the landing.
   const [backups, setBackups] = useState<readonly string[]>();
+  // Whether Join a community offers Create a community (`checkCreation`), and
+  // whether its page is shown; both cleared on the landing.
+  const [creatable, setCreatable] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   // The typed address survives a round trip to the find page and back.
   const [entered, setEntered] = useState("");
@@ -235,7 +244,9 @@ export function Welcome({
                 ? `done:join-error:${joinError.title}`
                 : finding
                   ? "done:find"
-                  : "done:join"
+                  : creating
+                    ? "done:create"
+                    : "done:join"
             : progress.status === "paused"
               ? `paused:${progress.at}`
               : progress.status;
@@ -352,6 +363,8 @@ export function Welcome({
     setFinding(undefined);
     setInviteCode("");
     setEntered("");
+    setCreatable(false);
+    setCreating(false);
     setup.reset();
   };
   /**
@@ -385,11 +398,23 @@ export function Welcome({
     known.current?.length
       ? [restoreCommunities(known.current, communities, decide)]
       : [];
-  /** How every lane ends: a linked account's owned communities feed Join a community. */
+  /**
+   * Whether Join a community may offer Create a community: only for an
+   * account at the public Builderlab, which the check then asks.
+   */
+  const offerCreation = () =>
+    reads.current && atPublicBuilderlab()
+      ? [checkCreation(identity, reads.current, setCreatable)]
+      : [];
+  /**
+   * How every lane ends: a linked account's owned communities feed Join a
+   * community, beside whether it offers Create a community.
+   */
   const finish = () => [
     ...(linked && reads.current
       ? [findCommunities(reads.current, setOwned)]
       : []),
+    ...offerCreation(),
     ...restore(),
   ];
   /** A retry after expiration reacquires the same account before uploading. */
@@ -439,6 +464,8 @@ export function Welcome({
     setLinked(undefined);
     setOwned(undefined);
     setBackups(undefined);
+    setCreatable(false);
+    setCreating(false);
     reads.current = undefined;
     known.current = undefined;
     setup.reset();
@@ -742,6 +769,7 @@ export function Welcome({
                 unlinkKey(identity, current, linked),
                 link,
                 backUpKey,
+                ...offerCreation(),
                 ...restore(),
               ]);
             }}
@@ -886,13 +914,20 @@ export function Welcome({
     ["key-choice", "key-import", "key-restore"].includes(progress.at)
   )
     return paused(progress.at) ?? <WireframeScreen>{null}</WireframeScreen>;
-  if (progress.status === "done" && !profileStep && !joinError && !finding)
+  if (
+    progress.status === "done" &&
+    !profileStep &&
+    !joinError &&
+    !finding &&
+    !creating
+  )
     return (
       <JoinCommunity
         url={entered}
         onUrlChange={setEntered}
         onFind={find}
         owned={owned}
+        onCreate={creatable ? () => setCreating(true) : undefined}
       />
     );
   return (
@@ -932,6 +967,19 @@ export function Welcome({
             onCancel={() => setFinding(undefined)}
             onJoin={(found, consent) => join(found, consent, inviteCode)}
             titleId="welcome-title"
+          />
+        ) : creating && reads.current ? (
+          // The created community joins as an entered address does.
+          <CreateCommunityStep
+            account={reads.current}
+            onCreated={(origin) => {
+              setCreating(false);
+              find(origin);
+            }}
+            onBack={() => {
+              returnFocus.current = "create";
+              setCreating(false);
+            }}
           />
         ) : null
       ) : progress.status === "running" ? (

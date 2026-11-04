@@ -7,19 +7,22 @@ import { OnboardingScreen } from "./OnboardingScreen";
 /**
  * First-run landing after setup. The community URL is the live action; a
  * linked account's owned communities are offered as rows that take the same
- * path with their address.
+ * path with their address, and, with `onCreate`, a new one can be created.
  */
 export function JoinCommunity({
   url,
   onUrlChange,
   onFind,
   owned = [],
+  onCreate,
 }: {
   url: string;
   onUrlChange: (url: string) => void;
   /** Receives the canonical secure origin, and an invite link's code when one was pasted. */
   onFind: (origin: string, code?: string) => void;
   owned?: readonly OwnedCommunity[] | undefined;
+  /** Offers Create a community, where the account may create one. */
+  onCreate?: (() => void) | undefined;
 }) {
   // The in-app Connect to a community landing's layout (CommunityLanding).
   return (
@@ -71,7 +74,16 @@ export function JoinCommunity({
         </>
       }
     >
-      {null}
+      {onCreate && (
+        <Button
+          size="lg"
+          variant="subtle"
+          data-return-focus="create"
+          onClick={onCreate}
+        >
+          Create a community
+        </Button>
+      )}
     </OnboardingScreen>
   );
 }

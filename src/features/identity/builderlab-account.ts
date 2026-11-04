@@ -8,6 +8,7 @@ import {
   ApiFailure,
   boundKey,
   check,
+  quota,
   relayUrl,
   type Reply,
 } from "../../bundled/builderlab/communities/api";
@@ -46,6 +47,23 @@ export type FirstRunAccount = Readonly<{
   linkedKey(): Promise<string | null>;
   /** The communities the account owns. Archived ones have no relay to join and are left out. */
   ownedCommunities(): Promise<readonly OwnedCommunity[]>;
+  /**
+   * Whether the account may create a hosted community for `pubkey`, the key
+   * on this device, as the Builderlab communities section decides before it
+   * enables Create a community: the account is bound to `pubkey`, and the
+   * community list's quota (`api.ts` `quota`) does not refuse it. A list with
+   * no readable quota does not refuse, as there; kgoose still enforces its
+   * limit on create.
+   */
+  canCreateCommunity(pubkey: string): Promise<boolean>;
+  /** Whether `<name>.communities.buzz.xyz` is free to create: the section's availability check. */
+  communityAvailable(name: string): Promise<boolean>;
+  /**
+   * Creates `<name>.communities.buzz.xyz`, owned by the account's bound key,
+   * and resolves to the canonical origin a join uses. The section's create;
+   * kgoose provisions the relay before it answers.
+   */
+  createCommunity(name: string): Promise<string>;
   /**
    * The destinations saved to the account, `wss://host[:port]` in kgoose's
    * order: the list the Builderlab plugin's known-communities sync keeps.
@@ -122,6 +140,10 @@ const notLinked = (reply: Reply) =>
   reply.error?.setup_needed === true ||
   (typeof reply.error?.code === "string" &&
     reply.error.code.toLowerCase() === "missing_mapping");
+
+/** A reply `notLinked` read as null is the card's missing-mapping refusal. */
+const notBound = (reply: Reply | null, fallback: string) =>
+  reply ?? check({ error: { code: "missing_mapping" } }, fallback);
 
 /**
  * Names the step and the HTTP status so a failed page tells the account check
@@ -529,6 +551,44 @@ function kgooseAccount(
         "Could not load the communities this account owns.",
         (reply) => reply?.communities?.flatMap(owned) ?? [],
       ),
+    async canCreateCommunity(pubkey) {
+      const [bound, allowed] = await Promise.all([
+        linkedKey(),
+        call(
+          "community list",
+          "/v1/buzz/communities/list",
+          "Could not load the communities this account owns.",
+          (reply) => reply !== null && quota(reply)?.canCreate !== false,
+        ),
+      ]);
+      return bound === pubkey && allowed;
+    },
+    communityAvailable: (name) =>
+      call(
+        "community availability",
+        "/v1/buzz/communities/availability",
+        "Could not check that address.",
+        (reply) =>
+          Boolean(notBound(reply, "Could not check that address.").available),
+        { name },
+      ),
+    createCommunity: (name) =>
+      call(
+        "community create",
+        "/v1/buzz/communities",
+        "Could not create the community.",
+        (reply, response) => {
+          const { community } = notBound(
+            reply,
+            "Could not create the community.",
+          );
+          const relay = community && relayUrl(community);
+          if (!relay)
+            throw failure("community create", response, "no community address");
+          return enteredRelayOrigin(relay);
+        },
+        { name },
+      ),
     // The route consults no Nostr identity, so its refusals are plain strings
     // and `reply` is never null here; its rows are not the card's.
     knownCommunities: () =>
@@ -673,6 +733,11 @@ export function seededAccount(
     linkedKey: () => Promise.resolve(seed.linked),
     ownedCommunities: () => Promise.resolve(seed.communities),
     knownCommunities: () => Promise.resolve(seed.known ?? []),
+    // The seed models no hosted communities to create.
+    canCreateCommunity: () => Promise.resolve(false),
+    communityAvailable: () => Promise.resolve(false),
+    createCommunity: () =>
+      Promise.reject(new Error("The development seed creates no communities.")),
     saveCommunity: () => Promise.resolve(),
     bind: () => Promise.resolve(),
     unbind: () =>

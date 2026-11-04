@@ -254,6 +254,103 @@ describe("ownedCommunities", () => {
   });
 });
 
+describe("hosted community creation", () => {
+  const bound = answer(200, { identity: { pubkey_hex: pubkey } });
+  const listed = (quota: object) => answer(200, { communities: [], ...quota });
+  const allowed = { quota_used: 0, quota_limit: 1, can_create: true };
+
+  it("allows creation only for the bound key, as the card's identity and list replies decide", async () => {
+    const { request, sent } = kgoose(bound, listed(allowed));
+    const account = builderlabAccount(credential, request, untouched);
+    expect(await account.canCreateCommunity(pubkey)).toBe(true);
+    expect(sent.map(({ url }) => url)).toEqual([
+      "https://t.example/api/goose/v1/buzz/nostr-identities/current",
+      "https://t.example/api/goose/v1/buzz/communities/list",
+    ]);
+    const other = builderlabAccount(
+      credential,
+      kgoose(bound, listed(allowed)).request,
+      untouched,
+    );
+    expect(await other.canCreateCommunity("cd".repeat(32))).toBe(false);
+    const unbound = builderlabAccount(
+      credential,
+      kgoose(
+        answer(200, {}),
+        answer(400, { error: { code: "missing_mapping" } }),
+      ).request,
+      untouched,
+    );
+    expect(await unbound.canCreateCommunity(pubkey)).toBe(false);
+  });
+
+  it("refuses at the quota's limit, and lets a list with no readable quota through as the card does", async () => {
+    const atLimit = builderlabAccount(
+      credential,
+      kgoose(
+        bound,
+        listed({ quota_used: 1, quota_limit: 1, can_create: false }),
+      ).request,
+      untouched,
+    );
+    expect(await atLimit.canCreateCommunity(pubkey)).toBe(false);
+    const unknown = builderlabAccount(
+      credential,
+      kgoose(bound, listed({})).request,
+      untouched,
+    );
+    expect(await unknown.canCreateCommunity(pubkey)).toBe(true);
+  });
+
+  it("checks and creates an address through the card's routes, resolving the origin a join uses", async () => {
+    const { request, sent } = kgoose(
+      answer(200, { available: true }),
+      answer(200, {
+        community: {
+          id: "1",
+          normalized_host: "north-star.communities.buzz.xyz",
+        },
+      }),
+    );
+    const account = builderlabAccount(credential, request, untouched);
+    expect(await account.communityAvailable("north-star")).toBe(true);
+    expect(await account.createCommunity("north-star")).toBe(
+      "https://north-star.communities.buzz.xyz",
+    );
+    expect(sent.map(({ url, body }) => [url, body])).toEqual([
+      [
+        "https://t.example/api/goose/v1/buzz/communities/availability",
+        '{"name":"north-star"}',
+      ],
+      [
+        "https://t.example/api/goose/v1/buzz/communities",
+        '{"name":"north-star"}',
+      ],
+    ]);
+  });
+
+  it("refuses with the card's copy", async () => {
+    const account = builderlabAccount(
+      credential,
+      kgoose(
+        refusal(409, "taken"),
+        refusal(400, "missing_mapping"),
+        answer(200, { community: {} }),
+      ).request,
+      untouched,
+    );
+    await expect(account.createCommunity("north-star")).rejects.toThrow(
+      "That Buzz address is already taken.",
+    );
+    await expect(account.communityAvailable("north-star")).rejects.toThrow(
+      "Connect your Buzz identity before creating a community.",
+    );
+    await expect(account.createCommunity("north-star")).rejects.toThrow(
+      "Builderlab community create failed (HTTP 200: no community address).",
+    );
+  });
+});
+
 describe("knownCommunities", () => {
   it("POSTs the plugin's list route at the build URL with the session credential and reads the saved destinations in the device's spelling", async () => {
     const { request, sent } = kgoose(

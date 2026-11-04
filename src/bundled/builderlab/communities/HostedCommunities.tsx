@@ -3,7 +3,6 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -36,7 +35,6 @@ import {
   boundKey,
   check,
   clearPendingDeletion,
-  HOST_SUFFIX,
   isDefinitiveDeletionRejection,
   makePendingDeletion,
   persistPendingDeletion,
@@ -45,7 +43,6 @@ import {
   readPendingDeletion,
   relayUrl,
   Unsupported,
-  VALID_NAME,
   type Account,
   type Api,
   type Community,
@@ -54,6 +51,7 @@ import {
   type Quota,
 } from "./api";
 import { writeClipboardText } from "../../../shared/clipboard";
+import { CommunityAddressField, useCommunityAddress } from "./CommunityAddress";
 
 const card = "mt-6 rounded-xl border border-default p-5";
 const sectionClassName = "mt-section-gap";
@@ -1104,41 +1102,24 @@ function CreateCommunity({
   creating: boolean;
   onCreate(name: string): Promise<boolean>;
 }) {
-  const suffixId = useId();
-  const [name, setName] = useState("");
-  // null while checking; otherwise the answer or the failure to show.
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [failed, setFailed] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const valid = name.length <= 63 && VALID_NAME.test(name);
-  // Check a paused, valid address so the result is ready before Create.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the same check on retry.
-  useEffect(() => {
-    setAvailable(null);
-    setFailed("");
-    if (!enabled || !valid) return;
-    let current = true;
-    const timer = setTimeout(() => {
-      void api
-        .call("availability", { name })
-        .then((reply) => {
-          check(reply, "Could not check that address.");
-          if (current) setAvailable(Boolean(reply.available));
-        })
-        .catch((reason) => current && setFailed(message(reason)));
-    }, 500);
-    return () => {
-      current = false;
-      clearTimeout(timer);
-    };
-  }, [api, enabled, name, valid, attempt]);
+  const availability = useCallback(
+    async (name: string) =>
+      Boolean(
+        check(
+          await api.call("availability", { name }),
+          "Could not check that address.",
+        ).available,
+      ),
+    [api],
+  );
+  const address = useCommunityAddress(availability, enabled);
   return (
     <form
       className={sectionClassName}
       onSubmit={(event) => {
         event.preventDefault();
-        if (enabled && valid && available)
-          void onCreate(name).then((ok) => ok && setName(""));
+        if (address.ready)
+          void onCreate(address.name).then((ok) => ok && address.setName(""));
       }}
     >
       <InlineHeader
@@ -1147,61 +1128,12 @@ function CreateCommunity({
       />
       <SettingsGroup layout="form">
         {atLimit && <p className="text-body-sm text-muted">{atLimit}</p>}
-        <Field
-          label="Community address"
-          labelVisibility="hidden"
-          invalid={Boolean(name) && !valid}
-          error={
-            name && !valid
-              ? "Use lowercase letters, numbers, and single hyphens."
-              : available === false
-                ? "That address is already taken."
-                : undefined
-          }
-        >
-          <div className="flex max-w-xl flex-wrap items-center gap-2">
-            <div className="min-w-0 flex-1 basis-48">
-              <Input
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={63}
-                placeholder="north-star"
-                aria-describedby={suffixId}
-                disabled={!enabled || busy}
-                value={name}
-                onValueChange={(value) => setName(value.trim().toLowerCase())}
-              />
-            </div>
-            <span id={suffixId} className="shrink-0 text-body-sm text-muted">
-              .{HOST_SUFFIX}
-            </span>
-          </div>
-        </Field>
-        {valid && enabled && failed ? (
-          <div role="alert" className="text-body-sm">
-            <p className="error m-0 break-words">{failed}</p>
-            <div className="mt-2">
-              <Button onClick={() => setAttempt((count) => count + 1)}>
-                Check again
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <p role="status" className="text-body-sm text-muted">
-            {valid && enabled
-              ? available === null
-                ? "Checking availability…"
-                : available
-                  ? "That address is available."
-                  : ""
-              : ""}
-          </p>
-        )}
+        <CommunityAddressField address={address} busy={busy} />
         <Button
           type="submit"
           variant="primary"
           loading={creating}
-          disabled={!enabled || !valid || !available || busy}
+          disabled={!address.ready || busy}
         >
           Create community
         </Button>

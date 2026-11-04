@@ -183,6 +183,29 @@ export function findCommunities(
 }
 
 /**
+ * Real: whether Join a community offers Create a community, for an account at
+ * the public Builderlab: the account must be bound to the key now on this
+ * device and its quota must allow one (`canCreateCommunity`). A failed check
+ * is reported as `false`, not a failed setup: joining works without it.
+ */
+export function checkCreation(
+  identity: Identity,
+  account: FirstRunAccount,
+  onChecked: (creatable: boolean) => void,
+): SetupStep {
+  return {
+    label: "Finding communities…",
+    run: async () => {
+      try {
+        onChecked(await account.canCreateCommunity(viewer(identity)));
+      } catch {
+        onChecked(false);
+      }
+    },
+  };
+}
+
+/**
  * Real: joins the destinations saved to the account that admit the key now on
  * this device (`restoreKnown`), then lets `decide` pick where setup rests from
  * the outcomes. Never fails setup: a destination that was refused or could not
