@@ -59,13 +59,15 @@ export function agentSections({
   communities?: CommunityReader | undefined;
 }): readonly AgentSection[] {
   if (agent.place === "elsewhere") return [];
-  const details =
-    settingsContent ??
-    (agent.place === "here" && agents.configHistory(agent.pubkey) ? (
+  const historyContent =
+    settingsContent === undefined &&
+    agent.place === "here" &&
+    agents.configHistory(agent.pubkey) ? (
       <SettingsGroup>
         <AgentConfigHistoryRow agents={agents} pubkey={agent.pubkey} />
       </SettingsGroup>
-    ) : undefined);
+    ) : undefined;
+  const details = settingsContent ?? historyContent;
   const typeTabs = type?.tabs ?? [];
   const settingsTab = typeTabs.find((tab) => tab.role === "settings");
   const orderedTabs =
@@ -106,7 +108,7 @@ export function agentSections({
   }));
   if (
     !settingsTab &&
-    (settingsHost?.typeControl || settingsHost?.pendingSave || details)
+    (settingsHost?.typeControl || settingsHost?.pendingSave || historyContent)
   )
     tabs.unshift({
       value: "agent:settings",
@@ -114,7 +116,7 @@ export function agentSections({
       render: () => (
         <>
           {settingsHost && <HostSettings host={settingsHost} />}
-          {details}
+          {historyContent}
         </>
       ),
     });

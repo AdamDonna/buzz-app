@@ -115,6 +115,53 @@ function editingFixture(split: boolean, save = vi.fn(async () => {})) {
   return { props, save };
 }
 
+it.each(["here", "hosted"] as const)(
+  "does not duplicate management content as Identity for %s agents without a settings tab",
+  async (place) => {
+    const { props } = editingFixture(false);
+    const view = render(
+      <AgentTabs
+        {...props}
+        agent={{ ...props.agent, place }}
+        type={undefined}
+      />,
+    );
+    for (const type of [undefined, { ...props.type, tabs: [] }]) {
+      view.rerender(
+        <AgentTabs {...props} agent={{ ...props.agent, place }} type={type} />,
+      );
+      expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+        "Memory",
+        "Settings",
+      ]);
+      expect(screen.queryByRole("tab", { name: "Identity" })).toBeNull();
+    }
+    expect(screen.getByRole("tab", { name: "Memory" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getAllByText("Agent settings")).toHaveLength(1);
+  },
+);
+
+it("keeps a host-only Identity tab limited to its existing controls", () => {
+  const { props } = editingFixture(false);
+  render(
+    <AgentTabs
+      {...props}
+      type={undefined}
+      settingsHost={{ typeControl: () => <p>Provider control</p> }}
+    />,
+  );
+  expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(screen.getByText("Provider control")).toBeVisible();
+  expect(screen.queryByText("Agent settings")).toBeNull();
+});
+
 it.each([false, true])(
   "confirms before discarding a section draft (split %s)",
   async (split) => {
