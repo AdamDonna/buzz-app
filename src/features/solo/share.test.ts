@@ -108,15 +108,34 @@ it("requests Private consent, then saves View only with other details preserved"
   );
 });
 
-it.each(["member", "guest"] as const)(
-  "preserves already open %s policy without consent or writes",
-  async (joinRole) => {
-    const f = fixture("public", joinRole);
-    f.setBase({ canEdit: false });
-    expect(await shareSoloChatAccess(f.session, id, f)).toBeUndefined();
-    expect(f.save).not.toHaveBeenCalled();
-  },
-);
+it("preserves Public policy without consent or writes", async () => {
+  const f = fixture("public", "member");
+  f.setBase({ canEdit: false });
+  expect(await shareSoloChatAccess(f.session, id, f)).toBeUndefined();
+  expect(f.save).not.toHaveBeenCalled();
+});
+
+it("requests View only confirmation and retains access without a write", async () => {
+  const f = fixture("public", "guest");
+  f.setBase({ canEdit: false });
+  const base = await shareSoloChatAccess(f.session, id, f);
+  expect(base).toMatchObject({ visibility: "public", joinRole: "guest" });
+  expect(f.save).not.toHaveBeenCalled();
+  expect(
+    await shareSoloChatAccess(f.session, id, { ...f, confirmed: base }),
+  ).toBeUndefined();
+  expect(f.save).not.toHaveBeenCalled();
+});
+
+it("does not reopen a View only chat that became Private during confirmation", async () => {
+  const f = fixture("public", "guest");
+  const base = await shareSoloChatAccess(f.session, id, f);
+  f.setBase({ visibility: "private", version: "new-private" });
+  await expect(
+    shareSoloChatAccess(f.session, id, { ...f, confirmed: base }),
+  ).rejects.toThrow("now Private");
+  expect(f.save).not.toHaveBeenCalled();
+});
 
 it("checks its exact uncertain access attempt without resending it", async () => {
   const f = fixture();

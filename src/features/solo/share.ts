@@ -72,8 +72,8 @@ export async function checkShareDestination(
     );
 }
 
-/** Both share entry points open only Private chats. Public policies stay intact.
- * Return the signed Private snapshot for consent; confirmed writes use the existing
+/** Both share entry points confirm Private and View only chats. Public stays intact.
+ * Return the signed snapshot for consent; confirmed Private writes use the existing
  * details owner and retain its exact uncertain attempt for explicit checking. */
 export async function shareSoloChatAccess(
   session: RelaySession,
@@ -103,7 +103,10 @@ export async function shareSoloChatAccess(
   }
   const base = await details.load(id, signal);
   check();
-  if (base.visibility === "public") return;
+  if (confirmed && confirmed.channelId !== id)
+    throw new Error("Chat selection changed. Try sharing again.");
+  if (base.visibility === "public")
+    return base.joinRole === "guest" && !confirmed ? base : undefined;
   const source = session.channels
     .list()
     .channels.find((item) => item.id === id);
@@ -114,8 +117,10 @@ export async function shareSoloChatAccess(
   )
     throw new Error("You can no longer change this chat’s general access.");
   if (!confirmed) return base;
-  if (confirmed.channelId !== id)
-    throw new Error("Chat selection changed. Try sharing again.");
+  if (confirmed.visibility !== "private")
+    throw new Error(
+      "The chat is now Private. Close this dialog and share again to confirm the access change.",
+    );
   const saving = details.save(
     confirmed,
     {

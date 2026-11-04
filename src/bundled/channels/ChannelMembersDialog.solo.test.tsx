@@ -835,7 +835,7 @@ it("shares to the current result after cancelling a different destination", asyn
 });
 
 it.each(["member", "guest"] as const)(
-  "an already open chat (%s) posts just the link, without confirmation or access changes",
+  "an already open chat (%s) preserves access and confirms View only delivery",
   async (joinRole) => {
     const t = fixture(true, { visibility: "public", joinRole });
     await t.ready();
@@ -848,6 +848,26 @@ it.each(["member", "guest"] as const)(
     await user.click(
       within(dialog).getByRole("button", { name: "Share Planning" }),
     );
+    if (joinRole === "guest") {
+      let confirmation = await screen.findByRole("alertdialog");
+      expect(confirmation).toHaveAccessibleDescription(
+        /^This chat is already View only\. Its link will be posted in Planning\./,
+      );
+      expect(t.published).toHaveLength(0);
+      await user.click(
+        within(confirmation).getByRole("button", { name: "Cancel" }),
+      );
+      const share = within(dialog).getByRole("button", {
+        name: "Share Planning",
+      });
+      await waitFor(() => expect(share).toHaveFocus());
+      expect(t.published).toHaveLength(0);
+      await user.click(share);
+      confirmation = await screen.findByRole("alertdialog");
+      await user.click(
+        within(confirmation).getByRole("button", { name: "Share" }),
+      );
+    }
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
     await waitFor(() =>
       expect(t.published.map((event) => event.kind)).toEqual([9]),
@@ -920,6 +940,11 @@ it("checks an uncertain access save before posting, without resending the access
       name: "Check access and share Planning",
     }),
   );
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Share",
+    }),
+  );
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
   await waitFor(() =>
     expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
@@ -956,6 +981,11 @@ it("retains View only when link enqueue fails and retries just the link", async 
   send.mockRestore();
   await user.click(
     within(dialog).getByRole("button", { name: "Retry share Planning" }),
+  );
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Share",
+    }),
   );
   await waitFor(() =>
     expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
@@ -1101,6 +1131,11 @@ it("leaves agents to mentions and shares a view-only link without enrolling or w
   await findDestination(user, dialog);
   await user.click(
     within(dialog).getByRole("button", { name: "Share Planning" }),
+  );
+  await user.click(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Share",
+    }),
   );
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
   // Planning is private, so the toast names it without a hash like the sidebar.

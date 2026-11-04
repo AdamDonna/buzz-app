@@ -28,6 +28,9 @@ export function useChatLinkSharing(
   restoreFocus: () => void,
 ) {
   const [pending, setPending] = useState<Pending>();
+  const privateCount =
+    pending?.sources.filter((base) => base.visibility === "private").length ??
+    0;
   const running = useRef(false);
   const cancel = useRef<HTMLButtonElement>(null);
   async function share() {
@@ -83,7 +86,7 @@ export function useChatLinkSharing(
           );
       };
       const attempts = new Map<string, ChannelDetailsDraft>();
-      const privateChats: ChannelDetails[] = [];
+      const confirmingChats: ChannelDetails[] = [];
       for (const id of new Set(sources)) {
         if (
           !ownSolo(
@@ -97,10 +100,10 @@ export function useChatLinkSharing(
           attempts,
           check,
         });
-        if (base) privateChats.push(base);
+        if (base) confirmingChats.push(base);
       }
       check();
-      const [first, ...rest] = privateChats;
+      const [first, ...rest] = confirmingChats;
       if (!first) return true;
       return new Promise((resolve) => {
         let settled = false;
@@ -129,10 +132,18 @@ export function useChatLinkSharing(
     },
     dialog: pending && (
       <AlertDialog
-        title="Change general access?"
+        title={
+          privateCount
+            ? "Change general access?"
+            : pending.sources.length > 1
+              ? "Share chat links?"
+              : "Share chat link?"
+        }
         description={
           <>
-            {`This will change ${pending.sources.length > 1 ? "these chats" : "the chat"} from Private to View only and send your message and chat ${pending.sources.length > 1 ? "links" : "link"} to ${pending.destination}. `}
+            {privateCount === pending.sources.length
+              ? `This will change ${pending.sources.length > 1 ? "these chats" : "the chat"} from Private to View only and send your message and chat ${pending.sources.length > 1 ? "links" : "link"} to ${pending.destination}. `
+              : `${privateCount ? "Private chats will change to View only; the other chats will stay View only." : pending.sources.length > 1 ? "These chats are already View only." : "This chat is already View only."} Your message and chat ${pending.sources.length > 1 ? "links" : "link"} will be sent to ${pending.destination}. `}
             <span className="mt-3 block">
               {SOLO_ACCESS_DISCLOSURE}
               {pending.sources.length > 1

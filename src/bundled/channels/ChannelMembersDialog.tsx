@@ -2282,7 +2282,9 @@ export function ChannelMembersDialog({
           title={`Share chat in ${channelText(chosen)}?`}
           description={
             <>
-              {`This will change the chat from Private to View only and post its link in ${channelText(chosen)}. `}
+              {share.confirmation.visibility === "public"
+                ? `This chat is already View only. Its link will be posted in ${channelText(chosen)}. `
+                : `This will change the chat from Private to View only and post its link in ${channelText(chosen)}. `}
               <span className="mt-3 block">{SOLO_ACCESS_DISCLOSURE}</span>
             </>
           }

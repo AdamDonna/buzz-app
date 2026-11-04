@@ -180,12 +180,13 @@ that agent in Buzz; they do not notify the external app through this connection.
   the next message. Search for a channel in its access dialog and click **Share**
   beside the result. This makes a Private chat **View only** and posts a link
   there, after confirming community
-  access to the full history and Canvas. Public and View only chats keep their
-  current access and just post the link.
+  access to the full history and Canvas. Chats already set to View only get a
+  delivery confirmation and keep their access. Public chats post directly.
   Opening a shared chat link creates no sidebar entry.
   Direct invitations still add members. Pasting a link to a Private chat you own into a channel, thread or DM
-  uses the same confirmation, then sends your original message. Other chat links
-  send without changing access; recipients still need permission to read.
+  uses the same confirmation, then sends your original message. Owned View only
+  chat links also confirm delivery. Other chat links send without changing access;
+  recipients still need permission to read.
   The access dialog offers **View only** for community reading
   or **Private** for people added to the chat. Public is not offered in
   this UI; a Public policy set through another client appears as

@@ -467,11 +467,50 @@ test.describe("View only channel share", () => {
     expect(
       links[0].event.tags.some(([key]) => key === "t" || key === "s"),
     ).toBe(false);
+    // Sharing again confirms delivery while retaining the existing View only policy.
+    await trigger.click();
+    await search.fill("Alpha");
+    await share.click();
+    await expect(confirmation).toContainText(
+      "This chat is already View only. Its link will be posted in #Alpha.",
+    );
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9),
+    ).toHaveLength(1);
+    if (info.project.name === "chromium")
+      await confirmation.screenshot({
+        path: info.outputPath("VIEW_ONLY_SHARE_CONFIRM_1280.png"),
+      });
+    await confirmation
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await expect(share).toBeFocused();
+    await expect(search).toHaveValue("Alpha");
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9),
+    ).toHaveLength(1);
+    await share.click();
+    await confirmation
+      .getByRole("button", { name: "Share", exact: true })
+      .click();
+    await expect(dialog).not.toBeVisible();
+    await expect
+      .poll(
+        () =>
+          app.report.publications.filter(({ event }) => event.kind === 9)
+            .length,
+      )
+      .toBe(2);
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9000),
+    ).toHaveLength(0);
   });
 
   // Browser-only: clipboard -> Solo card -> real composer consent/focus -> one
   // original message through the broker. Policy/failure matrices stay in Vitest.
-  test("pasted owned chats use Private consent and preserve Public access", async ({
+  test("pasted owned chats confirm Private and View only while preserving Public access", async ({
     page,
     app,
   }, info) => {
@@ -573,6 +612,41 @@ test.describe("View only channel share", () => {
       app.report.publications.filter(({ event }) => event.kind === 9000),
     ).toHaveLength(0);
 
+    await pasteLink();
+    await send.click();
+    const viewOnlyConfirmation = page.getByRole("alertdialog", {
+      name: "Share chat link?",
+    });
+    await expect(viewOnlyConfirmation).toContainText(
+      "This chat is already View only.",
+    );
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9),
+    ).toHaveLength(1);
+    if (info.project.name === "chromium")
+      await viewOnlyConfirmation.screenshot({
+        path: info.outputPath("VIEW_ONLY_PASTE_CONFIRM_390.png"),
+      });
+    await viewOnlyConfirmation
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await expect(input).toBeFocused();
+    await expect(input).toContainText("Please look at this");
+    await send.click();
+    await viewOnlyConfirmation
+      .getByRole("button", { name: "Share", exact: true })
+      .click();
+    await expect(viewOnlyConfirmation).not.toBeVisible();
+    await expect
+      .poll(
+        () =>
+          app.report.publications.filter(({ event }) => event.kind === 9)
+            .length,
+      )
+      .toBe(2);
+    expect(app.report.detailsPublications).toHaveLength(1);
+
     app.setChannelMetadata(sharedChatId, [
       ["t", "stream"],
       ["t", "buzz.solo"],
@@ -591,7 +665,7 @@ test.describe("View only channel share", () => {
           app.report.publications.filter(({ event }) => event.kind === 9)
             .length,
       )
-      .toBe(2);
+      .toBe(3);
     await expect(confirmation).not.toBeVisible();
     expect(app.report.detailsPublications).toHaveLength(1);
     expect(

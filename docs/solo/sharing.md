@@ -18,7 +18,8 @@ The access dialog has two ways to share:
 
 1. **Add a person**: one membership grant, no message.
 2. **Share with a channel**: make a Private chat View only, then post its link.
-   Public and View only chats keep their access and only post the link.
+   View only chats confirm delivery without changing access. Public chats post
+   directly and keep their access.
    Channel members and their agents can read without joining. Opening the link
    creates no sidebar entry. This is community-wide reading,
    not access limited to the chosen channel.
@@ -63,9 +64,11 @@ Each result has a **Share** action. It checks current access and opens a
 confirmation that first states the chat will change from Private to View only
 and its link will be posted in that channel, then discloses community reading of
 the full history and Canvas. **Share** saves that
-access and posts the link in one step. Public (existing) and View only chats keep
-their access and post the link directly. Cancel returns focus to the same Share
-result and preserves the search. The toast **Shared in #channel** offers **View**,
+access and posts the link in one step. A chat already set to View only gets a
+similar confirmation explaining link delivery; Share posts the link without an
+access write. Public (existing) chats keep their access and post directly.
+Cancel returns focus to the same Share result and preserves the search.
+The toast **Shared in #channel** offers **View**,
 which opens the posted link. **Done** closes the access dialog without writes.
 
 An access failure leaves the link unsent. An uncertain access save offers
@@ -144,12 +147,14 @@ For a Private chat you own, **Share** confirms community access to
 its full history and Canvas, opens reading, then sends your original message.
 **Cancel** leaves access and the draft unchanged.
 
-Public and View only chats send without a prompt and retain their access.
+View only chats you own get a link-delivery confirmation and retain their access.
+Public chats send without a prompt and retain their access.
 Links to chats you do not own also send without changing access; recipients still
 need their own permission to read. Solo destinations retain their existing send
 behavior. Direct person/agent invitations remain available in Chat access.
 
-Multiple owned Private chats in one message are named in one confirmation. If an
+Multiple owned Private or View only chats in one message are named in one
+confirmation. Only Private chats need an access edit. If an
 access save fails, the message stays unsent. Retry skips chats already opened;
 **Check access and send** checks an uncertain save without resending it. Any
 access change already saved is kept when you cancel or a later step fails.

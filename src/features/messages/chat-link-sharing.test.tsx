@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../relay/session";
@@ -34,6 +41,7 @@ async function fixture(
     shared?: boolean;
     alone?: boolean;
     multiple?: boolean;
+    viewOnlySecond?: boolean;
   } = {},
 ) {
   const viewer = keypair(),
@@ -56,8 +64,17 @@ async function fixture(
       metadata(relay, id, id === source ? "Work" : "Other work", clock, [
         ["t", "stream"],
         ["t", "buzz.solo"],
-        [options.visibility ?? "private"],
-        ["join_role", options.joinRole ?? "member"],
+        [
+          id === second && options.viewOnlySecond
+            ? "public"
+            : (options.visibility ?? "private"),
+        ],
+        [
+          "join_role",
+          id === second && options.viewOnlySecond
+            ? "guest"
+            : (options.joinRole ?? "member"),
+        ],
         ["P", options.owned === false ? person.pubkey : viewer.pubkey],
       ]),
     ]),
@@ -274,10 +291,28 @@ it("Cancel preserves access and the original draft", async () => {
 });
 
 it.each(["member", "guest"] as const)(
-  "an already open owned chat (%s) sends without confirmation or changing access",
+  "an already open owned chat (%s) preserves access and confirms View only delivery",
   async (joinRole) => {
     const f = await fixture(false, { visibility: "public", joinRole });
     await send();
+    if (joinRole === "guest") {
+      const dialog = await screen.findByRole("alertdialog", {
+        name: "Share chat link?",
+      });
+      expect(dialog).toHaveAccessibleDescription(
+        /^This chat is already View only\. Your message and chat link will be sent to #Team\./,
+      );
+      expect(f.publish).not.toHaveBeenCalled();
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: "Cancel" }),
+      );
+      expect(screen.getByRole("textbox")).toHaveTextContent(
+        "Please look at this",
+      );
+      expect(f.publish).not.toHaveBeenCalled();
+      await send();
+      await confirm();
+    }
     await waitFor(() =>
       expect(f.published.map((event) => event.kind)).toEqual([9]),
     );
@@ -432,6 +467,24 @@ it("multiple private links are confirmed together and opened before one message,
   await waitFor(() =>
     expect(f.published.map((event) => event.kind)).toEqual([9002, 9002, 9]),
   );
+});
+
+it("confirms mixed Private and View only links without rewriting the View only chat", async () => {
+  const f = await fixture(false, { multiple: true, viewOnlySecond: true });
+  await send();
+  const dialog = await screen.findByRole("alertdialog");
+  expect(dialog).toHaveTextContent(
+    "Private chats will change to View only; the other chats will stay View only.",
+  );
+  expect(dialog).toHaveTextContent("Work, Other work");
+  expect(f.publish).not.toHaveBeenCalled();
+  await confirm();
+  await waitFor(() =>
+    expect(f.published.map((event) => event.kind)).toEqual([9002, 9]),
+  );
+  expect(f.published[0]?.tags).toContainEqual(["h", source]);
+  expect(f.published[1]?.content).toContain(`buzz://channel/${second}`);
+  expect(f.members.get(second)).toEqual([f.viewer.pubkey]);
 });
 
 it("a chat that becomes Public during consent keeps Public and only sends the message", async () => {

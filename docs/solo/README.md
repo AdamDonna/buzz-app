@@ -97,9 +97,10 @@ behavior on the label, so a rename touches copy only.
   the owner can also add agents there (below). Search for a channel and click
   **Share** beside its result to make the
   Private chat View only and post a link, after confirming full-history and
-  Canvas disclosure. Public and View only chats keep their access and only post
-  the link. Pasting an owned Private chat link uses the same confirmation before
-  sending the original message. Opening the link creates no sidebar entry.
+  Canvas disclosure. View only chats confirm link delivery and keep their access;
+  Public chats post directly. Pasting an owned Private or View only chat link
+  uses the same confirmation before sending the original message. Opening the
+  link creates no sidebar entry.
   Current access is grouped into **People** and **Agents** like a channel, with Owner and Admin tags. Future
   joins/departures are not synchronized. Copy link grants no access; Done with no
   channel closes without writes. Shared uses verified membership and cached human
