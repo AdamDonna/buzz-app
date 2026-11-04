@@ -168,6 +168,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   it searches only once that word has at least three characters, even with
   `from:` or `in:`. A shorter last word shows how many characters to type, not
   "no results".
+- **Channel, people, and message search** shows “Searching…” beside each section heading
+  if a lookup takes more than a second. You can open results already shown
+  while the rest of the search finishes.
 - **Join** in a View only chat or channel adds you as a viewer, with a sidebar
   entry and normal unread tracking. Notifications follow your existing settings
   and mention/thread rules. You appear in People as **Viewing only**; you still
