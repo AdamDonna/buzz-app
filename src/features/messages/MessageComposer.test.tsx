@@ -1935,8 +1935,31 @@ it("leaves focus alone on picker cancellation or rejected files", async () => {
   expect(
     await screen.findByText("Could not attach file", { exact: true }),
   ).toBeVisible();
+  expect(screen.getByText("empty.txt is empty.")).toBeVisible();
   expect(h.uploadCalls).toHaveLength(0);
   expect(trigger).toHaveFocus();
+});
+
+it("attaches the picked files that fit and names an empty one", async () => {
+  const h = await mountUploadComposer();
+  const names = ["one.txt", "two.txt", "three.txt", "four.txt"];
+  pickAttachments(h.container, [
+    ...names.slice(0, 2).map((name) => attachmentFile(name)),
+    attachmentFile("cloud-placeholder.png", ""),
+    ...names.slice(2).map((name) => attachmentFile(name)),
+  ]);
+  expect(
+    await screen.findByText("Could not attach file", { exact: true }),
+  ).toBeVisible();
+  expect(screen.getByText("cloud-placeholder.png is empty.")).toBeVisible();
+  for (const name of names)
+    expect(
+      screen.getByRole("button", { name: `Remove ${name}` }),
+    ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "Remove cloud-placeholder.png" }),
+  ).toBeNull();
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
 });
 
 it("does not focus after a picker upload fails or is later retried", async () => {

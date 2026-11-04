@@ -1168,11 +1168,11 @@ function Composer({
       return;
     }
     try {
-      attachments.store.add(files);
-      setAttachmentError(undefined);
+      const before = attachments.store.snapshot().length;
+      setAttachmentError(attachments.store.add(files).join(" ") || undefined);
       return attachments.store
         .snapshot()
-        .slice(-files.length)
+        .slice(before)
         .map((item) => item.id);
     } catch (reason) {
       setAttachmentError(
