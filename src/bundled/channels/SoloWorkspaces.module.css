@@ -259,7 +259,7 @@
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  inset-inline-end: calc(var(--space-1) + var(--size-control-sm));
+  inset-inline-end: var(--space-1);
 }
 .projectHeader:is(
     :hover,
