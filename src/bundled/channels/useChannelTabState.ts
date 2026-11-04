@@ -10,7 +10,9 @@ import {
 import type { RelaySession } from "../../features/relay/session";
 import type { PanelOpening } from "../../features/panels/service";
 import {
+  profileActivityViewKey,
   profileHistoryActive,
+  profileHistoryBase,
   profilePanelKey,
 } from "../../features/profiles/target";
 
@@ -872,13 +874,18 @@ export function useChannelTabState(
     [key, snapshot],
   );
   const detailVisits = useCallback(
-    (channelId: string, target: string) =>
-      Object.entries(snapshot()[key]?.detailVisits ?? {}).flatMap(
+    (channelId: string, target: string) => {
+      const profile = profilePanelKey(target) ?? profileActivityViewKey(target);
+      const address = profile ? profileHistoryBase(target) : target;
+      return Object.entries(snapshot()[key]?.detailVisits ?? {}).flatMap(
         ([id, detail]) =>
-          detail.channelId === channelId && detail.target === target
+          detail.channelId === channelId &&
+          (profile ? profileHistoryBase(detail.target) : detail.target) ===
+            address
             ? [id]
             : [],
-      ),
+      );
+    },
     [key, snapshot],
   );
   const renameTab = useCallback(
