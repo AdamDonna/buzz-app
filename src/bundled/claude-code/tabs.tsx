@@ -471,6 +471,30 @@ export function createTabs({
   function ProviderDialogBody({ onClose }: { onClose(): void }) {
     const state = useSetupCatalog();
     const [code, setCode] = useState("");
+    const [token, setToken] = useState("");
+    const [saving, setSaving] = useState<AbortController>();
+    // Kept until the dialog closes.
+    const [saved, setSaved] = useState<{ ok: boolean; text: string }>();
+    const saveToken = async () => {
+      const controller = new AbortController();
+      setSaving(controller);
+      setSaved(undefined);
+      try {
+        const text = await setup.saveReviewSignIn(
+          token.trim(),
+          controller.signal,
+        );
+        setToken("");
+        setSaved({ ok: true, text });
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setSaved({ ok: false, text: message(error) });
+      } finally {
+        setSaving(undefined);
+      }
+    };
+    // Every dismissal cancels a save, as the footer Cancel does.
+    useEffect(() => () => saving?.abort(), [saving]);
     const status = state.status;
     const ready = status?.state === "ready" && !state.checking;
     const line =
@@ -581,13 +605,69 @@ export function createTabs({
         {ready && (
           <p className="m-0 text-body-sm text-subtle">Claude is signed in.</p>
         )}
+        {/* Kept through a routine check, so a paste or save goes on. */}
+        {status?.state === "ready" && (
+          <div className="grid gap-2" aria-busy={saving ? true : undefined}>
+            <Field
+              label="Sign in for reviews"
+              description={
+                <>
+                  Security reviews sign in apart from your agents. Run{" "}
+                  <code>claude setup-token</code> in Terminal, then paste the
+                  token it prints. It lasts a year.
+                </>
+              }
+            >
+              <Input
+                type="password"
+                autoComplete="off"
+                value={token}
+                readOnly={!!saving}
+                aria-disabled={saving ? true : undefined}
+                onValueChange={setToken}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing)
+                    return;
+                  event.preventDefault();
+                  if (token.trim() && !saving) void saveToken();
+                }}
+              />
+            </Field>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                disabled={!token.trim()}
+                focusableWhenDisabled
+                loading={!!saving}
+                onClick={saveToken}
+              >
+                Save review sign-in
+              </Button>
+              {saved && (
+                <p
+                  role={saved.ok ? "status" : "alert"}
+                  className={
+                    saved.ok
+                      ? "m-0 text-body-sm text-subtle"
+                      : "buzz-field-error m-0"
+                  }
+                >
+                  {saved.text}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
         <ProviderDialogActions>
           <Button
             onClick={() =>
-              state.running && !ready ? void setup.cancel() : onClose()
+              saving
+                ? saving.abort()
+                : state.running && !ready
+                  ? void setup.cancel()
+                  : onClose()
             }
           >
-            {ready ? "Done" : "Cancel"}
+            {ready && !saving ? "Done" : "Cancel"}
           </Button>
           {!ready && action && !state.running && !state.checking && (
             <Button

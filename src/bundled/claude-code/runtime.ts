@@ -62,6 +62,7 @@ import {
   turnPrompt,
 } from "./prompt";
 import { AgentSessions, localSessions, Spare } from "./sessions";
+import { protectionHistoryEntry } from "./security";
 import {
   readSessionTitle,
   readTranscript,
@@ -119,6 +120,7 @@ const NAMES_TIMEOUT_MS = 2_000;
 const CHAT = [9, 40002];
 
 type Entry = {
+  protected?: boolean;
   sessions: AgentSessions;
   config: Config;
   /** The team sections of the latest run; a change restarts idle sessions. */
@@ -218,22 +220,42 @@ export class ClaudeRuntime {
   /** Brings the runtime in line with this type's agents: changed settings
    * restart idle sessions, removed agents stop, and a spare waits while any
    * agent is here. */
+  private readonly retirements = new Map<string, Promise<void>>();
+  async retire(pubkey: string) {
+    let retiring = this.retirements.get(pubkey);
+    if (!retiring) {
+      retiring = (async () => {
+        const entry = this.agents.get(pubkey);
+        this.agents.delete(pubkey);
+        await entry?.sessions.shutdown();
+      })();
+      this.retirements.set(pubkey, retiring);
+    }
+    try {
+      await retiring;
+    } finally {
+      // A failed retirement is not kept: the agent can start again, and its
+      // old processes are not stopped again.
+      if (this.retirements.get(pubkey) === retiring)
+        this.retirements.delete(pubkey);
+    }
+  }
   sync(agents: readonly Agent[]) {
     const current = new Set(agents.map((agent) => agent.key));
     // Deleted, signed out or its community disconnected: either way its
     // processes stop. Saved sessions stay so it resumes when it is back.
-    for (const [key, entry] of this.agents)
-      if (!current.has(key)) {
-        entry.sessions.dispose();
-        this.agents.delete(key);
-      }
+    for (const key of this.agents.keys())
+      if (!current.has(key)) void this.retire(key).catch(() => undefined);
     for (const agent of agents) {
+      if (this.retirements.has(agent.key)) continue;
       const next = this.resolveConfig(agent.config);
       const entry = this.agents.get(agent.key);
       if (!entry) {
-        this.entry(agent.key, next).name = agent.name;
+        const created = this.entry(agent, next);
+        created.name = agent.name;
         continue;
       }
+      entry.protected = !!agent.protection;
       if (
         JSON.stringify(entry.config) !== JSON.stringify(next) ||
         entry.name !== agent.name
@@ -244,9 +266,9 @@ export class ClaudeRuntime {
       }
     }
     this.spare.warm(
-      ...agents.map((agent) => ({
-        ...where(this.resolveConfig(agent.config)),
-      })),
+      ...agents
+        .filter((agent) => !agent.protection)
+        .map((agent) => where(this.resolveConfig(agent.config))),
     );
     this.notify();
   }
@@ -394,7 +416,13 @@ export class ClaudeRuntime {
   }
   private notify() {
     this.views.clear();
-    for (const listener of this.listeners) listener();
+    // One subscriber's error must not stop the others, or a stop in progress.
+    for (const listener of this.listeners)
+      try {
+        listener();
+      } catch (error) {
+        console.error("A Claude session subscriber failed", error);
+      }
   }
   private readonly controls = new SessionControls(() => this.notify());
   private controlKey(agent: Agent, place: SessionPlace) {
@@ -419,7 +447,7 @@ export class ClaudeRuntime {
   ) {
     const key = this.controlKey(agent, place);
     const control = `${agent.key}/${key}`;
-    const entry = this.entry(agent.key, config(agent.config));
+    const entry = this.entry(agent, config(agent.config));
     if (action === "interrupt") {
       this.controls.interrupt(control);
       entry.policies.get(key)?.cancel();
@@ -490,7 +518,7 @@ export class ClaudeRuntime {
       return;
     }
     signal.throwIfAborted();
-    const entry = this.entry(agent.key, settings);
+    const entry = this.entry(agent, settings);
     entry.handle = agent;
     entry.team = team ?? "";
     // A pick is the owner's for this turn; otherwise a synced effort holds.
@@ -716,7 +744,7 @@ export class ClaudeRuntime {
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
     const { agent, team } = delivery;
-    const entry = this.entry(agent.key, this.resolveConfig(delivery.config));
+    const entry = this.entry(agent, this.resolveConfig(delivery.config));
     entry.handle = agent;
     entry.team = team ?? "";
     const refused = await this.refusal(agent.key, delivery.synced?.effort);
@@ -901,10 +929,21 @@ export class ClaudeRuntime {
     };
   }
 
-  private entry(agent: AgentKey, initial: Config): Entry {
+  /** Its entry, made with the agent's protection however it is first used,
+   * so a protected agent never launches unprotected before `sync`. */
+  private entry(
+    {
+      key: agent,
+      protection,
+    }: Readonly<{ key: AgentKey; protection?: unknown }>,
+    initial: Config,
+  ): Entry {
+    if (this.retirements.has(agent))
+      throw new Error("This agent’s previous native sessions have not retired");
     const existing = this.agents.get(agent);
     if (existing) return existing;
     const entry: Entry = {
+      protected: !!protection,
       config: initial,
       team: "",
       sessions: undefined as unknown as AgentSessions,
@@ -916,16 +955,33 @@ export class ClaudeRuntime {
     // it was given, until it is replaced.
     const tools =
       (cwd: string): ToolServer =>
-      async (conversation, message) => {
+      async (conversation, message, signal) => {
         const handle = entry.handle;
         const client =
           handle &&
           appClient(handle, {
+            // Its PreToolUse hook reviews every tool, Buzz's included.
+            nativeToolGate: true,
+            protectionContext: async () => {
+              if (!conversation)
+                throw new Error(
+                  "The native Claude conversation is unavailable",
+                );
+              return entry.sessions.protectionContext(conversation);
+            },
             relayAuthor: this.reads(agent)?.relayAuthor?.(),
             signingAuthority: this.reads(agent)?.workflowAuthority(),
-            read: (path) => readFile(this.spawn, cwd, path),
+            read: (path) =>
+              readFile(
+                this.spawn,
+                cwd,
+                path,
+                undefined,
+                handle.protection?.processProtection,
+              ),
             memories: (slug) => this.memories(agent, slug),
             remembered: () => this.forget(agent),
+            signal,
           });
         const context =
           (conversation && entry.contexts.get(conversation)) || {};
@@ -937,10 +993,26 @@ export class ClaudeRuntime {
           listing(this.added()),
         );
       };
+    const saved = localSessions(this.storage, agent);
     entry.sessions = new AgentSessions({
       spawn: (id, options) => this.spawn(id, options),
       spare: this.spare,
-      store: localSessions(this.storage, agent),
+      store: {
+        get: (key) => {
+          const value = saved.get(key);
+          return value?.protection === entry.handle?.protection?.stateKey
+            ? value
+            : undefined;
+        },
+        set: (key, value) =>
+          saved.set(key, {
+            ...value,
+            ...(entry.handle?.protection
+              ? { protection: entry.handle.protection.stateKey }
+              : {}),
+          }),
+        delete: (key) => saved.delete(key),
+      },
       started: (session, text) =>
         void this.prompts(agent).save(session, [{ label: "", text }]),
       onChange: () => this.notify(),
@@ -958,6 +1030,10 @@ export class ClaudeRuntime {
         ]),
       launch: async (key) => {
         const { workspace, instructions, scope } = entry.config;
+        const gate = entry.handle?.protection;
+        if (entry.protected && !gate)
+          throw new Error("The protected agent has no live policy binding");
+        gate?.assertAvailable();
         // Read once per process: a new note doesn't restart a session, and a
         // slow read starts it without them.
         const [memory, notes] = await Promise.all([
@@ -969,6 +1045,33 @@ export class ClaudeRuntime {
         const directories = key ? entry.directories.get(key) : undefined;
         return {
           ...where(entry.config),
+          ...(gate
+            ? {
+                protection: {
+                  gate,
+                  history: async (path: string, signal: AbortSignal) => {
+                    const bytes = await readFile(
+                      this.spawn,
+                      workspace,
+                      path,
+                      signal,
+                      gate.processProtection,
+                    );
+                    const lines = new TextDecoder().decode(bytes).split("\n");
+                    // Claude appends to its transcript as it goes, so the last
+                    // line may still be partial; the next hook reads it whole.
+                    const last = lines.pop() ?? "";
+                    const rows = lines
+                      .filter((line) => line.trim())
+                      .map((line) => JSON.parse(line) as unknown);
+                    try {
+                      if (last.trim()) rows.push(JSON.parse(last));
+                    } catch {}
+                    return rows.map(protectionHistoryEntry);
+                  },
+                },
+              }
+            : {}),
           ...(directories ? { directories } : {}),
           hook: (session, event, input) =>
             this.hook(agent, session, event, input),

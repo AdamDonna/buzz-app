@@ -285,6 +285,10 @@ available rather than silently discarding it.
 - **Settings → Agent setup → Harness defaults** is where supported agent types
   offer installation, sign-in, and default-model controls. Available controls
   depend on the type. Do not assume a provider is configured or signed in.
+  On macOS, Claude security reviews need their own sign-in: run
+  `claude setup-token` in Terminal and paste its token under **Sign in for
+  reviews** in Claude's **Edit configuration**. Until it is saved, Claude
+  reviews fail closed. It needs a Claude subscription and lasts a year.
 - **Activity**, where the agent type provides it, shows sessions and their
   transcripts in the agent's profile. A turn's **Thread** or **Channel** label
   opens that conversation. Working indicators describe current work,

@@ -616,6 +616,90 @@ it("asks a one-off turn for its prompt only once its process is ready", async ()
   );
 });
 
+it("stops and waits for processes still starting when it shuts down", async () => {
+  let release!: () => void;
+  const initialized = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { pool, claudes } = sessions({ initialized });
+  const starting = [
+    pool.metadata(),
+    pool.deliver("c/root", "hi", 1),
+    pool.runOnce("timer/a", () => "work"),
+  ];
+  try {
+    await vi.waitFor(() => expect(claudes()).toHaveLength(3));
+    // The host only signals them; they exit later, as after a grace period.
+    for (const claude of claudes()) claude.exitOnKill = false;
+    let stopped = false;
+    const shutdown = pool.shutdown().then(() => {
+      stopped = true;
+    });
+    await flush();
+    expect(claudes().map((claude) => claude.killed)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(stopped).toBe(false);
+    for (const claude of claudes()) claude.exit(null);
+    await shutdown;
+  } finally {
+    release();
+    await Promise.allSettled(starting);
+  }
+});
+
+it("stops and waits for a spare it took when it shuts down", async () => {
+  let release!: () => void;
+  const initialized = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { pool, spare, claudes } = withSpare({ initialized });
+  spare.warm({ cwd: "/work", model: "opus" });
+  await flush();
+  const [taken] = claudes();
+  if (!taken) throw new Error("no spare");
+  const delivering = pool.deliver("c/root", "hello", 10);
+  try {
+    // Taking it starts the next spare; the rest of the handover queues no
+    // timer, so it is initializing as the agent's after one turn of the loop.
+    await vi.waitFor(() => expect(claudes()).toHaveLength(2));
+    await flush();
+    taken.exitOnKill = false;
+    let stopped = false;
+    const shutdown = pool.shutdown().then(() => {
+      stopped = true;
+    });
+    await flush();
+    expect(taken.killed).toBe(true);
+    expect(stopped).toBe(false);
+    taken.exit(null);
+    await shutdown;
+  } finally {
+    release();
+    spare.dispose();
+    await delivering;
+  }
+});
+
+it("starts no process for a conversation still launching when it shuts down", async () => {
+  let release!: () => void;
+  const launched = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { pool, claudes } = sessions({ launched });
+  const delivering = pool.deliver("c/root", "hi", 1);
+  try {
+    await flush();
+    await pool.shutdown();
+  } finally {
+    release();
+  }
+  await expect(delivering).resolves.toMatchObject({ ok: false });
+  expect(claudes()).toEqual([]);
+});
+
 it("keeps a one-off turn's entry until its process has exited", async () => {
   const { pool, claudes } = sessions({ hold: true });
   const stop = new AbortController();

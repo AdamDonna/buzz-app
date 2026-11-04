@@ -55,11 +55,28 @@ export const MODELS = [
 const resolved = (model: string) =>
   MODELS.find((item) => item.value === model)?.resolvedModel ?? model;
 
-/** A spawn whose `claude` processes answer like Claude. Sessions named in
- * `known` (or created by a process) can be resumed; others fail to load. */
+/** The processes that run Claude: Buzz's copy, and the pinned protected
+ * release on the Mac `platform` reports. */
+export const CLAUDES: ReadonlySet<string> = new Set([
+  "claude",
+  "claude-protected-arm64",
+]);
+
+/** A spawn whose Claude processes answer like Claude, on an Apple silicon
+ * Mac. Sessions named in `known` (or created by a process) can be resumed;
+ * others fail to load. */
 export function fakeSpawn(known = new Set<string>()) {
   const processes: FakeClaude[] = [];
   const spawn = async (id: string, options: HostProcessOptions = {}) => {
+    if (id === "platform") {
+      options.onStdout?.("Darwin arm64\n");
+      return {
+        write: async () => {},
+        end: async () => {},
+        kill: async () => {},
+        exited: Promise.resolve(0),
+      };
+    }
     let resolveExit!: (code: number | null) => void;
     const exited = new Promise<number | null>((resolve) => {
       resolveExit = resolve;
@@ -210,7 +227,9 @@ export function fakeSpawn(known = new Set<string>()) {
       exited,
     };
     // Output that arrives before spawn returns is buffered by the caller.
-    if (id !== "claude") queueMicrotask(() => fake.exit(0));
+    // Claude answers `--version` and exits, as other processes do.
+    if (!CLAUDES.has(id) || args[0] === "--version")
+      queueMicrotask(() => fake.exit(0));
     return process;
   };
   return { spawn, processes, known };

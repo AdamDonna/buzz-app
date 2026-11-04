@@ -1199,19 +1199,21 @@ SIGKILL three seconds later; the group is always killed once the process exits,
 so descendants do not outlive it. At most 64 processes run at once. Processes
 run with the user's full access by default; the import preview says so.
 `protection: { readOnlyPaths, hiddenPaths }` adds macOS containment for the worker
-and descendants. Both arrays contain absolute existing paths. Read-only paths
-reject writes; hidden paths reject reads and writes. The host adds its application,
-plugin storage and actual Agents folder, blocks Apple Events, and refuses mutable
-development frontends or unsupported operating systems.
+and descendants. Both arrays contain existing paths, absolute or under the user's
+home written `~/…`. Read-only paths reject writes; hidden paths reject reads and
+writes. The host adds its application, plugin storage and actual Agents folder,
+blocks Apple Events, and refuses mutable development frontends or unsupported
+operating systems.
 
 Contained launches require an app-bundled executable or an `artifact` descriptor;
-PATH-only entrypoints are refused. Artifact descriptors name an absolute executable,
-its SHA-256, and optional flat sibling files with their hashes. Native launch hashes
-while copying those declared files into a content-addressed generation beneath the
-actual shared Agents folder, then launches that copy. All contained workers are
-prevented from writing this store. Corrupt generations fail closed and are never
-repaired in place. Equivalent Windows path forms are accepted; symlinks remain
-rejected. Control characters in containment paths refuse launch.
+PATH-only entrypoints are refused. Artifact descriptors name an executable, absolute
+or under the user's home written `~/…`, its SHA-256, and optional flat sibling files
+with their hashes. Native launch hashes while copying those declared files into a
+content-addressed generation beneath the actual shared Agents folder, then launches
+that copy. All contained workers are prevented from writing this store. Corrupt
+generations fail closed and are never repaired in place. Equivalent Windows path
+forms are accepted; symlinks remain rejected. Control characters in containment
+paths refuse launch.
 
 This is approval-authority containment, covering the application, controls, private
 approval state, and declared launch files. It does not verify every dependency an

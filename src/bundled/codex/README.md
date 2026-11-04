@@ -53,8 +53,9 @@ original untouched; a missing rollout starts a new thread.
   from shared configuration or project settings still follow Codex's trust rules.
 - File-based sign-in is shared. Sign out through Codex desktop or the terminal;
   signing out only in Buzz removes a link that the launcher restores. Signing in
-  through Buzz updates the shared credentials unless they are newer. Keyring
-  sign-in is scoped to the home and needs a separate Buzz sign-in.
+  through Buzz updates the shared credentials unless they are newer, replacing a
+  linked shared `auth.json` with a file, as `codex login` does. Keyring sign-in
+  is scoped to the home and needs a separate Buzz sign-in.
 
 See the launcher for home recovery when a desktop build inherits Buzz's
 `CODEX_HOME`, credential synchronization and rollout adoption.

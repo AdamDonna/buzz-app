@@ -6,14 +6,28 @@
 #   install VERSION PLATFORM SHA256  downloads a release, unless it is already
 #                                    downloaded, and checks it
 #   use VERSION                      makes a downloaded release the one in use
+#   review-token                     saves security reviews' sign-in from stdin
+#   review                           prints their folder, then that sign-in
 set -eu
 
 # Shared by every Buzz build on this computer, so there is one download.
+# Security reviews keep their own Claude folder beside it (macOS only), which
+# Buzz Security hides from contained agents.
+review=""
 if [ "$(uname)" = Darwin ]; then
   dir="$HOME/Library/Application Support/Buzz/claude-code"
+  review="$HOME/Library/Application Support/Buzz/claude-code-review-home"
 else
   dir="${XDG_DATA_HOME:-$HOME/.local/share}/buzz/claude-code"
 fi
+
+# Refuses a review folder that is a link or not a folder.
+review_folder() {
+  if [ -h "$review" ] || { [ -e "$review" ] && [ ! -d "$review" ]; }; then
+    echo "The Claude review folder is not a folder" >&2
+    exit 1
+  fi
+}
 
 # Versions name folders, so only digits and dots: no `..` or `/` escapes.
 valid() {
@@ -102,13 +116,55 @@ use)
   previous=$(cat "$dir/current" 2>/dev/null || true)
   printf %s "$version" >"$dir/current.$$"
   mv -f "$dir/current.$$" "$dir/current"
-  # Keep the new release, the one before it to fall back to, and any newer
-  # one, which another build may be testing; remove the rest.
+  # Keep the new release, the one before it to fall back to, any newer one,
+  # which another build may be testing, and the release protected agents run
+  # (`PROTECTED_CLAUDE_VERSION`); remove the rest.
   for folder in "$dir"/*/; do
     folder=$(basename "$folder")
-    [ "$folder" = "$version" ] || [ "$folder" = "$previous" ] ||
+    [ "$folder" = "$version" ] || [ "$folder" = "$previous" ] || [ "$folder" = "2.1.305" ] ||
       newer "$folder" "$version" || rm -rf "${dir:?}/$folder"
   done
+  ;;
+review-token)
+  # The token `claude setup-token` printed, read from stdin so it is never an
+  # argument, and never printed: only these fixed lines are.
+  [ -n "$review" ] || { echo "Claude security reviews need macOS" >&2; exit 2; }
+  token=""
+  IFS= read -r token || true
+  # Loosely, as its exact form is Claude's: one `sk-ant-` word.
+  LC_ALL=C
+  case "$token" in
+  sk-ant-?*) ;;
+  *) token="" ;;
+  esac
+  case "$token" in "" | *[!A-Za-z0-9_-]*)
+    echo "That is not a Claude token. Paste what claude setup-token printed." >&2
+    exit 1
+    ;;
+  esac
+  review_folder
+  mkdir -p "${review%/*}"
+  [ -d "$review" ] || mkdir -m 700 "$review"
+  review_folder
+  chmod 700 "$review"
+  umask 077
+  # A new file only, then a rename over the old one, so no link is followed.
+  part="$review/token.$$"
+  trap 'rm -f "$part"' EXIT
+  (set -C && printf '%s\n' "$token" >"$part")
+  mv -f -h "$part" "$review/token"
+  echo "Saved the sign-in for Claude security reviews."
+  ;;
+review)
+  # Nothing until a review folder exists; its folder alone until it holds a
+  # sign-in.
+  [ -n "$review" ] || { echo "Claude security reviews need macOS" >&2; exit 2; }
+  review_folder
+  [ -d "$review" ] || exit 0
+  printf '%s\n' "$review"
+  if [ -f "$review/token" ] && [ ! -h "$review/token" ]; then
+    cat "$review/token"
+  fi
   ;;
 *)
   echo "Unknown command: $command" >&2

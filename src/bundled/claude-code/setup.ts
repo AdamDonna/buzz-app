@@ -3,6 +3,7 @@
 // process; the copy lives apart from any `claude` the user installed, and
 // shares their `~/.claude` sign-in and settings.
 import type { AgentProviderSnapshot } from "../../features/agents/service";
+import type { ReviewPrompt } from "../../features/agent-protection/models";
 import type {
   HostProcess,
   HostRequest,
@@ -10,6 +11,11 @@ import type {
 } from "../../features/host/service";
 import { ClaudeProcess, ENV, type ClaudeModel, type Spawn } from "./claude";
 import script from "./claude.sh?raw";
+import {
+  PROTECTED_CLAUDE_ROOT,
+  PROTECTED_CLAUDE_VERSION,
+  protectedRuntime,
+} from "./security";
 
 export type ClaudeStatus =
   | Readonly<{ state: "missing" }>
@@ -39,8 +45,10 @@ const STEPS: Readonly<Record<string, string>> = {
   claude: "run",
   install: "install",
   use: "use",
+  review: "review",
+  "review-token": "review-token",
 };
-/** Starts `claude`, `install` and `use` as steps of `claude.sh`, which the
+/** Starts `claude` and its other steps as steps of `claude.sh`, which the
  * manifest grants as `bash -c`; other processes start as declared. */
 export const withScript =
   (spawn: Spawn): Spawn =>
@@ -122,8 +130,35 @@ async function collect(spawn: Spawn, id: string, args: readonly string[]) {
   return { code, stdout, stderr };
 }
 
+/** Waits for `work` until `signal` aborts; the work itself carries on. */
+const abortable = <T>(work: Promise<T>, signal: AbortSignal) =>
+  new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    void work
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+const NO_REVIEW_SIGN_IN =
+  "Claude security reviews need their own sign-in. Run claude setup-token in Terminal, then paste the token under Sign in for reviews in Settings → Agent setup → Harness defaults → Claude → Edit configuration. It needs a Claude Pro, Max, Team or Enterprise subscription.";
+const REJECTED_REVIEW_SIGN_IN =
+  "Claude rejected the security-review sign-in. It may have expired (it lasts a year) or been revoked, or the account has no Claude subscription. Run claude setup-token again and paste the new token under Sign in for reviews in Settings → Agent setup → Harness defaults → Claude → Edit configuration.";
+
+/** Security reviews' own Claude folder and the sign-in saved in it, or why
+ * there is none to review with. */
+async function reviewSignIn(spawn: Spawn) {
+  const { code, stdout, stderr } = await collect(spawn, "review", []);
+  if (code !== 0)
+    throw new Error(stderr.trim() || "Claude's review sign-in is unreadable");
+  const [home, token] = stdout.split("\n");
+  if (!home?.startsWith("/") || !token) throw new Error(NO_REVIEW_SIGN_IN);
+  return { home, token };
+}
 
 export async function checkClaude(spawn: Spawn): Promise<ClaudeStatus> {
   let version: string;
@@ -231,6 +266,8 @@ export class ClaudeSetup {
   private health: AgentProviderSnapshot = { readiness: "checking" };
   private process: HostProcess | undefined;
   private modelRequest: AbortController | undefined;
+  private modelWork: Promise<void> | undefined;
+  private cataloging: Promise<SetupState["models"]> | undefined;
   private modelsLoaded = false;
   /** Cancel was asked for before the running step's process was returned. */
   private cancelled = false;
@@ -311,21 +348,26 @@ export class ClaudeSetup {
     });
   }
 
-  /** Loads optional model copy only for surfaces that display the catalog. */
-  async loadModels(retry = false) {
+  /** Loads optional model copy only for surfaces that display the catalog.
+   * Callers during a load wait for it. */
+  loadModels(retry = false) {
+    if (this.modelRequest) return this.modelWork;
     if (
       !this.spawn ||
       this.state.status?.state !== "ready" ||
       this.state.checking ||
-      this.modelRequest ||
       (this.modelsLoaded && !retry)
     )
-      return;
+      return Promise.resolve();
     const request = new AbortController();
     this.modelRequest = request;
     this.set({ modelsChecking: true, modelsError: "" });
+    this.modelWork = this.discoverModels(this.spawn, request);
+    return this.modelWork;
+  }
+  private async discoverModels(spawn: Spawn, request: AbortController) {
     try {
-      const models = await queryModels(this.spawn, request.signal);
+      const models = await queryModels(spawn, request.signal);
       if (!models.length) throw new Error("Claude did not list its models");
       if (this.modelRequest === request) this.set({ models });
     } catch (error) {
@@ -340,6 +382,18 @@ export class ClaudeSetup {
         this.set({ modelsChecking: false });
       }
     }
+  }
+  /** The catalog for a surface that opens without the model picker: found
+   * once, and looked for again only after a discovery that listed nothing. */
+  catalog() {
+    this.cataloging ??= (async () => {
+      if (!this.state.status) await this.check();
+      await this.loadModels(!this.state.models.length);
+      return this.state.models;
+    })().finally(() => {
+      this.cataloging = undefined;
+    });
+    return this.cataloging;
   }
 
   /** Moves Buzz's copy to the latest release. Unless `needed`, a computer
@@ -502,9 +556,133 @@ export class ClaudeSetup {
     this.log(`Claude ${latest} is installed.\n`);
   }
 
+  async review(
+    model: { provider?: string; id: string },
+    prompt: ReviewPrompt,
+    signal: AbortSignal,
+  ) {
+    if (model.provider)
+      throw new Error(
+        "Claude uses its configured native provider; choose another runtime for an explicit provider ID",
+      );
+    if (!this.spawn) throw new Error("Claude review needs the desktop app");
+    const timeout = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
+    // Signed in apart from `~/.claude`, which contained agents can write; and
+    // without that sign-in, closed before any download or model.
+    const review = await abortable(reviewSignIn(this.spawn), timeout);
+    // A verdict comes only from the release the host verified.
+    await this.protectedInstalled(timeout);
+    const worker = await ClaudeProcess.start(this.spawn, {
+      cwd: "~",
+      systemPrompt: prompt.system,
+      discovery: true,
+      pinned: true,
+      review,
+      ...(prompt.outputSchema ? { outputSchema: prompt.outputSchema } : {}),
+      ...(model.id ? { model: model.id } : {}),
+    });
+    const cancel = () => void worker.kill();
+    timeout.addEventListener("abort", cancel, { once: true });
+    try {
+      timeout.throwIfAborted();
+      const result = await worker.send(prompt.input);
+      timeout.throwIfAborted();
+      if (!result.ok)
+        throw new Error(
+          /authentication_error|OAuth token .*(expired|revoked)/i.test(
+            result.error ?? "",
+          )
+            ? REJECTED_REVIEW_SIGN_IN
+            : (result.error ?? "The security model did not complete"),
+        );
+      return {
+        text: prompt.outputSchema ? worker.structuredResult : worker.result,
+        model: { id: worker.model ?? model.id },
+      };
+    } finally {
+      timeout.removeEventListener("abort", cancel);
+      await worker.kill();
+      await worker.exited;
+    }
+  }
+
+  private protectedDownload: Promise<void> | undefined;
+  async protectedInstalled(signal: AbortSignal) {
+    signal.throwIfAborted();
+    const spawn = this.spawn;
+    if (!spawn) throw new Error("Protected Claude needs the desktop app");
+    const pinned = await protectedRuntime(spawn);
+    // Contained, the host starts only its own copy, once that matches the
+    // manifest's pin; it never runs the download folder's file. Its hook
+    // guard stops a `--version` answer, so starting is the check.
+    const verified = async () => {
+      const process = await spawn(pinned, {
+        args: ["--version"],
+        protection: { readOnlyPaths: [PROTECTED_CLAUDE_ROOT], hiddenPaths: [] },
+      });
+      await process.kill();
+    };
+    try {
+      await abortable(verified(), signal);
+      return;
+    } catch {
+      signal.throwIfAborted();
+    }
+    this.protectedDownload ??= (async () => {
+      const platform =
+        PLATFORMS[(await collect(spawn, "platform", [])).stdout.trim()];
+      if (!platform)
+        throw new Error("Claude is not available for this computer");
+      const manifest = JSON.parse(
+        await this.fetch(`${PROTECTED_CLAUDE_VERSION}/manifest.json`),
+      ) as { platforms?: Record<string, { checksum?: string }> };
+      const checksum = manifest.platforms?.[platform]?.checksum;
+      if (!checksum || !/^[a-f0-9]{64}$/.test(checksum))
+        throw new Error("The protected Claude release has no valid checksum");
+      const process = await spawn("install", {
+        args: [PROTECTED_CLAUDE_VERSION, platform, checksum],
+      });
+      if ((await process.exited) !== 0)
+        throw new Error("The protected Claude runtime could not be installed");
+      await verified();
+    })().finally(() => {
+      this.protectedDownload = undefined;
+    });
+    await abortable(this.protectedDownload, signal);
+  }
+
   /** Sends a line to the running step, such as a sign-in code. */
   answer(text: string) {
     return this.process?.write(`${text}\n`);
+  }
+  /** Saves the token `claude setup-token` printed as security reviews' own
+   * sign-in. Like a sign-in code it goes on stdin, never in an argument, and
+   * the step prints only fixed lines, which this returns or throws. */
+  async saveReviewSignIn(token: string, signal: AbortSignal) {
+    if (!this.spawn) throw new Error("Claude reviews need the desktop app");
+    let output = "";
+    const process = await this.spawn("review-token", {
+      onStdout: (text) => {
+        output += text;
+      },
+      onStderr: (text) => {
+        output += text;
+      },
+    });
+    const stop = () => void process.kill();
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    try {
+      await process.end(`${token}\n`);
+      const code = await process.exited;
+      if (code !== 0)
+        throw new Error(
+          output.trim() || `Saving ended (${code ?? "stopped"}).`,
+        );
+      return output.trim();
+    } finally {
+      signal.removeEventListener("abort", stop);
+    }
   }
   cancel() {
     this.cancelled = true;

@@ -13,6 +13,23 @@ pub(crate) struct ProcessProtection {
 }
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl ProcessProtection {
+    /// Paths may be under the user's home, written `~/…`, as directories are.
+    pub(crate) fn at_home(mut self) -> Result<Self, String> {
+        for path in self
+            .read_only_paths
+            .iter_mut()
+            .chain(&mut self.hidden_paths)
+        {
+            if let Some(expanded) = path
+                .to_str()
+                .filter(|text| super::under_home(text).is_some())
+                .map(super::expand_home)
+            {
+                *path = expanded?;
+            }
+        }
+        Ok(self)
+    }
     pub(crate) fn profile(&self, controls: &[PathBuf]) -> Result<String, String> {
         let paths = self
             .read_only_paths
@@ -89,6 +106,21 @@ mod tests {
         assert!(protection.profile(&[]).is_err());
         protection.read_only_paths = vec![std::env::temp_dir(); 129];
         assert!(protection.profile(&[]).is_err());
+    }
+    #[test]
+    fn paths_may_be_under_home() {
+        let protection = ProcessProtection {
+            read_only_paths: vec![PathBuf::from("~/tools"), PathBuf::from("/opt/tools")],
+            hidden_paths: vec![PathBuf::from("~/private")],
+        }
+        .at_home()
+        .unwrap();
+        let home = super::super::expand_home("~").unwrap();
+        assert_eq!(
+            protection.read_only_paths,
+            [home.join("tools"), PathBuf::from("/opt/tools")]
+        );
+        assert_eq!(protection.hidden_paths, [home.join("private")]);
     }
     #[test]
     #[cfg(unix)]
