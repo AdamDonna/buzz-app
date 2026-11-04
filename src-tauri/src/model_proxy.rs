@@ -418,6 +418,7 @@ mod tests {
         let upstream = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
             http1::Builder::new()
+                .keep_alive(false)
                 .serve_connection(
                     TokioIo::new(socket),
                     service_fn(|req: Request<Incoming>| async move {
