@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { ConversationPresentation } from "../conversation/ConversationPresentation";
 import { MessageReactionControls, MessageReactions } from "./MessageReactions";
 import { profileTarget } from "../profiles/target";
@@ -573,6 +573,23 @@ it("asks again for names a disconnect cancels, without reporting a reconnect's r
 });
 
 it("reaches the full list by keyboard and returns to the emoji on Escape", async () => {
+  // jsdom lays nothing out, so the preview would treat its emoji as scrolled
+  // out of view and leave Tab to document order.
+  const rect = vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockReturnValue(
+      DOMRect.fromRect({ x: 100, y: 100, width: 20, height: 20 }),
+    );
+  const html = document.documentElement;
+  Object.defineProperties(html, {
+    clientWidth: { configurable: true, value: 1024 },
+    clientHeight: { configurable: true, value: 768 },
+  });
+  onTestFinished(() => {
+    rect.mockRestore();
+    Reflect.deleteProperty(html, "clientWidth");
+    Reflect.deleteProperty(html, "clientHeight");
+  });
   const user = userEvent.setup();
   const h = harness(
     Array.from({ length: 9 }, (_, index) => react(keypair(), 2 + index)),
