@@ -17,6 +17,8 @@ it.each([
   { sender: "everyone" },
   { activity: "dms", sender: "agents", show: "archived", attention: "unread" },
   { drafts: true },
+  // buzz:// plugin links carry every route value as a string.
+  { drafts: "true" },
 ])("accepts the filter params %j", (params) => {
   expect(isInboxRoute(params)).toBe(true);
 });
@@ -34,6 +36,8 @@ it.each([
   { show: "drafts" },
   { sender: "people" },
   { drafts: false },
+  { drafts: "false" },
+  { drafts: "" },
   // Drafts has no type, sender, status or attention filters to apply.
   { drafts: true, activity: "dms" },
   { drafts: true, show: "inbox" },

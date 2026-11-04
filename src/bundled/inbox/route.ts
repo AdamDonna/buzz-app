@@ -30,8 +30,10 @@ function inboxRoute(params: JsonValue | undefined): InboxRoute | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) return;
   const value = params as { readonly [key: string]: JsonValue };
   const keys = Object.keys(value);
+  // buzz:// plugin links carry every route value as a string.
   if (keys.includes("drafts"))
-    return keys.length === 1 && value.drafts === true
+    return keys.length === 1 &&
+      (value.drafts === true || value.drafts === "true")
       ? { drafts: true }
       : undefined;
   if (

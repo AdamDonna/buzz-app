@@ -2386,6 +2386,37 @@ it("a drafts route opens Drafts and leaves saved filters alone", async () => {
   expect(filterSummary()).not.toHaveTextContent("Drafts");
 });
 
+it("a drafts route retires a failed Inbox action, as the menu does", async () => {
+  const h = fixture();
+  const view = render(viewAt(h, visit({ activity: "mentions" })));
+  await screen.findByText("Please review this");
+  h.failSave();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Open Alice in #Design" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent("disk full");
+  view.rerender(
+    viewAt(h, {
+      ...visit({ drafts: true }),
+      entryId: "drafts",
+    } as PageNavigation),
+  );
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
+  view.rerender(
+    viewAt(h, {
+      ...visit({ activity: "mentions" }),
+      entryId: "back",
+    } as PageNavigation),
+  );
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
+  // Retry reloads the list; the read captured before Drafts doesn't replay.
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
+});
+
 it("a plain open leaves saved filters alone", async () => {
   const h = fixture();
   const saved = {

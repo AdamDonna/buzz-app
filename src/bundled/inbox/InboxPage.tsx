@@ -355,6 +355,8 @@ function InboxList({
     )
       return;
     appliedRoutes.add(navigation);
+    // Like the menu, entering or leaving Drafts retires the Inbox action.
+    if (drafts !== "drafts" in route) cancelRetry();
     setDrafts("drafts" in route);
     if ("drafts" in route) return;
     const next = route.show ?? "inbox";
