@@ -15,6 +15,7 @@ async function openLifecycle(page, app) {
 }
 
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   productionBroker: true,
   channelLifecycle: true,
   historyCounts: { alpha: 2, beta: 1 },

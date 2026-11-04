@@ -34,6 +34,7 @@ export const historySize = 640;
 // broker/subscriber and model only the upstream relay policy with ephemeral keys.
 export const test = base.extend({
   productionBroker: [false, { option: true }],
+  enabledPlugins: [[], { option: true }],
   builderlab: [{}, { option: true }],
   /** The production broker's live setup deadline. It runs in Node, so the
    * page clock cannot hold it; a test that keeps EOSE pending sets it longer. */
@@ -110,6 +111,7 @@ export const test = base.extend({
       browserName,
       browser,
       productionBroker,
+      enabledPlugins,
       builderlab,
       liveSetupTimeoutMs,
       actionProfile,
@@ -2447,7 +2449,21 @@ export const test = base.extend({
           observer.observe(document, { childList: true, subtree: true });
         });
       await page.addInitScript(
-        ({ viewer, profilePicture, iconCongestion }) => {
+        ({ viewer, profilePicture, iconCongestion, enabledPlugins }) => {
+          // Model fresh plugin choices before seeding an existing community.
+          // Feature journeys opt in once; reloads retain later user choices.
+          if (!localStorage.getItem("buzzodz.plugins.v1"))
+            localStorage.setItem(
+              "buzzodz.plugins.v1",
+              JSON.stringify({
+                version: 3,
+                enabled: {
+                  "buzz.reminders": false,
+                  "buzz.workflows": false,
+                  ...Object.fromEntries(enabledPlugins.map((id) => [id, true])),
+                },
+              }),
+            );
           const key = `buzz-client.v1:${viewer}`;
           if (!localStorage.getItem(key))
             localStorage.setItem(
@@ -2471,7 +2487,7 @@ export const test = base.extend({
               }),
             );
         },
-        { viewer, profilePicture, iconCongestion },
+        { viewer, profilePicture, iconCongestion, enabledPlugins },
       );
       await use({
         sign: (template) => finalizeEvent(template, userKey),

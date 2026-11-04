@@ -2,7 +2,7 @@ import { test, expect } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
 
 // Exercise generic panel motion independently of the bundled Bestie content.
-test.use({ companionFixture: true });
+test.use({ enabledPlugins: ["buzz.workflows"], companionFixture: true });
 
 // Capture real CSS transitions at the DOM-change boundary, before rendering can
 // finish them. transitionrun is queued: a busy renderer can deliver it after the

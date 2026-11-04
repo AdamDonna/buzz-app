@@ -10,6 +10,7 @@ import {
 } from "./timeline.mjs";
 
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   productionBroker: true,
   historyCounts: { alpha: 640, beta: 20 },
 });

@@ -6,6 +6,7 @@ import { holdReadingFocus } from "./reading.mjs";
 // Browser-only boundary: real shared-menu focus/dismissal, production broker,
 // IndexedDB reload and app-global preference startup. Policy matrices live in Vitest.
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   productionBroker: true,
   readState: true,
   savedSidebar: true,

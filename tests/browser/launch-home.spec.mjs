@@ -7,7 +7,7 @@ import {
 } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 
-test.use({ pluginFixtures: true });
+test.use({ enabledPlugins: ["buzz.workflows"], pluginFixtures: true });
 
 const home = { version: 1, kind: "home" };
 const settings = { version: 1, kind: "settings" };

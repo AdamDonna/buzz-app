@@ -17,6 +17,7 @@ const closeRequest = `{ const tabEvent = "buzz:close-active-tab";\n${readFileSyn
 )}\n}`;
 
 test.use({
+  enabledPlugins: ["buzz.workflows"],
   productionBroker: true,
   readState: true,
   threadUnread: true,

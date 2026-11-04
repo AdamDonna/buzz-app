@@ -527,7 +527,7 @@ confirmedPresence(
       await expect(profileContent).toHaveCount(0);
       await expect(pluginContent).toBeVisible();
       await expect(
-        page.getByRole("button", { name: "Disable Workflows", exact: true }),
+        page.getByRole("button", { name: "Enable Workflows", exact: true }),
       ).toBeVisible();
       const dialog = settingsDialog(page);
       await expect(dialog).toHaveCSS("background-color", "rgb(255, 255, 255)");
