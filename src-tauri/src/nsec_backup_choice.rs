@@ -101,7 +101,7 @@ fn lock(path: &Path, exclusive: bool) -> Result<Lease> {
     lease(file, exclusive).map_err(|_| BUSY.into())
 }
 
-/// Only `Some(true)` authorizes backup. Keep the returned value alive until completion.
+/// Only `Some(false)` stops backup. Keep the returned value alive until completion.
 pub(crate) fn read(path: &Path, config: &Config, pubkey: &str) -> Result<BackupChoice> {
     let lease = lock(path, false)?;
     let record: Option<Record> = match fs::File::open(path) {
@@ -144,7 +144,22 @@ pub(crate) async fn set(
     if identity.viewer().await? != pubkey {
         return Err("This device’s identity changed. Read its backup choice again.".into());
     }
-    let _lease = lock(path, true)?;
+    let _lease = match lock(path, true) {
+        Ok(lease) => lease,
+        // A running pass backs up any key that is not opted out, so turning
+        // automatic backup on while it holds the shared lease changes nothing.
+        Err(error) if automatic && error == BUSY => {
+            let current = read(path, config, pubkey)?;
+            if current.automatic == Some(false) {
+                return Err(error);
+            }
+            return Ok(BackupChoice {
+                _lease: None,
+                ..current
+            });
+        }
+        Err(error) => return Err(error),
+    };
     let record = Record {
         version: 1,
         pubkey: pubkey.into(),

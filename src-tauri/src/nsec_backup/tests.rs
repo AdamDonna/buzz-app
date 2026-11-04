@@ -869,6 +869,26 @@ async fn saving_consent_after_an_opt_out_wakes_the_existing_uploader_and_disable
     assert_eq!(service.state.lock().unwrap().uploads.len(), 1);
 }
 
+#[tokio::test]
+async fn enabling_backup_during_a_pass_for_a_key_with_no_saved_choice_succeeds() {
+    let service = Service::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let host = service.host(directory.path());
+    service.pause_upload.store(true, Ordering::SeqCst);
+    let started = service.upload_started.notified();
+    host.state.lock().unwrap().sessions.push(service.session());
+    host.trigger(IdentityHost::fixture());
+    started.await;
+    let enabled = host
+        .set_choice(IdentityHost::fixture(), &pubkey([1; 32]), true)
+        .await
+        .map(|choice| choice.automatic);
+    service.release_upload.add_permits(1);
+    finish_background(&host).await;
+    assert_eq!(enabled, Ok(None));
+    assert_eq!(service.state.lock().unwrap().uploads.len(), 1);
+}
+
 #[test]
 fn source_generations_and_teardown_fence_retired_work_without_another_sources_logout() {
     // No filesystem or worker is configured; exercise purpose-specific credential ownership.
