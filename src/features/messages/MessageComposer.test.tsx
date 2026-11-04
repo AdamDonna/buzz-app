@@ -1751,6 +1751,8 @@ async function mountUploadComposer(
     members?: readonly string[];
     defaultMention?: MessageComposerProps["defaultMention"];
     requireMention?: boolean;
+    /** The channel is a generated huddle room, as a legacy room's metadata shows. */
+    huddle?: boolean;
   } = {},
 ) {
   vi.stubGlobal(
@@ -1809,7 +1811,17 @@ async function mountUploadComposer(
                   ),
                 ]
               : filter.kinds?.includes(39000)
-                ? [metadata(relay, "channel", "General", 1700000000)]
+                ? [
+                    options.huddle
+                      ? metadata(
+                          relay,
+                          "channel",
+                          "huddle-channel",
+                          1700000000,
+                          [["private"], ["t", "stream"], ["ttl", "3600"]],
+                        )
+                      : metadata(relay, "channel", "General", 1700000000),
+                  ]
                 : [],
         );
       },
@@ -1948,10 +1960,11 @@ it("attaches the picked files that fit and names an empty one", async () => {
     attachmentFile("cloud-placeholder.png", ""),
     ...names.slice(2).map((name) => attachmentFile(name)),
   ]);
-  expect(
-    await screen.findByText("Could not attach file", { exact: true }),
-  ).toBeVisible();
-  expect(screen.getByText("cloud-placeholder.png is empty.")).toBeVisible();
+  // The title counts what was left out, so it reads true beside the rest.
+  const notice = await screen.findByRole("dialog", {
+    name: "Could not attach 1 of 5 files",
+  });
+  expect(notice).toHaveAccessibleDescription("cloud-placeholder.png is empty.");
   for (const name of names)
     expect(
       screen.getByRole("button", { name: `Remove ${name}` }),
@@ -1960,6 +1973,19 @@ it("attaches the picked files that fit and names an empty one", async () => {
     screen.queryByRole("button", { name: "Remove cloud-placeholder.png" }),
   ).toBeNull();
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+});
+
+it("counts every picked file when none of several can be attached", async () => {
+  const h = await mountUploadComposer();
+  pickAttachments(h.container, [
+    attachmentFile("a.png", ""),
+    attachmentFile("b.png", ""),
+  ]);
+  const notice = await screen.findByRole("dialog", {
+    name: "Could not attach 2 files",
+  });
+  expect(notice).toHaveAccessibleDescription("a.png, b.png are empty.");
+  expect(h.uploadCalls).toHaveLength(0);
 });
 
 it("does not focus after a picker upload fails or is later retried", async () => {
@@ -3055,6 +3081,74 @@ it("names a failed background reply's thread and opens that thread", async () =>
   expect(onOpenLink).toHaveBeenCalledWith(
     `buzz://message?channel=channel&id=${root}&thread=${root}`,
   );
+});
+
+it.each([
+  ["channel", undefined],
+  ["thread", "b".repeat(64)],
+])(
+  "offers no Open for a failed send to the %s its composer shows",
+  async (_case, threadRootId) => {
+    const h = await mountUploadComposer(threadRootId ? { threadRootId } : {});
+    attachByPaste(h.input(), attachmentFile());
+    await waitFor(() => expect(h.send()).toBeEnabled());
+    fireEvent.click(h.send());
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+    h.rerender(
+      <MessageComposer
+        session={h.owner.session}
+        scope={h.scope}
+        channelId="channel"
+        channelName="General"
+        {...(threadRootId ? { threadRootId } : {})}
+        onOpenLink={() => true}
+      />,
+    );
+    await act(async () =>
+      h.uploadCalls[0]?.result.reject(new Error("relay down")),
+    );
+    const notice = await screen.findByRole("dialog", {
+      name: `Upload to ${threadRootId ? "thread in " : ""}#General failed`,
+    });
+    // The restored chip is already in view; dismissing is all that is left.
+    expect(within(h.form()).getByText("notes.txt")).toBeVisible();
+    expect(within(notice).queryByRole("button", { name: /^Open/ })).toBeNull();
+    expect(
+      within(notice).getByRole("button", { name: "Dismiss notification" }),
+    ).toBeVisible();
+  },
+);
+
+it("offers no Open for a failed send to a huddle, which opens only from its entry point", async () => {
+  const h = await mountUploadComposer({ huddle: true });
+  await h.otherMembership(true);
+  attachByPaste(h.input(), attachmentFile());
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+  const onOpenLink = vi.fn(() => true);
+  h.rerender(
+    <MessageComposer
+      session={h.owner.session}
+      scope={h.scope}
+      channelId="other"
+      channelName="Random"
+      onOpenLink={onOpenLink}
+    />,
+  );
+  // A private room's name has no hash.
+  expect(screen.getByText("Uploading to General")).toHaveAttribute(
+    "role",
+    "status",
+  );
+  await act(async () =>
+    h.uploadCalls[0]?.result.reject(new Error("relay down")),
+  );
+  const notice = await screen.findByRole("dialog", {
+    name: "Upload to General failed",
+  });
+  expect(within(notice).queryByRole("button", { name: /^Open/ })).toBeNull();
+  expect(onOpenLink).not.toHaveBeenCalled();
 });
 
 it("keeps a background reply on the parent captured at Send", async () => {

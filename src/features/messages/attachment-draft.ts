@@ -23,7 +23,8 @@ export type AttachmentDraft = {
   snapshot(): readonly DraftAttachment[];
   subscribe(listener: () => void): () => void;
   /** Admits the files that fit, in order. A lone file that does not fit throws
-   * why; otherwise one sentence per reason names the files left out. */
+   * why; otherwise one sentence per reason names the first files left out
+   * and counts the rest. */
   add(files: readonly File[], recording?: VoiceRecording): readonly string[];
   addUploaded(attachment: UploadedAttachment): void;
   adopt(files: readonly DraftAttachment[]): boolean;
@@ -97,6 +98,8 @@ export function subscribeAttachmentDraftCounts(
 
 export const MAX_ATTACHMENT_FILES = 10;
 const MAX_RETAINED_BYTES = 2 * UPLOAD_MAX_BYTES;
+/** A refusal names this many files, then counts the rest. */
+const NAMED_REFUSALS = 3;
 
 /** Tab-local files survive navigation, not reload. Delivery remains outbox-owned.
  * A new chat's draft uploads before its channel exists. */
@@ -303,7 +306,7 @@ export function attachmentDraft(
         .flatMap((owner) => owner.snapshot())
         .reduce((sum, item) => sum + item.file.size, 0);
       const admitted: File[] = [];
-      // Reason → the files it left out. An empty file's reason names it.
+      // Reason → the files it left out. Empty files share the "" reason.
       const refused = new Map<string, string[]>();
       for (const file of files) {
         const reason = !file.size
@@ -323,16 +326,20 @@ export function attachmentDraft(
           admitted.push(file);
           retained += file.size;
         } else if (files.length === 1) throw reason;
-        else if (!file.size) refused.set(reason.message, []);
-        else
-          refused.set(reason.message, [
-            ...(refused.get(reason.message) ?? []),
-            file.name,
-          ]);
+        else {
+          const key = file.size ? reason.message : "";
+          refused.set(key, [...(refused.get(key) ?? []), file.name]);
+        }
       }
-      const left = Array.from(refused, ([reason, names]) =>
-        names.length ? `${names.join(", ")}: ${reason}` : reason,
-      );
+      const left = Array.from(refused, ([reason, names]) => {
+        const listed =
+          names.length > NAMED_REFUSALS
+            ? `${names.slice(0, NAMED_REFUSALS).join(", ")} and ${names.length - NAMED_REFUSALS} more`
+            : names.join(", ");
+        return reason
+          ? `${listed}: ${reason}`
+          : `${listed} ${names.length === 1 ? "is" : "are"} empty.`;
+      });
       if (!admitted.length) return left;
       items = [
         ...items,

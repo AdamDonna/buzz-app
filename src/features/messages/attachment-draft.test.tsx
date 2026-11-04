@@ -369,6 +369,25 @@ it("admits a batch's files that fit in pick order and names the rest by reason",
   expect(draft.result.current.items).toHaveLength(10);
 });
 
+it("names three files per reason, counts the rest and gives empty files one sentence", () => {
+  const h = fixture();
+  const draft = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
+  let left: readonly string[] = [];
+  act(() => {
+    left = draft.result.current.store.add([
+      file("a.png", 0),
+      ...Array.from({ length: 15 }, (_, i) => file(`${i + 1}.txt`)),
+      file("b.png", 0),
+      file("c.png", 0),
+    ]);
+  });
+  expect(draft.result.current.items).toHaveLength(10);
+  expect(left).toEqual([
+    "a.png, b.png, c.png are empty.",
+    "11.txt, 12.txt, 13.txt and 2 more: Attach at most 10 files per message.",
+  ]);
+});
+
 it("charges a batch's admitted files, not its refused ones, to the shared retention budget", () => {
   const h = fixture();
   const a = renderHook(() => useAttachmentDraft(h.session, "a", "a"));

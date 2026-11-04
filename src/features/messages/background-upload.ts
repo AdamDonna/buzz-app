@@ -14,8 +14,9 @@ const recoveryNotice = (recovery: boolean | "conflict", to: string) =>
     ? `Failed send to ${to} was kept because its draft changed. Clear that draft, then retry recovery before leaving this session.`
     : `Could not restore the failed send to ${to}. Retry recovery before leaving this session.`;
 
-/** Where a send is going: its conversation's name and a link that opens it. */
-export type Destination = Readonly<{ name: string; link: string }>;
+/** Where a send is going: its conversation's name and, unless only its own
+ * entry point opens it (a huddle), a link that opens it. */
+export type Destination = Readonly<{ name: string; link?: string }>;
 type Notice = Readonly<{
   id: string;
   title: string;
@@ -31,6 +32,8 @@ export type BackgroundUploads = Readonly<{
   /** The send Cancel stops, and how many other sends are running. */
   destination: Destination | undefined;
   others: number;
+  /** False while every listed send is cancelled but not yet settled. */
+  cancellable: boolean;
   notices: readonly Notice[];
   host: object | undefined;
 }>;
@@ -67,6 +70,7 @@ function queueFor(session: ComposerSession) {
         progress: null,
         destination: undefined,
         others: 0,
+        cancellable: false,
         notices: [],
         host: undefined,
       },
@@ -100,7 +104,8 @@ function update(queue: Queue) {
     0,
   );
   // A cancelled send stays listed until it settles; name the one Cancel stops.
-  const named = newest(queue) ?? queue.jobs.at(-1);
+  const running = live(queue);
+  const named = running.at(-1) ?? queue.jobs.at(-1);
   queue.snapshot = Object.freeze({
     uploading: queue.jobs.length > 0,
     phase: files.some((item) => item.status === "uploading")
@@ -110,7 +115,8 @@ function update(queue: Queue) {
         : "Preparing upload",
     progress: known && total ? sent / total : null,
     destination: named?.destination,
-    others: queue.jobs.filter((job) => job !== named).length,
+    others: running.filter((job) => job !== named).length,
+    cancellable: running.length > 0,
     notices: queue.notices,
     host: queue.hosts[0],
   });
@@ -223,13 +229,16 @@ export function sendInBackground(
   })();
 }
 
-function newest(queue: Queue) {
-  return queue.jobs.filter((job) => !job.controller.signal.aborted).at(-1);
+function live(queue: Queue) {
+  return queue.jobs.filter((job) => !job.controller.signal.aborted);
 }
 
 /** Desktop's Cancel stops the newest send and restores it like a failure. */
 export function cancelBackgroundUpload(session: ComposerSession) {
-  newest(queueFor(session))?.controller.abort();
+  const queue = queueFor(session);
+  live(queue).at(-1)?.controller.abort();
+  // A publish in flight ignores the abort; the pill still leaves it uncounted.
+  update(queue);
 }
 
 /** Like Desktop, a conversation cannot send again until its upload settles. */

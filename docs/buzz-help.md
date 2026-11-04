@@ -153,14 +153,15 @@ that agent in Buzz; they do not notify the external app through this connection.
   uploads are available. Files and media are shared with the conversation's
   members. If some of the files you pick, paste or drop can't be attached, such
   as an empty file or any past 10 per message, the rest still attach and a
-  notice names the files left out and why.
+  notice says how many were left out and why, naming the first few.
   If an upload fails, its attachment shows the reason, **Retry**, and
   **Remove**. Follow the error's guidance before retrying, or remove the attachment
   to unblock Send; your typed message stays in the composer. In the main window,
   files still uploading when you press **Send** finish in the background: the
   upload bar names the conversation they are going to, and **Cancel** stops the
   send it names. If a background send fails, its notice names that conversation
-  and can open it, where your message and files are back in the composer. Do not
+  and, when you are elsewhere, can open it (except a huddle). Your message and
+  files are back in that conversation's composer. Do not
   promise support for every file type or size.
 - **Emoji suggestions** appear when you type `:` and an emoji name. If a name
   is shortened with an ellipsis, hover over it or use the arrow keys to select

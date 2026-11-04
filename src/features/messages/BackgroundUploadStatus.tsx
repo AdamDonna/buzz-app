@@ -13,10 +13,13 @@ import styles from "./Messages.module.css";
 export function BackgroundUploadStatus({
   session,
   focusTarget,
+  here,
   onOpenLink,
 }: {
   session: ComposerSession;
   focusTarget: React.RefObject<HTMLElement | null>;
+  /** The hosting composer's own conversation, which a notice need not open. */
+  here: string;
   /** The hosting composer's link handler opens a notice's conversation. */
   onOpenLink?: ((target: string) => boolean) | undefined;
 }) {
@@ -39,7 +42,7 @@ export function BackgroundUploadStatus({
     <>
       {uploads.destination && (
         <div className={styles.backgroundUpload}>
-          <span id={phase} role="status">
+          <span id={phase} role="status" className="min-w-0 truncate">
             {`${uploads.phase} to ${uploads.destination.name}`}
             {uploads.others > 0 && ` and ${uploads.others} more`}
           </span>
@@ -86,6 +89,9 @@ export function BackgroundUploadStatus({
             size="sm"
             variant="ghost"
             aria-label={`Cancel upload to ${uploads.destination.name}`}
+            // Pressing Cancel can disable it; focus stays for the handoff above.
+            disabled={!uploads.cancellable}
+            focusableWhenDisabled
             onClick={() => cancelBackgroundUpload(session)}
           >
             Cancel
@@ -94,6 +100,7 @@ export function BackgroundUploadStatus({
       )}
       {uploads.notices.map((notice) => {
         const dismiss = () => dismissBackgroundUploadNotice(session, notice.id);
+        const { link } = notice.destination;
         return (
           <ToastNotice
             key={notice.id}
@@ -106,13 +113,12 @@ export function BackgroundUploadStatus({
                 Retry failed send recovery
               </Button>
             )}
-            {onOpenLink && (
+            {onOpenLink && link && link !== here && (
               <Button
                 type="button"
                 onClick={() => {
                   // Opening answers a failure; recovery stays until it succeeds.
-                  if (onOpenLink(notice.destination.link) && !notice.retry)
-                    dismiss();
+                  if (onOpenLink(link) && !notice.retry) dismiss();
                 }}
               >
                 {`Open ${notice.destination.name}`}

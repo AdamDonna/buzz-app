@@ -733,6 +733,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
 .backgroundUploadBar {
   position: relative;
   overflow: hidden;
+  flex-shrink: 0;
   width: 64px;
   height: 4px;
   border-radius: var(--radius-pill);

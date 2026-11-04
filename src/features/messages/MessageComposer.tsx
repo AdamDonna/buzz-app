@@ -447,6 +447,13 @@ function untouchedDraft(draft: MentionDraft) {
   );
 }
 
+/** The link that opens a conversation, or a thread in it. */
+function conversationLink(channelId: string, threadRootId?: string) {
+  return threadRootId
+    ? `buzz://message?${new URLSearchParams({ channel: channelId, id: threadRootId, thread: threadRootId })}`
+    : `buzz://channel/${encodeURIComponent(channelId)}`;
+}
+
 function sameAttachmentSelection(
   left: readonly { id: string }[],
   right: readonly { id: string }[],
@@ -922,7 +929,11 @@ function Composer({
   }
   const [error, setError] = useState<string>();
   const [pasteTooLong, setPasteTooLong] = useState(false);
-  const [attachmentError, setAttachmentError] = useState<string>();
+  const [attachmentError, setAttachmentError] =
+    useState<Readonly<{ title: string; description: string }>>();
+  /** Nothing was attached, for this one reason. */
+  const refuseAttachment = (description: string) =>
+    setAttachmentError({ title: "Could not attach file", description });
   const focusRestoredDraft = useRef(false);
   const beforeEdit = useRef<
     { value: MentionDraft; restore(): void } | undefined
@@ -1104,7 +1115,7 @@ function Composer({
   const voice = useVoiceCapture(
     attachments.store,
     !active || editingDisabled || !!editing.target || !canAttach,
-    setAttachmentError,
+    refuseAttachment,
   );
   useEffect(() => {
     if (disabled) attachments.store.cancel();
@@ -1156,11 +1167,11 @@ function Composer({
     )
       return;
     if (editing.target) {
-      setAttachmentError("Finish editing before attaching new files.");
+      refuseAttachment("Finish editing before attaching new files.");
       return;
     }
     if (!canAttach) {
-      setAttachmentError(
+      refuseAttachment(
         submission
           ? "Create this conversation before attaching files."
           : "Uploads are unavailable on this connection.",
@@ -1169,13 +1180,25 @@ function Composer({
     }
     try {
       const before = attachments.store.snapshot().length;
-      setAttachmentError(attachments.store.add(files).join(" ") || undefined);
-      return attachments.store
+      const left = attachments.store.add(files);
+      const added = attachments.store
         .snapshot()
         .slice(before)
         .map((item) => item.id);
-    } catch (reason) {
+      const refused = files.length - added.length;
       setAttachmentError(
+        left.length
+          ? {
+              title: added.length
+                ? `Could not attach ${refused} of ${files.length} files`
+                : `Could not attach ${refused} files`,
+              description: left.join(" "),
+            }
+          : undefined,
+      );
+      return added;
+    } catch (reason) {
+      refuseAttachment(
         reason instanceof Error ? reason.message : "Could not attach files.",
       );
     }
@@ -2623,23 +2646,19 @@ function Composer({
         // The revision acceptance saves; remembered agents are not a draft.
         const followup = JSON.stringify(mentionDraft(""));
         // Name it as the sidebar does; a thread link opens the thread.
-        const name = channelText({
-          ...channels().find((channel) => channel.id === channelId),
-          name: channelName,
-        });
+        const listed = channels().find((channel) => channel.id === channelId);
+        const name = channelText({ ...listed, name: channelName });
         sendInBackground(
           session,
           recoveryKey,
           channelId,
-          threadRootId
-            ? {
-                name: `thread in ${name}`,
-                link: `buzz://message?${new URLSearchParams({ channel: channelId, id: threadRootId, thread: threadRootId })}`,
-              }
-            : {
-                name,
-                link: `buzz://channel/${encodeURIComponent(channelId)}`,
-              },
+          {
+            name: threadRootId ? `thread in ${name}` : name,
+            // A huddle opens from its entry point, never by its room's link.
+            ...(listed?.huddle
+              ? {}
+              : { link: conversationLink(channelId, threadRootId) }),
+          },
           capturedAttachments,
           async (uploaded) => {
             const sent = await publish(uploaded);
@@ -2979,13 +2998,14 @@ function Composer({
         <BackgroundUploadStatus
           session={session}
           focusTarget={input}
+          here={conversationLink(channelId, threadRootId)}
           onOpenLink={onOpenLink}
         />
         {dragging && <FileDropOverlay composer={form} />}
         {attachmentError && (
           <ToastNotice
-            title="Could not attach file"
-            description={attachmentError}
+            title={attachmentError.title}
+            description={attachmentError.description}
             onDismiss={() => setAttachmentError(undefined)}
           />
         )}
