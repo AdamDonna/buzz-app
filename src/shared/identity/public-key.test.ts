@@ -105,6 +105,7 @@ describe("typed public keys", () => {
     ["a partly typed npub", npub.slice(0, 12)],
     ["the nsec with the same key bytes", nsecEncode(hexToBytes(first))],
     ["a note", noteEncode(first)],
+    ["an npub of 20 bytes", "npub1qurswpc8qurswpc8qurswpc8qurswpc86nz8sw"],
     ["63 hex characters", first.slice(1)],
     ["65 hex characters", `${first}a`],
     ["a name", "Sam Rivera"],

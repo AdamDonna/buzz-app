@@ -69,7 +69,10 @@ export function typedPublicKey(text: string): string | undefined {
   if (!npub.startsWith("npub1")) return undefined;
   try {
     const decoded = decode(npub);
-    return decoded.type === "npub" ? decoded.data : undefined;
+    // nip19 does not check an npub's payload length.
+    return decoded.type === "npub" && /^[0-9a-f]{64}$/.test(decoded.data)
+      ? decoded.data
+      : undefined;
   } catch {
     return undefined;
   }

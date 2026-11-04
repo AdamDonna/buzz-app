@@ -1021,6 +1021,16 @@ it("keeps public-key lookup results whose names do not match the key text", asyn
   expect(t.publish).not.toHaveBeenCalled();
 });
 
+it("finds a local agent the relay has no profile for by a nostr: npub", async () => {
+  const t = await setup("stream", false, true);
+  fireEvent.change(screen.getByRole("searchbox"), {
+    target: { value: `nostr:${npubEncode(t.agent.pubkey)}` },
+  });
+  expect(
+    await screen.findByRole("button", { name: /^Add Fixture agent/ }),
+  ).toBeEnabled();
+});
+
 it("ranks a matching username with the shared people matcher", async () => {
   const t = await setup();
   const handle = profile(keypair(), { display_name: "Alpha", name: "robin" });
@@ -1426,9 +1436,12 @@ it("failed directory searches recover through the shared refresh, not a false em
   expect(within(section).queryByText("Search offline")).not.toBeInTheDocument();
 });
 
-it("finds an existing member by their canonical public key", async () => {
+it.each([
+  ["npub", (pubkey: string) => npubEncode(pubkey)],
+  ["nostr: npub", (pubkey: string) => `nostr:${npubEncode(pubkey)}`],
+])("finds an existing member by their %s", async (_case, typed) => {
   const t = await setup("dm");
-  await t.user.type(screen.getByRole("searchbox"), npubEncode(t.viewer.pubkey));
+  await t.user.type(screen.getByRole("searchbox"), typed(t.viewer.pubkey));
   expect(screen.getByText("Carl (you)")).toBeVisible();
 });
 

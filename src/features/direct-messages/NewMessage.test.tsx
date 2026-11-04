@@ -877,14 +877,14 @@ it("matches an exact public key without exposing short key substrings", async ()
 });
 
 describe.each([
-  ["complete", true],
-  ["incomplete", false],
-])("in a %s directory", (_directory, complete) => {
+  ["a complete", true],
+  ["an incomplete", false],
+])("in %s directory", (_directory, complete) => {
   const avery = { pubkey: "a".repeat(64), name: "Avery" };
   it.each([
-    ["hex", avery.pubkey],
-    ["an npub", npubEncode(avery.pubkey)],
-    ["a nostr: npub", `nostr:${npubEncode(avery.pubkey)}`],
+    ["hex key", avery.pubkey],
+    ["npub", npubEncode(avery.pubkey)],
+    ["nostr: npub", `nostr:${npubEncode(avery.pubkey)}`],
   ])("finds the person named by a pasted %s", async (_case, key) => {
     const t = setup();
     // A complete directory matches typed text locally; an incomplete one

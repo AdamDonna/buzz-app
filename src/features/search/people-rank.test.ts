@@ -40,10 +40,10 @@ it("matches display names and usernames with the shared name rule", () => {
 
 const sam = "a".repeat(64);
 it.each([
-  ["hex", sam],
-  ["uppercase hex", sam.toUpperCase()],
-  ["an npub", npubEncode(sam)],
-  ["a nostr: npub", `nostr:${npubEncode(sam)}`],
+  ["hex key", sam],
+  ["uppercase hex key", sam.toUpperCase()],
+  ["npub", npubEncode(sam)],
+  ["nostr: npub", `nostr:${npubEncode(sam)}`],
 ])(
   "keeps only the person a typed %s names, as an exact match",
   (_case, key) => {

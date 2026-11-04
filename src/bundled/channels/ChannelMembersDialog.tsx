@@ -56,6 +56,7 @@ import { soloChatLink } from "../../features/solo/share";
 import {
   formatPublicKey,
   publicKeyLabels,
+  typedPublicKey,
 } from "../../shared/identity/public-key";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
@@ -895,9 +896,12 @@ export function ChannelMembersDialog({
         formatPublicKey(key) ??
         "Unknown member",
     );
+  // A whole key or npub, with or without `nostr:`, finds its owner.
+  const typedKey = typedPublicKey(text);
   // Filters every roster identity using its currently available label.
   const matches = (key: string, name: string) =>
     !text ||
+    key === typedKey ||
     [
       searchProfiles.get(key)?.name,
       searchProfiles.get(key)?.username,
@@ -908,16 +912,9 @@ export function ChannelMembersDialog({
     `${name} ${key} ${npubEncode(key)}`
       .toLowerCase()
       .includes(query.trim().toLowerCase());
-  // People to add use the shared name rule, like the relay's people page; a
-  // whole key or npub finds its owner.
-  const addable = (key: string, ...names: (string | undefined)[]) => {
-    const typed = query.trim().toLowerCase();
-    return (
-      names.some((name) => name && matchPerson(name, query)) ||
-      typed === key ||
-      typed === npubEncode(key)
-    );
-  };
+  // People to add use the shared name rule, like the relay's people page.
+  const addable = (key: string, ...names: (string | undefined)[]) =>
+    key === typedKey || names.some((name) => name && matchPerson(name, query));
   // Label once per member: a fallback label bech32-encodes the key, too costly
   // to repeat for every member of a large roster on each render.
   const memberLabels = new Map([...members].map((key) => [key, label(key)]));
@@ -1184,8 +1181,8 @@ export function ChannelMembersDialog({
       usage,
       picked,
     ).map(({ person }) => person);
-    // Name ranking must not discard exact-key lookups or other relay matches
-    // (for example a profile's NIP-05). Keep those after the shared name matches.
+    // Name ranking lists an exact-key match first but drops other relay
+    // matches (for example a profile's NIP-05). Keep those after its rows.
     const rankedKeys = new Set(ranked.map((person) => person.pubkey));
     const ordered = [
       ...ranked,

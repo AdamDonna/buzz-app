@@ -2332,9 +2332,9 @@ it("searches the people directory only from two characters", async () => {
 });
 
 it.each([
-  ["hex", (pubkey: string) => pubkey],
-  ["an npub", (pubkey: string) => npubEncode(pubkey)],
-  ["a nostr: npub", (pubkey: string) => `nostr:${npubEncode(pubkey)}`],
+  ["hex key", (pubkey: string) => pubkey],
+  ["npub", (pubkey: string) => npubEncode(pubkey)],
+  ["nostr: npub", (pubkey: string) => `nostr:${npubEncode(pubkey)}`],
 ])("lists the person a pasted %s names under People", async (_case, typed) => {
   const relay = keypair(),
     viewer = keypair(),
