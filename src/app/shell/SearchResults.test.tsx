@@ -2331,6 +2331,40 @@ it("searches the people directory only from two characters", async () => {
   }
 });
 
+it.each([
+  ["hex", (pubkey: string) => pubkey],
+  ["an npub", (pubkey: string) => npubEncode(pubkey)],
+  ["a nostr: npub", (pubkey: string) => `nostr:${npubEncode(pubkey)}`],
+])("lists the person a pasted %s names under People", async (_case, typed) => {
+  const relay = keypair(),
+    viewer = keypair(),
+    sam = keypair();
+  const owner = createRelaySession(
+    scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+  );
+  // The directory finds Sam by key; no name of his matches the text.
+  const t = peopleSession(owner.session, [
+    { pubkey: sam.pubkey, name: "Sam Rivera" },
+  ]);
+  try {
+    render(
+      <SearchResults
+        session={t.session}
+        query={typed(sam.pubkey)}
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={() => {}}
+      />,
+    );
+    const group = await screen.findByRole("group", { name: "People" });
+    expect(within(group).getByRole("option")).toHaveTextContent("Sam Rivera");
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
 it("still looks up a one-character channel named by in:", async () => {
   const relay = keypair(),
     viewer = keypair();

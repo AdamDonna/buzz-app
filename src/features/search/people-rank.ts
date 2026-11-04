@@ -1,5 +1,6 @@
 import { matchPerson } from "./person-match";
 import { searchOrder, type SearchUsage } from "./usage";
+import { typedPublicKey } from "../../shared/identity/public-key";
 
 export type PersonCandidate = {
   pubkey: string;
@@ -61,9 +62,11 @@ export function rankPeople<T extends PersonCandidate>(
   usage: SearchUsage,
   picked: string | undefined,
 ) {
+  // A pasted public key names its person exactly, though no name matches it.
+  const key = typedPublicKey(needle);
   return people
     .flatMap((person) => {
-      const rank = personMatch(person, needle);
+      const rank = person.pubkey === key ? 0 : personMatch(person, needle);
       if (rank === undefined) return [];
       const row = {
         key: personKey(person.pubkey),

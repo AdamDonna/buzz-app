@@ -1,4 +1,4 @@
-import { npubEncode } from "nostr-tools/nip19";
+import { decode, npubEncode } from "nostr-tools/nip19";
 
 // Rosters relabel the same keys on every render; bech32 is costly at that scale.
 const encoded = new Map<string, string>();
@@ -57,4 +57,20 @@ export function publicKeyLabels(
 export function abbreviatedPublicKey(pubkey: string): string | undefined {
   const npub = canonicalPublicKey(pubkey);
   return npub ? `${npub.slice(0, 10)}...${npub.slice(-10)}` : undefined;
+}
+
+/** The hex public key that typed text names exactly: 64 hex characters in
+ * either case, or an npub with or without `nostr:`. Undefined for anything
+ * else, including a key still being typed. */
+export function typedPublicKey(text: string): string | undefined {
+  const value = text.trim();
+  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
+  const npub = value.replace(/^nostr:/i, "");
+  if (!npub.startsWith("npub1")) return undefined;
+  try {
+    const decoded = decode(npub);
+    return decoded.type === "npub" ? decoded.data : undefined;
+  } catch {
+    return undefined;
+  }
 }

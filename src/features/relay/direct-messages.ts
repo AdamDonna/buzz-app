@@ -6,6 +6,7 @@ import type { RelayReader } from "./reader";
 import type { Outbox } from "./outbox";
 import type { ProfileSearch } from "./profile-search";
 import { newer, type RelayEvent } from "./events";
+import { typedPublicKey } from "../../shared/identity/public-key";
 import {
   verifiedProfile,
   verifiedProfileFilter,
@@ -50,7 +51,7 @@ export function createDirectMessages(
       // small; the second browse page overlaps the preview and is deduplicated.
       const value = query.trim();
       const browsing = !value;
-      const exactKey = /^[0-9a-f]{64}$/.test(value);
+      const exactKey = typedPublicKey(value);
       const limit = browsing && page === 1 ? 15 : 30;
       const relayPage = browsing && page > 1 ? page - 1 : page;
       const priority = page === 1 ? "foreground" : "background";
@@ -67,7 +68,7 @@ export function createDirectMessages(
                   kinds: [0],
                   limit,
                   page: relayPage,
-                  ...(exactKey ? { authors: [value] } : {}),
+                  ...(exactKey ? { authors: [exactKey] } : {}),
                 },
               ],
               { signal: active, priority },

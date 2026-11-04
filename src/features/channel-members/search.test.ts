@@ -41,35 +41,46 @@ it("uses the server prefix-search page, distinguishes namesakes, ranks exact nam
     owner.dispose();
   }
 });
-it("resolves an exact npub without searching its display text", async () => {
-  const viewer = keypair(),
-    relay = keypair(),
-    person = keypair();
-  const query = vi.fn(async (_filters: readonly ReadFilter[]) => [
-    profile(person, { name: "Morgan" }),
-  ]);
-  const owner = createRelaySession({
-    viewer: viewer.pubkey,
-    relayAuthor: relay.pubkey,
-    media: () => undefined,
-    query,
-  });
-  try {
-    const result = await searchMembers(
-      owner.session,
-      nip19.npubEncode(person.pubkey),
-      1,
-      new AbortController().signal,
-    );
-    expect(query.mock.calls[0]?.[0]).toEqual([
-      { kinds: [0], authors: [person.pubkey], limit: MEMBER_SEARCH_PAGE_SIZE },
+it.each([
+  ["an npub", (pubkey: string) => nip19.npubEncode(pubkey)],
+  ["a nostr: npub", (pubkey: string) => `nostr:${nip19.npubEncode(pubkey)}`],
+  ["uppercase hex", (pubkey: string) => pubkey.toUpperCase()],
+])(
+  "resolves an exact key from %s without searching its display text",
+  async (_case, typed) => {
+    const viewer = keypair(),
+      relay = keypair(),
+      person = keypair();
+    const query = vi.fn(async (_filters: readonly ReadFilter[]) => [
+      profile(person, { name: "Morgan" }),
     ]);
-    expect(result.people[0]?.pubkey).toBe(person.pubkey);
-    expect(result.more).toBe(false);
-  } finally {
-    owner.dispose();
-  }
-});
+    const owner = createRelaySession({
+      viewer: viewer.pubkey,
+      relayAuthor: relay.pubkey,
+      media: () => undefined,
+      query,
+    });
+    try {
+      const result = await searchMembers(
+        owner.session,
+        typed(person.pubkey),
+        1,
+        new AbortController().signal,
+      );
+      expect(query.mock.calls[0]?.[0]).toEqual([
+        {
+          kinds: [0],
+          authors: [person.pubkey],
+          limit: MEMBER_SEARCH_PAGE_SIZE,
+        },
+      ]);
+      expect(result.people[0]?.pubkey).toBe(person.pubkey);
+      expect(result.more).toBe(false);
+    } finally {
+      owner.dispose();
+    }
+  },
+);
 it("propagates a failed search instead of displaying no matches", async () => {
   const owner = createRelaySession({
     viewer: keypair().pubkey,

@@ -4,7 +4,16 @@ import type { ConversationHostServices } from "../conversation/ConversationHost"
 import "@testing-library/jest-dom/vitest";
 import { composerDOMFixture } from "../messages/composer-testing";
 
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { npubEncode } from "nostr-tools/nip19";
 import {
   act,
   cleanup,
@@ -865,6 +874,35 @@ it("matches an exact public key without exposing short key substrings", async ()
       ).not.toBeInTheDocument(),
     );
   }
+});
+
+describe.each([
+  ["complete", true],
+  ["incomplete", false],
+])("in a %s directory", (_directory, complete) => {
+  const avery = { pubkey: "a".repeat(64), name: "Avery" };
+  it.each([
+    ["hex", avery.pubkey],
+    ["an npub", npubEncode(avery.pubkey)],
+    ["a nostr: npub", `nostr:${npubEncode(avery.pubkey)}`],
+  ])("finds the person named by a pasted %s", async (_case, key) => {
+    const t = setup();
+    // A complete directory matches typed text locally; an incomplete one
+    // sends it to the relay.
+    t.directMessages.people.mockImplementation(async (query, page) => {
+      if (!query && complete)
+        return { people: [...people, avery], hasMore: false };
+      if (!query)
+        return page === 1 ? { people, hasMore: true } : new Promise(() => {});
+      return { people: complete ? [] : [avery], hasMore: false };
+    });
+    t.mount();
+    await screen.findByRole("option", { name: "Person 1" });
+    await t.user.click(recipient());
+    await t.user.paste(key);
+    expect(await screen.findByRole("option", { name: "Avery" })).toBeVisible();
+    expect(screen.queryByText("No matching people.")).toBeNull();
+  });
 });
 
 it("matches names from the start of a word, like mentions", async () => {

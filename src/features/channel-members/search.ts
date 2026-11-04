@@ -1,7 +1,7 @@
-import { nip19 } from "nostr-tools";
 import type { RelaySession } from "../relay/session";
 import { foldProfiles } from "../relay/profiles";
 import { matchPerson } from "../search/person-match";
+import { typedPublicKey } from "../../shared/identity/public-key";
 
 export const MEMBER_SEARCH_PAGE_SIZE = 30;
 
@@ -15,15 +15,8 @@ export async function searchMembers(
   const text = query.trim();
   if (!text || text.length > 256 || !Number.isSafeInteger(page) || page < 1)
     throw new Error("Enter a name or public key to search.");
-  let exact = /^[0-9a-f]{64}$/i.test(text) ? text.toLowerCase() : undefined;
-  if (text.startsWith("npub1")) {
-    try {
-      const decoded = nip19.decode(text);
-      if (decoded.type === "npub") exact = decoded.data;
-    } catch {
-      // An incomplete public key remains an ordinary query while typing.
-    }
-  }
+  // An incomplete public key remains an ordinary query while typing.
+  const exact = typedPublicKey(text);
   const events = exact
     ? await session.read(
         [{ kinds: [0], authors: [exact], limit: MEMBER_SEARCH_PAGE_SIZE }],
