@@ -3,7 +3,7 @@ import { workflowOwner } from "./workflow-attribution";
 import { agentAudience } from "./audience";
 import type { InboxItem, InboxSnapshot } from "./inbox";
 import type { ChannelMessage, ChannelQueries } from "./contracts";
-import type { RelayEvent } from "./events";
+import type { ReadFilter, RelayEvent } from "./events";
 import {
   effectiveFrontier,
   overrideActive,
@@ -18,17 +18,29 @@ import type {
 } from "./read-state";
 import type { ReadJournal } from "./read-state-storage";
 import { markMessage } from "./read-state-retention";
-import { LIVE_RESUME_LAG } from "./live";
 import type { Priority, RelayReader } from "./reader";
+import { isOversizedResponse } from "./errors";
 import { foldMessages, deletionApplies, messageAuthor } from "./fold";
 import { eventMs } from "./message-order";
 import { threadReference } from "./thread-reference";
+import {
+  UNREAD_CONTENT_KINDS,
+  UNREAD_WINDOW_BATCH,
+} from "./unread-window-batch";
 import {
   memoryThreadFollows,
   THREAD_FOLLOW_LIMIT,
   type ThreadFollows,
   type ThreadFollowStorage,
 } from "./thread-follows";
+import {
+  memoryThreadParticipation,
+  NO_THREAD_PARTICIPATION,
+  THREAD_PARTICIPATION_LIMIT,
+  type ThreadMark,
+  type ThreadParticipation,
+  type ThreadParticipationStorage,
+} from "./thread-participation";
 
 export type UnreadSnapshot = Readonly<{
   target: ReadTarget;
@@ -146,13 +158,6 @@ export interface UnreadCapability {
   clearUnreadLocal(target: ReadTarget): Promise<ReadMutationResult>;
   readonly syncedManualUnread: false;
 }
-/** How far before the newest event a batch already returned a repair reads
- * again (seconds): the relay accepts a created_at up to 900s from its clock, so
- * an event stored after that read can be older than the newest one it returned. */
-const REPAIR_OVERLAP = LIVE_RESUME_LAG;
-/** Rows one repair read asks for per batch. A read that returns this many may
- * have been cut off, and says nothing about what lay beyond the cut. */
-const REPAIR_LIMIT = 500;
 /** Rendered message order: effective ms, then event id. */
 const order = (a: RelayEvent, b: RelayEvent) =>
   eventMs(a) - eventMs(b) || a.id.localeCompare(b.id);
@@ -217,6 +222,8 @@ export function createUnread({
   profiles,
   notify = (listener) => listener(),
   follows = memoryThreadFollows(),
+  participation = memoryThreadParticipation(),
+  now = () => Date.now(),
 }: {
   reads: ReturnType<typeof createReadState>;
   channels: ChannelQueries;
@@ -228,31 +235,22 @@ export function createUnread({
   profiles?: ProfileQueries;
   notify?: (listener: () => void) => void;
   follows?: ThreadFollowStorage;
+  participation?: ThreadParticipationStorage;
+  /** Only for the never-read channel window floor; reading never uses the clock. */
+  now?: () => number;
 }) {
   let closed = false,
     epoch = 0;
   let requested = false;
   let repairAgain = false;
   let freshness: UnreadSnapshot["freshness"] = "unknown";
-  /** A repair failed, the evidence overflowed or the stream dropped, and no
-   * repair has completed since. Live traffic marks evidence observed again
-   * but does not pay this. */
+  /** A repair failed or the stream dropped, and no repair has completed
+   * since. Live traffic marks evidence observed again but does not pay this. */
   let owing = false;
   let error: string | undefined;
   let refresh: Promise<void> | undefined;
   const lifetime = new AbortController();
   const events = new Map<string, RelayEvent>();
-  // Per repair batch (its channel IDs): the newest created_at a complete read of
-  // it returned. `events` only grows until a reset below, so a later repair needs
-  // just what is newer; every path that empties or shrinks `events` clears this,
-  // and the next repair of every batch reads unbounded again. A repair whose
-  // read spans a reset (`resets` moved) must not answer for the cleared evidence.
-  const repaired = new Map<string, number>();
-  let resets = 0;
-  function forget() {
-    repaired.clear();
-    resets++;
-  }
   const known = new Set<string>();
   const listeners = new Map<string, Set<() => void>>();
   const snapshots = new Map<string, UnreadSnapshot>();
@@ -264,6 +262,8 @@ export function createUnread({
   let inboxSnapshot: InboxSnapshot | undefined;
   let inboxDirty = true;
   let inboxLoading = false;
+  // The last repair dropped a request after its retry (see `pool`).
+  let partial = false;
   const handles = new Set<() => void>();
   const views = new Map<
     () => void,
@@ -377,9 +377,27 @@ export function createUnread({
   // `channel:root` of every thread the viewer wrote or replied in, from
   // retained messages and lookup witnesses: the automatic follow.
   const ownThreads = new Set<string>();
-  // Relay lookups for parents the sampled window cannot decide. They are kept
+  // `channel:root` of the threads the viewer is part of, with the newest
+  // time they wrote or read in each (see thread-participation.ts). Read from
+  // storage by the first repair, extended and read again by every repair, and
+  // evicted last when retained evidence overflows. The live map is bounded by
+  // what the walk, the evidence and follows can teach; the 1,000 limit is
+  // applied where it is read (`newest()`) and in the saved record.
+  let remembered: Map<string, ThreadMark> | undefined;
+  // What storage holds, with the walk mark, so a repair writes only a change.
+  let persisted: ThreadParticipation | undefined;
+  const pinned = (event: RelayEvent) => {
+    const channel = channelOf(event);
+    return (
+      channel !== undefined &&
+      !!remembered?.has(
+        conversationKey(channel, threadReference(event)?.rootId ?? event.id),
+      )
+    );
+  };
+  // Relay lookups for parents the sampled windows cannot decide. They are kept
   // apart from counted evidence: fetched events never count, never fill the
-  // window and survive its overflow reset, because whether the viewer wrote or
+  // windows and survive their eviction, because whether the viewer wrote or
   // answered a message does not change with the sample. Bounded, oldest first.
   // Keyed by channel and parent, like `joined`. `evidence` is one of the
   // viewer's messages that make the viewer a member (the parent itself, or a
@@ -404,6 +422,9 @@ export function createUnread({
       rootId: string | undefined;
       ids: Set<string>;
       structuralOnly: boolean;
+      /** The reply whose root this structure lookup fetches, when its thread
+       * is one the participation pass would learn from it. */
+      taught: RelayEvent | undefined;
     }
   >();
   // The viewer's own deleted messages, so neither a stored lookup result nor
@@ -577,6 +598,20 @@ export function createUnread({
       entry.mentioned ||
       entry.broadcast ||
       conversation(entry));
+  /** A reply whose root is not retained would be a row of its own. While a
+   * repair runs, whose thread reads fetch the roots it lacks, and the
+   * structure lookup `want` queues has not finished, the reply waits, so a
+   * thread does not flash as one row per reply before grouping under its
+   * root. Otherwise it shows by itself, as a live mention does, and joins
+   * its root once that is verified. */
+  const rootless = (entry: Evidence) =>
+    refresh !== undefined &&
+    entry.parentId !== undefined &&
+    entry.rootId === undefined &&
+    entry.threadRootId !== undefined &&
+    !lookups.get(
+      `${conversationKey(entry.channelId, entry.threadRootId)}:structure`,
+    )?.done;
   /** Retained evidence cannot decide this reply's conversation yet. */
   const undecided = (entry: Evidence, dm: boolean) =>
     !entry.quiet &&
@@ -594,10 +629,18 @@ export function createUnread({
       reads.localUnread(`msg:${event.id}`)
     )
       return true;
-    return relevant(entry, dm) && afterFrontier(entry, state, dm);
+    return (
+      relevant(entry, dm) && afterFrontier(entry, state, timeline(entry, dm))
+    );
   }
-  /** The read-state half of unread, before conversation relevance. */
-  function afterFrontier(entry: Evidence, state: ReadState, dm: boolean) {
+  /** The read-state half of unread, before conversation relevance; `ordinary`
+   * is a top-level message the channel catch-up mark reads (see `timeline`).
+   * A thread read's reply is judged by the same marks as retained evidence. */
+  function afterFrontier(
+    entry: Pick<Evidence, "event" | "channelId" | "rootId">,
+    state: ReadState,
+    ordinary: boolean,
+  ) {
     const { event, channelId, rootId } = entry;
     const frontier = effectiveFrontier(
       state,
@@ -619,7 +662,7 @@ export function createUnread({
     // Channel catch-up never acknowledges thread replies: retained evidence
     // cannot prove nonparticipation, especially after reload. Only ordinary
     // top-level messages inherit it; reply attention/direct thread dots survive.
-    const ordinary = timeline(entry, dm)
+    const catchUp = ordinary
       ? state.frontiers[`activity:${channelId}`]
       : undefined;
     const thread = rootId
@@ -628,7 +671,7 @@ export function createUnread({
     // Past the retention window everything is read; overrides still force.
     const caughtUp = Math.max(
       frontier ?? -1,
-      ordinary ?? -1,
+      catchUp ?? -1,
       thread ?? -1,
       reads.floor(),
     );
@@ -747,7 +790,8 @@ export function createUnread({
     const dm = isDm(channelId);
     const kind = category(entry, dm);
     // A queued or running lookup may still make this reply thread attention.
-    // A read reply is never looked up, so it is undecided but not pending.
+    // A read reply under a retained root is never looked up, so it is
+    // undecided but not pending.
     const open = undecided(entry, dm);
     if (open) want(entry, dm);
     const pending =
@@ -1016,7 +1060,11 @@ export function createUnread({
         const session = channel.channelType === "solo";
         const evidence = (byChannel.get(channel.id) ?? []).filter((entry) => {
           want(entry, dm);
-          return entry.event.pubkey !== viewer && !!category(entry, dm);
+          return (
+            entry.event.pubkey !== viewer &&
+            !!category(entry, dm) &&
+            !(!dm && rootless(entry))
+          );
         });
         // A session's top-level timeline is one conversation; its threads,
         // roots included, stay separate.
@@ -1179,7 +1227,9 @@ export function createUnread({
             ? "idle"
             : "ready",
       items: Object.freeze(items),
-      freshness,
+      // Evidence shown while a repair still reads the roster is `observing`.
+      freshness: freshness === "observed" && refresh ? "observing" : freshness,
+      ...(partial ? { partial: true } : {}),
       ...(error ? { error } : {}),
     });
     // Keep React's snapshot stable for irrelevant evidence and duplicate deliveries.
@@ -1269,7 +1319,6 @@ export function createUnread({
   function purge() {
     // A revoke/regrant must not revive a transaction accepted under the old access epoch.
     epoch++;
-    forget();
     for (const channelId of channelReadGenerations.keys())
       if (!allowed(channelId)) channelReadGenerations.delete(channelId);
     for (const [key, lookup] of lookups)
@@ -1375,24 +1424,33 @@ export function createUnread({
       }
     }
   });
-  // Conversation membership for unread replies whose parent conversation is
-  // not decided by retained evidence: the parent may be the viewer's own older
-  // message, or the viewer may have replied to it outside the sampled window.
-  // A selector that evaluates an otherwise-unread reply asks the relay once per
-  // parent. Selectors only queue the parent; the fetch starts in a microtask,
-  // so channels nobody observes cost nothing. Fetched events are structure
-  // only: they never count and never start another lookup, so a lookup cannot
-  // walk up an old thread.
+  // Conversation membership for replies whose parent conversation is not
+  // decided by retained evidence: the parent may be the viewer's own older
+  // message, or the viewer may have replied to it outside the sampled windows.
+  // A selector that evaluates an otherwise-unread reply, or a read reply whose
+  // root is not retained, asks the relay once per parent. Selectors only queue
+  // the parent; the fetch starts in a microtask, so channels nobody observes
+  // cost nothing. Fetched events are structure only: they never count and
+  // never start another lookup, so a lookup cannot walk up an old thread.
   function want(entry: Evidence, dm: boolean) {
     const { event, channelId, parentId, threadRootId } = entry;
     if (!parentId || event.pubkey === viewer) return;
-    // Activity groups unread thread replies by root, so fetch a root the
-    // sampled window dropped for a followed thread or an unread reply in it.
+    // Activity and the Inbox group thread replies by root, so fetch a root the
+    // sampled windows dropped for a followed thread or a relevant reply in it,
+    // or for a read reply, which would otherwise be its own row. Membership
+    // of read replies is answered by the participation pass, not a lookup,
+    // except in a remembered thread: the viewer's reply may be older than the
+    // thread page and the authored page both reach, so the lookup recovers
+    // that verified witness, or finds it deleted and leaves the thread.
+    const read = () =>
+      !afterFrontier(entry, reads.state(), timeline(entry, dm));
     const structuralRootId =
       !entry.rootId &&
       (chosen(entry) === true ||
-        ((entry.mentioned || entry.broadcast || conversation(entry)) &&
-          isUnread(entry, reads.state(), dm)))
+        entry.mentioned ||
+        entry.broadcast ||
+        conversation(entry) ||
+        read())
         ? threadRootId
         : undefined;
     const structuralRecovery = structuralRootId !== undefined;
@@ -1402,7 +1460,7 @@ export function createUnread({
     if (
       lookups.has(key) ||
       (!structuralRecovery &&
-        (!undecided(entry, dm) || !afterFrontier(entry, reads.state(), dm)))
+        (!undecided(entry, dm) || (read() && !pinned(event))))
     )
       return;
     lookups.set(key, {
@@ -1424,6 +1482,13 @@ export function createUnread({
       rootId,
       ids,
       structuralOnly: structuralRecovery,
+      // A mention or a reply in the viewer's conversation teaches the pass
+      // its thread, as retained evidence does (see `participating().learn`);
+      // a read reply outside them only needs its root to group under.
+      taught:
+        structuralRecovery && (entry.mentioned || conversation(entry))
+          ? event
+          : undefined,
     });
     if (scheduled || retry) return;
     scheduled = true;
@@ -1461,7 +1526,7 @@ export function createUnread({
       lookupEvents.delete(oldest);
     }
   }
-  const contentKinds = [9, 40002, 40008];
+  const contentKinds = UNREAD_CONTENT_KINDS;
   type Target = { parentId: string; rootId: string | undefined };
   /** The viewer's reply decides this lookup: it answers the parent, or is
    * anywhere in the parent's thread. */
@@ -1617,6 +1682,15 @@ export function createUnread({
         const mine = replies.filter(
           (event) => event.pubkey === viewer && live(event),
         );
+        // What this batch teaches the repair's participation pass: a thread
+        // the viewer's reply was found in, or one a fetched root now holds.
+        // Its read goes ahead of the windows still queued, or runs as a
+        // follow-up once the repair's pool has finished.
+        const run = activePass?.generation === epoch ? activePass : undefined;
+        const taught: ReadFilter[][] = [];
+        const feed = (key: string, event: RelayEvent) => {
+          if (run) taught.push(...run.pass.feed(key, event));
+        };
         for (const target of parents) {
           if (target.structuralOnly) {
             remember(
@@ -1628,6 +1702,8 @@ export function createUnread({
                 more: false,
               },
             );
+            if (target.taught && structural(target.parentId))
+              feed(conversationKey(channelId, target.parentId), target.taught);
             continue;
           }
           const found = mine.filter((event) => decides(event, target));
@@ -1653,7 +1729,17 @@ export function createUnread({
             undefined,
           );
           const chosen = authored[0] ?? newest;
-          if (chosen) witness(lookup, chosen);
+          if (chosen) {
+            witness(lookup, chosen);
+            feed(
+              conversationKey(channelId, target.rootId ?? target.parentId),
+              chosen,
+            );
+          }
+        }
+        if (run && taught.length) {
+          run.queue.unshift(...taught);
+          if (!run.pooling) void followUp(run);
         }
         indexed = false;
         publish(new Set([channelId]));
@@ -1664,6 +1750,688 @@ export function createUnread({
       resolving = false;
     }
   }
+  // Per-channel evidence: the newest content events of each member channel at
+  // or after its older read mark (the explicit channel frontier or the
+  // catch-up `activity:` mark, whichever is older, so unread replies between
+  // them are seen), or after the last week for a channel never read on any
+  // device, whose dormant history would otherwise fill the budget to show
+  // nothing new. Each channel gets one page of at most WINDOW_LIMIT events,
+  // sized so the roster's windows together stay within WINDOW_BUDGET, three
+  // quarters of the retained budget: counts and rows beyond a channel's page
+  // are bounded, as under the roster sample alone, but a busy channel can no
+  // longer push a quiet channel's thread out of the evidence, not even on a
+  // first run with a large roster. Single-channel filters ride
+  // UNREAD_WINDOW_BATCH per request (the relay honours per-filter limits; the
+  // reader and hosts admit this batch shape beyond their four-filter rule),
+  // so the windows cost one or two requests, with WINDOW_CONCURRENCY in flight:
+  // the reader runs three reads at once, and the third slot stays free for
+  // the channel the viewer opens meanwhile. Each landed request publishes.
+  const WINDOW_LIMIT = 100;
+  const WINDOW_LEAST = 20;
+  const WINDOW_BUDGET = 3072;
+  const WINDOW_CONCURRENCY = 2;
+  const WINDOW_FLOOR_SECONDS = 7 * 24 * 60 * 60;
+  // Behind the windows, the roster sample is read too: the newest
+  // SAMPLE_LIMIT events of each SAMPLE_CHANNELS of the roster, whatever their
+  // marks, one single-filter request each (the relay once capped a request's
+  // `#h` values at 128). A window starts at its channel's older mark, and in
+  // a channel only scrolled to its end that is the catch-up mark, which reads
+  // no replies, so an unread reply older than it is in no window; the sample
+  // still holds it while it is that recent, as it holds read history before
+  // a mark or a never-read channel's week.
+  const SAMPLE_LIMIT = 500;
+  const SAMPLE_CHANNELS = 128;
+  // The viewer's threads ride the same requests as the windows do. The
+  // HOT_THREADS most recently read or written in are refetched whole, one
+  // filter per channel naming its roots (a full page splits a filter's roots,
+  // as `viewerReplies` does); the rest are asked only for replies since their
+  // newest time, one filter per root so no thread's seen replies are reread
+  // under another's older time, COLD_LIMIT each and usually none, with a root
+  // fetched by ID once a reply arrives. Across threads, only the newest
+  // PARTICIPATION_BUDGET replies are admitted per repair, the threads most
+  // recently read or written in having been asked first and each thread
+  // given its newest unread reply before the rest fill, with at most
+  // PARTICIPATION_RESERVE slots kept from the fill for the reads still to
+  // land, so a large cold set (mostly empty) does not starve the hot
+  // landing: pinned evidence must leave the channel windows at least three
+  // quarters of the retained budget.
+  const THREAD_LIMIT = 200;
+  const HOT_THREADS = 50;
+  const COLD_LIMIT = 50;
+  const PARTICIPATION_BUDGET = 1024;
+  const PARTICIPATION_RESERVE = PARTICIPATION_BUDGET / 4;
+  // The walk over the viewer's authored history teaches the threads they
+  // replied in. A device's first repair pages back from the authored page in
+  // the first request, SEED_PAGE a page behind the windows, until a short
+  // page or SEED_PAGES; later repairs read only what was authored since the
+  // newest time walked. Pages beyond the first are not evidence.
+  const SEED_PAGE = 500;
+  const SEED_PAGES = 6;
+  const deadline = () =>
+    AbortSignal.any([lifetime.signal, AbortSignal.timeout(10000)]);
+  const chunk = <T>(items: readonly T[], size: number) =>
+    Array.from({ length: Math.ceil(items.length / size) }, (_, i) =>
+      items.slice(i * size, (i + 1) * size),
+    );
+  /** One repair's reads: whether any landed, whether one was dropped, and
+   * the last failure, which is the repair's error when nothing landed. */
+  type Pass = { landed: boolean; dropped: boolean; failure: unknown };
+  /** A response over the reader's byte budget, or the native host's, fails
+   * the same way every time, so the request is split, not retried: its
+   * filters in two halves, a lone filter's `ids` in two, or a lone filter's
+   * limit halved. A lone filter at limit 1 cannot shrink and is dropped. */
+  const oversized = isOversizedResponse;
+  function split(request: readonly ReadFilter[]): ReadFilter[][] {
+    if (request.length > 1) {
+      const half = Math.ceil(request.length / 2);
+      return [request.slice(0, half), request.slice(half)];
+    }
+    const [filter] = request;
+    if (!filter) return [];
+    if (filter.ids && filter.ids.length > 1) {
+      const half = Math.ceil(filter.ids.length / 2);
+      return [
+        [{ ...filter, ids: filter.ids.slice(0, half), limit: half }],
+        [
+          {
+            ...filter,
+            ids: filter.ids.slice(half),
+            limit: filter.ids.length - half,
+          },
+        ],
+      ];
+    }
+    return filter.limit > 1
+      ? [[{ ...filter, limit: Math.floor(filter.limit / 2) }]]
+      : [];
+  }
+  /** Reads `requests` WINDOW_CONCURRENCY at a time, workers pulling the next
+   * as one lands; `landed` sees each result (undefined for a dropped request)
+   * and may push follow-up requests. A request that fails is read once more
+   * in its slot with a fresh deadline (one window in five live runs stalled
+   * past it alone); failing again, it is dropped and the rest still land.
+   * Once a request has been dropped, a failing request is dropped at once —
+   * a second stall is the relay, not the request — so a dead relay holds a
+   * pass for one deadline per request beyond the two the first costs. An
+   * oversized response splits the request (see `split`); `divided` sees the
+   * parts, which are read next. False when the repair was retired meanwhile
+   * or `landed` declined. */
+  async function pool(
+    requests: ReadFilter[][],
+    generation: number,
+    priority: Priority,
+    pass: Pass,
+    landed: (
+      request: readonly ReadFilter[],
+      result: readonly RelayEvent[] | undefined,
+      requests: ReadFilter[][],
+    ) => boolean,
+    divided: (
+      request: readonly ReadFilter[],
+      parts: readonly (readonly ReadFilter[])[],
+    ) => void = () => {},
+  ) {
+    let retired = false;
+    const worker = async () => {
+      while (!retired && !closed && generation === epoch) {
+        const request = requests.shift();
+        if (!request) return;
+        let result: readonly RelayEvent[] | undefined;
+        let parts: ReadFilter[][] | undefined;
+        for (
+          let attempt = 0;
+          attempt < (pass.dropped ? 1 : 2) && !parts;
+          attempt++
+        )
+          try {
+            result = await reader.read(request, {
+              signal: deadline(),
+              priority,
+            });
+            break;
+          } catch (cause) {
+            if (closed || generation !== epoch) return;
+            pass.failure = cause;
+            if (oversized(cause)) parts = split(request);
+          }
+        if (parts?.length) {
+          requests.unshift(...parts);
+          divided(request, parts);
+          continue;
+        }
+        if (result) pass.landed = true;
+        else pass.dropped = true;
+        if (
+          closed ||
+          generation !== epoch ||
+          !landed(request, result, requests)
+        )
+          retired = true;
+      }
+    };
+    await Promise.all(
+      Array.from({ length: WINDOW_CONCURRENCY }, () => worker()),
+    );
+    return !closed && generation === epoch && !retired;
+  }
+  async function rememberedRoots(): Promise<ThreadParticipation> {
+    if (!persisted) {
+      try {
+        persisted = await participation.read();
+      } catch {
+        // Unreadable storage forgets nothing durable: this repair relearns
+        // what the relay still shows and saves that.
+        persisted = NO_THREAD_PARTICIPATION;
+      }
+      remembered = new Map(persisted.roots);
+    }
+    return {
+      roots: remembered ?? persisted.roots,
+      ...(persisted.walk ? { walk: persisted.walk } : {}),
+    };
+  }
+  /** One repair's view of the threads the viewer is part of, keyed
+   * `channel:root` with the newest time of a reply the viewer wrote or read
+   * in each (or of its root) and the newest reply at it: an unread reply
+   * advances nothing, so it stays at or above its cold read's `since` and
+   * returns each repair until read. Roots start as those remembered from
+   * earlier repairs and explicit follows (a follow carries no time, so one
+   * first seen here is as recent as this repair), and grow with what this
+   * repair's evidence and walk teach: the viewer's replies, replies that
+   * mention the viewer, and replies in the viewer's conversations.
+   * Unfollowed threads are forgotten; threads in channels the roster lacks
+   * are neither read nor forgotten, since the walk mark advances past the
+   * viewer's replies in them. The newest are read and remembered. */
+  function participating(
+    members: ReadonlySet<string>,
+    stored: ThreadParticipation,
+  ) {
+    const followed = (key: string) => choices().get(key) !== false;
+    const active = (key: string) =>
+      members.has(key.slice(0, key.indexOf(":"))) && followed(key);
+    const roots = new Map([...stored.roots].filter(([key]) => followed(key)));
+    const seen = Math.floor(now() / 1000);
+    for (const [key, following] of choices())
+      if (following && !roots.has(key) && active(key))
+        roots.set(key, { at: seen });
+    /** A peer's reply the viewer has not read, as `isUnread` judges one:
+     * marked unread on this device, or past the marks the Inbox counts with
+     * (`msg:`, channel, `thread:` and `thread-activity:` frontiers and the
+     * synced overrides). */
+    const unreadReply = (event: RelayEvent, key: string, state: ReadState) => {
+      const separator = key.indexOf(":");
+      const channelId = key.slice(0, separator);
+      return (
+        event.pubkey !== viewer &&
+        (!!forcedMessages.get(channelId)?.has(event.id) ||
+          !!reads.localUnread(`msg:${event.id}`) ||
+          afterFrontier(
+            { event, channelId, rootId: key.slice(separator + 1) },
+            state,
+            false,
+          ))
+      );
+    };
+    // An unread reply caps its thread's mark for this pass at its own time,
+    // whatever is read after it, so the cold read still reaches it; a reply
+    // marked unread below the mark moves the mark back to it, the one way a
+    // mark moves back, and a thread or root marked unread holds the mark at
+    // the root while that intent lasts. Of replies in the same second, the
+    // first by `byTime` is the newest. A thread in a channel the roster lacks
+    // is learned, not read: the walk mark advances past the viewer's replies
+    // in it. A thread only an unread reply teaches is remembered as of its
+    // root, when that is held.
+    const ceilings = new Map<string, number>();
+    const moveBack = (key: string, at: number) => {
+      const mark = roots.get(key);
+      if (mark && mark.at > at) roots.set(key, { at });
+    };
+    const cap = (key: string, at: number) => {
+      ceilings.set(key, Math.min(ceilings.get(key) ?? at, at));
+      moveBack(key, at);
+    };
+    const learn = (key: string, event: RelayEvent) => {
+      if (!followed(key)) return;
+      const rootId = key.slice(key.indexOf(":") + 1);
+      const root = structural(rootId);
+      if (
+        reads.localUnread(`thread:${rootId}`) ||
+        reads.localUnread(`msg:${rootId}`)
+      )
+        cap(key, root?.created_at ?? roots.get(key)?.at ?? event.created_at);
+      if (threadReference(event) && unreadReply(event, key, reads.state())) {
+        cap(key, event.created_at);
+        if (root && !threadReference(root) && !roots.has(key)) learn(key, root);
+        return;
+      }
+      const ceiling = ceilings.get(key);
+      const [at, newestId] =
+        ceiling !== undefined && ceiling < event.created_at
+          ? [ceiling, undefined]
+          : [event.created_at, event.id];
+      const mark = roots.get(key);
+      if (
+        !mark ||
+        at > mark.at ||
+        (at === mark.at &&
+          newestId !== undefined &&
+          (mark.newestId === undefined ||
+            newestId.localeCompare(mark.newestId) < 0))
+      )
+        roots.set(key, newestId === undefined ? { at } : { at, newestId });
+    };
+    const newest = () =>
+      [...roots]
+        .filter(([key]) => active(key))
+        .sort(([, a], [, b]) => b.at - a.at)
+        .slice(0, THREAD_PARTICIPATION_LIMIT)
+        .map(([key]) => key);
+    // Roots asked for this repair, those whose read has not landed, those
+    // holding an admitted reply, roots asked for by ID, every event the
+    // thread reads returned, and the replies admitted so far by ID: a full
+    // page's split rereads replies the page already admitted, which count
+    // once.
+    const fetched = new Set<string>();
+    const pending = new Set<string>();
+    const held = new Set<string>();
+    const fetchedIds = new Set<string>();
+    const rows = new Map<string, RelayEvent>();
+    const admitted = new Set<string>();
+    // The reply each cold read begins at, by root: already seen, so its
+    // return is neither evidence nor a reason to fetch its root.
+    const boundary = new Map<string, string>();
+    const threads = (
+      channelId: string,
+      rootIds: readonly string[],
+      since?: number,
+    ): ReadFilter => ({
+      kinds: contentKinds,
+      "#h": [channelId],
+      "#e": [...rootIds],
+      ...(since === undefined ? {} : { since }),
+      include_aux: true,
+      limit: since === undefined ? THREAD_LIMIT : COLD_LIMIT,
+    });
+    /** The roots of `keys` not yet asked for, by channel, now asked for. */
+    const group = (keys: readonly string[]) => {
+      const groups = new Map<string, string[]>();
+      for (const key of keys) {
+        if (fetched.has(key)) continue;
+        fetched.add(key);
+        pending.add(key);
+        const separator = key.indexOf(":");
+        const channelId = key.slice(0, separator);
+        groups.set(channelId, [
+          ...(groups.get(channelId) ?? []),
+          key.slice(separator + 1),
+        ]);
+      }
+      return groups;
+    };
+    const byId = (rootIds: readonly string[]) => {
+      for (const id of rootIds) fetchedIds.add(id);
+      return chunk(rootIds, 100).map(
+        (ids): ReadFilter => ({
+          kinds: contentKinds,
+          ids,
+          include_aux: true,
+          limit: ids.length,
+        }),
+      );
+    };
+    const byTime = (a: RelayEvent, b: RelayEvent) =>
+      b.created_at - a.created_at || a.id.localeCompare(b.id);
+    // The walk: pages asked for beyond the first, the newest authored time
+    // seen, and whether the walk reached its end this repair.
+    let pages = 0;
+    let newestWalked: number | undefined;
+    let walked = false;
+    return {
+      roots,
+      walk: {
+        /** The authored read riding the first request: the viewer's newest
+         * page, since the last walk when there was one. */
+        first(): ReadFilter {
+          return {
+            kinds: contentKinds,
+            authors: [viewer],
+            ...(stored.walk ? { since: stored.walk.since } : {}),
+            include_aux: true,
+            limit: WINDOW_LIMIT,
+          };
+        },
+        /** Learns the threads the viewer replied in from a walk page and
+         * returns the next page when this one was full: the viewer's older
+         * messages, keyset from the page's oldest. */
+        landed(
+          filter: ReadFilter,
+          result: readonly RelayEvent[],
+        ): ReadFilter | undefined {
+          const page = result
+            .filter(
+              (event) =>
+                contentKind(event) &&
+                event.pubkey === viewer &&
+                (filter.since === undefined ||
+                  event.created_at >= filter.since),
+            )
+            .sort(byTime)
+            .slice(0, filter.limit);
+          for (const event of page) {
+            newestWalked = Math.max(newestWalked ?? 0, event.created_at);
+            const channelId = channelOf(event);
+            const reference = threadReference(event);
+            if (channelId && reference)
+              learn(conversationKey(channelId, reference.rootId), event);
+          }
+          const oldest = page.at(-1);
+          // Ending at SEED_PAGES with a full page is the one case the mark
+          // advances past replies never seen: the oldest of a history longer
+          // than the walk reads.
+          if (page.length < filter.limit || !oldest || pages >= SEED_PAGES) {
+            walked = true;
+            return;
+          }
+          pages++;
+          // An oversized page was halved (see `split`); the next keeps that.
+          return {
+            ...filter,
+            until: oldest.created_at,
+            before_id: oldest.id,
+            limit: filter.until === undefined ? SEED_PAGE : filter.limit,
+          };
+        },
+      },
+      /** Whole reads of the newest roots not yet asked for, with roots the
+       * retained evidence lacks fetched by ID so replies group and open under
+       * them. */
+      hot(keys = newest().slice(0, HOT_THREADS)) {
+        const groups = group(keys);
+        const missing = [...groups.values()]
+          .flat()
+          .filter((rootId) => !structural(rootId));
+        return chunk<ReadFilter>(
+          [
+            ...[...groups].map(([channelId, rootIds]) =>
+              threads(channelId, rootIds),
+            ),
+            ...byId(missing),
+          ],
+          UNREAD_WINDOW_BATCH,
+        );
+      },
+      /** Reads of the other remembered roots not yet asked for, each for
+       * replies since the newest time seen in it, inclusive: a reply in the
+       * same second as that one is not passed over, and the one seen returns
+       * too, to be passed over by ID. */
+      cold(keys = newest().slice(HOT_THREADS)) {
+        return chunk(
+          [...group(keys)].flatMap(([channelId, rootIds]) =>
+            rootIds.map((rootId) => {
+              const key = `${channelId}:${rootId}`;
+              const mark = roots.get(key);
+              if (mark?.newestId) boundary.set(key, mark.newestId);
+              return threads(channelId, [rootId], mark?.at ?? 0);
+            }),
+          ),
+          UNREAD_WINDOW_BATCH,
+        );
+      },
+      /** Learns a thread a lookup found the viewer in, or fetched the root
+       * of, and returns its read when not yet asked for: whole when it ranks
+       * among the hot threads, since its newest time otherwise. */
+      feed(key: string, event: RelayEvent): ReadFilter[][] {
+        learn(key, event);
+        if (fetched.has(key)) return [];
+        const rank = newest().indexOf(key);
+        if (rank < 0) return [];
+        return rank < HOT_THREADS ? this.hot([key]) : this.cold([key]);
+      },
+      /** A reply marked unread on this device: its thread's mark moves back
+       * to it (to the root, for a thread or its root), capped there for this
+       * pass so a lookup's single-event `learn` cannot re-advance it before a
+       * save, and the record is saved; `learn` keeps the mark there while the
+       * reply stays unread. */
+      lower(key: string, at: number) {
+        if (!roots.has(key)) return;
+        cap(key, at);
+        this.save();
+      },
+      /** A thread read's result, or `undefined` for a dropped read, which
+       * only releases its roots' reserved slots. */
+      landed(
+        request: readonly ReadFilter[],
+        result: readonly RelayEvent[] | undefined,
+        requests: ReadFilter[][],
+      ) {
+        // Every root asked for and not yet landed keeps one slot of the
+        // budget, so a read landing later still has room for its newest
+        // unread reply; a root already holding an admitted reply needs none.
+        // This request's roots have landed and are served below.
+        const asked = request.flatMap((filter) => {
+          const channelId = filter["#h"]?.[0];
+          return channelId
+            ? (filter["#e"] ?? []).map((rootId) => `${channelId}:${rootId}`)
+            : [];
+        });
+        for (const key of asked) pending.delete(key);
+        if (!result) return true;
+        const reserve = Math.min(
+          [...pending].filter((key) => !held.has(key)).length,
+          PARTICIPATION_RESERVE,
+        );
+        // A full page may hide replies under a filter's other roots, or
+        // older than a lone root's `since` page reaches; the roots are asked
+        // for again and keep their slots.
+        for (const filter of request) {
+          const channelId = filter["#h"]?.[0];
+          const rootIds = filter["#e"];
+          if (!channelId || !rootIds) continue;
+          if (rootIds.length < 2 && filter.since === undefined) continue;
+          const page = result.filter(
+            (event) =>
+              contentKind(event) &&
+              channelOf(event) === channelId &&
+              event.tags.some(
+                ([name, id]) => name === "e" && rootIds.includes(id ?? ""),
+              ),
+          ).length;
+          if (page < filter.limit) continue;
+          for (const rootId of rootIds) pending.add(`${channelId}:${rootId}`);
+          // The split stays ahead of the windows, as the thread read was.
+          if (rootIds.length < 2) {
+            requests.unshift([threads(channelId, rootIds)]);
+            continue;
+          }
+          const half = Math.ceil(rootIds.length / 2);
+          requests.unshift([
+            { ...filter, "#e": rootIds.slice(0, half) },
+            { ...filter, "#e": rootIds.slice(half) },
+          ]);
+        }
+        // A cold read's boundary reply was read by an earlier repair and is
+        // passed over; one still unread (a record from before unread replies
+        // kept their place, or a thread marked unread since) is admitted.
+        // Replies already retained cost the budget nothing: one
+        // a window read, or one this pass admitted. Of the rest, each root
+        // holding no admitted reply yet is given its newest unread reply, or
+        // its newest, most recently read or written in first, drawing on the
+        // whole budget (the reserve is kept for exactly these); then the rest
+        // are admitted newest first while the budget less the reserve lasts.
+        // What is not admitted is not kept and teaches no thread a newer
+        // time, so a later read still reaches it.
+        const reply = (event: RelayEvent) =>
+          contentKind(event) && !!threadReference(event);
+        const keyOf = (event: RelayEvent) => {
+          const channelId = channelOf(event);
+          const rootId = threadReference(event)?.rootId;
+          return channelId && rootId ? `${channelId}:${rootId}` : undefined;
+        };
+        const state = reads.state();
+        const seen = (event: RelayEvent) => {
+          const key = keyOf(event);
+          return (
+            key !== undefined &&
+            boundary.get(key) === event.id &&
+            !unreadReply(event, key, state)
+          );
+        };
+        const fresh = result.filter((event) => !seen(event));
+        const candidates = fresh
+          .filter(
+            (event) =>
+              reply(event) && !admitted.has(event.id) && !structural(event.id),
+          )
+          .sort(byTime);
+        const byRoot = new Map<string, RelayEvent[]>();
+        for (const event of candidates) {
+          const key = keyOf(event);
+          if (key) byRoot.set(key, [...(byRoot.get(key) ?? []), event]);
+        }
+        const room = () => PARTICIPATION_BUDGET - reserve - admitted.size;
+        const replies: RelayEvent[] = [];
+        const admit = (event: RelayEvent, key: string | undefined) => {
+          admitted.add(event.id);
+          if (key) held.add(key);
+          replies.push(event);
+        };
+        for (const [key, events] of [...byRoot].sort(
+          ([a], [b]) => (roots.get(b)?.at ?? 0) - (roots.get(a)?.at ?? 0),
+        )) {
+          const [newest] = events;
+          if (!newest || held.has(key) || admitted.size >= PARTICIPATION_BUDGET)
+            continue;
+          admit(
+            events.find((event) => unreadReply(event, key, state)) ?? newest,
+            key,
+          );
+        }
+        for (const event of candidates) {
+          if (room() <= 0) break;
+          if (!admitted.has(event.id)) admit(event, keyOf(event));
+        }
+        const kept = fresh.filter(
+          (event) =>
+            !reply(event) || admitted.has(event.id) || !!structural(event.id),
+        );
+        for (const event of kept) rows.set(event.id, event);
+        // A root an admitted reply names that nothing holds is fetched, so
+        // the reply groups under it rather than standing as its own row.
+        const missing = [
+          ...new Set(
+            replies.map((event) => threadReference(event)?.rootId ?? ""),
+          ),
+        ].filter(
+          (rootId) =>
+            rootId &&
+            !structural(rootId) &&
+            !rows.has(rootId) &&
+            !fetchedIds.has(rootId),
+        );
+        if (missing.length)
+          requests.unshift(...chunk(byId(missing), UNREAD_WINDOW_BATCH));
+        return accept(kept);
+      },
+      /** Learns roots and their newest times from retained evidence and the
+       * thread reads so far. */
+      learn() {
+        indexEvidence();
+        for (const entries of byChannel.values())
+          for (const entry of entries) {
+            const key = conversationKey(
+              entry.channelId,
+              entry.threadRootId ?? entry.event.id,
+            );
+            if (
+              (entry.event.pubkey === viewer && entry.parentId) ||
+              entry.mentioned ||
+              conversation(entry) ||
+              roots.has(key)
+            )
+              learn(key, entry.event);
+          }
+        for (const event of rows.values()) {
+          const channelId = channelOf(event);
+          const reference = contentKind(event)
+            ? threadReference(event)
+            : undefined;
+          if (!channelId || !reference) continue;
+          const key = conversationKey(channelId, reference.rootId);
+          if (roots.has(key)) learn(key, event);
+        }
+      },
+      /** The newest roots become the remembered threads, with the walk mark
+       * advanced to the newest authored time when the walk reached its end;
+       * a walk cut short by a dropped page is taken up by the next repair. */
+      save() {
+        const nextRoots = new Map(
+          [...roots]
+            .sort(([, a], [, b]) => b.at - a.at)
+            .slice(0, THREAD_PARTICIPATION_LIMIT),
+        );
+        const walk =
+          walked && newestWalked !== undefined
+            ? { since: newestWalked }
+            : stored.walk;
+        const next: ThreadParticipation = {
+          roots: nextRoots,
+          ...(walk ? { walk } : {}),
+        };
+        if (
+          persisted?.roots.size !== nextRoots.size ||
+          [...nextRoots].some(([key, mark]) => {
+            const was = persisted?.roots.get(key);
+            return was?.at !== mark.at || was?.newestId !== mark.newestId;
+          }) ||
+          persisted?.walk?.since !== walk?.since
+        ) {
+          persisted = next;
+          void participation.write(next).catch(() => {});
+        }
+      },
+    };
+  }
+  /** The newest repair's participation pass, with the queue its reads are
+   * pooled from and whether a pool is draining it. A lookup that lands while
+   * the repair reads puts the thread it taught at the queue's head, ahead of
+   * the remaining windows; one that lands later starts a follow-up. Retired
+   * with its access epoch; the next repair replaces it. */
+  type Run = {
+    pass: ReturnType<typeof participating>;
+    generation: number;
+    queue: ReadFilter[][];
+    pooling: boolean;
+  };
+  let activePass: Run | undefined;
+  /** Reads what lookups taught after the repair finished, in the background,
+   * each request once, and saves the threads learned; what a dropped read
+   * leaves is the next repair's. The Inbox's loading, freshness, partial
+   * notice and error are the repair's alone. A `landed` publish may queue
+   * more lookups, whose answers join the queue while it drains. A repair
+   * that starts meanwhile replaces the run and reads what it remembers. */
+  async function followUp(run: Run) {
+    if (run.pooling) return;
+    run.pooling = true;
+    const current = () =>
+      !closed && activePass === run && run.generation === epoch;
+    try {
+      while (run.queue.length && current()) {
+        await pool(
+          run.queue,
+          run.generation,
+          "background",
+          { landed: false, dropped: true, failure: undefined },
+          (request, result, queue) =>
+            current() && run.pass.landed(request, result, queue),
+        );
+        if (!current()) return;
+        run.pass.learn();
+        run.pass.save();
+      }
+    } finally {
+      run.pooling = false;
+    }
+  }
   async function repair(priority: Priority = "foreground") {
     requested = true;
     if (closed) return;
@@ -1671,19 +2439,15 @@ export function createUnread({
     repairAgain = false;
     inboxLoading = true;
     const generation = epoch;
-    const reset = resets;
-    const current = () => !closed && generation === epoch && reset === resets;
     refresh = (async () => {
-      await reads.ensure();
-      if (!current()) return;
+      const [, stored] = await Promise.all([reads.ensure(), rememberedRoots()]);
+      if (closed || generation !== epoch) return;
       const ids = channels
         .list()
         .channels.filter(
           (channel) => !channel.cached && channel.members?.includes(viewer),
         )
-        .map((channel) => channel.id)
-        // Batches key their marks, so they must not move when a channel is renamed.
-        .sort();
+        .map((channel) => channel.id);
       if (!ids.length) {
         freshness = "observed";
         owing = false;
@@ -1691,61 +2455,185 @@ export function createUnread({
         return;
       }
       try {
-        // The relay caps aggregate explicit #h values at 128 per request.
-        // Keep roster scope: an unscoped read also includes unjoined open channels.
-        // Each bounded batch owns its queue-inclusive deadline after marker sync;
-        // optional profiles must not block the initial user-visible observation.
-        for (let offset = 0; offset < ids.length; offset += 128) {
-          const batch = ids.slice(offset, offset + 128);
-          const key = batch.join(",");
-          const mark = repaired.get(key);
-          const asked = Math.floor(Date.now() / 1000);
-          const signal = AbortSignal.any([
-            lifetime.signal,
-            AbortSignal.timeout(10000),
-          ]);
-          const result = await reader.read(
-            [
-              {
-                kinds: [9, 40002, 40008],
-                "#h": batch,
-                include_aux: true,
-                limit: REPAIR_LIMIT,
-                ...(mark === undefined
-                  ? {}
-                  : { since: Math.max(0, mark - REPAIR_OVERLAP) }),
-              },
-            ],
-            { signal, priority },
-          );
-          // An overflow or refresh while this read was out discarded what the
-          // mark stands for: an overflow waits for refresh, a refresh reads again.
-          if (!current()) return;
-          // Accepting notifies subscribers, and one may refresh from there.
-          if (!accept(result) || !current()) return;
-          // The mark is anchored on what the relay returned, not the clock: a
-          // skewed clock or a future-dated event cannot move the window past
-          // unseen history. Only a read that returned fewer than its limit saw
-          // everything in its window, so only it installs or advances the mark;
-          // the earlier mark was itself such a read, so coverage chains. A read
-          // that filled its limit may have cut off older rows (a deletion would
-          // later free a slot for one), so it drops the mark and the next repair
-          // reads unbounded. An empty read sets nothing either.
-          const newest = Math.max(
-            0,
-            ...result.map((event) => event.created_at),
-          );
-          if (result.length >= REPAIR_LIMIT) repaired.delete(key);
-          else if (newest)
-            repaired.set(key, Math.max(mark ?? 0, Math.min(newest, asked)));
+        // Keep roster scope: an unscoped read also includes unjoined open
+        // channels. Each bounded request owns its queue-inclusive deadline
+        // after marker sync; optional profiles must not block the initial
+        // user-visible observation.
+        const { frontiers } = reads.state();
+        const floor = Math.floor(now() / 1000) - WINDOW_FLOOR_SECONDS;
+        const limit = Math.max(
+          WINDOW_LEAST,
+          Math.min(WINDOW_LIMIT, Math.floor(WINDOW_BUDGET / ids.length)),
+        );
+        // Most recently read channels first: the viewer is active there, and
+        // their windows are the smallest; never-read channels go last.
+        const windows = ids
+          .map((id) => {
+            const marks = [frontiers[id], frontiers[`activity:${id}`]].filter(
+              (mark): mark is number => mark !== undefined,
+            );
+            return {
+              id,
+              since: marks.length ? Math.min(...marks) : undefined,
+            };
+          })
+          .sort((a, b) => (b.since ?? -1) - (a.since ?? -1));
+        const marked = new Set(
+          windows.flatMap(({ id, since }) => (since === undefined ? [] : [id])),
+        );
+        // The viewer's newest messages ride the first request, and the
+        // remembered threads most recently read or written in are read right
+        // behind it, before the windows: the pinned rows are the ones the
+        // windows cannot show.
+        // The roster sample follows the windows. The other remembered
+        // threads are asked for new replies, and the walk pages back through
+        // the viewer's history, behind them.
+        const pass = participating(new Set(ids), stored);
+        const requests = chunk<ReadFilter>(
+          [
+            pass.walk.first(),
+            ...windows.map(({ id, since }) => ({
+              kinds: contentKinds,
+              "#h": [id],
+              since: since ?? floor,
+              include_aux: true,
+              limit,
+            })),
+          ],
+          UNREAD_WINDOW_BATCH,
+        );
+        const hot = pass.hot();
+        requests.splice(1, 0, ...hot);
+        requests.push(
+          ...chunk(ids, SAMPLE_CHANNELS).map((part) => [
+            {
+              kinds: contentKinds,
+              "#h": part,
+              include_aux: true,
+              limit: SAMPLE_LIMIT,
+            },
+          ]),
+          ...pass.cold(),
+        );
+        remembered = pass.roots;
+        const run: Run = { pass, generation, queue: requests, pooling: true };
+        activePass = run;
+        // Once those have landed, or were dropped, the Inbox is no longer
+        // loading; the windows still reading show as `observing`.
+        const first = new Set<readonly ReadFilter[]>(
+          requests.slice(0, 1 + hot.length),
+        );
+        const progress: Pass = {
+          landed: false,
+          dropped: false,
+          failure: undefined,
+        };
+        // A dropped window, or the first request carrying them, leaves its
+        // channels as they were; a dropped thread read or root fetch leaves
+        // those threads to the next repair, with their channels' counts
+        // still observed. Either way the Inbox says some activity could not
+        // be checked. A dropped walk page leaves only the walk's mark where
+        // it was, so the next repair resumes it, and says nothing.
+        let unchecked = false;
+        const walkPage = (request: readonly ReadFilter[]) =>
+          request.find((filter) => filter.authors);
+        const checks = (filter: ReadFilter) =>
+          (!!filter["#h"] && !filter["#e"]) ||
+          (!!filter.authors && filter.until === undefined);
+        const landed = (
+          request: readonly ReadFilter[],
+          result: readonly RelayEvent[] | undefined,
+          queue: ReadFilter[][],
+        ) => {
+          let ok = true;
+          const walk = walkPage(request);
+          if (request.some((filter) => filter["#e"] || filter.ids)) {
+            ok = pass.landed(request, result, queue);
+            if (!result) unchecked = true;
+          } else if (!result) unchecked ||= request.some(checks);
+          else {
+            // A read channel with nothing since its mark is observed with
+            // nothing unread; a never-read channel with no recent history
+            // stays unknown rather than claiming zero. The roster sample has
+            // no start, so it returning nothing of a channel claims nothing.
+            for (const filter of request) {
+              const id =
+                filter.since === undefined ? undefined : filter["#h"]?.[0];
+              if (id && marked.has(id)) known.add(id);
+            }
+            // Walk pages beyond the first are not evidence.
+            ok = walk?.until === undefined ? accept(result) : true;
+            if (ok && walk) {
+              const page = pass.walk.landed(walk, result);
+              if (page) queue.push([page]);
+            }
+            // The authored page teaches the viewer's newest threads at once;
+            // their reads go ahead of the remaining windows.
+            if (ok && walk && walk.until === undefined) {
+              pass.learn();
+              const taught = pass.hot();
+              queue.unshift(...taught);
+              for (const item of taught) first.add(item);
+            }
+          }
+          if (first.delete(request) && !first.size) {
+            inboxLoading = false;
+            publish();
+          }
+          return ok;
+        };
+        const divided = (
+          request: readonly ReadFilter[],
+          parts: readonly (readonly ReadFilter[])[],
+        ) => {
+          if (first.delete(request)) for (const part of parts) first.add(part);
+        };
+        // The queue is drained until it stays empty: a lookup may put a
+        // thread read at its head between a worker finding it empty and the
+        // pool returning.
+        const drain = async () => {
+          while (requests.length)
+            if (
+              !(await pool(
+                requests,
+                generation,
+                priority,
+                progress,
+                landed,
+                divided,
+              ))
+            )
+              return false;
+          return true;
+        };
+        try {
+          if (!(await drain())) return;
+          // Threads the windows and the walk newly taught: on a device's
+          // first repair, the threads the viewer replied in before their
+          // newest page.
+          pass.learn();
+          requests.push(...pass.hot(), ...pass.cold());
+          if (!(await drain())) return;
+        } finally {
+          run.pooling = false;
         }
+        // Nothing landed: nothing was observed, so the repair failed.
+        if (!progress.landed) throw progress.failure;
+        pass.learn();
+        pass.save();
+        // A lookup that landed between the last drain and the pool's release
+        // queued its read for a pool that had finished; it is the follow-up's.
+        if (requests.length) void followUp(run);
+        // A dropped request leaves its channels or threads as they were; the
+        // Inbox says so until the next repair, with no automatic retry.
+        partial = unchecked;
         freshness = "observed";
         owing = false;
         error = undefined;
         publish();
         void findHomes(generation);
       } catch (cause) {
-        if (!current()) return;
+        if (closed || generation !== epoch) return;
         freshness = "stale";
         owing = true;
         error =
@@ -1869,6 +2757,87 @@ export function createUnread({
     }
     if (changed.size) publish(changed);
   }
+  // Verified events never change; each is measured once.
+  const sizes = new WeakMap<RelayEvent, number>();
+  const sizeOf = (event: RelayEvent) => {
+    let size = sizes.get(event);
+    if (size === undefined) {
+      size = new TextEncoder().encode(JSON.stringify(event)).byteLength;
+      sizes.set(event, size);
+    }
+    return size;
+  };
+  const older = (a: RelayEvent, b: RelayEvent) =>
+    a.created_at - b.created_at || a.id.localeCompare(b.id);
+  /** `a` outlasts `b`: pinned after ordinary, then the newer. */
+  const outlasts = (a: RelayEvent, b: RelayEvent) =>
+    (Number(pinned(a)) - Number(pinned(b)) || older(a, b)) > 0;
+  /** Retained content once evidence is full, in eviction order: ordinary
+   * evidence goes first, the oldest of the channel holding the most of the
+   * exhausted budget (events, or bytes), so a busy channel's traffic pushes
+   * out its own older evidence and never a quiet channel's only message,
+   * whose count would otherwise become a confident zero; evidence of the
+   * viewer's threads goes last, oldest first. */
+  type Pool = { rows: RelayEvent[]; bytes: number };
+  type Pools = { unpinned: Map<string, Pool>; pinned: Pool };
+  const EVENT_BUDGET = 4096;
+  const BYTE_BUDGET = 8 * 1024 * 1024;
+  function pools(): Pools {
+    const unpinned = new Map<string, Pool>();
+    const pinnedPool: Pool = { rows: [], bytes: 0 };
+    for (const event of events.values()) {
+      const channel = contentKind(event) ? channelOf(event) : undefined;
+      if (channel === undefined) continue;
+      const pool = pinned(event)
+        ? pinnedPool
+        : (unpinned.get(channel) ?? { rows: [], bytes: 0 });
+      pool.rows.push(event);
+      pool.bytes += sizeOf(event);
+      if (pool !== pinnedPool) unpinned.set(channel, pool);
+    }
+    pinnedPool.rows.sort(older);
+    for (const pool of unpinned.values()) pool.rows.sort(older);
+    return { unpinned, pinned: pinnedPool };
+  }
+  /** The pool whose first event goes next, holding the most of `measure`. */
+  const next = ({ unpinned, pinned }: Pools, measure: keyof Pool) => {
+    const held = (pool: Pool) =>
+      measure === "rows" ? pool.rows.length : pool.bytes;
+    let chosen: Pool | undefined;
+    for (const pool of unpinned.values()) {
+      const first = pool.rows[0];
+      const best = chosen?.rows[0];
+      if (
+        first &&
+        (!best ||
+          held(pool) > held(chosen as Pool) ||
+          (held(pool) === held(chosen as Pool) && older(first, best) < 0))
+      )
+        chosen = pool;
+    }
+    return chosen ?? pinned;
+  };
+  const place = (pool: Pool, event: RelayEvent) => {
+    const { rows } = pool;
+    let low = 0,
+      high = rows.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      const row = rows[mid];
+      if (row && older(row, event) < 0) low = mid + 1;
+      else high = mid;
+    }
+    rows.splice(low, 0, event);
+    pool.bytes += sizeOf(event);
+  };
+  /** Whether incoming content would be evicted before the retained `oldest`:
+   * ordinary before pinned; pinned by age; ordinary by age within the channel
+   * going next, since another channel holds no more than it. */
+  const before = (event: RelayEvent, oldest: RelayEvent) =>
+    pinned(event) !== pinned(oldest)
+      ? !pinned(event)
+      : (pinned(event) || channelOf(event) === channelOf(oldest)) &&
+        older(event, oldest) < 0;
   function accept(batch: readonly RelayEvent[]) {
     if (closed) return false;
     retract(batch);
@@ -1876,6 +2845,24 @@ export function createUnread({
     indexed = false;
     const incoming = new Map(batch.map((event) => [event.id, event]));
     const owners = channelOwnership((id) => incoming.get(id) ?? events.get(id));
+    // An edit or deletion is kept with its newest-ranked content target,
+    // retained or in this batch, so an overlay on a pinned message is admitted
+    // while the message is. Without one it ranks as itself.
+    const overlaid = (event: RelayEvent) => {
+      let best: RelayEvent | undefined;
+      for (const [name, id] of event.tags) {
+        const target =
+          name === "e" && id ? (events.get(id) ?? incoming.get(id)) : undefined;
+        if (target && contentKind(target) && (!best || outlasts(target, best)))
+          best = target;
+      }
+      return best ?? event;
+    };
+    // Retained content in eviction order, built once a batch needs room, and
+    // the channels room was taken from or refused to.
+    let retained: Pools | undefined;
+    let evicted = false;
+    const unsettled = new Set<string>();
     for (const event of batch) {
       if (
         ![9, 40002, 40008, 40003, 5, 9005].includes(event.kind) ||
@@ -1885,20 +2872,55 @@ export function createUnread({
       const channels = owners(event);
       if (!channels || [...channels].some((channel) => !allowed(channel)))
         continue;
-      const size = new TextEncoder().encode(JSON.stringify(event)).byteLength;
-      if (events.size >= 4096 || bytes + size > 8 * 1024 * 1024) {
-        events.clear();
-        forget();
-        known.clear();
-        bytes = 0;
-        error = "Unread observation capacity reached; refresh available";
-        freshness = "stale";
-        owing = true;
-        publish();
-        return false;
+      const size = sizeOf(event);
+      const subject = auxiliaryKind(event) ? overlaid(event) : event;
+      // Full: make room by evicting what goes first, unless this event would
+      // go before all of it. The channel stays observed; like any sample,
+      // the count is of what is retained. An overlay whose own target goes
+      // first retires with it: a deleted or superseded body is not kept
+      // counted for want of room.
+      let admitted = true;
+      while (events.size >= EVENT_BUDGET || bytes + size > BYTE_BUDGET) {
+        retained ??= pools();
+        const pool = next(
+          retained,
+          events.size >= EVENT_BUDGET ? "rows" : "bytes",
+        );
+        const oldest = pool.rows[0];
+        if (!oldest || (!events.has(subject.id) && before(subject, oldest))) {
+          admitted = false;
+          for (const channel of channels) unsettled.add(channel);
+          break;
+        }
+        pool.rows.shift();
+        pool.bytes -= sizeOf(oldest);
+        events.delete(oldest.id);
+        bytes -= sizeOf(oldest);
+        evicted = true;
+        const channel = channelOf(oldest);
+        if (channel) {
+          changed.add(channel);
+          unsettled.add(channel);
+        }
+        if (oldest.id === subject.id) {
+          admitted = false;
+          break;
+        }
       }
+      if (!admitted) continue;
       events.set(event.id, event);
       bytes += size;
+      // Later events in this batch see this one as retained.
+      const channel =
+        retained && contentKind(event) ? channelOf(event) : undefined;
+      if (retained && channel !== undefined) {
+        if (pinned(event)) place(retained.pinned, event);
+        else {
+          const pool = retained.unpinned.get(channel) ?? { rows: [], bytes: 0 };
+          place(pool, event);
+          retained.unpinned.set(channel, pool);
+        }
+      }
       for (const channel of channels) {
         known.add(channel);
         changed.add(channel);
@@ -1906,6 +2928,27 @@ export function createUnread({
       // The recursively resolved owner set already includes every activity
       // projection affected by a deletion, including delete-of-edit chains.
     }
+    // A channel left with no retained content is no longer observed: what
+    // room took or refused is not a count of nothing.
+    for (const channel of unsettled)
+      if (
+        !retained?.unpinned.get(channel)?.rows.length &&
+        !retained?.pinned.rows.some((event) => channelOf(event) === channel) &&
+        known.delete(channel)
+      )
+        changed.add(channel);
+    // Edits and deletions stay only while one of their targets does.
+    if (evicted)
+      for (const [id, event] of events) {
+        if (!auxiliaryKind(event)) continue;
+        const targets = event.tags.flatMap(([name, target]) =>
+          name === "e" && target ? [target] : [],
+        );
+        if (targets.length && targets.every((target) => !events.has(target))) {
+          events.delete(id);
+          bytes -= sizeOf(event);
+        }
+      }
     if (changed.size) {
       // The session admits profiles from this same batch after unread evidence.
       if (profiles)
@@ -2063,12 +3106,7 @@ export function createUnread({
     },
     ensure: () => refresh ?? (requested ? Promise.resolve() : repair()),
     refresh: async () => {
-      // An explicit refresh re-observes everything. The reset fences a running
-      // repair, which the refresh waits out rather than joins.
-      forget();
-      const running = refresh;
       await reads.refresh("foreground");
-      await running?.catch(() => undefined);
       await repair();
     },
     revision: reads.revision,
@@ -2104,6 +3142,10 @@ export function createUnread({
       }
       follows.write(next);
       saved = next;
+      // A follow carries no time of its own: the thread joins the viewer's
+      // remembered threads as of now, and the next repair refetches it.
+      if (following && remembered && !remembered.has(key))
+        remembered.set(key, { at: Math.floor(now() / 1000) });
       followsChanged(changed);
     },
     reading(channelId) {
@@ -2525,9 +3567,28 @@ export function createUnread({
         return true;
       };
       if (!valid()) throw new Error("Unread target unavailable");
-      return serialize(target.channelId, () =>
+      const result = await serialize(target.channelId, () =>
         reads.markLocalUnread(key, valid),
       );
+      // In a remembered thread, the mark moves back to the reply marked
+      // unread, or to the root for a thread or its root, so the cold read
+      // reaches it again on later launches; the repair's `learn` keeps it
+      // there while the reply stays unread.
+      if (target.kind !== "channel") {
+        const event = events.get(
+          target.kind === "thread" ? target.rootId : target.messageId,
+        );
+        const rootId =
+          target.kind === "thread"
+            ? target.rootId
+            : event && (threadReference(event)?.rootId ?? event.id);
+        if (event && rootId)
+          activePass?.pass.lower(
+            conversationKey(target.channelId, rootId),
+            event.created_at,
+          );
+      }
+      return result;
     },
     async clearUnreadLocal(target) {
       const key = targetKey(target);
@@ -2621,8 +3682,11 @@ export function createUnread({
       resetLookups();
       repairAgain = false;
       indexed = false;
+      activePass = undefined;
+      remembered = undefined;
+      persisted = undefined;
+      partial = false;
       events.clear();
-      forget();
       known.clear();
       forcedMessages.clear();
       entered.clear();
@@ -2637,6 +3701,7 @@ export function createUnread({
       channelReadGenerations.clear();
       lifetime.abort();
       resetLookups();
+      activePass = undefined;
       membershipListeners.clear();
       for (const stop of [...handles]) stop();
       stopRead();
@@ -2655,6 +3720,7 @@ export function createUnread({
       inboxListeners.clear();
       forcedMessages.clear();
       entered.clear();
+      participation.close();
       reads.dispose();
     },
   };

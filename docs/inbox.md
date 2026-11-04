@@ -123,8 +123,56 @@ Multiple steps are not atomic: failures leave remaining evidence retryable. Manu
 disable read mutations. Saved frontiers are not proof of remote reconciliation.
 
 This is **bounded recent evidence**, not a complete historical inbox. Unread
-retains at most 4,096 events / 8 MiB, observing up to 500 recent events per
-128-channel roster batch. A lazy addressed query returns up to 50 kind-9/40002
+retains at most 4,096 events / 8 MiB. Each joined channel is observed on its
+own since its read mark (or since the last week, when never read anywhere), up
+to 100 recent events per channel—fewer on a large roster, so a first run's
+windows together fit the budget—so one busy channel cannot push another
+channel's thread out of the Inbox. The newest 500 events of up to 128 joined
+channels at a time are read as well, whatever their marks, so what a window
+starts after is still seen while it is that recent: in a channel only scrolled
+to its end, whose catch-up mark reads no replies, an unread reply older than
+the mark, and read history older than a channel's mark or a never-read
+channel's week. Threads the viewer took part in—replied in, was mentioned or
+answered in, or follows—are remembered per relay and viewer on this device, at
+most 1,000 threads, so their new replies reach the Inbox after their channel's
+window has moved on. The 50 most recently read or
+written in are refetched whole on every repair, before the channel windows,
+and show as rows read or unread. The rest are asked only for replies since the
+newest one the viewer wrote or read, behind the windows, and are rows only
+while they hold a reply the viewer has not read: that newest reply is
+remembered by ID and passed over when it returns, so a reply in the same
+second is not missed and a quiet thread the viewer has read costs nothing and
+shows nothing on later launches—like channel evidence older than its window,
+its read replies are not rows after a relaunch—while a thread's unread replies
+return on every repair until they are read, and a reply marked unread moves
+that mark back to itself (a thread or root marked unread, back to the root).
+A device's first repair also walks back through the viewer's own messages,
+behind the windows, to learn the threads they replied in before their most
+recent messages; later repairs read only what they wrote since.
+The windows, the viewer's own recent messages and the thread reads ride
+together, up to 128 filters per request with two requests in flight, so a
+roster costs one or two round trips; the newest events across the roster are
+one more request per 128 channels, behind the windows. The Inbox is ready once
+the viewer's own recent messages and the remembered threads most recently read
+or written in have landed, or were dropped, and reports `observing` while
+further windows still read. A read that fails is tried once more; dropped
+after that, its channels or threads stay as they were—a dropped thread read
+leaves its channels' counts observed—and the Inbox notes that some recent
+activity could not be checked until the next refresh, with no automatic retry;
+later reads that fail in the same pass are dropped at once, and a dropped walk
+page leaves the walk to the next repair without a notice. A response too large
+for the reader or the native host is split and read in parts rather than
+retried. A repair in which no read lands fails instead, keeping the previous
+evidence and its stale freshness. While a
+repair runs, a reply whose root is not yet retained is not shown as a row
+of its own; it appears under its root once the thread read or lookup brings
+it. A lookup that finds the viewer's reply in a thread, or fetches the root
+of a thread they were mentioned or answered in, hands that thread to the
+running repair, which reads it ahead of the remaining windows; after the
+repair it is read in the background and remembered at once, so it stays in
+the Inbox without a refresh. When the budget is full, the oldest evidence
+outside those threads goes first; the observation completes rather than
+resetting. A lazy addressed query returns up to 50 kind-9/40002
 messages. For those exact IDs and unresolved failed targets, general `#e`
 queries page signed kind-40003 edits and kind-5/9005 deletions, then deletions
 of the edits; `include_aux` on an ordinary `#p` query is not a supported relay

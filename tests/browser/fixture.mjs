@@ -21,6 +21,7 @@ import { buildApp } from "./build.mjs";
 import { fixtureBody } from "./fixture-body.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
 import { validTypingTemplate } from "../../src/features/relay/typing-protocol.ts";
+import { isUnreadWindowBatch } from "../../src/features/relay/unread-window-batch.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 // Public nonmember channel for search/preview/join journeys. Real channel ids
@@ -494,12 +495,18 @@ export const test = base.extend({
                   : []),
               ],
               `${community} ${channel} message ${i}\n${"Mixed height message content. ".repeat((1 + (i % 7) * 3) * (tallMessages ? 5 : 1))}${syntax ? `\n${syntax}` : ""}`,
-              readState ? peerKey : userKey,
+              readState || firstSeenHistory ? peerKey : userKey,
               1700000100 + Math.floor(i / historyRowsPerSecond),
             );
           }),
         );
-    // The app's unread read takes the newest 500 events across joined channels.
+    // A joined channel the viewer has written far more in: its newer messages
+    // fill the viewer's authored page and the roster sample, which have no
+    // window start, and the walk through the rest of them pages back behind
+    // the windows, while the fixture honours the never-read window start for
+    // the channel windows (see the unread evidence read below). The measured
+    // history is by a peer, so the walk does not serve it before the
+    // measurement.
     if (firstSeenHistory)
       histories.set(
         "primary/busy",
@@ -1682,6 +1689,34 @@ export const test = base.extend({
             }
         return [...rows, ...aux];
       }
+      // Unread participation: the viewer's newest messages in the community,
+      // and the walk's keyset pages back through the rest.
+      if (
+        filter.kinds?.includes(9) &&
+        filter.authors?.length === 1 &&
+        filter.authors[0] === viewer &&
+        !filter["#h"] &&
+        !filter["#e"] &&
+        !filter.ids
+      )
+        return [...histories]
+          .filter(([key]) => key.startsWith(`${community}/`))
+          .flatMap(([, history]) => history)
+          .filter(
+            (event) =>
+              filter.kinds.includes(event.kind) &&
+              event.pubkey === viewer &&
+              (filter.since === undefined ||
+                event.created_at >= filter.since) &&
+              (filter.until === undefined ||
+                event.created_at < filter.until ||
+                (event.created_at === filter.until &&
+                  event.id > filter.before_id)),
+          )
+          .toSorted(
+            (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+          )
+          .slice(0, filter.limit);
       // Unread conversation lookup: the viewer's replies to undecided parents.
       if (
         filter.kinds?.includes(9) &&
@@ -1715,7 +1750,10 @@ export const test = base.extend({
             (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
           )
           .slice(0, filter.limit);
-      // Unread evidence is not a top-level window, even for a one-ID final batch.
+      // Unread evidence: a channel's window since its read mark, or the
+      // replies under given roots. Fixture history predates the app's
+      // never-read window start by years, so `since` is ignored except under
+      // `firstSeenHistory`, where it keeps the measured history first-seen.
       if (
         filter.kinds?.includes(9) &&
         !filter.top_level &&
@@ -1730,10 +1768,18 @@ export const test = base.extend({
           ])
           .filter(
             (event) =>
-              filter.until === undefined ||
-              event.created_at < filter.until ||
-              (event.created_at === filter.until &&
-                event.id > filter.before_id),
+              (filter.until === undefined ||
+                event.created_at < filter.until ||
+                (event.created_at === filter.until &&
+                  event.id > filter.before_id)) &&
+              (!firstSeenHistory ||
+                filter.since === undefined ||
+                event.created_at >= filter.since) &&
+              (!filter["#e"] ||
+                event.tags.some(
+                  ([key, value]) =>
+                    key === "e" && filter["#e"].includes(value?.toLowerCase()),
+                )),
           )
           .toSorted(
             (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
@@ -2252,14 +2298,10 @@ export const test = base.extend({
           throw new Error(
             `Unexpected fixture request: ${request.method} ${request.url}`,
           );
+        // The host reads up to four filters per request, or an unread
+        // repair batch of up to 128.
         expect(body.length).toBeGreaterThan(0);
-        expect(body.length).toBeLessThanOrEqual(
-          body.every(
-            (filter) => filter.kinds?.length === 1 && filter.kinds[0] === 9007,
-          )
-            ? 4
-            : 3,
-        );
+        expect(body.length <= 4 || isUnreadWindowBatch(body)).toBe(true);
         const filter = body[0];
         const result = [
           ...new Map(

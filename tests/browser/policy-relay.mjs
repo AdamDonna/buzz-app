@@ -73,6 +73,25 @@ export function policyRelay({
   const unreadHolds = [];
   report.unreadHolds = unreadHolds;
   let heldUnread = false;
+  // Holds an unread evidence response until `releaseUnread`, honouring the
+  // app's abort meanwhile.
+  const holdUnreadResponse = (result, signal) =>
+    new Promise((resolve, reject) => {
+      const held = { pending: true, aborted: false };
+      unreadHolds.push(held);
+      const abort = () => {
+        held.pending = false;
+        held.aborted = true;
+        reject(signal.reason);
+      };
+      if (signal.aborted) return abort();
+      signal.addEventListener("abort", abort, { once: true });
+      pendingUnread.push(() => {
+        held.pending = false;
+        signal.removeEventListener("abort", abort);
+        if (!held.aborted) resolve(Response.json(result));
+      });
+    });
   const profileHolds = [];
   report.profileHolds = profileHolds;
   let heldAuthors = new Set();
@@ -343,6 +362,37 @@ export function policyRelay({
             filters.flatMap((filter) => answer(community, filter)),
           );
         }
+        // Unread participation: the viewer's newest threads refetched whole,
+        // one `#e` filter per channel naming its roots, with roots the
+        // retained evidence lacks fetched by ID in the same request; older
+        // threads asked one root at a time for replies since their newest.
+        // Unread repair requests carry up to 128 filters
+        // (`isUnreadWindowBatch`).
+        if (
+          filters.every(
+            (filter) =>
+              [9, 40002, 40008].every((kind) => filter.kinds?.includes(kind)) &&
+              filter.include_aux &&
+              ((filter["#h"]?.length === 1 &&
+                filter["#e"] &&
+                !filter.authors) ||
+                (filter.ids && !filter["#h"] && !filter["#e"])),
+          )
+        ) {
+          expect(filters.length).toBeLessThanOrEqual(128);
+          const community = communityOf(url);
+          for (const filter of filters) {
+            if (filter.since !== undefined) {
+              expect(filter["#e"]).toHaveLength(1);
+              expect(filter.limit).toBe(50);
+            } else
+              expect(filter.limit).toBe(filter.ids ? filter.ids.length : 200);
+            report.queries.push({ community, filter, at: performance.now() });
+          }
+          return Response.json(
+            filters.flatMap((filter) => answer(community, filter)),
+          );
+        }
         // Unread conversation lookup: missing parents by ID, and the viewer's
         // replies to undecided parents in one channel.
         if (
@@ -390,6 +440,41 @@ export function policyRelay({
           return Response.json(
             filters.flatMap((filter) => answer(communityOf(url), filter)),
           );
+        }
+        // Unread evidence windows: single-channel filters, each since its
+        // channel's read mark, up to 128 per request; the viewer's own newest
+        // messages ride the first request, and when that page is full the
+        // walk pages back through their history one request at a time.
+        if (
+          filters.every(
+            (filter) =>
+              [9, 40002, 40008].every((kind) => filter.kinds?.includes(kind)) &&
+              filter.include_aux &&
+              ((filter["#h"]?.length === 1 && filter.since !== undefined) ||
+                (filter.authors?.length === 1 &&
+                  !filter["#h"] &&
+                  !filter["#e"])),
+          )
+        ) {
+          expect(filters.length).toBeLessThanOrEqual(128);
+          const community = communityOf(url);
+          for (const filter of filters) {
+            // One page per channel, smaller on a large roster.
+            if (filter.authors && filter.until !== undefined) {
+              expect(filters).toHaveLength(1);
+              expect(filter.before_id).toEqual(expect.any(String));
+              expect(filter.limit).toBe(500);
+            } else if (filter.authors) expect(filter.limit).toBe(100);
+            else {
+              expect(filter.limit).toBeGreaterThanOrEqual(20);
+              expect(filter.limit).toBeLessThanOrEqual(100);
+            }
+            report.queries.push({ community, filter, at: performance.now() });
+          }
+          const result = filters.flatMap((filter) => answer(community, filter));
+          return heldUnread
+            ? holdUnreadResponse(result, init.signal)
+            : Response.json(result);
         }
         if (filters.length !== 1) {
           // Sidebar preferences read only these five exact own-author coordinates.
@@ -501,22 +586,7 @@ export function policyRelay({
           filter.depth_limit === undefined &&
           filter.until === undefined
         )
-          return new Promise((resolve, reject) => {
-            const held = { pending: true, aborted: false };
-            unreadHolds.push(held);
-            const abort = () => {
-              held.pending = false;
-              held.aborted = true;
-              reject(init.signal.reason);
-            };
-            if (init.signal.aborted) return abort();
-            init.signal.addEventListener("abort", abort, { once: true });
-            pendingUnread.push(() => {
-              held.pending = false;
-              init.signal.removeEventListener("abort", abort);
-              if (!held.aborted) resolve(Response.json(result));
-            });
-          });
+          return holdUnreadResponse(result, init.signal);
         if (
           filter.kinds?.includes(0) &&
           filter.authors?.some((id) => heldAuthors.has(id))

@@ -1,3 +1,4 @@
+import { verifiedSymbol } from "nostr-tools";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import type { ReadFilter, RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
@@ -142,7 +143,7 @@ it("initial unread markers and evidence bypass held optional profiles without ca
     });
   try {
     await h.session.unread.ensure();
-    expect(h.trace.map(({ kind }) => kind)).toEqual([0, 30078, 9]);
+    expect(h.trace.map(({ kind }) => kind)).toEqual([0, 30078, 9, 9]);
     expect(profileFinished).toBe(false);
     expect(h.profileSignals).toHaveLength(1);
     expect(h.profileSignals[0]?.aborted).toBe(false);
@@ -174,9 +175,11 @@ it("evidence gets its own deadline after a failed marker read; marker errors sta
     assert(marker);
     marker.abort(new DOMException("Marker deadline expired", "TimeoutError"));
     await done;
-    expect(deadlines).toHaveLength(2);
+    // The window request and the roster sample each own a deadline.
+    expect(deadlines).toHaveLength(3);
     expect(deadlines[1]?.signal.aborted).toBe(false);
-    expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9]);
+    expect(deadlines[2]?.signal.aborted).toBe(false);
+    expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9, 9]);
     expect(h.snapshot()).toMatchObject({
       observedCount: 1,
       freshness: "observed",
@@ -193,7 +196,7 @@ it("evidence gets its own deadline after a failed marker read; marker errors sta
   expect(h.session.unread.sync().status).toBe("reconciled");
 });
 
-it("queries all 278 membership IDs with sequential relay-legal batches and publishes each batch", async () => {
+it("queries all 278 membership IDs in 128-filter requests and publishes each landed request", async () => {
   const h = setup(278);
   const batches: string[][] = [];
   const first = message(h.peer, "other", "first", 11);
@@ -204,20 +207,30 @@ it("queries all 278 membership IDs with sequential relay-legal batches and publi
     observed.push(h.snapshot().observedCount);
   });
   h.query.mockImplementation(async (filters) => {
-    const filter = filters[0];
-    if (!filter?.kinds?.includes(9)) return [];
-    const ids = filter["#h"] ?? [];
-    expect(ids.length).toBeGreaterThan(0);
-    expect(ids.length).toBeLessThanOrEqual(128);
-    expect(filter.limit).toBe(500);
-    batches.push([...ids]);
-    if (batches.length > 1) expect(h.snapshot().observedCount).toBe(1);
+    if (!filters[0]?.kinds?.includes(9)) return [];
+    if (!filters.some((filter) => filter["#h"])) return [];
+    expect(filters.length).toBeLessThanOrEqual(128);
+    // The viewer's authored page rides the first request. Windows are sized
+    // so a roster this large stays within the budget: the least, 20 each.
+    const ids = filters.flatMap((filter) => {
+      if (filter.authors) return [];
+      expect(filter["#h"]).toHaveLength(1);
+      expect(filter).toMatchObject({
+        include_aux: true,
+        limit: 20,
+        since: expect.any(Number),
+      });
+      return [filter["#h"]?.[0] ?? ""];
+    });
+    batches.push(ids);
+    // Two requests run at once; the first has landed before a third starts.
+    if (batches.length > 2) expect(h.snapshot().observedCount).toBe(1);
     return [first, second, last].filter((event) =>
       ids.includes(event.tags[0]?.[1] ?? ""),
     );
   });
   await h.session.unread.ensure();
-  expect(batches.map((batch) => batch.length)).toEqual([128, 128, 22]);
+  expect(batches).toHaveLength(3);
   expect(batches.flat().sort()).toEqual([...h.ids].sort());
   expect(observed).toContain(1);
   expect(
@@ -227,51 +240,64 @@ it("queries all 278 membership IDs with sequential relay-legal batches and publi
   expect(h.session.channels.window("room-277").rows).toEqual([]);
 });
 
-it("a full early batch does not starve later channels, and later failure retains evidence until explicit retry", async () => {
+it("a full channel window does not starve later channels, and a dropped request leaves its channels unknown until explicit refresh", async () => {
   const h = setup(129);
-  const rows = Array.from({ length: 500 }, (_, i) =>
+  const rows = Array.from({ length: 100 }, (_, i) =>
     message(h.peer, "other", `busy ${i}`, 11 + i),
   );
   let fail = true;
   const batches: string[][] = [];
   h.query.mockImplementation(async (filters) => {
-    const filter = filters[0];
-    if (!filter?.kinds?.includes(9)) return [];
-    const ids = filter["#h"] ?? [];
-    batches.push([...ids]);
+    if (!filters[0]?.kinds?.includes(9) || !filters.some((f) => f["#h"]))
+      return [];
+    const ids = filters.flatMap((filter) => filter["#h"] ?? []);
+    // The roster sample, with no start, holds the busy rows and never fails.
+    if (filters.every((filter) => filter.since === undefined))
+      return ids.includes("other") ? rows : [];
+    batches.push(ids);
     if (ids.includes("other")) return rows;
     if (fail) throw new Error("Later chunk unavailable");
-    assert(ids[0]);
-    return [message(h.peer, ids[0], "quiet", 11)];
+    return ids.map((id) => message(h.peer, id, "quiet", 11));
   });
   await h.session.unread.ensure();
-  expect(batches).toHaveLength(2);
+  // The second request, the two windows beyond the first's 128 filters, is
+  // read once more, then dropped; the busy channel's request landed, so the
+  // Inbox is observed but partial.
+  const attempted = batches.length;
+  expect(attempted).toBe(1 + 2);
   expect(h.snapshot()).toMatchObject({
-    observedCount: 500,
-    freshness: "stale",
-    error: "Later chunk unavailable",
-  });
-  await h.session.unread.ensure();
-  expect(batches).toHaveLength(2); // No automatic retry loop.
-  fail = false;
-  await h.session.unread.refresh();
-  expect(batches).toHaveLength(4);
-  expect(h.snapshot()).toMatchObject({
-    observedCount: 500,
+    observedCount: 100,
     freshness: "observed",
   });
-  expect(h.snapshot().error).toBeUndefined();
+  expect(h.session.unread.inbox()).toMatchObject({
+    status: "ready",
+    freshness: "observed",
+    partial: true,
+  });
+  expect(h.session.unread.inbox().error).toBeUndefined();
   const quiet = batches[1]?.[0];
   assert(quiet);
-  expect(
-    h.session.unread.snapshot({ kind: "channel", channelId: quiet })
-      .observedCount,
-  ).toBe(1);
+  const snapshot = () =>
+    h.session.unread.snapshot({ kind: "channel", channelId: quiet });
+  expect(snapshot().coverage).toBe("unknown");
+  await h.session.unread.ensure();
+  expect(batches).toHaveLength(attempted); // No automatic retry loop.
+  fail = false;
+  await h.session.unread.refresh();
+  expect(batches).toHaveLength(attempted + 2);
+  expect(h.snapshot()).toMatchObject({
+    observedCount: 100,
+    freshness: "observed",
+  });
+  expect(h.session.unread.inbox().partial).toBeUndefined();
+  expect(snapshot()).toMatchObject({ observedCount: 1, freshness: "observed" });
 });
 
 function conversationRelay(h: ReturnType<typeof setup>) {
-  // A relay whose channel sample holds only the 500 newest rows, so older
-  // conversation membership is reachable only by parent lookup.
+  // A relay whose channel window and roster sample hold only the 100 and 500
+  // newest rows and whose page of the viewer's own messages holds none of
+  // these older replies, so older conversation membership is reachable only
+  // by parent lookup.
   const store: RelayEvent[] = [];
   const lookups: ReadFilter[][] = [];
   let fail = false;
@@ -281,26 +307,29 @@ function conversationRelay(h: ReturnType<typeof setup>) {
     );
   h.query.mockImplementation(async (filters) => {
     if (!filters[0]?.kinds?.includes(9)) return [];
-    if (filters[0].ids || filters[0].authors) {
+    if (filters[0].ids || (filters[0].authors && filters[0]["#e"])) {
       lookups.push([...filters]);
       if (fail) throw new Error("lookup failed");
     }
     return filters.flatMap((filter) =>
-      [...store]
-        .filter(
-          (event) =>
-            (!filter["#h"] ||
-              event.tags.some(
-                ([name, value]) =>
-                  name === "h" && filter["#h"]?.includes(value ?? ""),
-              )) &&
-            (!filter.ids || filter.ids.includes(event.id)) &&
-            (!filter.authors || filter.authors.includes(event.pubkey)) &&
-            (filter.until === undefined || event.created_at <= filter.until) &&
-            (!filter["#e"] || tagged(event, filter["#e"])),
-        )
-        .sort((a, b) => b.created_at - a.created_at)
-        .slice(0, filter.limit),
+      filter.authors && !filter["#e"]
+        ? []
+        : [...store]
+            .filter(
+              (event) =>
+                (!filter["#h"] ||
+                  event.tags.some(
+                    ([name, value]) =>
+                      name === "h" && filter["#h"]?.includes(value ?? ""),
+                  )) &&
+                (!filter.ids || filter.ids.includes(event.id)) &&
+                (!filter.authors || filter.authors.includes(event.pubkey)) &&
+                (filter.until === undefined ||
+                  event.created_at <= filter.until) &&
+                (!filter["#e"] || tagged(event, filter["#e"])),
+            )
+            .sort((a, b) => b.created_at - a.created_at)
+            .slice(0, filter.limit),
     );
   });
   const asked = () =>
@@ -352,7 +381,8 @@ it("looks up conversation membership that falls outside the sampled window", asy
     mine,
     answer,
   );
-  // 500 newer rows fill the channel sample and push out every older message.
+  // 500 newer rows fill the channel window and the roster sample and push
+  // out every older message.
   relay.store.push(
     mine,
     agentRoot,
@@ -624,6 +654,15 @@ it("deleting one of the viewer's replies keeps the membership its other replies 
   const newer = reply(h.viewer, "my newer reply", 12, agentRoot, agentRoot);
   const sibling = reply(h.peer, "same level", 700, agentRoot, agentRoot);
   relay.store.push(agentRoot, older, newer, sibling, ...busy(h, 499));
+  // The thread's page, read once the lookup finds the viewer in it, reaches
+  // neither of their replies: membership rests on the lookup alone.
+  const answer = h.query.getMockImplementation();
+  assert(answer);
+  h.query.mockImplementation(async (filters) =>
+    filters.some((filter) => filter["#e"] && !filter.authors)
+      ? []
+      : answer(filters),
+  );
   await h.session.unread.ensure();
   h.snapshot();
   const attention = () => h.session.unread.attention("other", sibling.id);
@@ -712,9 +751,14 @@ it("lookups for the same parent ID in two channels do not share a result", async
       unread: true,
     }),
   );
+  await vi.waitFor(() =>
+    expect(
+      h.session.unread.attention("room-1", elsewhere.id).pending,
+    ).toBeUndefined(),
+  );
   const elsewhereAttention = h.session.unread.attention("room-1", elsewhere.id);
   expect(elsewhereAttention).toMatchObject({ unread: false });
-  expect(elsewhereAttention.pending).toBeUndefined();
+  expect(elsewhereAttention.category).toBeUndefined();
 });
 
 it("a lookup in flight during a cache clear cannot restore its result", async () => {
@@ -730,7 +774,8 @@ it("a lookup in flight during a cache clear cannot restore its result", async ()
     // Evaluate against the relay now; answer after the clear.
     const rows = (await base?.(filters, signal)) ?? [];
     const lookup =
-      filters[0]?.kinds?.includes(9) && (filters[0].ids || filters[0].authors);
+      filters[0]?.kinds?.includes(9) &&
+      (filters[0].ids || (filters[0].authors && filters[0]["#e"]));
     if (hold && lookup) await held.promise;
     return rows;
   });
@@ -791,14 +836,22 @@ it.each(["clear", "dispose", "revoke", "join"])(
     const held = deferred(),
       fresh = deferred();
     const batches: string[][] = [];
+    const windows = () => batches.filter((ids) => ids.length);
     h.query.mockImplementation(async (filters) => {
       if (!filters[0]?.kinds?.includes(9)) return [];
-      batches.push([...(filters[0]["#h"] ?? [])]);
-      await (batches.length === 1 ? held.promise : fresh.promise);
+      // Windows, not the roster sample behind them, which has no start.
+      const ids = filters.flatMap((filter) =>
+        filter.since === undefined ? [] : (filter["#h"] ?? []),
+      );
+      batches.push(ids);
+      // The two window requests in flight are held across the boundary.
+      await (ids.length && windows().length <= 2
+        ? held.promise
+        : fresh.promise);
       return [h.row];
     });
     const repair = h.session.unread.ensure();
-    await vi.waitFor(() => expect(batches).toHaveLength(1));
+    await vi.waitFor(() => expect(windows()).toHaveLength(2));
     if (boundary === "dispose") h.dispose();
     else if (boundary === "clear") await h.clearCache();
     else if (boundary === "join")
@@ -807,16 +860,16 @@ it.each(["clear", "dispose", "revoke", "join"])(
     held.release();
     await repair;
     if (boundary === "clear" || boundary === "dispose") {
-      expect(batches).toHaveLength(1);
+      expect(windows()).toHaveLength(2);
       expect(h.snapshot().observedCount).toBeNull();
       return;
     }
     // The abandoned read starts over against the current membership.
-    await vi.waitFor(() => expect(batches).toHaveLength(2));
+    await vi.waitFor(() => expect(windows()).toHaveLength(4));
     expect(h.snapshot().observedCount).toBeNull();
     fresh.release();
     await h.session.unread.ensure();
-    const reread = batches.slice(1).flat();
+    const reread = windows().slice(2).flat();
     if (boundary === "join") {
       expect(reread).toContain("new-room");
       expect(h.snapshot().observedCount).toBe(1);
@@ -843,7 +896,7 @@ it("concurrent ensure callers share the active marker/evidence work", async () =
   expect(finished).toBe(false);
   release();
   await Promise.all([first, second]);
-  expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9]);
+  expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9, 9]);
   expect(h.snapshot().observedCount).toBe(1);
 });
 
@@ -861,7 +914,15 @@ it("transient startup failure recovers on live reconnect without an automatic re
     return [h.row];
   });
   await h.session.unread.ensure();
-  expect(h.snapshot().error).toBe("Transient evidence failure");
+  // Dropped after its one retry, and nothing else landed: the channel stays
+  // unknown and the repair failed rather than claiming a partial observation.
+  expect(h.snapshot().coverage).toBe("unknown");
+  expect(h.session.unread.inbox()).toMatchObject({
+    status: "error",
+    freshness: "stale",
+    error: "Transient evidence failure",
+  });
+  expect(h.session.unread.inbox().partial).toBeUndefined();
   const count = h.query.mock.calls.length;
   await h.session.unread.ensure();
   expect(h.query).toHaveBeenCalledTimes(count);
@@ -873,7 +934,7 @@ it("transient startup failure recovers on live reconnect without an automatic re
       freshness: "observed",
     }),
   );
-  expect(h.snapshot().error).toBeUndefined();
+  expect(h.session.unread.inbox().partial).toBeUndefined();
 });
 
 it("the recovery tick repairs unread only as a slow backstop after a connection's own repair", async () => {
@@ -1052,43 +1113,6 @@ function tickReads(h: ReturnType<typeof setup>) {
   };
 }
 
-it("an evidence overflow is repaired on the next recovery tick", async () => {
-  vi.useFakeTimers({ toFake: ["Date"], now: 1_700_000_000_000 });
-  try {
-    const h = setup();
-    const answer = h.query.getMockImplementation();
-    assert(answer);
-    h.query.mockImplementation(async (filters, signal) =>
-      filters[0]?.kinds?.includes(39002)
-        ? [
-            roster(h.relay, "other", [h.viewer.pubkey], 10),
-            metadata(h.relay, "other", "other", 10),
-          ]
-        : answer(filters, signal),
-    );
-    await h.session.unread.ensure();
-    // The connection's own repair starts the backstop interval.
-    h.reconnect();
-    await vi.waitFor(() =>
-      expect(tickReads(h)).toEqual({ evidence: 2, snapshots: 2 }),
-    );
-    h.receive(
-      Array.from({ length: 19 }, (_, i) =>
-        message(h.peer, "other", "x".repeat(450000), i + 20),
-      ),
-    );
-    expect(h.snapshot()).toMatchObject({
-      error: "Unread observation capacity reached; refresh available",
-    });
-    const before = tickReads(h).evidence;
-    vi.setSystemTime(Date.now() + 60_000);
-    h.recover();
-    await vi.waitFor(() => expect(tickReads(h).evidence).toBe(before + 1));
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
 it("a covered reconnect pays the drop's debt: the next recovery tick reads nothing", async () => {
   vi.useFakeTimers({ toFake: ["Date"], now: 1_700_000_000_000 });
   try {
@@ -1160,14 +1184,81 @@ it("a covered reconnect does not postpone the recovery tick's full unread repair
   }
 });
 
-it("capacity failure stops batching and remains visible rather than becoming success", async () => {
-  const h = setup(129);
-  h.receive(
-    Array.from({ length: 18 }, (_, i) =>
-      message(h.peer, "other", "x".repeat(450000), i + 11),
-    ),
+it("a reconnect repair in which nothing lands keeps the observation stale instead of claiming it observed", async () => {
+  const h = setup();
+  await h.session.unread.ensure();
+  expect(h.snapshot()).toMatchObject({
+    observedCount: 1,
+    freshness: "observed",
+  });
+  h.query.mockImplementation(async (filters) => {
+    if (filters[0]?.kinds?.includes(39002))
+      return [
+        roster(h.relay, "other", [h.viewer.pubkey], 10),
+        metadata(h.relay, "other", "other", 10),
+      ];
+    if (filters[0]?.kinds?.includes(9)) throw new Error("Relay read timed out");
+    return [];
+  });
+  const count = h.query.mock.calls.length;
+  h.reconnect();
+  // The window request and the roster sample beside it are each read twice,
+  // then dropped; nothing was observed.
+  await vi.waitFor(() =>
+    expect(
+      h.query.mock.calls
+        .slice(count)
+        .filter(([filters]) => filters[0]?.kinds?.includes(9)),
+    ).toHaveLength(4),
   );
+  await vi.waitFor(() =>
+    expect(h.session.unread.inbox()).toMatchObject({
+      status: "error",
+      freshness: "stale",
+      error: "Relay read timed out",
+    }),
+  );
+  expect(h.snapshot()).toMatchObject({ observedCount: 1, freshness: "stale" });
+  expect(h.session.unread.inbox().partial).toBeUndefined();
+});
+
+it("a relay that accepts reads but answers none costs one read per request after the first drop", async () => {
+  const h = setup(300);
+  const batches: string[][] = [];
+  h.query.mockImplementation(async (filters) => {
+    if (!filters[0]?.kinds?.includes(9) || !filters.some((f) => f["#h"]))
+      return [];
+    batches.push(filters.flatMap((filter) => filter["#h"] ?? []));
+    throw new Error("Relay read timed out");
+  });
+  await h.session.unread.ensure();
+  // Six requests (the authored page and 299 windows, then 128, then 45,
+  // then the roster sample's 128, 128 and 44): the first is read twice, the
+  // last four once; the second, in flight beside the first, at most twice.
+  // Twelve reads would mean a retry per request.
+  const sizes = batches.map((batch) => batch.length);
+  expect(sizes.filter((size) => size === 127)).toHaveLength(2);
+  expect(sizes.filter((size) => size === 45)).toHaveLength(1);
+  expect(sizes.filter((size) => size === 44)).toHaveLength(1);
+  expect(batches.length).toBeLessThanOrEqual(8);
+  expect(h.session.unread.inbox()).toMatchObject({
+    status: "error",
+    freshness: "stale",
+  });
+  expect(h.snapshot().coverage).toBe("unknown");
+});
+
+it("a full budget evicts the oldest evidence and the observation still completes", async () => {
+  const h = setup(129);
+  const oldest = message(h.peer, "other", "x".repeat(450000), 11);
+  h.receive([
+    oldest,
+    ...Array.from({ length: 17 }, (_, i) =>
+      message(h.peer, "other", "x".repeat(450000), i + 12),
+    ),
+  ]);
   expect(h.snapshot().observedCount).toBe(18);
+  expect(h.session.unread.attention("other", oldest.id).unread).toBe(true);
   const overflow = message(h.peer, "other", "x".repeat(450000), 40);
   let batches = 0;
   h.query.mockImplementation(async (filters) => {
@@ -1176,12 +1267,120 @@ it("capacity failure stops batching and remains visible rather than becoming suc
     return [overflow];
   });
   await h.session.unread.ensure();
-  expect(batches).toBe(1);
+  // Every window request and the roster sample's two still run.
+  expect(batches).toBe(4);
   expect(h.snapshot()).toMatchObject({
-    observedCount: null,
-    freshness: "stale",
-    error: "Unread observation capacity reached; refresh available",
+    observedCount: 18,
+    freshness: "observed",
   });
+  expect(h.snapshot().error).toBeUndefined();
+  expect(h.session.unread.attention("other", overflow.id).unread).toBe(true);
+  expect(h.session.unread.attention("other", oldest.id).unread).toBe(false);
+});
+
+it("a response over the reader's byte budget splits the request and the repair completes", async () => {
+  const h = setup(40);
+  // 40 channels of 76 messages of 3,000 bytes: the roster's windows ride one
+  // request, whose response is ~10 MB, over the 8 MiB the real reader admits.
+  // Events are marked verified, as the transport would have, and recent, so
+  // the never-read channels' week-long windows reach them.
+  let sequence = 0;
+  const recent = Math.floor(Date.now() / 1000) - 3600;
+  const rows = new Map(
+    h.ids.map((id) => [
+      id,
+      Array.from(
+        { length: 76 },
+        (_, i): RelayEvent => ({
+          id: (sequence++).toString(16).padStart(64, "0"),
+          pubkey: h.peer.pubkey,
+          kind: 9,
+          created_at: recent + i,
+          content: "x".repeat(3000),
+          tags: [["h", id]],
+          sig: "0".repeat(128),
+          [verifiedSymbol]: true,
+        }),
+      ),
+    ]),
+  );
+  h.query.mockImplementation(async (filters) =>
+    filters.flatMap((filter) => {
+      const channel = filter["#h"]?.[0];
+      const since = filter.since;
+      if (!filter.kinds?.includes(9) || !channel || since === undefined)
+        return [];
+      return (rows.get(channel) ?? [])
+        .filter((event) => event.created_at >= since)
+        .slice(-filter.limit);
+    }),
+  );
+  await h.session.unread.ensure();
+  // The 41-filter request is split in two, each within the budget.
+  const windowed = h.query.mock.calls
+    .map(([filters]) => filters)
+    .filter((filters) => filters.some((filter) => filter.since !== undefined));
+  expect(windowed.map((filters) => filters.length)).toEqual([41, 21, 20]);
+  // The evidence lands, trimmed to the 8 MiB retained budget channel by
+  // channel, rather than failing the repair with nothing observed.
+  for (const id of h.ids) {
+    const snapshot = h.session.unread.snapshot({
+      kind: "channel",
+      channelId: id,
+    });
+    expect(snapshot).toMatchObject({
+      coverage: "observed",
+      freshness: "observed",
+    });
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.observedCount).toBeGreaterThanOrEqual(50);
+    expect(snapshot.observedCount).toBeLessThanOrEqual(76);
+  }
+  expect(h.session.unread.inbox()).toMatchObject({
+    status: "ready",
+    freshness: "observed",
+  });
+  expect(h.session.unread.inbox().partial).toBeUndefined();
+});
+
+it("a response the native host rejects as too large splits the request the same way", async () => {
+  const h = setup(40);
+  // Native reads at most 16 MiB (`read_response`) and rejects before the
+  // reader can measure, with the plain string its IPC carries.
+  const recent = Math.floor(Date.now() / 1000) - 3600;
+  h.query.mockImplementation(async (filters) => {
+    // The whole roster's windows in one request are over the cap; either half fits.
+    if (filters.length > 30) throw "Relay response is too large";
+    return filters.flatMap((filter) => {
+      const channel = filter["#h"]?.[0];
+      if (!filter.kinds?.includes(9) || !channel || filter.since === undefined)
+        return [];
+      return [
+        {
+          ...message(h.peer, channel, "recent", recent),
+          [verifiedSymbol]: true,
+        },
+      ];
+    });
+  });
+  await h.session.unread.ensure();
+  const windowed = h.query.mock.calls
+    .map(([filters]) => filters)
+    .filter((filters) => filters.some((filter) => filter.since !== undefined));
+  expect(windowed.map((filters) => filters.length)).toEqual([41, 21, 20]);
+  for (const id of h.ids)
+    expect(
+      h.session.unread.snapshot({ kind: "channel", channelId: id }),
+    ).toMatchObject({
+      coverage: "observed",
+      freshness: "observed",
+      observedCount: 1,
+    });
+  expect(h.session.unread.inbox()).toMatchObject({
+    status: "ready",
+    freshness: "observed",
+  });
+  expect(h.session.unread.inbox().partial).toBeUndefined();
 });
 
 it.each(["clear", "dispose", "revoke"])(
@@ -1205,10 +1404,18 @@ it.each(["clear", "dispose", "revoke"])(
     // Only a fresh observation without the revoked channel is dispatched.
     await h.session.unread.ensure();
     const evidence = h.query.mock.calls
-      .map(([filters]) => filters[0])
-      .filter((filter) => filter?.kinds?.includes(9));
-    expect(evidence).toHaveLength(1);
-    expect(evidence[0]?.["#h"]).not.toContain("other");
+      .flatMap(([filters]) => filters)
+      .filter((filter) => filter.kinds?.includes(9) && filter["#h"]);
+    // 128 windows and the roster sample of the same 128 channels.
+    expect(
+      evidence.filter((filter) => filter.since !== undefined),
+    ).toHaveLength(128);
+    expect(evidence.filter((filter) => filter.since === undefined)).toEqual([
+      expect.objectContaining({ "#h": expect.any(Array), limit: 500 }),
+    ]);
+    expect(evidence.flatMap((filter) => filter["#h"] ?? [])).not.toContain(
+      "other",
+    );
   },
 );
 
@@ -1220,7 +1427,8 @@ it("a subscriber clearing cache during progressive publication stops later chunk
   });
   await h.session.unread.ensure();
   await cleared;
-  expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9]);
+  // The two requests in flight land; nothing further is dispatched.
+  expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9, 9]);
   expect(h.snapshot().observedCount).toBeNull();
 });
 
@@ -1232,7 +1440,9 @@ it("explicit refresh bypasses optional profiles for both markers and evidence", 
   try {
     await h.session.unread.refresh();
     expect(h.profileSignals[0]?.aborted).toBe(false);
-    expect(h.trace.map(({ kind }) => kind)).toEqual([30078, 9, 0, 30078, 9]);
+    expect(h.trace.map(({ kind }) => kind)).toEqual([
+      30078, 9, 9, 0, 30078, 9, 9,
+    ]);
   } finally {
     release();
     await profiles;

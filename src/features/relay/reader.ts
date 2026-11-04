@@ -1,4 +1,5 @@
 import { isSidebarPreferencesBatch } from "./sidebar-preferences";
+import { isUnreadWindowBatch } from "./unread-window-batch";
 import { isWorkflowDefinitionBatch } from "../workflows/queries";
 import { verifyThreadWindows } from "./thread-window";
 import { yieldToHost } from "./yield";
@@ -6,7 +7,7 @@ import { createRelayProfiler, type RelayProfiler } from "./profiling";
 import type { ReadFilter, RelayEvent } from "./events";
 import type { ReadTransport } from "./transport";
 import { byteSize } from "./budget";
-import { ReadError } from "./errors";
+import { READ_BUDGET_EXCEEDED, ReadError } from "./errors";
 import type { AgentLibrary } from "../agents/library";
 
 export type Priority = "foreground" | "background";
@@ -194,10 +195,7 @@ export function createRelayReader(
         void query
           .then(async (events) => {
             if (byteSize(events) > 8 * 1024 * 1024)
-              throw new ReadError(
-                "invalid-response",
-                "Relay response exceeds the read budget",
-              );
+              throw new ReadError("invalid-response", READ_BUDGET_EXCEEDED);
             await verifyThreadWindows(
               job.filters,
               events,
@@ -244,7 +242,8 @@ export function createRelayReader(
         (!filters.length && !library) ||
         (filters.length > 4 &&
           !isWorkflowDefinitionBatch(filters) &&
-          !isSidebarPreferencesBatch(filters))
+          !isSidebarPreferencesBatch(filters) &&
+          !isUnreadWindowBatch(filters))
       )
         throw new Error("A read needs 1–4 filters");
       // Object property and set order do not change NIP-01 filter semantics.

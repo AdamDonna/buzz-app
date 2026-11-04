@@ -178,10 +178,15 @@ it.each([
     const view = render(h.view);
     await waitFor(() => expect(rows()).toHaveLength(2));
     await chooseFilter("Mentions");
-    const thread = rows().find((row) =>
-      row.textContent?.includes("Matching thread mention"),
-    );
-    if (!thread) throw new Error("Missing matching-mention row");
+    // The mention's root is not retained until the lookup fetches it; the
+    // startup repair holds the reply's row until then.
+    const thread = await waitFor(() => {
+      const row = rows().find((row) =>
+        row.textContent?.includes("Matching thread mention"),
+      );
+      if (!row) throw new Error("Missing matching-mention row");
+      return row;
+    });
     if (action === "menu") {
       fireEvent.contextMenu(
         within(thread).getByRole("button", { name: /^Open / }),
@@ -1603,6 +1608,7 @@ function fixture(
   let rosterStarted = false;
   let evidenceReads = 0;
   let unreadGate: Promise<void> | undefined;
+  let unreadFails: boolean | "all" = false;
   let unreadStarted = false;
   const historyRequests: string[] = [];
   const threadRequests: string[] = [];
@@ -1769,6 +1775,14 @@ function fixture(
         ) {
           unreadStarted = true;
           await unreadGate;
+          // Only the channel windows fail, so the remembered thread reads
+          // land and the pass is partial; "all" fails the repair outright.
+          if (
+            unreadFails === "all" ||
+            (unreadFails &&
+              filters.some((filter) => filter.since !== undefined))
+          )
+            throw new Error("unread window unavailable");
         }
         if (
           filters.some((filter) => !!filter["#p"] && filter.kinds?.includes(9))
@@ -1960,6 +1974,9 @@ function fixture(
     evidenceReads: () => evidenceReads,
     historyRequests,
     unreadStarted: () => unreadStarted,
+    failUnread(value: boolean | "all") {
+      unreadFails = value;
+    },
     holdUnread() {
       unreadStarted = false;
       let release = () => {};
@@ -2638,6 +2655,101 @@ it("reads a reopened row again after its tab closes", async () => {
   open();
   await findReader();
   await waitFor(() => expect(unread()).not.toBeInTheDocument());
+});
+
+it("a window dropped after its retry shows a soft notice with Refresh, not the failure banner", async () => {
+  const h = fixture();
+  render(h.view);
+  await waitFor(() =>
+    expect(h.owner.session.unread.inbox().status).toBe("ready"),
+  );
+  h.failUnread(true);
+  await act(() => h.owner.session.unread.refresh());
+  expect(h.owner.session.unread.inbox()).toMatchObject({
+    status: "ready",
+    freshness: "observed",
+    partial: true,
+  });
+  const notice = await screen.findByText(
+    "Some recent activity could not be checked.",
+  );
+  expect(notice.closest("[role=status]")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  h.failUnread(false);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByText("Some recent activity could not be checked."),
+    ).not.toBeInTheDocument(),
+  );
+  expect(h.owner.session.unread.inbox().partial).toBeUndefined();
+});
+
+async function partialNotice(h: ReturnType<typeof fixture>) {
+  render(h.view);
+  await waitFor(() =>
+    expect(h.owner.session.unread.inbox().status).toBe("ready"),
+  );
+  h.failUnread(true);
+  await act(() => h.owner.session.unread.refresh());
+  const refresh = await screen.findByRole("button", { name: "Refresh" });
+  expect(h.owner.session.unread.inbox().partial).toBe(true);
+  return refresh;
+}
+
+it.each(["refresh", "other"] as const)(
+  "the partial notice's Refresh hands off focus when recovery removes it (focus owner: %s)",
+  async (focusOwner) => {
+    const h = fixture();
+    const user = userEvent.setup();
+    const refresh = await partialNotice(h);
+    h.failUnread(false);
+    const other = screen.getByRole("button", { name: "Unread only" });
+    const release = h.holdUnread();
+    try {
+      refresh.focus();
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(h.unreadStarted()).toBe(true));
+      // The control stays mounted and focused while its refresh runs.
+      expect(refresh).toHaveFocus();
+      expect(refresh).toHaveAttribute("aria-disabled", "true");
+      if (focusOwner === "other") other.focus();
+    } finally {
+      await act(async () => release());
+    }
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Some recent activity could not be checked."),
+      ).not.toBeInTheDocument(),
+    );
+    // Focus the retired Refresh owned moves to a stable Inbox control; focus
+    // the person moved meanwhile stays where they put it.
+    await waitFor(() =>
+      expect(
+        focusOwner === "refresh"
+          ? screen.getByRole("button", { name: "Inbox filters" })
+          : other,
+      ).toHaveFocus(),
+    );
+  },
+);
+
+it("the partial notice's Refresh hands focus to the alert's Retry when the refresh fails", async () => {
+  const h = fixture();
+  const user = userEvent.setup();
+  const refresh = await partialNotice(h);
+  h.failUnread("all");
+  refresh.focus();
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "unread window unavailable",
+  );
+  expect(
+    screen.queryByText("Some recent activity could not be checked."),
+  ).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Retry inbox" })).toHaveFocus(),
+  );
 });
 
 it.each([false, true])(
