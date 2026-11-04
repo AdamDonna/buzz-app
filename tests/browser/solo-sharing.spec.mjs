@@ -433,6 +433,24 @@ test.describe("View only channel share", () => {
       .getByRole("button", { name: "Share", exact: true })
       .click();
     await expect(dialog).not.toBeVisible();
+    const changedToast = page.getByRole("dialog", {
+      name: "Chat changed to View only. Shared in #Alpha",
+      exact: true,
+    });
+    await expect(changedToast).toBeVisible();
+    await expect(
+      changedToast.getByRole("button", { name: "View", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => window.fixtureNavigation.snapshot().entry.target.channelId,
+      ),
+    ).toBe(sharedChatId);
+    await changedToast.hover();
+    if (info.project.name === "chromium")
+      await changedToast.screenshot({
+        path: info.outputPath("SHARE_ACCESS_CHANGED_TOAST_390.png"),
+      });
     expect(app.report.detailsPublications).toHaveLength(1);
     expect(app.report.detailsPublications[0].tags).toContainEqual([
       "visibility",
@@ -467,6 +485,15 @@ test.describe("View only channel share", () => {
     expect(
       links[0].event.tags.some(([key]) => key === "t" || key === "s"),
     ).toBe(false);
+    await changedToast
+      .getByRole("button", { name: "View", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.fixtureNavigation.snapshot().entry.target),
+      )
+      .toMatchObject({ channelId: "alpha", messageId: links[0].event.id });
+    await openChat(page, app, sharedChatId);
     // Sharing again confirms delivery while retaining the existing View only policy.
     await trigger.click();
     await search.fill("Alpha");
@@ -495,6 +522,9 @@ test.describe("View only channel share", () => {
       .getByRole("button", { name: "Share", exact: true })
       .click();
     await expect(dialog).not.toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Shared in #Alpha", exact: true }),
+    ).toBeVisible();
     await expect
       .poll(
         () =>

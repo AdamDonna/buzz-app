@@ -83,11 +83,14 @@ export async function shareSoloChatAccess(
     confirmed,
     attempts,
     check = () => signal.throwIfAborted(),
+    onAccessChanged,
   }: {
     signal: AbortSignal;
     confirmed?: ChannelDetails | undefined;
     attempts: Map<string, ChannelDetailsDraft>;
     check?: () => void;
+    /** Only after this share's save or exact uncertain attempt is confirmed. */
+    onAccessChanged?: () => void;
   },
 ): Promise<ChannelDetails | undefined> {
   check();
@@ -100,6 +103,7 @@ export async function shareSoloChatAccess(
       );
     await details.check(id, signal);
     check();
+    onAccessChanged?.();
   }
   const base = await details.load(id, signal);
   check();
@@ -137,6 +141,7 @@ export async function shareSoloChatAccess(
   if (draft) attempts.set(id, draft);
   await saving;
   check();
+  onAccessChanged?.();
 }
 
 /** Promote in place through the existing signed details owner. A retry checks an

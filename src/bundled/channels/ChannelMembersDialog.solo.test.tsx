@@ -797,6 +797,11 @@ it.each(["member", "guest"] as const)(
       joinRole: "guest",
     });
     expect(t.placement).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      "Chat changed to View only. Shared in Planning",
+      "success",
+      undefined,
+    );
   },
 );
 
@@ -875,6 +880,11 @@ it.each(["member", "guest"] as const)(
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(t.channel()?.joinRole).toBe(joinRole);
     expect(t.members.get(source)).toEqual([t.viewer.pubkey]);
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      "Shared in Planning",
+      "success",
+      undefined,
+    );
   },
 );
 
@@ -899,6 +909,7 @@ it("a refused access change posts nothing and retry asks for confirmation again"
     "Settings refused",
   );
   expect(t.published).toHaveLength(0);
+  expect(notify).not.toHaveBeenCalled();
   t.failDetails(false);
   await user.click(
     within(dialog).getByRole("button", { name: "Retry share Planning" }),
@@ -950,6 +961,11 @@ it("checks an uncertain access save before posting, without resending the access
     expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
   );
   expect(t.members.get(source)).toEqual([t.viewer.pubkey]);
+  expect(notify).toHaveBeenCalledExactlyOnceWith(
+    "Chat changed to View only. Shared in Planning",
+    "success",
+    undefined,
+  );
 });
 
 it("retains View only when link enqueue fails and retries just the link", async () => {
@@ -978,6 +994,7 @@ it("retains View only when link enqueue fails and retries just the link", async 
   );
   expect(t.channel()?.joinRole).toBe("guest");
   expect(t.published.map((event) => event.kind)).toEqual([9002]);
+  expect(notify).not.toHaveBeenCalled();
   send.mockRestore();
   await user.click(
     within(dialog).getByRole("button", { name: "Retry share Planning" }),
@@ -989,6 +1006,11 @@ it("retains View only when link enqueue fails and retries just the link", async 
   );
   await waitFor(() =>
     expect(t.published.map((event) => event.kind)).toEqual([9002, 9]),
+  );
+  expect(notify).toHaveBeenCalledExactlyOnceWith(
+    "Chat changed to View only. Shared in Planning",
+    "success",
+    undefined,
   );
 });
 

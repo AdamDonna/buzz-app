@@ -72,6 +72,7 @@ export function useSoloShare({
   const [confirmation, setConfirmation] = useState<ChannelDetails>();
   const running = useRef(false);
   const requestedAccess = useRef(new Map<string, ChannelDetailsDraft>());
+  const accessChanged = useRef(false);
   const accessAttempt = useSyncExternalStore(
     session.channelDetails.subscribe,
     () => session.channelDetails.snapshot(channelId),
@@ -191,6 +192,9 @@ export function useSoloShare({
         signal: active,
         confirmed,
         attempts: requestedAccess.current,
+        onAccessChanged: () => {
+          accessChanged.current = true;
+        },
         check: () => {
           active.throwIfAborted();
           if (!visible())
@@ -226,7 +230,7 @@ export function useSoloShare({
         .list()
         .channels.find((item) => item.id === target);
       notify(
-        shared ? `Shared in ${channelText(shared)}` : "Shared",
+        `${accessChanged.current ? "Chat changed to View only. " : ""}${shared ? `Shared in ${channelText(shared)}` : "Shared"}`,
         "success",
         view && navigationController
           ? {
@@ -237,6 +241,7 @@ export function useSoloShare({
             }
           : undefined,
       );
+      accessChanged.current = false;
       close();
     } catch (reason) {
       if (!visible()) return;

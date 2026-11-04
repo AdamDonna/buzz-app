@@ -68,8 +68,10 @@ access and posts the link in one step. A chat already set to View only gets a
 similar confirmation explaining link delivery; Share posts the link without an
 access write. Public (existing) chats keep their access and post directly.
 Cancel returns focus to the same Share result and preserves the search.
-The toast **Shared in #channel** offers **View**,
-which opens the posted link. **Done** closes the access dialog without writes.
+The toast says **Chat changed to View only. Shared in #channel** when Share
+changed access, or **Shared in #channel** when access was already open. Both
+offer **View**, which opens the posted link. **Done** closes the access dialog
+without writes.
 
 An access failure leaves the link unsent. An uncertain access save offers
 **Check access and share**: it checks the existing write without resending, then

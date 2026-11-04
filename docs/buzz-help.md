@@ -182,6 +182,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   there, after confirming community
   access to the full history and Canvas. Chats already set to View only get a
   delivery confirmation and keep their access. Public chats post directly.
+  The success toast confirms any change to View only and offers **View** to open
+  the posted link in the destination channel.
   Opening a shared chat link creates no sidebar entry.
   Direct invitations still add members. Pasting a link to a Private chat you own into a channel, thread or DM
   uses the same confirmation, then sends your original message. Owned View only

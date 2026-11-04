@@ -66,10 +66,12 @@ function fixture(
   } as unknown as RelaySession;
   const attempts = new Map<string, ChannelDetailsDraft>();
   const signal = new AbortController().signal;
+  const onAccessChanged = vi.fn();
   return {
     session,
     attempts,
     signal,
+    onAccessChanged,
     save,
     load,
     checkSave,
@@ -92,7 +94,9 @@ it("requests Private consent, then saves View only with other details preserved"
   const base = await shareSoloChatAccess(f.session, id, f);
   expect(base?.visibility).toBe("private");
   expect(f.save).not.toHaveBeenCalled();
+  expect(f.onAccessChanged).not.toHaveBeenCalled();
   await shareSoloChatAccess(f.session, id, { ...f, confirmed: base });
+  expect(f.onAccessChanged).toHaveBeenCalledOnce();
   expect(f.save).toHaveBeenCalledExactlyOnceWith(
     base,
     expect.objectContaining({
@@ -113,6 +117,7 @@ it("preserves Public policy without consent or writes", async () => {
   f.setBase({ canEdit: false });
   expect(await shareSoloChatAccess(f.session, id, f)).toBeUndefined();
   expect(f.save).not.toHaveBeenCalled();
+  expect(f.onAccessChanged).not.toHaveBeenCalled();
 });
 
 it("requests View only confirmation and retains access without a write", async () => {
@@ -125,6 +130,26 @@ it("requests View only confirmation and retains access without a write", async (
     await shareSoloChatAccess(f.session, id, { ...f, confirmed: base }),
   ).toBeUndefined();
   expect(f.save).not.toHaveBeenCalled();
+  expect(f.onAccessChanged).not.toHaveBeenCalled();
+});
+
+it("does not claim another client's access change while confirmation is open", async () => {
+  const f = fixture();
+  const base = await shareSoloChatAccess(f.session, id, f);
+  f.setBase({ visibility: "public", joinRole: "guest", version: "other" });
+  await shareSoloChatAccess(f.session, id, { ...f, confirmed: base });
+  expect(f.save).not.toHaveBeenCalled();
+  expect(f.onAccessChanged).not.toHaveBeenCalled();
+});
+
+it("does not announce a rejected access save", async () => {
+  const f = fixture();
+  const base = await shareSoloChatAccess(f.session, id, f);
+  f.save.mockRejectedValueOnce(new Error("Settings refused"));
+  await expect(
+    shareSoloChatAccess(f.session, id, { ...f, confirmed: base }),
+  ).rejects.toThrow("Settings refused");
+  expect(f.onAccessChanged).not.toHaveBeenCalled();
 });
 
 it("does not reopen a View only chat that became Private during confirmation", async () => {
@@ -144,7 +169,9 @@ it("checks its exact uncertain access attempt without resending it", async () =>
   await expect(
     shareSoloChatAccess(f.session, id, { ...f, confirmed: base }),
   ).rejects.toThrow("Check save status");
+  expect(f.onAccessChanged).not.toHaveBeenCalled();
   await shareSoloChatAccess(f.session, id, { ...f, confirmed: base });
+  expect(f.onAccessChanged).toHaveBeenCalledOnce();
   expect(f.checkSave).toHaveBeenCalledExactlyOnceWith(id, f.signal);
   expect(f.save).toHaveBeenCalledOnce();
 });
