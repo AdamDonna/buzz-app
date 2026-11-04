@@ -111,6 +111,10 @@ export type ChannelStoreOptions = {
 const EMPTY_ROWS: readonly ChannelMessage[] = Object.freeze([]);
 /** Relay page size, separate from discovery's retained-entry budget. */
 const DISCOVERY_LIMIT = 500;
+/** Channels one creator-proof filter names. Each has one creation, so a limit
+ * of twice this, the relay's maximum, leaves room for strays; a filter that
+ * reaches it proves only the channels whose creation arrived. */
+const CREATION_READ_CHANNELS = 250;
 // Public channel metadata for name search, read a page at a time up to a
 // bound; matches resolve exactly.
 const PUBLIC_CHANNEL_PAGE = 500;
@@ -1192,7 +1196,7 @@ export function createChannelStore(
   ) {
     if (!transport || !discovery || options.cachedOnly) return;
     const pending = new Map<string, CreationRead>();
-    const filters = events.flatMap((event) => {
+    const wanted = events.flatMap((event) => {
       const id = tag(event, "d");
       const identity = channelIdentity(event);
       if (
@@ -1210,19 +1214,27 @@ export function createChannelStore(
       const read = { version: event.id, complete: false };
       creationReads.set(id, read);
       pending.set(id, read);
-      return [
-        {
-          kinds: [9007],
-          ...(settings?.consistency
-            ? { consistency: settings.consistency }
-            : {}),
-          authors: [identity.creator],
-          "#h": [id],
-          limit: 1,
-        },
-      ];
+      return [{ id, creator: identity.creator }];
     });
-    if (!filters.length) return;
+    if (!wanted.length) return;
+    const creators = new Map(wanted.map(({ id, creator }) => [id, creator]));
+    // One filter names many channels and their creators. Discovery accepts a
+    // creation only from its own channel's creator, so a cross match is ignored.
+    const filters = [];
+    for (
+      let offset = 0;
+      offset < wanted.length;
+      offset += CREATION_READ_CHANNELS
+    ) {
+      const chunk = wanted.slice(offset, offset + CREATION_READ_CHANNELS);
+      filters.push({
+        kinds: [9007],
+        ...(settings?.consistency ? { consistency: settings.consistency } : {}),
+        authors: [...new Set(chunk.map(({ creator }) => creator))],
+        "#h": chunk.map(({ id }) => id),
+        limit: 2 * chunk.length,
+      });
+    }
     const generation = epoch;
     const controller = new AbortController();
     controllers.add(controller);
@@ -1242,13 +1254,38 @@ export function createChannelStore(
         settings?.signal?.throwIfAborted();
         if (disposed || generation !== epoch || controller.signal.aborted)
           throw new DOMException("Stale creation resolution", "AbortError");
+        const creations = receipts.filter((event) => event.kind === 9007);
+        const proved = new Set(
+          creations.flatMap((event) => {
+            const coordinates = event.tags.filter(([name]) => name === "h");
+            const id =
+              coordinates.length === 1 && coordinates[0]?.length === 2
+                ? coordinates[0][1]
+                : undefined;
+            return id && event.pubkey === creators.get(id) ? [id] : [];
+          }),
+        );
         for (const filter of filters.slice(offset, offset + 4)) {
-          const id = filter["#h"][0];
-          const read = id && pending.get(id);
-          if (id && read && creationReads.get(id) === read)
-            read.complete = true;
+          // A filter cut at its limit may have left a channel's creation out.
+          const cut =
+            creations.filter((event) =>
+              event.tags.some(
+                ([name, id]) => name === "h" && filter["#h"].includes(id ?? ""),
+              ),
+            ).length >= filter.limit;
+          for (const id of filter["#h"]) {
+            const read = pending.get(id);
+            if (
+              read &&
+              creationReads.get(id) === read &&
+              (!cut || proved.has(id))
+            )
+              read.complete = true;
+            else if (read && creationReads.get(id) === read)
+              creationReads.delete(id);
+          }
         }
-        applyDiscovery(receipts.filter((event) => event.kind === 9007));
+        applyDiscovery(creations);
       }
     })()
       .catch((error) => {

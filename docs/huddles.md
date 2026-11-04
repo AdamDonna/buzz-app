@@ -280,6 +280,11 @@ proof from the writer, even after an earlier replica lookup found no receipt.
 Proof-read failures reject that resolution so invitation recovery can use its
 existing bounded retries; newer accepted metadata remains the proof source.
 
+Background proof reads combine up to 250 channels and their creators per filter.
+If a response reaches its limit, channels without an exact receipt from their
+own creator remain eligible for a later refresh. Cross-author and ambiguous
+channel matches consume response space but do not complete those proof reads.
+
 Rooms without that evidence, including legacy Huddles whose creation events did
 not include their room ID, retain ordinary channel access. For presentation only,
 relay-signed metadata identifying a private, expiring stream named exactly

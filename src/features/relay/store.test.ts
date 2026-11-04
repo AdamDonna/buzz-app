@@ -874,6 +874,137 @@ it.each([
   },
 );
 
+describe("creator proof reads", () => {
+  const stream = (channel: string, creator = alice.pubkey) =>
+    metadata(relay, channel, channel, 1_700_000_000, [
+      ["t", "stream"],
+      ["P", creator],
+    ]);
+  type Pending = ReturnType<typeof setup>["pending"];
+  /** Answer metadata reads with stream metadata and every other read with
+   * nothing, until only creator proofs are pending; return those. */
+  async function proofs(
+    pending: Pending,
+    creators = new Map<string, string>(),
+  ) {
+    for (let round = 0; round < 20; round++) {
+      await flush();
+      const found = pending.filter((entry) =>
+        entry.filters.some((filter) => filter.kinds?.includes(9007)),
+      );
+      const other = pending.filter((entry) => !found.includes(entry));
+      if (found.length && !other.length) return found;
+      for (const entry of other) {
+        pending.splice(pending.indexOf(entry), 1);
+        entry.respond(
+          entry.filters.flatMap((filter) =>
+            filter.kinds?.includes(39000)
+              ? (filter["#d"] ?? []).map((channel) =>
+                  stream(channel, creators.get(channel)),
+                )
+              : [],
+          ),
+        );
+      }
+    }
+    throw new Error("no creator proof read");
+  }
+  async function listed(channels: readonly string[]) {
+    const test = setup();
+    test.queries.ensureList();
+    test
+      .next()
+      .respond(
+        channels.map((channel) => roster(relay, channel, [viewer.pubkey])),
+      );
+    return test;
+  }
+
+  it("reads up to 250 channels' creations in one filter", async () => {
+    const channels = Array.from({ length: 300 }, (_, i) => `c${i}`);
+    const creators = new Map(
+      channels.map((channel, i) => [
+        channel,
+        i % 2 ? alice.pubkey : viewer.pubkey,
+      ]),
+    );
+    const { store, pending } = await listed(channels);
+    try {
+      const [read] = await proofs(pending, creators);
+      assert.exists(read);
+      const [first, second] = read.filters;
+      expect(read.filters).toHaveLength(2);
+      expect([first?.limit, second?.limit]).toEqual([500, 100]);
+      expect([first?.["#h"]?.length, second?.["#h"]?.length]).toEqual([
+        250, 50,
+      ]);
+      expect(
+        new Set([...(first?.["#h"] ?? []), ...(second?.["#h"] ?? [])]),
+      ).toEqual(new Set(channels));
+      for (const filter of read.filters) {
+        expect(filter.kinds).toEqual([9007]);
+        expect(new Set(filter.authors)).toEqual(
+          new Set([viewer.pubkey, alice.pubkey]),
+        );
+      }
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it.each(["missing", "cross-author", "ambiguous-coordinate"])(
+    "retries a %s proof after a filter reaches its limit",
+    async (receipt) => {
+      const { store, queries, pending } = await listed(["a", "b"]);
+      const creators = new Map([["a", viewer.pubkey]]);
+      try {
+        const [first] = await proofs(pending, creators);
+        assert.exists(first);
+        expect(first.filters).toMatchObject([{ "#h": ["a", "b"], limit: 4 }]);
+        pending.splice(pending.indexOf(first), 1);
+        // The shared author set admits viewer's creation in b, whose creator is
+        // alice. Neither that cross match nor an ambiguous coordinate proves b.
+        first.respond(
+          [0, 1, 2, 3].map((n) =>
+            signed(
+              receipt === "ambiguous-coordinate" && n > 0 ? alice : viewer,
+              {
+                kind: 9007,
+                created_at: 1_700_000_000 - n,
+                content: "",
+                tags:
+                  n === 0 || receipt === "missing"
+                    ? [["h", "a"]]
+                    : receipt === "cross-author"
+                      ? [["h", "b"]]
+                      : [
+                          ["h", "outside"],
+                          ["h", "b"],
+                        ],
+              },
+            ),
+          ),
+        );
+        await flush();
+        queries.refreshList?.();
+        pending
+          .shift()
+          ?.respond([
+            roster(relay, "a", [viewer.pubkey]),
+            stream("a", viewer.pubkey),
+            roster(relay, "b", [viewer.pubkey]),
+            stream("b"),
+          ]);
+        const [again] = await proofs(pending);
+        assert.exists(again);
+        expect(again.filters).toMatchObject([{ "#h": ["b"], limit: 2 }]);
+      } finally {
+        store.dispose();
+      }
+    },
+  );
+});
+
 it("settles a metadata retry during quota cooldown without issuing another read", async () => {
   const { store, queries, next, pending } = setup();
   const clock = vi.spyOn(performance, "now").mockReturnValue(1000);

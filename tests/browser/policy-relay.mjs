@@ -376,11 +376,14 @@ export function policyRelay({
           for (const filter of filters) {
             expect(filter).toEqual({
               kinds: [9007],
-              authors: [expect.any(String)],
-              "#h": [expect.any(String)],
-              limit: 1,
+              authors: expect.arrayContaining([expect.any(String)]),
+              "#h": expect.arrayContaining([expect.any(String)]),
+              limit: expect.any(Number),
               ...(filter.consistency ? { consistency: "strong" } : {}),
             });
+            expect(filter["#h"].length).toBeLessThanOrEqual(2048);
+            expect(filter.limit).toBeGreaterThan(0);
+            expect(filter.limit).toBeLessThanOrEqual(500);
             report.queries.push({
               community: communityOf(url),
               filter,
