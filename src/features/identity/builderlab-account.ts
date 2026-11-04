@@ -343,17 +343,14 @@ export function builderlabAccount(
  * `builderlabAccount` for an FI build's sign-in (`firstRunCredential`): the
  * same routes through the bundled plugin's NIP-FI forwarder, which sends the
  * native session as a Bearer token, each fenced to the session that sign-in
- * returned (`credential.value` is its revision). Backup status answers
- * "unavailable": the forwarder grants no route for it, as the FI plugin reads
- * none either, so Welcome back offers no restore and an imported key is
- * offered the backup.
+ * returned (`credential.value` is its revision).
  */
 export function federatedBuilderlabAccount(
   credential: Credential,
   federated: Pick<FederatedIdentity, "snapshot" | "request">,
   identity: BackupIdentity,
 ): FirstRunAccount {
-  const account = kgooseAccount(
+  return kgooseAccount(
     (path, headers, body) => {
       const session = federated.snapshot();
       if (
@@ -372,7 +369,6 @@ export function federatedBuilderlabAccount(
     { federated: credential.value },
     identity,
   );
-  return { ...account, backupStatus: async () => "unavailable" };
 }
 
 /** One JSON POST under the Builderlab API root; `path` starts with `/`. */

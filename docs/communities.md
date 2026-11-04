@@ -343,7 +343,13 @@ relay-enforced, used by the bundled `buzz.moderation` plugin), metadata, protect
 media and live traffic stay bound to the captured destination.
 HTTP authority discovery and other upstream fetches reject redirects.
 
-The broker keeps its loopback Host check, requires exact local Origin on POSTs,
+When a viewer pin enables the broker, Vite configuration rejects non-loopback
+listeners, including CLI `--host` overrides, before loading the signing identity.
+Use the default listener or `--host 127.0.0.1`; unpinned fixture servers do not
+load an identity and retain Vite's normal host options. Packaged builds exclude
+the broker.
+
+The broker also checks the loopback Host, requires exact local Origin on POSTs,
 and rejects mismatched Origin or non-same-origin Fetch Metadata on GETs too.
 This establishes **trusted-app-origin intent, not a human gesture**; same-origin
 plugins and local processes remain trusted, not sandboxed. User-directed HTTPS

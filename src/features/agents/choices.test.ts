@@ -126,7 +126,8 @@ function archiveFixture(
   const reads: string[] = [];
   const read = async () => {
     reads.push(snapshot.status);
-    snapshot = { status: "ready", archived };
+    // Like the store, each read publishes a new frozen list.
+    snapshot = { status: "ready", archived: Object.freeze([...archived]) };
     for (const listener of listeners) listener();
   };
   return {

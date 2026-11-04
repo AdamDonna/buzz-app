@@ -22,12 +22,19 @@ import { directoryChanges, mentionCandidates } from "./mention-candidates";
 import { useListedChannel } from "../../features/relay/listed-channel";
 import { useNamesRevision } from "../../features/identity-names/react";
 import {
+  useVerifiedNames,
+  withVerifiedNames,
+  type VerifiedPerson,
+} from "../../features/profiles/useVerifiedNames";
+import {
   exactMention,
   matchingMentions,
   rankMentions,
   type MentionChoice,
 } from "./mention-ranking";
-type Person = ReturnType<typeof useMentionDirectory>["people"][number];
+type Person = VerifiedPerson<
+  ReturnType<typeof useMentionDirectory>["people"][number]
+>;
 const activityFields = new Set(["preview", "lastActivityAt"]);
 /** Equal but for the preview and activity time a new message changes. */
 function sameMentionFields(a: ChannelSummary, b: ChannelSummary) {
@@ -71,7 +78,13 @@ function page(session: ComposerSession, people: readonly Person[]) {
   const key = JSON.stringify(
     [...people]
       .sort((a, b) => (a.pubkey < b.pubkey ? -1 : a.pubkey > b.pubkey ? 1 : 0))
-      .map(({ pubkey, name, isAgent }) => [pubkey, name, !!isAgent]),
+      .map(({ pubkey, name, isAgent, fullName, profileNames }) => [
+        pubkey,
+        name,
+        !!isAgent,
+        fullName ?? "",
+        profileNames ?? [],
+      ]),
   );
   const seen = pages.get(session) ?? new Map<string, readonly Person[]>();
   pages.set(session, seen);
@@ -129,10 +142,23 @@ export function namedCandidates(
     ]),
   ];
   // Directory pages are menu-local, not cached profiles. Name them only when no
-  // other source knows the key, so namesakes in this choice set are qualified.
+  // other source knows the key, so namesakes in this choice set are qualified,
+  // or when a verified name replaced the one the shared profiles show: the
+  // label must be the name the mention inserts.
+  const shared = session.profiles.snapshot();
+  const pageVerified = new Set(
+    outside
+      .filter(
+        (person) =>
+          !!person.profileNames && !shared.get(person.pubkey)?.verified,
+      )
+      .map((person) => person.pubkey),
+  );
   const facts = [
     ...outside
-      .filter((person) => !known?.(person.pubkey))
+      .filter(
+        (person) => !known?.(person.pubkey) || pageVerified.has(person.pubkey),
+      )
       .map(({ pubkey, name, isAgent }) => ({
         pubkey,
         name,
@@ -143,7 +169,14 @@ export function namedCandidates(
   // One naming scope per choice set, not one normalization per row.
   const name = session.names?.scope(keys, facts);
   const choices: readonly MentionChoice[] = candidates.map((choice) => {
-    const named = name?.(choice.recipient.pubkey);
+    const key = choice.recipient.pubkey;
+    // Without a naming policy the scope falls back to the public profile,
+    // which must not outrank the verified name the mention inserts.
+    const found = name?.(key);
+    const named =
+      found?.source === "public-profile" && pageVerified.has(key)
+        ? undefined
+        : found;
     return {
       ...choice,
       label: named?.name ?? choice.recipient.name,
@@ -256,14 +289,23 @@ export function useMentionChoices(
   const key = JSON.stringify([channelId, invite, query, open, !!roster]);
   const same = installed?.session === session && installed.key === key;
   const carried = same ? installed.people : none;
+  // Searched people the community verified carry their verified names.
+  const verified = useVerifiedNames(session, directory.people, {
+    key: query,
+    settled: !directory.loading,
+  });
+  const searched = useMemo(
+    () => withVerifiedNames(directory.people, verified, profiles),
+    [directory.people, verified, profiles],
+  );
   const people = useMemo(() => {
-    if (!carried.length) return directory.people;
-    const known = new Set(directory.people.map((person) => person.pubkey));
+    if (!carried.length) return searched;
+    const known = new Set(searched.map((person) => person.pubkey));
     return [
-      ...directory.people,
+      ...searched,
       ...carried.filter((person) => !known.has(person.pubkey)),
     ];
-  }, [directory.people, carried]);
+  }, [searched, carried]);
   const current = useCallback(
     () =>
       namedCandidates(

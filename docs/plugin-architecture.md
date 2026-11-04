@@ -539,6 +539,33 @@ presentation retires. This is not a global navigation API or an access grant.
 A tab's `open` replaces that tab; a channel drawer or side-column panel's `open`
 opens the target as a new tab.
 
+### Huddle status
+
+While native Huddles is available and active, it provides an optional
+read-only `huddleStatus` service with this document's call phase, so a plugin
+such as a music player can pause for a call. Read it with
+`ctx.inject(["huddleStatus"], (scope) => …)` instead of adding it to required
+`inject`. The callback runs only while Huddles provides the service, and its
+scope is disposed when Huddles unloads. External plugins declare the
+structural type themselves.
+
+```ts
+type HuddleStatus = {
+  version: 1;
+  phase():
+    | "idle" | "incoming" | "connecting" | "connected" | "leaving" | "error";
+  subscribe(listener: () => void): () => void; // returns unsubscribe
+};
+```
+
+The phase belongs to this window's call, not to the viewer's identity, so a
+call on another device never appears here. `connecting` begins before the
+microphone prompt. `leaving` covers call teardown; a teardown failure moves to
+`error`, so the end of `leaving` does not by itself prove the native call closed.
+`subscribe` also fires for changes other than the phase, such as speaking
+levels, so compare `phase()` with the last value seen. The service exposes no
+destination, roster, audio or controls.
+
 ### Opening targets from channel plugins
 
 Every plugin surface in a channel or thread can open a target, such as a panel
@@ -554,9 +581,11 @@ reaction choosers and message markers get no opener.
 
 ### Resolution order
 
-Panels and link renderers share one rule when several match the same target.
-It covers only those two: message renderers (`registerMessage`, rendered by
-`MessageBody`) keep first-active-match semantics and accept no `order`.
+Panels, link renderers and attachment renderers (`registerAttachment`) share
+one rule when several match the same target; for an attachment renderer the
+target is the `Attachment`, and an `order` function receives it. Message
+renderers (`registerMessage`, rendered by `MessageBody`) keep first-active-match
+semantics and accept no `order`.
 `order` is optional and defaults to `0`; lower wins, and equal orders fall to
 ascending contribution key (`pluginId/contributionId`), so activation, load
 latency and disable/re-enable never decide the winner. `matches` stays boolean,
@@ -832,6 +861,12 @@ for editor/Todos bases and setup preconditions. Setup delivery and its separate
 exact-ID confirmation both use writer-backed reads; unknown seed outcomes are
 checked without automatically replaying the seed. Template copies explicitly opt
 out and remain replica-eligible; Channel Settings no longer reads a Canvas preview.
+The session Canvas owner checks returned events independently of the relay's query
+filter: kind 40100 and exactly one two-field `h` tag naming the requested channel.
+It ignores mismatched events before selecting the current head; an invalid newer
+event cannot hide a valid returned head. History rejects pages containing invalid
+coordinates. These checks precede Solo's separate owner/agent-attestation check,
+so an authentic signature on unrelated content cannot make it Canvas instructions.
 Editor/Todos saves carry `expected-revision=<loaded
 head id>` (or `none` when absent); template seeds carry `none`. On relays supporting
 Canvas compare-and-swap, stale preconditions are refused atomically before mutation.
@@ -1266,7 +1301,9 @@ magic-byte sniffing must match that declaration. This signature check is not a
 full image decode or a guarantee that downstream image processing is safe.
 The full ASCII-escaped IPC metadata, including
 the authority envelope, is bounded to 16 KiB. The frontend reserves 512 bytes for
-that envelope. Unicode text values are preserved.
+that envelope: the total escaped-metadata cap of 16 KiB minus 512 bytes takes
+precedence over the per-field limits, so 16 fields of 8 KiB each are not possible.
+Unicode text values are preserved, but escaping can increase their metadata size.
 
 The deadline is fixed at 30 seconds. Responses use the existing bounded
 `HostResponse`: status, at most 64 headers totaling 16 KiB excluding `Set-Cookie`,
@@ -1285,9 +1322,14 @@ Repeated or conflicting native dispatch of the same upload envelope refuses,
 including after ambiguous failure, timeout, or a lost reply. This prevents
 same-envelope host/IPC resends, not durable exactly-once execution; use an upstream
 idempotency key when supported, and never mint a new callId to retry an unknown
-outcome. Missing raw IPC support rejects JSON/array fallback before consumption.
+outcome. Missing raw IPC support rejects JSON/array fallback before consumption
+of that fallback dispatch, but the original upload may already have run. Treat a
+"Protected upload body must be raw bytes; outcome may be unknown" refusal as an
+unknown outcome, never as proof that nothing was sent or permission to retry
+with a fresh callId.
 
-Plugin author types export `AddedTool`, `BuzzClient` and `Media` from
+Plugin author types export `AddedTool`, `AddedToolContext`, `AddedToolReply`,
+`BuzzClient` and `Media` from
 `@buzz/author`; an added tool can use its supplied `client.media(url)` to read
 community media. In the native client, optional base64 `Media.data` is present
 only for JPEG, PNG, GIF or WebP of at most 3,932,160 decoded bytes (3.75 MiB; up to

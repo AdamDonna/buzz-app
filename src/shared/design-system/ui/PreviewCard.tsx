@@ -18,6 +18,8 @@ export type PreviewCardProps = {
   open?: boolean;
   onOpenChange?: BasePreviewCard.Root.Props["onOpenChange"];
   side?: BasePreviewCard.Positioner.Props["side"];
+  /** Distance from the anchor; defaults to 8px. */
+  sideOffset?: BasePreviewCard.Positioner.Props["sideOffset"];
   /** Alignment along the anchor's edge; defaults to its start. */
   align?: BasePreviewCard.Positioner.Props["align"];
   /** Optional content anchor when the trigger owns a wider hit area. */
@@ -63,6 +65,7 @@ export function PreviewCard({
   open,
   onOpenChange,
   side = "bottom",
+  sideOffset = 8,
   align = "start",
   anchor,
   warm = false,
@@ -274,7 +277,7 @@ export function PreviewCard({
           sticky={!!actionRef}
           anchor={anchor}
           align={align}
-          sideOffset={8}
+          sideOffset={sideOffset}
           positionMethod="fixed"
           popover="manual"
           ref={promote}

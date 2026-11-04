@@ -1334,7 +1334,7 @@ describe("federatedBuilderlabAccount", () => {
     expect(fi.request).not.toHaveBeenCalled();
   });
 
-  it("answers backup status as unavailable without a request and hands the uploader the session revision", async () => {
+  it("reads backup status through the forwarder and hands the uploader the session revision", async () => {
     const fi = await signedIn();
     const watchers: { onmessage: (status: BackupStatus) => void }[] = [];
     const send = vi.fn(async (command: string, args?: unknown) => {
@@ -1349,7 +1349,24 @@ describe("federatedBuilderlabAccount", () => {
       setBackupChoice: () =>
         Promise.resolve({ available: true, pubkey, automatic: true } as never),
     });
-    expect(await account.backupStatus()).toBe("unavailable");
+    fi.request.mockResolvedValueOnce(
+      answer(200, {
+        current_nostr_pubkey: null,
+        backup_nostr_pubkeys: [pubkey],
+      }),
+    );
+    expect(await account.backupStatus()).toEqual([pubkey]);
+    expect(fi.request.mock.calls.map(([input]) => input)).toEqual([
+      {
+        path: "/api/goose/v1/buzz/nsec-backups/status",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://t.example",
+        },
+        body: "{}",
+      },
+    ]);
     vi.mocked(invoke).mockImplementation(async (_command, args) =>
       (args as { federated?: string | null }).federated ? 1 : null,
     );
@@ -1383,6 +1400,6 @@ describe("federatedBuilderlabAccount", () => {
         },
       ],
     ]);
-    expect(fi.request).not.toHaveBeenCalled();
+    expect(fi.request).toHaveBeenCalledTimes(1);
   });
 });

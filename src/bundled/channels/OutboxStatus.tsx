@@ -61,7 +61,8 @@ export function OutboxStatus({
                     try {
                       if (
                         item.event.kind === 9000 &&
-                        item.recovery?.key.startsWith("member-add:")
+                        (item.recovery?.key.startsWith("member-add:") ||
+                          !item.event.tags.some(([tag]) => tag === "role"))
                       ) {
                         const channelId = item.event.tags.find(
                           ([tag]) => tag === "h",
@@ -79,11 +80,10 @@ export function OutboxStatus({
                         const guest = item.event.tags.some(
                           ([tag, value]) => tag === "role" && value === "guest",
                         );
-                        await (guest
-                          ? memberAdditions.add(channelId, pubkey, {
-                              role: "guest",
-                            })
-                          : memberAdditions.add(channelId, pubkey));
+                        await memberAdditions.add(channelId, pubkey, {
+                          ...(guest ? { role: "guest" } : {}),
+                          retry: true,
+                        });
                       } else outbox.retry(item.event.id);
                       setError(undefined);
                     } catch (reason) {

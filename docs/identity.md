@@ -27,10 +27,10 @@ continuing as the old account, and one that times out fails as *Sign-in did
 not finish*. Setup's account calls then go through the native forwarder as the
 bundled plugin's installation, fenced to that session, and a backup hands the
 uploader the session's revision. Native admission checks only that
-installation's grant, so this works whether or not the plugin has started. The
-forwarder grants no backup-status route, so Welcome back offers no restore and
-an imported key is backed up automatically. The session outlives first run: sign-in
-at launch finds it signed in.
+installation's grant, so this works whether or not the plugin has started.
+*Checking for a backed-up key* (below) goes through the forwarder too, so
+Welcome back offers a restore where the portal accepts the session there. The
+session outlives first run: sign-in at launch finds it signed in.
 
 A URL given on the welcome screen is looked up first, before sign-in and before
 any key exists: **Continue** opens the same **Finding community** page described
@@ -494,7 +494,9 @@ Desktop builds configured with `BUZZ_NSEC_BACKUP_SERVICE_URL` and
 automatic-backup choice, Builderlab login, and matching key
 binding. Unset, self-managed, corrupt or mismatched consent prevents all backup
 requests, including retries. These are paired
-native build-process inputs; unset leaves the feature disabled. The service URL
+native build-process inputs; unset or empty leaves the feature disabled. Preview
+releases that sign in to `app.builderlab.xyz` set them to that origin's
+`/api/goose` service and the `backup/bb-public/production` namespace. The service URL
 includes its API prefix and must use HTTPS. Existing login credentials are accepted
 only for the matching trusted build origin. Without a qualifying login, backup
 defers without opening a browser or delaying identity readiness.
@@ -1012,8 +1014,10 @@ message/event writes use this identity. [Join recovery](communities.md#packaged-
 records public progress before remote changes. The existing durable outbox retains
 uncertain delivery across restart; retry uses the same signed event with fresh HTTP
 authentication. Events older than 15 minutes get a strong ID readback instead of
-being republished or silently re-dated. Missing/failed readback retains uncertainty;
-the user must inspect the conversation before explicitly sending a new message.
+being republished or silently re-dated. For ordinary messages, missing/failed
+readback retains uncertainty; inspect the conversation before explicitly sending
+another. Expired no-role Solo invitations have a narrower verified retirement
+path through [Outbox Retry](solo/sharing.md).
 
 Protected media and uploads are native, because the webview cannot attach Blossom
 (kind 24242) authentication itself: `<img>`, `<video>` and `<audio>` send no custom
@@ -1030,9 +1034,10 @@ saved-community membership; the selected server receives a short-lived token
 scoped to its origin. The scheme signs a fresh 60-second `get` token per request
 and forwards only a bounded single `Range`; non-image/video/audio types (and SVG)
 are served with download disposition and `nosniff`. The main webview does not navigate to protected media for downloads: a narrowly scoped native command authenticates the bounded media GET, saves to the OS Downloads directory without replacing existing files, and rejects unsafe filenames. `relay_upload`
-hashes, signs (`upload` + `x`) and sends the exact bytes JavaScript passes it;
-shared TypeScript (`hostUpload`) owns limits, error mapping and descriptor
-validation. JavaScript never signs kind 24242. Packaged HEIC and video
+hashes, signs (`upload` + `x`) and sends the exact bytes JavaScript passes it,
+then requires the successful response's SHA-256 and size to match those bytes.
+Shared TypeScript (`hostUpload`) owns limits, error mapping and the remaining
+descriptor validation. JavaScript never signs kind 24242. Packaged HEIC and video
 preparation uses fixed demuxers and ffmpeg arguments in the native host, then
 hashes and uploads only the converted bytes; JavaScript receives the descriptor,
 not the prepared file. ffmpeg must be installed on the computer.

@@ -826,6 +826,22 @@ export function relayBrokerPlugin({
   const defaultRelay = relayUrl?.trim() ? relayOrigin(relayUrl) : undefined;
   return {
     name: "buzz-relay-broker",
+    configResolved(config) {
+      // Request headers express browser origin intent, not remote-client
+      // authentication. Check the effective listener, including CLI overrides,
+      // before configureServer loads the signing identity.
+      const host = config.server.host;
+      if (
+        host !== undefined &&
+        host !== false &&
+        host !== "localhost" &&
+        host !== "127.0.0.1" &&
+        host !== "::1"
+      )
+        throw new Error(
+          "The live identity broker requires a loopback-only Vite listener; remove --host or use --host 127.0.0.1.",
+        );
+    },
     async configureServer(server) {
       const log = getLogger("relay-broker");
       const key = identity();
@@ -3018,6 +3034,18 @@ export function relayBrokerPlugin({
               const conflict =
                 failure?.sent === false &&
                 failure.refusal?.startsWith("conflict:");
+              // Answer a proven validation refusal as the relay's HTTP API does,
+              // 400 with its bounded text, so every publish path shows the same
+              // reason. The text goes to this client only, never to the log.
+              if (
+                failure?.sent === false &&
+                failure.reason?.startsWith("invalid:") &&
+                !(
+                  readPublishing &&
+                  failure.refusal === READ_STATE_TIMESTAMP_REFUSAL
+                )
+              )
+                return json(res, 400, { error: failure.reason });
               return json(res, conflict ? 409 : 503, {
                 error:
                   failure?.sent === false &&

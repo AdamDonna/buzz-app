@@ -150,7 +150,12 @@ export function nativeSidebar(transport: ReadTransport) {
   ): Promise<T> {
     const current = await head(coordinate, signal);
     const draft = prepare(current.payload, current.createdAt);
-    if (same(current.payload, draft.next)) return draft.result;
+    // A saved main agent of none matches the empty value but is still a
+    // record, unlike none at all, so it is written even then.
+    const unchanged =
+      same(current.payload, draft.next) &&
+      (current.createdAt > 0 || coordinate !== "main-agent");
+    if (unchanged) return draft.result;
     // Reject unsupported/over-budget writes at the existing projection boundary.
     if (coordinate === "main-agent") mainAgent(draft.next);
     else project(coordinate, draft.next);
@@ -180,7 +185,10 @@ export function nativeSidebar(transport: ReadTransport) {
     decodeSidebarPreferences: decode,
     async readMainAgent(signal: AbortSignal) {
       const current = await head("main-agent", signal);
-      return current.createdAt ? mainAgent(current.payload) : undefined;
+      // A record of none reads as null, apart from no record at all.
+      return current.createdAt
+        ? (mainAgent(current.payload) ?? null)
+        : undefined;
     },
     async writeMainAgent(agent: string | null, signal: AbortSignal) {
       if (agent !== null && !agentKey.test(agent))

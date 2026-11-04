@@ -33,7 +33,7 @@ test("generated author package in a path with spaces exposes shared message fact
       join(dir, "consumer.ts"),
       `
 import { createElement } from "react";
-import type { Context, DecisionResult, Host, HostRequestOnceOptions, AddedTool, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
+import type { Context, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, PluginManifest, NamingPolicy, PageSidebarProps, SidebarSectionContribution, SidebarSections, UnreadCapability } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -74,7 +74,8 @@ export function apply(ctx: Context) {
   const upload: HostByteUpload = { url: "https://api.example.com/upload", field: "image", name: "image.png", contentType: "image/png" };
   void host.uploadBytesOnce?.(new Uint8Array([1]), upload, { callId: crypto.randomUUID() });
   const tool: AddedTool = { name: "example_image", description: "Read an image", inputSchema: {},
-    async call(client: BuzzClient) {
+    async call(client: BuzzClient, context: AddedToolContext): Promise<AddedToolReply> {
+      void [context.channel, context.root, context.topLevel, context.wholeChannel];
       const media: Media = await client.media("abc.png");
       return media.data ?? "No inline image";
     },

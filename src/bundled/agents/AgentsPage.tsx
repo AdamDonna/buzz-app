@@ -759,7 +759,12 @@ function DefaultAgentInventory({
   // Keep Morgan's automatic fallback/adoption behavior active even though the
   // Bestie pill names only the explicit account-saved choice.
   useDefaultAgent(session, scope);
-  const bestie = useBestieChoice(session, scope);
+  // A remote agent is asked about before it is made Bestie.
+  const bestie = useBestieChoice(
+    session,
+    scope,
+    (pubkey) => props.agents.find((agent) => agent.pubkey === pubkey)?.place,
+  );
   return (
     <>
       <Inventory

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import type { AgentChoicesSnapshot } from "../../features/agents/choices";
+import type { AgentPlace } from "../../features/agents/service";
 import type { RelaySession } from "../../features/relay/session";
 import {
   chooseDefaultAgent,
@@ -20,9 +21,22 @@ export function onBestieMade(listener: (pubkey: string) => void) {
   return () => void made.delete(listener);
 }
 
+/** What a remote agent as Bestie can't do, said before it is chosen. */
+export const REMOTE_BESTIE_WARNING =
+  "Some bestie features aren’t available with remote agents.";
+
+/** Whether an agent runs somewhere other than this device. */
+export const remoteAgent = (place: AgentPlace | undefined) =>
+  place === "hosted" || place === "elsewhere";
+
 /** Making an agent Bestie, wherever it is offered: `make` asks before
- * replacing an explicitly saved Bestie, in the dialog `view` renders. */
-export function useBestieChoice(session: RelaySession, scope: string) {
+ * replacing an explicitly saved Bestie, and before choosing a remote agent
+ * (`placeOf` says where each runs), in the dialog `view` renders. */
+export function useBestieChoice(
+  session: RelaySession,
+  scope: string,
+  placeOf?: (pubkey: string) => AgentPlace | undefined,
+) {
   // Bestie names only the explicit account-saved choice.
   const saved = useSavedAgent(session, scope);
   const choices = useAgentChoices(session, true, true);
@@ -32,6 +46,8 @@ export function useBestieChoice(session: RelaySession, scope: string) {
     current: BestieAgent;
     replacing: BestieAgent;
   }>();
+  /** The remote agent asked about, with no Bestie to replace. */
+  const [remote, setRemote] = useState<BestieAgent>();
   // Only the latest choice reports its failure.
   const latest = useRef(0);
   // Closing the side panel unmounts the dialog without its close handler, so
@@ -69,7 +85,9 @@ export function useBestieChoice(session: RelaySession, scope: string) {
     chooseDefaultAgent(session, scope, pubkey)
       .then(() => {
         for (const listener of made) listener(pubkey);
-        if (choice === latest.current) setReplacement(undefined);
+        if (choice !== latest.current) return;
+        setReplacement(undefined);
+        setRemote(undefined);
       })
       .catch((failure: Error) => {
         if (choice !== latest.current) return;
@@ -86,13 +104,17 @@ export function useBestieChoice(session: RelaySession, scope: string) {
     if (!replacing || pubkey === saved) return;
     const previous = choices.identities.find((agent) => agent.pubkey === saved);
     if (previous) setReplacement({ current: previous, replacing });
-    else save(pubkey);
+    else if (remoteAgent(placeOf?.(pubkey))) {
+      setError("");
+      setRemote(replacing);
+    } else save(pubkey);
   };
   const view = (
     <>
       {replacement && (
         <BestieReplacement
           {...replacement}
+          remote={remoteAgent(placeOf?.(replacement.replacing.pubkey))}
           pending={savingBestie}
           error={error}
           onClose={() => {
@@ -114,7 +136,19 @@ export function useBestieChoice(session: RelaySession, scope: string) {
           }}
         />
       )}
-      {error && !replacement && <p role="alert">{error}</p>}
+      {remote && (
+        <RemoteBestieConfirm
+          name={bestieName(remote)}
+          pending={savingBestie}
+          error={error}
+          onClose={() => {
+            setRemote(undefined);
+            setError("");
+          }}
+          onConfirm={() => save(remote.pubkey)}
+        />
+      )}
+      {error && !replacement && !remote && <p role="alert">{error}</p>}
     </>
   );
   return { saved, choices, make, view };
@@ -126,6 +160,7 @@ export const bestieName = (agent: BestieAgent) =>
 function BestieReplacement({
   current,
   replacing,
+  remote,
   pending,
   error,
   onChoose,
@@ -133,6 +168,7 @@ function BestieReplacement({
 }: {
   current: BestieAgent;
   replacing: BestieAgent;
+  remote: boolean;
   pending: boolean;
   error: string;
   onChoose(): void;
@@ -142,7 +178,7 @@ function BestieReplacement({
   return (
     <AlertDialog
       title={`Make ${bestieName(replacing)} your bestie?`}
-      description={`Your existing chats with ${bestieName(current)} will still be available in your DMs.`}
+      description={`Your existing chats with ${bestieName(current)} will still be available in your DMs.${remote ? ` ${REMOTE_BESTIE_WARNING}` : ""}`}
       initialFocus={keep}
       pending={pending}
       onClose={onClose}
@@ -154,6 +190,44 @@ function BestieReplacement({
           </Button>
           <Button variant="prominent" loading={pending} onClick={onChoose}>
             Switch to {bestieName(replacing)}
+          </Button>
+        </>
+      }
+    />
+  );
+}
+
+/** Asks before a remote agent becomes Bestie, as some Bestie features need it
+ * on this device. Cancel leaves the choice as it was. */
+export function RemoteBestieConfirm({
+  name,
+  pending,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  name: string;
+  pending: boolean;
+  error: string;
+  onConfirm(): void;
+  onClose(): void;
+}) {
+  const cancel = useRef<HTMLButtonElement>(null);
+  return (
+    <AlertDialog
+      title={`Use ${name} as your bestie?`}
+      description={REMOTE_BESTIE_WARNING}
+      initialFocus={cancel}
+      pending={pending}
+      onClose={onClose}
+      {...(error && { children: <p role="alert">{error}</p> })}
+      actions={
+        <>
+          <Button ref={cancel} disabled={pending} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="prominent" loading={pending} onClick={onConfirm}>
+            Use as bestie
           </Button>
         </>
       }

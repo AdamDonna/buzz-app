@@ -84,8 +84,8 @@ checks, not that an OS banner was displayed or read.
   styling and offscreen cues without clearing unread evidence. Muted channel and
   DM sidebar rows show a crossed-out bell immediately after their names and hide
   unread dots, including thread dots. Manual unread can still emphasize
-  the name, and thread activity remains available. Muted DMs retain automatic
-  unread emphasis, offscreen unread counts and avatar previews. Solo chat labels
+  the name, and thread activity remains available. Muted DMs also suppress automatic
+  unread emphasis; offscreen unread counts and avatar previews remain. Solo chat labels
   retain unread emphasis. Unread thread cues are distinct from participating-thread alerts,
   which mute suppresses. Unknown or failed
   preference reads hold non-mention candidates until explicit retry; a confirmed
