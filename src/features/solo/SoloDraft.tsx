@@ -8,6 +8,7 @@ import { ChatNotStarted } from "../relay/channel-writes";
 import { DraftSettings } from "./DraftSettings";
 import { SoloDraftView } from "./SoloPresentation";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { GearIcon } from "../../shared/design-system/icons";
 import {
   defaultsRevision,
@@ -23,7 +24,13 @@ import {
   subscribeView,
   viewRevision,
 } from "../../shared/view-state";
-import { MessageComposer } from "../messages/MessageComposer";
+import {
+  MessageComposer,
+  readSoloModelPicks,
+  soloModelPicksKey,
+} from "../messages/MessageComposer";
+import type { DraftPicks } from "../messages/ComposerModels";
+import type { MentionPicks } from "../relay/messages";
 import { useDefaultAgent } from "./default-agent";
 import { WorkspaceControl } from "./WorkspaceControl";
 import { rememberedMentions } from "../messages/remembered-mentions";
@@ -95,8 +102,32 @@ function blankNewChat(session: RelaySession, scope: string, key: string) {
   return (
     (!composerMarkdown(saved).trim() || addressingOnly(saved)) &&
     !attachmentDraftCount(session, `${scope}:${key}:new-draft`) &&
+    !Object.keys(
+      readSoloModelPicks(scope, soloModelPicksKey(`${key}:new-draft`)),
+    ).length &&
     readView(scope, `${key}:settings`, null) === null &&
     readView(scope, `${key}:new-project`, null) === null
+  );
+}
+
+/** Keep only explicit draft selections validated for a first-send recipient. */
+function firstChatPicks(
+  draftPicks: DraftPicks | undefined,
+  validated: MentionPicks,
+  recipients: readonly string[],
+): DraftPicks {
+  return Object.fromEntries(
+    Object.entries(draftPicks ?? {}).flatMap(([pubkey, saved]) => {
+      const sent = validated[pubkey];
+      if (!sent || !recipients.includes(pubkey)) return [];
+      const { model, effort, type } = saved;
+      const pick = {
+        ...(model && model === sent.model ? { model } : {}),
+        ...(effort && effort === sent.effort ? { effort } : {}),
+        ...(type ? { type } : {}),
+      };
+      return pick.model || pick.effort ? [[pubkey, pick] as const] : [];
+    }),
   );
 }
 /** Open New chats. Asked whether they hold work of the person's that view
@@ -146,6 +177,7 @@ export function SoloDraft({
     : projectId
       ? `solo:project:${projectId}`
       : "solo";
+  const notify = useToastNotification();
   // Before the composer reads it: a named agent replaces a saved draft that
   // only tags another agent, since that tag was the earlier default.
   useState(() => dropOtherAgentTag(scope, `${draftKey}:new-draft`, agent));
@@ -248,6 +280,8 @@ export function SoloDraft({
     draft: MentionDraft,
     files: AttachmentDraft,
     addressed?: readonly MentionRecipient[],
+    picks?: MentionPicks,
+    draftPicks?: DraftPicks,
   ) {
     const text = composerMarkdown(draft);
     if (submitting.current || !text.trim() || !available) return;
@@ -271,6 +305,9 @@ export function SoloDraft({
     const { ttlSeconds } = draftSettings;
     const project = selectedProject;
     const canvas = draftCanvas;
+    const draftModelPicksKey = soloModelPicksKey(`${draftKey}:new-draft`);
+    const chatModelPicksKey = soloModelPicksKey(channelId);
+    const startingDraftPicks = draftPicks ?? {};
     try {
       if (typeof name !== "string")
         throw new Error("The chat name could not be verified.");
@@ -351,13 +388,37 @@ export function SoloDraft({
             }
           : undefined,
       );
+      const firstPicks: MentionPicks = Object.fromEntries(
+        Object.entries(picks ?? {}).filter(([pubkey]) =>
+          recipients.includes(pubkey),
+        ),
+      );
+      const retainedPicks = firstChatPicks(
+        startingDraftPicks,
+        firstPicks,
+        recipients,
+      );
+      const savedChatPicks =
+        !Object.keys(retainedPicks).length ||
+        writeView(scope, chatModelPicksKey, retainedPicks);
       try {
-        session.messages.send(
-          channelId,
-          text,
-          recipients,
-          ...(uploaded.length ? [uploaded] : []),
-        );
+        if (Object.keys(firstPicks).length)
+          session.messages.send(
+            channelId,
+            text,
+            recipients,
+            uploaded,
+            undefined,
+            [],
+            firstPicks,
+          );
+        else
+          session.messages.send(
+            channelId,
+            text,
+            recipients,
+            ...(uploaded.length ? [uploaded] : []),
+          );
         files.clear();
         writeView(
           scope,
@@ -383,13 +444,21 @@ export function SoloDraft({
       writeView(scope, `${draftKey}:new-draft`, source ? null : "");
       writeView(scope, `${draftKey}:new-draft:agents`, null);
       writeView(scope, `${draftKey}:new-project`, null);
+      // The next New chat must not read this start's recovery snapshot.
+      writeView(scope, draftModelPicksKey, null);
       onStarted(channelId);
+      if (!savedChatPicks)
+        notify(
+          "Could not save model and effort for this chat. Choose them again before your next message.",
+          "error",
+        );
       // Only a start that made no chat ends here; the chat and its messages
       // are dropped (see channelWrites.start), and what was sent returns to a
       // New chat still blank. Any other miss leaves the chat listed, with its
       // messages' own Retry.
       void ready.catch((reason: unknown) => {
         if (!(reason instanceof ChatNotStarted)) return;
+        writeView(scope, chatModelPicksKey, null);
         writeView(scope, `draft:${channelId}`, null);
         clearAttachmentDraft(session, `${scope}:draft:${channelId}`);
         const open = [...openNewChats].filter(
@@ -414,6 +483,11 @@ export function SoloDraft({
             missing.push("settings");
           if (!writeView(scope, `${draftKey}:new-project`, project))
             missing.push("workspace");
+          if (
+            Object.keys(startingDraftPicks).length &&
+            !writeView(scope, draftModelPicksKey, startingDraftPicks)
+          )
+            missing.push("model and effort");
           // The pill's agents, when it routed the send; the composer reads
           // them as it mounts. Tags in the text carry their own.
           if (
@@ -496,6 +570,7 @@ export function SoloDraft({
         }
         submission={{
           draftKey: `${draftKey}:new-draft`,
+          modelPicksKey: soloModelPicksKey(`${draftKey}:new-draft`),
           // The space ends the link, so typing after it writes prose.
           initialDraft: source && `${source.link} `,
           locked: busy,
@@ -504,8 +579,8 @@ export function SoloDraft({
           unsaved: (held) => {
             unsaved.current = held;
           },
-          submit: (draft, files, addressed) => {
-            void start(draft, files, addressed);
+          submit: (draft, files, addressed, picks, draftPicks) => {
+            void start(draft, files, addressed, picks, draftPicks);
           },
         }}
       />

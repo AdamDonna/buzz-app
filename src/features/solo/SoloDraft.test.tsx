@@ -18,6 +18,7 @@ import type { RelaySession } from "../relay/session";
 import { readView, writeView } from "../../shared/view-state";
 import { linkedDraftKey, type LinkedChat } from "./linked-chat";
 import { SoloDraft, resetNewChatProject } from "./SoloDraft";
+import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { ChatNotStarted, createChannelWrites } from "../relay/channel-writes";
 import { createOutbox } from "../relay/outbox";
 import { keypair, signed } from "../relay/testing";
@@ -29,6 +30,8 @@ import type {
 } from "../conversation/contracts";
 import { createAgentChoices } from "../agents/choices";
 import { createAgentLibrary } from "../agents/library";
+import { AgentsContext } from "../agents/react";
+import type { Agents } from "../agents/service";
 import { MentionCompletion } from "../../bundled/mentions/MentionCompletion";
 import { mentionQuery } from "../../bundled/mentions/mention-query";
 import type { ComposerCompletion } from "../conversation/contracts";
@@ -2017,6 +2020,336 @@ it("a first message that can't go out waits in the new chat's composer with its 
       .snapshot()
       .map((item) => item.uploaded),
   ).toEqual([notes]);
+});
+
+function soloModelAgents() {
+  const pubkey = "a".repeat(64);
+  const agent = {
+    pubkey,
+    key: pubkey,
+    name: "Member agent",
+    type: "test/agent",
+  };
+  const snapshot = { status: "ready", agents: [agent] };
+  const types = [
+    {
+      key: "test/agent",
+      models: () => ({
+        current: "fast",
+        sendDefaults: true,
+        models: [
+          { id: "fast", label: "Fast", efforts: [] },
+          {
+            id: "deep",
+            label: "Deep",
+            efforts: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      }),
+    },
+  ];
+  return {
+    find: (key: string) => (key === pubkey ? agent : undefined),
+    joinable: () => [],
+    sessionState: () => "unavailable" as const,
+    subscribe: () => () => {},
+    snapshot: () => snapshot,
+    types: () => types,
+  } as unknown as Agents;
+}
+
+it("sends the selected model and effort with a Solo chat's first message", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  const pubkey = "a".repeat(64);
+  const modelAgents = soloModelAgents();
+  writeView("test", "solo:new-draft", taggedDraft("Start with care"));
+  const firstMount = render(
+    <AgentsContext.Provider value={modelAgents}>
+      <SoloDraft session={test.session} scope="test" onStarted={onStarted} />
+    </AgentsContext.Provider>,
+  );
+
+  await user.click(
+    await screen.findByRole("button", { name: /Model.*effort/ }),
+  );
+  await user.click(
+    await screen.findByRole("button", {
+      name: "Model for Member agent in this chat",
+    }),
+  );
+  await user.click(await screen.findByRole("menuitemradio", { name: "Deep" }));
+  const effort = await screen.findByLabelText(
+    "Effort for Member agent in this chat",
+  );
+  effort.focus();
+  await user.keyboard("{ArrowRight}");
+  expect(effort).toHaveAttribute("aria-valuetext", "High");
+
+  expect(readView("test", "solo:model-picks:solo:new-draft", null)).toEqual({
+    [pubkey]: { model: "deep", effort: "high", type: "test/agent" },
+  });
+  firstMount.unmount();
+  render(
+    <AgentsContext.Provider value={modelAgents}>
+      <SoloDraft session={test.session} scope="test" onStarted={onStarted} />
+    </AgentsContext.Provider>,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Model and effort for this chat" }),
+  );
+  const restoredModel = await screen.findByRole("button", {
+    name: "Model for Member agent in this chat",
+  });
+  expect(restoredModel).toHaveTextContent("Deep");
+  expect(
+    await screen.findByLabelText("Effort for Member agent in this chat"),
+  ).toHaveAttribute("aria-valuetext", "High");
+
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  const [id] = onStarted.mock.calls[0] ?? [];
+  expect(test.messages.send).toHaveBeenLastCalledWith(
+    id,
+    "@Member agent Start with care",
+    [pubkey],
+    [],
+    undefined,
+    [],
+    { [pubkey]: { model: "deep", effort: "high" } },
+  );
+  expect(readView("test", `solo:model-picks:${id}`, null)).toEqual({
+    [pubkey]: { model: "deep", effort: "high", type: "test/agent" },
+  });
+  await waitFor(() =>
+    expect(
+      readView("test", "solo:model-picks:solo:new-draft", null),
+    ).toBeNull(),
+  );
+});
+
+it("restores model and effort after a refused first Solo start", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    onFailed = vi.fn(),
+    user = userEvent.setup();
+  const pubkey = "a".repeat(64);
+  const modelAgents = soloModelAgents();
+  const refuse = refusedStart(test);
+  writeView("test", "solo:new-draft", taggedDraft("Retry with care"));
+  render(
+    <AgentsContext.Provider value={modelAgents}>
+      <SoloDraft
+        session={test.session}
+        scope="test"
+        onStarted={onStarted}
+        onFailed={onFailed}
+      />
+    </AgentsContext.Provider>,
+  );
+
+  await user.click(
+    screen.getByRole("button", { name: "Model and effort for this chat" }),
+  );
+  await user.click(
+    screen.getByRole("button", { name: "Model for Member agent in this chat" }),
+  );
+  await user.click(await screen.findByRole("menuitemradio", { name: "Deep" }));
+  const effort = await screen.findByLabelText(
+    "Effort for Member agent in this chat",
+  );
+  effort.focus();
+  await user.keyboard("{ArrowRight}");
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  const [id] = onStarted.mock.calls[0] ?? [];
+  expect(test.messages.send.mock.calls[0]?.at(-1)).toEqual({
+    [pubkey]: { model: "deep", effort: "high" },
+  });
+
+  await refuse();
+  await waitFor(() => expect(onFailed).toHaveBeenCalledOnce());
+  expect(readView("test", `solo:model-picks:${id}`, null)).toBeNull();
+  expect(readView("test", "solo:model-picks:solo:new-draft", null)).toEqual({
+    [pubkey]: { model: "deep", effort: "high", type: "test/agent" },
+  });
+  expect(
+    screen.getByRole("button", { name: "Model and effort for this chat" }),
+  ).toBeVisible();
+
+  test.channelWrites.ready = Promise.resolve();
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(2));
+  expect(test.messages.send.mock.calls[1]?.at(-1)).toEqual({
+    [pubkey]: { model: "deep", effort: "high" },
+  });
+});
+
+it.each(["created", "refused"])(
+  "keeps a later New chat's choices separate while the first start is %s",
+  async (outcome) => {
+    const test = setup(),
+      onStarted = vi.fn(),
+      onFailed = vi.fn(),
+      user = userEvent.setup();
+    const pubkey = "a".repeat(64);
+    const modelAgents = soloModelAgents();
+    const picks = { [pubkey]: { model: "deep", type: "test/agent" } };
+    let settle!: () => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      settle = () => {
+        if (outcome === "created") resolve();
+        else reject(new ChatNotStarted("Channel creation rejected"));
+      };
+    });
+    test.channelWrites.ready = ready;
+    writeView("test", "solo:new-draft", taggedDraft("First start"));
+    writeView("test", "solo:model-picks:solo:new-draft", picks);
+    const view = () => (
+      <AgentsContext.Provider value={modelAgents}>
+        <SoloDraft
+          session={test.session}
+          scope="test"
+          onStarted={onStarted}
+          onFailed={onFailed}
+        />
+      </AgentsContext.Provider>
+    );
+    const first = render(view());
+    try {
+      await user.click(screen.getByRole("button", { name: "Send message" }));
+      await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+      first.unmount();
+      render(view());
+      await user.click(
+        screen.getByRole("button", { name: "Model and effort for this chat" }),
+      );
+      const model = screen.getByRole("button", {
+        name: "Model for Member agent in this chat",
+      });
+      expect(model).toHaveTextContent("Fast");
+      // Deliberately choose the same model: equality with the first start's
+      // snapshot must not let that start clear this later draft's choice.
+      await user.click(model);
+      await user.click(
+        await screen.findByRole("menuitemradio", { name: "Deep" }),
+      );
+    } finally {
+      await act(async () => {
+        settle();
+        await ready.catch(() => {});
+      });
+    }
+    expect(readView("test", "solo:model-picks:solo:new-draft", null)).toEqual(
+      picks,
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Model for Member agent in this chat",
+      }),
+    ).toHaveTextContent("Deep");
+    expect(screen.getByRole("textbox")).not.toHaveTextContent("First start");
+    if (outcome === "refused")
+      expect(onFailed).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringContaining("New chat has a newer draft"),
+      );
+  },
+);
+
+it("reports when first-send choices could not be saved for the created chat", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  const pubkey = "a".repeat(64);
+  const picks = { [pubkey]: { model: "deep", type: "test/agent" } };
+  writeView("test", "solo:new-draft", taggedDraft("Keep the first send"));
+  writeView("test", "solo:model-picks:solo:new-draft", picks);
+  const create = test.channelWrites.start.getMockImplementation();
+  if (!create) throw new Error("Expected the start fixture implementation");
+  let storage: ReturnType<typeof failingViewWrites> | undefined;
+  test.channelWrites.start.mockImplementationOnce((...args) => {
+    storage = failingViewWrites([`solo:model-picks:${args[0]}`]);
+    return create(...args);
+  });
+  render(
+    <ToastProvider>
+      <AgentsContext.Provider value={soloModelAgents()}>
+        <SoloDraft session={test.session} scope="test" onStarted={onStarted} />
+      </AgentsContext.Provider>
+    </ToastProvider>,
+  );
+  try {
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+    expect(test.messages.send.mock.calls[0]?.at(-1)).toEqual({
+      [pubkey]: { model: "deep" },
+    });
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Could not save model and effort for this chat. Choose them again before your next message.",
+      }),
+    ).toBeVisible();
+  } finally {
+    storage?.mockRestore();
+  }
+});
+
+it("keeps provider defaults unchanged on an unconfigured Solo first message", async () => {
+  const test = setup(),
+    onStarted = vi.fn(),
+    user = userEvent.setup();
+  const pubkey = "a".repeat(64);
+  const agent = {
+    pubkey,
+    key: pubkey,
+    name: "Member agent",
+    type: "test/agent",
+  };
+  const snapshot = { status: "ready", agents: [agent] };
+  const types = [
+    {
+      key: "test/agent",
+      models: () => ({
+        current: "fast",
+        sendDefaults: true,
+        models: [
+          { id: "fast", label: "Fast", efforts: [] },
+          { id: "deep", label: "Deep", efforts: [] },
+        ],
+      }),
+    },
+  ];
+  const modelAgents = {
+    find: (key: string) => (key === pubkey ? agent : undefined),
+    joinable: () => [],
+    sessionState: () => "unavailable" as const,
+    subscribe: () => () => {},
+    snapshot: () => snapshot,
+    types: () => types,
+  } as unknown as Agents;
+  writeView("test", "solo:new-draft", taggedDraft("Use configured defaults"));
+  render(
+    <AgentsContext.Provider value={modelAgents}>
+      <SoloDraft session={test.session} scope="test" onStarted={onStarted} />
+    </AgentsContext.Provider>,
+  );
+
+  await user.click(screen.getByRole("button", { name: "Send message" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  const [id] = onStarted.mock.calls[0] ?? [];
+  expect(test.messages.send).toHaveBeenLastCalledWith(
+    id,
+    "@Member agent Use configured defaults",
+    [pubkey],
+  );
+  expect(readView("test", `solo:model-picks:${id}`, null)).toBeNull();
 });
 
 it("resumes a new chat's interrupted upload after navigating away and back", async () => {

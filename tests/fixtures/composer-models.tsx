@@ -33,7 +33,16 @@ const types = [
             { id: "high", label: "High" },
           ],
         },
-        { id: "alternate", label: "Alternate model", efforts: [] },
+        {
+          id: "alternate",
+          label: "Alternate model",
+          effort: "medium",
+          efforts: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+        },
       ],
     }),
   },
@@ -55,6 +64,7 @@ const media = () => undefined;
 const ignoreResolved = () => {};
 function Fixture() {
   useKeyboardFocusVisibility();
+  const solo = new URLSearchParams(window.location.search).has("solo");
   const [picks, setPicks] = useState<MentionPicks>({});
   return (
     <AgentsContext.Provider value={agents}>
@@ -68,6 +78,8 @@ function Fixture() {
             media={media}
             value={picks}
             disabled={false}
+            resettable={solo}
+            explicitOnly={solo}
             startsThread={false}
             place={{ channelId: "fixture" }}
             onChange={setPicks}

@@ -66,7 +66,7 @@ import { ClaudeProcess } from "../../bundled/claude-code/claude";
 import { fakeSpawn } from "../../bundled/claude-code/claude-testing";
 import { ConversationPresentation } from "../conversation/ConversationPresentation";
 import { AgentsContext } from "../agents/react";
-import type { Agents } from "../agents/service";
+import type { Agents, Models } from "../agents/service";
 import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { InlineChip } from "../../shared/design-system/ui/InlineChip";
@@ -2265,7 +2265,7 @@ it.each(["never", "before the failure", "after the failure"])(
     expect(button).toHaveAttribute("data-selected");
     await userEvent.hover(button);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Next run: High",
+      "next run: High",
     );
     await userEvent.unhover(button);
     expect(h.publish).not.toHaveBeenCalled();
@@ -3614,17 +3614,16 @@ const sessionAgents = (
     label: string;
     efforts: readonly { id: string; label: string }[];
   }[] = [{ id: "fast", label: "Fast", efforts: [] }],
+  pubkeys: readonly string[] = [first.pubkey],
 ) => {
   const snapshot = {
     status: "ready",
-    agents: [
-      {
-        key: first.pubkey,
-        pubkey: first.pubkey,
-        name: "Honey",
-        type: "test/agent",
-      },
-    ],
+    agents: pubkeys.map((pubkey) => ({
+      key: pubkey,
+      pubkey,
+      name: "Honey",
+      type: "test/agent",
+    })),
   };
   let state: "idle" | "active" | "compacting" | "unavailable" = "idle";
   const listeners = new Set<() => void>();
@@ -4513,6 +4512,7 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
       {
         id: "fast",
         label: "Fast",
+        effort: "low",
         efforts: [
           { id: "low", label: "Low" },
           { id: "high", label: "High" },
@@ -4533,6 +4533,7 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
     find: (pubkey: string) =>
       snapshot.agents.find((agent) => agent.pubkey === pubkey),
     joinable: () => [],
+    portable: async () => ({ agents: [] }),
     sessionState: () => "unavailable" as const,
     subscribe: () => () => {},
     snapshot: () => snapshot,
@@ -4562,8 +4563,12 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
     await h.user.click(screen.getByRole("button", { name }));
   };
   const send = async () => {
+    const sent = h.messages.send.mock.calls.length;
     await h.user.keyboard("{Escape}");
     await h.user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() =>
+      expect(h.messages.send).toHaveBeenCalledTimes(sent + 1),
+    );
   };
   expect(picker()).toBeNull();
   await h.user.click(screen.getByRole("button", { name: "Second Honey" }));
@@ -4572,8 +4577,8 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
   await write("First Honey", "think hard");
   const slider = await open();
   expect(model()).toHaveTextContent("Fast");
-  expect(slider).toHaveAttribute("aria-valuetext", "Default");
-  expect(slider.closest("[data-unknown]")).not.toBeNull();
+  expect(slider).toHaveAttribute("aria-valuetext", "Low");
+  expect(slider.closest("[data-unknown]")).toBeNull();
   slider.focus();
   await h.user.keyboard("{ArrowRight}");
   expect(slider).toHaveAttribute("aria-valuetext", "High");
@@ -4589,7 +4594,7 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
   );
   await write("First Honey", "think deeper");
   const again = await open();
-  expect(again).toHaveAttribute("aria-valuetext", "Default");
+  expect(again).toHaveAttribute("aria-valuetext", "Low");
   // A new model keeps an effort it also offers.
   again.focus();
   await h.user.keyboard("{ArrowRight}");
@@ -4622,6 +4627,10 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
     await screen.findByRole("menuitemradio", { name: "Fast" }),
   );
   expect(model()).toHaveTextContent("Fast");
+  const usual = await screen.findByLabelText("Effort for Honey's next run");
+  usual.focus();
+  await h.user.keyboard("{ArrowRight}{Home}");
+  expect(usual).toHaveAttribute("aria-valuetext", "Low");
   await send();
   expect(h.messages.send).toHaveBeenLastCalledWith(
     "channel",
@@ -4629,6 +4638,726 @@ it("asks a mentioned agent of the viewer's for a model and effort on the next ru
     [first.pubkey],
     [],
   );
+});
+
+function soloModelPreferenceHarness(
+  agents: Agents = sessionAgents("channel", [
+    {
+      id: "fast",
+      label: "Fast",
+      efforts: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ],
+    },
+    {
+      id: "deep",
+      label: "Deep",
+      efforts: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ],
+    },
+  ]),
+) {
+  const options = {
+    soloConversation: true,
+    ownSoloConversation: true,
+    chatPresentation: true,
+    requireMention: true,
+  };
+  const mountChat = (channelId = "channel") => {
+    const channel = {
+      id: channelId,
+      channelType: "solo" as const,
+      members: [first.pubkey, second.pubkey],
+    };
+    const channels = [channel, { ...channel, id: "other-chat" }];
+    const channelList = { status: "ready" as const, channels };
+    const composer = mount(
+      { ...options, channelId },
+      undefined,
+      undefined,
+      agents,
+    );
+    composer.setLibrary([
+      { pubkey: first.pubkey, name: "Honey" },
+      { pubkey: second.pubkey, name: "Honey" },
+    ]);
+    composer.setProfiles(
+      new Map([
+        [first.pubkey, { name: "Honey", isAgent: true }],
+        [second.pubkey, { name: "Honey", isAgent: true }],
+      ]),
+    );
+    Object.assign(composer.session, {
+      channels: {
+        ...composer.session.channels,
+        list: () => channelList,
+      },
+      channelWrites: {
+        refreshMembership: vi.fn(async () => channel),
+        addAgents: vi.fn(async () => {}),
+      },
+    });
+    return composer;
+  };
+  const write = async (
+    composer: ReturnType<typeof mount>,
+    text: string,
+    recipient = "First Honey",
+  ) => {
+    await composer.user.type(composer.input(), text);
+    await composer.user.click(screen.getByRole("button", { name: recipient }));
+  };
+  const openPicker = async (composer: ReturnType<typeof mount>) =>
+    composer.user.click(
+      await screen.findByRole("button", { name: /Model.*effort/ }),
+    );
+  const modelButton = () =>
+    screen.getByRole("button", { name: "Model for Honey in this chat" });
+  const send = async (composer: ReturnType<typeof mount>) => {
+    await composer.user.keyboard("{Escape}");
+    await composer.user.click(
+      screen.getByRole("button", { name: "Send message" }),
+    );
+  };
+  return { mountChat, write, openPicker, modelButton, send };
+}
+
+it("sends and restores model and effort per Solo chat and agent", async () => {
+  const { mountChat, write, openPicker, modelButton, send } =
+    soloModelPreferenceHarness();
+  const h = mountChat();
+  await write(h, "a");
+  await openPicker(h);
+  await h.user.click(modelButton());
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Deep" }),
+  );
+  const effort = await screen.findByLabelText("Effort for Honey in this chat");
+  effort.focus();
+  await h.user.keyboard("{ArrowRight}");
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.[0]).toBe("channel");
+  expect(h.messages.send.mock.calls[0]?.[1]).toContain("a");
+  expect(h.messages.send.mock.calls[0]?.[2]).toEqual([first.pubkey]);
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep", effort: "high" },
+  });
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: { model: "deep", effort: "high", type: "test/agent" },
+  });
+
+  await write(h, "b", "Second Honey");
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(2));
+  expect(h.messages.send).toHaveBeenLastCalledWith(
+    "channel",
+    expect.stringContaining("b"),
+    [second.pubkey],
+    [],
+  );
+
+  await write(h, "c");
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(3));
+  expect(h.messages.send).toHaveBeenLastCalledWith(
+    "channel",
+    expect.stringContaining("c"),
+    [first.pubkey],
+    [],
+    undefined,
+    [],
+    { [first.pubkey]: { model: "deep", effort: "high" } },
+  );
+
+  h.retarget({ channelId: "other-chat" });
+  await write(h, "d");
+  await openPicker(h);
+  await waitFor(() => expect(modelButton()).toHaveTextContent("Fast"));
+  await h.user.keyboard("{Escape}");
+  h.retarget({ channelId: "channel" });
+  await write(h, "e");
+  await openPicker(h);
+  await waitFor(() => expect(modelButton()).toHaveTextContent("Deep"));
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledTimes(4));
+
+  h.unmount();
+  const reopened = mountChat();
+  await reopened.user.type(reopened.input(), "d");
+  await reopened.user.click(
+    screen.getByRole("button", { name: "First Honey" }),
+  );
+  await reopened.user.click(
+    await screen.findByRole("button", { name: /Model.*effort/ }),
+  );
+  expect(
+    screen.getByRole("button", { name: "Model for Honey in this chat" }),
+  ).toHaveTextContent("Deep");
+  expect(
+    await screen.findByLabelText("Effort for Honey in this chat"),
+  ).toHaveAttribute("aria-valuetext", "High");
+  await send(reopened);
+  await waitFor(() => expect(reopened.messages.send).toHaveBeenCalledOnce());
+  expect(reopened.messages.send.mock.calls[0]?.[1]).toContain("d");
+  expect(reopened.messages.send.mock.calls[0]?.[2]).toEqual([first.pubkey]);
+  expect(reopened.messages.send.mock.calls[0]?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep", effort: "high" },
+  });
+});
+
+it("retains an explicitly selected default Solo model and effort after provider defaults change", async () => {
+  const efforts = [
+    { id: "low", label: "Low" },
+    { id: "high", label: "High" },
+  ];
+  const fast = { id: "fast", label: "Fast", effort: "low", efforts };
+  const models = [fast, { id: "deep", label: "Deep", efforts }];
+  const agents = sessionAgents("channel", models);
+  let current = "fast";
+  const type = agents.types()[0];
+  if (!type) throw new Error("The fixture agent type should exist.");
+  const types = [{ ...type, models: () => ({ current, models }) }];
+  const { mountChat, write, openPicker, modelButton, send } =
+    soloModelPreferenceHarness({ ...agents, types: () => types } as Agents);
+  const h = mountChat();
+  await write(h, "pin the default");
+  await openPicker(h);
+  for (const name of ["Deep", "Fast"]) {
+    await h.user.click(modelButton());
+    await h.user.click(await screen.findByRole("menuitemradio", { name }));
+  }
+  const effort = await screen.findByLabelText("Effort for Honey in this chat");
+  effort.focus();
+  await h.user.keyboard("{ArrowRight}{Home}");
+  expect(effort).toHaveAttribute("aria-valuetext", "Low");
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: { model: "fast", effort: "low", type: "test/agent" },
+  });
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  h.unmount();
+  current = "deep";
+  fast.effort = "high";
+  const reopened = mountChat();
+  await write(reopened, "keep Fast");
+  await openPicker(reopened);
+  expect(modelButton()).toHaveTextContent("Fast");
+  expect(
+    await screen.findByLabelText("Effort for Honey in this chat"),
+  ).toHaveAttribute("aria-valuetext", "Low");
+  await send(reopened);
+  await waitFor(() => expect(reopened.messages.send).toHaveBeenCalledOnce());
+  expect(reopened.messages.send).toHaveBeenLastCalledWith(
+    "channel",
+    expect.stringContaining("keep Fast"),
+    [first.pubkey],
+    [],
+    undefined,
+    [],
+    { [first.pubkey]: { model: "fast", effort: "low" } },
+  );
+});
+
+it("keeps newer Solo choices when a background upload restores its draft", async () => {
+  const { mountChat, write, openPicker, modelButton, send } =
+    soloModelPreferenceHarness();
+  const h = mountChat();
+  const gate = deferred<ReturnType<typeof uploadDescriptor>>();
+  const upload = vi.fn(() => gate.promise);
+  h.retarget({ session: { ...h.session, attachments: { upload } } });
+  await write(h, "original caption");
+  await openPicker(h);
+  await h.user.click(modelButton());
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Deep" }),
+  );
+  await h.user.keyboard("{Escape}");
+  attachByPaste(h.input(), attachmentFile("original.txt"));
+  try {
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+    await send(h);
+    await waitFor(() =>
+      expect(h.input().value).not.toContain("original caption"),
+    );
+    await openPicker(h);
+    await h.user.click(
+      screen.getByRole("button", { name: "Reset model and effort" }),
+    );
+    await h.user.keyboard("{Escape}");
+  } finally {
+    await act(async () => gate.reject(new Error("offline")));
+  }
+  await waitFor(() => expect(h.input().value).toContain("original caption"));
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({});
+  await openPicker(h);
+  expect(modelButton()).toHaveTextContent("Fast");
+  await h.user.keyboard("{Escape}");
+  await h.user.click(
+    screen.getByRole("button", { name: "Remove original.txt" }),
+  );
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send).toHaveBeenLastCalledWith(
+    "channel",
+    expect.stringContaining("original caption"),
+    [first.pubkey],
+    [],
+  );
+});
+
+it("uses the supported Solo model and effort when saved choices are unavailable", async () => {
+  const { mountChat, modelButton, send } = soloModelPreferenceHarness();
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: { model: "removed", effort: "high", type: "test/agent" },
+  });
+  const unsupported = mountChat();
+  await unsupported.user.type(unsupported.input(), "a");
+  await unsupported.user.click(
+    screen.getByRole("button", { name: "First Honey" }),
+  );
+  const trigger = await screen.findByRole("button", { name: /Model.*effort/ });
+  expect(trigger).not.toHaveAttribute("data-selected");
+  await unsupported.user.click(trigger);
+  expect(modelButton()).toHaveTextContent("Fast");
+  expect(
+    await screen.findByLabelText("Effort for Honey in this chat"),
+  ).toHaveAttribute("aria-valuetext", "Default");
+  await send(unsupported);
+  await waitFor(() => expect(unsupported.messages.send).toHaveBeenCalledOnce());
+  expect(unsupported.messages.send).toHaveBeenCalledWith(
+    "channel",
+    expect.stringContaining("a"),
+    [first.pubkey],
+    [],
+  );
+
+  unsupported.unmount();
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: { model: "deep", effort: "ultra", type: "test/agent" },
+  });
+  const unsupportedEffort = mountChat();
+  await unsupportedEffort.user.type(unsupportedEffort.input(), "b");
+  await unsupportedEffort.user.click(
+    screen.getByRole("button", { name: "First Honey" }),
+  );
+  await screen.findByRole("button", { name: /Model.*effort/ });
+  await send(unsupportedEffort);
+  await waitFor(() =>
+    expect(unsupportedEffort.messages.send).toHaveBeenCalledOnce(),
+  );
+  expect(unsupportedEffort.messages.send.mock.calls[0]?.[1]).toContain("b");
+  expect(unsupportedEffort.messages.send.mock.calls[0]?.[2]).toEqual([
+    first.pubkey,
+  ]);
+  expect(unsupportedEffort.messages.send.mock.calls[0]?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep" },
+  });
+  unsupportedEffort.unmount();
+});
+
+it("waits for a saved Solo model to load before sending, then retries with it", async () => {
+  let resolveModels!: (value: Models) => void;
+  const pendingModels = new Promise<Models>((resolve) => {
+    resolveModels = resolve;
+  });
+  const readyAgents = sessionAgents("channel");
+  const type = readyAgents.types()[0];
+  if (!type) throw new Error("The fixture agent type should exist.");
+  const delayedTypes = [{ ...type, models: () => pendingModels }];
+  const readySnapshot = readyAgents.snapshot();
+  let snapshot: ReturnType<Agents["snapshot"]> = {
+    ...readySnapshot,
+    status: "loading",
+    agents: [],
+  };
+  const listeners = new Set<() => void>();
+  const loadInventory = () => {
+    snapshot = readySnapshot;
+    for (const listener of listeners) listener();
+  };
+  const agents = {
+    ...readyAgents,
+    snapshot: () => snapshot,
+    find: (pubkey: string) =>
+      snapshot.agents.find((agent) => agent.pubkey === pubkey),
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    types: () => delayedTypes,
+  } as Agents;
+  const { mountChat, write, send } = soloModelPreferenceHarness(agents);
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: { model: "deep", effort: "high", type: "test/agent" },
+  });
+  const h = mountChat();
+  try {
+    await write(h, "a");
+    await send(h);
+    expect(h.messages.send).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Saved model and effort choices are still loading",
+    );
+    act(loadInventory);
+    await send(h);
+    expect(h.messages.send).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => {
+      loadInventory();
+      resolveModels({
+        current: "fast",
+        models: [
+          { id: "fast", label: "Fast", efforts: [{ id: "low", label: "Low" }] },
+          {
+            id: "deep",
+            label: "Deep",
+            efforts: [{ id: "high", label: "High" }],
+          },
+        ],
+      });
+      await pendingModels;
+    });
+  }
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep", effort: "high" },
+  });
+});
+
+it("resets all displayed Solo agents against storage before its event arrives", async () => {
+  const agents = sessionAgents(
+    "channel",
+    [
+      { id: "fast", label: "Fast", efforts: [] },
+      { id: "deep", label: "Deep", efforts: [] },
+    ],
+    [first.pubkey, second.pubkey],
+  );
+  const { mountChat, write, openPicker, send } =
+    soloModelPreferenceHarness(agents);
+  const unrelated = { model: "deep", type: "test/agent" };
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: { model: "deep", type: "test/agent" },
+    [resourceOwner]: unrelated,
+  });
+  const h = mountChat();
+  await write(h, "a");
+  await h.user.click(screen.getByRole("button", { name: "Second Honey" }));
+  await openPicker(h);
+  await waitFor(() =>
+    expect(
+      screen.getAllByRole("button", {
+        name: "Model for Honey in this chat",
+      }),
+    ).toHaveLength(2),
+  );
+  // Another window has written, but this window has not received its event.
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify(["scope", "solo:model-picks:channel"])}`,
+    JSON.stringify({
+      [first.pubkey]: { model: "deep", type: "test/agent" },
+      [second.pubkey]: { model: "deep", type: "test/agent" },
+      [resourceOwner]: unrelated,
+    }),
+  );
+  await h.user.click(
+    screen.getByRole("button", { name: "Reset model and effort" }),
+  );
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [resourceOwner]: unrelated,
+  });
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send).toHaveBeenCalledWith(
+    "channel",
+    expect.stringContaining("a"),
+    [first.pubkey, second.pubkey],
+    [],
+  );
+});
+
+it("keeps unsaved Solo choices across edits to another agent and storage updates", async () => {
+  const agents = sessionAgents(
+    "channel",
+    [
+      { id: "fast", label: "Fast", efforts: [] },
+      { id: "deep", label: "Deep", efforts: [] },
+    ],
+    [first.pubkey, second.pubkey],
+  );
+  const { mountChat, write, openPicker, modelButton, send } =
+    soloModelPreferenceHarness(agents);
+  const storageKey = `buzz-view.v1:${JSON.stringify(["scope", "solo:model-picks:channel"])}`;
+  const h = mountChat();
+  await write(h, "a");
+  const originalSetItem = Storage.prototype.setItem;
+  const failedWrite = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(function (this: Storage, key, value) {
+      if (key === storageKey) throw new DOMException("Storage is full");
+      originalSetItem.call(this, key, value);
+    });
+  onTestFinished(() => failedWrite.mockRestore());
+  await openPicker(h);
+  await h.user.click(modelButton());
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Deep" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Could not save model and effort for this chat",
+  );
+  await h.user.keyboard("{Escape}");
+  const unrelated = { model: "deep", type: "test/agent" };
+  act(() => {
+    originalSetItem.call(
+      localStorage,
+      storageKey,
+      JSON.stringify({ [resourceOwner]: unrelated }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: storageKey,
+        storageArea: localStorage,
+      }),
+    );
+  });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Could not save model and effort for this chat",
+  );
+  await h.user.click(screen.getByRole("button", { name: "Second Honey" }));
+  await openPicker(h);
+  const models = await waitFor(() => {
+    const buttons = screen.getAllByRole("button", {
+      name: "Model for Honey in this chat",
+    });
+    expect(buttons).toHaveLength(2);
+    return buttons;
+  });
+  expect(models[0]).toHaveTextContent("Deep");
+  const secondModel = models[1];
+  if (!secondModel) throw new Error("The second agent's model should exist.");
+  await h.user.click(secondModel);
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Deep" }),
+  );
+  await send(h);
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep" },
+    [second.pubkey]: { model: "deep" },
+  });
+  failedWrite.mockRestore();
+  await write(h, "b");
+  await h.user.click(screen.getByRole("button", { name: "Second Honey" }));
+  await openPicker(h);
+  const restoredSecondModel = screen.getAllByRole("button", {
+    name: "Model for Honey in this chat",
+  })[1];
+  if (!restoredSecondModel)
+    throw new Error("The second agent's model should exist after sending.");
+  await h.user.click(restoredSecondModel);
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Fast" }),
+  );
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [first.pubkey]: { model: "deep", type: "test/agent" },
+    [resourceOwner]: unrelated,
+  });
+});
+
+it("resets saved Solo choices and reports persistence failures", async () => {
+  const { mountChat, openPicker, modelButton, send } =
+    soloModelPreferenceHarness();
+  writeView("scope", "solo:model-picks:channel", {
+    [first.pubkey]: { model: "deep", effort: "high", type: "test/agent" },
+    [second.pubkey]: { model: "deep", effort: "low", type: "test/agent" },
+  });
+  const resetChat = mountChat();
+  await resetChat.user.type(resetChat.input(), "a");
+  await resetChat.user.click(
+    screen.getByRole("button", { name: "First Honey" }),
+  );
+  await openPicker(resetChat);
+  await resetChat.user.click(
+    screen.getByRole("button", { name: "Reset model and effort" }),
+  );
+  expect(readView("scope", "solo:model-picks:channel", null)).toEqual({
+    [second.pubkey]: { model: "deep", effort: "low", type: "test/agent" },
+  });
+  await send(resetChat);
+  await waitFor(() => expect(resetChat.messages.send).toHaveBeenCalledOnce());
+  expect(resetChat.messages.send).toHaveBeenCalledWith(
+    "channel",
+    expect.stringContaining("a"),
+    [first.pubkey],
+    [],
+  );
+  const key = `buzz-view.v1:${JSON.stringify([
+    "scope",
+    "solo:model-picks:channel",
+  ])}`;
+  const originalSetItem = Storage.prototype.setItem;
+  const failedWrite = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(function (this: Storage, storageKey, value) {
+      if (storageKey === key) throw new DOMException("Storage is full");
+      originalSetItem.call(this, storageKey, value);
+    });
+  onTestFinished(() => failedWrite.mockRestore());
+
+  await resetChat.user.type(resetChat.input(), "b");
+  await openPicker(resetChat);
+  await resetChat.user.click(modelButton());
+  await resetChat.user.click(
+    await screen.findByRole("menuitemradio", { name: "Deep" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Could not save model and effort for this chat",
+  );
+  await send(resetChat);
+  await waitFor(() => expect(resetChat.messages.send).toHaveBeenCalledTimes(2));
+  expect(resetChat.messages.send.mock.calls[1]?.[1]).toContain("b");
+  expect(resetChat.messages.send.mock.calls[1]?.[2]).toEqual([first.pubkey]);
+  expect(resetChat.messages.send.mock.calls[1]?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep" },
+  });
+});
+
+it("publishes a queued Solo message with the model and effort captured at submit", async () => {
+  localStorage.setItem("buzz-follow-up-behavior.v1", "queue");
+  const agents = sessionAgents("channel", [
+    { id: "fast", label: "Fast", efforts: [] },
+    {
+      id: "deep",
+      label: "Deep",
+      efforts: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ],
+    },
+  ]);
+  const h = mount(
+    {
+      soloConversation: true,
+      ownSoloConversation: true,
+      chatPresentation: true,
+      requireMention: true,
+    },
+    undefined,
+    "viewer",
+    agents,
+  );
+  h.setLibrary([first]);
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey", isAgent: true }]]));
+  const activityListeners = new Set<() => void>();
+  let activity = {
+    status: "unavailable",
+    records: [],
+    turns: [],
+    typing: [],
+    local: [
+      {
+        agent: first.pubkey,
+        channelId: "channel",
+        messageId: "previous",
+        state: "working",
+        scope: "scope",
+        threadRootId: "",
+        startedAt: 1,
+      },
+    ],
+  };
+  const channel = {
+    id: "channel",
+    channelType: "solo" as const,
+    creator: "viewer",
+    archived: false,
+    readOnly: false,
+  };
+  const channelList = { status: "ready" as const, channels: [channel] };
+  h.retarget({
+    ownSoloConversation: true,
+    requireMention: true,
+    session: {
+      ...h.session,
+      viewer: "viewer",
+      channels: {
+        ...h.session.channels,
+        list: () => channelList,
+      },
+      channelWrites: {
+        refreshMembership: async () => ({
+          id: "channel",
+          members: [first.pubkey],
+        }),
+        addAgents: vi.fn(),
+      },
+      agentActivity: {
+        activate: () => () => {},
+        snapshot: () => activity,
+        subscribe: (listener: () => void) => {
+          activityListeners.add(listener);
+          return () => activityListeners.delete(listener);
+        },
+      },
+    } as unknown as RelaySession,
+  });
+
+  await h.user.type(h.input(), "Queued with the deep model");
+  await h.user.click(screen.getByRole("button", { name: "First Honey" }));
+  await h.user.click(
+    await screen.findByRole("button", { name: /Model.*effort/ }),
+  );
+  await h.user.click(
+    await screen.findByRole("button", { name: "Model for Honey in this chat" }),
+  );
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Deep" }),
+  );
+  const effort = await screen.findByLabelText("Effort for Honey in this chat");
+  effort.focus();
+  await h.user.keyboard("{ArrowRight}");
+  await h.user.keyboard("{Escape}");
+  await h.user.click(screen.getByRole("button", { name: "Send message" }));
+  await screen.findByRole("region", { name: "Queued follow-ups" });
+  expect(h.messages.send).not.toHaveBeenCalled();
+
+  await h.user.type(h.input(), "Next message");
+  await h.user.click(screen.getByRole("button", { name: "First Honey" }));
+  await h.user.click(
+    await screen.findByRole("button", { name: /Model.*effort/ }),
+  );
+  await h.user.click(
+    await screen.findByRole("button", { name: "Model for Honey in this chat" }),
+  );
+  await h.user.click(
+    await screen.findByRole("menuitemradio", { name: "Fast" }),
+  );
+  activity = {
+    ...activity,
+    local: activity.local.map((row) => ({ ...row, state: "done" })),
+  };
+  act(() => {
+    for (const listener of activityListeners) listener();
+  });
+
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send.mock.calls[0]?.[0]).toBe("channel");
+  expect(h.messages.send.mock.calls[0]?.[1]).toContain(
+    "Queued with the deep model",
+  );
+  expect(h.messages.send.mock.calls[0]?.[2]).toEqual([first.pubkey]);
+  expect(h.messages.send.mock.calls.at(-1)?.at(-1)).toEqual({
+    [first.pubkey]: { model: "deep", effort: "high" },
+  });
 });
 
 it("opens the effort picker at the effort the agent's next run uses", async () => {
@@ -5439,7 +6168,7 @@ it("keeps custom emoji text readable and sends repeated shortcodes unchanged", (
 it.each([
   ["  :party: \n\t :party:  ", true],
   [":party:".repeat(24), true],
-  [Array(24).fill(":party:").join(" ") + " 😀", false],
+  [`${Array(24).fill(":party:").join(" ")} 😀`, false],
 ])(
   "classifies images-only emoji drafts without changing their text: %s",
   (draft, imagesOnly) => {
@@ -6183,6 +6912,8 @@ it("keeps retry submission available while a new Solo draft is locked", () => {
     expect.objectContaining({ prepareForSend: expect.any(Function) }),
     // Outside Solo-with-agents no recipients are held apart from the text.
     undefined,
+    undefined,
+    undefined,
   );
   expect(h.messages.send).not.toHaveBeenCalled();
 });
@@ -6810,6 +7541,8 @@ it("seeds a Berd draft's pill with the default agent once, never its text", asyn
     expect.objectContaining({ text: "hello", recipients: [] }),
     expect.objectContaining({ prepareForSend: expect.any(Function) }),
     [{ pubkey: second.pubkey, name: "Selected" }],
+    {},
+    {},
   );
 });
 
@@ -9721,6 +10454,8 @@ it("does not apply ordinary draft reconciliation to submission-owned recovery", 
     },
     expect.objectContaining({ prepareForSend: expect.any(Function) }),
     // Outside Solo-with-agents no recipients are held apart from the text.
+    undefined,
+    undefined,
     undefined,
   );
   expect(
