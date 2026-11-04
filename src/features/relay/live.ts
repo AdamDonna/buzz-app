@@ -1702,10 +1702,14 @@ export function subscribeRelayTraffic(
             for (const [id, n] of page.got)
               counts.set(id, (counts.get(id) ?? 0) + n);
             const rest = scope(route).filter(
-              (id) => (counts.get(id) ?? 0) < LIVE_REPLAY_LIMIT,
+              (id) =>
+                route.count > LIVE_REPLAY_LIMIT ||
+                (counts.get(id) ?? 0) < LIVE_REPLAY_LIMIT,
             );
-            // A full page within one second cannot move the cutoff.
-            if (page.oldest === page.until)
+            // Extra frames may be live fan-out (including duplicates or
+            // backdated events), so neither counts nor cutoff prove a prefix.
+            // A full page within one second also cannot move the cutoff.
+            if (route.count > LIVE_REPLAY_LIMIT || page.oldest === page.until)
               for (const id of rest) {
                 replayQueue.set(id, route.since);
                 splitReplay.add(id);

@@ -4578,7 +4578,7 @@ describe("combined replay paging", () => {
   const run = (channel: string, newest: number, count: number) =>
     Array.from(
       { length: count },
-      (_, i) => [channel, newest - i] as [string, number],
+      (_, i) => [channel, newest - Math.floor(i / 4)] as [string, number],
     );
   const pagesAfter = (h: ReturnType<typeof setup>, request: WireRequest) =>
     h.first
@@ -4587,7 +4587,7 @@ describe("combined replay paging", () => {
       .filter((r) => isReplay(r) && r[2].until !== undefined);
 
   it("asks for the rest below its oldest event, without channels that have their newest 500", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ now: 1_700_000_600_000 });
     const { h, first } = await start();
     try {
       await page(h, first, run("c000", 1_700_000_600, 500));
@@ -4597,18 +4597,18 @@ describe("combined replay paging", () => {
       expect(second[2]).toMatchObject({
         "#h": ids.slice(1, 256),
         since: first[2].since,
-        until: 1_700_000_101,
+        until: 1_700_000_476,
         limit: 500,
       });
-      await page(h, second, run("c001", 1_700_000_101, 500));
+      await page(h, second, run("c001", 1_700_000_476, 500));
       const third = pagesAfter(h, second)[0];
       assert.exists(third);
       // The event at the cutoff second may repeat one already delivered.
       expect(third[2]).toMatchObject({
         "#h": ids.slice(1, 256),
-        until: 1_699_999_602,
+        until: 1_700_000_352,
       });
-      await page(h, third, run("c002", 1_699_999_602, 3));
+      await page(h, third, run("c002", 1_700_000_352, 3));
       expect(pagesAfter(h, third)).toEqual([]);
       expect(
         h.first
@@ -4620,48 +4620,77 @@ describe("combined replay paging", () => {
     }
   }, 60_000);
 
-  it("replays one filter per channel when a full page cannot move the cutoff", async () => {
-    vi.useFakeTimers();
-    const { h, first } = await start();
-    try {
-      const at = 1_700_000_100;
-      const tie = (n: number) =>
-        Array.from(
-          { length: n },
-          (_, i) => [ids[i % 10] ?? "", at] as [string, number],
-        );
-      await page(h, first, tie(500));
-      const second = pagesAfter(h, first)[0];
-      assert.exists(second);
-      expect(second[2]).toMatchObject({ "#h": ids.slice(0, 256), until: at });
-      await page(h, second, tie(500));
-      expect(pagesAfter(h, second)).toEqual([]);
-      for (let i = 0; i < 40; i++) {
-        const pending = h.first
+  it.each(["tied cutoff", "duplicate live event", "backdated live event"])(
+    "falls back to per-channel replay after a %s",
+    async (scenario) => {
+      vi.useFakeTimers({ now: 1_700_000_600_000 });
+      const { h, first } = await start();
+      try {
+        const at = 1_700_000_500;
+        const tie = (n: number) =>
+          Array.from(
+            { length: n },
+            (_, i) => [ids[i % 10] ?? "", at] as [string, number],
+          );
+        let last = first;
+        if (scenario === "tied cutoff") {
+          await page(h, first, tie(500));
+          const second = pagesAfter(h, first)[0];
+          assert.exists(second);
+          expect(second[2]).toMatchObject({
+            "#h": ids.slice(0, 256),
+            until: at,
+          });
+          await page(h, second, tie(500));
+          last = second;
+        } else {
+          // Fan-out is registered before historical delivery. A duplicate must
+          // not count as A's 500th row; a backdated arrival must not skip a tail.
+          await h.first.receive([
+            "EVENT",
+            first[1],
+            message(
+              h.key,
+              "c000",
+              scenario === "duplicate live event" ? `${first[1]} 0` : "late",
+              scenario === "duplicate live event" ? at + 100 : at - 50,
+            ),
+          ]);
+          await page(h, first, [
+            ...run("c000", at + 100, 499),
+            ["c001", at - 24],
+          ]);
+        }
+        expect(pagesAfter(h, last)).toEqual([]);
+        for (let i = 0; i < 40; i++) {
+          const pending = h.first
+            .requests()
+            .slice(h.first.requests().indexOf(last) + 1)
+            .filter((r) => isReplay(r) && scopeOf(r).length < 256);
+          if (pending.some((r) => r[2]["#h"]?.length === 1)) break;
+          for (const r of pending) await h.first.receive(["EOSE", r[1]]);
+        }
+        const singles = h.first
           .requests()
-          .slice(h.first.requests().indexOf(second) + 1)
-          .filter((r) => isReplay(r) && scopeOf(r).length < 256);
-        if (pending.some((r) => r[2]["#h"]?.length === 1)) break;
-        for (const r of pending) await h.first.receive(["EOSE", r[1]]);
+          .filter(
+            (r) =>
+              isReplay(r) && filtersOf(r).every((f) => f["#h"]?.length === 1),
+          );
+        const single = singles[0];
+        assert.exists(single);
+        expect(filtersOf(single)).toHaveLength(10);
+        expect(scopeOf(single)).toContain("c000");
+        expect(
+          filtersOf(single).every(
+            (f) => f.since === first[2].since && !("until" in f),
+          ),
+        ).toBe(true);
+      } finally {
+        h.owner.dispose();
       }
-      const singles = h.first
-        .requests()
-        .filter(
-          (r) =>
-            isReplay(r) && filtersOf(r).every((f) => f["#h"]?.length === 1),
-        );
-      const single = singles[0];
-      assert.exists(single);
-      expect(filtersOf(single)).toHaveLength(10);
-      expect(
-        filtersOf(single).every(
-          (f) => f.since === first[2].since && !("until" in f),
-        ),
-      ).toBe(true);
-    } finally {
-      h.owner.dispose();
-    }
-  }, 60_000);
+    },
+    60_000,
+  );
 });
 
 it.each([
