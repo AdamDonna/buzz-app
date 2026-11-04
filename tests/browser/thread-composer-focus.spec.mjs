@@ -1,5 +1,5 @@
 import { test, expect } from "./fixture.mjs";
-import { activate, open } from "./timeline.mjs";
+import { activate, open, virtuaIdle } from "./timeline.mjs";
 
 test.use({
   productionBroker: true,
@@ -179,9 +179,9 @@ test("a link to a specific reply reveals it without focusing the composer", asyn
     "alpha",
     `<buzz://message?channel=alpha&id=${target.id}>`,
   );
-  const link = page.locator(
-    `[data-channel-timeline] [data-message-id="${message.id}"] a`,
-  );
+  const link = page
+    .locator(`[data-channel-timeline] [data-message-id="${message.id}"]`)
+    .getByRole("link", { name: "Alice Fixture in #Alpha", exact: true });
   const thread = page.getByRole("region", {
     name: "Thread messages",
     exact: true,
@@ -190,6 +190,13 @@ test("a link to a specific reply reveals it without focusing the composer", asyn
     name: "Reply to thread",
     exact: true,
   });
+  // The appended row measures, and its link resolves the reply's byline, after
+  // it mounts; the timeline follows both. A click before then retries through
+  // forced scroll alignments, and a forced scroll whose event lands between
+  // press and release starts Virtua's pointer-event hold, so the release misses
+  // the link and the click opens nothing. Wait for the settled row.
+  await expect(link).toBeVisible();
+  await virtuaIdle(page);
   // Check both normal navigation and the link menu's workspace-local opener.
   for (const menu of [false, true]) {
     if (menu) {
