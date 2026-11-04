@@ -66,6 +66,7 @@ fn validate_content(content: &Value, status: &str) -> Result<()> {
 /// Exactly the tags `relay_sign_reminder` writes; the tag selects the status it may carry.
 fn tag_status(tags: &[Vec<String>]) -> Option<&'static str> {
     match tags {
+        [d] if d.len() == 2 && d[0] == "d" && hex(&d[1], 32) => Some("pending"),
         [d, schedule] if d.len() == 2 && d[0] == "d" && hex(&d[1], 32) && schedule.len() == 2 => {
             let digits = !schedule[1].is_empty()
                 && schedule[1].bytes().all(|b| b.is_ascii_digit())
@@ -173,13 +174,13 @@ fn now() -> Result<u64> {
 
 async fn sign_reminder(host: &IdentityHost, intent: ReminderIntent, now: u64) -> Result<Value> {
     let invalid = || "Invalid reminder".to_owned();
-    let schedule = match (intent.not_before, intent.expiration) {
-        (Some(at), None) if at < (1 << 53) => ("not_before", at, "pending"),
+    let (schedule, status) = match (intent.not_before, intent.expiration) {
+        (None, None) => (None, "pending"),
+        (Some(at), None) if at < (1 << 53) => (Some(("not_before", at)), "pending"),
         (None, Some(at)) if (now + 29 * DAY..=now + 91 * DAY).contains(&at) => {
             let status = intent.content.get("status").and_then(Value::as_str);
             (
-                "expiration",
-                at,
+                Some(("expiration", at)),
                 if status == Some("done") {
                     "done"
                 } else {
@@ -193,7 +194,7 @@ async fn sign_reminder(host: &IdentityHost, intent: ReminderIntent, now: u64) ->
     if !hex(&intent.d, 32) || intent.created_at + 60 < now || intent.created_at > now + 3600 {
         return Err(invalid());
     }
-    validate_content(&intent.content, schedule.2)?;
+    validate_content(&intent.content, status)?;
     let plaintext = serde_json::to_string(&intent.content).map_err(|_| invalid())?;
     if plaintext.len() > MAX_PLAINTEXT {
         return Err(invalid());
@@ -206,14 +207,15 @@ async fn sign_reminder(host: &IdentityHost, intent: ReminderIntent, now: u64) ->
                 .map_err(|_| "Could not encrypt reminder".into())
         })
         .await?;
+    let mut tags = vec![vec!["d".into(), intent.d]];
+    if let Some((name, at)) = schedule {
+        tags.push(vec![name.into(), at.to_string()]);
+    }
     host.sign(EventTemplate {
         kind: KIND,
         created_at: intent.created_at,
         content,
-        tags: vec![
-            vec!["d".into(), intent.d],
-            vec![schedule.0.into(), schedule.1.to_string()],
-        ],
+        tags,
     })
     .await
 }
@@ -307,6 +309,20 @@ mod tests {
     async fn signs_decodes_and_admits_only_own_reminders() {
         let host = IdentityHost::fixture();
         let now = 1_000_000;
+        let undated = sign_reminder(&host, intent(None, None, "pending"), now)
+            .await
+            .unwrap();
+        assert_eq!(
+            undated["tags"],
+            json!([["d", "0123456789abcdef0123456789abcdef"]])
+        );
+        admit_reminder(&host, &undated).await.unwrap();
+        let decoded_undated = host
+            .with_key(move |secret, viewer| Ok(decrypt(secret, viewer, &undated)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded_undated["content"]["status"], "pending");
         let pending = sign_reminder(&host, intent(Some(now + 60), None, "pending"), now)
             .await
             .unwrap();
@@ -333,6 +349,8 @@ mod tests {
 
         // Wrong schedule/status pairing, out-of-window expiration, stale clocks and bad d tags.
         for bad in [
+            intent(None, None, "done"),
+            intent(None, None, "cancelled"),
             intent(Some(now), None, "done"),
             intent(None, Some(now + DAY), "done"),
             intent(Some(now), Some(now + 40 * DAY), "pending"),

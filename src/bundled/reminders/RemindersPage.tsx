@@ -104,7 +104,7 @@ export function RemindersPage({
   }, []);
   const scope = scopeOf(connection);
   const groups = groupReminders(state.reminders, now, endOfToday());
-  const done = groups.find((group) => group.label === "Done");
+  const done = groups.find((group) => group.label === "Completed");
   const active = groups.filter((group) => group !== done);
   const run = (action: Promise<unknown>) => {
     setError(undefined);
@@ -259,7 +259,7 @@ function ReminderSections({
       (
         next ??
         sections.current?.querySelector<HTMLElement>(
-          '[aria-label="Done"] button',
+          '[aria-label="Completed"] button',
         )
       )?.focus();
     }
@@ -417,7 +417,7 @@ function ReminderSections({
                 key="done"
                 layout="position"
                 initial={false}
-                aria-label="Done"
+                aria-label="Completed"
                 className={styles.group}
               >
                 <Accordion
@@ -427,7 +427,7 @@ function ReminderSections({
                       value: "done",
                       title: (
                         <span className={styles.groupHeading}>
-                          Done{" "}
+                          Completed{" "}
                           <span className="text-caption text-subtle">
                             {done.length}
                           </span>

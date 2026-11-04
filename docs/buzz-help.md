@@ -165,6 +165,10 @@ that agent in Buzz; they do not notify the external app through this connection.
 - **Emoji suggestions** appear when you type `:` and an emoji name. If a name
   is shortened with an ellipsis, hover over it or use the arrow keys to select
   it and see the full name in a tooltip.
+- **Reminders** (optional plugin): choose **Remind me** from a message menu.
+  **No due time** is the default; choose a time if you want a notification.
+  Undated reminders stay in **Reminders → No due time**. Expand **Completed**
+  (collapsed by default) to find finished items and open their messages.
 - **Spoilers** stay hidden in reminder previews and notifications as `[Spoiler]`.
   Open the original message to reveal them.
 - **Canvas** holds shared notes and context for a channel or chat. Messages and

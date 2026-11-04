@@ -17,7 +17,7 @@ import {
 } from "./model";
 import styles from "./Reminders.module.css";
 
-/** "Remind me" for one message: a preset or custom time, plus an optional note. */
+/** "Remind me" for one message: an optional due time and note. */
 export function RemindDialog({
   message,
   session,
@@ -28,7 +28,7 @@ export function RemindDialog({
   close(): void;
 }) {
   const fields = useRef<HTMLDivElement>(null);
-  const [when, setWhen] = useState(TIME_PRESETS[0]?.label ?? "custom");
+  const [when, setWhen] = useState("none");
   const [note, setNote] = useState("");
   const [date, setDate] = useState(todayDateString);
   const [time, setTime] = useState("09:00");
@@ -36,7 +36,7 @@ export function RemindDialog({
   const [error, setError] = useState<string>();
   const custom = parseCustomDateTime(date, time);
   const preset = TIME_PRESETS.find((item) => item.label === when);
-  const submit = async (notBefore: number) => {
+  const submit = async (notBefore?: number) => {
     const reminders = session.reminders;
     if (!reminders || pending) return;
     setPending(true);
@@ -72,7 +72,7 @@ export function RemindDialog({
             null)
       }
       title="Remind me"
-      description="Choose when to be reminded about this message."
+      description="Save this message for later, with an optional due time."
       actions={
         <>
           <Button disabled={pending} onClick={close}>
@@ -81,9 +81,14 @@ export function RemindDialog({
           <Button
             variant="prominent"
             loading={pending}
-            disabled={pending || (!preset && custom === null)}
+            disabled={pending || (when === "custom" && custom === null)}
             onClick={() => {
-              const at = preset ? preset.at() : parseCustomDateTime(date, time);
+              const at =
+                when === "none"
+                  ? undefined
+                  : preset
+                    ? preset.at()
+                    : parseCustomDateTime(date, time);
               if (at !== null) void submit(at);
             }}
           >
@@ -103,6 +108,7 @@ export function RemindDialog({
             {
               label: "",
               options: [
+                { value: "none", label: "No due time" },
                 ...TIME_PRESETS.map((item) => ({
                   value: item.label,
                   label: item.label,

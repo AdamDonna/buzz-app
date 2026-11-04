@@ -18,7 +18,7 @@ export type Reminder = Readonly<{
   id: string;
   eventId: string;
   createdAt: number;
-  /** Due time in unix seconds; absent once done or cancelled. */
+  /** Due time in unix seconds; absent for undated, done or cancelled reminders. */
   notBefore?: number;
   status: ReminderStatus;
   target?: ReminderTarget;
@@ -57,7 +57,7 @@ export type Reminders = Readonly<{
   refresh(): Promise<void>;
   create(
     target: ReminderTarget,
-    notBefore: number,
+    notBefore?: number,
     note?: string,
   ): Promise<void>;
   snooze(id: string, notBefore: number): Promise<void>;
@@ -346,7 +346,7 @@ export function createReminders(options: {
       write({
         d: randomD(),
         createdAt: now(),
-        notBefore,
+        ...(notBefore !== undefined ? { notBefore } : {}),
         content: {
           target,
           ...(note?.trim() ? { note: note.trim() } : {}),

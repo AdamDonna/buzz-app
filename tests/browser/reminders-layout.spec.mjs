@@ -173,8 +173,8 @@ test("completion preserves section alignment and avatar opens its conversation",
     .click();
   await expect(page.getByRole("region", { name: "Overdue" })).toHaveCount(0);
   await today.getByRole("checkbox").first().click();
-  const done = page.getByRole("region", { name: "Done", exact: true });
-  await done.getByRole("button", { name: "Done 2" }).click();
+  const done = page.getByRole("region", { name: "Completed", exact: true });
+  await done.getByRole("button", { name: "Completed 2" }).click();
   await expect(done.getByRole("listitem")).toHaveCount(2);
   const heading = (locator) =>
     locator.evaluate((el) => {
@@ -229,7 +229,24 @@ test("completion preserves section alignment and avatar opens its conversation",
   await expect(
     page.getByRole("region", { name: "Today", exact: true }),
   ).toHaveCount(0);
-  await expect(done.getByRole("button", { name: "Done 4" })).toBeVisible();
+  await expect(done.getByRole("button", { name: "Completed 4" })).toBeVisible();
+  // The default save is undated; completing the final active row hands focus
+  // to Completed rather than losing it when the checkbox unmounts.
+  await page
+    .getByRole("button", { name: "Set a reminder", exact: true })
+    .click();
+  await expect(page.getByRole("combobox", { name: "When" })).toHaveText(
+    "No due time",
+  );
+  await page.getByRole("button", { name: "Set reminder", exact: true }).click();
+  const undated = page.getByRole("region", {
+    name: "No due time",
+    exact: true,
+  });
+  await undated.getByRole("checkbox").focus();
+  await page.keyboard.press("Space");
+  await expect(undated).toHaveCount(0);
+  await expect(done.getByRole("button", { name: "Completed 5" })).toBeFocused();
   expect(errors).toEqual([]);
 });
 

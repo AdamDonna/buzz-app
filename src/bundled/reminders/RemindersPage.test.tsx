@@ -86,11 +86,12 @@ it.each([
   expect(row).not.toHaveTextContent("Rosebud");
 });
 
-it("lists finished reminders newest first in a collapsed Done group", () => {
+it("lists finished reminders newest first in a collapsed Completed group", () => {
   const state = {
     status: "ready" as const,
     reminders: [
       reminder("overdue item", "pending", 1, now - 60),
+      reminder("saved for later", "pending", 2),
       reminder("older done", "done", 10),
       reminder("newer done", "done", 20),
       reminder("cancelled item", "cancelled", 30),
@@ -119,6 +120,9 @@ it("lists finished reminders newest first in a collapsed Done group", () => {
       clock={{ subscribe: () => () => {}, read: () => now }}
     />,
   );
+  const undated = screen.getByRole("region", { name: "No due time" });
+  expect(within(undated).getByText("saved for later")).toBeVisible();
+  expect(undated.querySelector("time")).toBeNull();
   const overdue = screen.getByRole("region", { name: "Overdue" });
   expect(within(overdue).queryByText("Ada")).toBeNull();
   expect(within(overdue).queryByText("#general")).toBeNull();
@@ -139,12 +143,12 @@ it("lists finished reminders newest first in a collapsed Done group", () => {
   expect(
     within(overdue).getByRole("button", { name: "Open message from Ada" }),
   ).toHaveAccessibleDescription("overdue item Overdue · 1 minute ago");
-  const done = screen.getByRole("region", { name: "Done" });
+  const done = screen.getByRole("region", { name: "Completed" });
   // Done sits below the active sections, collapsed.
   expect(
     overdue.compareDocumentPosition(done) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  const toggle = within(done).getByRole("button", { name: "Done 2" });
+  const toggle = within(done).getByRole("button", { name: "Completed 2" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   expect(screen.queryByText("newer done")).toBeNull();
   fireEvent.click(toggle);
@@ -247,10 +251,10 @@ it("shows a note-only reminder without an open action", () => {
     within(row).queryByRole("button", { name: /^Open message/ }),
   ).toBeNull();
   // A finished note has nothing to open or cancel, so no empty overflow menu.
-  fireEvent.click(screen.getByRole("button", { name: "Done 1" }));
-  const done = within(screen.getByRole("region", { name: "Done" })).getByRole(
-    "listitem",
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Completed 1" }));
+  const done = within(
+    screen.getByRole("region", { name: "Completed" }),
+  ).getByRole("listitem");
   expect(
     within(done)
       .getAllByRole("button")
@@ -446,17 +450,17 @@ it("renders a reminder due past JavaScript's Date range without its due label", 
 const hint =
   "Choose Remind me from any message's menu to bring it back here when it matters.";
 
-it("says the list is caught up when only Done reminders exist", () => {
+it("says the list is caught up when only Completed reminders exist", () => {
   page([reminder("finished", "done", 1)]);
   expect(screen.getByText("You're all caught up")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Done 1" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Completed 1" })).toBeVisible();
 });
 
 it("explains how to add a reminder on an empty page", () => {
   page([reminder("cancelled", "cancelled", 1)]);
   expect(screen.getByText("No reminders yet")).toBeVisible();
   expect(screen.getByText(hint)).toBeVisible();
-  expect(screen.queryByRole("region", { name: "Done" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Completed" })).toBeNull();
 });
 
 it.each([

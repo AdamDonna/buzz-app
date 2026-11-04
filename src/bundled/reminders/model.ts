@@ -58,22 +58,31 @@ export function pendingMessageIds(state: RemindersState) {
 
 export type ReminderGroup = Readonly<{ label: string; reminders: Reminder[] }>;
 
-/** Overdue, Today and Upcoming pending reminders, then Done newest first; cancelled is hidden. */
+/** Pending reminders by due time, then Completed newest first; cancelled is hidden. */
 export function groupReminders(
   reminders: readonly Reminder[],
   now: number,
   endOfToday: number,
 ): ReminderGroup[] {
-  const groups = { Overdue: [], Today: [], Upcoming: [], Done: [] } as Record<
-    string,
-    Reminder[]
-  >;
+  const groups = {
+    Overdue: [],
+    Today: [],
+    Upcoming: [],
+    "No due time": [],
+    Completed: [],
+  } as Record<string, Reminder[]>;
   for (const reminder of reminders) {
     const at = reminder.notBefore;
-    if (reminder.status === "done") groups.Done?.push(reminder);
-    if (reminder.status !== "pending" || at === undefined) continue;
+    if (reminder.status === "done") groups.Completed?.push(reminder);
+    if (reminder.status !== "pending") continue;
     const label =
-      at <= now ? "Overdue" : at <= endOfToday ? "Today" : "Upcoming";
+      at === undefined
+        ? "No due time"
+        : at <= now
+          ? "Overdue"
+          : at <= endOfToday
+            ? "Today"
+            : "Upcoming";
     groups[label]?.push(reminder);
   }
   return Object.entries(groups)
@@ -81,7 +90,7 @@ export function groupReminders(
     .map(([label, list]) => ({
       label,
       reminders: list.sort((a, b) =>
-        label === "Done"
+        label === "Completed" || label === "No due time"
           ? b.createdAt - a.createdAt
           : (a.notBefore ?? 0) - (b.notBefore ?? 0),
       ),

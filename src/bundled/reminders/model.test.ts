@@ -99,6 +99,8 @@ describe("reminder grouping", () => {
   it("buckets pending reminders, lists done newest first and hides cancelled", () => {
     const groups = groupReminders(
       [
+        reminder({ id: "undated" }),
+        { ...reminder({ id: "new-undated" }), createdAt: 5 },
         reminder({ id: "later", notBefore: 3000 }),
         reminder({ id: "zero", notBefore: 0 }),
         reminder({ id: "overdue", notBefore: 500 }),
@@ -114,7 +116,8 @@ describe("reminder grouping", () => {
       ["Overdue", ["zero", "overdue"]],
       ["Today", ["today"]],
       ["Upcoming", ["later"]],
-      ["Done", ["done-later", "done"]],
+      ["No due time", ["new-undated", "undated"]],
+      ["Completed", ["done-later", "done"]],
     ]);
     expect(
       groupReminders([reminder({ notBefore: 3000 })], NOW, 2000).map(
@@ -273,4 +276,18 @@ describe("dueLabel", () => {
       `${afterMidnight.toLocaleDateString([], { weekday: "short" })} ${time(afterMidnight)}`,
     );
   });
+});
+
+it("never schedules notifications or due badges for undated reminders", () => {
+  const saved = [reminder({ id: "undated", target: target() })];
+  expect(countDue(saved, NOW)).toBe(0);
+  expect(dueSince(saved, 0, NOW)).toEqual([]);
+  expect(nextDelay(saved, NOW)).toBeUndefined();
+  expect(
+    pendingMessageIds({
+      status: "ready",
+      hydrated: true,
+      reminders: saved,
+    }).has("e"),
+  ).toBe(true);
 });

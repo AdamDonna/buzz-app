@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ReadFilter, RelayEvent } from "./events";
 import {
   createReminders,
@@ -631,5 +631,38 @@ describe("resume after a continuous membership replay", () => {
     answer([wire("e1", 10, "pending")]);
     await read;
     expect(model.capability.snapshot().status).toBe("ready");
+  });
+});
+
+it("saves an undated reminder without schedule or expiration and restores it from history", async () => {
+  const h = harness();
+  await h.model.capability.create(target, undefined, "Follow up");
+  const intent = h.signed[0];
+  expect(intent).toBeDefined();
+  expect(intent).not.toHaveProperty("notBefore");
+  expect(intent).not.toHaveProperty("expiration");
+  expect(intent?.content).toEqual({
+    target,
+    note: "Follow up",
+    status: "pending",
+  });
+  const saved = h.model.capability.snapshot().reminders[0];
+  assert(saved);
+  expect(saved).toMatchObject({ status: "pending", target });
+  const restored = harness([
+    {
+      ...wire("restored", saved.createdAt, "pending", saved.id),
+      content: JSON.stringify(intent?.content),
+    },
+  ]);
+  await restored.model.capability.refresh();
+  expect(restored.model.capability.snapshot().reminders[0]).not.toHaveProperty(
+    "notBefore",
+  );
+  expect(restored.model.capability.snapshot().reminders[0]).toMatchObject({
+    id: saved.id,
+    status: "pending",
+    target,
+    note: "Follow up",
   });
 });

@@ -47,7 +47,7 @@ it("redacts spoilers before handing the preview to reminder storage", async () =
       authorPubkey: "a",
       preview: "The answer is [Spoiler]",
     },
-    expect.any(Number),
+    undefined,
     "",
   );
 });
@@ -206,7 +206,7 @@ it("lets a preset and note be chosen before saving, and keeps the draft after fa
   await vi.waitFor(() =>
     expect(screen.getByRole("option", { selected: true })).toHaveFocus(),
   );
-  await user.keyboard("{ArrowDown}");
+  await user.keyboard("{ArrowDown}{ArrowDown}");
   await vi.waitFor(() =>
     expect(screen.getByRole("option", { name: "In 1 hour" })).toHaveFocus(),
   );
@@ -309,4 +309,21 @@ it("stays open after a stray outside click", async () => {
   fireEvent.click(backdrop);
   await Promise.resolve();
   expect(close).not.toHaveBeenCalled();
+});
+
+it("defaults to no due time and saves without choosing a schedule", async () => {
+  const create = vi.fn(async () => {});
+  const close = dialog(create);
+  expect(screen.getByRole("combobox", { name: "When" })).toHaveTextContent(
+    "No due time",
+  );
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Set reminder" }));
+  expect(create).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ eventId: "m" }),
+    undefined,
+    "",
+  );
+  expect(close).toHaveBeenCalledOnce();
 });
