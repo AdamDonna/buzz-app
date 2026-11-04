@@ -259,7 +259,7 @@ impl FederatedIdentity {
             None => Ok(self.clone()),
         }
     }
-    fn is(&self, other: &Self) -> bool {
+    pub(crate) fn is(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -974,7 +974,7 @@ impl FederatedIdentity {
             self.retire_state(&mut state, Status::SignedOut, None);
         }
     }
-    /// Agent grants belong to the first server; its sign-out is `AgentTokens::sign_out`.
+    /// With agent grants, sign-out is `AgentTokens::sign_out`.
     pub(crate) async fn sign_out(&self) -> Snapshot {
         self.finish_sign_out(self.begin_sign_out()).await
     }
@@ -1078,10 +1078,9 @@ pub(crate) async fn federated_identity_sign_out(
     relay: Option<String>,
 ) -> Result<Snapshot, String> {
     let server = host.server_for_command(relay.as_deref())?;
-    if server.is(&host) {
-        tokens.sign_out().await
-    } else {
-        Ok(server.sign_out().await)
+    match tokens.for_server(&server) {
+        Some(tokens) => tokens.sign_out().await,
+        None => Ok(server.sign_out().await),
     }
 }
 

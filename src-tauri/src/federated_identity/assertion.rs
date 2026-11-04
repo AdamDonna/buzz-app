@@ -297,6 +297,30 @@ impl FederatedIdentity {
             generation.stop.cancel();
         }
     }
+    /// Whether a canonical relay requires NIP-FI, from the discovery shared
+    /// with people's requests. A failure is reported and not kept.
+    pub(crate) async fn requires_federated_identity(&self, relay: &str) -> Result<bool, String> {
+        let generation = self.discovery_generation(relay, None)?;
+        let result = generation
+            .result
+            .get_or_init(|| discovery(relay))
+            .await
+            .clone();
+        if result.is_err() {
+            let mut cache = self
+                .0
+                .discoveries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache
+                .get(relay)
+                .is_some_and(|current| Arc::ptr_eq(current, &generation))
+            {
+                cache.remove(relay);
+            }
+        }
+        result
+    }
     pub(crate) async fn assertion_for_socket(
         &self,
         identity: &IdentityHost,
