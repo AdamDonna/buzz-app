@@ -438,7 +438,7 @@ it("opens settings for a selected agent beside the grid and follows the arrow ke
   expect(
     within(profilePane).getByRole("tablist", { name: "Panel tabs" }),
   ).toBeVisible();
-  expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -469,6 +469,7 @@ it("opens the side panel with the type's tabs and the app's Settings and Memory 
     "Your teams",
     "Marketplace",
     "AAda",
+    "Identity",
     "Reply",
     "Memory",
     "Settings",
@@ -2950,7 +2951,7 @@ it("moves focus from Finish setup to the first tab once the setup finishes", asy
   await user.click(screen.getByText("Sky"));
   screen.getByRole("button", { name: "Finish setup" }).focus();
   await user.keyboard("{Enter}");
-  expect(await screen.findByRole("tab", { name: "Reply" })).toHaveFocus();
+  expect(await screen.findByRole("tab", { name: "Identity" })).toHaveFocus();
 });
 
 it("keeps a failed Delete's agent and its warning on screen", async () => {
@@ -3091,7 +3092,7 @@ it("opens deletion from the card menu without selecting it and requires confirma
   await user.click(
     await screen.findByRole("menuitem", { name: "Open settings" }),
   );
-  expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
+  expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
@@ -3497,7 +3498,7 @@ it("opens the owned agent provider Activity tab for the originating conversation
         close={close}
       />,
     );
-    expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
