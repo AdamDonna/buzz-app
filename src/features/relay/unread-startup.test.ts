@@ -953,7 +953,7 @@ it("the recovery tick repairs unread only as a slow backstop after a connection'
         : answer(filters, signal),
     );
     await h.session.unread.ensure();
-    const evidence = () => h.trace.filter(({ kind }) => kind === 9).length;
+    const evidence = () => tickReads(h).evidence;
     const before = evidence();
     h.reconnect();
     await vi.waitFor(() => expect(evidence()).toBe(before + 1));
@@ -1030,12 +1030,7 @@ it("a live message after a failed unread repair does not cancel its retry", asyn
       if (fail) throw new Error("Transient evidence failure");
       return [h.row];
     });
-    // The repair's read, not a lookup for one message.
-    const evidence = () =>
-      h.query.mock.calls.filter(
-        ([filters]) =>
-          filters[0]?.include_aux && filters[0]?.kinds?.includes(40002),
-      ).length;
+    const evidence = () => tickReads(h).evidence;
     await h.session.unread.ensure();
     fail = true;
     h.reconnect();
@@ -1106,8 +1101,13 @@ function tickReads(h: ReturnType<typeof setup>) {
     h.query.mock.calls.filter(([filters]) => filters[0] && match(filters[0]))
       .length;
   return {
+    // A channel read, not a lookup by ID or a thread read.
     evidence: count(
-      (filter) => !!filter.include_aux && !!filter.kinds?.includes(40002),
+      (filter) =>
+        !!filter["#h"] &&
+        !filter["#e"] &&
+        !filter.ids &&
+        !!filter.kinds?.includes(40002),
     ),
     snapshots: count((filter) => !!filter.kinds?.includes(30078)),
   };
@@ -1235,7 +1235,7 @@ it("a covered reconnect does not postpone the recovery tick's full unread repair
     await h.session.unread.ensure();
     // A full repair reads the read-state snapshot; a covered one resumes it.
     const snapshots = () => h.trace.filter(({ kind }) => kind === 30078).length;
-    const evidence = () => h.trace.filter(({ kind }) => kind === 9).length;
+    const evidence = () => tickReads(h).evidence;
     h.reconnect();
     await vi.waitFor(() => expect(snapshots()).toBe(2));
     const repaired = Date.now();
