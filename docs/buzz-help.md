@@ -400,6 +400,9 @@ confirmation.
   macOS (inside the app's installed name, such as `Buzz Foundation.app`), with
   no setup or token. Without such a plugin there are no tools to
   offer; do not promise them.
+- The **GitHub** plugin’s pull request panel offers **Queue for merge** when
+  the target branch requires a merge queue. After confirmation, it queues the
+  displayed commit and shows **Queued for merge**; GitHub controls when it merges.
 - Some desktop plugins can upload images you provide to services they declare.
 - Agents running on this computer can write plugins while the **Plugin
   development** plugin is on (it is by default). It gives them
