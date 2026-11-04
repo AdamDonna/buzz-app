@@ -15,8 +15,10 @@ an upgrade silently removes the feature that makes it usable.
 ## Storage contract
 
 Both browser and native storage persist each known bundled plugin's resolved
-enabled state before returning the first usable catalog. Later releases retain
-those states even if their bundled defaults change. A newly introduced plugin
+enabled state. The browser requires that write before returning a usable catalog;
+native default snapshots are best effort, so readable profiles can still open
+when saving fails. Later releases retain saved states even if their bundled
+defaults change. A newly introduced plugin
 uses its declared default when first encountered, then persists that state too.
 Use the existing plugin settings stores and native registry lock; do not add
 activation-time usage queries or a second preference owner.
@@ -40,10 +42,16 @@ preserves established installs without trying to prove feature usage from
 possibly incomplete or offline relay reads. Mere absence of a settings file is
 not enough to identify a fresh native install.
 
-Corrupt or unreadable settings require recovery; failed persistence must not
-activate an uncommitted catalog. A deliberate reset uses current bundled
-defaults and persists them immediately, so another launch cannot reapply the
-legacy backfill. Reset is an explicit user action, rather than an upgrade.
+Corrupt or unreadable settings require recovery. A failed native default-snapshot
+write serves the resolved in-memory state and retries on the next catalog read;
+explicit edits and resets still report write failures. If a fresh native profile
+cannot save its first snapshot, the directory created during initialization can
+make a later launch count as existing. Restart stability requires a saved
+snapshot; this is a limitation of the local install heuristic.
+
+A deliberate reset uses current bundled defaults. Once it succeeds, another
+launch cannot reapply the legacy backfill. Reset is an explicit user action,
+rather than an upgrade.
 
 ## Required checks for a default change
 

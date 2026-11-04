@@ -1265,6 +1265,66 @@ fn bundled_defaults_are_pinned_for_fresh_and_untouched_existing_profiles() {
 }
 
 #[test]
+#[cfg(unix)]
+fn failed_default_snapshot_does_not_block_untouched_upgrades() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for saved_workflows in [None, Some(false)] {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("profiles/test");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("registry.lock"), "").unwrap();
+        let settings = root.join("registry.json");
+        let original = saved_workflows.map(|enabled| {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "version": 2, "bundledEnabled": true,
+                "bundledOverrides": { "buzz.workflows": enabled }, "installed": {}
+            }))
+            .unwrap();
+            fs::write(&settings, &bytes).unwrap();
+            bytes
+        });
+        let manager = Manager::open(Some(home.path().into()), "test", false).unwrap();
+        let permissions = fs::metadata(&root).unwrap().permissions();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+        let first = manager.catalog();
+        let second = manager.catalog();
+        let edit = manager.change("disable", "buzz.reminders");
+        // Restore before asserting, so a failing test can clean up its profile.
+        fs::set_permissions(&root, permissions).unwrap();
+        assert!(edit.is_err(), "explicit edits must report the failed write");
+        assert_eq!(fs::read(&settings).ok(), original);
+        for result in [first, second] {
+            let catalog = result.expect("a failed snapshot must not block launch");
+            for (id, enabled) in [
+                ("buzz.reminders", true),
+                ("buzz.workflows", saved_workflows.unwrap_or(true)),
+            ] {
+                assert_eq!(
+                    catalog
+                        .plugins
+                        .iter()
+                        .find(|p| p.manifest.id == id)
+                        .unwrap()
+                        .enabled,
+                    enabled,
+                    "{id}"
+                );
+            }
+        }
+        // Once storage is writable, a later read must save the same decisions.
+        manager.catalog().unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(settings).unwrap()).unwrap();
+        assert_eq!(saved["bundledOverrides"]["buzz.reminders"], true);
+        assert_eq!(
+            saved["bundledOverrides"]["buzz.workflows"],
+            saved_workflows.unwrap_or(true)
+        );
+    }
+}
+
+#[test]
 fn legacy_plugin_settings_preserve_choices_while_missing_flags_keep_old_defaults() {
     for saved in [None, Some(true), Some(false)] {
         let home = tempfile::tempdir().unwrap();

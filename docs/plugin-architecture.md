@@ -643,8 +643,10 @@ placement and the shell presents it as Messages, the startup destination.
 Saved `buzz.me` and `buzz.sessions` flags are ignored like any uninstalled owner.
 
 Saved enabled/disabled flags win over defaults (except required Channels).
-Both storage owners persist resolved bundled states before returning a usable
-catalog. Existing profiles without saved Reminders or Workflows choices retain
+Both storage owners persist resolved bundled states. Native default snapshots
+are best effort: a failed write keeps the readable catalog usable and is retried
+on the next read; explicit edits and resets still report write failures.
+Existing profiles without saved Reminders or Workflows choices retain
 their former On state; fresh profiles start both Off. Reopening preserves either
 result, and an explicit reset uses current defaults. Future default-off changes
 must follow [the fresh-install decision](plugin-defaults.md), including legacy

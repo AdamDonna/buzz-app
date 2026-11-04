@@ -899,8 +899,12 @@ impl Manager {
         }
         let renamed = migrate_agent_flag::migrate(&mut r);
         let pinned = pin_bundled_defaults(&mut r, self.existing_profile);
-        if renamed || pinned {
+        if renamed {
             self.save(&r)?;
+        } else if pinned {
+            // Readable settings must remain usable when the default snapshot
+            // cannot be written. Later reads retry; explicit edits still fail.
+            let _ = self.save(&r);
         }
         Ok(r)
     }
