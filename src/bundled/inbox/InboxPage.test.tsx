@@ -2410,10 +2410,9 @@ it("a drafts route retires a failed Inbox action, as the menu does", async () =>
   );
   await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
   // Retry reloads the list; the read captured before Drafts doesn't replay.
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  });
+  // Either path clears the notice only after its run settles.
+  fireEvent.click(screen.getByRole("button", { name: "Retry inbox" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
 });
 
