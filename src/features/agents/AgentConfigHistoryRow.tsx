@@ -113,9 +113,6 @@ function HistoryRow({
           ),
           content: (
             <div className="grid gap-2">
-              <p className="m-0 text-caption text-secondary">
-                Versions are kept automatically when changes are saved.
-              </p>
               <ol className={styles.list} aria-label="Previous versions">
                 {revisions.map(({ track, event }) => (
                   <AgentConfigVersionRow
