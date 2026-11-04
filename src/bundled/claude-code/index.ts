@@ -34,7 +34,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (async (id, options) =>
       direct(
         id,
-        id === "claude"
+        id === "claude" && options?.args?.includes("--input-format")
           ? {
               ...options,
               env: {
