@@ -1495,24 +1495,22 @@ test("joined batches survive the real HTTP boundary and retirement only rebuilds
     );
     traffic.update([...joined, "preview"], joined);
     await until(
-      () => established.mock.calls.length === 4 && h.requests.length === 30,
+      () => established.mock.calls.length === 4 && h.requests.length === 5,
     );
-    expect(h.requests).toHaveLength(30);
+    expect(h.requests).toHaveLength(5);
     const batches = h.requests.filter(
       (r) => r.filter["#h"] && r.filter.limit === 0,
     );
+    // Every joined channel replays through one combined filter; the preview
+    // channel has its own route.
     const replays = h.requests.filter(
-      (r) => r.filter["#h"] && r.filters.length > 1,
+      (r) =>
+        r.filter["#h"] &&
+        r.filter.limit === 500 &&
+        !r.filter["#h"].includes("preview"),
     );
-    expect(replays.map((r) => r.filters.length)).toEqual([
-      ...Array(25).fill(10),
-      6,
-    ]);
-    for (const r of replays)
-      for (const f of r.filters) {
-        expect(f["#h"]).toHaveLength(1);
-        expect(f.limit).toBe(500);
-      }
+    expect(replays.map((r) => r.filters.length)).toEqual([1]);
+    expect(replays[0].filter["#h"]).toEqual(joined);
     expect(
       established.mock.calls
         .filter(([ids]) => Array.isArray(ids))
@@ -1544,12 +1542,12 @@ test("joined batches survive the real HTTP boundary and retirement only rebuilds
     });
     expect(malformed.status).toBe(400);
     await malformed.text();
-    expect(h.requests).toHaveLength(30);
+    expect(h.requests).toHaveLength(5);
     const retained = joined.slice(1);
     traffic.update([...retained, "preview"], retained);
     await until(() => established.mock.calls.length === 5);
     expect(established).toHaveBeenCalledTimes(5);
-    expect(h.requests).toHaveLength(31);
+    expect(h.requests).toHaveLength(6);
     expect(
       h.frames.filter((f) => f.kind === "CLOSE" && f.id === old.id),
     ).toHaveLength(1);

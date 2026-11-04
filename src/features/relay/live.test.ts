@@ -40,6 +40,7 @@ type WireFilter = {
   "#h"?: string[];
   "#p"?: string[];
   since: number;
+  until?: number;
   limit: number;
 };
 type WireRequest = [string, string, WireFilter, ...WireFilter[]];
@@ -4426,10 +4427,11 @@ it("covers 100,000 channels with protocol-sized live batches and a bounded repla
       if (scopeOf(frame).length && filters[0]?.limit === 0) {
         for (const id of scopeOf(frame)) live.set(id, frame);
       } else if (scopeOf(frame).length) {
-        expect(
-          filters.every((f) => f["#h"]?.length === 1 && f.limit === 500),
-        ).toBe(true);
-        replayed += filters.length;
+        // One combined replay filter per REQ, at most 256 channels.
+        expect(filters).toHaveLength(1);
+        expect(filters[0]?.limit).toBe(500);
+        expect(scopeOf(frame).length).toBeLessThanOrEqual(256);
+        replayed += scopeOf(frame).length;
       }
       await h.first.receive(["EOSE", frame[1]]);
     }
@@ -4477,8 +4479,9 @@ it("covers 100,000 channels with protocol-sized live batches and a bounded repla
 
 it("reports a replay failure to recovery, continues other channels, and exposes its retry", async () => {
   vi.useFakeTimers();
+  // Enough channels for more combined replays than setup slots.
   const ids = Array.from(
-    { length: 80 },
+    { length: 2000 },
     (_, i) => `c${String(i).padStart(3, "0")}`,
   );
   const h = setup([], createLiveAdmission(), 2048);
@@ -4539,6 +4542,193 @@ it("reports a replay failure to recovery, continues other channels, and exposes 
   } finally {
     h.owner.dispose();
   }
+});
+
+describe("combined replay paging", () => {
+  const ids = Array.from(
+    { length: 300 },
+    (_, i) => `c${String(i).padStart(3, "0")}`,
+  );
+  const isReplay = (request: WireRequest) =>
+    scopeOf(request).length > 0 && request[2].limit === 500;
+  async function start() {
+    const h = setup([], createLiveAdmission(), 2048);
+    h.owner.update(ids, ids);
+    await h.first.auth();
+    for (const request of [...h.first.requests()])
+      if (!isReplay(request)) await h.first.receive(["EOSE", request[1]]);
+    const first = h.first.requests().find(isReplay);
+    assert.exists(first);
+    expect(scopeOf(first)).toEqual(ids.slice(0, 256));
+    return { h, first };
+  }
+  async function page(
+    h: ReturnType<typeof setup>,
+    request: WireRequest,
+    events: [channel: string, at: number][],
+  ) {
+    for (const [i, [channel, at]] of events.entries())
+      await h.first.receive([
+        "EVENT",
+        request[1],
+        message(h.key, channel, `${request[1]} ${i}`, at),
+      ]);
+    await h.first.receive(["EOSE", request[1]]);
+  }
+  const run = (channel: string, newest: number, count: number) =>
+    Array.from(
+      { length: count },
+      (_, i) => [channel, newest - Math.floor(i / 4)] as [string, number],
+    );
+  const pagesAfter = (h: ReturnType<typeof setup>, request: WireRequest) =>
+    h.first
+      .requests()
+      .slice(h.first.requests().indexOf(request) + 1)
+      .filter((r) => isReplay(r) && r[2].until !== undefined);
+
+  it("asks for the rest below its oldest event, without channels that have their newest 500", async () => {
+    vi.useFakeTimers({ now: 1_700_000_600_000 });
+    const { h, first } = await start();
+    try {
+      await page(h, first, run("c000", 1_700_000_600, 500));
+      const second = pagesAfter(h, first)[0];
+      assert.exists(second);
+      expect(filtersOf(second)).toHaveLength(1);
+      expect(second[2]).toMatchObject({
+        "#h": ids.slice(1, 256),
+        since: first[2].since,
+        until: 1_700_000_476,
+        limit: 500,
+      });
+      await page(h, second, run("c001", 1_700_000_476, 500));
+      const third = pagesAfter(h, second)[0];
+      assert.exists(third);
+      // The event at the cutoff second may repeat one already delivered.
+      expect(third[2]).toMatchObject({
+        "#h": ids.slice(1, 256),
+        until: 1_700_000_352,
+      });
+      await page(h, third, run("c002", 1_700_000_352, 3));
+      expect(pagesAfter(h, third)).toEqual([]);
+      expect(
+        h.first
+          .requests()
+          .filter((r) => isReplay(r) && r[2]["#h"]?.length === 1),
+      ).toEqual([]);
+    } finally {
+      h.owner.dispose();
+    }
+  }, 60_000);
+
+  it("keeps paging when an undecodable frame fills the page", async () => {
+    vi.useFakeTimers({ now: 1_700_000_600_000 });
+    const { h, first } = await start();
+    const log = captureLog();
+    try {
+      await h.first.receive(["EVENT", first[1], {}]);
+      await page(h, first, run("c000", 1_700_000_600, 499));
+      expect(log.lines).toEqual([
+        "warn relay.test dropped an undecodable live event",
+      ]);
+      const second = pagesAfter(h, first)[0];
+      assert.exists(second);
+      // c000 counted only 499, so it stays in the next page.
+      expect(second[2]).toMatchObject({
+        "#h": ids.slice(0, 256),
+        until: 1_700_000_476,
+      });
+    } finally {
+      log.restore();
+      h.owner.dispose();
+    }
+  }, 60_000);
+
+  it.each([
+    "tied cutoff",
+    "duplicate live event",
+    "backdated live event",
+    "page of undecodable frames",
+  ])(
+    "falls back to per-channel replay after a %s",
+    async (scenario) => {
+      vi.useFakeTimers({ now: 1_700_000_600_000 });
+      const { h, first } = await start();
+      try {
+        const at = 1_700_000_500;
+        const tie = (n: number) =>
+          Array.from(
+            { length: n },
+            (_, i) => [ids[i % 10] ?? "", at] as [string, number],
+          );
+        let last = first;
+        if (scenario === "tied cutoff") {
+          await page(h, first, tie(500));
+          const second = pagesAfter(h, first)[0];
+          assert.exists(second);
+          expect(second[2]).toMatchObject({
+            "#h": ids.slice(0, 256),
+            until: at,
+          });
+          await page(h, second, tie(500));
+          last = second;
+        } else if (scenario === "page of undecodable frames") {
+          // No decodable event gives a cutoff to page below.
+          const log = captureLog();
+          try {
+            for (let i = 0; i < 500; i++)
+              await h.first.receive(["EVENT", first[1], {}]);
+            await h.first.receive(["EOSE", first[1]]);
+          } finally {
+            log.restore();
+          }
+        } else {
+          // Fan-out is registered before historical delivery. A duplicate must
+          // not count as A's 500th row; a backdated arrival must not skip a tail.
+          await h.first.receive([
+            "EVENT",
+            first[1],
+            message(
+              h.key,
+              "c000",
+              scenario === "duplicate live event" ? `${first[1]} 0` : "late",
+              scenario === "duplicate live event" ? at + 100 : at - 50,
+            ),
+          ]);
+          await page(h, first, [
+            ...run("c000", at + 100, 499),
+            ["c001", at - 24],
+          ]);
+        }
+        expect(pagesAfter(h, last)).toEqual([]);
+        for (let i = 0; i < 40; i++) {
+          const pending = h.first
+            .requests()
+            .slice(h.first.requests().indexOf(last) + 1)
+            .filter((r) => isReplay(r) && scopeOf(r).length < 256);
+          if (pending.some((r) => r[2]["#h"]?.length === 1)) break;
+          for (const r of pending) await h.first.receive(["EOSE", r[1]]);
+        }
+        const singles = h.first
+          .requests()
+          .filter(
+            (r) =>
+              isReplay(r) && filtersOf(r).every((f) => f["#h"]?.length === 1),
+          );
+        const single = singles[0];
+        assert.exists(single);
+        expect(filtersOf(single)).toHaveLength(10);
+        expect(scopeOf(single)).toContain("c000");
+        expect(
+          filtersOf(single).every(
+            (f) => f.since === first[2].since && !("until" in f),
+          ),
+        ).toBe(true);
+      } finally {
+        h.owner.dispose();
+      }
+    },
+    60_000,
+  );
 });
 
 it.each([

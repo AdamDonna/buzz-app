@@ -655,12 +655,10 @@ export function policyRelay({
             if (!admitWs(this, kind, id)) return;
             for (const filter of filters) {
               const channel = filter["#h"]?.[0];
-              // Initial replay stays per channel; zero replay may consolidate the wire.
+              // History and live-only requests may both name multiple channels.
               if (
                 filter.kinds.includes(9) &&
-                (!channel ||
-                  filter["#h"].length > 2048 ||
-                  (filter.limit !== 0 && filter["#h"].length !== 1))
+                (!channel || filter["#h"].length > 2048)
               ) {
                 queueMicrotask(() =>
                   emit(this, [
