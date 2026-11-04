@@ -41,8 +41,15 @@ export type Membership = Readonly<{ pubkey: string; relay: string }>;
  * harness agents, or the installed or development build of old Buzz. */
 export type PortSource = "harness" | "installed" | "development";
 /** An identity an earlier agent system saved, which Agents can take over. */
+export type SavedConnection = Readonly<{
+  runtime: string;
+  provider?: string;
+  model?: string;
+  effort?: string;
+}>;
 export type PortableAgent = Readonly<{
   source: PortSource;
+  connection?: SavedConnection;
   pubkey: string;
   name: string;
   picture?: string;

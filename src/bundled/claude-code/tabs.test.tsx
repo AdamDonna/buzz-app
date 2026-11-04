@@ -1543,6 +1543,24 @@ it("focuses the code only when its compact sign-in disclosure is expanded", asyn
   expect(screen.getByLabelText("Sign-in code")).toHaveValue("retained-code");
 });
 
+it("clears unsupported saved effort when changing the creation model", async () => {
+  const Model = installed().type.CreateModel;
+  if (!Model) throw new Error("Missing model control");
+  const config = { ...DEFAULT_CONFIG, model: "sonnet", effort: "xhigh" };
+  const onChange = vi.fn();
+  render(<Model config={config} onChange={onChange} disabled={false} />);
+  const user = userEvent.setup();
+  const picker = await screen.findByRole("combobox", { name: "Model" });
+  await waitFor(() => expect(picker).toBeEnabled());
+  await user.click(picker);
+  await user.click(await screen.findByRole("option", { name: "Haiku 4.5" }));
+  expect(onChange).toHaveBeenLastCalledWith({
+    ...config,
+    model: "haiku",
+    effort: "",
+  });
+});
+
 it("saves reviews' own sign-in through stdin, keeps its result, and cancels a save", async () => {
   const { type, spawn } = installed();
   const Setup = providerSetup(type);

@@ -182,7 +182,7 @@ export function ModelPicker({
   /** Whether text absent from `models` may be committed as its model ID. */
   allowCustomModel?: boolean;
   compact?: boolean;
-  appearance?: "outlined" | "glass-ghost";
+  appearance?: "outlined" | "glass-ghost" | "inverted";
   includeDefault?: boolean;
   value: string;
   defaultLabel: string;
@@ -198,6 +198,9 @@ export function ModelPicker({
   const [customModel, setCustomModel] = useState<string | null>(null);
   const control = useRef<HTMLDivElement>(null);
   const defaultChoice = models.find((model) => model.id === defaultModel);
+  const efforts = models.find(
+    (model) => model.id === (value || defaultModel),
+  )?.efforts;
   const fallback: ModelChoice = {
     id: "",
     label: defaultChoice?.label ?? defaultLabel,
@@ -239,7 +242,10 @@ export function ModelPicker({
   };
   return (
     <>
-      <div ref={control}>
+      <div
+        ref={control}
+        className="flex max-w-full flex-wrap items-center gap-3"
+      >
         {groupByFamily ? (
           <ModelFamilyMenu
             leading={leading}
@@ -306,6 +312,27 @@ export function ModelPicker({
               if (model === CUSTOM_MODEL_ACTION.id) openCustomDialog();
               else onChange(model);
             }}
+          />
+        )}
+        {!groupByFamily && onEffortChange && efforts && efforts.length > 1 && (
+          <Select
+            label="Thinking effort"
+            value={effort ?? ""}
+            valueLabel={effortLabel}
+            variant={compact ? "compact" : "preference"}
+            appearance={appearance}
+            {...(appearance === "glass-ghost" ? { size: "xs" as const } : {})}
+            groups={[
+              {
+                label: "",
+                options: efforts.map((level) => ({
+                  value: level.id,
+                  label: level.label,
+                })),
+              },
+            ]}
+            disabled={disabled || loading || pending}
+            onValueChange={(level) => onEffortChange(value, level)}
           />
         )}
       </div>

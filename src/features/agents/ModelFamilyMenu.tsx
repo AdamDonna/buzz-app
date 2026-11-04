@@ -59,7 +59,7 @@ export function ModelFamilyMenu({
 }: {
   leading?: ReactNode;
   inherited?: boolean;
-  appearance?: "outlined" | "glass-ghost";
+  appearance?: "outlined" | "glass-ghost" | "inverted";
   resetLabel?: string | undefined;
   label: string;
   effort?: string | undefined;
@@ -113,7 +113,7 @@ export function ModelFamilyMenu({
               <span className={`buzz-select-value ${styles.model}`}>
                 {selected.label}
               </span>
-              {inherited && appearance === "outlined" && (
+              {inherited && appearance !== "glass-ghost" && (
                 <span className="buzz-select-value-suffix text-subtle">
                   {" · Default"}
                 </span>

@@ -14,3 +14,7 @@ Your home for creating and managing agents. Set them up, group them into teams, 
 ## Developer import scenarios
 
 Development builds expose **Settings → Developer → Agent import**. **What Import finds** supplies simulated community/Legacy findings for reviewing the production Agents page and its dialogs. Simulated imports leave agents unchanged. **Real data** uses actual imports, including when **Show as a new community** hides the existing inventory. Turn that switch off and choose Real data to return to the normal view. These controls are absent from packaged builds.
+
+## Connecting from an old agent’s DM
+
+On desktop, a one-to-one DM can show **Connect [agent name]** when its exact identity is available to import locally and its signed profile confirms you own it. Already managed or visibly online agents do not show this prompt. Saved harness, provider and model choices are preselected where supported; explicitly saved effort is preserved and can be changed later in agent settings. An unavailable runtime requires choosing a type; unsaved selections use that type’s defaults. Review the inline controls and choose **Connect**. Installation or sign-in uses the type’s existing setup dialog. Stop the old runtime first. The import retains the identity and conversation; supported instructions/workspace are adopted. No earlier message is resent.

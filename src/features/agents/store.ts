@@ -332,7 +332,7 @@ export function removeRecord(storage: AgentStore, key: AgentKey) {
 }
 
 /** A record as it is saved. */
-function recordText({ skipped, ...record }: AgentRecord) {
+export function recordText({ skipped, ...record }: AgentRecord) {
   // Skipped objects go back where they were read from, so a later reader that
   // can apply them still finds them.
   return JSON.stringify({

@@ -1,4 +1,5 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The history region must support keyboard scrolling.
+import { AgentConnectionSetup } from "../agents/AgentConnectionSetup";
 import { TypingIndicator, useLiveConversationAgents } from "./TypingIndicator";
 import { ActivityGroupPreview } from "./ActivityGroupPreview";
 import { ActivityExpansion } from "./ActivityExpansion";
@@ -1597,6 +1598,12 @@ function Timeline({
         </Virtualizer>
       )}
       <div ref={activityTail}>
+        <AgentConnectionSetup
+          key={channelId}
+          session={queries}
+          rows={window.rows}
+          channel={queries.channels.get?.(channelId)}
+        />
         <TypingIndicator
           audience="agents"
           inFlow

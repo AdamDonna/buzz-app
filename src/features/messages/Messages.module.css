@@ -669,6 +669,9 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
 .feed:has(.emptyConversation) .edge:empty {
   min-height: 0;
 }
+:where(.feed:has([data-agent-connection-setup])) .emptyConversation {
+  display: none;
+}
 .emptyConversation {
   padding-block: var(--space-panel-inset);
 }

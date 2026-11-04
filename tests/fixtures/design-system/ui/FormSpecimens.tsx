@@ -434,6 +434,14 @@ export function SelectExamples() {
           description="Choose where this item belongs."
         />
         <Select
+          label="Filled workspace"
+          variant="compact"
+          appearance="inverted"
+          value={value}
+          onValueChange={setValue}
+          groups={workspaceGroups}
+        />
+        <Select
           label="Read-only workspace"
           variant="field"
           readOnly

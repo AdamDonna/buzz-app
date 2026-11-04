@@ -928,6 +928,7 @@ export const COMPONENTS: readonly ComponentDefinition[] = [
       "disabled",
       "align: start | center | end",
       "compact link",
+      "compact inverted: app-background fill",
       "compact glass-ghost (proposed)",
       "compact value suffix",
       "optional group separator",

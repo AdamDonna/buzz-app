@@ -203,10 +203,11 @@ function messagesHarness(
     .mockImplementationOnce(() => first)
     .mockImplementation(makeView);
   const ensure = vi.fn(async () => {});
+  const profiles = new Map();
   const session = {
     viewer,
     thread,
-    profiles: { ensure },
+    profiles: { ensure, snapshot: () => profiles, subscribe: () => () => {} },
     agentChoices: createAgentLibrary(undefined).queries,
     messages: { retry: vi.fn() },
     media: () => undefined,

@@ -673,3 +673,42 @@ it("keeps a Default suffix beside inherited card models as defaults change", asy
   expect(control()).toHaveTextContent("Loading models…");
   expect(control().querySelector(".buzz-select-value-suffix")).toBeNull();
 });
+
+it.each(["", "reasoning"])(
+  "offers supported effort without changing model inheritance (%s)",
+  async (value) => {
+    const user = userEvent.setup();
+    const onEffortChange = vi.fn();
+    const props = {
+      models: [
+        {
+          id: "reasoning",
+          label: "Reasoning",
+          efforts: [
+            { id: "", label: "Automatic" },
+            { id: "high", label: "High" },
+          ],
+        },
+        { id: "plain", label: "Plain" },
+      ],
+      value,
+      defaultModel: "reasoning",
+      defaultLabel: "Reasoning",
+      onChange: vi.fn(),
+      onEffortChange,
+      effort: "",
+    };
+    const view = render(<ModelPicker {...props} />);
+    await user.click(screen.getByRole("combobox", { name: "Thinking effort" }));
+    await user.click(await screen.findByRole("option", { name: "High" }));
+    expect(onEffortChange).toHaveBeenCalledExactlyOnceWith(value, "high");
+    view.rerender(<ModelPicker {...props} disabled />);
+    expect(
+      screen.getByRole("combobox", { name: "Thinking effort" }),
+    ).toBeDisabled();
+    view.rerender(<ModelPicker {...props} value="plain" />);
+    expect(
+      screen.queryByRole("combobox", { name: "Thinking effort" }),
+    ).toBeNull();
+  },
+);

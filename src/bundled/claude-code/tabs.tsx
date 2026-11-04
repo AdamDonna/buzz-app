@@ -386,7 +386,21 @@ export function createTabs({
         loading={state.modelsChecking}
         error={state.modelsError}
         retry={() => void setup.loadModels(true)}
-        onChange={(model) => onChange({ ...current, model })}
+        onChange={(model) => {
+          const efforts = effortsFor(
+            model || providerDefaults.model,
+            state.models,
+          );
+          onChange({
+            ...current,
+            model,
+            effort:
+              state.models.length === 0 ||
+              efforts.some((level) => level.id === current.effort)
+                ? current.effort
+                : "",
+          });
+        }}
       />
     );
   }

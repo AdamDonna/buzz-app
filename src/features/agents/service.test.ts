@@ -14567,3 +14567,153 @@ it("keeps owned protection settings visible while the selected community reconne
   await settle();
   expect(f.run).not.toHaveBeenCalled();
 });
+
+it("saves reviewed import config before native identity installation and adopts the old instructions", async () => {
+  const { service, native, storage, session } = await setup();
+  const port = native.port.getMockImplementation();
+  if (!port) throw new Error("Missing native port fixture");
+  native.port.mockImplementation(async (...args) => {
+    expect(storage.get(`buzz.agent.v1:${sibling}`)).toContain(
+      "Reviewed choice",
+    );
+    const result = await port(...args);
+    return { ...result, carry: { instructions: "Adopted instructions" } };
+  });
+  const { agent } = await service.port({
+    source: "installed",
+    pubkey: sibling,
+    type: "example/echo",
+    config: { reply: "Reviewed choice" },
+    scope: session.scope,
+  });
+  expect(agent.config).toEqual({ reply: "Adopted instructions" });
+  expect(service.find(sibling)?.config).toEqual({
+    reply: "Adopted instructions",
+  });
+});
+
+it("refuses stale-community connection and does not import when reviewed settings cannot be saved", async () => {
+  const { service, native, storage } = await setup();
+  const input = {
+    source: "installed" as const,
+    pubkey: sibling,
+    type: "example/echo",
+    config: { reply: "Reviewed" },
+  };
+  await expect(
+    service.port({ ...input, scope: "another-community" }),
+  ).rejects.toThrow("community changed");
+  expect(native.port).not.toHaveBeenCalled();
+  vi.spyOn(storage, "add").mockRejectedValue(new Error("Disk full"));
+  await expect(service.port(input)).rejects.toThrow("Disk full");
+  expect(native.port).not.toHaveBeenCalled();
+});
+
+it("does not overwrite settings another app saved before an inline import", async () => {
+  const { service, native, storage } = await setup();
+  const kept = JSON.stringify({
+    pubkey: sibling,
+    config: { reply: "Other app" },
+    attention: {},
+  });
+  await storage.set(`buzz.agent.v1:${sibling}`, kept);
+  await expect(
+    service.port({
+      source: "installed",
+      pubkey: sibling,
+      type: "example/echo",
+      config: { reply: "Reviewed" },
+    }),
+  ).rejects.toThrow("already has saved setup");
+  expect(storage.get(`buzz.agent.v1:${sibling}`)).toBe(kept);
+  expect(native.port).not.toHaveBeenCalled();
+});
+
+it("reports an incomplete import when adopting settings fails after identity installation", async () => {
+  const { service, native, storage } = await setup();
+  vi.spyOn(storage, "set").mockRejectedValue(new Error("Disk full"));
+  await expect(
+    service.port({
+      source: "installed",
+      pubkey: sibling,
+      type: "example/echo",
+      config: { reply: "Reviewed" },
+    }),
+  ).rejects.toThrow("identity was imported");
+  expect(native.port).toHaveBeenCalledOnce();
+  expect(storage.get(`buzz.agent.v1:${sibling}`)).toContain("Reviewed");
+  await service.refresh();
+  expect(service.find(sibling)?.config).toEqual({ reply: "Reviewed" });
+});
+
+it("serializes inline import before the staged write is durable", async () => {
+  const { service, native, storage } = await setup();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const add = storage.add.bind(storage);
+  const staged = vi
+    .spyOn(storage, "add")
+    .mockImplementation(async (key, value) => {
+      const result = await add(key, value);
+      await held;
+      return result;
+    });
+  const input = {
+    source: "installed" as const,
+    pubkey: sibling,
+    type: "example/echo",
+    config: { reply: "Reviewed" },
+  };
+  const first = service.port(input);
+  try {
+    await vi.waitFor(() => expect(staged).toHaveBeenCalledOnce());
+    await expect(service.port(input)).rejects.toThrow(
+      "already being connected",
+    );
+    expect(native.port).not.toHaveBeenCalled();
+  } finally {
+    release();
+  }
+  await first;
+  expect(native.port).toHaveBeenCalledOnce();
+});
+
+it("preserves staged settings after native installation fails and later refreshes", async () => {
+  const { service, native, storage } = await setup();
+  native.port.mockRejectedValueOnce(new Error("Installation failed"));
+  await expect(
+    service.port({
+      source: "installed",
+      pubkey: sibling,
+      type: "example/echo",
+      config: { reply: "Reviewed" },
+    }),
+  ).rejects.toThrow("Installation failed");
+  await service.refresh();
+  await settle();
+  expect(storage.get(`buzz.agent.v1:${sibling}`)).toContain("Reviewed");
+  expect(service.find(sibling)).toBeUndefined();
+});
+
+it("keeps reviewed settings when native port persists the identity then rejects", async () => {
+  const { service, native } = await setup();
+  const port = native.port.getMockImplementation();
+  if (!port) throw new Error("Missing native port fixture");
+  native.port.mockImplementation(async (...args) => {
+    await port(...args);
+    native.list.mockRejectedValueOnce(new Error("Temporary list failure"));
+    throw new Error("Native installation reported failure");
+  });
+  await expect(
+    service.port({
+      source: "installed",
+      pubkey: sibling,
+      type: "example/echo",
+      config: { reply: "Reviewed" },
+    }),
+  ).rejects.toThrow("Native installation reported failure");
+  await service.refresh();
+  expect(service.find(sibling)?.config).toEqual({ reply: "Reviewed" });
+});
