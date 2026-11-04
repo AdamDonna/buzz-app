@@ -199,7 +199,14 @@ function ReactorItems({
   people: readonly string[];
   session: RelaySession;
 }) {
-  const requested = useRef(new Set<string>());
+  // Evictions also count background reads a shrink cancelled without rejecting.
+  const readEvictions = () => session.profiles.evictions?.() ?? 0;
+  const evictions = useSyncExternalStore(
+    session.profiles.subscribe,
+    readEvictions,
+    readEvictions,
+  );
+  const requested = useRef({ evictions, ids: new Set<string>() });
   const [failed, setFailed] = useState(false);
   const [released, setReleased] = useState(0);
   // Show any names already loaded; request only the rows that come into view.
@@ -217,12 +224,17 @@ function ReactorItems({
   useEffect(() => {
     const root = popup.current;
     if (!root) return;
+    // An eviction drops names and a shrink quietly cancels pending pages, so
+    // rows in view ask again. Names still loaded cost no read.
+    if (requested.current.evictions !== evictions)
+      requested.current = { evictions, ids: new Set() };
     const observer = new IntersectionObserver(
       (entries) => {
         const page = entries.flatMap(({ isIntersecting, target }) => {
           const id = (target as HTMLElement).dataset.reactor;
-          if (!isIntersecting || !id || requested.current.has(id)) return [];
-          requested.current.add(id);
+          if (!isIntersecting || !id || requested.current.ids.has(id))
+            return [];
+          requested.current.ids.add(id);
           observer.unobserve(target);
           return [id];
         });
@@ -232,7 +244,7 @@ function ReactorItems({
           // A reconnect reads pending ids again itself; a disconnect only
           // cancels them. Observe these rows again: those in view ask again,
           // joining the reconnect's read or reading now.
-          for (const id of page) requested.current.delete(id);
+          for (const id of page) requested.current.ids.delete(id);
           setReleased((count) => count + 1);
         });
       },
@@ -240,10 +252,10 @@ function ReactorItems({
       { root, rootMargin: "100% 0px" },
     );
     for (const row of root.querySelectorAll<HTMLElement>("[data-reactor]"))
-      if (!requested.current.has(row.dataset.reactor ?? ""))
+      if (!requested.current.ids.has(row.dataset.reactor ?? ""))
         observer.observe(row);
     return () => observer.disconnect();
-  }, [popup, people, session, released]);
+  }, [popup, people, session, released, evictions]);
   return (
     <>
       {people.map((authorId) => {

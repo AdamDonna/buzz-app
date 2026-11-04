@@ -207,6 +207,23 @@ function harness(
   }
   return { ...owner, live, wire, publish, Controls };
 }
+/** Answers other profile reads, which run one at a time, until one asking
+ * for `author` is live, and returns it. */
+async function profileRead(h: ReturnType<typeof harness>, author: string) {
+  const asks = (entry: (typeof h.wire.pending)[number]) =>
+    !!entry.filters[0]?.authors?.includes(author);
+  const live = () =>
+    h.wire.pending.filter((entry) => !entry.signal?.aborted && asks(entry));
+  for (let read = 0; read < 10 && !live().length; read++)
+    await act(async () => {
+      for (const entry of h.wire.pending)
+        if (entry.filters[0]?.kinds?.includes(0) && !asks(entry))
+          entry.respond([]);
+      await flush();
+    });
+  expect(live()).toHaveLength(1);
+  return live()[0];
+}
 it("shows one bubble per emoji, counts unique people, and removes all my duplicate events", async () => {
   const mine = react(),
     duplicate = react(viewer, 3),
@@ -521,22 +538,7 @@ it("asks again for names a disconnect cancels, without reporting a reconnect's r
   const h = harness(people.map((person, index) => react(person, 2 + index)));
   act(() => h.live.state({ status: "connected", routes: [] }));
   render(<h.Controls />);
-  const lists = (entry: (typeof h.wire.pending)[number]) =>
-    !!entry.filters[0]?.authors?.includes(last.pubkey);
-  // Profile reads run one at a time: answer others until the list's runs.
-  const listRead = async () => {
-    const live = () =>
-      h.wire.pending.filter((entry) => !entry.signal?.aborted && lists(entry));
-    for (let read = 0; read < 10 && !live().length; read++)
-      await act(async () => {
-        for (const entry of h.wire.pending)
-          if (entry.filters[0]?.kinds?.includes(0) && !lists(entry))
-            entry.respond([]);
-        await flush();
-      });
-    expect(live()).toHaveLength(1);
-    return live()[0];
-  };
+  const listRead = () => profileRead(h, last.pubkey);
   act(() => screen.getByRole("button", { name: "👍: 9 people" }).focus());
   const preview = await screen.findByRole("dialog", { name: "👍 reactions" });
   fireEvent.click(
@@ -562,6 +564,42 @@ it("asks again for names a disconnect cancels, without reporting a reconnect's r
   expect(cancelled?.signal?.aborted).toBe(true);
   reveal(within(list).getAllByRole("menuitem"));
   const again = await listRead();
+  await act(async () => {
+    again?.respond([profile(last, { name: "Last person" })]);
+    await flush();
+  });
+  expect(
+    within(list).getByRole("menuitem", { name: "Last person" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("asks again for names a cache shrink quietly cancels while the list stays open", async () => {
+  const last = keypair();
+  const people = [...Array.from({ length: 8 }, () => keypair()), last];
+  const h = harness(people.map((person, index) => react(person, 2 + index)));
+  // An open channel reserves room for its roster (ConversationChannel).
+  const release = h.session.profiles.reserve?.(people.length);
+  if (!release) throw new Error("Expected a profile reservation");
+  render(<h.Controls />);
+  act(() => screen.getByRole("button", { name: "👍: 9 people" }).focus());
+  const preview = await screen.findByRole("dialog", { name: "👍 reactions" });
+  fireEvent.click(
+    within(preview).getByRole("button", { name: "and 6 others" }),
+  );
+  const list = await screen.findByRole("menu");
+  reveal(within(list).getAllByRole("menuitem"));
+  const cancelled = await profileRead(h, last.pubkey);
+  // A member leaving lowers the reservation; the next task shrinks the cache
+  // and cancels the list's background page without rejecting its ensure.
+  await act(async () => {
+    release();
+    await flush();
+  });
+  expect(cancelled?.signal?.aborted).toBe(true);
+  // The same rows, still in view, ask again.
+  reveal(within(list).getAllByRole("menuitem"));
+  const again = await profileRead(h, last.pubkey);
   await act(async () => {
     again?.respond([profile(last, { name: "Last person" })]);
     await flush();
