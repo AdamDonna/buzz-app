@@ -891,11 +891,12 @@ explicit agent deletion permits a reset; ordinary restore of the same session do
 not. Failure to persist the reservation prevents dispatch. A known transient
 outcome releases it only if that storage write succeeds.
 
-The `/v1/nip-fi/agent-grant` and `/v1/nip-fi/agent-assertion` routes and
-`Nostr-Agent-Proof` header are this configured adapter's wire contract, not
-standard endpoints defined by NIP-FI/NIP-FA. NIP-FI defines the
-`nip-fi-agent+jwt` assertion class and owner checks; that does not establish
-interoperability with another adapter's enrollment endpoints.
+The `/v1/nip-fi/agent-grant` and `/v1/nip-fi/agent-assertion` routes follow
+NIP-FA's agent-route contract, including its neutral token types and
+`Nostr-Authorization` proof header. The native client depends on the compatible
+kgoose changes in [cash-server#146003](https://github.com/squareup/cash-server/pull/146003)
+being deployed before this client change is merged. NIP-FI defines the
+`nip-fi-agent+jwt` assertion class and owner checks.
 
 In an FI build, Builderlab's remote-agent, hosted-community, known-community,
 Apps viewer and backup calls go through the native FI session. The renderer
