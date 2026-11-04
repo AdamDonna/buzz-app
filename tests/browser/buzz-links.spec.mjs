@@ -462,7 +462,8 @@ test("a hovered message preview survives the timeline's scroll-time pointer-even
   await expect(preview).toHaveAttribute("data-open", "");
   // The link cannot hear a real leave while the list ignores the pointer.
   await hitTest("none");
-  await page.mouse.move(point.x, box.y - 120, { steps: 4 });
+  // Leave sideways: the preview sits above the message.
+  await page.mouse.move(box.x - 200, point.y, { steps: 4 });
   await expect(preview).toHaveCount(0);
 });
 
@@ -746,5 +747,36 @@ test.describe("links to channels the reader hasn't joined", () => {
     await named.hover();
     const card = page.getByLabel("Channel preview", { exact: true });
     await expect(card).toContainText("Public channel · Not joined");
+  });
+
+  test("link previews open above the message's hover actions", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    // A link below the first line puts its preview's default place over the
+    // actions above the message.
+    const message = app.append(
+      "primary",
+      "alpha",
+      `Release notes:\nsee <buzz://channel/${app.openChannelId}>`,
+    );
+    const row = page.locator(
+      `[data-channel-timeline] [data-message-id="${message.id}"]`,
+    );
+    const channel = row.getByRole("link", { name: "#open", exact: true });
+    await expect(channel).toBeVisible();
+    await virtuaIdle(page);
+    await channel.hover();
+    const card = page.getByRole("link", {
+      name: "Channel preview",
+      exact: true,
+    });
+    await expect(card).toContainText("Public channel · Not joined");
+    const actions = row.getByRole("group", { name: "Message actions" });
+    await expect(actions).toBeVisible();
+    // A trial click fails while the preview covers the action.
+    for (const control of await actions.getByRole("button").all())
+      await control.click({ trial: true });
   });
 });
