@@ -989,6 +989,11 @@ export function ChannelInventory({
     menuActions?.publish((channel, surface) => {
       if (cached || channel.cached || relay.snapshot().session !== queries)
         return [];
+      // A not-joined preview has no sidebar row to place, mute or mark read.
+      if (channel.readOnly && channel.viewerRole !== "guest")
+        return [
+          <ChannelCopyLinkMenuItem key="copy-link" channelId={channel.id} />,
+        ];
       const placement = sections.find((section) =>
         section.rows.some((row) => row.id === channel.id),
       );
