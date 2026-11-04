@@ -3978,7 +3978,9 @@ it("Retry still reads the next conversation after an unrelated save", async () =
         .observedCount,
     ).toBe(0),
   );
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
 });
 
 it("Retry repeats a failed step of the next conversation after its other steps clear its mark", async () => {
