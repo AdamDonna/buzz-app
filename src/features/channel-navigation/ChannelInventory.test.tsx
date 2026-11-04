@@ -2021,7 +2021,7 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     const view = render(tree(), { reactStrictMode: true });
     await screen.findByRole("button", { name: "Pollen" });
     await waitFor(() => expect(row("fizz-dm")).not.toBeNull());
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     expect(row("group-dm")).not.toBeNull();
     expect(row("namesake")).not.toBeNull();
     await waitFor(() => expect(readView(scope, "hidden-dms", [])).toEqual([]));
@@ -2031,7 +2031,10 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     });
     await screen.findByRole("button", { name: "Fizz" });
     expect(row("pollen-dm")).not.toBeNull();
-    expect(row("fizz-dm")).toBeNull();
+    // Promotion immediately removes the DM from accessible navigation; its
+    // inert exit copy must also leave the DOM when the fade completes.
+    expect(screen.queryByRole("button", { name: "Fizz DM" })).toBeNull();
+    await waitFor(() => expect(row("fizz-dm")).toBeNull());
     act(() => {
       forgetDefaultAgent(fizz);
     });
@@ -2041,27 +2044,27 @@ it("promotes exactly the Bestie DM, restores prior local removal, and releases i
     act(() => {
       setDefaultAgent(scope, pollen);
     });
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     view.unmount();
     const reopened = render(tree(), { reactStrictMode: true });
     await waitFor(() => expect(row("fizz-dm")).not.toBeNull());
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     reopened.rerender(tree(false));
     expect(row("pollen-dm")).not.toBeNull();
     reopened.rerender(tree());
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     // A retained name is not enough to suppress a conversation whose exact
     // membership or chosen-agent eligibility is no longer established.
     h.publish("pollen-dm", { members: [viewer, pollen, fizz] });
     expect(row("pollen-dm")).not.toBeNull();
     h.publish("pollen-dm", { members: [viewer, pollen] });
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     // Source failure removes its candidates but does not release an explicit
     // account choice whose exact verified DM still exists.
     act(() => {
       native.set({ status: "error", agents: [], error: "Agents unavailable" });
     });
-    expect(row("pollen-dm")).toBeNull();
+    await waitFor(() => expect(row("pollen-dm")).toBeNull());
     expect(screen.getByRole("button", { name: "Bestie" })).toBeInTheDocument();
     // A settled successful inventory proving the saved agent is gone releases it.
     act(() => {
