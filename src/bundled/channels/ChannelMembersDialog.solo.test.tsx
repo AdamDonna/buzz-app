@@ -762,6 +762,9 @@ it.each(["member", "guest"] as const)(
     await user.click(share);
     let confirmation = await screen.findByRole("alertdialog");
     expect(confirmation).toHaveAccessibleName("Share chat in Planning?");
+    expect(confirmation).toHaveAccessibleDescription(
+      /^This will change the chat from Private to View only and post its link in Planning\./,
+    );
     expect(confirmation).toHaveTextContent("full history and Canvas");
     expect(t.published).toHaveLength(0);
     await user.click(
@@ -822,7 +825,7 @@ it("shares to the current result after cancelling a different destination", asyn
   const confirmation = await screen.findByRole("alertdialog", {
     name: "Share chat in Review?",
   });
-  expect(confirmation).toHaveTextContent("its link will be posted in Review");
+  expect(confirmation).toHaveTextContent("post its link in Review");
   await user.click(within(confirmation).getByRole("button", { name: "Share" }));
   await waitFor(() => expect(dialog).not.toBeInTheDocument());
   await waitFor(() =>

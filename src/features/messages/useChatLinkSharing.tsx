@@ -130,7 +130,7 @@ export function useChatLinkSharing(
     dialog: pending && (
       <AlertDialog
         title="Change general access?"
-        description={`${SOLO_ACCESS_DISCLOSURE}${pending.sources.length > 1 ? ` This applies to: ${pending.sources.map((base) => base.name).join(", ")}.` : ""} Your message and chat link will be sent to ${pending.destination}.`}
+        description={`This will change ${pending.sources.length > 1 ? "these chats" : "the chat"} from Private to View only and send your message and chat ${pending.sources.length > 1 ? "links" : "link"} to ${pending.destination}. ${SOLO_ACCESS_DISCLOSURE}${pending.sources.length > 1 ? ` This applies to: ${pending.sources.map((base) => base.name).join(", ")}.` : ""}`}
         onClose={() => pending.finish(false)}
         pending={pending.busy}
         initialFocus={cancel}

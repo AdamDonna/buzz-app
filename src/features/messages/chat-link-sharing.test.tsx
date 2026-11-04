@@ -232,6 +232,9 @@ it.each([false, true])(
     const dialog = await screen.findByRole("alertdialog", {
       name: "Change general access?",
     });
+    expect(dialog).toHaveAccessibleDescription(
+      /^This will change the chat from Private to View only and send your message and chat link to #Team\./,
+    );
     expect(dialog).toHaveTextContent("full history and Canvas");
     expect(dialog).toHaveTextContent("#Team");
     expect(screen.queryByRole("button", { name: "Send link only" })).toBeNull();
