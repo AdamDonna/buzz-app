@@ -677,6 +677,45 @@ test.describe("View only channel share", () => {
       .toBe(2);
     expect(app.report.detailsPublications).toHaveLength(1);
 
+    // Renewed consent must remount the real alert, return focus to Cancel and
+    // keep the original composer message unsent until a second explicit Share.
+    await pasteLink();
+    await send.click();
+    await expect(viewOnlyConfirmation).toBeVisible();
+    app.setChannelMetadata(sharedChatId, [
+      ["t", "stream"],
+      ["t", "buzz.solo"],
+      ["P", app.viewer],
+      ["name", "Beta"],
+      ["private"],
+      ["join_role", "guest"],
+    ]);
+    await viewOnlyConfirmation
+      .getByRole("button", { name: "Share", exact: true })
+      .click();
+    await expect(confirmation).toContainText("from Private to View only");
+    await expect(
+      confirmation.getByRole("button", { name: "Cancel", exact: true }),
+    ).toBeFocused();
+    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(
+      app.report.publications.filter(({ event }) => event.kind === 9),
+    ).toHaveLength(2);
+    if (info.project.name === "chromium")
+      await confirmation.screenshot({
+        path: info.outputPath("RENEWED_PASTE_CONSENT_390.png"),
+      });
+    await primary.click();
+    await expect(confirmation).not.toBeVisible();
+    await expect
+      .poll(
+        () =>
+          app.report.publications.filter(({ event }) => event.kind === 9)
+            .length,
+      )
+      .toBe(3);
+    expect(app.report.detailsPublications).toHaveLength(2);
+
     app.setChannelMetadata(sharedChatId, [
       ["t", "stream"],
       ["t", "buzz.solo"],
@@ -695,9 +734,9 @@ test.describe("View only channel share", () => {
           app.report.publications.filter(({ event }) => event.kind === 9)
             .length,
       )
-      .toBe(3);
+      .toBe(4);
     await expect(confirmation).not.toBeVisible();
-    expect(app.report.detailsPublications).toHaveLength(1);
+    expect(app.report.detailsPublications).toHaveLength(2);
     expect(
       app.report.publications.filter(({ event }) => event.kind === 9000),
     ).toHaveLength(0);

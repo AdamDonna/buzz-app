@@ -38,8 +38,10 @@ export function useChatLinkSharing(
     const request = pending;
     running.current = true;
     setPending({ ...request, busy: true });
+    let checking: ChannelDetails | undefined;
     try {
       for (const base of request.sources) {
+        checking = base;
         await shareSoloChatAccess(session, base.channelId, {
           signal: request.signal,
           confirmed: base,
@@ -50,19 +52,58 @@ export function useChatLinkSharing(
       request.check();
       request.finish(true);
     } catch (reason) {
-      if (!request.signal.aborted)
-        setPending({
-          ...request,
-          busy: false,
-          error: reason instanceof Error ? reason.message : String(reason),
-          checkRequired: request.sources.some(({ channelId: id }) => {
-            const attempt = session.channelDetails.snapshot(id);
-            return (
-              attempt?.status === "unconfirmed" &&
-              attempt.draft === request.attempts.get(id)
-            );
-          }),
-        });
+      if (request.signal.aborted) return;
+      const checkRequired = request.sources.some(({ channelId: id }) => {
+        const attempt = session.channelDetails.snapshot(id);
+        return (
+          attempt?.status === "unconfirmed" &&
+          attempt.draft === request.attempts.get(id)
+        );
+      });
+      if (checking && !checkRequired) {
+        try {
+          const options = {
+            signal: request.signal,
+            attempts: request.attempts,
+            check: request.check,
+          };
+          const fresh = await shareSoloChatAccess(
+            session,
+            checking.channelId,
+            options,
+          );
+          if (fresh && fresh.version !== checking.version) {
+            const sources: ChannelDetails[] = [];
+            for (const { channelId: id } of request.sources) {
+              const base =
+                id === fresh.channelId
+                  ? fresh
+                  : await shareSoloChatAccess(session, id, options);
+              if (base) sources.push(base);
+            }
+            request.check();
+            const [first, ...rest] = sources;
+            if (first) {
+              const { error: _, checkRequired: __, ...current } = request;
+              setPending({
+                ...current,
+                sources: [first, ...rest],
+                busy: false,
+              });
+              return;
+            }
+          }
+        } catch {
+          // Keep the original failure if current consent cannot be read safely.
+        }
+      }
+      if (request.signal.aborted) return;
+      setPending({
+        ...request,
+        busy: false,
+        error: reason instanceof Error ? reason.message : String(reason),
+        checkRequired,
+      });
     } finally {
       running.current = false;
     }
@@ -132,6 +173,7 @@ export function useChatLinkSharing(
     },
     dialog: pending && (
       <AlertDialog
+        key={pending.sources.map((base) => base.version).join(":")}
         title={
           privateCount
             ? "Change general access?"

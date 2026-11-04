@@ -189,6 +189,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   uses the same confirmation, then sends your original message. Owned View only
   chat links also confirm delivery. Other chat links send without changing access;
   recipients still need permission to read.
+  If an owned chat's access or details change during confirmation, review the
+  refreshed consent and choose **Share** again before sending.
   The access dialog offers **View only** for community reading
   or **Private** for people added to the chat. Public is not offered in
   this UI; a Public policy set through another client appears as

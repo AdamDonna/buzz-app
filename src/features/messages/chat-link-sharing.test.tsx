@@ -101,11 +101,14 @@ async function fixture(
       );
       metadataEvents.set(
         id,
-        metadata(relay, id, id === source ? "Work" : "Other work", ++clock, [
-          ...tags,
-          ["public"],
-          ["join_role", "guest"],
-        ]),
+        metadata(
+          relay,
+          id,
+          event.tags.find(([tag]) => tag === "name")?.[1] ??
+            (id === source ? "Work" : "Other work"),
+          ++clock,
+          [...tags, ["public"], ["join_role", "guest"]],
+        ),
       );
     }
     published.push(event);
@@ -224,6 +227,18 @@ async function fixture(
           ["t", "buzz.solo"],
           ["public"],
           ["join_role", joinRole],
+          ["P", viewer.pubkey],
+        ]),
+      );
+    },
+    changeDetails({ name = "Work", visibility = "private" } = {}) {
+      metadataEvents.set(
+        source,
+        metadata(relay, source, name, ++clock, [
+          ["t", "stream"],
+          ["t", "buzz.solo"],
+          [visibility],
+          ["join_role", options.joinRole ?? "member"],
           ["P", viewer.pubkey],
         ]),
       );
@@ -498,3 +513,55 @@ it("a chat that becomes Public during consent keeps Public and only sends the me
   );
   expect(f.sign).not.toHaveBeenCalled();
 });
+
+it("asks for fresh Private consent when a pasted View only chat narrows before Share", async () => {
+  const f = await fixture(false, { visibility: "public", joinRole: "guest" });
+  await send();
+  await screen.findByRole("alertdialog", { name: "Share chat link?" });
+  f.changeDetails();
+  await confirm();
+  const renewed = await screen.findByRole("alertdialog", {
+    name: "Change general access?",
+  });
+  await waitFor(() =>
+    expect(
+      within(renewed).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus(),
+  );
+  expect(renewed).toHaveTextContent("from Private to View only");
+  expect(within(renewed).queryByRole("alert")).toBeNull();
+  expect(f.publish).not.toHaveBeenCalled();
+  await confirm();
+  await waitFor(() =>
+    expect(f.published.map((event) => event.kind)).toEqual([9002, 9]),
+  );
+});
+
+it.each(["before confirmation", "during signing"])(
+  "renews pasted-link consent after details change %s without writing until Share is confirmed again",
+  async (when) => {
+    const f = await fixture();
+    await send();
+    await screen.findByRole("alertdialog");
+    if (when === "during signing") {
+      const original = f.sign.getMockImplementation();
+      if (!original) throw new Error("Missing signer");
+      f.sign.mockImplementationOnce(async (event) => {
+        f.changeDetails({ name: "Updated work" });
+        return original(event);
+      });
+    } else f.changeDetails({ name: "Updated work" });
+    await confirm();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Share" })).toBeEnabled();
+    expect(f.publish).not.toHaveBeenCalled();
+    await confirm();
+    await waitFor(() =>
+      expect(f.published.map((event) => event.kind)).toEqual([9002, 9]),
+    );
+    expect(f.published[0]?.tags).toContainEqual(["name", "Updated work"]);
+  },
+);

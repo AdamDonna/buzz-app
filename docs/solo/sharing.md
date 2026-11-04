@@ -158,6 +158,8 @@ behavior. Direct person/agent invitations remain available in Chat access.
 Multiple owned Private or View only chats in one message are named in one
 confirmation. Only Private chats need an access edit. If an
 access save fails, the message stays unsent. Retry skips chats already opened;
+if a chat's access or details changed while consent was open, the confirmation
+reloads its current policy and requires **Share** again before continuing.
 **Check access and send** checks an uncertain save without resending it. Any
 access change already saved is kept when you cancel or a later step fails.
 Changing the draft or leaving stops further access writes and message sending;
