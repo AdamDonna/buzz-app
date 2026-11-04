@@ -13,6 +13,7 @@ import {
   openProfileTranscript,
   profileTarget,
   profileActivityViewTarget,
+  profileHistoryTarget,
 } from "../../features/profiles/target";
 import { ProfilePanel } from "./ProfilePanel";
 import type { Navigation } from "../../features/navigation/controller";
@@ -455,7 +456,7 @@ function renderAgentActivity(
     registerTab: () => {},
     controlAttention: () => {},
   } as unknown as Agents;
-  const target =
+  let target =
     profileActivityViewTarget(key, { transcript: !!transcript }) ?? "";
   // Like Working now: the opener asks as it opens the target.
   if (transcript === "opened") openProfileTranscript(target, () => true);
@@ -484,11 +485,49 @@ function renderAgentActivity(
     },
     {
       target,
+      navigate: (next: string) => {
+        target = next;
+        view.rerender(panel(mounts));
+      },
       /** Remounts the retained profile, as on returning to its channel. */
       remount: () => view.rerender(panel(++mounts)),
     },
   );
 }
+
+it.each([false, "opened"] as const)(
+  "keeps an Activity profile mounted across version addresses (transcript %s)",
+  (transcript) => {
+    const dispose = renderAgentActivity(
+      [
+        { title: "Settings", role: "settings" },
+        { title: "Activity", role: "activity" },
+      ],
+      "thread-root",
+      transcript,
+    );
+    try {
+      const activity = screen.getByText("Echo activity");
+      const pane = activity.closest('[role="tabpanel"]') as HTMLElement;
+      pane.scrollTop = 636;
+      for (const target of [
+        profileHistoryTarget(dispose.target),
+        profileHistoryTarget(dispose.target, {
+          side: "instructions",
+          id: "b".repeat(64),
+        }),
+        dispose.target,
+      ]) {
+        dispose.navigate(target);
+        expect(screen.getByText("Echo activity")).toBe(activity);
+        expect(pane.scrollTop).toBe(636);
+        expect(!!screen.queryByText("Transcript first")).toBe(!!transcript);
+      }
+    } finally {
+      dispose();
+    }
+  },
+);
 
 it("opens an agent's activity on its type's Activity tab, the profile's only one", async () => {
   const dispose = renderAgentActivity(

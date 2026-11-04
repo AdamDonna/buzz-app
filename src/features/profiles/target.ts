@@ -24,7 +24,7 @@ export function profileAgentHint(target: string): boolean {
 
 export function profilePanelKey(target: string): string | undefined {
   if (profileHistoryActive(target)) {
-    const base = target.split("#")[0] as string;
+    const base = profileHistoryBase(target);
     return profilePanelKey(base) ?? profileActivityViewKey(base);
   }
   return profileAgentHint(target)
@@ -56,6 +56,7 @@ export function profileActivityViewTarget(
     : undefined;
 }
 export function profileActivityViewKey(target: string): string | undefined {
+  target = profileHistoryBase(target);
   try {
     const agent = new URL(target).searchParams.get("agent");
     return agent &&
@@ -88,25 +89,28 @@ export function openProfileTranscript(
   open: (target: string) => boolean,
 ): boolean {
   if (!profileActivityTranscript(target)) return open(target);
-  transcriptRequests.set(target, ++transcriptOpenings);
+  const base = profileHistoryBase(target);
+  transcriptRequests.set(base, ++transcriptOpenings);
   const opened = open(target);
-  if (!opened) transcriptRequests.delete(target);
+  if (!opened) transcriptRequests.delete(base);
   changed();
   return opened;
 }
 /** The opening still asking `target`'s profile for its transcript. */
 export function profileTranscriptRequest(target: string): number | undefined {
-  return transcriptRequests.get(target);
+  return transcriptRequests.get(profileHistoryBase(target));
 }
 /** Takes `target`'s opening for the profile now showing it, so a profile
  * mounted later, as on returning to the channel, finds nothing to act on. */
 export function claimProfileTranscript(target: string): number | undefined {
+  target = profileHistoryBase(target);
   const opening = transcriptRequests.get(target);
   if (transcriptRequests.delete(target)) changed();
   return opening;
 }
 /** Whether an Activity destination asks for its conversation's transcript. */
 export function profileActivityTranscript(target: string): boolean {
+  target = profileHistoryBase(target);
   const agent = profileActivityViewKey(target);
   return (
     !!agent && target === profileActivityViewTarget(agent, { transcript: true })
@@ -124,9 +128,7 @@ export function profileHistoryTarget(
   target: string,
   selected?: HistorySelection,
 ) {
-  const base = profileHistoryActive(target)
-    ? (target.split("#")[0] as string)
-    : target;
+  const base = profileHistoryBase(target);
   return selected
     ? `${base}#version=${historySelectionKey(selected)}`
     : `${base}#versions`;
@@ -137,4 +139,11 @@ export function profileHistoryActive(target: string) {
     (target.split("#").length === 2 && target.endsWith("#versions")) ||
     !!profileHistoryRoute(target)
   );
+}
+
+/** A profile's version addresses share its opening; unknown fragments stay exact. */
+export function profileHistoryBase(target: string): string {
+  return profileHistoryActive(target)
+    ? (target.split("#")[0] as string)
+    : target;
 }

@@ -72,6 +72,31 @@ it("recognizes only the exact local profile Activity destination", () => {
     expect(profileActivityViewKey(invalid)).toBeUndefined();
 });
 
+it.each([false, true])(
+  "preserves the Activity opening through version addresses (transcript %s)",
+  (transcript) => {
+    const pubkey = "a".repeat(64);
+    const base = profileActivityViewTarget(pubkey, { transcript }) as string;
+    const version = profileHistoryTarget(base, {
+      side: "instructions",
+      id: "b".repeat(64),
+    });
+    for (const target of [profileHistoryTarget(base), version]) {
+      expect(profileActivityViewKey(target)).toBe(pubkey);
+      expect(profileActivityTranscript(target)).toBe(transcript);
+      expect(profilePanelKey(target)).toBe(pubkey);
+    }
+    if (transcript) {
+      openProfileTranscript(base, () => true);
+      expect(profileTranscriptRequest(version)).toBe(
+        profileTranscriptRequest(base),
+      );
+      expect(claimProfileTranscript(version)).toBeDefined();
+      expect(profileTranscriptRequest(base)).toBeUndefined();
+    }
+  },
+);
+
 it("marks only the transcript Activity destination as asking for it", () => {
   const key = "ab".repeat(32);
   const plain = profileActivityViewTarget(key) ?? "";
