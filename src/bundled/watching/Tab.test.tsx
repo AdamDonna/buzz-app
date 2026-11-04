@@ -1124,6 +1124,7 @@ it("lists each recent event apart, shown as a chat message from its author", () 
   const snapshot = { status: "ready", running: [agent] };
   const ctx = {
     agents: {
+      presentWatch: () => undefined,
       snapshot: () => snapshot,
       subscribe: () => () => {},
     },

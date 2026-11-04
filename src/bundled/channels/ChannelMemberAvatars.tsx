@@ -1,3 +1,4 @@
+import { useProfileGeneration } from "../../features/relay/react";
 import { useEffect, useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import { useIdentityNames } from "../../features/identity-names/react";
@@ -5,6 +6,7 @@ import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
 import { UsersIcon } from "../../shared/design-system/icons";
 import { avatarMedia } from "../../shared/avatar-source";
 import { formatPublicKey } from "../../shared/identity/public-key";
+import { PROFILE_CACHE_BASE } from "../../features/relay/budget";
 
 /** The members trigger previews people; the dialog still includes every member. */
 export function ChannelMemberAvatars({
@@ -35,12 +37,16 @@ export function ChannelMemberAvatars({
     session.channels.get?.(channelId);
   const members = channel?.members ?? [];
   const memberKey = members.join(":");
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
+    void profileGeneration;
+    // Three avatars need no more than the base cache. An open channel reserves
+    // room for its whole roster, but only the mention menu reads all of it.
     if (memberKey)
       void session.profiles
-        .ensure(memberKey.split(":"), "background")
+        .ensure(memberKey.split(":").slice(0, PROFILE_CACHE_BASE), "background")
         .catch(() => {});
-  }, [session, memberKey]);
+  }, [session, memberKey, profileGeneration]);
   const agents = new Set(choices.identities.map((agent) => agent.pubkey));
   const people = members
     .filter((id) => !agents.has(id) && !profiles.get(id)?.isAgent)

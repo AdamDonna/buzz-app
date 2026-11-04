@@ -1,3 +1,4 @@
+import { browserOutboxStorage } from "../../src/features/relay/outbox-storage";
 // Browser-only native boundary and controllable plugin. Production service,
 // composition, admission, activity projection and UI are unchanged.
 import type {
@@ -12,7 +13,11 @@ import type { WorkOutcome } from "../../src/features/agents/local-activity";
 // the agent's memory.
 export const localAgentKey =
   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-let identities: AgentIdentity[] = [];
+const resumable = import.meta.env.VITE_BUZZ_TEST_RESUME_AGENTS === true;
+const identityKey = "buzz-test-resumable-agent";
+let identities: AgentIdentity[] = resumable
+  ? JSON.parse(sessionStorage.getItem(identityKey) ?? "[]")
+  : [];
 /** Requests the owner stopped, in order. */
 const stopped: string[] = [];
 const pending: {
@@ -21,24 +26,27 @@ const pending: {
   step(tool: string, target?: string): void;
   finish(result: WorkOutcome): void;
 }[] = [];
+/** The latest run of request `id`: a retried request runs again. */
+const latest = (id: string) => {
+  const row = pending.filter((row) => row.id === id).at(-1);
+  if (!row) throw new Error("No pending request");
+  return row;
+};
 const controls = {
+  outboxStorage: browserOutboxStorage,
   pending: () => pending.map((row) => row.id),
   stopped: () => [...stopped],
   /** Hands over and, like a real harness, reports a first step. */
   handover(id: string) {
-    const row = pending.find((row) => row.id === id);
-    if (!row) throw new Error("No pending request");
+    const row = latest(id);
     row.handover();
     row.step("Read", "notes.txt");
   },
   step(id: string, tool: string, target?: string) {
-    const row = pending.find((row) => row.id === id);
-    if (!row) throw new Error("No pending request");
-    row.step(tool, target);
+    latest(id).step(tool, target);
   },
   finish(id: string, ok: boolean) {
-    const row = pending.find((row) => row.id === id);
-    if (!row) throw new Error("No pending request");
+    const row = latest(id);
     row.handover();
     row.finish(
       ok ? { ok: true } : { ok: false, error: "Fixture provider unavailable" },
@@ -67,6 +75,8 @@ export function localAgentsNative(): AgentsNative {
         deleted: false,
       };
       identities = [identity];
+      if (resumable)
+        sessionStorage.setItem(identityKey, JSON.stringify(identities));
       return identity;
     },
     portable: unsupported,
@@ -97,11 +107,12 @@ export const localAgentPlugin: BundledPlugin = {
   manifest: { id: "fixture.local-agent", name: "Local agent", apiVersion: 1 },
   enabledByDefault: true,
   module: {
-    inject: ["agents", "relay"],
+    inject: ["agents", "relay", "navigation"],
     apply(ctx) {
       ctx.agents.register({
         id: "tester",
         title: "Local tester",
+        resumes: resumable,
         defaults: () => ({ config: {} }),
         // The remote agent type's Activity tab, so published turns can be seen.
         tabs: [
@@ -109,7 +120,15 @@ export const localAgentPlugin: BundledPlugin = {
             id: "activity",
             title: "Activity",
             role: "activity",
-            component: createActivityTab(ctx.relay),
+            component: createActivityTab(
+              ctx.relay,
+              (section) =>
+                void ctx.navigation.open({
+                  version: 1,
+                  kind: "settings",
+                  section,
+                }),
+            ),
           },
         ],
         run(delivery) {

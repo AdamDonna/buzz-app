@@ -45,6 +45,7 @@ async function setup(count = 3) {
   let journal: ReadJournal | undefined;
   const reader = { read: vi.fn(async () => []) };
   const reads = createReadState({
+    floor: () => 0,
     viewer: viewer.pubkey,
     reader,
     host: undefined,

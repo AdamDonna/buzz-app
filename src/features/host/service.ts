@@ -27,10 +27,47 @@ export type HostUpload = Readonly<{
     contentType: string;
   }>;
 }>;
+/** One in-memory multipart part plus bounded text fields. Desktop only. */
+export type HostByteUpload = Readonly<{
+  url: string;
+  /** 1–256 ASCII letters/digits/dots/underscores/hyphens; no leading dot. */
+  field: string;
+  /** One filename with the same safe characters; no leading dot or path. */
+  name: string;
+  /** Exactly image/png, image/jpeg or image/webp, matching the bytes' signature. */
+  contentType: string;
+  /** At most 16 text fields, safe names, each value at most 8192 UTF-8 bytes. */
+  fields?: Readonly<Record<string, string>>;
+}>;
 export type HostResponse = Readonly<{
   status: number;
   headers: Readonly<Record<string, string>>;
   body: string;
+}>;
+export type HostRequestOnceOptions = Readonly<{
+  callId: string;
+  /** Synchronous final caller check. Only literal true permits dispatch. */
+  isEligible?: () => boolean;
+}>;
+/** GET-only raw bytes from an exact declared HTTPS origin. Desktop only. */
+export type HostByteRequest = Readonly<{
+  url: string;
+  /** Required integer byte cap, 1–16777216. */
+  maxBytes: number;
+  /** 1–30000 milliseconds; defaults to 30000. */
+  timeoutMs?: number;
+}>;
+export type HostByteResponse = Readonly<{
+  status: number;
+  headers: Readonly<Record<string, string>>;
+  body: Uint8Array;
+}>;
+export type HostSavedBytes = Readonly<{
+  path: string;
+  size: number;
+  sha256: string;
+  /** Host wall-clock Unix milliseconds, not a deletion timer. */
+  expiresAt: number;
 }>;
 /** Reusable NIP-OA proof for one agent key; preparing it does not submit it. */
 export type NipOaAuthorization = readonly [
@@ -86,6 +123,12 @@ export type HostMcpServer = Readonly<{
   close(): Promise<void>;
   /** Resolves once it has stopped. */
   closed: Promise<void>;
+  authorize?(request: McpAuthorization): Promise<void>;
+}>;
+export type McpAuthorization = Readonly<{
+  callback: string;
+  state: string;
+  code_challenge: string;
 }>;
 type McpEvent =
   | { type: "message"; request: number; body: string }
@@ -95,6 +138,7 @@ type McpEvent =
  * itself and grant every client the same authority. Defaults to false. */
 export type HostMcpOptions = Readonly<{ sharedSession?: boolean }>;
 export interface Host {
+  denyMcpAuthorization?(request: McpAuthorization): Promise<void>;
   runCommand(id: string, input?: string): Promise<string | null>;
   /** Starts a process the manifest declares in `host.processes`. It lives until
    * it exits, is killed, or the plugin unloads. Desktop only. */
@@ -118,6 +162,33 @@ export interface Host {
    * `host.files`. Desktop only. */
   resolveDirectory?: (path: string) => Promise<string>;
   request(input: HostRequest): Promise<HostResponse>;
+  /** POST-only, desktop and compatible native host required. A repeated call
+   * authority rejects with unknown outcome, never resubmits or caches success.
+   * Blocks IPC-fallback resends only, not fresh calls or upstream retries.
+   * Also send callId as a server idempotency key when the server supports it. */
+  requestOnce?: (
+    input: HostRequest,
+    options: HostRequestOnceOptions,
+  ) => Promise<HostResponse>;
+  /** Protected multipart POST; no file grant, IPC fallback or automatic retry.
+   * Copies 1–16777216 bytes before awaiting native authority. */
+  uploadBytesOnce?: (
+    bytes: Uint8Array,
+    input: HostByteUpload,
+    options: HostRequestOnceOptions,
+  ) => Promise<HostResponse>;
+  /** No automatic replay protection or text/array fallback. */
+  requestBytes?: (input: HostByteRequest) => Promise<HostByteResponse>;
+  /** Requires host.managedFiles, not host.files. Keep bytes immutable through
+   * hashing/save. An ambiguous failure must not be automatically retried. */
+  saveBytes?: (
+    bytes: Uint8Array,
+    input: Readonly<{ sha256: string }>,
+  ) => Promise<HostSavedBytes>;
+  /** Removes this plugin's own managed file. Await attachment sends first;
+   * Conservatively refuses app-wide while any plugin's host.readFile call or
+   * process named read/read-protected is active, regardless of program/path. */
+  deleteManagedFile?: (path: string) => Promise<void>;
   /** Uploads a file as `request` sends a body. Desktop only. */
   upload?: (input: HostUpload) => Promise<HostResponse>;
   prepareRemoteAgentAuthorization?: (
@@ -193,6 +264,17 @@ export async function prepareRemoteAgentAuthorization(
     throw new Error("Invalid remote agent authorization");
   return tag;
 }
+
+type CallContext = Readonly<{ boot: string; page: number }>;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const callContexts = new WeakMap<
+  Context["fiber"],
+  {
+    context: Promise<CallContext>;
+    activation: string;
+    disposed: boolean;
+  }
+>();
 
 export class HostService extends Service implements Host {
   constructor(context: Context) {
@@ -372,7 +454,26 @@ export class HostService extends Service implements Host {
       ]),
       close,
       closed,
+      authorize: (request: McpAuthorization) =>
+        invoke<void>("plugin_host_mcp_authorize", {
+          id: owner.id,
+          revision: owner.revision,
+          handle: server.handle,
+          request,
+        }).catch(rethrow),
     });
+  }
+
+  async denyMcpAuthorization(request: McpAuthorization) {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("External authorization requires Buzz desktop");
+    await invoke<void>("plugin_host_mcp_authorize", {
+      id: owner.id,
+      revision: owner.revision,
+      handle: null,
+      request,
+    }).catch(rethrow);
   }
 
   // Methods, not fields: `this.ctx` is then the calling plugin's scope.
@@ -414,6 +515,156 @@ export class HostService extends Service implements Host {
     }).catch(rethrow);
   }
 
+  async requestOnce(
+    input: HostRequest,
+    { callId, isEligible }: HostRequestOnceOptions,
+  ): Promise<HostResponse> {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Protected requests require an installed desktop plugin");
+    if (input.method !== "POST" || !UUID.test(callId))
+      throw new Error(
+        "Protected requests require POST and a canonical UUID callId",
+      );
+    return protectedCall(this.ctx, callId, isEligible, (once) =>
+      invoke<HostResponse>("plugin_host_request", {
+        id: owner.id,
+        revision: owner.revision,
+        request: input,
+        once,
+      }),
+    );
+  }
+
+  async uploadBytesOnce(
+    bytes: Uint8Array,
+    input: HostByteUpload,
+    { callId, isEligible }: HostRequestOnceOptions,
+  ): Promise<HostResponse> {
+    const owner = this.ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Protected requests require an installed desktop plugin");
+    if (
+      !(bytes instanceof Uint8Array) ||
+      bytes.byteLength < 1 ||
+      bytes.byteLength > BYTE_LIMIT
+    )
+      throw new Error("Invalid upload bytes");
+    // Pin both the bytes and metadata before waiting for authority or eligibility.
+    const snapshot = new Uint8Array(bytes);
+    const metadata = asciiJson({
+      id: owner.id,
+      revision: owner.revision,
+      upload: input,
+    });
+    if (metadata.length > UPLOAD_METADATA_LIMIT - 512)
+      throw new Error("Upload metadata is too large");
+    return protectedCall(this.ctx, callId, isEligible, (once) =>
+      invoke<HostResponse>("plugin_host_upload_bytes_once", snapshot, {
+        headers: {
+          // Append authority to the already pinned JSON object without reserializing input.
+          "x-buzz-upload": `${metadata.slice(0, -1)},"once":${asciiJson(once)}}`,
+        },
+      }),
+    );
+  }
+
+  async requestBytes(input: HostByteRequest): Promise<HostByteResponse> {
+    const ctx = this.ctx;
+    const owner = ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Byte requests require an installed desktop plugin");
+    if (
+      !Number.isInteger(input.maxBytes) ||
+      input.maxBytes < 1 ||
+      input.maxBytes > BYTE_LIMIT ||
+      (input.timeoutMs !== undefined &&
+        (!Number.isInteger(input.timeoutMs) ||
+          input.timeoutMs < 1 ||
+          input.timeoutMs > 30000))
+    )
+      throw new Error("Invalid byte request limits");
+    const lifetime = byteLifetime(ctx);
+    try {
+      const frame = await invoke<unknown>("plugin_host_request_bytes", {
+        id: owner.id,
+        revision: owner.revision,
+        request: input,
+      }).catch(rethrow);
+      lifetime.active();
+      return decodeByteFrame(frame, input.maxBytes);
+    } finally {
+      lifetime.release();
+    }
+  }
+
+  async saveBytes(
+    bytes: Uint8Array,
+    { sha256 }: Readonly<{ sha256: string }>,
+  ): Promise<HostSavedBytes> {
+    const ctx = this.ctx;
+    const owner = ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Managed saves require an installed desktop plugin");
+    if (
+      !(bytes instanceof Uint8Array) ||
+      bytes.byteLength < 1 ||
+      bytes.byteLength > BYTE_LIMIT ||
+      !/^[0-9a-f]{64}$/.test(sha256)
+    )
+      throw new Error("Invalid managed save bytes or SHA256");
+    const size = bytes.byteLength;
+    const lifetime = byteLifetime(ctx);
+    try {
+      const saved = await invoke<HostSavedBytes>(
+        "plugin_host_save_bytes",
+        bytes,
+        {
+          headers: {
+            "x-buzz-plugin-id": owner.id,
+            "x-buzz-plugin-revision": owner.revision,
+            "x-buzz-sha256": sha256,
+          },
+        },
+      ).catch(rethrow);
+      lifetime.active();
+      if (
+        !saved ||
+        typeof saved.path !== "string" ||
+        !saved.path ||
+        saved.path.includes("\0") ||
+        saved.size !== size ||
+        saved.sha256 !== sha256 ||
+        !Number.isSafeInteger(saved.expiresAt) ||
+        saved.expiresAt <= 0
+      )
+        throw new Error("Invalid managed save result; outcome unknown");
+      return saved;
+    } finally {
+      lifetime.release();
+    }
+  }
+
+  async deleteManagedFile(path: string): Promise<void> {
+    const ctx = this.ctx;
+    const owner = ctx.pluginOwner;
+    if (!owner || !isTauri())
+      throw new Error("Managed deletion requires an installed desktop plugin");
+    if (typeof path !== "string" || !path || path.includes("\0"))
+      throw new Error("Invalid managed file path");
+    const lifetime = byteLifetime(ctx);
+    try {
+      await invoke<void>("plugin_host_delete_managed_file", {
+        id: owner.id,
+        revision: owner.revision,
+        path,
+      }).catch(rethrow);
+      lifetime.active();
+    } finally {
+      lifetime.release();
+    }
+  }
+
   async upload(input: HostUpload): Promise<HostResponse> {
     const owner = this.ctx.pluginOwner;
     if (!owner || !isTauri())
@@ -424,6 +675,163 @@ export class HostService extends Service implements Host {
       upload: input,
     }).catch(rethrow);
   }
+}
+
+const UPLOAD_METADATA_LIMIT = 16 * 1024;
+// HTTP IPC headers are ASCII; JSON escapes preserve Unicode field values.
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(
+    /[^\x20-\x7e]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+async function protectedCall<T>(
+  ctx: Context,
+  callId: string,
+  isEligible: HostRequestOnceOptions["isEligible"],
+  dispatch: (
+    once: CallContext & { activation: string; callId: string },
+  ) => Promise<T>,
+): Promise<T> {
+  if (!ctx.pluginOwner || !isTauri())
+    throw new Error("Protected requests require an installed desktop plugin");
+  if (!UUID.test(callId))
+    throw new Error("Protected requests require a canonical UUID callId");
+  let state = callContexts.get(ctx.fiber);
+  const active = () => {
+    if (ctx.fiber.uid === null || state?.disposed)
+      throw new Error("Protected request owner is inactive; outcome unknown");
+  };
+  active();
+  if (!state) {
+    state = {
+      context: invoke<CallContext>("plugin_host_call_context").catch(rethrow),
+      activation: crypto.randomUUID(),
+      disposed: false,
+    };
+    const lifetime = state;
+    ctx.effect(
+      () => () => {
+        lifetime.disposed = true;
+        if (callContexts.get(ctx.fiber) === lifetime)
+          callContexts.delete(ctx.fiber);
+      },
+      "protected host calls",
+    );
+    callContexts.set(ctx.fiber, state);
+  }
+  // Cache failures too: refreshing native authority must never be an implicit retry.
+  const context = await state.context;
+  active();
+  if (
+    !context ||
+    !UUID.test(context.boot) ||
+    !Number.isSafeInteger(context.page) ||
+    context.page < 0
+  )
+    throw new Error(
+      "Compatible native protected-request context is unavailable",
+    );
+  if (isEligible !== undefined) {
+    try {
+      const eligible = isEligible();
+      if (eligible !== true) {
+        // Invalid async callbacks still fail closed; observe any rejection.
+        void Promise.resolve(eligible).catch(() => {});
+        throw new Error();
+      }
+    } catch {
+      throw new Error("Protected request caller eligibility refused");
+    }
+    active();
+  }
+  const result = await dispatch({
+    ...context,
+    activation: state.activation,
+    callId,
+  }).catch(rethrow);
+  active();
+  return result;
+}
+
+const BYTE_LIMIT = 16 * 1024 * 1024;
+
+/** Per-operation cooperative lifetime, deliberately independent of POST context. */
+function byteLifetime(ctx: Context) {
+  let disposed = false;
+  const active = () => {
+    if (disposed || ctx.fiber.uid === null)
+      throw new Error("Byte operation owner is inactive; outcome unknown");
+  };
+  active();
+  const release = ctx.effect(
+    () => () => {
+      disposed = true;
+    },
+    "host byte operation",
+  );
+  return { active, release };
+}
+
+function decodeByteFrame(frame: unknown, maxBytes: number): HostByteResponse {
+  // Check transport before creating a view: fallback arrays must not be copied.
+  if (
+    !(frame instanceof ArrayBuffer) ||
+    frame.byteLength < 4 ||
+    frame.byteLength > 4 + 20 * 1024 + maxBytes
+  )
+    throw new Error("A compatible raw byte response is required");
+  const length = new DataView(frame).getUint32(0, false);
+  if (
+    length < 1 ||
+    length > 20 * 1024 ||
+    length > frame.byteLength - 4 ||
+    frame.byteLength - 4 - length > maxBytes
+  )
+    throw new Error("Invalid byte response framing");
+  const metadata: unknown = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(frame, 4, length),
+    ),
+  );
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata))
+    throw new Error("Invalid byte response metadata");
+  const { status, headers } = metadata as {
+    status: number;
+    headers: Record<string, unknown>;
+  };
+  if (
+    !Number.isInteger(status) ||
+    status < 100 ||
+    status > 599 ||
+    !headers ||
+    typeof headers !== "object" ||
+    Array.isArray(headers)
+  )
+    throw new Error("Invalid byte response status or headers");
+  const entries = Object.entries(headers);
+  const encoder = new TextEncoder();
+  let headerBytes = 0;
+  if (entries.length > 64) throw new Error("Too many byte response headers");
+  for (const [name, value] of entries) {
+    if (
+      !/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(name) ||
+      name === "set-cookie" ||
+      typeof value !== "string" ||
+      /[\0\r\n]/.test(value)
+    )
+      throw new Error("Invalid byte response header");
+    headerBytes +=
+      encoder.encode(name).byteLength + encoder.encode(value).byteLength;
+  }
+  if (headerBytes > 16 * 1024)
+    throw new Error("Byte response headers are too large");
+  return {
+    status,
+    headers: headers as Record<string, string>,
+    body: new Uint8Array(frame, 4 + length),
+  };
 }
 
 /** A native command's failure, which arrives as its message, as an Error. */

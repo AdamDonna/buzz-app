@@ -24,7 +24,13 @@ import type {
 } from "../../features/conversation/contracts";
 import type { Navigation } from "../../features/navigation/controller";
 import type { NavigationScope } from "../../features/navigation/targets";
-import { useChannelList, useRelayConnection } from "../../features/relay/react";
+import type { PageNavigation } from "../../features/navigation/service";
+import { routeOf } from "./route";
+import {
+  useChannelList,
+  useProfileGeneration,
+  useRelayConnection,
+} from "../../features/relay/react";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { useIdentityNames } from "../../features/identity-names/react";
 import { messagePreview } from "../../features/notifications/content";
@@ -174,6 +180,11 @@ type InboxPageTabs = (props: PageTabsProps) => ReactNode;
 /** The open conversation's Archive/Restore, published for the Inbox shortcut. */
 export type ArchiveShortcut = { current?: (() => void) | undefined };
 
+// Each presentation of a visit (a new open, even of the same address) is a fresh
+// navigation object, so a route is applied once per object and never re-applied
+// by a remount or re-render of the same one.
+const appliedRoutes = new WeakSet<object>();
+
 export function InboxPage({
   relay,
   navigator,
@@ -181,9 +192,11 @@ export function InboxPage({
   tabs,
   host,
   archive,
+  navigation,
 }: {
   relay: RelayData;
   navigator: Navigation;
+  navigation?: PageNavigation | undefined;
   extensions?: ConversationExtensions | undefined;
   /** The host tab workspace, `conversation.ui.Tabs`, while a plugin provides it. */
   tabs?: InboxPageTabs | undefined;
@@ -210,6 +223,7 @@ export function InboxPage({
             tabs={tabs}
             host={host}
             archive={archive}
+            navigation={navigation}
           />
         ) : (
           <div data-buzz-ui="" className={styles.page}>
@@ -247,6 +261,7 @@ type InboxViewProps = {
   tabs?: InboxPageTabs | undefined;
   host: ConversationHostServices;
   archive?: ArchiveShortcut | undefined;
+  navigation?: PageNavigation | undefined;
 };
 
 const never = () => false;
@@ -282,6 +297,7 @@ function InboxList({
   extensions,
   host,
   archive: archiveShortcut,
+  navigation,
   open: openTab,
   close: closeTab,
   isOpen,
@@ -326,6 +342,22 @@ function InboxList({
     writeView(archiveScope, filtersKey, next);
   }
   const [drafts, setDrafts] = useState(false);
+  // A shortcut's open carries filters; a plain open carries none and changes nothing.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only a new presentation applies its route; later filter edits are the user's.
+  useEffect(() => {
+    const route = routeOf(navigation?.target);
+    // Back/Forward returns to the view as the user left it, not the opening filters.
+    if (
+      !navigation ||
+      !route ||
+      navigation.traversal ||
+      appliedRoutes.has(navigation)
+    )
+      return;
+    appliedRoutes.add(navigation);
+    setFilter({ show: "inbox", ...route });
+    setDrafts(false);
+  }, [navigation]);
   const subscribeArchives = useCallback(
     (listener: () => void) => subscribeView(archiveScope, listener),
     [archiveScope],
@@ -601,12 +633,14 @@ function InboxList({
     selection.snapshot,
   );
   const name = useIdentityNames(session.names);
+  const profileGeneration = useProfileGeneration(session.profiles);
   useEffect(() => {
     // A settled discovery revision can retire earlier optional profile reads.
     void list.asOf;
+    void profileGeneration;
     if (profileIds.length && list.status === "ready")
       void session.profiles.ensure(profileIds, "background").catch(() => {});
-  }, [session, profileIds, list.status, list.asOf]);
+  }, [session, profileIds, list.status, list.asOf, profileGeneration]);
   useLayoutEffect(() => {
     const id = focusRow.current;
     if (id === undefined || pending) return;
@@ -859,17 +893,20 @@ function InboxList({
     if (failure || pending || document.activeElement !== document.body) return;
     fallbackControl.current?.focus({ preventScroll: true });
   }, [failure, pending]);
+  function showView(value: ShowFilter) {
+    if (value === show) return;
+    cancelRetry();
+    setSelectedTarget(undefined);
+    setFilter({ show: value });
+  }
+  const filtered =
+    activity !== "all" || senderFilter !== "everyone" || unreadOnly;
   const toolbar = (
     <header className={styles.toolbar}>
       <InboxFilters
         view={drafts ? "drafts" : activity}
         show={show}
-        onShowChange={(value) => {
-          if (value === show) return;
-          cancelRetry();
-          setSelectedTarget(undefined);
-          setFilter({ show: value });
-        }}
+        onShowChange={showView}
         sender={senderFilter}
         unreadOnly={unreadOnly}
         triggerRef={fallbackControl}
@@ -989,13 +1026,23 @@ function InboxList({
                           : "Mentions, direct messages, and replies in threads you participate in appear here."
                       }
                       action={
-                        show === "archived" && unreadOnly ? (
+                        filtered || show === "archived" ? (
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => setFilter({ attention: "all" })}
+                            onClick={() => {
+                              // Status stays; an unfiltered archive returns to Inbox.
+                              if (filtered)
+                                setFilter({
+                                  activity: "all",
+                                  sender: "everyone",
+                                  attention: "all",
+                                });
+                              else showView("inbox");
+                              fallbackControl.current?.focus();
+                            }}
                           >
-                            Show all archived conversations
+                            {filtered ? "Clear filters" : "Show Inbox"}
                           </Button>
                         ) : undefined
                       }

@@ -87,6 +87,7 @@ export async function readApiFailure(
   response: Response,
   reason?: (
     body: unknown,
+    status: number,
   ) => string | Pick<ApiFailure, "error" | "code"> | undefined,
 ): Promise<ApiFailure> {
   if (!response.body) return apiFailure(response.status, undefined);
@@ -111,7 +112,7 @@ export async function readApiFailure(
       return apiFailure(response.status, undefined);
     }
     const failure = apiFailure(response.status, body);
-    const allowed = failure.quota ? undefined : reason?.(body);
+    const allowed = failure.quota ? undefined : reason?.(body, response.status);
     return allowed
       ? {
           ...failure,
@@ -258,6 +259,7 @@ export async function admittedApiRequest(
   priority: Ticket["priority"] = "foreground",
   reason?: (
     body: unknown,
+    status: number,
   ) => string | Pick<ApiFailure, "error" | "code"> | undefined,
 ): Promise<Response> {
   return lane.run(

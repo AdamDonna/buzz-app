@@ -561,6 +561,10 @@ test("local previews stay interactive during eager upload and removal collapses 
 }) => {
   let release;
   let requests = 0;
+  let releaseRetry;
+  const heldRetry = new Promise((resolve) => {
+    releaseRetry = resolve;
+  });
   const held = new Promise((resolve) => {
     release = resolve;
   });
@@ -576,8 +580,8 @@ test("local previews stay interactive during eager upload and removal collapses 
             if (req.url !== "/api/relay/upload" || req.method !== "POST")
               return next();
             req.resume();
-            const status = [1, 4].includes(++requests) ? 503 : 204;
-            void held.then(() => {
+            const status = [1, 3, 5].includes(++requests) ? 503 : 204;
+            void (requests === 3 ? heldRetry : held).then(() => {
               res.writeHead(status);
               res.end();
             });
@@ -672,6 +676,14 @@ test("local previews stay interactive during eager upload and removal collapses 
         visibility: "visible",
       });
 
+    // Hover can scroll the entrance's overflow-clipping section as well as the
+    // strip. Measure resting alignment with both horizontal offsets cleared.
+    await form
+      .getByRole("region", { name: "Attachments" })
+      .evaluate((section) => {
+        section.scrollLeft = 0;
+        section.querySelector("ul").scrollLeft = 0;
+      });
     await expect
       .poll(() =>
         form.evaluate((el) => {
@@ -945,12 +957,27 @@ test("local previews stay interactive during eager upload and removal collapses 
     });
     await page.setViewportSize({ width: 1440, height: 950 });
     const retry = form.getByRole("button", { name: "Retry photo.png" });
-    await expect(retry).toBeVisible();
+    await editor.focus();
+    await editor.hover();
+    const failure = form.getByRole("alert");
+    await expect(failure).toHaveText(
+      "photo.png: Upload failed. Retry or remove this file.",
+    );
+    await expect(failure).toBeVisible();
+    await expect(failure).toHaveCSS("clip-path", "none");
+    // A 1px, clipped ancestor can still satisfy Playwright's toBeVisible.
+    await expect(failure.locator("..")).toHaveCSS("clip-path", "none");
+    await expect(retry).toHaveText("Retry");
+    await expect(retry).toHaveCSS("opacity", "1");
+    await expect(
+      form.getByRole("button", { name: "Send message" }),
+    ).toBeDisabled();
     await expect
       .poll(() => form.evaluate((el) => el.getBoundingClientRect().height))
-      .toBe(beforeFailure);
+      .toBeGreaterThan(beforeFailure);
     const failedRemove = form.getByRole("button", { name: "Remove photo.png" });
-    await expect(failedRemove).toBeVisible();
+    await expect(failedRemove).toHaveText("Remove");
+    await expect(failedRemove).toHaveCSS("opacity", "1");
     // Both error actions must fit inside the real strip scrollport.
     for (const action of [retry, failedRemove]) {
       expect(
@@ -971,13 +998,45 @@ test("local previews stay interactive during eager upload and removal collapses 
           document.documentElement.classList.toggle("dark", mode === "dark"),
         mode,
       );
-      for (const width of [390, 1280]) {
+      for (const width of [390, 640, 1280]) {
         await page.setViewportSize({ width, height: 800 });
         await page.evaluate(() => {
           document.documentElement.style.fontSize = "200%";
         });
+        await editor.focus();
+        await editor.hover();
+        await expect(retry).toHaveCSS("opacity", "1");
+        await expect(failedRemove).toHaveCSS("opacity", "1");
+        await expect(failure).toBeInViewport();
+        if (width === 640) {
+          // A narrow pane must not inherit an 18rem floor at enlarged text sizes.
+          expect(
+            await failure.evaluate((el) => {
+              const item = el.closest("li").getBoundingClientRect();
+              const strip = el.closest("ul").getBoundingClientRect();
+              return strip.width - item.width;
+            }),
+          ).toBeGreaterThanOrEqual(0);
+        }
+        for (const content of [failure, retry, failedRemove]) {
+          expect(
+            await content.evaluate((el) => {
+              const box = el.getBoundingClientRect();
+              const item = el.closest("li").getBoundingClientRect();
+              return Math.min(
+                box.left - item.left,
+                item.right - box.right,
+                box.top - item.top,
+                item.bottom - box.bottom,
+              );
+            }),
+          ).toBeGreaterThanOrEqual(0);
+        }
         await retry.click({ trial: true });
         await failedRemove.click({ trial: true });
+        await form.screenshot({
+          path: test.info().outputPath(`upload-failure-${mode}-${width}.png`),
+        });
         // Error actions must stay clear of the following image, at any UI size.
         expect(
           await failedRemove.evaluate((el) => {
@@ -998,27 +1057,82 @@ test("local previews stay interactive during eager upload and removal collapses 
     await form.screenshot({
       path: test.info().outputPath("compact-upload-retry.png"),
     });
+    // A second rejection must restore the explanation and leave the draft intact.
+    const rejectedRetry = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/relay/upload") &&
+        response.status() === 503,
+    );
+    const retryStarted = page.waitForRequest((request) =>
+      request.url().endsWith("/api/relay/upload"),
+    );
+    await retry.focus();
+    await page.keyboard.press("Enter");
+    await retryStarted;
+    await expect(
+      form.getByRole("button", { name: "Preview photo.png" }),
+    ).toBeFocused();
+    await expect(form.getByRole("progressbar")).toBeVisible();
+    releaseRetry();
+    await rejectedRetry;
+    await expect(retry).toBeVisible();
+    await expect(
+      form.getByRole("button", { name: "Preview photo.png" }),
+    ).toBeFocused();
+    await expect(failure).toBeVisible();
+    await expect(
+      form.getByRole("button", { name: "Send message" }),
+    ).toBeDisabled();
+    await expect(editor).toHaveText("Preserve this draft");
     await retry.click();
     await expect(retry).toHaveCount(0);
     await expect(form.getByRole("progressbar")).toHaveCount(0);
+    await expect(failure).toHaveCount(0);
+    await expect(
+      form.getByRole("button", { name: "Send message" }),
+    ).toBeEnabled();
+    await expect(editor).toHaveText("Preserve this draft");
+    const failedName = `${"long-attachment-name-".repeat(8)}.txt`;
+    await page.setViewportSize({ width: 640, height: 800 });
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
     await form.getByLabel("Choose attachments").setInputFiles({
-      name: "failed.txt",
+      name: failedName,
       mimeType: "text/plain",
       buffer: Buffer.from("failed"),
     });
     await expect(
-      form.getByRole("button", { name: "Retry failed.txt" }),
+      form.getByRole("button", { name: `Retry ${failedName}` }),
     ).toBeVisible();
+    expect(
+      await failure.evaluate(
+        (el) =>
+          el.closest("ul").getBoundingClientRect().width -
+          el.closest("li").getBoundingClientRect().width,
+      ),
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      await form
+        .getByText(failedName, { exact: true })
+        .evaluate((el) => el.scrollWidth > el.clientWidth),
+    ).toBe(true);
     await expect(
       form.getByRole("button", { name: "Send message" }),
     ).toBeDisabled();
-    await form.getByRole("button", { name: "Remove failed.txt" }).click();
+    await form.getByRole("button", { name: `Remove ${failedName}` }).focus();
+    await page.keyboard.press("Enter");
+    await expect(editor).toBeFocused();
     await expect(
-      form.getByRole("button", { name: "Retry failed.txt" }),
+      form.getByRole("button", { name: `Retry ${failedName}` }),
     ).toHaveCount(0);
     await expect(
       form.getByRole("button", { name: "Send message" }),
     ).toBeEnabled();
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    await page.setViewportSize({ width: 1440, height: 950 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.evaluate(() => {
       window.reviewTransitions = [];
@@ -1066,6 +1180,7 @@ test("local previews stay interactive during eager upload and removal collapses 
     ).toEqual([]);
     await expect(editor).toHaveText("Preserve this draft");
   } finally {
+    releaseRetry();
     release();
     await server.close();
   }

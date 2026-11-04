@@ -14,6 +14,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { useActivityLanePublisher } from "./activity-lane";
 import { ThreadPanel, type ThreadPanelProps } from "./ThreadPanel";
+import { selectNewestMessage } from "./message-selection";
 import type { MessageRowProps } from "./MessageRow";
 import type { MessageComposerProps } from "./MessageComposer";
 import { createAgentLibrary } from "../agents/library";
@@ -34,7 +35,7 @@ import { formatPublicKey } from "../../shared/identity/public-key";
 // reduced here; MessageRow/MessageComposer retain their own mounted suites.
 vi.mock("../relay/react", () => {
   const profiles = new Map();
-  return { useRowProfiles: () => profiles };
+  return { useProfileGeneration: () => 0, useRowProfiles: () => profiles };
 });
 vi.mock("./MessageRow", () => ({
   MessageRow: ({
@@ -346,6 +347,30 @@ it("allocates only after commit and disposes distinct owned views under StrictMo
     expect(view.dispose).toHaveBeenCalledOnce();
     expect(view.listeners.size).toBe(0);
   }
+});
+it("registers its messages for keyboard selection and leaves an Escape the selection handled open", () => {
+  const h = messagesHarness();
+  h.render();
+  const list = screen.getByRole("region", { name: "Thread messages" });
+  let selectedNewest = false;
+  act(() => {
+    selectedNewest = selectNewestMessage(list);
+  });
+  expect(selectedNewest).toBe(true);
+  const selected = document.activeElement;
+  expect(selected?.closest("[data-message-id]")).not.toBeNull();
+  // Shift+Escape is "Mark all as read", not a dismissal.
+  fireEvent.keyDown(selected as Element, { key: "Escape", shiftKey: true });
+  expect(h.close).not.toHaveBeenCalled();
+  // The mocked composer has no focus target; stand in for selection's handling.
+  const handled = (event: Event) => event.preventDefault();
+  selected?.addEventListener("keydown", handled);
+  fireEvent.keyDown(selected as Element, { key: "Escape" });
+  expect(h.close).not.toHaveBeenCalled();
+  selected?.removeEventListener("keydown", handled);
+  fireEvent.keyDown(selected as Element, { key: "Escape" });
+  expect(h.close).toHaveBeenCalledOnce();
+  h.unmount();
 });
 it("allocation failure exposes an effective retry rather than leaving a spinner", () => {
   const h = messagesHarness();

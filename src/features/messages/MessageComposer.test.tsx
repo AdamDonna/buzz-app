@@ -8,7 +8,14 @@ import { createMemberAdditions } from "../channel-members/operations";
 import { addChannelMember } from "../channel-members/members";
 import "@testing-library/jest-dom/vitest";
 import { mentionHistory } from "./mention-history";
-import { composerDOMFixture, typedDraft } from "./composer-testing";
+import {
+  composerDOMFixture,
+  longMentionDraft,
+  longRichDraft,
+  pasteRichDraft,
+  placeholderPeople,
+  typedDraft,
+} from "./composer-testing";
 import { bindNames } from "../identity-names/service";
 import { createAgentDirectory } from "../identity-names/testing";
 import {
@@ -61,7 +68,10 @@ import { ConversationPresentation } from "../conversation/ConversationPresentati
 import { AgentsContext } from "../agents/react";
 import type { Agents } from "../agents/service";
 import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
+import { MessageMarkdown } from "./MessageMarkdown";
+import { InlineChip } from "../../shared/design-system/ui/InlineChip";
 import { MessageEditScope, useMessageEditScope } from "./MessageEditScope";
+import { registerMessageList } from "./message-selection";
 import { createRelaySession, type RelaySession } from "../relay/session";
 import { keypair, metadata, roster, signed } from "../relay/testing";
 import type { EventTemplate } from "nostr-tools";
@@ -88,6 +98,19 @@ import { ResourcePicker } from "../../bundled/repos/ResourcePicker";
 import { entityHref } from "../repos/routes";
 import type { Entity, RepositoryHome } from "../repos/destinations";
 import { HELPFUL_HINT_REST_MS } from "../../shared/design-system/ui/hoverIntent";
+
+// Pass-through spies: the real renderers run; tests count chip redraws.
+vi.mock("./MessageMarkdown", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./MessageMarkdown")>();
+  return { ...actual, MessageMarkdown: vi.fn(actual.MessageMarkdown) };
+});
+vi.mock("../../shared/design-system/ui/InlineChip", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../shared/design-system/ui/InlineChip")
+    >();
+  return { ...actual, InlineChip: vi.fn(actual.InlineChip) };
+});
 
 composerDOMFixture();
 
@@ -128,6 +151,16 @@ const resource = { uri: entityHref(resourceRoute), label: "Fix login" };
 
 beforeEach(() => {
   localStorage.clear();
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: {
+      request: async (
+        _name: string,
+        options: unknown,
+        callback?: (lock: unknown) => unknown,
+      ) => (callback ? callback({}) : (options as () => unknown)()),
+    },
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -140,6 +173,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   for (const owner of owners.splice(0)) owner.dispose();
+  Reflect.deleteProperty(navigator, "locks");
   vi.unstubAllGlobals();
   delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
@@ -302,6 +336,17 @@ function mount(
     },
     media: (url: string) => url,
     outbox: {
+      ready: async () => {},
+      recovery: async (key: string) =>
+        pending.find((item) => item.recovery?.key === key),
+      recover: async (
+        _id: string,
+        _recovery: unknown,
+        consume?: () => void,
+      ) => {
+        consume?.();
+      },
+      acknowledge: async () => {},
       observeDismiss: () => () => {},
       supports: () => true,
       snapshot: () => pending,
@@ -533,6 +578,56 @@ it("publishes typing for text edits but not caret-driven token expansion", () =>
   expect(send).not.toHaveBeenCalled();
   h.fill(`${text}x`);
   expect(send).toHaveBeenCalledTimes(1);
+});
+
+it("types into a long chip-heavy draft without redrawing its link chips", async () => {
+  const h = mount();
+  const renders = vi.mocked(MessageMarkdown);
+  renders.mockClear();
+  pasteRichDraft(h.input(), longRichDraft());
+  expect(h.input().querySelectorAll("[data-source]")).toHaveLength(45);
+  // The paste drew the chips, each as its link label.
+  expect(renders).toHaveBeenCalled();
+  const chip = h.input().querySelector<HTMLElement>("[data-source]");
+  expect(chip?.textContent).toBe(
+    chip?.dataset.source?.match(/^\[(.*)\]\(/)?.[1],
+  );
+  const text = h.input().value;
+  const middle = text.indexOf(" bravo", text.length / 2) + 1;
+  act(() => h.input().setSelectionRange(middle, middle));
+  renders.mockClear();
+  await h.user.keyboard("xyz");
+  // The composer re-renders per keystroke to save the draft; the chips'
+  // props (emoji, extensions, directory, members) must hold across it.
+  expect(renders).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue(
+    `${text.slice(0, middle)}xyz${text.slice(middle)}`,
+  );
+  expect(h.input().querySelectorAll("[data-source]")).toHaveLength(45);
+});
+
+it("types into a mention-heavy draft without redrawing its recipient chips", async () => {
+  const people = placeholderPeople(20);
+  writeView("scope", "draft:channel", longMentionDraft(people));
+  const h = mount();
+  const chips = () =>
+    [...h.input().querySelectorAll("[data-source] .inline-chip")].map((chip) =>
+      chip.getAttribute("aria-label"),
+    );
+  expect(chips()).toEqual(people.map((person) => `Person ${person.name}`));
+  const text = h.input().value;
+  act(() => {
+    h.input().focus();
+    h.input().setSelectionRange(text.length, text.length);
+  });
+  const renders = vi.mocked(InlineChip);
+  renders.mockClear();
+  await h.user.keyboard("xyz");
+  // Members, roster and archives feed the chip names; typing must not
+  // rebuild them.
+  expect(renders).not.toHaveBeenCalled();
+  expect(h.input()).toHaveValue(`${text}xyz`);
+  expect(chips()).toHaveLength(20);
 });
 
 it("retires reply controls immediately and preserves the draft when replying again", () => {
@@ -1996,7 +2091,7 @@ it.each([false, true])(
     await waitFor(() =>
       expect(
         screen.getAllByRole("alert").map((node) => node.textContent),
-      ).toEqual([UPLOAD_FAILURES.metadata]),
+      ).toEqual([`metadata.txt: ${UPLOAD_FAILURES.metadata}`]),
     );
     expect(
       screen.getByText(`Upload failed: ${UPLOAD_FAILURES.metadata}`),
@@ -2004,10 +2099,10 @@ it.each([false, true])(
     expect(h.input()).toHaveValue(tagged ? "@Honey caption" : "caption");
     expect(h.publish).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "Retry metadata.txt" }),
-      { key: "Delete" },
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove metadata.txt" }),
     );
+    expect(h.input()).toHaveFocus();
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await waitFor(() =>
@@ -2663,22 +2758,22 @@ it("offers message preparation retry after a failed attachment send remounts", a
   );
 });
 
-it("keeps a remaining upload failure banner when removing one of two failed files", async () => {
+it("identifies failed filenames through retry and removal when service errors match", async () => {
   const h = await mountUploadComposer();
   attachByPaste(h.input(), attachmentFile("one.txt"));
   attachByPaste(h.input(), attachmentFile("two.txt"));
   await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
   await act(async () => {
-    h.uploadCalls[0]?.result.reject(new Error("first failed"));
+    h.uploadCalls[0]?.result.reject(new Error("HTTP 503"));
   });
   await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
   await act(async () => {
-    h.uploadCalls[1]?.result.reject(new Error("second failed"));
+    h.uploadCalls[1]?.result.reject(new Error("HTTP 503"));
   });
   await waitFor(() =>
     expect(
       screen.getAllByRole("alert").map((node) => node.textContent),
-    ).toEqual(["first failed", "second failed"]),
+    ).toEqual(["one.txt: HTTP 503", "two.txt: HTTP 503"]),
   );
   await userEvent.click(screen.getByRole("button", { name: "Retry one.txt" }));
   await waitFor(() => expect(h.uploadCalls).toHaveLength(3));
@@ -2688,13 +2783,12 @@ it("keeps a remaining upload failure banner when removing one of two failed file
   await waitFor(() =>
     expect(
       screen.getAllByRole("alert").map((node) => node.textContent),
-    ).toEqual(["first failed again", "second failed"]),
+    ).toEqual(["one.txt: first failed again", "two.txt: HTTP 503"]),
   );
-  fireEvent.keyDown(screen.getByRole("button", { name: "Retry one.txt" }), {
-    key: "Delete",
-  });
+  await userEvent.click(screen.getByRole("button", { name: "Remove one.txt" }));
+  expect(h.input()).toHaveFocus();
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
-    "second failed",
+    "two.txt: HTTP 503",
   ]);
   await waitFor(() =>
     expect(within(h.form()).queryByText("one.txt")).not.toBeInTheDocument(),
@@ -2722,7 +2816,7 @@ it("retains successful attachment uploads after a later file fails and retries o
   });
   await screen.findAllByRole("alert");
   expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
-    "relay down",
+    "retry.txt: relay down",
   ]);
   expect(screen.getByText("Upload failed: relay down")).toBeVisible();
   expect(h.input()).toHaveValue("caption");
@@ -5612,7 +5706,13 @@ for (const threadRootId of [undefined, "f".repeat(64)])
         send: add,
         retry,
         ready: async () => {},
-        recover: async () => {},
+        recover: async (
+          _id: string,
+          _recovery: unknown,
+          consume?: () => void,
+        ) => {
+          consume?.();
+        },
         acknowledge: async () => {},
         snapshot: () => operations,
         subscribe: (fn: () => void) => {
@@ -5729,7 +5829,13 @@ it.each([false, true])(
         send: add,
         snapshot: () => operations,
         ready: async () => {},
-        recover: async () => {},
+        recover: async (
+          _id: string,
+          _recovery: unknown,
+          consume?: () => void,
+        ) => {
+          consume?.();
+        },
         acknowledge: async () => {},
       },
     });
@@ -5765,9 +5871,13 @@ it.each([false, true])(
   },
 );
 
-it.each(["send", "unmount", "disabled", "denied"])(
-  "waits for agent admission before saved Solo chat messages: %s",
-  async (outcome) => {
+it.each(
+  ["send", "unmount", "disabled", "denied"].flatMap((outcome) =>
+    ["private", "public"].map((visibility) => ({ outcome, visibility })),
+  ),
+)(
+  "waits for agent admission before saved $visibility Solo chat messages with a Guest default: $outcome",
+  async ({ outcome, visibility }) => {
     const view = mount();
     const list = {
       status: "ready",
@@ -5775,6 +5885,8 @@ it.each(["send", "unmount", "disabled", "denied"])(
         {
           id: "channel",
           channelType: "solo",
+          visibility,
+          joinRole: "guest",
           members: [] as string[],
         },
       ],
@@ -7020,6 +7132,64 @@ it("edits in the same composer, cancels without persisting edit text, and restor
   fireEvent.keyDown(input, { key: "z", ctrlKey: true });
   expect(input).toHaveValue("Unsent draft");
   expect(h.messages.edit).not.toHaveBeenCalled();
+});
+
+it("selects the newest message on Up when the scope has a message list, instead of editing", () => {
+  const base = mount({}, undefined, first.pubkey);
+  base.unmount();
+  const row = editableMessage();
+  let scope: ReturnType<typeof useMessageEditScope>;
+  function Probe() {
+    scope = useMessageEditScope();
+    return null;
+  }
+  const list = document.createElement("ol");
+  list.innerHTML =
+    '<li data-message-id="older"><div data-layout="timeline">Older</div></li>' +
+    '<li data-message-id="newest"><div data-layout="timeline">Newest</div></li>';
+  document.body.append(list);
+  const unregister = registerMessageList(list, {
+    row: (id) => ({ id }) as ChannelMessage,
+    newest: () => "newest",
+    canEdit: () => false,
+    edit: () => {},
+    canDelete: () => false,
+    remove: () => {},
+    canMarkUnread: () => false,
+    markUnread: () => {},
+    composer: () => null,
+  });
+  try {
+    render(
+      <MessageEditScope>
+        <Probe />
+        <MessageComposer
+          session={base.session}
+          scope="scope"
+          channelId="channel"
+          channelName="General"
+          editMessages={[row]}
+        />
+      </MessageEditScope>,
+      { wrapper: ToastProvider },
+    );
+    if (scope) scope.list.current = list;
+    const input = screen.getByRole("textbox");
+    act(() => input.focus());
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(
+      list.querySelector('[data-message-id="newest"] > div'),
+    ).toHaveFocus();
+    expect(input).not.toHaveAccessibleName("Edit message");
+    // Without a connected list, Up keeps editing the last own message.
+    list.remove();
+    act(() => input.focus());
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(input).toHaveAccessibleName("Edit message");
+  } finally {
+    unregister();
+    list.remove();
+  }
 });
 
 it.each(["cancel", "accepted"])(
@@ -9467,6 +9637,26 @@ it("leaves active message-edit content alone and reconciles the draft on return"
   expect(h.messages.send).not.toHaveBeenCalled();
 });
 
+it.each([
+  ["without", undefined],
+  ["with", vi.fn()],
+])("saves a submission draft %s an unsaved listener", (_, unsaved) => {
+  const h = mount({
+    submission: {
+      draftKey: "new-draft",
+      locked: false,
+      disabled: false,
+      unsaved,
+      submit: vi.fn(),
+    },
+  });
+  h.fill("Not sent yet");
+  expect(readView("scope", "new-draft", null)).toMatchObject({
+    text: "Not sent yet",
+  });
+  if (unsaved) expect(unsaved).toHaveBeenLastCalledWith(false);
+});
+
 it("does not apply ordinary draft reconciliation to submission-owned recovery", () => {
   const submit = vi.fn();
   const h = mount({
@@ -11258,9 +11448,11 @@ it.each([
       fireEvent.click(
         screen.getByRole("button", { name: "Remove queued message" }),
       );
-      expect(
-        screen.queryByRole("region", { name: "Queued follow-ups" }),
-      ).toBeNull();
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("region", { name: "Queued follow-ups" }),
+        ).toBeNull(),
+      );
       expect(h.messages.send).not.toHaveBeenCalled();
       return;
     }
@@ -11270,6 +11462,9 @@ it.each([
         "@Honey Follow up",
         [first.pubkey],
         [],
+        expect.objectContaining({ key: expect.stringMatching(/^follow-up:/) }),
+        [],
+        {},
       ),
     );
     expect(h.input()).toHaveValue("Keep typing");
@@ -12846,4 +13041,73 @@ it("removing a pending chip abandons its resolution, and redo starts it again", 
     abandoned.resolve(null);
     restarted.resolve(null);
   }
+});
+
+describe("oversized paste feedback", () => {
+  const pasteText = (input: ComposerInputElement, text: string) => {
+    act(() => {
+      input.focus();
+      fireEvent.paste(input, {
+        clipboardData: {
+          items: [],
+          getData: (type: string) => (type === "text/plain" ? text : ""),
+        },
+      });
+    });
+  };
+
+  it("announces rejection, keeps the saved draft and clears feedback on recovery", () => {
+    const h = mount();
+    h.fill("Keep this draft.");
+    pasteText(h.input(), "x".repeat(16001));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paste would make your message too long. Shorten the text and try again.",
+    );
+    expect(h.input()).toHaveAccessibleDescription(
+      /This paste would make your message too long/,
+    );
+    expect(h.input()).toHaveValue("Keep this draft.");
+    expect(readView("scope", "draft:channel", null)).toMatchObject({
+      text: "Keep this draft.",
+    });
+    expect(h.messages.send).not.toHaveBeenCalled();
+    pasteText(h.input(), " OK");
+    expect(h.input()).toHaveValue("Keep this draft. OK");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(h.input()).not.toHaveAttribute("aria-describedby");
+    pasteText(h.input(), "x".repeat(16001));
+    h.retarget({ channelId: "other-channel" });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("offers a file only when the composer supports attachments", () => {
+    const h = mount();
+    h.retarget({ session: { ...h.session, attachments: { upload: vi.fn() } } });
+    pasteText(h.input(), "x".repeat(16001));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Shorten it or attach the text as a file.",
+    );
+  });
+
+  it("counts staged chat cards against the paste budget", () => {
+    const link = "[Session: PR 45 fixes](buzz://channel/session-id)";
+    writeView("scope", "draft:channel", {
+      text: "",
+      recipients: [],
+      chatCards: [link],
+    });
+    const h = mount();
+    const available = 16000 - link.length - 2;
+    pasteText(h.input(), "x".repeat(available + 1));
+    expect(h.input()).toHaveValue("");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paste would make your message too long.",
+    );
+    pasteText(h.input(), "x".repeat(available));
+    expect(h.input()).toHaveValue("x".repeat(available));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Chat attachments" }),
+    ).toBeVisible();
+  });
 });

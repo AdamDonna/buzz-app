@@ -72,8 +72,10 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 import {
   createEventVerifier,
   eventDto,
+  type EventVerifier,
   type ReadFilter,
   type RelayEvent,
+  type SignatureVerifier,
 } from "./events";
 
 /** Relay connection. Implementations verify signatures; callers never see raw JSON. */
@@ -165,9 +167,16 @@ export interface ReadTransport {
   readonly renameSidebarSection?: SidebarSectionRenameMutator;
   readonly writeSidebarStar?: SidebarStarMutator;
   /** Host-only private account record of the main agent the viewer chose:
-   * undefined when never saved. */
-  readMainAgent?(signal: AbortSignal): Promise<string | undefined>;
-  writeMainAgent?(agent: string, signal: AbortSignal): Promise<void>;
+   * null when they saved none or it was cleared, undefined when there is no
+   * record. */
+  readMainAgent?(signal: AbortSignal): Promise<string | null | undefined>;
+  /** Null saves that this account has no main agent. */
+  writeMainAgent?(agent: string | null, signal: AbortSignal): Promise<void>;
+  /** Clears only the expected choice and returns the resulting choice. */
+  clearMainAgent?(
+    expected: string,
+    signal: AbortSignal,
+  ): Promise<string | undefined>;
   readonly profiling?: RelayProfiler;
   /** Verified incoming traffic. The session owns this subscription and fences late delivery. */
   subscribe?(callbacks: LiveCallbacks): LiveSubscription;
@@ -246,6 +255,8 @@ export interface Signer {
   upload?(file: File, signal: AbortSignal): Promise<Response>;
   /** Native hosts serve relay `/media/` URLs through an authenticated proxy. */
   media?(url: string): string;
+  /** Native hosts check incoming signatures with libsecp256k1, off the main thread. */
+  verifySignatures?: SignatureVerifier;
 }
 
 /** The host's explicit HTTP base wins; otherwise translate the ws(s) relay URL's scheme. */
@@ -266,7 +277,7 @@ export function relayHttpBase(
 
 async function parseEvents(
   raw: unknown,
-  verify: (value: unknown) => RelayEvent,
+  verify: EventVerifier,
   signal?: AbortSignal,
 ): Promise<RelayEvent[]> {
   if (!Array.isArray(raw))
@@ -274,17 +285,35 @@ async function parseEvents(
       "invalid-response",
       "Relay response is not an event array",
     );
-  const events: RelayEvent[] = [];
+  const { native } = verify;
   // Signature checks are CPU work too. Yield between small batches so speculative
   // head/profile responses cannot monopolize input and foreground rendering.
-  for (let index = 0; index < raw.length; index += 12) {
-    if (signal?.aborted) throw new DOMException("Read cancelled", "AbortError");
-    const started = performance.now();
-    const batch = raw.slice(index, index + 12).map(verify);
-    clientMetrics.cpu("verify.read", performance.now() - started, batch.length);
-    events.push(...batch);
-    if (index + 12 < raw.length) await yieldToHost();
-  }
+  // A native host checks signatures; JS still validates and hashes each event.
+  const checkChunks = async <T>(check: (value: unknown) => T) => {
+    const checked: T[] = [];
+    for (let index = 0; index < raw.length; index += 12) {
+      if (signal?.aborted)
+        throw new DOMException("Read cancelled", "AbortError");
+      const started = performance.now();
+      const batch = raw.slice(index, index + 12).map(check);
+      clientMetrics.cpu(
+        "verify.read",
+        performance.now() - started,
+        batch.length,
+      );
+      checked.push(...batch);
+      if (index + 12 < raw.length) await yieldToHost();
+    }
+    return checked;
+  };
+  if (!native) return checkChunks(verify);
+  const events = await native.settle(await checkChunks(native.prepare));
+  if (signal?.aborted) throw new DOMException("Read cancelled", "AbortError");
+  if (!events.every((event) => event !== undefined))
+    throw new ReadError(
+      "invalid-response",
+      "Relay supplied a malformed or invalidly signed event",
+    );
   return events;
 }
 
@@ -1329,7 +1358,7 @@ export async function connectSignedTransport(
   httpOrigin = relayOrigin(httpOrigin);
   const principal = () => signedAdmissions(httpOrigin, viewer);
   const profiling = createRelayProfiler();
-  const verify = createEventVerifier();
+  const verify = createEventVerifier(undefined, signer.verifySignatures);
   const presence = presenceObservation();
   const upload = signer.upload?.bind(signer);
   return {
@@ -1391,6 +1420,11 @@ export async function connectSignedTransport(
           }),
           socketFactory,
           owner.live,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          signer.verifySignatures,
         );
       } catch (error) {
         owner.streams--;
@@ -1426,6 +1460,9 @@ export async function connectSignedTransport(
             profiling,
             event.id,
             principal().api,
+            "foreground",
+            false,
+            refusalText,
           ).catch((error) => {
             if (error instanceof ApiPaused || error instanceof ApiNotSent)
               throw new PublishNotSent(error.message);
@@ -1493,11 +1530,12 @@ async function signedPost(
   admission: Parameters<typeof admittedApiRequest>[0],
   priority: "foreground" | "background" = "foreground",
   optionalPresence = false,
+  reason?: (body: unknown, status: number) => string | undefined,
 ) {
   const dispatch = (request: () => Promise<Response>) =>
     optionalPresence
       ? admission.prepare(request)
-      : admittedApiRequest(admission, request, signal, priority);
+      : admittedApiRequest(admission, request, signal, priority, reason);
   signal?.throwIfAborted();
   return admission.prepare(async () => {
     const body = JSON.stringify(value);
@@ -1532,6 +1570,39 @@ export async function acceptReadStatePublish(response: Response, id: string) {
   return acceptPublish(response, id);
 }
 
+const REFUSAL_STATUSES = [400, 401, 403, 404, 413, 422];
+/** NIP-01 machine-readable prefixes: the shape of a relay's own refusal. */
+const NIP01_PREFIX =
+  /^(invalid|blocked|restricted|error|pow|duplicate|rate-limited|conflict|auth-required):\s*/;
+/** Prefixes writers match on, so the text is shown as sent. */
+const KEPT_PREFIXES = new Set(["rate-limited", "conflict", "auth-required"]);
+/** The relay's own `{error}` text for a refused write. Admission otherwise
+ * reduces every upstream body to a status summary, so a signed publish asks
+ * it to keep this one, bounded by `readApiFailure`. A gateway or VPN edge
+ * can answer the same statuses with JSON `{error}`, so only relay-shaped
+ * text (a NIP-01 prefix) is kept. The prefix is a shape, not proof of origin. */
+const refusalText = (body: unknown, status: number) => {
+  const error = (body as { error?: unknown } | null)?.error;
+  return REFUSAL_STATUSES.includes(status) &&
+    typeof error === "string" &&
+    NIP01_PREFIX.test(error)
+    ? error
+    : undefined;
+};
+
+/** The display text for an HTTP refusal: the relay's own words without their
+ * NIP-01 machine prefix. `reason` keeps the raw text for classification. Text
+ * with a prefix writers match on (`conflict:`, `rate-limited:`) is shown as
+ * sent. Text without a prefix is not relay-shaped, so the status summary stays. */
+function refusalMessage(status: number, reason: string | undefined) {
+  const prefix = reason ? NIP01_PREFIX.exec(reason) : null;
+  if (!reason || !prefix) return `Relay rejected the message (${status})`;
+  if (KEPT_PREFIXES.has(prefix[1] ?? "")) return reason.trim();
+  const text = reason.slice(prefix[0].length).trim();
+  if (!text) return `Relay rejected the message (${status})`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** A transport failure is an unknown outcome; only a definitive rejection is a failed write. */
 export async function acceptPublish(response: Response, id: string) {
   if (!response.ok) {
@@ -1542,7 +1613,7 @@ export async function acceptPublish(response: Response, id: string) {
       throw new PublishRejected(
         "conflict: the relay state changed; reload before writing again",
       );
-    if ([400, 401, 403, 404, 413, 422].includes(response.status)) {
+    if (REFUSAL_STATUSES.includes(response.status)) {
       // Keep the relay's bounded `{error}` text for writers that classify it.
       let reason: string | undefined;
       await readApiFailure(response, (value) => {
@@ -1551,7 +1622,7 @@ export async function acceptPublish(response: Response, id: string) {
         return undefined;
       });
       throw new PublishRejected(
-        `Relay rejected the message (${response.status})`,
+        refusalMessage(response.status, reason),
         reason,
       );
     }

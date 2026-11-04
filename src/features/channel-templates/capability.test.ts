@@ -45,6 +45,7 @@ function fixture() {
     observeDismiss: () => () => {},
     observeSend: () => () => {},
     ready: async () => {},
+    recovery: async () => undefined,
     recover: async () => {},
     acknowledge: async () => {},
     supports: () => true,
@@ -416,6 +417,59 @@ it("keeps display-only Canvas reads replica-eligible without weakening editor re
   );
 });
 
+it.each<[string, number, string[][]]>([
+  ["wrong kind", 9, [["h", channel]]],
+  ["wrong channel", 40100, [["h", "22222222-2222-4222-8222-222222222222"]]],
+  ["missing channel", 40100, []],
+  ["missing channel value", 40100, [["h"]]],
+  [
+    "duplicate channel",
+    40100,
+    [
+      ["h", channel],
+      ["h", channel],
+    ],
+  ],
+  [
+    "ambiguous channel",
+    40100,
+    [
+      ["h", channel],
+      ["h", "elsewhere"],
+    ],
+  ],
+  ["channel tag extra field", 40100, [["h", channel, "extra"]]],
+])(
+  "ignores %s as a Canvas head and rejects it in history",
+  async (_problem, kind, tags) => {
+    const f = fixture();
+    const valid = signed(viewer, {
+      kind: 40100,
+      tags: [
+        ["h", channel],
+        ["client-id", "canvas"],
+      ],
+      content: "Current Canvas",
+      created_at: 100,
+    });
+    const unrelated = signed(viewer, {
+      kind,
+      tags,
+      content: "Unrelated owner-signed text",
+      created_at: 101,
+    });
+    // A relay may return authentic events outside the requested coordinates.
+    vi.mocked(f.reader.read).mockResolvedValueOnce([unrelated]);
+    expect(await f.canvas.read(channel)).toBeUndefined();
+    vi.mocked(f.reader.read).mockResolvedValueOnce([valid, unrelated]);
+    expect(await f.canvas.read(channel)).toEqual(valid);
+    vi.mocked(f.reader.read).mockResolvedValueOnce([unrelated]);
+    await expect(f.canvas.history(channel)).rejects.toThrow(
+      /invalid or non-advancing/,
+    );
+  },
+);
+
 it.each([false, true])(
   "carries a strong-read revision precondition for existing=%s",
   async (existing) => {
@@ -728,7 +782,7 @@ it("pages retained Canvas history across equal timestamps without changing the s
   expect(await f.canvas.read(channel)).toEqual(first.revisions[0]);
   expect(f.outbox.send).not.toHaveBeenCalled();
 });
-it.each(["wrong kind", "wrong channel", "repeated cursor", "newer timestamp"])(
+it.each(["repeated cursor", "newer timestamp"])(
   "rejects %s history rows without exposing them",
   async (problem) => {
     const f = fixture();
@@ -742,21 +796,14 @@ it.each(["wrong kind", "wrong channel", "repeated cursor", "newer timestamp"])(
     vi.mocked(f.reader.read).mockResolvedValueOnce([
       {
         ...row,
-        ...(problem === "wrong kind" ? { kind: 9 } : {}),
-        ...(problem === "wrong channel" ? { tags: [["h", "elsewhere"]] } : {}),
         ...(problem === "newer timestamp"
           ? { created_at: row.created_at + 1 }
           : {}),
       },
     ]);
-    await expect(
-      f.canvas.history(
-        channel,
-        problem === "repeated cursor" || problem === "newer timestamp"
-          ? cursor
-          : undefined,
-      ),
-    ).rejects.toThrow(/invalid or non-advancing/);
+    await expect(f.canvas.history(channel, cursor)).rejects.toThrow(
+      /invalid or non-advancing/,
+    );
   },
 );
 it("fences Canvas history after access loss or session retirement, including during a read", async () => {

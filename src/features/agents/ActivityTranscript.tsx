@@ -1,12 +1,20 @@
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  Fragment,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type {
-  ToolDiff,
-  ToolItem,
-  Transcript,
-  TranscriptItem,
-  TranscriptTurn,
+import {
+  sectionTitle,
+  type PromptSection,
+  type ToolDiff,
+  type ToolItem,
+  type Transcript,
+  type TranscriptItem,
+  type TranscriptTurn,
 } from "./activity-transcript";
 import { MAX_MARKDOWN_LENGTH, scanMarkdown } from "../relay/message-content";
 import {
@@ -31,6 +39,8 @@ import {
   formatItemTimestamp,
   formatTime,
 } from "../../shared/datetime";
+import referenceStyles from "../../shared/InlineReference.module.css";
+import type { AgentViewProps } from "./service";
 import styles from "./ActivityTranscript.module.css";
 
 type TurnState = "working" | "unknown" | "ended";
@@ -79,9 +89,12 @@ const toolName = (item: ToolItem) => line(item.title) || "tool";
 /** The first location, unless the adapter's title already names it. */
 const toolPath = (item: ToolItem) =>
   item.paths[0] && !item.title.includes(item.paths[0]) ? item.paths[0] : "";
-const thread = (turn: TranscriptTurn) =>
+/** A channel turn is labelled only where the label opens the channel. */
+const thread = (turn: TranscriptTurn, linked: boolean) =>
   turn.threadRootId === null
-    ? ""
+    ? linked
+      ? "Channel"
+      : ""
     : turn.threadRootId
       ? `Thread ${turn.threadRootId.slice(0, 8)}`
       : "Thread unknown";
@@ -126,6 +139,7 @@ export function ActivityTranscript({
   state,
   before,
   follow = true,
+  openConversation,
 }: {
   transcript: Transcript;
   agentName: string;
@@ -135,6 +149,8 @@ export function ActivityTranscript({
   /** Scroll the host to the latest step; off where the transcript shares
    * its scroll with other content. */
   follow?: boolean;
+  /** Links each turn's channel or thread; plain text without it. */
+  openConversation?: AgentViewProps["openConversation"];
 }) {
   const timeline = useFollowLatest(transcript, follow);
   return (
@@ -146,12 +162,21 @@ export function ActivityTranscript({
         </p>
       )}
       {transcript.turns.map((turn) => (
-        <Turn
-          key={turn.turnId}
-          turn={turn}
-          state={turn.endedAt ? "ended" : (state(turn.turnId) ?? "unknown")}
-          agentName={agentName}
-        />
+        <Fragment key={turn.turnId}>
+          {(turn.newSession || turn.continued) && (
+            <p className={`text-body-sm ${styles.session}`}>
+              {turn.newSession
+                ? "New session"
+                : "Session continued; earlier turns not shown"}
+            </p>
+          )}
+          <Turn
+            turn={turn}
+            state={turn.endedAt ? "ended" : (state(turn.turnId) ?? "unknown")}
+            agentName={agentName}
+            openConversation={openConversation}
+          />
+        </Fragment>
       ))}
     </div>
   );
@@ -161,10 +186,12 @@ function Turn({
   turn,
   state,
   agentName,
+  openConversation,
 }: {
   turn: TranscriptTurn;
   state: TurnState;
   agentName: string;
+  openConversation: AgentViewProps["openConversation"];
 }) {
   const status = turn.error
     ? "Error"
@@ -173,12 +200,16 @@ function Turn({
       : turn.endedAt
         ? "Completed"
         : "Status unknown";
+  const { channelId, threadRootId } = turn;
+  // An unknown thread is not opened as its channel.
+  const open =
+    openConversation && channelId && threadRootId !== undefined
+      ? () => openConversation(channelId, threadRootId ?? undefined)
+      : undefined;
+  const place = thread(turn, !!open);
   const facts = [
-    turn.endedAt ? duration(turn.endedAt - turn.startedAt) : "",
-    thread(turn),
     ...turn.config,
     turn.source === "heartbeat" ? "heartbeat" : "",
-    turn.newSession ? "new session" : "",
     turn.stopReason ?? "",
     turn.context
       ? `context ${Math.round(turn.context.used / 1000)}k/${Math.round(turn.context.size / 1000)}k`
@@ -204,6 +235,26 @@ function Turn({
           </>
         )}
         <span data-state={turn.error ? "error" : state}>{status}</span>
+        {!!turn.endedAt && (
+          <span> · {duration(turn.endedAt - turn.startedAt)}</span>
+        )}
+        {place && (
+          <span>
+            {" · "}
+            {open ? (
+              // The shared inline link, in the header's own type.
+              <button
+                type="button"
+                className={referenceStyles.link}
+                onClick={open}
+              >
+                {place}
+              </button>
+            ) : (
+              place
+            )}
+          </span>
+        )}
         {facts.map((fact) => (
           <span key={fact}> · {fact}</span>
         ))}
@@ -239,7 +290,7 @@ function Sections({
   sections,
 }: {
   title: string;
-  sections: readonly { tag: string; body: string }[];
+  sections: readonly PromptSection[];
 }) {
   return (
     <details className={styles.context}>
@@ -254,7 +305,7 @@ function Sections({
         <details key={index} className={styles.section}>
           <summary className="text-body-sm text-subtle">
             <CaretRightIcon size={14} aria-hidden="true" />
-            <span>{section.tag}</span>
+            <span>{sectionTitle(section.tag)}</span>
           </summary>
           <pre className={styles.pre}>{section.body}</pre>
         </details>

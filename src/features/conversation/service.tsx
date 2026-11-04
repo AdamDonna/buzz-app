@@ -262,6 +262,14 @@ export class ConversationService extends Service implements Conversation {
     validate(value);
     if (typeof value.matches !== "function")
       throw new Error("An attachment renderer needs a matcher");
+    if (
+      value.order !== undefined &&
+      typeof value.order !== "number" &&
+      typeof value.order !== "function"
+    )
+      throw new Error(
+        "An attachment renderer order must be a number or function",
+      );
     this.attachmentEntries.register(this.ctx, value);
   }
   registerMessage(value: MessageRenderer) {

@@ -1,4 +1,5 @@
 import { useSearchSettings } from "./SearchSettings";
+import { usePagePresentation } from "./BestieNavigation";
 import {
   useCallback,
   useEffect,
@@ -21,12 +22,8 @@ import {
 import type { ShortcutBindingsSnapshot } from "../../features/shortcuts/preferences";
 import type { AppServices } from "../services";
 import { HOST_SHORTCUT_ORDER } from "../shortcuts";
-import { conversationComposerFocusTarget } from "../focus-navigation";
-import {
-  orderPages,
-  pagePresentation,
-  shellPresentation,
-} from "./presentation";
+import { conversationFocusTarget } from "../focus-navigation";
+import { orderPages, shellPresentation } from "./presentation";
 import { matchName } from "../../features/search/match";
 import {
   SearchChoices,
@@ -44,11 +41,17 @@ export type SearchServices = Pick<
   Partial<
     Pick<
       AppServices,
-      "appearance" | "notifications" | "plugins" | "adminAccess"
+      | "appearance"
+      | "notifications"
+      | "plugins"
+      | "adminAccess"
+      | "settingsCards"
     >
   >;
 const SEARCH_ID = "global-search";
 const SEARCH_BINDING: KeyBinding = { key: "k", mod: true };
+// Slack opens its ⌘K switcher from ⌘T too; the hint shows ⌘K.
+const SEARCH_BINDINGS = [SEARCH_BINDING, { key: "t", mod: true }];
 const CONVERSATION_SEARCH_ID = "conversation-search";
 const CONVERSATION_SEARCH_BINDING: KeyBinding = { key: "f", mod: true };
 const NO_OVERRIDES: ShortcutBindingsSnapshot = { overrides: {}, error: null };
@@ -61,9 +64,10 @@ export function PageSearch({
   services,
 }: {
   pages: readonly RegisteredPage[];
-  onSelect: (key: string) => void;
+  onSelect: (key: string, options?: { section?: string }) => void;
   services?: SearchServices | undefined;
 }) {
+  const pagePresentation = usePagePresentation();
   const [open, setOpen] = useState(false);
   const [contentPresent, setContentPresent] = useState(false);
   const [query, setQuery] = useState("");
@@ -108,7 +112,7 @@ export function PageSearch({
       services?.shortcuts.registerHost({
         id: SEARCH_ID,
         title: "Search Buzz",
-        binding: SEARCH_BINDING,
+        binding: SEARCH_BINDINGS,
         order: HOST_SHORTCUT_ORDER.search,
         allowInEditable: true,
         run: begin,
@@ -145,9 +149,24 @@ export function PageSearch({
   ]
     .flatMap((page) => {
       if (!needle) return [{ page, rank: 0 }];
-      const match = matchName(page.label, needle);
-      return match
-        ? [{ page: { ...page, matches: match.positions }, rank: match.rank }]
+      const labelMatch = matchName(page.label, needle);
+      const detailMatch = page.detail
+        ? matchName(page.detail, needle)
+        : undefined;
+      const rank = Math.min(
+        labelMatch?.rank ?? Infinity,
+        detailMatch?.rank ?? Infinity,
+      );
+      return Number.isFinite(rank)
+        ? [
+            {
+              page: {
+                ...page,
+                ...(labelMatch ? { matches: labelMatch.positions } : {}),
+              },
+              rank,
+            },
+          ]
         : [];
     })
     .sort((a, b) => a.rank - b.rank)
@@ -191,7 +210,7 @@ export function PageSearch({
         finalFocus={() =>
           returnFocus.current?.id === "main-content"
             ? (composerChannel.current &&
-                conversationComposerFocusTarget(composerChannel.current)) ||
+                conversationFocusTarget(composerChannel.current)) ||
               false
             : returnFocus.current
         }
@@ -212,7 +231,7 @@ export function PageSearch({
           )
             (
               (composerChannel.current &&
-                conversationComposerFocusTarget(composerChannel.current)) ||
+                conversationFocusTarget(composerChannel.current)) ||
               main
             ).focus({ preventScroll: true });
         }}
@@ -245,6 +264,11 @@ export function PageSearch({
                 returnFocus.current = document.getElementById("main-content");
                 setSearchOpen(false);
               }}
+              openSection={(section) => {
+                returnFocus.current = document.getElementById("main-content");
+                onSelect("settings", { section });
+                setSearchOpen(false);
+              }}
             />
           ) : (
             <SearchChoices
@@ -272,6 +296,7 @@ function CommunitySearch({
   onScopeChange,
   isOpen,
   close,
+  openSection,
 }: {
   services: SearchServices;
   pages: readonly SearchDestination[];
@@ -283,6 +308,7 @@ function CommunitySearch({
    * closed, such as a DM still opening, must not navigate. */
   isOpen: () => boolean;
   close: (channelId?: string) => void;
+  openSection: (section: string) => void;
 } & SearchInputProps) {
   const inlineSettings = useSearchSettings({
     query: scopedChannelId ? "" : query,
@@ -290,8 +316,11 @@ function CommunitySearch({
     notifications: services.notifications,
     plugins: services.plugins,
     adminAccess: services.adminAccess,
+    settingsCards: services.settingsCards,
+    communities: services.communities,
     navigation: services.navigation,
     close,
+    openSection,
   });
   const client = useSyncExternalStore(
     services.communities.subscribe,

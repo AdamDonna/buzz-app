@@ -149,18 +149,22 @@ export const apply: PluginModule["apply"] = (ctx) => {
                   ? `Reminder due · #${channel.name}`
                   : "Reminder due",
               body:
-                [reminder.target?.preview, reminder.note].find(
-                  (text) => text && plainText(text),
-                ) ?? "A reminder is waiting",
+                [
+                  plainText(reminder.target?.preview ?? "", {
+                    storedPreview: true,
+                  }),
+                  plainText(reminder.note ?? ""),
+                ].find(Boolean) || "A reminder is waiting",
             })
             .catch(() => {});
         }
       }
       // The saved time is what the next launch treats as seen, so it moves only
       // while the live connection is up and the latest read started during that
-      // connection, succeeded, and has none pending (`ready`). Reads made before
-      // the first connection, or before or during an outage, never count, since
-      // live events could not reach them.
+      // connection, succeeded, and has none pending (`ready`), or the list was
+      // complete at the drop and this connection's continuous replay carried
+      // every edit since. Reads made before the first connection, or before or
+      // during an outage, never count, since live events could not reach them.
       // Limit: a reminder decoded after the saved time passed its due time
       // still notifies this session via `notified`, but is lost if the app
       // quits before then.

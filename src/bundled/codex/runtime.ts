@@ -3,7 +3,7 @@ import type { Host } from "../../features/host/service";
 import { nativeHookState } from "./hooks";
 import { isFinalMessage } from "../../buzz-mcp/session-tools";
 import type { WorkOutcome } from "../../features/agents/local-activity";
-import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import { fromOwner } from "../../features/agents/owner-attestation";
 import {
   type ConversationWake,
   wakeAnchor,
@@ -11,6 +11,10 @@ import {
 } from "../../features/agent-harness/plugin-wake";
 import type { AgentKey } from "../../features/agents/membership";
 import type { AgentReads } from "../../features/agents/reads";
+import {
+  EACH_TURN,
+  sessionPrompts,
+} from "../../features/agents/session-prompts";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import type {
   Agent,
@@ -648,6 +652,10 @@ export class CodexRuntime {
   channelLabel(agent: AgentKey, channelId: string) {
     return this.reads(agent)?.channelLabel(channelId);
   }
+  /** What each of the agent's threads started with. */
+  prompts(agent: AgentKey) {
+    return sessionPrompts(this.storage, "codex", agent);
+  }
   private storageKey(scope: string, agent: AgentKey) {
     // Resume restores the persisted tool schema, so a binding from before a
     // tool change starts fresh. v5 added channel and member management; v6
@@ -703,11 +711,7 @@ export class CodexRuntime {
     const reads = this.reads(agent.key);
     if (
       trigger.type === "mention" &&
-      !(await fromOwner(
-        trigger.event,
-        agent.owner,
-        workflowOf(reads, agent.pubkey),
-      ))
+      !(await fromOwner(trigger.event, agent.owner))
     ) {
       delivery.ignored?.();
       return;
@@ -1610,6 +1614,8 @@ export class CodexRuntime {
           excludeTurns: true,
         });
       let started: Started;
+      // Only a thread started here keeps what it started with.
+      let fresh = !resuming;
       if (resuming) {
         const { threadId } = existing;
         const missing = (error: unknown) => {
@@ -1626,6 +1632,7 @@ export class CodexRuntime {
           })
           .catch(async (error) => {
             missing(error);
+            fresh = true;
             return start();
           });
       } else started = await start();
@@ -1654,6 +1661,13 @@ export class CodexRuntime {
         ready();
         return;
       }
+      const additionalContext = turnContext(
+        agent,
+        settings,
+        request.team,
+        memory,
+        this.repositories(request.scope),
+      );
       const turn = await rpc.request<{ turn: { id: string } }>("turn/start", {
         threadId: active.threadId,
         input: input(
@@ -1663,15 +1677,22 @@ export class CodexRuntime {
         effort,
         ...summary,
         // Application context is a developer message that updates on each turn.
-        additionalContext: turnContext(
-          agent,
-          settings,
-          request.team,
-          memory,
-          this.repositories(request.scope),
-        ),
+        additionalContext,
       });
       active.turnId = turn.turn.id;
+      if (fresh)
+        void this.prompts(agent.key).save(active.threadId, [
+          {
+            label: "base",
+            text: params.developerInstructions,
+          },
+          {
+            label: EACH_TURN,
+            text: Object.values(additionalContext)
+              .map(({ value }) => value)
+              .join(""),
+          },
+        ]);
       this.acknowledgeActivity(active, request);
       // A conversation new to this agent: name its Solo chat meanwhile.
       if (request.named && !existing)

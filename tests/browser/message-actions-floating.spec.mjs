@@ -103,15 +103,26 @@ for (const own of [true, false]) {
         await row.evaluate((node, direction) => {
           node.dir = direction;
         }, direction);
+        await page.mouse.move(0, 0);
+        await hidden(actions);
+        await expect(row.locator("[data-layout]")).not.toHaveAttribute(
+          "data-actions-revealed",
+          "",
+        );
+        const bubble = row.locator("[data-message-action-anchor]");
+        const restingFill = await bubble.evaluate(
+          (node) => getComputedStyle(node).backgroundColor,
+        );
         await row.getByText("Hi", { exact: true }).hover();
         await above(actions);
+        await expect(bubble).not.toHaveCSS("background-color", restingFill);
         await actions.evaluate((bar) =>
           Promise.all(
             bar.getAnimations().map((animation) => animation.finished),
           ),
         );
         // A slow diagonal from a short bubble must reach both toolbar ends.
-        for (const label of ["React with 👍", "More message actions"]) {
+        for (const label of ["Add reaction", "More message actions"]) {
           await hoverMessage(row);
           const button = await actions
             .getByRole("button", { name: label, exact: true })
@@ -210,6 +221,64 @@ for (const own of [true, false]) {
 
 // Browser-only: caption and attachment content share one raised action position
 // while retaining native hit testing and an uninterrupted pointer path.
+// A first-of-group received message's name opens the sender's profile, so the
+// bar moves off it. Browser-only: whether a bar beside the bubble still meets
+// a slow diagonal, and whether the name beneath takes the click, are top-layer
+// hit tests on measured geometry.
+test("actions clear a short received message's name and stay reachable beside it", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  // An own message first, so the received "ok" starts a group with a byline.
+  app.append("primary", "alpha", "Mine", true, true);
+  const event = app.append("primary", "alpha", "ok", true, false);
+  const row = page.locator(
+    `[data-channel-timeline] [data-message-id="${event.id}"]`,
+  );
+  const actions = actionsFor(row);
+  const name = row.locator("strong > [role='button']");
+  await expect(name).toBeVisible();
+  await settle(page);
+  await hoverMessage(row);
+  await shown(actions);
+  await actions.evaluate((bar) =>
+    Promise.all(bar.getAnimations().map((animation) => animation.finished)),
+  );
+  const [nameBox, bar] = await Promise.all([
+    name.boundingBox(),
+    actions.boundingBox(),
+  ]);
+  // The bar is at the name's height but entirely beside it.
+  expect(bar.y + bar.height).toBeGreaterThan(nameBox.y);
+  expect(bar.x).toBeGreaterThan(nameBox.x + nameBox.width);
+  // A slow diagonal from the bubble crosses the byline to either end.
+  for (const label of ["Add reaction", "More message actions"]) {
+    await hoverMessage(row);
+    const button = await actions
+      .getByRole("button", { name: label, exact: true })
+      .boundingBox();
+    await page.mouse.move(
+      button.x + button.width / 2,
+      button.y + button.height / 2,
+      { steps: 30 },
+    );
+    await shown(actions);
+  }
+  // The byline keeps the hover only: with the bar shown, the name itself
+  // still takes the click and opens the profile.
+  await hoverMessage(row);
+  await name.hover();
+  await shown(actions);
+  const author = await name.innerText();
+  await name.click();
+  await expect(
+    page
+      .getByRole("complementary", { name: "Profile", exact: true })
+      .getByRole("heading", { name: author, exact: true }),
+  ).toBeVisible();
+});
+
 for (const own of [false, true]) {
   test(`captioned ${own ? "own" : "received"} attachments keep their actions reachable`, async ({
     page,
@@ -300,7 +369,7 @@ for (const own of [false, true]) {
     // The hovered media's toolbar must not take hits from the caption above it.
     expect(
       await reference.evaluate((node) => {
-        const rect = node.getBoundingClientRect();
+        const rect = node.getClientRects()[0];
         return node.contains(
           document.elementFromPoint(
             rect.x + rect.width / 2,
@@ -497,7 +566,7 @@ test("thread actions and growing reactions paint beyond the scroller without mov
   await shown(actions);
   // Moving onto the escaped controls must keep the row's reveal state alive.
   const quick = actions.getByRole("button", {
-    name: "React with 👍",
+    name: "Add reaction",
     exact: true,
   });
   const quickBox = await quick.boundingBox();
@@ -506,34 +575,6 @@ test("thread actions and growing reactions paint beyond the scroller without mov
     Math.min(quickBox.y + quickBox.height - 1, bounds.y + bounds.height + 1),
   );
   await shown(actions);
-  const glyph = quick.locator('[class*="quickReactionGlyph"]');
-  await expect
-    .poll(() =>
-      glyph.evaluate((node) => {
-        const matrix = new DOMMatrix(getComputedStyle(node).transform);
-        return Math.round(Math.hypot(matrix.a, matrix.b) * 1000) / 1000;
-      }),
-    )
-    .toBe(1.12);
-  expect(
-    await glyph.evaluate((node) => {
-      const rect = node.getBoundingClientRect();
-      const edge = node
-        .closest("[data-message-scroller]")
-        .getBoundingClientRect().bottom;
-      // Decorative glyphs intentionally ignore input; enable hit testing only for
-      // this paint probe, then restore their production pointer behavior.
-      node.style.pointerEvents = "auto";
-      const matrix = new DOMMatrix(getComputedStyle(node).transform);
-      const offset = node.offsetHeight * 0.4;
-      const hit = document.elementFromPoint(
-        rect.x + rect.width / 2 + matrix.c * offset,
-        rect.y + rect.height / 2 + matrix.d * offset,
-      );
-      node.style.pointerEvents = "";
-      return rect.bottom > edge && (hit === node || node.contains(hit));
-    }),
-  ).toBe(true);
   await page.screenshot({
     path: test.info().outputPath("thread-floating-actions.png"),
   });
@@ -753,11 +794,17 @@ test("menus and pickers retain their anchor but cover actions", async ({
     `[data-channel-timeline] [data-message-id="${event.id}"]`,
   );
   const actions = actionsFor(row);
+  await page.mouse.move(0, 0);
+  const bubble = row.locator("[data-message-action-anchor]");
+  const restingFill = await bubble.evaluate(
+    (node) => getComputedStyle(node).backgroundColor,
+  );
   await hoverMessage(row);
   const trigger = actions.getByRole("button", { name: "More message actions" });
   await trigger.click();
   const menu = page.getByRole("menu");
   await menu.hover();
+  await expect(bubble).not.toHaveCSS("background-color", restingFill);
   await shown(actions);
   await hidden(actions);
   await expect(row.locator("[data-layout]")).toHaveAttribute(
@@ -781,6 +828,7 @@ test("menus and pickers retain their anchor but cover actions", async ({
   const search = page.locator('em-emoji-picker input[type="search"]');
   await expect(search).toBeVisible();
   await search.hover();
+  await expect(bubble).not.toHaveCSS("background-color", restingFill);
   await shown(actions);
   await hidden(actions);
   await expect(row.locator("[data-layout]")).toHaveAttribute(
@@ -937,7 +985,7 @@ test("profile menus and composer pickers keep message hover actions out of the w
 });
 
 // Both speakers must leave the opposite avatar column clear at real pane widths.
-test("long bubbles stay inside the opposite speaker's starting edge", async ({
+test("long bubbles expand to 32px before the opposite avatar", async ({
   page,
   app,
 }) => {
@@ -969,14 +1017,26 @@ test("long bubbles stay inside the opposite speaker's starting edge", async ({
       .poll(async () => {
         const left = await bubble(received).boundingBox();
         const right = await bubble(sent).boundingBox();
+        const receivedAvatar = await page
+          .locator(
+            `[data-message-id="${received.id}"] [class*="messageAvatar"]`,
+          )
+          .boundingBox();
+        const sentAvatar = await page
+          .locator(`[data-message-id="${sent.id}"] [class*="messageAvatar"]`)
+          .boundingBox();
         return (
           left !== null &&
           right !== null &&
-          right.x >= left.x - 1 &&
-          left.x + left.width <= right.x + right.width + 1 &&
-          right.x > left.x + 8
+          receivedAvatar !== null &&
+          sentAvatar !== null &&
+          Math.abs(sentAvatar.x - (left.x + left.width) - 32) < 1 &&
+          Math.abs(right.x - (receivedAvatar.x + receivedAvatar.width) - 32) < 1
         );
       })
       .toBe(true);
+    await page.screenshot({
+      path: test.info().outputPath(`message-width-${width}.png`),
+    });
   }
 });

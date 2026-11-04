@@ -10,6 +10,10 @@ import { parseBuzzLink } from "./buzz-links";
 import { entityTarget } from "../repos/routes";
 import type { Navigation, OpenFailure, OpenResult } from "./controller";
 import { parseOpenTarget, type OpenTarget } from "./targets";
+import {
+  parseExternalAuthorization,
+  type ExternalAuthorization,
+} from "../agents/external-connection";
 
 export type DeepLinkStep =
   | Readonly<{ open: OpenTarget }>
@@ -34,6 +38,7 @@ export type DeepLinkHost = Readonly<{
   }>;
   /** Invite presentation belongs to the community switcher, not navigation. */
   invite?: (invite: InviteLink, viewer: string) => void;
+  authorize?: (request: ExternalAuthorization, viewer: string) => void;
 }>;
 type Client = Pick<ClientSnapshot, "status" | "viewer" | "selected">;
 
@@ -58,6 +63,15 @@ export function deepLinkStep(
   const link = buzzLink(url);
   if (!link) return { fail: "invalid-target" };
   try {
+    if (link.format === "plugin-install")
+      return {
+        open: parseOpenTarget({
+          version: 1,
+          kind: "settings",
+          section: "plugins",
+          pluginImport: link.source,
+        }),
+      };
     if (!client.viewer || !client.selected) return { fail: "unavailable" };
     if (link.format === "removed")
       return {
@@ -112,6 +126,8 @@ export function bindDeepLinks(
     | {
         url: string;
         invite: InviteLink | null;
+        authorization: ExternalAuthorization | null;
+        plugin: boolean;
         /** Names no destination, so no account or community binds it. */
         invalid: boolean;
         /** Read before the client was first ready: it launched the app. */
@@ -166,10 +182,12 @@ export function bindDeepLinks(
     const incoming = held;
     if (incoming.invalid) return reject(client, incoming.launch);
     if (
-      (incoming.viewer && incoming.viewer !== client.viewer) ||
-      (!incoming.invite &&
-        incoming.selected &&
-        incoming.selected !== client.selected)
+      !incoming.plugin &&
+      ((incoming.viewer && incoming.viewer !== client.viewer) ||
+        (!incoming.invite &&
+          !incoming.authorization &&
+          incoming.selected &&
+          incoming.selected !== client.selected))
     ) {
       held = undefined;
       host.fail("denied");
@@ -178,6 +196,13 @@ export function bindDeepLinks(
     if (client.status === "loading")
       return Promise.resolve({ status: "failed", reason: "unavailable" });
     const invite = incoming.invite;
+    if (incoming.authorization) {
+      if (!client.viewer || client.status !== "ready")
+        return Promise.resolve({ status: "failed", reason: "unavailable" });
+      held = undefined;
+      host.authorize?.(incoming.authorization, client.viewer);
+      return Promise.resolve({ status: "cancelled" });
+    }
     if (invite && (!client.viewer || client.status !== "ready")) {
       // Retain the invite through identity setup and client restoration.
       return Promise.resolve({ status: "failed", reason: "unavailable" });
@@ -206,8 +231,12 @@ export function bindDeepLinks(
     held.selected ??= client.selected;
     if (
       !held.invalid &&
+      !held.plugin &&
       ((held.viewer && held.viewer !== client.viewer) ||
-        (!held.invite && held.selected && held.selected !== client.selected))
+        (!held.invite &&
+          !held.authorization &&
+          held.selected &&
+          held.selected !== client.selected))
     ) {
       held = undefined;
       host.fail("denied");
@@ -236,11 +265,7 @@ export function bindDeepLinks(
             console.error("Could not read pending deep links", error);
           continue;
         }
-        if (
-          closed ||
-          epoch !== clientEpoch ||
-          started.id !== host.navigation.snapshot().attempt.id
-        )
+        if (closed || started.id !== host.navigation.snapshot().attempt.id)
           continue;
         let url: string | undefined;
         for (let index = urls.length - 1; index >= 0; index--) {
@@ -251,12 +276,17 @@ export function bindDeepLinks(
           }
         }
         if (url === undefined) continue;
+        const plugin = parseBuzzLink(url)?.format === "plugin-install";
+        if (epoch !== clientEpoch && !plugin) continue;
         const client = communities.snapshot();
         const invite = parseInviteLink(url);
+        const authorization = parseExternalAuthorization(url);
         held = {
           url,
           invite,
-          invalid: !invite && !buzzLink(url),
+          authorization,
+          plugin,
+          invalid: !invite && !authorization && !buzzLink(url),
           launch,
           viewer: client.viewer,
           selected: client.selected,
@@ -275,7 +305,10 @@ export function bindDeepLinks(
     const next = communities.snapshot();
     if (
       (client.viewer && client.viewer !== next.viewer) ||
-      (client.selected && client.selected !== next.selected && !held?.invite)
+      (client.selected &&
+        client.selected !== next.selected &&
+        !held?.invite &&
+        !held?.authorization)
     )
       clientEpoch++;
     client = next;

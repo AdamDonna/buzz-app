@@ -179,6 +179,7 @@ function harness(initial: Client, pending: string[] = []) {
       },
     },
     accepted: vi.fn(),
+    authorize: vi.fn(),
   };
   const stop = bindDeepLinks(
     host,
@@ -220,6 +221,27 @@ function harness(initial: Client, pending: string[] = []) {
 const inboxOn = { status: () => "on" as const, subscribe: () => () => {} };
 const ready: Client = { status: "ready", viewer, selected: origin };
 const loading: Client = { status: "loading", selected: null };
+
+it("holds external authorization through startup without adding handshake data to navigation", async () => {
+  const link = `buzz://mcp-authorize?${new URLSearchParams({ version: "1", client: "Test app", callback: "http://127.0.0.1:1234/buzz/authorize", state: "A".repeat(43), scope: "read post", code_challenge: "A".repeat(43), code_challenge_method: "S256" })}`;
+  const t = harness(loading, [link]);
+  try {
+    await vi.waitFor(() => expect(t.take).toHaveBeenCalled());
+    expect(t.host.authorize).not.toHaveBeenCalled();
+    t.become({ status: "ready", viewer, selected: null });
+    await vi.waitFor(() => expect(t.host.authorize).toHaveBeenCalledOnce());
+    expect(t.host.authorize).toHaveBeenCalledWith(
+      expect.objectContaining({ client: "Test app", scope: ["read", "post"] }),
+      viewer,
+    );
+    expect(t.host.navigation.open).not.toHaveBeenCalled();
+    expect(JSON.stringify(t.controller.navigation.snapshot())).not.toContain(
+      "code_challenge",
+    );
+  } finally {
+    t.stop();
+  }
+});
 const channelOpen = `open:${JSON.stringify({
   version: 1,
   kind: "conversation",
@@ -972,6 +994,58 @@ it("does not revive a disposed bridge when native registration finishes", async 
   await invoked.fn.mock.results[0]?.value;
   expect(listener).not.toHaveBeenCalled();
 });
+
+const localPluginLink = "buzz://plugin-install?repository=org%2Frepo";
+it.each(["viewer", "selected"] as const)(
+  "keeps a plugin link across a %s change while loading",
+  async (key) => {
+    const t = harness({ ...ready, status: "loading" }, [localPluginLink]);
+    try {
+      await vi.waitFor(() => expect(t.take).toHaveBeenCalledTimes(1));
+      t.become({
+        ...ready,
+        [key]: key === "viewer" ? "f".repeat(64) : elsewhere,
+      });
+      await vi.waitFor(() =>
+        expect(t.host.navigation.open).toHaveBeenCalledTimes(1),
+      );
+      expect(t.host.fail).not.toHaveBeenCalled();
+      expect(t.host.navigation.snapshot().entry.target).toMatchObject({
+        kind: "settings",
+        section: "plugins",
+      });
+    } finally {
+      t.stop();
+    }
+  },
+);
+it.each(["viewer", "selected"] as const)(
+  "keeps a pending plugin shell read across a %s change",
+  async (key) => {
+    const t = harness(ready);
+    let release!: (urls: string[]) => void;
+    try {
+      await vi.waitFor(() => expect(t.take).toHaveBeenCalledTimes(1));
+      t.take.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      t.arrive(localPluginLink);
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      t.become({ [key]: key === "viewer" ? "f".repeat(64) : elsewhere });
+      release([localPluginLink]);
+      await vi.waitFor(() =>
+        expect(t.host.navigation.open).toHaveBeenCalledTimes(1),
+      );
+      expect(t.host.fail).not.toHaveBeenCalled();
+    } finally {
+      release?.([]);
+      t.stop();
+    }
+  },
+);
 
 it("binds a plugin page link to the selected community and viewer", () => {
   const scope = { viewer, communityOrigin: origin };

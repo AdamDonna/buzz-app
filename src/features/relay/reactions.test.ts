@@ -144,7 +144,7 @@ it("incremental channel projection applies delete-of-reaction and rejects an own
   ).toEqual([]);
 });
 
-it("removal validates every loaded author and conversation before queuing one deletion", () => {
+it("removal validates every loaded author and conversation before queuing one deletion per target", () => {
   const mine = reaction(),
     duplicate = reaction(viewer, 3),
     theirs = reaction(other);
@@ -154,6 +154,7 @@ it("removal validates every loaded author and conversation before queuing one de
   const messages = createMessages(
     {
       ready: async () => {},
+      recovery: async () => undefined,
       recover: async () => {},
       acknowledge: async () => {},
       supports: () => true,
@@ -177,16 +178,19 @@ it("removal validates every loaded author and conversation before queuing one de
   expect(() => messages.remove(["missing"])).toThrow(/Load/);
   expect(send).not.toHaveBeenCalled();
   messages.remove([mine.id, duplicate.id, mine.id]);
-  expect(send).toHaveBeenCalledExactlyOnceWith({
-    kind: 5,
-    content: "",
-    tags: [
-      ["h", "c"],
-      ["e", mine.id],
-      ["e", duplicate.id],
-      ["k", "7"],
-    ],
-  });
+  expect(send.mock.calls).toEqual(
+    [mine.id, duplicate.id].map((id) => [
+      {
+        kind: 5,
+        content: "",
+        tags: [
+          ["h", "c"],
+          ["e", id],
+          ["k", "7"],
+        ],
+      },
+    ]),
+  );
 });
 
 it("requires matching viewer and agent identities to remove agent messages", () => {
@@ -198,6 +202,7 @@ it("requires matching viewer and agent identities to remove agent messages", () 
   const messages = createMessages(
     {
       ready: async () => {},
+      recovery: async () => undefined,
       recover: async () => {},
       acknowledge: async () => {},
       supports: () => true,
@@ -271,6 +276,7 @@ it("authorizes removal against the relay-attributed agent author, not the relay 
   const messages = createMessages(
     {
       ready: async () => {},
+      recovery: async () => undefined,
       recover: async () => {},
       acknowledge: async () => {},
       supports: () => true,

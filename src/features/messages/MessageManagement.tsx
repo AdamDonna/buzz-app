@@ -93,6 +93,65 @@ export function useMessageDeletion() {
     : undefined;
 }
 
+/**
+ * Selected-message keys act as the message menu does, read when the key is
+ * pressed. Delete covers your own messages; the menu also deletes for agent
+ * owners, which needs ownership evidence a key cannot wait for.
+ */
+export function useMessageKeyActions(session: RelaySession) {
+  const management = useContext(Management);
+  const editor = useMessageEditScope();
+  return useMemo(() => {
+    if (!management) return undefined;
+    const joined = (row: ChannelMessage) => {
+      const channel = session.channels
+        .list()
+        .channels.find((item) => item.id === row.channelId);
+      return channel &&
+        !channel.cached &&
+        (!channel.readOnly || channel.viewerRole === "guest") &&
+        !row.membership &&
+        !row.diff &&
+        (!row.delivery || ["accepted", "seen"].includes(row.delivery))
+        ? channel
+        : undefined;
+    };
+    return {
+      canDelete(row: ChannelMessage) {
+        const channel = joined(row);
+        return (
+          !!channel &&
+          !channel.readOnly &&
+          !channel.archived &&
+          !!session.viewer &&
+          row.authorId === session.viewer &&
+          !!session.outbox?.supports(5)
+        );
+      },
+      remove(row: ChannelMessage) {
+        management.remove(row, undefined, () => editor?.focusTarget() ?? null);
+      },
+      canMarkUnread(row: ChannelMessage) {
+        if (!joined(row)) return false;
+        const attention = session.unread.attention(row.channelId, row.id);
+        return !attention.unread && !attention.forced;
+      },
+      markUnread(row: ChannelMessage) {
+        management.report(undefined);
+        void session.unread
+          .markMessageUnread(row.channelId, row.id)
+          .catch((cause) =>
+            management.report(
+              cause instanceof Error
+                ? cause.message
+                : "Could not update unread state. Try again.",
+            ),
+          );
+      },
+    };
+  }, [management, editor, session]);
+}
+
 /** Recovery stays outside virtualized rows; each conversation has one edit destination. */
 export function MessageManagement({
   session,
@@ -146,7 +205,8 @@ export function MessageManagement({
   );
   const available =
     !selection ||
-    ((!channelId || channelId === selection.row.channelId) && deletable);
+    ((!channelId || channelId === selection.row.channelId) &&
+      (selection.row.delivery === "failed" || deletable));
   useEffect(() => {
     if (!available) setSelection(undefined);
   }, [available]);
@@ -327,6 +387,51 @@ export function MessageManagementItems({
   row: ChannelMessage;
   session: RelaySession;
 }) {
+  return row.delivery === "failed" ? (
+    <UnsentMessageItems row={row} session={session} />
+  ) : (
+    <ManagedMessageItems row={row} session={session} />
+  );
+}
+
+/** The relay never stored a failed send, so Delete, which discards it from this
+ * device, is its only item, and channel state does not gate it. */
+function UnsentMessageItems({
+  row,
+  session,
+}: {
+  row: ChannelMessage;
+  session: RelaySession;
+}) {
+  const management = useContext(Management);
+  const editor = useMessageEditScope();
+  const afterClose = useAfterMessageMenuClose();
+  if (
+    !management ||
+    row.authorId !== session.viewer ||
+    row.membership ||
+    row.diff
+  )
+    return null;
+  const remove = () =>
+    management.remove(row, undefined, () => editor?.focusTarget() ?? null);
+  return (
+    <MenuItem onClick={() => (afterClose ? afterClose(remove) : remove())}>
+      <MenuIcon>
+        <TrashIcon size={14} />
+      </MenuIcon>
+      Delete message
+    </MenuItem>
+  );
+}
+
+function ManagedMessageItems({
+  row,
+  session,
+}: {
+  row: ChannelMessage;
+  session: RelaySession;
+}) {
   const management = useManagedMessage(row, session);
   const editor = useMessageEditScope();
   const afterClose = useAfterMessageMenuClose();
@@ -474,8 +579,11 @@ function DeleteMessageDialog({
   );
   const cancelAction = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState<string>();
+  // The relay never stored a failed send; deleting it discards the outbox intent.
+  const unsent = row.delivery === "failed";
+  const [discarding, setDiscarding] = useState(false);
   const operation = operations.find((item) => item.event.id === operationId);
-  const pending = operation?.delivery === "sending";
+  const pending = operation?.delivery === "sending" || discarding;
   const retryable =
     operation?.delivery === "failed" || operation?.delivery === "unknown";
   useEffect(() => {
@@ -488,11 +596,12 @@ function DeleteMessageDialog({
       close();
     }
   }, [operationId, operation, close]);
-  const run = (event: MouseEvent<HTMLButtonElement>) => {
+  const run = async (event: MouseEvent<HTMLButtonElement>) => {
     const dialog = event.currentTarget.closest('[role="alertdialog"]');
     setError(undefined);
     try {
       if (
+        !unsent &&
         !session.channels
           .list()
           .channels.some(
@@ -507,7 +616,22 @@ function DeleteMessageDialog({
         throw new Error(
           "This conversation is no longer available for changes.",
         );
-      if (operationId) {
+      if (unsent) {
+        // dismiss() leaves a send that is retrying alone, without an error.
+        if (
+          !session.outbox
+            ?.snapshot()
+            .some(
+              (item) => item.event.id === row.id && item.delivery === "failed",
+            )
+        )
+          throw new Error(
+            "This message’s delivery changed. Cancel to see its current status.",
+          );
+        setDiscarding(true);
+        await session.outbox.dismiss(row.id);
+        close();
+      } else if (operationId) {
         session.outbox?.retry(operationId);
         dispatched(operationId, dialog);
       } else {
@@ -516,6 +640,7 @@ function DeleteMessageDialog({
         dispatched(id, dialog);
       }
     } catch (cause) {
+      setDiscarding(false);
       setError(
         cause instanceof Error
           ? cause.message
@@ -527,9 +652,15 @@ function DeleteMessageDialog({
     <AlertDialog
       title="Delete message?"
       initialFocus={cancelAction}
-      description="This requests removal of this message from Buzz’s relay. People may still have copies. This cannot be undone."
+      description={
+        unsent
+          ? "This message wasn’t sent. Deleting it removes it from this device. This cannot be undone."
+          : "This requests removal of this message from Buzz’s relay. People may still have copies. This cannot be undone."
+      }
       pending={pending}
-      finalFocus={() => (operationId ? (selection.focus?.() ?? true) : true)}
+      finalFocus={() =>
+        operationId || discarding ? (selection.focus?.() ?? true) : true
+      }
       onClose={close}
       actions={
         <>

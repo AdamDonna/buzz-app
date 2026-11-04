@@ -2,9 +2,10 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { ActivityTranscript } from "./ActivityTranscript";
 import type { TranscriptTurn } from "./activity-transcript";
+import { withSessionPrompts } from "./session-prompts";
 import { codexTurns } from "../../bundled/codex/transcript";
 import { restoreRecordedTools } from "../../bundled/codex/recorded-tools";
 import { formatItemTimestamp } from "../../shared/datetime";
@@ -341,7 +342,7 @@ it("keeps different threads distinguishable when showing all conversations", () 
       threadRootId,
       triggeringEventIds: [],
       newSession: false,
-      config: [],
+      config: ["gpt-6"],
       startedAt: Date.parse("2026-10-20T12:00:00Z"),
       endedAt: Date.parse("2026-10-20T12:01:00Z"),
       partial: false,
@@ -357,6 +358,67 @@ it("keeps different threads distinguishable when showing all conversations", () 
   );
   expect(screen.getByText("· Thread aaaaaaaa")).toBeVisible();
   expect(screen.getByText("· Thread bbbbbbbb")).toBeVisible();
+  // The place follows the duration and leads the remaining facts.
+  expect(
+    screen.getAllByRole("article")[0]?.querySelector("header")?.textContent,
+  ).toMatch(/Completed · 1m 0s · Thread aaaaaaaa · gpt-6$/);
+});
+
+it("opens a turn's thread or channel from its label, keeping thread labels it can't open as text", () => {
+  const turn = (
+    turnId: string,
+    channelId: string | null,
+    threadRootId: string | null | undefined,
+  ): TranscriptTurn => ({
+    turnId,
+    channelId,
+    threadRootId,
+    triggeringEventIds: [],
+    newSession: false,
+    config: [],
+    startedAt: Date.parse("2026-10-20T12:00:00Z"),
+    endedAt: Date.parse("2026-10-20T12:01:00Z"),
+    partial: false,
+    items: [],
+  });
+  const transcript = {
+    turns: [
+      turn("thread", "channel", "a".repeat(64)),
+      turn("channel", "channel", null),
+      // Neither an unknown thread nor a turn without a channel can be opened.
+      turn("unknown", "channel", undefined),
+      turn("nowhere", null, "b".repeat(64)),
+    ],
+  };
+  const openConversation = vi.fn();
+  const view = render(
+    <ActivityTranscript
+      transcript={transcript}
+      agentName="Agent"
+      state={() => "ended"}
+      openConversation={openConversation}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Thread aaaaaaaa" }));
+  expect(openConversation).toHaveBeenLastCalledWith("channel", "a".repeat(64));
+  fireEvent.click(screen.getByRole("button", { name: "Channel" }));
+  expect(openConversation).toHaveBeenLastCalledWith("channel", undefined);
+  expect(screen.getAllByRole("button")).toHaveLength(2);
+  expect(screen.getByText("· Thread unknown")).toBeInTheDocument();
+  expect(screen.getByText("· Thread bbbbbbbb")).toBeInTheDocument();
+  // A host that can't open conversations shows thread labels as text and
+  // leaves channel turns unlabelled.
+  view.rerender(
+    <ActivityTranscript
+      transcript={transcript}
+      agentName="Agent"
+      state={() => "ended"}
+    />,
+  );
+  expect(screen.queryAllByRole("button")).toEqual([]);
+  expect(screen.getByText("· Thread aaaaaaaa")).toBeInTheDocument();
+  expect(screen.queryByText(/Channel/)).toBeNull();
+  expect(openConversation).toHaveBeenCalledTimes(2);
 });
 
 it("opens at the latest turn and follows new ones until the reader scrolls up", () => {
@@ -407,4 +469,50 @@ it("opens at the latest turn and follows new ones until the reader scrolls up", 
   expect(shared.scrollTop).toBe(0);
   view.remove();
   shared.remove();
+});
+
+it("divides sessions, and shows each one's prompt once at its top", () => {
+  const turn = (
+    turnId: string,
+    sessionId: string,
+    newSession: boolean,
+  ): TranscriptTurn => ({
+    turnId,
+    channelId: "channel",
+    threadRootId: null,
+    triggeringEventIds: [],
+    sessionId,
+    newSession,
+    config: [],
+    startedAt: 1,
+    endedAt: 2,
+    partial: false,
+    items: [],
+  });
+  const turns = withSessionPrompts(
+    [turn("1", "old", false), turn("2", "new", true), turn("3", "new", false)],
+    (session) =>
+      session === "new"
+        ? [
+            {
+              label: "",
+              text: "<agent-instructions>\nBe kind\n</agent-instructions>",
+            },
+          ]
+        : undefined,
+  );
+  render(
+    <ActivityTranscript
+      transcript={{ turns }}
+      agentName="Agent"
+      state={() => "ended"}
+    />,
+  );
+  expect(
+    screen
+      .getAllByText(/^(New session|Session continued)/)
+      .map((line) => line.textContent),
+  ).toEqual(["Session continued; earlier turns not shown", "New session"]);
+  expect(screen.getAllByText(/System prompt/)).toHaveLength(1);
+  expect(screen.getByText("Agent instructions")).toBeInTheDocument();
 });

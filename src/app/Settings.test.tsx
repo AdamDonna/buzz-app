@@ -21,8 +21,10 @@ import {
   type SettingsCards,
 } from "../features/settings/service";
 import type { ClientSnapshot } from "../features/communities/service";
+import type { DecisionsService } from "../features/decisions/service";
 import type { RelayData } from "../features/relay/service";
 import type { Contribution } from "../plugins/contributions";
+import { createPluginInstallRequests } from "../plugins/installer";
 
 afterEach(cleanup);
 vi.mock("../bundled/icons", () => ({
@@ -1198,6 +1200,42 @@ it("shows administration only within a selected community", () => {
   expect(screen.queryByText("Membership body")).toBeNull();
 });
 
+it("opens Manage plugins from the Decisions API hint", async () => {
+  const user = userEvent.setup();
+  const { cards } = registry([]);
+  const providers: never[] = [];
+  const decisions = {
+    backend: () => undefined,
+    providers: () => providers,
+    subscribe: () => () => {},
+    setBackend: vi.fn(),
+  } as unknown as DecisionsService;
+  const onSection = vi.fn();
+  const view = (section: string) => (
+    <Settings
+      {...host}
+      cards={cards}
+      decisions={decisions}
+      navigation={
+        {
+          target: { version: 1, kind: "settings", section },
+          complete: () => true,
+        } as never
+      }
+      onSection={onSection}
+    />
+  );
+  const { rerender } = render(view("decisions"));
+  const section = await screen.findByRole("region", { name: "Decisions API" });
+  await user.click(
+    within(section).getByRole("button", { name: "Manage plugins" }),
+  );
+  expect(onSection).toHaveBeenCalledExactlyOnceWith("plugins");
+  // The link is hidden with its section, so focus moves into the one it opened.
+  rerender(view("plugins"));
+  expect(screen.getByRole("region", { name: "Manage plugins" })).toHaveFocus();
+});
+
 it("gives contributed cards their own community sections and retires removed cards", async () => {
   const { cards, set } = registry([
     card("hosted", "Hosted communities", "Communities"),
@@ -1994,7 +2032,15 @@ it("keeps identity independent of community profile and clears revealed keys on 
         {...host}
         cards={cards}
         identity={
-          { exportKey } as unknown as Parameters<typeof Settings>[0]["identity"]
+          {
+            exportKey,
+            // No backup status: the row stays hidden.
+            backup: {
+              subscribe: () => () => {},
+              snapshot: () => undefined,
+              ready: () => new Promise(() => {}),
+            },
+          } as unknown as Parameters<typeof Settings>[0]["identity"]
         }
       />
     </ToastProvider>,
@@ -2372,4 +2418,118 @@ it("routes a managed plugin's updates through the managed review instead of the 
     pinned,
   );
   expect(checkGit).not.toHaveBeenCalled();
+});
+
+function installRequestFixture(imports: object | undefined) {
+  const { cards } = registry([]);
+  const snapshot = {
+    configuration: {
+      status: "ready",
+      externalPluginsPaused: false,
+      catalog: { profile: "test", location: "test", plugins: [] },
+    },
+    activation: {},
+    busy: false,
+    error: null,
+    refreshError: null,
+  };
+  const plugins = {
+    imports,
+    subscribe: () => () => {},
+    snapshot: () => snapshot,
+    change: vi.fn(async () => true),
+    dismissError: vi.fn(),
+  } as unknown as Parameters<typeof Settings>[0]["plugins"];
+  const requests = createPluginInstallRequests();
+  return { cards, plugins, requests };
+}
+const market = { id: "example.market", name: "Market" };
+
+const requestedSource = {
+  repository: "https://example.com/plugins.git",
+  reference: "v1",
+};
+
+it("opens a requested plugin source in Plugins and cancels it when Settings closes", async () => {
+  const { cards, plugins, requests } = installRequestFixture({
+    git: vi.fn(),
+    discard: vi.fn(async () => {}),
+  });
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+  const outcome = requests.request(requestedSource, market);
+  const dialog = await screen.findByRole("dialog", { name: "Add a plugin" });
+  expect(within(dialog).getByLabelText("Git or GitHub repository")).toHaveValue(
+    "https://example.com/plugins.git",
+  );
+  expect(dialog).toHaveTextContent("Opened from Market (example.market).");
+  view.unmount();
+  await expect(outcome).resolves.toBe("cancelled");
+  expect(requests.snapshot()).toBeUndefined();
+});
+
+it("cancels a request nobody claimed when Settings closes", async () => {
+  const { cards, plugins, requests } = installRequestFixture(undefined);
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  const outcome = requests.request(requestedSource, market);
+  expect(requests.snapshot()).toBeDefined();
+  view.unmount();
+  await expect(outcome).resolves.toBe("cancelled");
+});
+
+it("refuses a plugin request while the add dialog is open", async () => {
+  const { cards, plugins, requests } = installRequestFixture({
+    git: vi.fn(),
+    discard: vi.fn(async () => {}),
+  });
+  render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+  await screen.findByRole("dialog", { name: "Add a plugin" });
+  await expect(requests.request(requestedSource, market)).resolves.toBe(
+    "unavailable",
+  );
+});
+
+it("leaves a confirmed install's request to the install when Settings closes", async () => {
+  const { cards, plugins, requests } = installRequestFixture(undefined);
+  const view = render(
+    <Settings
+      {...host}
+      cards={cards}
+      plugins={plugins}
+      installRequests={requests}
+    />,
+  );
+  const outcome = requests.request(requestedSource, market);
+  const id = requests.snapshot()?.id ?? 0;
+  expect(requests.claim(id)).toBe(true);
+  const unconfirm = requests.confirm(id);
+  view.unmount();
+  await Promise.resolve();
+  expect(requests.snapshot()?.id).toBe(id);
+  requests.settle(id, "installed");
+  unconfirm();
+  await expect(outcome).resolves.toBe("installed");
 });
