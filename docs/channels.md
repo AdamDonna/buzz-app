@@ -1202,7 +1202,8 @@ The port retains the prepared-store implementation and its behavior tests:
   open and active (not a retained background tab), it reserves room for its whole
   roster on top of that base, up to 10,240 entries. Leaving gives the room back
   after the current task, so a remount or a roster count change keeps the loaded
-  profiles; the shrink cancels background profile reads still in flight, and
+  profiles; the shrink cancels background profile reads asked for before
+  leaving, not the next view's, and
   stops the verified-name syncs it emptied. Verified-name syncs (128 people
   each) have their own pool of 80, enough for the largest cache, apart from the
   32 artifact syncs. A background profile read of many pages publishes once,
