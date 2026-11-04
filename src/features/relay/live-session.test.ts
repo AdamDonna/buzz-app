@@ -1709,13 +1709,16 @@ async function caughtUp(count: number) {
     peer = keypair();
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let live!: LiveCallbacks;
-  const owner = createRelaySession({
-    ...wire.transport,
-    subscribe(callbacks) {
-      live = callbacks;
-      return { update() {}, retry() {}, dispose() {} };
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
     },
-  });
+    { readStateFloor: () => 0 },
+  );
   const ids = Array.from(
     { length: count },
     (_, i) => `room-${i.toString().padStart(3, "0")}`,

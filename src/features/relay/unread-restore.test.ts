@@ -264,6 +264,7 @@ async function launch({
     state: { frontiers, overrides: {} },
   };
   const reads = createReadState({
+    floor: () => 0,
     viewer,
     reader,
     host: undefined,

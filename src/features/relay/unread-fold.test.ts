@@ -109,6 +109,7 @@ async function setup(
   let journal: ReadJournal | undefined = newReadJournal();
   const reader = { read: vi.fn(async () => [] as RelayEvent[]) };
   const reads = createReadState({
+    floor: () => 0,
     viewer,
     reader,
     host: undefined,
@@ -308,18 +309,19 @@ it("with 2,000 retained events across 80 channels, the Inbox folds each channel'
   expect(fixture).toHaveLength(2000);
   owner.accept(fixture);
   expect(fixture.every((item) => owner.event(item.id))).toBe(true);
+  expect(owner.capability.activity("c7").items).toHaveLength(1);
+  expect(folds.calls).toHaveLength(1);
+  expect(new Set(folds.calls[0]?.events)).toEqual(expected.get("c7"));
+  folds.calls = [];
   const inbox = owner.capability.inbox();
   // A thread row and a mention row in each channel.
   expect(inbox.items).toHaveLength(160);
+  // c7's rows are reused from its activity until the evidence changes.
   expect(folds.calls.map(({ channelId }) => channelId).sort()).toEqual(
-    [...ids].sort(),
+    ids.filter((id) => id !== "c7").sort(),
   );
   for (const { channelId, events } of folds.calls) {
     expect(events.length).toBeLessThanOrEqual(25);
     expect(new Set(events)).toEqual(expected.get(channelId));
   }
-  folds.calls = [];
-  expect(owner.capability.activity("c7").items).toHaveLength(1);
-  expect(folds.calls).toHaveLength(1);
-  expect(new Set(folds.calls[0]?.events)).toEqual(expected.get("c7"));
 });

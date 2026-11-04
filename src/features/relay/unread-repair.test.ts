@@ -184,6 +184,7 @@ async function setup({
     revision: Math.max(0, ...Object.values(localUnread)),
   };
   const reads = createReadState({
+    floor: () => 0,
     viewer,
     reader,
     host: undefined,
