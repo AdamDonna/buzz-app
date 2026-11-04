@@ -43,6 +43,11 @@ pub(crate) struct Info {
     handle: u64,
     url: String,
 }
+#[derive(Default)]
+struct Pending {
+    next: u64,
+    replies: HashMap<u64, oneshot::Sender<Result<String, String>>>,
+}
 struct Shared {
     authority: String,
     prefix: String,
@@ -50,12 +55,10 @@ struct Shared {
     client: reqwest::Client,
     events: Channel<Event>,
     stop: CancellationToken,
-    pending: Mutex<(u64, HashMap<u64, oneshot::Sender<Result<String, String>>>)>,
+    pending: Mutex<Pending>,
 }
 impl Shared {
-    fn pending(
-        &self,
-    ) -> MutexGuard<'_, (u64, HashMap<u64, oneshot::Sender<Result<String, String>>>)> {
+    fn pending(&self) -> MutexGuard<'_, Pending> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -141,7 +144,7 @@ impl ModelProxies {
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
             accept(listener, shared.clone()).await;
-            shared.pending().1.clear();
+            shared.pending().replies.clear();
             state.registry().entries.remove(&handle);
             let _ = shared.events.send(Event::Closed);
         });
@@ -219,15 +222,15 @@ async fn transform(shared: &Shared, path: String, body: String) -> Result<String
     struct Waiting<'a>(&'a Shared, u64);
     impl Drop for Waiting<'_> {
         fn drop(&mut self) {
-            self.0.pending().1.remove(&self.1);
+            self.0.pending().replies.remove(&self.1);
         }
     }
     let (tx, rx) = oneshot::channel();
     let request = {
         let mut p = shared.pending();
-        let n = p.0;
-        p.0 += 1;
-        p.1.insert(n, tx);
+        let n = p.next;
+        p.next += 1;
+        p.replies.insert(n, tx);
         n
     };
     let _waiting = Waiting(shared, request);
@@ -374,7 +377,7 @@ pub(crate) fn plugin_model_proxy_reply(
     let shared = servers.owned(&id, handle)?;
     let tx = shared
         .pending()
-        .1
+        .replies
         .remove(&request)
         .ok_or("Request is no longer waiting")?;
     tx.send(body.ok_or_else(|| "Model proxy callback failed".into()))
@@ -473,7 +476,7 @@ mod tests {
         let shared = servers.owned("harness", info.handle).unwrap();
         let tx = shared
             .pending()
-            .1
+            .replies
             .remove(&event["request"].as_u64().unwrap())
             .unwrap();
         tx.send(Ok("trimmed".into())).unwrap();
@@ -537,7 +540,7 @@ mod tests {
             .owned("harness", info.handle)
             .unwrap()
             .pending()
-            .1
+            .replies
             .remove(&event["request"].as_u64().unwrap())
             .unwrap()
             .send(Err("failed".into()))
