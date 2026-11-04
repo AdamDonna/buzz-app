@@ -19,7 +19,6 @@ import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { useSavedAgent } from "../../features/solo/default-agent";
-import { SoloColumn } from "../../features/solo/SoloPresentation";
 import { RobotIcon } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
@@ -414,7 +413,7 @@ function BestieConversation({
     >
       <section
         data-attachment-drop-zone=""
-        className={`${styles.work} flex min-h-0 flex-1 flex-col`}
+        className={styles.work}
         aria-label={`Chat with ${bestie}`}
       >
         {thread ? (
@@ -424,7 +423,7 @@ function BestieConversation({
             close={closeThread}
           />
         ) : (
-          <SoloColumn>
+          <>
             <ChannelBody
               viewer={session.viewer}
               cached={!!channel.cached}
@@ -437,7 +436,7 @@ function BestieConversation({
               focusRequest={composerFocus}
               onSend={setSent}
             />
-          </SoloColumn>
+          </>
         )}
       </section>
     </ConversationChannel>

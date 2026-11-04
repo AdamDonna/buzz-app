@@ -5,3 +5,11 @@
 [data-selected] .label[data-bestie-unread] {
   color: var(--text-row-selected);
 }
+
+/* A block grid avoids an inline baseline below the row's center. Match the
+ * ordinary unread badge's trailing inset inside the shared navigation row. */
+.badge {
+  display: grid;
+  place-items: center;
+  padding-inline-end: var(--space-1);
+}

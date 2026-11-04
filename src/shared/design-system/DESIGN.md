@@ -1720,8 +1720,8 @@ and paired text. Do not generate unused role families from every palette hue.
 Existing palette utilities and older role names are compatibility APIs while
 callers migrate, not the default for new UI. Tailwind's stock palette is removed.
 
-`ShimmerText` gives a short live-work label (an agent's current step) a slow
-sheen from metadata text to standard text, with a distinct 1.8s sweep.
+`ShimmerText` gives a short live-work label (an agent's current step) a defined
+sheen from metadata text to standard text, with a 1.2s sweep.
 Use it only while that work is
 live, never on finished, failed or waiting text. Reduced motion shows plain text.
 

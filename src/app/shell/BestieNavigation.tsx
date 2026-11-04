@@ -110,7 +110,7 @@ export function BestieUnreadBadge({ pageKey }: { pageKey: string }) {
   const conversation = useContext(BestieConversationContext);
   if (pageKey !== BESTIE_PAGE || !conversation) return null;
   return (
-    <span className={channelStyles.indicatorStack} data-channel-indicators="">
+    <span className={styles.badge} data-channel-indicators="">
       <span className={channelStyles.indicatorLayer}>
         <UnreadBadge
           session={conversation.session}
