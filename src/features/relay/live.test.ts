@@ -2450,6 +2450,51 @@ it.each([
 );
 
 it.each([
+  ["in the same millisecond as its REQ", 0],
+  ["after the clock went back a second", -1_000],
+])(
+  "keeps a channel owed when it is granted %s while that REQ is in flight",
+  async (_, shift) => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const h = setup([], undefined, 10, () => 0.5);
+    try {
+      age();
+      h.owner.update(["a", "b"], ["a", "b"]);
+      await establish(h.first);
+      h.first.close();
+      await vi.advanceTimersByTimeAsync(500);
+      const second = h.sockets[1];
+      assert.exists(second);
+      await second.auth();
+      const sent = Date.now();
+      await vi.advanceTimersByTimeAsync(750);
+      const batch = second.requests().find((r) => scopeOf(r).length > 1);
+      assert.exists(batch);
+      for (const r of second.requests())
+        if (r !== batch) await second.receive(["EOSE", r[1]]);
+      // Its REQ was sent at `sent`; the grant comes before its EOSE.
+      vi.setSystemTime(sent + shift);
+      await grant(h, "b", second);
+      await second.receive(["EOSE", batch[1]]);
+      // Its re-send is sent; the drop comes before that EOSE.
+      expect(second.requests().at(-1)).not.toBe(batch);
+      h.callbacks.established.mockClear();
+      second.close();
+      await vi.advanceTimersByTimeAsync(1_000);
+      const third = h.sockets[2];
+      assert.exists(third);
+      // The grant is no longer in the next membership replay.
+      await establish(third);
+      expect(h.callbacks.established.mock.calls.filter((c) => c[0])).toEqual([
+        [["a", "b"], undefined, ["a"]],
+      ]);
+    } finally {
+      h.owner.dispose();
+    }
+  },
+);
+
+it.each([
   ["after its re-send reached EOSE", true, ["a", "b"]],
   ["while its re-send was still pending", false, ["a"]],
 ] as const)(
