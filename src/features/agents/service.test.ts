@@ -66,6 +66,7 @@ import {
 import { TypeSafeKey } from "../../bundled/typesafe/key";
 import { typesafeProvider } from "../../bundled/typesafe";
 import { CATCH_UP_PREFIX, readCheckpoints } from "./catch-up";
+import { CHANNEL_KINDS } from "../relay/live";
 import { fileStore, type AgentStore } from "./state";
 import { readInterrupted, writeInterrupted } from "./interrupted";
 import { memoryStorage } from "./test-fakes";
@@ -322,6 +323,7 @@ async function setup({
     relay: fake.relay,
     reconnecting: fake.reconnecting,
     recover: fake.recover,
+    unrouted: fake.unrouted,
     memories: fake.memories,
     archives: fake.archives,
     session: fake.session,
@@ -7654,7 +7656,7 @@ it("does not catch up after a restart on a message it already heard live", async
   }
 });
 
-it("wakes a kind 9 watch added since for nothing older, though an overlapping watch catches up on it", async () => {
+it("wakes a watch added since for nothing older, though an overlapping watch catches up on it", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     const { service, run, history, recover } = await setup({
@@ -7671,7 +7673,7 @@ it("wakes a kind 9 watch added since for nothing older, though an overlapping wa
     history.push(posted("missed", now + 30));
     vi.setSystemTime((now + 60) * 1000);
     // Added after the message: a stream for its channel, one for all
-    // channels, and a watch of every kind, which has none.
+    // channels, and one of every kind.
     await service.save(bot, {
       attention: {
         "watch/chat2": watch,
@@ -7682,15 +7684,445 @@ it("wakes a kind 9 watch added since for nothing older, though an overlapping wa
     await settle();
     vi.setSystemTime((now + 90) * 1000);
     recover();
-    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     await settle();
     await settle();
-    // Only the watch of other kinds too, which hears what the app missed
-    // since it listened, as a reconnect replay would give it.
-    expect(turns(run).sort()).toEqual([
+    expect(turns(run)).toEqual(["catch-up watch/chat 1"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("catches up a watch of other kinds, or of every kind, on what it missed", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const { service, run, history, recover, session } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    const watch = chat["watch/chat"];
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/likes": { ...watch, kinds: [7] },
+        "watch/any": { ...watch, kinds: [] },
+      },
+    });
+    await settle();
+    vi.setSystemTime((now + 60) * 1000);
+    history.push(
+      posted("missed", now + 30),
+      eventDto(
+        signed(author, {
+          kind: 7,
+          content: "+",
+          created_at: now + 31,
+          tags: [
+            ["h", channel],
+            ["e", "a".repeat(64)],
+          ],
+        }),
+      ),
+    );
+    recover();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+    await settle();
+    await settle();
+    // The reaction read for the likes watch goes to each watch it matches;
+    // the read for every kind then gives only the message.
+    expect(turns(run)).toEqual([
+      "catch-up watch/likes 1",
       "catch-up watch/any 1",
-      "catch-up watch/chat 1",
+      "catch-up watch/any 1",
     ]);
+    expect(heard(run)).toEqual(["+", "+", "missed"]);
+    // Each reads its watch's own kinds; one of every kind, those live hears,
+    // as a read must name its kinds.
+    const reads = vi
+      .mocked(session.read)
+      .mock.calls.map(([filters]) => filters[0] as ReadFilter)
+      .filter((filter) => filter.until !== undefined);
+    expect(reads.map((filter) => filter.kinds)).toEqual(
+      expect.arrayContaining([[7], CHANNEL_KINDS]),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each([
+  { case: "a kind live does not hear", kind: 30023, unroute: false },
+  { case: "a channel live does not route", kind: 9, unroute: true },
+])(
+  "reads again what live does not hear while it stays connected, rather than pass over it: $case",
+  async ({ kind, unroute }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const { service, run, history, recover, storage, unrouted } = await setup(
+        { identities: [echo] },
+      );
+      const now = nowSeconds();
+      vi.setSystemTime(now * 1000);
+      await service.save(bot, {
+        attentionEnabled: true,
+        attention: {
+          "watch/channel": null,
+          "watch/quiet": { ...chat["watch/chat"], kinds: [kind] },
+        },
+      });
+      await settle();
+      vi.setSystemTime((now + 1) * 1000);
+      if (unroute) unrouted.add(channel);
+      recover();
+      await settle();
+      // It does not come live, though the connection stays up.
+      history.push(
+        eventDto(
+          signed(author, {
+            kind,
+            content: "while connected",
+            created_at: now + 2,
+            tags: [["h", channel]],
+          }),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await settle();
+      // Ticks do not pass over it: it is read up to the connect, no further.
+      expect(
+        Object.values(readCheckpoints(storage)).map(
+          ({ read, through }) => read ?? through,
+        ),
+      ).toEqual([now + 1]);
+      expect(heard(run)).toEqual([]);
+      // A read a little behind now gives it, with no reconnect.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await settle();
+      await settle();
+      expect(heard(run)).toEqual(["while connected"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("reads again what live does not hear while its watch is edited more often than it reads", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    const { service, run, history, recover } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    const quiet = { ...chat["watch/chat"], kinds: [30023] };
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: { "watch/channel": null, "watch/quiet": quiet },
+    });
+    await settle();
+    vi.setSystemTime((now + 1) * 1000);
+    recover();
+    await settle();
+    history.push(
+      eventDto(
+        signed(author, {
+          kind: 30023,
+          content: "while edited",
+          created_at: now + 2,
+          tags: [["h", channel]],
+        }),
+      ),
+    );
+    // Each edit starts the watches' catch-up again, more often than it reads
+    // by itself.
+    for (let edit = 0; edit < 30; edit++) {
+      await service.save(bot, {
+        attention: {
+          "watch/quiet": { ...quiet, exclude_authors: [keypair().pubkey] },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await settle();
+    }
+    expect(heard(run)).toEqual(["while edited"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("finds an event the relay stores late with an older time, after a read passed that time, once", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    const { service, run, history, recover, storage, connect } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/notes": { ...chat["watch/chat"], kinds: [30023] },
+      },
+    });
+    await settle();
+    vi.setSystemTime((now + 1) * 1000);
+    recover();
+    await settle();
+    // A read while connected passes now + 30 or so, with nothing to give.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(heard(run)).toEqual([]);
+    // Then the relay stores one from a client whose clock is behind.
+    history.push(
+      eventDto(
+        signed(author, {
+          kind: 30023,
+          content: "stored late",
+          created_at: nowSeconds() - 55,
+          tags: [["h", channel]],
+        }),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    await settle();
+    expect(heard(run)).toEqual(["stored late"]);
+    // Later reads cover its time again and give it no second time.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await settle();
+    expect(heard(run)).toEqual(["stored late"]);
+    // Nor after a restart, whose first read covers it again from what was
+    // saved.
+    connect(false);
+    const second = await setup({
+      storage,
+      identities: [echo],
+      history: [...history],
+    });
+    second.recover();
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(
+      vi
+        .mocked(second.session.read)
+        .mock.calls.some(([filters]) => filters[0]?.kinds?.includes(30023)),
+    ).toBe(true);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("finds an event stored late below where an interrupted read went on, and gives none twice", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // What the first copy was given, though its turns never end.
+    const first: string[] = [];
+    const { service, history, recover, storage, connect } = await setup({
+      identities: [echo],
+      runOnce: async ({ delivery }) => {
+        const { trigger } = delivery;
+        if (trigger.type === "catch-up")
+          first.push(
+            ...trigger.events.map(
+              ({ event }) => event.content.split(" ")[0] ?? "",
+            ),
+          );
+        await blocked;
+        return { ok: true };
+      },
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/notes": { ...chat["watch/chat"], kinds: [30023] },
+      },
+    });
+    await settle();
+    // Large enough that a turn takes a few, so the lane fills long before
+    // the window is given and the read waits part way.
+    const note = (content: string, created_at: number) =>
+      eventDto(
+        signed(author, {
+          kind: 30023,
+          content: `${content} ${"x".repeat(20_000)}`,
+          created_at,
+          tags: [["h", channel]],
+        }),
+      );
+    const notes = Array.from({ length: 40 }, (_, i) =>
+      note(`n${i}`, now + 2 + i * 10),
+    );
+    history.push(...notes);
+    vi.setSystemTime((now + 700) * 1000);
+    recover();
+    // Part way: the window's bound is saved, with what it gave as heard.
+    const saved = () =>
+      Object.values(readCheckpoints(storage)).find(
+        (checkpoint) => checkpoint.upper && checkpoint.heard?.length,
+      );
+    await vi.waitFor(() => expect(saved()).toBeDefined());
+    await settle();
+    expect(saved()?.after).toBeUndefined();
+    const after = Math.max(
+      ...(saved()?.heard ?? []).map(({ created_at }) => created_at),
+    );
+    expect(after).toBeLessThan(now + 2 + 39 * 10);
+    // Then one is stored late, older than the last given but in the overlap.
+    history.push(note("late", now + 105));
+    expect(now + 105).toBeLessThan(after);
+    expect(first.length).toBeGreaterThan(0);
+    connect(false);
+    release();
+    const second = await setup({
+      storage,
+      identities: [echo],
+      history: [...history],
+    });
+    second.recover();
+    await settle();
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await settle();
+    const again = heard(second.run).map(
+      (content) => content.split(" ")[0] ?? "",
+    );
+    expect(again.filter((content) => content === "late")).toEqual(["late"]);
+    // None given before the restart is given again; the rest come once.
+    expect(again.filter((content) => content !== "late").sort()).toEqual(
+      notes
+        .filter(({ created_at }) => created_at > after)
+        .map(({ created_at }) => `n${(created_at - now - 2) / 10}`)
+        .sort(),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("gives no live message again after a restart when a polled watch hears more than it keeps", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const storage = memoryStorage();
+    const first = await setup({ storage, identities: [echo] });
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/chat": { ...chat["watch/chat"], channels: "all" },
+        "watch/channel": null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    // More than a stream keeps as heard, inside one overlap, while polls run.
+    const sent: ReturnType<typeof posted>[] = [];
+    for (let index = 0; index < 300; index++) {
+      const live = posted(`live ${index}`, nowSeconds());
+      first.history.push(live);
+      sent.push(live);
+      first.emit({ events: [live], channelId: channel });
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
+    expect(heard(first.run).length).toBeGreaterThan(0);
+    first.connect(false);
+    const second = await setup({ storage, identities: [echo], history: sent });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("gives no live message again after a restart when a polled watch hears more between reads than it keeps", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const storage = memoryStorage();
+    const first = await setup({ storage, identities: [echo] });
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/chat": { ...chat["watch/chat"], channels: "all" },
+        "watch/channel": null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    // Ten a second: more than it keeps as heard between two reads.
+    const sent: ReturnType<typeof posted>[] = [];
+    for (let second = 0; second < 60; second++) {
+      const batch = Array.from({ length: 10 }, (_, index) =>
+        posted(`live ${second}.${index}`, nowSeconds()),
+      );
+      first.history.push(...batch);
+      sent.push(...batch);
+      first.emit({ events: batch, channelId: channel });
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(heard(first.run).length).toBeGreaterThan(0);
+    first.connect(false);
+    const second = await setup({ storage, identities: [echo], history: sent });
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(heard(second.run)).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reads what a route missed while it was down, though it comes back between reads", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    const { service, run, history, recover, storage, unrouted, session } =
+      await setup({ identities: [echo] });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    // When each read of a kind live does not hear reads up to, and when.
+    const notes: { until?: number | undefined; at: number }[] = [];
+    const read = vi.mocked(session.read);
+    const original = read.getMockImplementation();
+    read.mockImplementation((filters, options) => {
+      if (filters[0]?.kinds?.includes(30023))
+        notes.push({ until: filters[0].until, at: nowSeconds() });
+      return original ? original(filters, options) : Promise.resolve([]);
+    });
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        ...chat,
+        "watch/channel": null,
+        "watch/notes": { ...chat["watch/chat"], kinds: [30023] },
+      },
+    });
+    await settle();
+    vi.setSystemTime((now + 1) * 1000);
+    recover();
+    await settle();
+    unrouted.add(channel);
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Sent while the route was down, and past what its replay sends again.
+    history.push(posted("while the route was down", now + 8));
+    await vi.advanceTimersByTimeAsync(10_000);
+    unrouted.delete(channel);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle();
+    await settle();
+    expect(heard(run)).toEqual(["while the route was down"]);
+    const chats = Object.entries(readCheckpoints(storage)).filter(([key]) =>
+      key.includes("watch/chat"),
+    );
+    expect(chats.map(([, { through }]) => through >= now + 8)).toEqual([true]);
+    // Reading the stream that came back up to now does not take the others
+    // past their lag behind now.
+    expect(notes.length).toBeGreaterThan(0);
+    for (const { until, at } of notes)
+      expect(until).toBeLessThanOrEqual(Math.max(now + 1, at - 10));
   } finally {
     vi.useRealTimers();
   }
@@ -7958,9 +8390,9 @@ it("waits for a confirmed roster before catching up, saving no progress past wha
     confirm("saved", [viewer, bot]);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(heard(run)).toEqual(missed);
-    // 64 to a turn.
+    // 64 to a turn. Later reads, as live does not cover every channel, read
+    // its newest again for events stored late, and give none twice.
     expect(run).toHaveBeenCalledTimes(5);
-    expect(catchUpReads(session)).toHaveLength(reads);
   } finally {
     vi.useRealTimers();
   }
@@ -10025,13 +10457,13 @@ it("wakes nothing from the time no plugin showed its attention when it is shown 
   }
 });
 
-it("wakes only a watch with no hidden stream for an event heard while Attention was off", async () => {
+it("wakes no watch, whatever kinds it watches, for an event heard while Attention was off", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   try {
     const start = nowSeconds();
     const storage = memoryStorage();
-    // A second watch on several kinds has no catch-up stream, so no record
-    // that Attention was hidden.
+    // A watch on several kinds has a catch-up stream too, so a record that
+    // Attention was hidden.
     const attention = {
       ...chat,
       "watch/any": { ...chat["watch/chat"], kinds: [9, 7] },
@@ -10053,13 +10485,11 @@ it("wakes only a watch with no hidden stream for an event heard while Attention 
     second.emit({ events: [posted("live while hidden", start + 20)] });
     await settle();
     await showAttention(second.ctx, "two");
-    await vi.waitFor(() => expect(second.run).toHaveBeenCalled());
+    vi.setSystemTime((start + 30) * 1000);
+    second.emit({ events: [posted("after", start + 30)] });
+    await vi.waitFor(() => expect(second.run).toHaveBeenCalledTimes(2));
     await settle();
-    expect(
-      second.run.mock.calls.map(([{ trigger }]) =>
-        trigger.type === "watch" ? trigger.slug : trigger.type,
-      ),
-    ).toEqual(["watch/any"]);
+    expect(heard(second.run)).toEqual(["after", "after"]);
   } finally {
     vi.useRealTimers();
   }

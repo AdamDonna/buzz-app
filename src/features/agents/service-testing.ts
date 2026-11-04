@@ -90,10 +90,12 @@ export function fakeRelay(origin = "https://relay.example.test") {
     }),
   };
   let status = "connected";
+  /** Channels of the list live does not route. */
+  const unrouted = new Set<string>();
   const statuses = new Set<() => void>();
   /** The viewer's kind 30177 records the community returns. */
   const listed: RelayEvent[] = [];
-  /** The kind 9 messages it stores, which catch-up reads. */
+  /** The events it stores, which catch-up reads. */
   const history: RelayEvent[] = [];
   /** Each agent's `core` memory as the community holds it. */
   const memories = new Map<string, string>();
@@ -109,9 +111,18 @@ export function fakeRelay(origin = "https://relay.example.test") {
         };
       }),
     },
-    read: vi.fn(async (filters: readonly ReadFilter[]) =>
-      filters[0]?.kinds?.includes(9) ? page(history, filters[0]) : [...listed],
-    ),
+    read: vi.fn(async (filters: readonly ReadFilter[]) => {
+      // As the session's reader refuses it.
+      if (
+        filters.some((filter) => !filter.kinds?.length && !filter.ids?.length)
+      )
+        throw new Error("Relay reads need valid kinds or event IDs");
+      // A catch-up read is bounded on both sides; it may ask for any kinds.
+      return filters[0]?.kinds?.includes(9) ||
+        (filters[0]?.since !== undefined && filters[0]?.until !== undefined)
+        ? page(history, filters[0])
+        : [...listed];
+    }),
     readRemote: vi.fn(async (filters: readonly ReadFilter[]) => {
       const ids = filters[0]?.ids ?? [];
       return history.filter((event) => ids.includes(event.id));
@@ -130,7 +141,21 @@ export function fakeRelay(origin = "https://relay.example.test") {
       },
     },
     live: {
-      snapshot: () => ({ status }),
+      // Each channel of the list is live while connected, unless `unrouted`.
+      snapshot: () => ({
+        status,
+        routes:
+          status === "connected"
+            ? rows
+                .filter(({ id }) => !unrouted.has(id))
+                .map(({ id }) => ({
+                  id: `channel:${id}`,
+                  channelId: id,
+                  status: "live",
+                  replay: "unknown",
+                }))
+            : [],
+      }),
       subscribe(listener: () => void) {
         statuses.add(listener);
         return () => statuses.delete(listener);
@@ -213,6 +238,7 @@ export function fakeRelay(origin = "https://relay.example.test") {
     },
     archives,
     listed,
+    unrouted,
     history,
     memories,
     session,
@@ -229,6 +255,7 @@ export function page(events: readonly RelayEvent[], filter: ReadFilter) {
   return events
     .filter(
       (event) =>
+        (!filter.kinds || filter.kinds.includes(event.kind)) &&
         event.created_at >= (filter.since ?? 0) &&
         (event.created_at < until ||
           (event.created_at === until &&
