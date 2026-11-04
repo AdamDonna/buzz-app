@@ -18,6 +18,7 @@ mod advertise;
 mod keychain;
 mod owner;
 mod pairing;
+pub(crate) use pairing::Unrevoked;
 mod policy;
 // No token is issued on Windows, so there is nothing to test there.
 #[cfg(all(test, not(windows)))]

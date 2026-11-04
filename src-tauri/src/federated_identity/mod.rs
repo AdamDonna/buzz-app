@@ -126,6 +126,9 @@ struct Inner {
     assertions: Mutex<assertion::AssertionCache>,
     discoveries: Mutex<assertion::DiscoveryCache>,
     retiring: Mutex<Option<Retiring>>,
+    /// Holds the next renewal between recording its retirement and installing.
+    #[cfg(test)]
+    install_gate: Mutex<Option<testing::Gate>>,
 }
 /// Records durably, before a sign-out or change of account commits, what
 /// else that retirement revokes; see [`FederatedIdentity::on_retire`]. The
@@ -213,6 +216,8 @@ impl FederatedIdentity {
             operation: AsyncMutex::new(()),
             changes,
             account_changes,
+            #[cfg(test)]
+            install_gate: Mutex::default(),
             agent_tokens: Mutex::default(),
             assertions: Mutex::new(Default::default()),
             discoveries: Mutex::new(Default::default()),
@@ -890,6 +895,8 @@ impl FederatedIdentity {
         } else {
             None
         };
+        #[cfg(test)]
+        self.pass_install_gate().await;
         let prepared = agent::AgentTokens::preparing_session(self, record.email.clone())
             .await
             .map_err(|_| Failure::from("storage-unavailable"))?;

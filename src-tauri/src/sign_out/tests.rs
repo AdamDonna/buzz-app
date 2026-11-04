@@ -1958,3 +1958,22 @@ fn a_sign_out_an_older_build_finished_removes_the_current_key_once() {
     assert!(synced.get());
     assert_eq!(removed.get(), 3);
 }
+
+/// A plain sign-out goes ahead once the pairing revoke-all is owed; sign out
+/// and erase needs it done; a marker that could not be saved stops both.
+#[test]
+fn pairing_revoke_all_policy_for_sign_out() {
+    use crate::credential_service::Unrevoked;
+    let failed = |recorded| -> Result<(), Unrevoked> {
+        Err(Unrevoked {
+            recorded,
+            message: "keychain".into(),
+        })
+    };
+    for wipe in [false, true] {
+        assert!(pairings_allow(&Ok(()), wipe));
+        assert!(!pairings_allow(&failed(false), wipe), "unsaved marker");
+    }
+    assert!(pairings_allow(&failed(true), false), "plain sign-out");
+    assert!(!pairings_allow(&failed(true), true), "sign out and erase");
+}

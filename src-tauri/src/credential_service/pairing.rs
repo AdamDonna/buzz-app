@@ -520,7 +520,6 @@ impl Pairings {
 /// marker was saved, so the next launch still finishes it.
 #[derive(Debug)]
 pub(crate) struct Unrevoked {
-    #[allow(dead_code)] // For a sign-out that may proceed once it is owed.
     pub(crate) recorded: bool,
     pub(crate) message: String,
 }

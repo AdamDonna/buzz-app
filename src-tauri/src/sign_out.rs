@@ -860,6 +860,16 @@ pub(crate) fn sign_out_wipe_refusal() -> Option<&'static str> {
     current_refusal(true, false)
 }
 
+/// Paired tools act as this human, whose key a plain sign-out keeps, so it
+/// needs their revoke-all at least owed: once the marker is saved, the next
+/// launch finishes it. Sign out and erase needs it done.
+fn pairings_allow(cleared: &Result<(), crate::credential_service::Unrevoked>, wipe: bool) -> bool {
+    match cleared {
+        Ok(()) => true,
+        Err(unrevoked) => !wipe && unrevoked.recorded,
+    }
+}
+
 /// Records the choices and restarts; the next launch deletes.
 #[tauri::command]
 pub(crate) async fn sign_out<R: tauri::Runtime>(
@@ -882,11 +892,8 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
     };
     // Agents run as plugin host processes, which stop when Buzz exits.
     let shutdown = || async { Ok(()) };
-    // Paired tools act as this human, whose key a sign-out may keep, so a
-    // revocation that cannot be saved stops the sign-out. (`recorded` says
-    // the next launch would still finish it.)
     if let Some(credentials) = app.try_state::<crate::credential_service::CredentialService>() {
-        if credentials.clear_pairings().await.is_err() {
+        if !pairings_allow(&credentials.clear_pairings().await, wipe) {
             return Err(refuse(
                 "Couldn't revoke paired command-line tools; nothing was signed out",
             ));

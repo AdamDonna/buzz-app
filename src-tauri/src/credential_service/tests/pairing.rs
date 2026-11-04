@@ -585,3 +585,42 @@ async fn nothing_pairs_while_a_recorded_retirement_is_under_way() {
     assert_eq!(error(&reply).1, "revoked");
     assert!(fixture.keychain.value.lock().unwrap().is_none());
 }
+
+/// A real renewal into another account, paused after it records its
+/// revoke-all and before it installs, refuses pairing meanwhile; once it
+/// commits, the marker remains and a restart revokes.
+#[tokio::test]
+async fn a_renewal_paused_before_it_installs_refuses_pairing_then_a_restart_revokes() {
+    let mut fixture = fixture_signed_in(testing::renewing_into_another_account().await);
+    let token = paired(&fixture).await;
+    let gate = fixture.identity.gate_install_for_test();
+    let identity = fixture.identity.clone();
+    let renewal = tokio::spawn(async move { identity.renew_for_test().await });
+    gate.reached.notified().await;
+
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst), "recorded");
+    let (_, reply) = pair_request(&fixture.service, &[CLIENT, RELAY]).await;
+    assert_eq!(reply["error"], "unavailable", "{reply}");
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "unavailable");
+
+    gate.resume.notify_one();
+    renewal.await.unwrap().unwrap();
+    assert_eq!(
+        fixture.identity.email_for_test().as_deref(),
+        Some("b@example.com")
+    );
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst), "marker kept");
+
+    let session = testing::renewing_into_another_account().await;
+    fixture.service = service_over(
+        &fixture.host,
+        &session,
+        &fixture.keychain,
+        &fixture.notices,
+        IdentityHost::fixture(),
+    );
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "revoked");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}

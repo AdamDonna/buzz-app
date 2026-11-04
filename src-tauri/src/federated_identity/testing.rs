@@ -36,7 +36,27 @@ pub(crate) async fn renewing_into_another_account() -> FederatedIdentity {
     tests::signed_in_at(Arc::new(tests::Memory::default()), base, "a@example.com").0
 }
 
+/// Where a paused renewal waits: `reached` once it is there, then `resume`.
+#[derive(Clone, Default)]
+pub(crate) struct Gate {
+    pub(crate) reached: Arc<tokio::sync::Notify>,
+    pub(crate) resume: Arc<tokio::sync::Notify>,
+}
+
 impl FederatedIdentity {
+    /// Pauses the next renewal after its retirement is recorded, before it installs.
+    pub(crate) fn gate_install_for_test(&self) -> Gate {
+        let gate = Gate::default();
+        *self.0.install_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+    pub(super) async fn pass_install_gate(&self) {
+        let gate = self.0.install_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.resume.notified().await;
+        }
+    }
     /// Finishes a renewal through this session's adapter.
     pub(crate) async fn renew_for_test(&self) -> Result<(), String> {
         let revision = self.snapshot().revision;
