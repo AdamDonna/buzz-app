@@ -1,3 +1,4 @@
+import { visibleTeams } from "../../features/agents/visible-teams";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import { AgentDetails } from "./AgentDetails";
 import { communityDestination } from "../../features/communities/destination";
@@ -277,14 +278,7 @@ export function AgentsPage({
   // Teams are shared by every community; this one shows each with a member
   // here, or with none in any community. A synced team always shows in its
   // home, and elsewhere only with a member there or while it has none.
-  const members = new Set(snapshot.agents.map((agent) => agent.pubkey));
-  const teams = snapshot.teams.filter(
-    (team) =>
-      team.members.some((pubkey) => members.has(pubkey)) ||
-      (team.revision
-        ? !team.members.length || agents.teamHere({ id: team.id })
-        : !team.members.some((pubkey) => agents.memberships(pubkey).length)),
-  );
+  const teams = visibleTeams(agents);
   // Only a team still saved, or one being made, keeps its editor open.
   const editing =
     editingTeam === "new" || teams.some((team) => team.id === editingTeam)

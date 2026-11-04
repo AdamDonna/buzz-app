@@ -329,6 +329,7 @@ export function MentionCompletion({
                     roster,
                     selected,
                     elsewhere: community?.joinable(),
+                    teamNames: teams.readNames,
                   },
                   query.query,
                   signal,

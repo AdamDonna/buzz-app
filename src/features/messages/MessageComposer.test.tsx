@@ -12203,7 +12203,7 @@ const mira = { pubkey: "c".repeat(64), name: "Mira Example" };
 
 /** The owner's agent in another community, as `Agents.joinable()` offers it. */
 function elsewhereAgent(agent: MentionRecipient) {
-  const snapshot = { agents: [] };
+  const snapshot = { agents: [], teams: [] };
   const types: never[] = [];
   const joinable = [
     { key: agent.pubkey, ...agent, relay: "wss://oss.example.com" },

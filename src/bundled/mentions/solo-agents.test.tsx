@@ -3426,7 +3426,7 @@ it.each(["loading", "error"] as const)(
 it("team loading has no Retry action and never replaces a people status", async () => {
   const loading = teamFixture(undefined, { status: "loading" });
   await waitFor(() =>
-    expect(loading.result()?.status).toBe("Loading saved teams…"),
+    expect(loading.result()?.status).toBe("Loading legacy teams…"),
   );
   expect(loading.result()?.retry).toBeUndefined();
   loading.view.unmount();

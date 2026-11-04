@@ -747,10 +747,11 @@ turning it back on does not restore old recipients. Solo chat auto-recipient rul
 unchanged. An outbox rejection preserves the original draft; acceptance is not proof
 of relay delivery or agent execution.
 
-Team records in the channel kit (see [Channels](channels.md); groups, Canvas and
-`buzz-channel-kit-v2` team manifests) appear in both mention choosers as shortcuts.
-No bundled plugin writes team records now, so they appear only for records already
-in the community. A team is a shortcut, not a group identity: explicit selection
+Saved teams from **Your teams**, both local and confirmed synced copies, appear
+in both mention choosers under the same community visibility rules. Legacy
+channel-kit teams (see [Channels](channels.md)) remain available independently;
+a legacy catalog failure does not block current teams. A team is a shortcut, not
+a group identity: explicit selection
 inserts its saved agent keys as individual mentions in one undoable edit through
 `insertMentions`. Names never resolve membership. Typing a team name or Space
 alone does not select it. Team names also prevent Space from accidentally selecting

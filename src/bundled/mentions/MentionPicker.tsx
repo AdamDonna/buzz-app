@@ -357,7 +357,7 @@ export function MentionPicker({
               <p role="status">
                 {teams.status}{" "}
                 {teams.canRetry && (
-                  <Button onClick={teams.retry}>Retry teams</Button>
+                  <Button onClick={teams.retry}>Retry legacy teams</Button>
                 )}
               </p>
             )}
