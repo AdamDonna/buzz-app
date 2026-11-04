@@ -724,7 +724,7 @@ export function Welcome({
           />
         ) : null;
       case "key-lost":
-        // Starting over creates a new key, as Create my key does, and the old
+        // Starting over creates a new key, as Set me up does, and the old
         // key's communities are not offered to it (so the lane ends with the
         // restore alone, not `finish`). The old key stays linked
         // until the new one exists, so the account is never left without a

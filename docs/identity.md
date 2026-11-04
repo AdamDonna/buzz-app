@@ -97,14 +97,15 @@ leaves the lookup unavailable rather than empty, and never fails setup: it only
 decides whether Welcome back offers a restore and whether an import needs
 automatic backup.
 
-**Not linked** pauses on **Get started with Buzz**. **Create my key** creates
-and links a key; **Use an existing key** opens **Enter your private key**. **Use a different
-account** signs out the first-run session and returns to the welcome screen.
+**Not linked** pauses on **Get started with Buzz**, which says the account will
+manage the Buzz identity. **Set me up** creates and links a key; **Use an
+existing key** opens **Enter your private key**. **Use a different account**
+signs out the first-run session and returns to the welcome screen.
 The browser may retain its portal session. This choice page shows the signed-in
 email so the account can be checked before linking a key.
 
 Builderlab setup automatically backs up the created key after linking it to the
-signed-in account and waits for the uploader. The create/import screens disclose
+signed-in account and waits for the uploader. The import screen discloses
 this behavior. A failed backup stays in setup with **Try again**, preserving the
 key on this device; it cannot be bypassed by disabling backup. If the session
 has expired, retry signs in again and must return to the original account before
@@ -165,7 +166,7 @@ counts as done only when kgoose confirms removing the old key, or the account
 then holds no key or the new one. If the old key is still bound (kgoose removes
 nothing when the sign-in is no longer active) or another key is, the step fails
 without Try again.
-Welcome back itself never offers Create my key.
+Welcome back itself never offers Set me up.
 
 Every lane ends the same way. A linked account runs **Finding communities**
 (the same real read) once its key is on the device; the old key's list is not
@@ -795,10 +796,11 @@ The native identity service exposes `getBackupChoice()` and
 `setBackupChoice(pubkey, automatic)`. These APIs expose public metadata and do not
 change identity readiness. Reading a choice does not contact a server; saving
 automatic backup wakes the existing native uploader if a session is connected.
-Builderlab first run discloses automatic backup before creating, replacing or
-importing a key, then enables it after linking. There is no separate backup-choice
-screen or failure bypass. Independent imports without Builderlab sign-in do not
-enable backup. Settings retains control over future automatic uploads.
+Builderlab first run discloses automatic backup before replacing or importing a
+key, says the account manages a key it creates, then enables backup after
+linking. There is no separate backup-choice screen or failure bypass.
+Independent imports without Builderlab sign-in do not enable backup. Settings
+retains control over future automatic uploads.
 
 The choice is bound to the current public key and trusted build-configured backup
 service and namespace. Missing or mismatched metadata returns no choice;

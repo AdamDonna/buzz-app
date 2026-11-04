@@ -1139,9 +1139,7 @@ const urlField = () => {
 const urlContinue = () => screen.getByRole("button", { name: "Continue" });
 /** The key choice a setup with no backed-up key pauses on; Create links and backs up the key. */
 const createMyKey = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(
-    await screen.findByRole("button", { name: "Create my key" }),
-  );
+  await user.click(await screen.findByRole("button", { name: "Set me up" }));
 };
 async function completeRequiredProfile(
   user: ReturnType<typeof userEvent.setup>,
@@ -1967,7 +1965,7 @@ it("Sign in with Builderlab runs sign-in, creates the key mid-setup, and lands o
   // The lookup's sentence no longer carries the address: the signed-in line
   // does, once, with a way out if it is the wrong account.
   expect(
-    screen.getByText(/We’ll create a private key that represents you/),
+    screen.getByText(/If this is your first time using Buzz/),
   ).toBeVisible();
   expect(screen.queryByText("Signed in as a@example.com.")).toBeNull();
   expect(screen.queryByText(/backed-up key for a@example\.com/)).toBeNull();
@@ -1975,14 +1973,14 @@ it("Sign in with Builderlab runs sign-in, creates the key mid-setup, and lands o
     screen.getByRole("button", { name: "Use a different account" }),
   ).toBeEnabled();
   expect(invoke).not.toHaveBeenCalledWith("identity_create", {});
-  // Automatic backup is disclosed before creating the key.
+  // The account's management of the identity is disclosed before creating the key.
   expect(
-    screen.getByText(/backed up to your Builderlab account automatically/),
+    screen.getByText(/Your identity in Buzz will be managed by your account/),
   ).toBeVisible();
   expect(
     screen.getByRole("button", { name: "Use an existing key" }),
   ).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Create my key" })).toHaveAttribute(
+  expect(screen.getByRole("button", { name: "Set me up" })).toHaveAttribute(
     "data-variant",
     "prominent",
   );
@@ -2257,7 +2255,7 @@ it("a link that fails after the key is created blocks setup with only Try again,
   identity.dispose();
 });
 
-it("a backup that times out after Create my key offers Try again, which re-runs only the backup, and setup lands on Join Community for a landing URL", async () => {
+it("a backup that times out after Set me up offers Try again, which re-runs only the backup, and setup lands on Join Community for a landing URL", async () => {
   const relay = landingRelay("https://relay.example.com");
   relay.info.resolve();
   const bind = vi.fn((_pubkey: string) => Promise.resolve());
@@ -3237,7 +3235,7 @@ const callsTo = (relay: ReturnType<typeof nativeRelay>, community: string) =>
   relay.calls.filter((call) => call.community === community);
 /**
  * Sign in with Builderlab (from the connect choice when `typed` is given) for an
- * account that saved `known`, then Create my key.
+ * account that saved `known`, then Set me up.
  */
 async function restoreLane(
   identity: Identity,
@@ -4103,7 +4101,7 @@ it("Use an existing key opens Enter your private key, classifies what is pasted,
   expect(
     screen.getByRole("heading", { name: "Get started with Buzz" }),
   ).toBeVisible();
-  for (const name of ["Create my key", "Use an existing key"])
+  for (const name of ["Set me up", "Use an existing key"])
     expect(screen.getByRole("button", { name })).toBeEnabled();
   // Focus returns to the choice that opened the page, not to the heading.
   expect(
@@ -4492,7 +4490,7 @@ it("a linked account is welcomed back with its npub, accepts only the linked key
   expect(screen.getByTitle(linkedNpub)).toBeVisible();
   expect(screen.getByRole("button", { name: /^Saved key,/ })).toBeEnabled();
   expect(screen.queryByText(owned.pubkey)).toBeNull();
-  for (const name of ["Create my key", "Use an existing key"])
+  for (const name of ["Set me up", "Use an existing key"])
     expect(screen.queryByRole("button", { name })).toBeNull();
   expect(
     screen.getByRole("button", { name: "Use a different account" }),
@@ -6739,7 +6737,7 @@ it("an FI build's Sign in with Builderlab signs in through the native session an
   );
   await user.click(await screen.findByRole("button", { name: SIGN_IN }));
   expect(
-    await screen.findByRole("button", { name: "Create my key" }),
+    await screen.findByRole("button", { name: "Set me up" }),
   ).toBeVisible();
   expect(fi.service.signIn).toHaveBeenCalledOnce();
   expect(fi.request.mock.calls.map(([{ path }]) => path).sort()).toEqual([
@@ -6779,9 +6777,7 @@ it.each(["unavailable", "not_offered"] as const)(
       </Welcome>,
     );
     await user.click(await screen.findByRole("button", { name: SIGN_IN }));
-    expect(
-      await screen.findByText(/Block can use that copy to restore this key/),
-    ).toBeVisible();
+    expect(await screen.findByText(/managed by your account/)).toBeVisible();
     await createMyKey(user);
     await screen.findByRole("alert");
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();

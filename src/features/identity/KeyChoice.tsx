@@ -31,9 +31,8 @@ export function KeyChoice({
             Get started with Buzz
           </h1>
           <p className="text-body text-subtle">
-            We’ll create a private key that represents you in Buzz. Your key is
-            backed up to your Builderlab account automatically. Block can use
-            that copy to restore this key, including anywhere else you use it.
+            Your identity in Buzz will be managed by your account. If this is
+            your first time using Buzz we can set your identity up for you.
           </p>
           {email && (
             <p className="break-words text-body-sm text-subtle">
@@ -44,7 +43,7 @@ export function KeyChoice({
       }
     >
       <Button variant="prominent" size="lg" onClick={onCreate}>
-        Create my key
+        Set me up
       </Button>
       <Button
         variant="subtle"

@@ -28,7 +28,8 @@ the interface unless an available tool actually supports that action.
   On Mac, the welcome entrance plays once per app storage profile; Reduce Motion
   skips it, and pressing a key finishes it immediately.
   The key-import field masks your key. Use the eye inside the field to reveal
-  or hide it. Check the signed-in email before creating a key.
+  or hide it. Check the signed-in email before choosing **Set me up**, which
+  creates a key.
   Setup then creates a new key or takes an existing private key, and may link
   it to the signed-in account. Builderlab setup backs the key up automatically;
   if backup fails temporarily, retry to complete setup. If backup is not supported
