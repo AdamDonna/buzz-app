@@ -109,6 +109,24 @@ fn only(value: &Value, allowed: &[&str]) -> bool {
 fn exact_lineup(value: &Value, allowed: &[&str]) -> bool {
     only(value, allowed) && lineup(value)
 }
+fn workspace_lead(value: &Value) -> bool {
+    only(value, &["region", "channelId"])
+        && value["channelId"]
+            .as_str()
+            .is_some_and(super::channel_writes::uuid)
+        && value["region"].as_str().is_some_and(|region| {
+            region.strip_prefix("buzz.region:").is_some_and(|name| {
+                name.len() <= 201
+                    && name
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+                    && name.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b".:-".contains(&b)
+                    })
+            })
+        })
+}
 fn record(raw: &Value, community: &str) -> Result<String> {
     let bytes = serde_json::to_vec(raw).map_err(|_| "Invalid channel recipe")?;
     if !only(raw, &["version", "community", "deleted", "value"])
@@ -205,7 +223,8 @@ fn record(raw: &Value, community: &str) -> Result<String> {
             let mut names = std::collections::HashSet::new();
             groups.len() <= 100
                 && groups.iter().all(|g| {
-                    only(g, &["id", "name", "defaultTemplateId"])
+                    only(g, &["id", "name", "defaultTemplateId", "lead"])
+                        && g.get("lead").is_none_or(workspace_lead)
                         && g.get("id")
                             .and_then(Value::as_str)
                             .is_some_and(|s| identifier(s) && names.insert(s))
@@ -397,6 +416,42 @@ mod tests {
 #[cfg(test)]
 mod crypto_tests {
     use super::*;
+    #[tokio::test]
+    async fn solo_workspace_leads_round_trip_through_native_admission() {
+        let host = IdentityHost::fixture();
+        let community = "https://relay.test";
+        let lead = serde_json::json!({"region":"buzz.region:nexus:tasks",
+            "channelId":"11111111-1111-4111-8111-111111111111"});
+        let mut raw = serde_json::json!({"version":1,"community":community,"deleted":false,
+            "value":{"type":"groups","id":"me","groups":[
+                {"id":"work","name":"Work","defaultTemplateId":"","lead":lead}
+            ],"assignments":{}}});
+        prepare(&raw, community).unwrap();
+        let ciphertext = host.kit_cipher(raw.to_string(), true).await.unwrap();
+        let event = serde_json::json!({"kind":30078,"content":ciphertext,
+            "tags":[["d",record(&raw,community).unwrap()],["t",ME_KIT_TAG]]});
+        assert_eq!(
+            validate_ciphertext(&host, &event, community).await.unwrap(),
+            raw
+        );
+        for invalid in [
+            Value::Null,
+            serde_json::json!({"region":"buzz.region:nexus:tasks"}),
+            serde_json::json!({"region":"other","channelId":lead["channelId"]}),
+            serde_json::json!({"region":"buzz.region:","channelId":lead["channelId"]}),
+            serde_json::json!({"region":"buzz.region:nexus tasks","channelId":lead["channelId"]}),
+            serde_json::json!({"region":"buzz.region:nexus:tasks","channelId":"invalid"}),
+            serde_json::json!({"region":"buzz.region:nexus:tasks","channelId":lead["channelId"],"extra":true}),
+        ] {
+            raw["value"]["groups"][0]["lead"] = invalid;
+            assert!(prepare(&raw, community).is_err(), "{raw}");
+        }
+        raw["value"]["groups"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("lead");
+        assert!(prepare(&raw, community).is_ok());
+    }
     #[tokio::test]
     async fn kit_crypto_round_trips_and_enforces_coordinate_and_community() {
         let host = IdentityHost::fixture();
