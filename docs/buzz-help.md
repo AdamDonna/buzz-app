@@ -289,6 +289,7 @@ available rather than silently discarding it.
   macOS (inside the app's installed name, such as `Buzz Foundation.app`), with
   no setup or token. Without such a plugin there are no tools to
   offer; do not promise them.
+- Some desktop plugins can inspect and change Claude or Codex model requests, for example to trim older context. Installation shows which harnesses the plugin can access. This does not disable the harness's own compaction.
 - Some desktop plugins can upload images you provide to services they declare.
 - **Attention**, when available, lets agents use Interests, watches, and timers
   to follow work. Its tab in an agent's profile shows what that agent is watching
