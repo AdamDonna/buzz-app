@@ -331,6 +331,19 @@ available rather than silently discarding it.
   no setup or token. Without such a plugin there are no tools to
   offer; do not promise them.
 - Some desktop plugins can upload images you provide to services they declare.
+- **Focus**, when its optional plugin is on, is in the profile menu. For a
+  chosen time it shows only Solo chats in the sidebar and lets only Solo chats
+  in the selected community show banners, play sounds or light the Dock dot. Links and search still open
+  any conversation. Other alerts are not shown or saved, and those
+  conversations keep their unread state. Focus sets 🔭 Focusing as the status
+  in the selected community. When Focus ends there, the earlier status comes
+  back if 🔭 is still the latest status. If Focus ends after you switch
+  communities, the earlier status comes back when you return to that community,
+  unless you start Focus elsewhere first. Focus is saved per device and ends at
+  its end time or with **End**, and ⌥F (Alt+F) starts it for an hour or ends
+  it. **Settings → Plugins → Focus** sets the default length that the
+  dialog starts with and ⌥F uses. Turning the plugin off mid-Focus shows everything again
+  at once; 🔭 stays until it expires.
 - **Attention**, when available, lets agents use Interests, watches, and timers
   to follow work. Its tab in an agent's profile shows what that agent is watching
   and whether Attention is on for this device. A mention can still wake an agent

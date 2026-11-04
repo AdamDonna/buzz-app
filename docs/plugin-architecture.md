@@ -243,7 +243,7 @@ external source project with `pnpm exec tsc` in that directory.
 The host owns navigation, Settings, loading errors, and render error boundaries.
 Settings controls and CLI management do not depend on plugin activation. Updates are detected while the app
 is running. A selected page remounts when its revision changes; its local React
-state resets. Plugin-specific persistent data has no host API yet.
+state resets. Plugin-specific persistent data has no host API yet; bundled plugins such as Reminders and Focus keep small device-local state in namespaced `localStorage` keys.
 
 Plugins are trusted code executing in the app's JavaScript context. They are not
 sandboxed: infinite loops, global changes, and external side effects cannot be
@@ -353,6 +353,17 @@ ctx.reflect.get("sidebarSections")?.register({
   }],
 });
 ```
+
+### Solo-only sidebar
+
+`sidebarScope.restrict({ id, scope: "solo", banner })` shows only the Solo
+inventory while it is registered. The All/Solo/Team tabs and page destinations
+give way to the plugin's `banner` component, and the person's saved tab returns
+when the last restriction is removed. It returns a remover; disable, replacement
+and teardown remove it too, so a restriction can never outlive its plugin. A
+banner that throws renders nothing and leaves the sidebar usable. It changes
+only the sidebar: links, search and alert clicks still open any conversation.
+Focus is the first caller and registers its restriction only while Focus is on.
 
 A plugin exports `inject` and `apply(ctx)`. Pages register with
 `ctx.pages.register({ id, title, layout?, companion?, primary?, placement?, icon?, component, sidebar? })`. Panels register with
@@ -547,6 +558,15 @@ same way message alerts are (`title` to 128 characters; `body` as Markdown prose
 to 200), so a plugin cannot send raw markup or unlimited text to the OS. Without
 them the banner reads `Buzz` / `New <label>`. The host applies no age limit to
 plugin submissions; the plugin decides what is still worth announcing.
+
+`notifications.gate({ id, allows(target) })` narrows which targets may alert.
+While any gate is registered, a banner, its sound and the Dock unread dot need
+every gate to allow the target; the Dock asks about each conversation as a
+`conversation` target. Pending alerts are rechecked when a gate is added or
+removed. A throwing gate is skipped. `gate` returns a remover, and disabling the
+plugin removes its gates. Gates never widen the host's own access and
+preference checks. A refused alert is dropped, not queued. Focus registers one
+only while Focus is on.
 
 A page may supply `icon`, a `data:image/<subtype>[;params],<payload>` URL; the
 scheme and type match case-insensitively. Search Buzz and the page navigation

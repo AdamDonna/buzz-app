@@ -4,6 +4,13 @@ Dialogs and content tabs follow the [navigation history and dismissal contract](
 The integrated families are Members, Settings sections, provider controls opened
 within Settings or through Agents-page links, and thread, Profile and GitHub tabs.
 
+Plugin account-action dialogs in the profile menu are a documented exception.
+They live in the profile menu's own state and create no visit: Back/Forward
+leaves them as they are, and closing one adds or retires nothing. Moving them to
+the navigation owner would change every account action at once. Focus's dialog
+holds one short choice with no draft or pending work; other account actions,
+such as Send feedback, can hold drafts and uploads.
+
 Back/Forward revisits content and restores the selected thread while retaining
 open tabs. X (and the equivalent explicit tab
 close controls) removes the thread and retires its addressed visits. Traversal

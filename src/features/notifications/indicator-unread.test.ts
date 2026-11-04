@@ -4,7 +4,7 @@ import { createRelaySession } from "../relay/session";
 import type { RelayEvent } from "../relay/events";
 import { readJournal, type ReadJournal } from "../relay/read-state-storage";
 import { keypair, message, metadata, roster, signed } from "../relay/testing";
-import { bindUnreadIndicator } from "./indicator-unread";
+import { bindUnreadIndicator, type IndicatorGates } from "./indicator-unread";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -72,8 +72,8 @@ function setup() {
     relay: { snapshot: () => relayState, subscribe },
   } as unknown as Communities;
   const project = vi.fn();
-  const bind = () => {
-    const stop = bindUnreadIndicator(communities, project);
+  const bind = (gates?: IndicatorGates) => {
+    const stop = bindUnreadIndicator(communities, project, gates);
     cleanups.push(stop);
     return stop;
   };
@@ -239,4 +239,36 @@ it("stays off for coordination between agents and lights for the next message to
   expect(h.project.mock.calls).toEqual([[false]]);
   h.emit([message(h.peer, "room", "Done", 12)]);
   expect(h.project).toHaveBeenLastCalledWith(true);
+});
+
+it("counts only conversations the notification gates allow and follows gate changes", () => {
+  const h = setup();
+  h.grant();
+  let allowed = new Set<string>();
+  const gateListeners = new Set<() => void>();
+  const seen: unknown[] = [];
+  h.bind({
+    allows(target) {
+      seen.push(target);
+      return target.kind === "conversation" && allowed.has(target.channelId);
+    },
+    subscribe(listener) {
+      gateListeners.add(listener);
+      return () => void gateListeners.delete(listener);
+    },
+  });
+  h.emit([message(h.peer, "room", "held", 11)]);
+  expect(h.project.mock.calls).toEqual([[false]]);
+  expect(seen[0]).toEqual({
+    version: 1,
+    kind: "conversation",
+    scope: { viewer: h.viewer.pubkey, communityOrigin: "https://one.example" },
+    channelId: "room",
+  });
+  allowed = new Set(["room"]);
+  for (const listener of gateListeners) listener();
+  expect(h.project).toHaveBeenLastCalledWith(true);
+  allowed = new Set();
+  for (const listener of gateListeners) listener();
+  expect(h.project).toHaveBeenLastCalledWith(false);
 });

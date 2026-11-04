@@ -1,16 +1,26 @@
 import type { Communities } from "../communities/service";
 import type { RelaySession } from "../relay/session";
+import { communityDestination } from "../communities/destination";
+import type { OpenTarget } from "../navigation/targets";
+
+/** Notification gates: only conversations they allow light the indicator. */
+export type IndicatorGates = Readonly<{
+  allows(target: OpenTarget): boolean;
+  subscribe(listener: () => void): () => void;
+}>;
 
 /** A host projection of existing evidence, never a count or a new read owner. */
 export function bindUnreadIndicator(
   communities: Communities,
   project: (unread: boolean) => void,
+  gates?: IndicatorGates,
 ) {
   let closed = false;
   let session: RelaySession | undefined;
   let identity = "";
   let previous: boolean | undefined;
   let stopRoster = () => {};
+  let refresh = () => {};
   const channels = new Map<string, () => void>();
   const publish = (unread: boolean) => {
     if (unread === previous) return;
@@ -19,6 +29,7 @@ export function bindUnreadIndicator(
   };
   const clear = () => {
     stopRoster();
+    refresh = () => {};
     for (const stop of channels.values()) stop();
     channels.clear();
   };
@@ -41,6 +52,10 @@ export function bindUnreadIndicator(
     publish(false);
     if (!owned) return;
     const viewer = client.viewer as string;
+    const scope = gates && {
+      viewer,
+      communityOrigin: communityDestination(client.selected as string).url,
+    };
     const valid = () => !closed && session === owned && identity === next;
     const changed = () => {
       if (!valid()) return;
@@ -65,7 +80,15 @@ export function bindUnreadIndicator(
             (channel) =>
               !channel.huddle &&
               !channel.metadataPending &&
-              channel.members?.includes(viewer),
+              channel.members?.includes(viewer) &&
+              (!gates ||
+                !scope ||
+                gates.allows({
+                  version: 1,
+                  kind: "conversation",
+                  scope,
+                  channelId: channel.id,
+                })),
           )
           .map((channel) => channel.id),
       );
@@ -84,16 +107,19 @@ export function bindUnreadIndicator(
       changed();
     };
     stopRoster = owned.channels.subscribeList(roster);
+    refresh = roster;
     roster();
   };
   const stop = communities.subscribe(update);
   const stopRelay = communities.relay.subscribe(update);
+  const stopGates = gates?.subscribe(() => refresh()) ?? (() => {});
   update();
   return () => {
     if (closed) return;
     closed = true;
     stop();
     stopRelay();
+    stopGates();
     clear();
     session = undefined;
     publish(false);

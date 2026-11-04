@@ -23,6 +23,11 @@ import type { Navigation } from "../../features/navigation/controller";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
+import { OwnedContribution } from "../../plugins/OwnedContribution";
+import type {
+  RegisteredSidebarRestriction,
+  SidebarScope,
+} from "../../features/channel-navigation/sidebar-scope-service";
 import styles from "./PrimarySidebar.module.css";
 
 import { useRelayConnection } from "../../features/relay/react";
@@ -53,6 +58,8 @@ type Props = {
   chatIcons?: ContributionReader<ChatIcon> | undefined;
   chatMenus?: ContributionReader<ChatMenu> | undefined;
   sidebarSections?: SidebarSections | undefined;
+  /** A plugin restriction shows only Solo; the saved filter returns after. */
+  sidebarScope?: SidebarScope | undefined;
   target: OpenTarget;
   children: ReactNode;
   creationAction?: ReactNode;
@@ -102,18 +109,21 @@ function ScopedSidebar({
         typeof saved?.location === "string" ? saved.location : undefined,
     };
   });
+  const sidebarScope = props.sidebarScope;
   useEffect(
     () =>
       soloNavigationFor(connection.session)?.subscribeReveal(
         (_id, explicit) =>
           explicit &&
+          // A restriction already shows Solo; keep the saved filter for after.
+          !sidebarScope?.snapshot().length &&
           setView((current) =>
             current.filter === "team"
               ? { ...current, filter: "solo" }
               : current,
           ),
       ),
-    [connection.session],
+    [connection.session, sidebarScope],
   );
   const soloNavigation = soloNavigationFor(connection.session);
   // Select the title, not the snapshot: Solo regions are rebuilt on every message.
@@ -158,6 +168,10 @@ function ScopedSidebar({
         : undefined
     : undefined;
   const location = destination ? targetKey(target) : undefined;
+  const restriction = useSyncExternalStore(
+    props.sidebarScope?.subscribe ?? noSubscription,
+    () => props.sidebarScope?.snapshot()[0],
+  );
   // A deliberate filter change leaves the pane alone; only a new destination reveals its inventory.
   if (attempt !== observedAttempt) setObservedAttempt(attempt);
   if (
@@ -165,34 +179,50 @@ function ScopedSidebar({
     location &&
     (view.location !== location || attempt !== observedAttempt)
   ) {
-    setView({ filter: view.filter === "all" ? "all" : destination, location });
+    // A restriction keeps the saved filter for when it ends.
+    setView({
+      filter: view.filter === "all" || restriction ? view.filter : destination,
+      location,
+    });
   }
   useEffect(() => {
     writeView(scope, "navigation-scope", view);
   }, [scope, view]);
-  const filter = view.filter;
+  const filter = restriction ? "solo" : view.filter;
   const setFilter = (filter: Filter) => setView({ filter, location });
-  const panelId = `sidebar-${filter}`;
+  // Without the tabs there is no tab to label the panel.
+  const panelId = restriction ? undefined : `sidebar-${filter}`;
   const header = (
     <>
       <div className={styles.sidebarControls}>
         <div className={styles.sidebarScope}>
-          <Tabs
-            label="Navigation scope"
-            variant="segmented"
-            size="sm"
-            value={filter}
-            items={
-              soloTitle === "Solo"
-                ? filters
-                : [filters[0], filters[2], { ...filters[1], label: soloTitle }]
-            }
-            onValueChange={setFilter}
-          />
+          {restriction && props.sidebarScope ? (
+            <RestrictionBanner
+              entry={restriction}
+              registry={props.sidebarScope}
+            />
+          ) : (
+            <Tabs
+              label="Navigation scope"
+              variant="segmented"
+              size="sm"
+              value={filter}
+              items={
+                soloTitle === "Solo"
+                  ? filters
+                  : [
+                      filters[0],
+                      filters[2],
+                      { ...filters[1], label: soloTitle },
+                    ]
+              }
+              onValueChange={setFilter}
+            />
+          )}
         </div>
         {props.creationAction}
       </div>
-      {props.children && (
+      {props.children && !restriction && (
         <div className={styles.destinations}>{props.children}</div>
       )}
     </>
@@ -379,4 +409,19 @@ function conversationDestination(list: ChannelList | undefined, id: string) {
   const channel = list?.channels.find((item) => item.id === id);
   if (!channel && list?.status !== "ready") return undefined;
   return channel?.channelType === "solo" ? "solo" : "team";
+}
+
+/** A plugin's banner, isolated so its failure keeps the sidebar working. */
+function RestrictionBanner({
+  entry,
+  registry,
+}: {
+  entry: RegisteredSidebarRestriction;
+  registry: SidebarScope;
+}) {
+  return (
+    <OwnedContribution entry={entry} registry={registry} fallback={null}>
+      {({ banner: Banner }) => <Banner />}
+    </OwnedContribution>
+  );
 }

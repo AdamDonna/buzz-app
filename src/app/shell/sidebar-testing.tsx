@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
+import type { SidebarScope } from "../../features/channel-navigation/sidebar-scope-service";
 import { act, render } from "@testing-library/react";
 import { vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
@@ -43,6 +44,7 @@ export function fixture(
   host: {
     transport?: ReadTransport;
     federatedIdentity?: FederatedIdentity;
+    sidebarScope?: SidebarScope;
   } = {},
 ) {
   const owner = createRelaySession(host.transport ?? null);
@@ -231,6 +233,7 @@ export function fixture(
                   target={target}
                   chatIcons={chatIcons}
                   chatMenus={chatMenus}
+                  sidebarScope={host.sidebarScope}
                   {...(host.federatedIdentity
                     ? { federatedIdentity: host.federatedIdentity }
                     : {})}

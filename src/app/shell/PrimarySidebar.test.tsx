@@ -21,6 +21,10 @@ import { fixture, owners, id, viewer, scope } from "./sidebar-testing";
 import type { ChannelDetails } from "../../features/relay/channel-details-protocol";
 import { createSoloRegionFixture } from "../../features/channel-navigation/solo-navigation-testing";
 import { PrimarySidebar } from "./PrimarySidebar";
+import type {
+  RegisteredSidebarRestriction,
+  SidebarScope,
+} from "../../features/channel-navigation/sidebar-scope-service";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { SOLO_LABEL } from "../../features/solo/labels";
 import type { ChannelDetailsCapability } from "../../features/relay/channel-details";
@@ -193,6 +197,50 @@ it("keeps focus on a different chat after an Enter-save finishes", async () => {
     expect(screen.queryByRole("textbox", { name: "Chat name" })).toBeNull(),
   );
   expect(destination).toHaveFocus();
+});
+it("shows only Solo under a plugin restriction and restores the saved filter after", async () => {
+  const user = userEvent.setup();
+  let restrictions: readonly RegisteredSidebarRestriction[] = [];
+  const listeners = new Set<() => void>();
+  const publish = (next: readonly RegisteredSidebarRestriction[]) => {
+    restrictions = next;
+    for (const listener of listeners) listener();
+  };
+  const sidebarScope: SidebarScope = {
+    snapshot: () => restrictions,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    restrict: () => () => {},
+  };
+  fixture(true, false, undefined, undefined, 0, undefined, undefined, {
+    sidebarScope,
+  });
+  await user.click(screen.getByRole("tab", { name: "Team" }));
+  act(() =>
+    publish([
+      {
+        id: "focus",
+        scope: "solo",
+        banner: () => <span>Focusing</span>,
+        key: "test.focus/focus",
+        pluginId: "test.focus",
+        revision: "bundled",
+      },
+    ]),
+  );
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(screen.queryByRole("tabpanel")).toBeNull();
+  expect(screen.getByText("Focusing")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Inbox" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Solo" })).toBeVisible();
+  act(() => publish([]));
+  expect(screen.getByRole("tab", { name: "Team" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Inbox" })).toBeVisible();
 });
 it("filters the combined sidebar without navigating or resetting Solo sections", async () => {
   const user = userEvent.setup();
@@ -667,6 +715,62 @@ it("changes Team to Solo only for a live explicit chip intent and does not repla
     act(() => h.roster([...h.session.channels.list().channels]));
     view.rerender(<div />);
     view.rerender(tree());
+    expect(screen.getByRole("tab", { name: "Team" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  } finally {
+    view.unmount();
+    await h.dispose();
+  }
+});
+
+it("an explicit Solo reveal during a restriction keeps the saved Team filter", async () => {
+  const h = createSoloRegionFixture(viewer);
+  let restrictions: readonly RegisteredSidebarRestriction[] = [];
+  const listeners = new Set<() => void>();
+  const publish = (next: readonly RegisteredSidebarRestriction[]) => {
+    restrictions = next;
+    for (const listener of listeners) listener();
+  };
+  const sidebarScope: SidebarScope = {
+    snapshot: () => restrictions,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    restrict: () => () => {},
+  };
+  const target = conversationTarget(h.scope, "owned");
+  const view = render(
+    <ToastProvider>
+      <PrimarySidebar
+        relay={h.relay}
+        navigator={h.navigator}
+        target={target}
+        sidebarScope={sidebarScope}
+      >
+        {null}
+      </PrimarySidebar>
+    </ToastProvider>,
+  );
+  try {
+    await act(() => h.navigate(target));
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Team" }));
+    act(() =>
+      publish([
+        {
+          id: "focus",
+          scope: "solo",
+          banner: () => <span>Focusing</span>,
+          key: "test.focus/focus",
+          pluginId: "test.focus",
+          revision: "bundled",
+        },
+      ]),
+    );
+    act(() => h.service.reveal("owned"));
+    act(() => publish([]));
     expect(screen.getByRole("tab", { name: "Team" })).toHaveAttribute(
       "aria-selected",
       "true",

@@ -34,6 +34,10 @@ export type {
   PluginInstaller,
 } from "./installer";
 export type {
+  SidebarRestriction,
+  SidebarScope,
+} from "../features/channel-navigation/sidebar-scope-service";
+export type {
   Panel,
   Panels,
   ChannelPanelContext,
@@ -122,6 +126,7 @@ export type {
   Notifications,
   NotificationInput,
   NotificationCategoryDescriptor,
+  NotificationGate,
 } from "../features/notifications/service";
 
 export type { VoiceRecording } from "../features/relay/voice-media";

@@ -335,6 +335,8 @@ import TablerSunIcon from "@tabler/icons-react/dist/esm/icons/IconSun.mjs";
 export const SunIcon = defineIcon("tabler", TablerSunIcon);
 import TablerTableIcon from "@tabler/icons-react/dist/esm/icons/IconTable.mjs";
 export const TableIcon = defineIcon("tabler", TablerTableIcon);
+import TablerTelescopeIcon from "@tabler/icons-react/dist/esm/icons/IconTelescope.mjs";
+export const TelescopeIcon = defineIcon("tabler", TablerTelescopeIcon);
 import TablerTimerIcon from "@tabler/icons-react/dist/esm/icons/IconStopwatch.mjs";
 export const TimerIcon = defineIcon("tabler", TablerTimerIcon);
 import TablerClockIcon from "@tabler/icons-react/dist/esm/icons/IconClockHour4.mjs";
