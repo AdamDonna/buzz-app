@@ -240,6 +240,157 @@ describe("navigation attempts over one history driver", () => {
     expect(attempt.signal.reason).toBe(NAVIGATION_ABORTED);
     expect(nav.snapshot().presented).toBeUndefined();
   });
+  it("keeps a shown page when a later attempt on its visit times out", async () => {
+    vi.useFakeTimers();
+    const { host, navigation: nav } = setup();
+    void nav.open(page);
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    // A background retry times out: the page stays, with its authority.
+    const retry = nav.retry();
+    const retried = nav.snapshot().attempt;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(retry).resolves.toEqual({
+      status: "failed",
+      reason: "timeout",
+      presented: true,
+    });
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "timeout",
+      presented: true,
+    });
+    expect(retried.signal.aborted).toBe(false);
+    // The page answers late: its visit is open again, once.
+    expect(host.complete(retried, { status: "opened" })).toBe(true);
+    expect(nav.snapshot().status).toBe("opened");
+    expect(nav.snapshot().reason).toBeUndefined();
+    expect(nav.snapshot().presented).toBeUndefined();
+    expect(host.complete(retried, { status: "opened" })).toBe(false);
+    // A late failure the page reports itself replaces it, as an early one does.
+    void nav.retry();
+    const slow = nav.snapshot().attempt;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({ status: "failed", presented: true });
+    expect(
+      host.complete(slow, { status: "failed", reason: "unavailable" }),
+    ).toBe(true);
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "unavailable",
+    });
+    expect(nav.snapshot().presented).toBeUndefined();
+    expect(slow.signal.aborted).toBe(true);
+    // The card now covers the page, so this visit opens afresh.
+    void nav.retry();
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    // A same-target open that times out keeps it too.
+    void nav.open(page);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({ status: "failed", presented: true });
+    // A failure the page reports itself still replaces it, a timeout included:
+    // only this controller's own deadline keeps the page.
+    for (const reason of ["unavailable", "denied", "timeout"] as const) {
+      void nav.retry();
+      host.complete(nav.snapshot().attempt, { status: "opened" });
+      void nav.retry();
+      host.complete(nav.snapshot().attempt, { status: "failed", reason });
+      expect(nav.snapshot()).toMatchObject({ status: "failed", reason });
+      expect(nav.snapshot().presented).toBeUndefined();
+      // The reported failure covered the page: a later timeout shows the card.
+      void nav.retry();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(nav.snapshot().presented).toBeUndefined();
+    }
+  });
+  it("lets a kept page normalize its address before its late answer", async () => {
+    vi.useFakeTimers();
+    const { host, navigation: nav } = setup();
+    void nav.open(page);
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    void nav.retry();
+    const kept = nav.snapshot().attempt;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({ status: "failed", presented: true });
+    // The page learns its address only after the deadline, then answers.
+    const routed: OpenTarget = { ...page, route: { version: 1, params: "a" } };
+    expect(host.resolve(kept, routed)).toBe(true);
+    const current = nav.snapshot().attempt;
+    expect(current.entry.id).toBe(kept.entry.id);
+    expect(current.entry.target).toEqual(routed);
+    expect(host.complete(kept, { status: "opened" })).toBe(false);
+    expect(host.complete(current, { status: "opened" })).toBe(true);
+    expect(nav.snapshot().status).toBe("opened");
+    // Once answered, the attempt no longer accepts a late address.
+    expect(host.resolve(current, page)).toBe(false);
+  });
+  it("lets the host replace a kept page whose deadline passed while it was not drawn", async () => {
+    vi.useFakeTimers();
+    const { host, navigation: nav } = setup();
+    void nav.open(page);
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    void nav.retry();
+    const kept = nav.snapshot().attempt;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({ status: "failed", presented: true });
+    // The host was drawing its loading state, so its failure covers the page.
+    expect(host.complete(kept, { status: "failed", reason: "timeout" })).toBe(
+      true,
+    );
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "timeout",
+    });
+    expect(nav.snapshot().presented).toBeUndefined();
+    expect(kept.signal.aborted).toBe(true);
+    // Its card covers the page, so a later timeout on this visit shows it too.
+    void nav.retry();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot().presented).toBeUndefined();
+  });
+  it("replaces a page with a failure once another visit was opened over it", async () => {
+    vi.useFakeTimers();
+    const { host, navigation: nav } = setup();
+    void nav.open(page);
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    void nav.open(settings);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "timeout",
+    });
+    expect(nav.snapshot().presented).toBeUndefined();
+    // Back to the page: its content is no longer what is shown.
+    nav.back();
+    expect(nav.snapshot().entry.target).toEqual(page);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "timeout",
+    });
+    expect(nav.snapshot().presented).toBeUndefined();
+  });
+  it("still shows an incoming link's failure over a shown page", async () => {
+    const { host, navigation: nav } = setup();
+    void nav.open(page);
+    host.complete(nav.snapshot().attempt, { status: "opened" });
+    host.fail("unavailable", () => Promise.resolve({ status: "cancelled" }));
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "unavailable",
+      ingress: true,
+    });
+    expect(nav.snapshot().presented).toBeUndefined();
+    // Its card covers the page: reopening the page and timing out shows the
+    // card, not a page that never answered.
+    vi.useFakeTimers();
+    void nav.open(page);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(nav.snapshot()).toMatchObject({
+      status: "failed",
+      reason: "timeout",
+    });
+    expect(nav.snapshot().presented).toBeUndefined();
+  });
   it("rejects invalid targets before cancelling or moving the current intent", async () => {
     const { navigation: nav } = setup();
     void nav.open(settings);
