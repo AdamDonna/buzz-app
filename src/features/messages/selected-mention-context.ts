@@ -9,6 +9,7 @@ export const TaskRecipientContext = createContext<
   | {
       pubkey?: string | undefined;
       selectPrimary?: ((pubkey: string) => boolean) | undefined;
+      eligible?: ((pubkey: string) => boolean) | undefined;
     }
   | undefined
 >(undefined);

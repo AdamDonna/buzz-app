@@ -3919,11 +3919,16 @@ it.each([
                 })
             : undefined;
         try {
-          await userEvent.click(
-            screen.getByRole("button", {
-              name: `${mode === "toolbar same explicit" ? "Member" : "Outside"} agent ${mode === "toolbar same explicit" ? a : b}`,
-            }),
-          );
+          if (mode === "toolbar ineligible explicit")
+            expect(
+              screen.queryByRole("button", { name: `Outside agent ${b}` }),
+            ).toBeNull();
+          else
+            await userEvent.click(
+              screen.getByRole("button", {
+                name: `${mode === "toolbar same explicit" ? "Member" : "Outside"} agent ${mode === "toolbar same explicit" ? a : b}`,
+              }),
+            );
         } finally {
           failure?.mockRestore();
         }

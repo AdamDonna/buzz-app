@@ -694,13 +694,10 @@ it("uses one contributed heading and the prior All Team Nexus order without losi
     expect(screen.getAllByText("Nexus")).toHaveLength(2);
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: "Create" }));
-    expect(
-      screen.queryByRole("menuitem", { name: "New chat" }),
-    ).not.toBeInTheDocument();
-    expect(
-      await screen.findByRole("menuitem", { name: "New workspace" }),
-    ).toBeVisible();
+      .click(screen.getByRole("button", { name: "New chat in Chats" }));
+    expect(h.navigator.snapshot().entry.target).toEqual(
+      soloDraftTarget(h.scope),
+    );
   } finally {
     view.unmount();
     await h.dispose();
