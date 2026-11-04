@@ -1,5 +1,5 @@
 import type { JsonValue, OpenTarget } from "../../features/navigation/targets";
-import type { ActivityFilter } from "./InboxFilters";
+import type { ActivityFilter, SenderFilter, ShowFilter } from "./InboxFilters";
 
 /** Inbox's page address; the route contract below applies only to it. */
 export const inboxTarget = {
@@ -9,31 +9,40 @@ export const inboxTarget = {
   pageId: "inbox",
 } as const;
 
-/** Filters a shortcut asks the Inbox page to show; omitted choices stay as saved. */
-export type InboxRoute = {
-  attention?: "unread";
-  activity?: ActivityFilter;
+/** Filters an open asks the Inbox page to show; omitted choices stay as saved.
+ * Drafts has none of the conversation filters, so it stands alone. */
+export type InboxRoute =
+  | {
+      attention?: "all" | "unread";
+      activity?: ActivityFilter;
+      show?: ShowFilter;
+      sender?: SenderFilter;
+    }
+  | { drafts: true };
+const filters: Readonly<Record<string, readonly JsonValue[]>> = {
+  attention: ["all", "unread"],
+  activity: ["all", "threads", "mentions", "dms"],
+  show: ["inbox", "archived"],
+  sender: ["everyone", "humans", "agents"],
 };
-const activities: readonly string[] = ["all", "threads", "mentions", "dms"];
 
 function inboxRoute(params: JsonValue | undefined): InboxRoute | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) return;
   const value = params as { readonly [key: string]: JsonValue };
+  const keys = Object.keys(value);
+  if (keys.includes("drafts"))
+    return keys.length === 1 && value.drafts === true
+      ? { drafts: true }
+      : undefined;
   if (
-    Object.keys(value).some((key) => key !== "attention" && key !== "activity")
+    keys.some(
+      (key) =>
+        !Object.hasOwn(filters, key) ||
+        !filters[key]?.includes(value[key] as JsonValue),
+    )
   )
     return;
-  const { attention, activity } = value;
-  if (attention !== undefined && attention !== "unread") return;
-  if (
-    activity !== undefined &&
-    !(typeof activity === "string" && activities.includes(activity))
-  )
-    return;
-  return {
-    ...(attention ? { attention } : {}),
-    ...(activity ? { activity: activity as ActivityFilter } : {}),
-  };
+  return Object.fromEntries(keys.map((key) => [key, value[key]])) as InboxRoute;
 }
 
 export const isInboxRoute = (params: JsonValue) => !!inboxRoute(params);

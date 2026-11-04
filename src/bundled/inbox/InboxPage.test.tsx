@@ -2326,6 +2326,66 @@ it("a shortcut open leaves the Drafts view", async () => {
   ).toBeVisible();
 });
 
+it("a route open applies its status and sender, keeping the other saved filters", async () => {
+  const h = fixture({ withDm: true });
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify({
+      show: "inbox",
+      activity: "threads",
+      sender: "everyone",
+      attention: "unread",
+    }),
+  );
+  render(viewAt(h, visit({ show: "archived", sender: "agents" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
+  expect(filterSummary()).toHaveTextContent("Agents");
+  expect(savedFilters(h)).toEqual({
+    show: "archived",
+    activity: "threads",
+    sender: "agents",
+    attention: "unread",
+  });
+});
+
+it("a route that changes Inbox and Archived ends the selection, as the menu does", async () => {
+  const h = fixture();
+  const view = render(viewAt(h, visit()));
+  const list = () =>
+    within(screen.getByRole("list", { name: "Inbox conversations" }));
+  await waitFor(() =>
+    expect(list().getAllByRole("button", { name: /^Open / })).toHaveLength(2),
+  );
+  const [first] = list().getAllByRole("button", { name: /^Open / });
+  if (!first) throw new Error("Missing fixture row");
+  fireEvent.click(first);
+  await waitFor(() => expect(h.archive.current).toBeDefined());
+  view.rerender(viewAt(h, visit({ show: "archived" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Archived"));
+  // The hidden Inbox conversation is no longer the Archive shortcut's target.
+  await waitFor(() => expect(h.archive.current).toBeUndefined());
+});
+
+it("a drafts route opens Drafts and leaves saved filters alone", async () => {
+  const h = fixture();
+  const saved = {
+    show: "archived",
+    activity: "dms",
+    sender: "humans",
+    attention: "unread",
+  };
+  localStorage.setItem(
+    `buzz-view.v1:${JSON.stringify([h.owner.session.scope, "inbox:filters"])}`,
+    JSON.stringify(saved),
+  );
+  const view = render(viewAt(h, visit({ drafts: true })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Drafts"));
+  expect(savedFilters(h)).toEqual(saved);
+  view.rerender(viewAt(h, visit({ activity: "mentions" })));
+  await waitFor(() => expect(filterSummary()).toHaveTextContent("Mentions"));
+  expect(filterSummary()).not.toHaveTextContent("Drafts");
+});
+
 it("a plain open leaves saved filters alone", async () => {
   const h = fixture();
   const saved = {

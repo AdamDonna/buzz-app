@@ -355,8 +355,15 @@ function InboxList({
     )
       return;
     appliedRoutes.add(navigation);
-    setFilter({ show: "inbox", ...route });
-    setDrafts(false);
+    setDrafts("drafts" in route);
+    if ("drafts" in route) return;
+    const next = route.show ?? "inbox";
+    // Like the menu's Inbox/Archived choice, a new list ends the selection.
+    if (next !== show) {
+      cancelRetry();
+      setSelectedTarget(undefined);
+    }
+    setFilter({ ...route, show: next });
   }, [navigation]);
   const subscribeArchives = useCallback(
     (listener: () => void) => subscribeView(archiveScope, listener),
