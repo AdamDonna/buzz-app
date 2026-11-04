@@ -296,12 +296,17 @@ These rules keep a row from moving under the user's pointer or keyboard.
   with no search and no typing pause; the directory is then settled for it
   (section 5). A search that reported more pages, or failed, answers nothing
   beyond its own query; the listing shown for an empty query is not a name
-  search and answers no query but its own; and an exact 64-hex key is never
-  answered this way. A retry searches afresh.
+  search and answers no query but its own; and an exact public key is never
+  answered this way. An **exact public key** is a query that, ignoring
+  surrounding whitespace, is 64 hex characters in either case, or a complete
+  all-lowercase or all-uppercase npub, with or without a `nostr:` prefix in
+  any case, that decodes to a 32-byte key. A partly typed npub, or one with
+  mixed case, a bad checksum or a payload of another length, is a name search.
+  A retry searches afresh.
 - A search refutes its query when it finds no one, reports no more pages, and
   the query contains a letter or digit. After that, a client MAY skip the
   directory search for a longer query that starts with the refuted query, and
-  treat it as finding no one. It MUST NOT skip the search for an exact 64-hex
+  treat it as finding no one. It MUST NOT skip the search for an exact public
   key, because that is an author lookup that name prefixes cannot refute. A
   retry, or any new search, clears the refutation.
 
