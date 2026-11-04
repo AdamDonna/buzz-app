@@ -699,6 +699,7 @@ impl AgentTokens {
             Ok(())
         })
         .await?;
+        self.0.identity.record_retirement().await?;
         // Publish retirement before releasing the wipe lock, then wait for
         // session persistence without holding it (restore takes operation first).
         let retiring = self.0.identity.begin_sign_out();

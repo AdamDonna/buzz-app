@@ -446,3 +446,54 @@ async fn an_approval_after_a_revoke_all_saves_nothing() {
     assert_eq!(error(&pairing.await.unwrap()).1, "denied");
     assert!(fixture.keychain.value.lock().unwrap().is_none());
 }
+
+/// A sign-out records the revoke-all before it commits, so a run that ends
+/// before any request or watcher follows it still revokes next launch.
+#[tokio::test]
+async fn a_sign_out_then_a_restart_before_its_revoke_still_revokes() {
+    let mut fixture = fixture();
+    let token = paired(&fixture).await;
+    let tokens = AgentTokens::in_memory(fixture.identity.clone());
+    let before = fixture.identity.retirements();
+    // This fixture has no agents to wipe, which fails after the sign-out.
+    let _ = tokens.sign_out().await;
+    assert_eq!(fixture.identity.retirements(), before + 1, "signed out");
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst));
+    assert!(fixture.keychain.value.lock().unwrap().is_some());
+
+    // The next run's session knows nothing of the sign-out.
+    let session = testing::restoring();
+    session.finish_restore_for_test();
+    fixture.service = service_over(
+        &fixture.host,
+        &session,
+        &fixture.keychain,
+        &fixture.notices,
+        IdentityHost::fixture(),
+    );
+    let reply = ask(&fixture, &token, "get_public_key", &[]).await;
+    assert_eq!(error(&reply).1, "revoked");
+    assert!(fixture.keychain.value.lock().unwrap().is_none());
+}
+
+/// A revoke-all that can record neither its marker nor the cleared records
+/// is reported as unrecorded, and a sign-out that needs it does not happen.
+#[tokio::test]
+async fn an_unrecorded_revoke_all_is_reported_and_stops_a_sign_out() {
+    let fixture = fixture();
+    paired(&fixture).await;
+    fixture.keychain.fail_owed.store(true, Ordering::SeqCst);
+    fixture.keychain.fail_write.store(true, Ordering::SeqCst);
+    let unrevoked = fixture.service.clear_pairings().await.unwrap_err();
+    assert!(!unrevoked.recorded);
+
+    let tokens = AgentTokens::in_memory(fixture.identity.clone());
+    let before = fixture.identity.retirements();
+    assert!(tokens.sign_out().await.is_err());
+    assert_eq!(fixture.identity.retirements(), before, "nothing signed out");
+
+    // With the marker saved, only the records wait.
+    fixture.keychain.fail_owed.store(false, Ordering::SeqCst);
+    assert!(fixture.service.clear_pairings().await.unwrap_err().recorded);
+    assert!(fixture.keychain.owed.load(Ordering::SeqCst));
+}

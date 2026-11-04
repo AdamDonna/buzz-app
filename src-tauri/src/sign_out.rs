@@ -883,7 +883,8 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
     // Agents run as plugin host processes, which stop when Buzz exits.
     let shutdown = || async { Ok(()) };
     // Paired tools act as this human, whose key a sign-out may keep, so a
-    // revocation that cannot be saved stops the sign-out.
+    // revocation that cannot be saved stops the sign-out. (`recorded` says
+    // the next launch would still finish it.)
     if let Some(credentials) = app.try_state::<crate::credential_service::CredentialService>() {
         if credentials.clear_pairings().await.is_err() {
             return Err(refuse(

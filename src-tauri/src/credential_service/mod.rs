@@ -153,7 +153,7 @@ impl CredentialService {
         keychain: Arc<dyn keychain::Keychain>,
         notify: pairing::Notify,
     ) -> Self {
-        Self(Arc::new(Inner {
+        let service = Self(Arc::new(Inner {
             agents,
             instance,
             endpoint: OnceCell::new(),
@@ -162,7 +162,18 @@ impl CredentialService {
             session,
             pairings: Pairings::new(keychain, notify),
             owner_budgets: Mutex::default(),
-        }))
+        }));
+        let weak = Arc::downgrade(&service.0);
+        service.0.session.on_retire(Arc::new(move || {
+            let inner = weak.upgrade();
+            Box::pin(async move {
+                match inner {
+                    Some(inner) => inner.pairings.record_retirement().await,
+                    None => Ok(()),
+                }
+            })
+        }));
+        service
     }
     /// The OS keychain item this instance's pairings live in.
     /// `data` holds the marker for a revoke-all still owed.
@@ -325,7 +336,7 @@ impl CredentialService {
     /// durably once the returned future succeeds.
     pub(crate) fn clear_pairings(
         &self,
-    ) -> impl std::future::Future<Output = Result<(), String>> + '_ {
+    ) -> impl std::future::Future<Output = Result<(), pairing::Unrevoked>> + '_ {
         self.0.pairings.clear()
     }
 

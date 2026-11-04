@@ -161,7 +161,9 @@ impl Pairings {
         let _write = self.write.lock().await;
         self.loaded_locked().await?;
         if self.state().owed {
-            self.clear_locked().await?;
+            self.clear_locked()
+                .await
+                .map_err(|unrevoked| unrevoked.message)?;
         }
         Ok(())
     }
@@ -426,12 +428,24 @@ impl Pairings {
     /// admitted or approved before this call acts or is saved from the moment
     /// it is made, before its future runs; until the revocation is saved, none
     /// acts at all, in this run or, through the owed marker, the next.
-    pub(crate) fn clear(&self) -> impl std::future::Future<Output = Result<(), String>> + '_ {
+    pub(crate) fn clear(&self) -> impl std::future::Future<Output = Result<(), Unrevoked>> + '_ {
         self.fence(&mut self.state());
         async move {
             let _write = self.write.lock().await;
             self.clear_locked().await
         }
+    }
+
+    /// Records durably that a revoke-all is owed, before a sign-out or change
+    /// of account commits, so a run that ends before [`Pairings::follow`]'s
+    /// revoke is saved still finishes it next launch. A transition that then
+    /// fails leaves it owed: a refused pairing is safe, a reused one is not.
+    pub(crate) async fn record_retirement(&self) -> Result<(), String> {
+        let _write = self.write.lock().await;
+        let keychain = self.keychain.clone();
+        tokio::task::spawn_blocking(move || keychain.set_owed(true))
+            .await
+            .unwrap_or_else(|_| Err("Paired tools could not be revoked".into()))
     }
 
     fn fence(&self, state: &mut State) {
@@ -456,18 +470,25 @@ impl Pairings {
 
     /// Saves an owed revoke-all: the marker first, so a refused clear is
     /// still owed next launch, then the records, then the marker's removal.
-    async fn clear_locked(&self) -> Result<(), String> {
+    async fn clear_locked(&self) -> Result<(), Unrevoked> {
         let keychain = self.keychain.clone();
         tokio::task::spawn_blocking(move || {
+            let recorded = keychain.set_owed(true).is_ok();
+            keychain
+                .write(None)
+                .map_err(|message| Unrevoked { recorded, message })?;
             // Once the records are cleared, the marker no longer matters: one
             // that cannot be removed only revokes again next launch.
-            let _ = keychain.set_owed(true);
-            keychain.write(None)?;
             let _ = keychain.set_owed(false);
-            Ok::<(), String>(())
+            Ok(())
         })
         .await
-        .unwrap_or_else(|_| Err("Paired tools could not be revoked".into()))?;
+        .unwrap_or_else(|_| {
+            Err(Unrevoked {
+                recorded: false,
+                message: "Paired tools could not be revoked".into(),
+            })
+        })?;
         let mut state = self.state();
         state.records = Some(Ok(Vec::new()));
         state.owed = false;
@@ -475,6 +496,15 @@ impl Pairings {
         (self.notify)(Notice::Changed);
         Ok(())
     }
+}
+
+/// A revoke-all whose records are not yet cleared. `recorded` says the owed
+/// marker was saved, so the next launch still finishes it.
+#[derive(Debug)]
+pub(crate) struct Unrevoked {
+    #[allow(dead_code)] // For a sign-out that may proceed once it is owed.
+    pub(crate) recorded: bool,
+    pub(crate) message: String,
 }
 
 struct Closing<'a>(&'a Pairings, String);

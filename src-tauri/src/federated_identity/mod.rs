@@ -125,7 +125,15 @@ struct Inner {
     agent_tokens: Mutex<std::sync::Weak<agent::Inner>>,
     assertions: Mutex<assertion::AssertionCache>,
     discoveries: Mutex<assertion::DiscoveryCache>,
+    retiring: Mutex<Option<Retiring>>,
 }
+/// Records durably, before a sign-out or change of account commits, what
+/// else that retirement revokes; see [`FederatedIdentity::on_retire`].
+pub(crate) type Retiring = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+        + Send
+        + Sync,
+>;
 #[derive(Clone)]
 pub(crate) struct FederatedIdentity(Arc<Inner>);
 
@@ -205,6 +213,7 @@ impl FederatedIdentity {
             agent_tokens: Mutex::default(),
             assertions: Mutex::new(Default::default()),
             discoveries: Mutex::new(Default::default()),
+            retiring: Mutex::default(),
         }))
     }
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -212,6 +221,27 @@ impl FederatedIdentity {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// Has every sign-out and change of account first record `retiring`
+    /// durably; one it cannot record does not happen.
+    pub(crate) fn on_retire(&self, retiring: Retiring) {
+        *self
+            .0
+            .retiring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(retiring);
+    }
+    pub(crate) async fn record_retirement(&self) -> Result<(), String> {
+        let retiring = self
+            .0
+            .retiring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        match retiring {
+            Some(retiring) => retiring().await,
+            None => Ok(()),
+        }
     }
     fn publish(&self, state: &State) {
         self.0.changes.send_replace(state.snapshot.clone());
@@ -847,6 +877,12 @@ impl FederatedIdentity {
             // Commit point: past here a renewal can't be canceled, only ended
             // with its session, so nothing below has to undo a cancel.
             state.renewal = None;
+        }
+        let changing = matches!(&self.state().account, Some(previous) if *previous != record.email);
+        if changing {
+            self.record_retirement()
+                .await
+                .map_err(|_| Failure::from("storage-unavailable"))?;
         }
         let prepared = agent::AgentTokens::preparing_session(self, record.email.clone())
             .await
