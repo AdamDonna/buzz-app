@@ -331,7 +331,20 @@ export class GooseRuntime {
     const resumed = trigger.type === "mention" && !!trigger.resumed;
     // goose runs commands as you; mentions need owner or delegated authority.
     if (trigger.type === "mention") {
-      if (!(await fromOwner(trigger.event, agent.owner))) {
+      const snapshot = this.relay(agent.key)?.snapshot();
+      if (
+        !(await fromOwner(trigger.event, agent.owner, {
+          agent: agent.pubkey,
+          authority:
+            snapshot?.status === "ready"
+              ? snapshot.session.workflowAuthority
+              : undefined,
+          profiles:
+            snapshot?.status === "ready"
+              ? snapshot.session.profiles
+              : undefined,
+        }))
+      ) {
         ignored?.();
         return;
       }

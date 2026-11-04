@@ -227,22 +227,24 @@ The owner tag identifies the identity that scheduled the workflow, not the autho
 of every rendered word. Templates can include trigger-controlled values; those
 values do not acquire the owner's prompt authority.
 
-Claude Code, Codex, Pi and Goose do not accept relay-rendered workflow messages
-as owner-authorized requests. The relay's `buzz:workflow-mention` tags prove that
-the target appeared in the owner's template, but the message does not bind its
-rendered text to that template or identify trigger-controlled substitutions.
-Even a static template cannot be distinguished from a substituted one by the
-client. Existing workflow mentions therefore do not automatically start or steer
-these agents. They remain visible as conversation data; the owner or a directly
-NIP-OA-attested agent must send a separate request to act on them.
-
-The shared request gate rejects the reserved `buzz:workflow` marker before
-checking the signer, including when the relay shares the owner's key or has an
-owner attestation. Ordinary direct owner and attested-agent requests retain their
-existing authorization. Supporting automatic workflow requests safely requires
-an authenticated template/data boundary in the protocol; changing prompt quoting
-alone does not establish it. This does not change workflow ownership or grant
-permission to edit another identity's workflow.
+Claude Code and Codex also use this proof to authorize delegated workflow mentions.
+The receiving agent's ready community session must supply the explicit relay
+authority. The workflow owner must be that agent's owner, or an agent whose
+admitted kind-0 profile cryptographically proves the same owner through NIP-OA.
+The profile comes from the receiving agent's community profile directory;
+display metadata and saved inventories do not prove sibling ownership. Missing,
+invalid or failed profile reads deny the mention; a later mention can retry.
+Both runtimes recheck delivery cancellation after authorization, before creating
+sessions or starting processes, so removing an agent during a profile read cannot
+restart it when the read completes.
+The event must contain a canonical `buzz:workflow-mention` for the receiving
+agent; all such tags
+must have exactly two fields, a lowercase-hex pubkey, and no duplicate targets.
+The relay emits these tags only for targets present in the owner-authored template
+and the rendered output. Legacy `p` tags route mentions but do not authorize them.
+Workflows created and maintained under an owned agent's own key remain owned by
+that agent and can wake agents with the same proven human owner. This does not
+grant an agent permission to edit a workflow owned by a different signing identity.
 
 Cached-only startup intentionally shows the actual signer until a live connection
 establishes explicit relay authority. Saved operator-contact `relayAuthor` is not
@@ -253,11 +255,11 @@ effective-author attribution and owner edit/delete behavior added separately in
 #661; when that author differs from the signer, the row keeps the signing key
 for row identity only and does not display it. Thread and media views
 request workflow-owner profiles through the existing background profile directory.
-The workflow proof controls the automation label; it does not grant request
-authority or control main's effective message-author policy. With explicit
-authority, an unadmitted copy has no workflow label, but can still receive main's
-effective-author attribution; production reads must retain their admission-owned
-event objects. Without explicit authority,
+The workflow proof controls the automation label and the delegated-mention gate
+above; it does not control main's effective message-author policy. With explicit
+authority, an unadmitted copy has neither a workflow label nor delegated prompt
+authority, but can still receive main's effective-author attribution; production reads
+must retain their admission-owned event objects. Without explicit authority,
 cached-only startup keeps the signer fallback described above.
 Participant summaries have no per-message owner evidence
 and continue to identify signing participants, not workflow owners. Workflow rows
