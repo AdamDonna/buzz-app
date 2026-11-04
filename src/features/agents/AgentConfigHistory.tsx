@@ -338,9 +338,9 @@ export function AgentConfigHistory({
       >
         <div className="grid gap-2">
           {current && (
-            <p className="m-0 text-body-sm text-secondary">
-              This is the current version.
-            </p>
+            <span className={`${styles.currentBadge} text-label-sm`}>
+              Current
+            </span>
           )}
           {event ? (
             deleted ? (

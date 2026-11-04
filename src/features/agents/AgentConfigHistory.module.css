@@ -44,6 +44,13 @@
   border-radius: var(--radius-pill);
   background: var(--affordance-accent-prominent);
 }
+.currentBadge {
+  justify-self: start;
+  padding: var(--space-half) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--affordance-accent-prominent);
+  color: var(--text-on-accent);
+}
 .diff {
   flex-basis: 100%;
   margin: 0;

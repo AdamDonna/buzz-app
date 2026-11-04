@@ -135,7 +135,7 @@ it("pages older history, labels the gap, shows a diff and reverts on the head", 
   expect(screen.queryByText(/aren't loaded|Couldn't load/)).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /^Version · Current/ }));
-  expect(screen.getByText("This is the current version.")).toBeVisible();
+  expect(within(screen.getByRole("dialog")).getByText("Current")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
   const diff = screen.getByRole("region", { name: "Changes" });
   expect(diff).toHaveTextContent(`− line ${HISTORY_PAGE - 1}`);
@@ -145,6 +145,7 @@ it("pages older history, labels the gap, shows a diff and reverts on the head", 
   fireEvent.click(
     screen.getAllByRole("button", { name: /^Version / })[1] as HTMLElement,
   );
+  expect(within(screen.getByRole("dialog")).queryByText("Current")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Revert to this" }));
   expect(onRevert).toHaveBeenCalledOnce();
   const [template] = onRevert.mock.calls[0] as unknown as [
