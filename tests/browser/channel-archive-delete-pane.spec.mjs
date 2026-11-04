@@ -284,7 +284,7 @@ for (const action of ["archive", "delete"]) {
         await search.getByRole("combobox").fill("Lifecycle channel");
         await search
           .getByRole("option", {
-            name: "Lifecycle channel Archived channel",
+            name: "Lifecycle channel Archived channel · 1 member",
             exact: true,
           })
           .click();

@@ -1071,7 +1071,9 @@ it.each(["stream", "forum", "solo"] as const)(
       );
       expect(
         screen.getByText(
-          channelType === "solo" ? "Archived chat" : "Archived channel",
+          channelType === "solo"
+            ? "Archived chat"
+            : "Archived channel · 1 member",
         ),
       ).toBeTruthy();
       expect(open).toHaveBeenCalledExactlyOnceWith("archive");
@@ -1128,6 +1130,78 @@ it.each([
     }
   },
 );
+
+it("shows each channel result's member count, reading an unjoined channel's roster for display only", async () => {
+  const relay = keypair();
+  const viewer = keypair();
+  const [first, second, third] = [keypair(), keypair(), keypair()];
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const open = [
+    ["public", ""],
+    ["t", "stream"],
+  ];
+  const discovery = [
+    metadata(relay, "joined", "crew-chat", 1700000000, open),
+    roster(relay, "joined", [viewer.pubkey, first.pubkey]),
+    metadata(relay, "lobby", "crew-lobby", 1700000000, open),
+    roster(relay, "lobby", [first.pubkey, second.pubkey, third.pubkey]),
+    metadata(relay, "solo-room", "crew-solo", 1700000000, open),
+    roster(relay, "solo-room", [second.pubkey]),
+  ];
+  const reads: unknown[] = [];
+  const owner = createRelaySession({
+    ...wire.transport,
+    query(filters) {
+      reads.push(filters);
+      return Promise.resolve(
+        discovery.filter((event) =>
+          filters.some((filter) => matchFilter(filter as Filter, event)),
+        ),
+      );
+    },
+  });
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="crew"
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={() => {}}
+      />,
+    );
+    const group = () => within(screen.getByRole("group", { name: "Channels" }));
+    await waitFor(() =>
+      expect(
+        group()
+          .getAllByRole("option")
+          .map((option) => option.textContent),
+      ).toEqual([
+        expect.stringContaining("Conversation · 2 members"),
+        expect.stringContaining("Public channel · not joined · 3 members"),
+        expect.stringContaining("Public channel · not joined · 1 member"),
+      ]),
+    );
+    // The joined row counts the roster it carries; only unjoined rows read,
+    // without the viewer filter, so their rosters stay out of discovery.
+    expect(reads).toContainEqual([
+      {
+        kinds: [39002],
+        authors: [relay.pubkey],
+        "#d": ["lobby", "solo-room"],
+        limit: 2,
+      },
+    ]);
+    expect(owner.session.channels.get?.("lobby")?.members).toEqual([]);
+    expect(
+      owner.session.channels.list().channels.map((channel) => channel.id),
+    ).toEqual(["joined"]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
 
 it("finds active public channels the viewer has not joined without adding them to the joined list", async () => {
   const relay = keypair();

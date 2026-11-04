@@ -1173,6 +1173,32 @@ export const test = base.extend({
               lifecycleTime,
             ),
           );
+      // Search's member count reads rosters without the viewer filter, so
+      // the unjoined public channel answers with its members, not the viewer.
+      if (
+        filter.kinds?.includes(39002) &&
+        !filter["#p"] &&
+        openSearch &&
+        !rosterIds.includes(OPEN_CHANNEL) &&
+        filter["#d"]?.includes(OPEN_CHANNEL)
+      )
+        return [
+          sign(
+            39002,
+            [
+              ["d", OPEN_CHANNEL],
+              ...["a", "b", "c"].map((digit) => [
+                "p",
+                digit.repeat(64),
+                "",
+                "member",
+              ]),
+            ],
+            "",
+            relayKey,
+            lifecycleTime,
+          ),
+        ];
       if (filter.kinds?.includes(39002))
         return rosterIds
           .filter((id) => !filter["#d"] || filter["#d"].includes(id))

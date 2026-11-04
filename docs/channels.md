@@ -531,6 +531,9 @@ membership, the channel joins the sidebar and the composer becomes available and
 focused. Guest-default previews omit Join and preserve reading without membership.
 Joining a channel is not available for DMs, private, archived or session
 conversations. See [relay queries](relay-queries.md#public-channel-name-search-and-join).
+Channel results end with their member count when the roster is known, such as
+**Public channel · not joined · 12 members**. A failed read leaves the row
+without one. See [relay queries](relay-queries.md#public-channel-name-search-and-join).
 Unarchive publishes the existing narrow `9002` command with `archived=false` and
 requires fresh relay metadata with a missing/false archive tag before updating
 shared discovery; a missing record is not success. Restoration returns the sidebar

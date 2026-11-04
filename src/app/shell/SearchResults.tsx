@@ -54,6 +54,7 @@ import {
   searchOrder,
 } from "../../features/search/usage";
 import { usePublicChannelSearch } from "../../features/channels/usePublicChannelSearch";
+import { useMemberCounts } from "../../features/channels/useChannelDirectory";
 import { type SearchSort, useSearchMessages } from "./useSearchMessages";
 import {
   MESSAGE_SEARCH_MIN_CHARS,
@@ -849,6 +850,10 @@ export function SearchResults({
     ],
     channelRank,
   ).slice(0, 8);
+  // Display only; joined rows count the roster they carry.
+  const memberCounts = useMemberCounts(session.channels);
+  const memberCount = (channel: ChannelSummary) =>
+    channel.members?.length || memberCounts.counts.get(channel.id);
   // A chat found by its agent, not its name, says which agent it has.
   const soloDetail = (channel: ChannelSummary) => {
     const agent = newChatAmong(channel.members);
@@ -884,6 +889,22 @@ export function SearchResults({
       icon: ChatCircleIcon,
       run: choose(key, () => openConversation(channel.id)),
     };
+  };
+  // Channel rows add how many members they have, when the roster is known.
+  const channelDestination = (channel: ChannelSummary): SearchDestination => {
+    const destination = conversationDestination(channel);
+    const count = memberCount(channel);
+    return count
+      ? {
+          ...destination,
+          detail: [
+            destination.detail,
+            `${count} ${count === 1 ? "member" : "members"}`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        }
+      : destination;
   };
   // Choosing a person opens your DM with them, starting it when needed.
   const [personOpen, setPersonOpen] = useState<{
@@ -1191,7 +1212,7 @@ export function SearchResults({
                   },
                   {
                     label: "Channels",
-                    destinations: channelResults.map(conversationDestination),
+                    destinations: channelResults.map(channelDestination),
                     best: Math.min(...channelResults.map(channelRank)),
                   },
                   {
@@ -1263,6 +1284,19 @@ export function SearchResults({
               ];
   return (
     <SearchChoices
+      onRowsShown={(keys) => {
+        // Only channel results without a roster read a count.
+        const unknown = new Set(
+          channelResults.flatMap((channel) =>
+            channel.members?.length ? [] : [`channel:${channel.id}`],
+          ),
+        );
+        memberCounts.show(
+          keys.flatMap((key) =>
+            unknown.has(key) ? [key.slice("channel:".length)] : [],
+          ),
+        );
+      }}
       inlineSettings={inlineSettings}
       query={query}
       onQueryChange={onQueryChange}

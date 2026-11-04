@@ -416,6 +416,12 @@ roster, applied through shared discovery. That makes the channel a sidebar
 member and enables the composer, which then receives focus. An accepted but
 unconfirmed join reports that it may have taken effect and stays retryable.
 
+Palette channel rows show member counts. Joined rows count the roster discovery
+already holds. The rest use the Channels tab's display-only
+`channels.readMemberCounts(ids)` once the row is on screen, so they share its
+cache, retry backoff and bounded `39002` reads. The rosters never reach
+discovery, so a counted roster grants no reading, membership or sidebar row.
+
 ### Finite read recovery
 
 A finite read that has no session recovery source retries transient failures

@@ -255,7 +255,9 @@ test.describe("public search destination", () => {
       )
       .locator("[data-search-result]")
       .filter({ hasText: /^open/ });
-    await expect(result).toContainText("Public channel · not joined");
+    await expect(result).toContainText(
+      "Public channel · not joined · 3 members",
+    );
     await result.click();
     const composer = page.getByRole("textbox", {
       name: "Message #open",
