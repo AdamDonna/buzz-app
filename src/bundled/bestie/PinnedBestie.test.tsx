@@ -268,10 +268,16 @@ async function fixture({
     disconnect() {},
     async clearCache() {},
   };
-  const navigator = {
-    open: vi.fn(async () => ({ status: "opened" as const })),
-    dismiss: vi.fn(),
-  } as unknown as Navigation;
+  const controller = createNavigationController(
+    createMemoryHistory({
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.bestie",
+      pageId: "bestie",
+    }),
+  );
+  disposals.push(controller.dispose);
+  const navigator = controller.navigation;
   const host = {
     relay,
     panels: {
@@ -633,7 +639,9 @@ it("restores Bestie threads with Back and Forward and retires every explicitly c
   rerender();
   expect(await screen.findByLabelText("Thread")).toBeVisible();
 
-  await userEvent.click(screen.getByRole("button", { name: "Close thread" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "Close Are you there? tab" }),
+  );
   rerender();
   expect(navigator.snapshot().entry.target).toEqual(bestie);
   act(() => navigator.back());
@@ -808,4 +816,37 @@ it("rechecks eligibility before retrying a failed DM open", async () => {
     ),
   ).toBeVisible();
   expect(f.open).toHaveBeenCalledTimes(attempts);
+});
+
+it("keeps the DM and draft mounted beside a thread and retains the reply draft while collapsing its pane", async () => {
+  const f = await fixture({ existing: true, withReply: true });
+  f.choose(pollen);
+  f.mount();
+  const user = userEvent.setup();
+  const composer = await screen.findByRole("textbox", {
+    name: "Message Pollen",
+  });
+  await user.type(composer, "Main draft");
+  await user.click(
+    await screen.findByRole("button", { name: "View thread: 1 reply" }),
+  );
+  expect(await screen.findByLabelText("Thread")).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Message Pollen" })).toBe(
+    composer,
+  );
+  expect(composer).toHaveTextContent("Main draft");
+  const reply = screen.getByRole("textbox", { name: "Reply to thread" });
+  await user.type(reply, "Reply draft");
+  await user.click(screen.getByRole("button", { name: "Toggle tab pane" }));
+  expect(composer).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Toggle tab pane" }));
+  expect(await screen.findByRole("textbox", { name: "Reply to thread" })).toBe(
+    reply,
+  );
+  expect(reply).toHaveTextContent("Reply draft");
+  await user.click(
+    screen.getByRole("button", { name: "Close Are you there? tab" }),
+  );
+  expect(composer).toHaveTextContent("Main draft");
+  expect(screen.queryByLabelText("Thread")).not.toBeInTheDocument();
 });

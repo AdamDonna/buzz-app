@@ -470,7 +470,11 @@ available rather than silently discarding it.
   existing chat or an edited draft. People can choose a different agent for a
   particular conversation. When the optional **Bestie** plugin is on, that saved
   choice also opens the agent's DM from the left navigation; Messages omits the
-  duplicate row while it is pinned. A verified existing DM stays available if
+  duplicate row while it is pinned. Bestie uses the same conversation tabs as
+  Messages: threads open beside the chat (or in the main pane, following your
+  thread placement setting), and can be moved, renamed, or closed. Collapsing
+  the side pane keeps its open threads and reply drafts.
+  A verified existing DM stays available if
   agent discovery fails. If a replacement save fails, the last confirmed Bestie
   remains selected and the confirmation offers another attempt. Being the bestie
   does not prove an agent is ready or running.
