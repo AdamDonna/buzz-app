@@ -300,7 +300,7 @@ function host(files: Record<string, string>) {
       if (content === undefined) {
         options.onStderr?.(`base64: ${path}: No such file or directory\n`);
         code = 1;
-      } else options.onStdout?.(btoa(content));
+      } else options.onStdout?.(Buffer.from(content).toString("base64"));
     }
     return {
       write: async () => undefined,
