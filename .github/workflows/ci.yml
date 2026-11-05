@@ -21,13 +21,16 @@ env:
 jobs:
   javascript:
     if: github.event_name != 'workflow_dispatch'
-    name: JavaScript (${{ matrix.shard }}/4)
+    name: JavaScript (${{ matrix.shard }}/6)
     runs-on: ubuntu-24.04
+    # Vitest shards by path hash and equal file count, not duration, so slow
+    # files can share one. Six keeps the slowest well inside this deadline on
+    # slower runners; five barely moves it, and seven is slower than six.
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -42,7 +45,7 @@ jobs:
         env:
           # Bound contention between suites that sign and verify large fixtures.
           BUZZ_TEST_WORKERS: "2"
-        run: ./bin/node scripts/ci-test-report.mjs kind=vitest report=test-results/ci/vitest.json evidence=test-results/ci/vitest-timing.json title="Vitest shard ${{ matrix.shard }}/4" -- ./bin/pnpm exec vitest run --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile=test-results/ci/vitest.json
+        run: ./bin/node scripts/ci-test-report.mjs kind=vitest report=test-results/ci/vitest.json evidence=test-results/ci/vitest-timing.json title="Vitest shard ${{ matrix.shard }}/6" -- ./bin/pnpm exec vitest run --shard=${{ matrix.shard }}/6 --reporter=default --reporter=json --outputFile=test-results/ci/vitest.json
       - name: Vitest timing evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
