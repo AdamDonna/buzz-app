@@ -1197,8 +1197,10 @@ not joined here; the transcript shows the agent's ACP output.
 
 The shared Claude, Goose, and Pi turn formatter sends conversation history and
 the triggering event as exact JSON records with escaped markup delimiters, the
-same records Codex sends. Message text and tags therefore cannot create extra
-request sections. The transcript reads those records directly and retains
+same records Codex sends. Beside the author's `pubkey`, each record carries
+their verified `username` when the community verified one, which the agent
+writes after `@` to tag them, and their `display_name`. Message text, names
+and tags therefore cannot create extra request sections. The transcript reads those records directly and retains
 support for the earlier single-object JSON event and older line-based
 `buzz-event` and `buzz-events` records; it never parses decoded message content
 as another prompt.

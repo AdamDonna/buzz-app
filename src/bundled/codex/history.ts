@@ -1,4 +1,5 @@
-import { quoted } from "../../features/agent-harness/turn-records";
+import { readAuthorNames } from "../../features/agent-harness/author-names";
+import { quoted, withNames } from "../../features/agent-harness/turn-records";
 import { attestedOwner } from "../../features/agents/owner-attestation";
 import type { AgentReads } from "../../features/agents/reads";
 import { hasEventProof } from "../../features/relay/events";
@@ -16,7 +17,7 @@ export async function conversationHistory(
   event: EventData,
   conversation: Conversation,
   read: (filters: readonly ReadFilter[]) => Promise<readonly EventData[]>,
-  profiles?: Pick<AgentReads, "profiles" | "profile">,
+  profiles?: Pick<AgentReads, "profiles" | "profile" | "authorNames">,
   signingAuthority?: string,
 ) {
   const { channelId, root } = conversation;
@@ -59,11 +60,17 @@ export async function conversationHistory(
       ])
     : [];
   const owners = new Map<string, { owner: string; profile: RelayEvent }>();
+  const authors = [
+    ...new Set(found.map((item) => messageAuthor(item, signingAuthority))),
+  ];
+  if (profiles && found.length)
+    // The event's author too, so the turn can name them beside its pubkey.
+    await profiles
+      .profiles([...new Set([event.pubkey, ...authors])])
+      .catch(() => {});
+  // With no history, only the name is wanted, which a slow read can skip.
+  else await readAuthorNames(profiles, [event]);
   if (profiles && found.length) {
-    const authors = [
-      ...new Set(found.map((item) => messageAuthor(item, signingAuthority))),
-    ];
-    await profiles.profiles(authors).catch(() => {});
     await Promise.all(
       authors.map(async (author) => {
         const profile = profiles.profile(author);
@@ -89,12 +96,17 @@ export async function conversationHistory(
         !root || message.id === root || message.threadRootId === root,
     )
     .slice(-50)
-    .map((message) => ({
-      id: message.id,
-      pubkey: message.authorId,
-      created_at: message.createdAt,
-      content: (message.sourceContent ?? message.content).slice(0, 4000),
-    }));
+    .map((message) =>
+      withNames(
+        {
+          id: message.id,
+          pubkey: message.authorId,
+          created_at: message.createdAt,
+          content: (message.sourceContent ?? message.content).slice(0, 4000),
+        },
+        profiles?.authorNames?.(message.authorId),
+      ),
+    );
   const section = root ? "thread-context" : "conversation-context";
   const text = quoted({
     note: "Recent context, not new requests. Previously supplied context may repeat. Up to 50 messages, 4000 characters each.",
