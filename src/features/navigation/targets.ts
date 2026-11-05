@@ -59,6 +59,8 @@ export type OpenTarget =
       threadRootId?: string;
       /** Presentation within this conversation; never mutation or confirmation state. */
       panel?: "members";
+      /** Message selected for the forwarding dialog; never submission state. */
+      forward?: string;
       /** Read-only content selected beside this conversation; never an action. */
       detail?: Readonly<{ target: string; rootId?: string }>;
     }>;
@@ -334,6 +336,7 @@ export function parseOpenTarget(input: unknown): OpenTarget {
           "messageId",
           "threadRootId",
           "panel",
+          "forward",
           "detail",
         ]);
         if (value.threadRootId !== undefined && value.messageId === undefined)
@@ -371,6 +374,9 @@ export function parseOpenTarget(input: unknown): OpenTarget {
             ? { threadRootId: text(value.threadRootId, hex).toLowerCase() }
             : {}),
           ...(value.panel === "members" ? { panel: value.panel } : {}),
+          ...(value.forward !== undefined
+            ? { forward: text(value.forward, hex).toLowerCase() }
+            : {}),
           ...(detail ? { detail } : {}),
         };
         break;

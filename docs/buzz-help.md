@@ -121,8 +121,13 @@ that agent in Buzz; they do not notify the external app through this connection.
 - Long message bubbles use the available conversation width, stopping 32px
   before the opposite speaker’s avatar column. Short messages hug their text.
 - Hover over a message to reveal the capsule above it: add a reaction, reply,
-  copy its link, or open More. **Copy message** is in More. Keyboard focus also
-  reveals these actions; touch layouts keep actions inline.
+  copy its link, forward it, or open More. **Copy message** is in More. Keyboard
+  focus also reveals these actions; touch layouts keep actions inline.
+- **Forward message** in a message's hover actions or message menu sends its link
+  to one person in the current community, with an optional note. Buzz opens or
+  creates the direct message for you. The link previews the original message;
+  the recipient still needs access to its conversation. Forwarding is unavailable
+  when the connection cannot start DMs or the message has no link yet.
 
 - Only explicit additions by another member and removals appear as centered
   channel notices; self-joins and voluntary leaves are hidden.

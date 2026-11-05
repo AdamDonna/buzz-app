@@ -15,6 +15,20 @@ const conversation = {
 } as const;
 
 describe("open target boundary", () => {
+  it("bounds a scoped forwarding presentation independently of its underlying message", () => {
+    const target = parseOpenTarget({
+      ...conversation,
+      forward: "D".repeat(64),
+    });
+    expect(target).toEqual({
+      ...parseOpenTarget(conversation),
+      forward: "d".repeat(64),
+    });
+    expect(targetKey(target)).not.toBe(targetKey(conversation));
+    expect(() =>
+      parseOpenTarget({ ...conversation, forward: "invalid" }),
+    ).toThrow();
+  });
   it("bounds nested provider addresses to Agent setup and keeps their scope", () => {
     const target = {
       version: 1,

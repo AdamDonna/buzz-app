@@ -367,18 +367,19 @@ function fixture({
     resolve: () => true,
   };
   const open = vi.fn(async () => ({ status: "opened" as const }));
+  const navigationSnapshot = {
+    entry: {
+      id: navigation.entryId,
+      target: behindSettings
+        ? { version: 1, kind: "settings", scope: null }
+        : navigation.target,
+    },
+    attempt: { signal: abort.signal },
+  };
   const navigator = {
     open,
     retry() {},
-    snapshot: () => ({
-      entry: {
-        id: navigation.entryId,
-        target: behindSettings
-          ? { version: 1, kind: "settings", scope: null }
-          : navigation.target,
-      },
-      attempt: { signal: abort.signal },
-    }),
+    snapshot: () => navigationSnapshot,
   } as unknown as Navigation;
   const archive: ArchiveShortcut = {};
   const read: ReadShortcut = {};

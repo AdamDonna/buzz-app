@@ -41,6 +41,7 @@ import type { ChannelLifecycleAction } from "../../features/relay/channel-lifecy
 import type { CommunityMembership } from "../moderation/membership";
 import { SoloHeading, SoloToolbar, useSoloMoveRecovery } from "./SoloHeading";
 import { NewMessage } from "../../features/direct-messages/NewMessage";
+import { ForwardMessageProvider } from "../../features/messages/ForwardMessage";
 import { Panel } from "../../shared/design-system/ui/Panel";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -2482,7 +2483,14 @@ function ChannelWorkspace({
           }
         }
       >
-        {workspace}
+        <ForwardMessageProvider
+          session={queries}
+          scope={scope}
+          navigation={navigator}
+          renderDialog
+        >
+          {workspace}
+        </ForwardMessageProvider>
       </ConversationChannel>
       {soloMoveNotices}
     </LinkThreadTabContext>
