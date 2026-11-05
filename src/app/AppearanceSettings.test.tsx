@@ -529,7 +529,7 @@ it("custom palette drafts preview without saving, survive external changes and c
   const appearance = createAppearance();
   preferenceAppearances.push(appearance);
   render(<AppearanceSettings appearance={appearance} />);
-  fireEvent.click(screen.getByRole("button", { name: "Create custom theme" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create theme" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Accent hex color" }), {
     target: { value: "#663399" },
   });
@@ -541,7 +541,7 @@ it("custom palette drafts preview without saving, survive external changes and c
   );
   expect(screen.getByText(/The saved theme changed/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  fireEvent.click(screen.getByRole("button", { name: "Edit custom theme" }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit theme" }));
   expect(screen.getByRole("textbox", { name: "Accent hex color" })).toHaveValue(
     DEFAULT_CUSTOM_PALETTE.light.accent,
   );
@@ -554,7 +554,7 @@ it("custom palette drafts preview without saving, survive external changes and c
   });
   fireEvent.click(screen.getByRole("button", { name: "Save theme" }));
   expect(appearance.snapshot().palette?.light.accent).toBe("#663399");
-  fireEvent.click(screen.getByRole("button", { name: "Export palette text" }));
+  fireEvent.click(screen.getByRole("button", { name: "Export" }));
   expect(
     paletteRuntime.parse(
       (
@@ -575,16 +575,12 @@ it("rejects invalid imported themes and stages valid imports until Save", async 
   render(<AppearanceSettings appearance={appearance} />);
   const transfer = screen.getByRole("textbox", { name: "Palette text" });
   fireEvent.change(transfer, { target: { value: '{"version":2}' } });
-  fireEvent.click(
-    screen.getByRole("button", { name: "Preview imported palette" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
   expect(screen.getByRole("alert")).toHaveTextContent("version 1");
   fireEvent.change(transfer, {
     target: { value: JSON.stringify(DEFAULT_CUSTOM_PALETTE) },
   });
-  fireEvent.click(
-    screen.getByRole("button", { name: "Preview imported palette" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Import" }));
   expect(appearance.snapshot().palette).toBeNull();
   expect(screen.getByRole("button", { name: "Save theme" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Save theme" }));

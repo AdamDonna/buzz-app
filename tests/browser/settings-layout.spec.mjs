@@ -184,6 +184,14 @@ test("settings share a centered, bounded column and keep controls contained acro
       name,
       exact: true,
     });
+    if (name === "Appearance") {
+      await agents
+        .getByRole("button", { name: "Create theme", exact: true })
+        .click();
+      await expect(
+        agents.getByRole("button", { name: "Save theme", exact: true }),
+      ).toBeVisible();
+    }
     await expect
       .poll(
         () =>

@@ -66,12 +66,19 @@ export function CustomPaletteSettings({
         </p>
         {!draft ? (
           <div className="flex flex-wrap gap-2">
-            <Button ref={editButton} onClick={edit}>
-              {snapshot.palette ? "Edit custom theme" : "Create custom theme"}
+            <Button
+              ref={editButton}
+              onClick={edit}
+              aria-label={snapshot.palette ? "Edit theme" : "Create theme"}
+            >
+              {snapshot.palette ? "Edit" : "Create"}
             </Button>
             {snapshot.palette && (
-              <Button onClick={() => appearance.setPalette(null)}>
-                Reset theme
+              <Button
+                aria-label="Reset theme"
+                onClick={() => appearance.setPalette(null)}
+              >
+                Reset
               </Button>
             )}
           </div>
@@ -152,6 +159,7 @@ export function CustomPaletteSettings({
               <Button onClick={() => setDraft(null)}>Cancel</Button>
               <Button
                 variant="primary"
+                aria-label="Save theme"
                 disabled={!parsed}
                 onClick={() => {
                   if (!parsed) return;
@@ -159,7 +167,7 @@ export function CustomPaletteSettings({
                   setDraft(null);
                 }}
               >
-                Save theme
+                Save
               </Button>
             </div>
           </>
@@ -187,7 +195,7 @@ export function CustomPaletteSettings({
               setTransferError(null);
             }}
           >
-            Export palette text
+            Export
           </Button>
           <Button
             onClick={() => {
@@ -203,7 +211,7 @@ export function CustomPaletteSettings({
               setTransferError(null);
             }}
           >
-            Preview imported palette
+            Import
           </Button>
         </div>
       </SettingsGroup>
@@ -213,7 +221,7 @@ export function CustomPaletteSettings({
           description={snapshot.paletteError}
         >
           <Button onClick={() => appearance.setPalette(snapshot.palette)}>
-            Retry saving custom theme
+            Retry
           </Button>
         </ToastNotice>
       )}

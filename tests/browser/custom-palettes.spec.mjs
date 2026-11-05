@@ -32,7 +32,7 @@ test("custom palette editing, mode-scoped preview, reload and reset preserve act
   await page.goto(app.origin);
   await openSettings(page);
   await selectSettingsSection(page, "Appearance");
-  await button(page, "Create custom theme").click();
+  await button(page, "Create theme").click();
   await page.getByLabel("Window color picker", { exact: true }).fill("#00ff00");
   await expect(
     page.getByRole("textbox", { name: "Window hex color", exact: true }),
@@ -56,7 +56,7 @@ test("custom palette editing, mode-scoped preview, reload and reset preserve act
   await page
     .getByRole("textbox", { name: "Palette text" })
     .fill(JSON.stringify(palette));
-  await button(page, "Preview imported palette").click();
+  await button(page, "Import").click();
   // Inspect both modes in the same host: inherited root aliases must rebind.
   await button(page, "Dark").click();
   await expect(previews.last()).toHaveCSS("background-color", "rgb(15, 0, 0)");
@@ -169,7 +169,7 @@ test("another window updates the saved palette while a dirty draft remains local
   await page.goto(app.origin);
   await openSettings(page);
   await selectSettingsSection(page, "Appearance");
-  await button(page, "Create custom theme").click();
+  await button(page, "Create theme").click();
   await page
     .getByRole("textbox", { name: "Accent hex color", exact: true })
     .fill("#ff0000");
@@ -191,7 +191,7 @@ test("another window updates the saved palette while a dirty draft remains local
       page.getByRole("textbox", { name: "Accent hex color", exact: true }),
     ).toHaveValue("#ff0000");
     await button(page, "Cancel").click();
-    await button(page, "Edit custom theme").click();
+    await button(page, "Edit theme").click();
     await expect(
       page.getByRole("textbox", { name: "Accent hex color", exact: true }),
     ).toHaveValue("#888888");

@@ -230,12 +230,12 @@ that agent in Buzz; they do not notify the external app through this connection.
   ⌘1–9 switch communities, and ⇧Esc marks everything read. If a plugin uses
   the same key as another shortcut, Settings → Shortcuts marks it "Also used
   by"; change one of them to choose which fires.
-- **Custom themes**: **Settings → Appearance → Create custom theme** edits
+- **Custom themes**: **Settings → Appearance → Create theme** edits
   separate Light and Dark palettes on this device. Window and Sidebar are tint
   sources; effective colors are shown after readability adjustments. Selection
   colors the selected sidebar row; Accent colors Send and your messages. Preview
   before **Save theme**, **Cancel** to discard edits, or **Reset theme** to return
-  to built-in colors. Export palette text to copy/share; imported Buzz palette
+  to built-in colors. Export to copy/share; imported Buzz palette
   text is previewed before saving. This setting does not sync across devices or
   recolor companion windows.
 - **Spelling**: in the Mac app or Safari, the message box underlines
