@@ -67,6 +67,10 @@ function fixturePlugin(plugins) {
   return {
     name: "buzz-fixture-server",
     async configureServer(server) {
+      // Here rather than after creation: server.restart() builds a new HTTP
+      // server and binds it to the number Vite probed for the first one.
+      if (server.httpServer && server.config.server.port === 0)
+        bindAssignedPort(server.httpServer);
       const after = [];
       for (const plugin of plugins) {
         const result = await plugin.configureServer?.(server);
@@ -105,8 +109,32 @@ async function keepNodeEnv(run) {
   }
 }
 
+// Vite resolves port 0 by probing for a free port, closing the probe and then
+// binding that number, so another process can take it in between and the bind
+// fails with "Port N is already in use". Bind port 0 itself instead: the OS
+// assigns a free port in the same step, and Vite reads the bound address back.
+function bindAssignedPort(httpServer) {
+  const listen = httpServer.listen;
+  httpServer.listen = (_port, ...args) => listen.call(httpServer, 0, ...args);
+}
+
 export const build = (config) => keepNodeEnv(() => viteBuild(config));
-export const preview = (config) => keepNodeEnv(() => vitePreview(config));
+export const preview = (config) =>
+  keepNodeEnv(() =>
+    vitePreview({
+      ...config,
+      plugins: [
+        ...(config.plugins ?? []),
+        {
+          name: "buzz-fixture-assigned-port",
+          configurePreviewServer(server) {
+            if (server.config.preview.port === 0)
+              bindAssignedPort(server.httpServer);
+          },
+        },
+      ],
+    }),
+  );
 
 // Run once per test run, before any test: it scans and bundles the fixture
 // dependencies so no server does that work inside a navigation budget.
@@ -157,14 +185,26 @@ export async function createServer(config) {
     const server = await keepNodeEnv(() =>
       createViteServer({ ...fixture, cacheDir }),
     );
-    const close = server.close.bind(server);
-    server.close = async () => {
+    // server.restart() copies the new server's members onto this one with
+    // Object.assign, which would replace a plain close. An accessor takes the
+    // new close as the one it wraps, so a restarted server still removes its
+    // cache.
+    let close = server.close;
+    const owned = async () => {
       try {
-        await close();
+        await close.call(server);
       } finally {
         await rm(cacheDir, { recursive: true, force: true });
       }
     };
+    Object.defineProperty(server, "close", {
+      configurable: true,
+      enumerable: true,
+      get: () => owned,
+      set: (next) => {
+        close = next;
+      },
+    });
     return server;
   } catch (error) {
     await rm(cacheDir, { recursive: true, force: true });
