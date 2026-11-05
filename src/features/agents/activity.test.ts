@@ -476,3 +476,19 @@ it("associates lifecycle with retained signed triggers and preserves it through 
   expect(f.snapshot().turns[1]?.requests).toEqual([]);
   f.release();
 });
+it("skips the snapshot comparison for channel traffic that changes no typing", () => {
+  const f = fixture();
+  f.send(f.item("turn_liveness"));
+  const stringify = vi.spyOn(JSON, "stringify");
+  try {
+    f.activity.channelEvents([
+      { ...typingEvent(), pubkey: "b".repeat(64), kind: 9 },
+    ]);
+    expect(stringify).not.toHaveBeenCalled();
+    f.activity.channelEvents([typingEvent()]);
+    expect(f.snapshot().typing).toHaveLength(1);
+  } finally {
+    stringify.mockRestore();
+    f.activity.dispose();
+  }
+});

@@ -486,6 +486,7 @@ export function createAgentActivity(
       if (closed || !leases || status !== "listening") return;
       const known = liveAgents;
       const now = Date.now();
+      let changed = false;
       for (const event of events) {
         if (![9, 20002].includes(event.kind) || !known.has(event.pubkey))
           continue;
@@ -515,6 +516,7 @@ export function createAgentActivity(
               timestamp <= previous.timestamp + 2000))
         )
           continue;
+        changed = true;
         typing.delete(key);
         typing.set(
           key,
@@ -536,7 +538,8 @@ export function createAgentActivity(
           if (oldest) typing.delete(oldest);
         }
       }
-      publish();
+      // Expiry and freshness ride the publish timer; other traffic changes nothing.
+      if (changed) publish();
     },
     state(live: LiveSnapshot) {
       if (closed || !available || !leases) return;
