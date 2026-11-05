@@ -13,7 +13,7 @@ use protection::ProcessProtection;
 
 use crate::host_command::{effective_path, load_login_shell_path, resolve_program};
 use crate::{with_manager, PluginManager};
-use buzzodz_plugins::HostProcess;
+use buzzodz_plugins::{HostProcess, ProcessArtifact};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -642,6 +642,13 @@ fn runs_protected_claude(plugin: &str, process_id: &str, protected: bool) -> boo
             process_id,
             "claude-protected-arm64" | "claude-protected-x64"
         )
+}
+
+/// A host command's artifact, verified where it is installed, as an
+/// uncontained process's is.
+pub(crate) fn verified_artifact(mut artifact: ProcessArtifact) -> Result<PathBuf, String> {
+    artifact.path = expand_home(&artifact.path)?.to_string_lossy().into_owned();
+    verify_artifact(&artifact)
 }
 
 /// A manifest may place an artifact under the user's home, written `~/…`.

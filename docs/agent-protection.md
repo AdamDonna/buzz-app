@@ -110,6 +110,8 @@ named siblings into a generation under the storage owner's shared Agents folder,
 then executes that worker-read-only copy. Corrupt generations fail closed;
 verification/copying runs off the async runtime. Symbolic links remain rejected.
 These paths come from the installed plugin manifest, never from model input or PATH.
+Host commands may also declare `artifact`; they are never contained, so each run
+verifies the installed bytes in place instead of copying them.
 
 `processProtection` contains `readOnlyPaths` and `hiddenPaths`, absolute or under
 the user's home written `~/…`. Hidden paths must exist. A read-only path may lack

@@ -120,6 +120,9 @@ pub struct HostCommand {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_output_bytes: Option<u64>,
+    /// Run these verified bytes, never a program found on PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ProcessArtifact>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -298,6 +301,10 @@ impl Manifest {
                     || command
                         .max_output_bytes
                         .is_some_and(|limit| !(1..=MAX_HOST_COMMAND_OUTPUT_BYTES).contains(&limit))
+                    || command
+                        .artifact
+                        .as_ref()
+                        .is_some_and(|artifact| !valid_artifact(artifact))
                 {
                     return Err("Invalid host command declaration".into());
                 }
@@ -2271,6 +2278,18 @@ mod tests {
             .unwrap()
             .push(manifest["host"]["commands"][0].clone());
         assert!(artifact_from_text(&invalid.to_string(), "export const x = 1".into()).is_err());
+        let mut pinned = manifest.clone();
+        pinned["host"]["commands"][0]["artifact"] =
+            serde_json::json!({"path": "~/example/cli", "sha256": "a".repeat(64)});
+        assert!(artifact_from_text(&pinned.to_string(), "export const x = 1".into()).is_ok());
+        for (field, value) in [
+            ("path", serde_json::json!("relative/cli")),
+            ("sha256", serde_json::json!("A".repeat(64))),
+        ] {
+            let mut invalid = pinned.clone();
+            invalid["host"]["commands"][0]["artifact"][field] = value;
+            assert!(artifact_from_text(&invalid.to_string(), "export const x = 1".into()).is_err());
+        }
 
         let mut processes = manifest.clone();
         processes["host"]["processes"] = serde_json::json!([
