@@ -89,6 +89,14 @@ async function open(page, app) {
     .waitFor();
   await expect(page.locator("[data-message-id]").first()).toBeVisible();
 }
+// A pasted pull request link is named for it, with the title `link` reads.
+const opener = (page, target) => {
+  const [, , repo, , number] = new URL(target).pathname.split("/");
+  return page.getByRole("link", {
+    name: `${repo}#${number} · A useful change`,
+    exact: true,
+  });
+};
 async function link(page, app, target) {
   await page.route("https://api.github.com/repos/block/buzz/pulls/*", (route) =>
     route.fulfill({
@@ -103,7 +111,7 @@ async function link(page, app, target) {
   // A return from a compose route can still be restoring the timeline.
   await settle(page);
   app.append("primary", "alpha", `Please review ${target}`);
-  const trigger = page.getByRole("link", { name: target, exact: true });
+  const trigger = opener(page, target);
   await expect(trigger).toBeVisible();
   await settle(page);
   await trigger.scrollIntoViewIfNeeded();
@@ -693,40 +701,36 @@ readingTest(
     await wheel(page, -200);
     const saved = await anchor(page);
     await expectNonPaging(page, app);
-    await page
-      .getByRole("link", { name: target, exact: true })
-      .evaluate((el) => el.focus({ preventScroll: true }));
+    await opener(page, target).evaluate((el) =>
+      el.focus({ preventScroll: true }),
+    );
     await page.keyboard.press("Enter");
     await expect(panel(page)).toBeVisible();
     await settle(page);
     await expectAnchor(page, saved);
     // A panel can return focus to a mounted but offscreen link. Observe the
     // native focus call itself: eventual anchor recovery can hide a scroll jump.
-    await page
-      .getByRole("link", { name: target, exact: true })
-      .evaluate((el) => {
-        const focus = el.focus;
-        el.focus = function (options) {
-          const history = el.closest("[data-channel-timeline]");
-          const before = history.scrollTop;
-          focus.call(this, options);
-          window.panelFocusScrollDelta = history.scrollTop - before;
-        };
-      });
+    await opener(page, target).evaluate((el) => {
+      const focus = el.focus;
+      el.focus = function (options) {
+        const history = el.closest("[data-channel-timeline]");
+        const before = history.scrollTop;
+        focus.call(this, options);
+        window.panelFocusScrollDelta = history.scrollTop - before;
+      };
+    });
     await page
       .locator(
         '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
       )
       .focus();
-    await expect(
-      page.getByRole("link", { name: target, exact: true }),
-    ).not.toBeInViewport();
+    await expect(opener(page, target)).not.toBeInViewport();
     await page
       .locator(
         '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
       )
       .click();
-    const trigger = page.getByRole("link", { name: target, exact: true });
+    const trigger = opener(page, target);
     await settle(page);
     await expect(trigger).toBeFocused();
     expect(await page.evaluate(() => window.panelFocusScrollDelta)).toBe(0);
