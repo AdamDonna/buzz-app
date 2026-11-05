@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -745,6 +746,36 @@ it("groups an in-flow typing preview without repeating the preceding agent's byl
   expect(
     view.container.querySelector("[data-agent-response-preview]"),
   ).toHaveAttribute("data-stack-previous", "true");
+});
+
+it("keeps a compact in-flow continuation's avatar as its name only, not a second group avatar", async () => {
+  const f = fixture();
+  f.update([{ pubkey: agent, channelId: "channel" }]);
+  const root = document.documentElement;
+  root.dataset.messageDensity = "compact";
+  try {
+    render(
+      <TypingIndicator
+        inFlow
+        previousAuthor={agent}
+        session={f.session}
+        channelId="channel"
+      />,
+    );
+    // The byline is omitted, so the avatar's label still names the row.
+    const avatar = screen.getByRole("img", { name: "Agent" });
+    expect(avatar.parentElement).toHaveClass("sr-only");
+    act(() => {
+      root.dataset.messageDensity = "default";
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("img", { name: "Agent" }).parentElement,
+      ).not.toHaveClass("sr-only"),
+    );
+  } finally {
+    delete root.dataset.messageDensity;
+  }
 });
 
 it("uses the agent typing bubble for a public agent outside the viewer’s choices", async () => {

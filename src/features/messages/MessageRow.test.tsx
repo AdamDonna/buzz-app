@@ -2918,6 +2918,57 @@ it.each(["timeline", "thread", "continuation"] as const)(
 );
 
 it.each(["timeline", "thread", "continuation"] as const)(
+  "lists own %s rows unaligned in compact density, with the first grouped avatar",
+  async (layout) => {
+    const props = {
+      layout,
+      row: { ...row, authorId: "ab".repeat(32) },
+      viewer: "ab".repeat(32),
+      profile: { name: "author" },
+      media: () => undefined,
+      onOpenLink: () => true,
+      canOpenLink: () => true,
+      day: false,
+      retry: undefined,
+    };
+    const root = document.documentElement;
+    root.dataset.messageDensity = "compact";
+    try {
+      // The first row of a group, which is the one a flat list gives an avatar.
+      const { container, rerender } = renderDom(
+        <MessageRow {...props} stackPrevious={false} stackNext />,
+      );
+      expect(container.querySelector("[data-own]")).toBeNull();
+      expect(container.querySelector("[data-viewer-message]")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "View author profile" }),
+      ).toBeInTheDocument();
+      rerender(<MessageRow {...props} stackPrevious />);
+      expect(
+        screen.queryByRole("button", { name: "View author profile" }),
+      ).toBeNull();
+      // Choosing Default while mounted restores bubbles without a remount.
+      rerender(<MessageRow {...props} stackPrevious={false} />);
+      act(() => {
+        root.dataset.messageDensity = "default";
+      });
+      await waitFor(() =>
+        expect(
+          container.querySelector("[data-viewer-message]"),
+        ).toHaveTextContent("Root"),
+      );
+      expect(container.querySelector("[data-own]")).toHaveTextContent("Root");
+      expect(
+        screen.getByRole("button", { name: "View author profile" }),
+      ).toBeInTheDocument();
+    } finally {
+      delete root.dataset.messageDensity;
+      cleanup();
+    }
+  },
+);
+
+it.each(["timeline", "thread", "continuation"] as const)(
   "retains a focused grouped avatar until focus leaves in %s rows",
   (layout) => {
     const render = (stackNext: boolean) => (

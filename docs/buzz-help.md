@@ -335,6 +335,10 @@ that agent in Buzz; they do not notify the external app through this connection.
   Appearance → Allow automatic spelling correction**. Correct Spelling
   Automatically in the message box's right-click Spelling and Grammar menu then
   turns correction on or off.
+- **Message density**: **Settings → Appearance → Message density → Compact**
+  shows conversations as a flat, left-aligned list without bubbles, across the
+  window's full width, to fit more on screen. Text size stays with **Interface
+  size**. The choice applies on this device only.
 - **Time format**: **Settings → Appearance → Clock** chooses 12-hour or
   24-hour times. System, the default, follows the desktop app's operating
   system: the 24-hour time setting on macOS, the short time format on Windows,

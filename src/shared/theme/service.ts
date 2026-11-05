@@ -32,6 +32,11 @@ export const parseColorModePreference = (
   value: unknown,
 ): ColorModePreference =>
   value === "light" || value === "dark" ? value : "system";
+/** Vertical rhythm of conversation rows; text size stays with the font scale. */
+export type MessageDensity = "default" | "compact";
+export const DENSITY_KEY = "buzz-message-density.v1";
+export const parseMessageDensity = (value: unknown): MessageDensity =>
+  value === "compact" ? "compact" : "default";
 
 export interface AppearanceSnapshot {
   readonly preference: ColorModePreference;
@@ -42,6 +47,8 @@ export interface AppearanceSnapshot {
   readonly accentError: string | null;
   readonly contrast: Contrast;
   readonly contrastError: string | null;
+  readonly density: MessageDensity;
+  readonly densityError: string | null;
   readonly error: string | null;
 }
 
@@ -65,6 +72,8 @@ export function createAppearance(
     accentError: null,
     contrast: "low",
     contrastError: null,
+    density: "default",
+    densityError: null,
   };
   let disposed = false;
   let paletteGuard = 0;
@@ -95,6 +104,7 @@ export function createAppearance(
         }),
       );
     }
+    root.dataset.messageDensity = state.density;
     root.style.setProperty("--buzz-text-scale", String(state.fontScale));
     // CSS owns the palette; browser chrome derives from the same canvas token.
     host.document
@@ -189,12 +199,29 @@ export function createAppearance(
     }
     notify();
   };
+  const restoreDensity = () => {
+    try {
+      state = {
+        ...state,
+        density: parseMessageDensity(host?.localStorage.getItem(DENSITY_KEY)),
+        densityError: null,
+      };
+    } catch {
+      state = {
+        ...state,
+        densityError:
+          "Message density could not be restored. Choose a density to try saving it again.",
+      };
+    }
+    notify();
+  };
   const onStorage = (event: StorageEvent) => {
     if (
       event.key !== APPEARANCE_KEY &&
       event.key !== FONT_SCALE_KEY &&
       event.key !== ACCENT_KEY &&
       event.key !== CONTRAST_KEY &&
+      event.key !== DENSITY_KEY &&
       event.key !== LEGACY_BUBBLE_KEY &&
       event.key !== null
     )
@@ -205,6 +232,7 @@ export function createAppearance(
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
+      if (event.key === null || event.key === DENSITY_KEY) restoreDensity();
       if (
         event.key === null ||
         event.key === ACCENT_KEY ||
@@ -215,6 +243,7 @@ export function createAppearance(
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
+      if (event.key === null || event.key === DENSITY_KEY) restoreDensity();
       if (
         event.key === null ||
         event.key === ACCENT_KEY ||
@@ -227,6 +256,7 @@ export function createAppearance(
   restoreFont();
   restoreAccent();
   restoreContrast();
+  restoreDensity();
   host?.addEventListener("storage", onStorage);
   systemScheme?.addEventListener("change", onSystemSchemeChange);
   return {
@@ -299,6 +329,20 @@ export function createAppearance(
           "This vibe level is active, but could not be saved on this device. Try again.";
       }
       state = { ...state, contrast, contrastError };
+      notify();
+    },
+    setDensity(value: MessageDensity) {
+      if (disposed) return;
+      const density = parseMessageDensity(value);
+      let densityError: string | null = null;
+      try {
+        if (!host) throw new Error("No browser storage");
+        host.localStorage.setItem(DENSITY_KEY, density);
+      } catch {
+        densityError =
+          "This message density is active, but could not be saved on this device. Try again.";
+      }
+      state = { ...state, density, densityError };
       notify();
     },
     /** After `dispose`, setters change nothing. */

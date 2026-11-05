@@ -474,6 +474,46 @@ it("switches contrast through the shared select and restores it", async () => {
   appearance.dispose();
 });
 
+it("switches message density, restores it, and retries a failed save", async () => {
+  const appearance = createAppearance();
+  preferenceAppearances.push(appearance);
+  render(
+    <ToastProvider>
+      <AppearanceSettings appearance={appearance} />
+    </ToastProvider>,
+  );
+  const user = userEvent.setup();
+  const density = screen.getByRole("combobox", { name: "Message density" });
+  expect(density).toHaveTextContent("Default");
+  await user.click(density);
+  await user.click(await screen.findByRole("option", { name: "Compact" }));
+  expect(document.documentElement.dataset.messageDensity).toBe("compact");
+  expect(localStorage.getItem("buzz-message-density.v1")).toBe("compact");
+  const restored = createAppearance();
+  expect(restored.snapshot().density).toBe("compact");
+  restored.dispose();
+
+  const write = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementationOnce(() => {
+      throw new Error("denied");
+    });
+  await user.click(density);
+  await user.click(await screen.findByRole("option", { name: "Default" }));
+  expect(document.documentElement.dataset.messageDensity).toBe("default");
+  expect(localStorage.getItem("buzz-message-density.v1")).toBe("compact");
+  await user.click(
+    await screen.findByRole("button", { name: "Retry saving message density" }),
+  );
+  expect(write).toHaveBeenLastCalledWith("buzz-message-density.v1", "default");
+  expect(localStorage.getItem("buzz-message-density.v1")).toBe("default");
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Retry saving message density" }),
+    ).not.toBeInTheDocument(),
+  );
+});
+
 it("offers message spelling correction only on Mac WebKit, off until this device opts in", async () => {
   const user = userEvent.setup();
   const appearance = createAppearance();

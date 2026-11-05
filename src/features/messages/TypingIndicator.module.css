@@ -97,3 +97,7 @@
   padding: 0;
   pointer-events: none;
 }
+/* Matches the composer, which spans a compact list's full width. */
+:where(html[data-message-density="compact"]) .typing[data-audience="humans"] {
+  inline-size: calc(100% - 2 * var(--space-4));
+}

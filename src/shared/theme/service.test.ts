@@ -114,6 +114,8 @@ it.each([
       accentError: null,
       contrast: "low",
       contrastError: null,
+      density: "default",
+      densityError: null,
     });
     expect(b.root.dataset.colorMode).toBe(app.snapshot().mode);
     expect(b.meta.setAttribute).toHaveBeenLastCalledWith(
@@ -446,4 +448,48 @@ it("keeps contrast active on storage failure, retries, and follows other windows
   app.dispose();
   app.setContrast("high");
   expect(b.root.dataset.colorLevel).toBe("touch");
+});
+
+it.each([
+  [null, "default"],
+  ["", "default"],
+  ["COMPACT", "default"],
+  ["default", "default"],
+  ["compact", "compact"],
+] as const)(
+  "bootstrap and service agree on stored density %j",
+  (stored, density) => {
+    const b = browser();
+    if (stored !== null) b.values.set("buzz-message-density.v1", stored);
+    runInNewContext(readFileSync("public/appearance-init.js", "utf8"), {
+      localStorage: b.storage,
+      document: b.host.document,
+      matchMedia: b.host.matchMedia,
+    });
+    expect(b.root.dataset.messageDensity).toBe(density);
+    const app = createAppearance(b.host);
+    expect(app.snapshot().density).toBe(density);
+    expect(b.root.dataset.messageDensity).toBe(density);
+    app.dispose();
+  },
+);
+
+it("keeps density active on storage failure, retries, and follows other windows", () => {
+  const b = browser();
+  const app = createAppearance(b.host);
+  b.storage.setItem.mockImplementationOnce(() => {
+    throw new Error("denied");
+  });
+  app.setDensity("compact");
+  expect(b.root.dataset.messageDensity).toBe("compact");
+  expect(app.snapshot().densityError).not.toBeNull();
+  app.setDensity("compact");
+  expect(b.values.get("buzz-message-density.v1")).toBe("compact");
+  expect(app.snapshot().densityError).toBeNull();
+  b.values.set("buzz-message-density.v1", "default");
+  b.change("buzz-message-density.v1");
+  expect(b.root.dataset.messageDensity).toBe("default");
+  app.dispose();
+  app.setDensity("compact");
+  expect(b.root.dataset.messageDensity).toBe("default");
 });
