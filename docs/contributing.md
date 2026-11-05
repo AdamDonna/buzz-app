@@ -829,11 +829,27 @@ the complete correctness suite still runs with `pnpm test` / `just scan`:
   journeys it changed (`file:line` for hunks inside a test body; the whole file
   when the diff touches any line outside one, such as imports, helpers or hooks
   before, between or after tests, or the file is new; removed lines are judged
-  against the base revision's test bodies). `flake_vitest`
+  against the base revision's test bodies). Those always run. It then adds
+  whole test files that the diff's other source, helper, fixture-page or patch
+  changes reach, most specific first, while each lane's predicted wall time
+  stays within nine minutes and the additions stay near 40 journeys and 20
+  Vitest files. A Vitest file that would overrun the time is skipped, and
+  files after it can still join; the step summary names the highest-ranked
+  skipped files.
+  Journeys run as the longest run in rank order that fits, since more
+  journeys can mean more shards and a shorter lane. Two gaps remain: a journey
+  that loads the full app (`page.goto(app.origin)`) is reached only through
+  modules its own imports reach, such as helpers, not through the app's module
+  graph; and a patch under `patches/` reaches browser specs but no Vitest
+  files. When a change touches such code, run the related tests yourself.
+  The prediction reads
+  per-journey and per-file durations from
+  `scripts/flake-check-costs.json`; `scripts/flake-check.mjs costs` regenerates
+  it from recent green `main` runs. `flake_vitest`
   then runs that selection ten times with the JavaScript lane's two workers, and
   `flake_browser` runs `--repeat-each=10` per engine (Chromium and WebKit)
   on the shard container with the same native fixture, spreading the
-  repetitions over one shard per five journeys (at most eight) so a whole-file
+  repetitions over one shard per five journeys (at most sixteen) so a whole-file
   selection fits the job timeout. Measurement specs and
   journeys tagged `@classic-scrollbars`, `@local-webkit` or `@media-recorder`
   are excluded; their own lanes cover them. The step summary shows a test ×
