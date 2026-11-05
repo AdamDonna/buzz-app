@@ -140,6 +140,8 @@ function ConsentDialog({
               )
               .join("; ")}
             . Keys stay in Buzz.
+            {request.version === 2 &&
+              " The app can renew valid approval for another 30 days. Approval expires after 30 days without renewal. The app can restore this access after either app restarts. You can revoke it in External apps."}
           </p>
           {children}
           {!state.available && (

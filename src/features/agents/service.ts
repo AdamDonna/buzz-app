@@ -2754,6 +2754,8 @@ export class AgentsService extends Service implements Agents {
       relayOrigin(selected.selected) !== relayOrigin(agent.relay)
     )
       throw new Error("Select this agent's connected community first.");
+    const approvedViewer = selected.viewer;
+    const approvedCommunity = communityDestination(selected.selected).url;
     const controller = new AbortController();
     const lifetime = AbortSignal.any([signal, controller.signal]);
     const check = () => {
@@ -2815,7 +2817,40 @@ export class AgentsService extends Service implements Agents {
         lifetime,
       );
       void server.closed.then(release);
-      return server;
+      const authorize = server.authorize;
+      return Object.freeze({
+        ...server,
+        ...(authorize
+          ? {
+              authorize: (
+                request: import("../host/service").McpAuthorization,
+              ) => {
+                check();
+                const { durable_client, ...nativeRequest } = request;
+                if (durable_client)
+                  nativeRequest.approval = {
+                    client: durable_client,
+                    viewer: approvedViewer,
+                    agent: key,
+                    community: approvedCommunity,
+                    scopes,
+                  };
+                if (
+                  request.approval &&
+                  (request.approval.viewer !== selected.viewer ||
+                    request.approval.agent !== key ||
+                    request.approval.community !== approvedCommunity ||
+                    JSON.stringify(request.approval.scopes) !==
+                      JSON.stringify(scopes))
+                )
+                  throw new Error(
+                    "Buzz approval does not match the selected identity and access.",
+                  );
+                return authorize(nativeRequest);
+              },
+            }
+          : {}),
+      });
     } catch (error) {
       release();
       throw error;

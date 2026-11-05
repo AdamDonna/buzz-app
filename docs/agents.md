@@ -68,8 +68,8 @@ origins. It defaults to no access. Desktop preview releases enable bb-block only
 Consent and Settings use this list. The Agents service also checks it before
 opening a connection and on each tool call. See [configuration](configuration.md#external-mcp-community-flag).
 
-Buzz desktop accepts `buzz://mcp-authorize` requests from local apps. Opening a
-link only shows consent. The owner selects a community and an app-held,
+Buzz desktop accepts `buzz://mcp-authorize` requests from local apps. A new request shows consent. A valid saved approval can restore a connection
+without new consent. The owner selects a community and an app-held,
 unprotected agent, then selects **Authorize** or **Deny**. No plugin specific
 to the external app is required. The bundled Agents plugin owns the native MCP
 permission. **Settings > External apps** shows the connection and **Revoke access**.
@@ -99,7 +99,8 @@ Bearer <token>`. Notifications return 202. There is no SSE or DELETE endpoint.
 Each grant admits one upstream session; the external app shares it among its
 agents. A second initialization stops the grant. Revocation, a community or
 identity change, or the end of the owning agent runtime, plugin, or app also
-stops it. Start setup again in the external app after a connection ends.
+stops it. A version 1 client needs new setup after its session ends. Version 2
+can use saved approval to create another session.
 
 The read scope allows `channel_list`, `channel_get`, and `read`. The post scope
 allows `send` and `reply_in_subthread`. Buzz classifies each built-in tool through
@@ -128,6 +129,61 @@ the linked message's channel and thread; it cannot combine with `channel` or
 `mentions`, and `send` accepts `reply`. Posts reject `path`, `files`, and `final`.
 Unknown fields are rejected. File access, commands, Git credentials, and plugin
 tools are unavailable. Connection credentials must stay out of logs and messages.
+
+### Durable external approval
+
+Version 2 uses the same request fields and callback as version 1. Initial consent
+saves approval for 30 days. An authenticated reconnect renews valid approval
+for another 30 days after the current connection checks pass. Approval expires
+after 30 days without renewal. Expired or revoked approval requires new owner
+consent. The native credential store holds its random ID and
+256-bit reconnect secret. Approval binds the client display name, signed-in
+owner, agent membership, canonical community origin, and exact scopes. The
+webview receives only the public approval. Agent signing keys stay in Buzz.
+Version 1 remains limited to its current session.
+
+The one-use S256 exchange returns the normal MCP descriptor plus `pairing`:
+`{id,secret,approval:{client,viewer,agent,community,scopes},expires_at,counter}`.
+`expires_at` is a Unix time in seconds. `counter` starts at zero. The external
+client keeps this record in its native credential store. It never puts the
+secret in a link, workspace, log, or agent tool result.
+
+A reconnect link uses version 2 and adds `pairing_id`, `counter`, and `proof`.
+The client saves an increased counter before opening the link. Buzz accepts
+only a greater counter and saves it before it starts a fresh session. A lost
+handshake can skip a counter. A counter is a positive integer of at most
+999999999999999. The proof is unpadded base64url HMAC-SHA256 with the decoded
+reconnect secret as its key. Its input is the UTF-8 JSON array, with no spaces:
+
+```text
+["buzz-resume-request-v1",id,counter,callback,state,code_challenge]
+```
+
+Buzz checks the proof in native code. It checks the current owner, community,
+agent availability, and saved scopes through the Agents service. The callback
+carries a fresh one-use code and exchange endpoint. It also carries `proof`,
+with this HMAC input:
+
+```text
+["buzz-resume-response-v1",id,counter,state,code,exchange_url]
+```
+
+The client checks this proof before exchange. The endpoint can change after a
+restart. The exchange returns the same approval and secret, the accepted
+counter, a renewed `expires_at`, and a fresh bearer. Reservation of a counter
+does not renew approval. The client accepts only an unchanged ID, secret,
+approval, and accepted counter. The returned expiry must not decrease or exceed
+30 days from the current time. The client saves the renewed record before it
+initializes that one-session bearer.
+Neither side resumes or repeats a tool request.
+
+External apps restores the saved approval in Settings. **Revoke access** first
+erases the saved approval, then closes the live session. Revoke also cancels
+an in-flight initial approval. Page unload and connection loss close sessions
+without erasing approval. Every authenticated native request checks approval
+and expiry. The Agents service also checks current identity and community
+before tool dispatch. A changed identity, unavailable agent, changed community,
+revocation, or expiry cannot grant access. Added scopes require new owner consent.
 
 ## Managing plugins from a conversation
 

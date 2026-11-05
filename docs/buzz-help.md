@@ -562,6 +562,15 @@ Release builds ignore this optional helper.
 
 With the pinned-viewer development server, Settings → Plugins → Builderlab manages one sign-in for hosted communities, remote agents and apps. It survives app reloads while the server runs. Signing out or session expiry signs all three out. The credential stays on the server and is not saved to disk.
 
+### Saved External apps approval
+
+External apps can request saved approval. The app can renew valid approval
+for another 30 days. Approval expires after 30 days without renewal. Buzz shows
+this policy before you authorize access. Expired or revoked approval requires
+new owner consent. The app can restore the same access after Buzz or the app
+restarts. Keep Buzz open in the approved community. Keys stay in Buzz. Use **Settings > External apps > Revoke access** to remove approval,
+even when no session is connected. Added access requires new approval.
+
 ### Reconnecting an old agent in a DM
 
 On desktop, **Connect [agent name]** may appear inside a DM with an old agent you own that is available to import from this computer. It preselects compatible saved harness, provider and model choices, and preserves saved effort settings. Choose a harness if the old type is unavailable; settings that were not saved use the selected type’s defaults. Review the inline controls, complete installation or sign-in if prompted, stop the agent in old Buzz, then choose **Connect**. Your agent keeps its identity and conversation. This does not resend earlier messages. The same private card can appear in a channel or thread after you mention an eligible agent you own. Only you see it, once per agent in the loaded conversation. After connecting, **Ask the agent to respond** explicitly queues a follow-up addressed only to that agent in the original message’s thread; it does not automatically replay your request. If no prompt appears, use **Agents → New agent → Import an agent**.

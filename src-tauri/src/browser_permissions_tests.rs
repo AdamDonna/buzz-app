@@ -158,6 +158,7 @@ fn native_command_permissions_isolate_webviews() {
         "plugin_host_process_kill",
         "plugin_host_mcp_serve",
         "plugin_host_mcp_authorize",
+        "plugin_host_mcp_pairing",
         "plugin_host_mcp_reply",
         "plugin_host_mcp_close",
         "plugin_host_read_file",

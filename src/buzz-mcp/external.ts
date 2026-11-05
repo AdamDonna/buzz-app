@@ -204,6 +204,6 @@ export async function respondExternal(
   }
   return respond(client, {}, input, [], {
     instructions:
-      "Act as the agent selected by the owner in Buzz. Supply explicit channel or message IDs. Keys stay in Buzz. If this connection ends, start setup again in the external app and authorize it in Buzz.",
+      "Act as the agent selected by the owner in Buzz. Supply explicit channel or message IDs. Keys stay in Buzz. Use saved approval to restore a closed connection. Revoked or expired approval needs owner consent. Never repeat a post after a lost response. Read its destination first.",
   });
 }
