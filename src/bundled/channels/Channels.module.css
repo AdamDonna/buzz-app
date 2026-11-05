@@ -452,6 +452,20 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
 .scopeSectionTitle {
   color: var(--text-standard);
 }
+/* Collapsed headings stand in for their hidden rows, using the same unread
+   evidence as the sidebar edge cues. Muted destinations stay quiet. */
+.channelSection:has(
+    > .sectionContent
+      :is([data-channel-unread], [data-channel-activity]):not(
+        [data-channel-muted]
+      )
+  )
+  > .sectionHeader
+  > details:not([open])
+  .sectionTitle {
+  color: var(--text-navigation-unread);
+  font-weight: var(--type-weight-semibold);
+}
 .contributionFeedback {
   margin: 0;
   padding: var(--space-1) var(--space-2);
