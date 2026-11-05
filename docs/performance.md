@@ -360,6 +360,7 @@ one session (2026-11-05). Each change that moves these numbers adds its row.
 | --- | --- | --- | --- | --- | --- |
 | Before thread scrolling fixes | 85 ms | 76 | 194 | 54 | 300 ms |
 | Closed action bars skip the glass | 50 ms | 44 | 94 | 9 | 133 ms |
+| Thread rows isolated in the scroller | 30 ms | 10 | 44 | 6 | 67 ms |
 
 ## Results and iteration
 
