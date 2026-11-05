@@ -242,9 +242,12 @@ export function ModelPicker({
   };
   return (
     <>
+      {/* Preference rows stack at full width; only compact triggers share a line. */}
       <div
         ref={control}
-        className="flex max-w-full flex-wrap items-center gap-3"
+        className={
+          compact ? "flex max-w-full flex-wrap items-center gap-3" : undefined
+        }
       >
         {groupByFamily ? (
           <ModelFamilyMenu
