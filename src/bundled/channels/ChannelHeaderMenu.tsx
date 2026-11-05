@@ -84,7 +84,18 @@ export function ChannelHeaderMenu({
           Finish conversion
         </MenuItem>
       )}
-      <MenuItem onClick={openDetails}>
+      <MenuItem
+        onClick={() => {
+          // WebKit can drop the tab's focus before the menu finishes closing.
+          finalFocus.current = () =>
+            document.querySelector<HTMLElement>(
+              '[data-panel-workspace] [data-tab-value="settings"]',
+            ) ??
+            trigger.current ??
+            false;
+          openDetails();
+        }}
+      >
         <MenuIcon>
           <InfoIcon size={16} />
         </MenuIcon>

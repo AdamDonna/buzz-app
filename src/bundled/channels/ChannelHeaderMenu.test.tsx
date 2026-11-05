@@ -3,8 +3,9 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
-import { createRef, useLayoutEffect } from "react";
+import { createRef, useLayoutEffect, useState } from "react";
 import { ChannelHeaderMenu } from "./ChannelHeaderMenu";
+import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import type { RelaySession } from "../../features/relay/session";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import {
@@ -81,7 +82,7 @@ function harness(value: ChannelSummary | undefined = channel) {
         <ChannelHeaderMenu {...props} />
       </ChannelNavigationProvider>,
     );
-  return { props, mount, load, save, run, lifecycleLoad, details };
+  return { props, relay, mount, load, save, run, lifecycleLoad, details };
 }
 it("loads details only on demand, offers lifecycle actions from live state, and opens details without mutation", async () => {
   const h = harness();
@@ -116,6 +117,60 @@ it("loads details only on demand, offers lifecycle actions from live state, and 
     await screen.findByRole("menuitem", { name: "View channel details" }),
   );
   expect(h.props.openDetails).toHaveBeenCalledTimes(2);
+});
+it("hands focus to the opened settings tab when the menu finishes closing after focus drops to the body", async () => {
+  const h = harness();
+  const close = vi.fn();
+  function Page() {
+    const [settings, setSettings] = useState(false);
+    return (
+      <ChannelNavigationProvider relay={h.relay}>
+        <ChannelHeaderMenu {...h.props} openDetails={() => setSettings(true)} />
+        {settings && (
+          <PanelWorkspace
+            value="settings"
+            select={() => {}}
+            items={[
+              {
+                id: "settings",
+                label: "Channel settings",
+                close,
+                content: <p>Settings</p>,
+              },
+            ]}
+          />
+        )}
+      </ChannelNavigationProvider>
+    );
+  }
+  render(<Page />, { reactStrictMode: true });
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "Channel actions" });
+  await user.click(trigger);
+  const menu = await screen.findByRole("menu");
+  let release!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const animations = vi.fn(() => [{ finished }]);
+  // Hold the menu's exit animation. WebKit can drop focus to the body while
+  // it runs; jsdom keeps it on the tab, so the test drops it.
+  Object.defineProperty(menu, "getAnimations", { value: animations });
+  try {
+    await user.click(
+      screen.getByRole("menuitem", { name: "View channel details" }),
+    );
+    await waitFor(() => expect(animations).toHaveBeenCalled());
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => release());
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    const tab = screen.getByRole("tab", { name: "Channel settings" });
+    await waitFor(() => expect(tab).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => release());
+  }
 });
 it("supports keyboard dismissal, outside clicks, and Canvas with the stable header focus target", async () => {
   const h = harness();
