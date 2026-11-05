@@ -199,6 +199,10 @@ html[data-keyboard-navigation] .card:focus-visible {
   color: var(--text-secondary);
   font-size: var(--text-body-sm-size, 0.8125rem);
 }
+/* Match the xs card model selector so static harness badges align with it. */
+.agentCard .detail {
+  min-height: var(--space-6);
+}
 .detailText {
   overflow: hidden;
   text-overflow: ellipsis;

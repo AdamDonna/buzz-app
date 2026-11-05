@@ -24,6 +24,8 @@ import {
 } from "../agents/current-activity";
 import { localWorkLabel, type LocalWork } from "../agents/local-activity";
 import { AgentResponsePreview } from "./AgentResponsePreview";
+import { RemoteAgentHint, RemoteWorkIcon } from "./RemoteAgentHint";
+import { remoteWorkDetail } from "../agents/execution-location";
 import { ActivityStepPreview, activityStepLabel } from "./ActivityStepPreview";
 import { AgentActivityRow } from "../agents/AgentActivityRow";
 import { NavigationCard } from "../../shared/design-system/ui/NavigationItem";
@@ -206,6 +208,7 @@ export function useConversationAgents(
     replaced,
     agents,
     knownAgents,
+    choices,
   };
 }
 
@@ -244,6 +247,7 @@ export function TypingIndicator({
     replaced,
     agents: activeAgents,
     knownAgents,
+    choices,
   } = useConversationAgents(
     session,
     channelId,
@@ -384,12 +388,16 @@ export function TypingIndicator({
       ? `buzz://message?${new URLSearchParams({ channel: channelId, id: conversationRoot, thread: conversationRoot })}`
       : `buzz://channel/${encodeURIComponent(channelId)}`;
     const picture = profiles.get(pubkey)?.picture;
+    const agent = choices.identities.find((choice) => choice.pubkey === pubkey);
+    const remoteDetail = session.viewer
+      ? remoteWorkDetail(agent?.execution, agent?.runtime)
+      : undefined;
     const status = work
       ? localWorkLabel(work)
       : detail.detailAvailability === "available"
         ? detail.label
         : detail.detailAvailability === "no-current-step"
-          ? "No current step details received."
+          ? (remoteDetail ?? "No current step details received.")
           : "Only typing updates are reaching this app.";
     const scope =
       detail.roots.length === 1 && detail.roots[0] === null
@@ -467,6 +475,13 @@ export function TypingIndicator({
             <AgentResponsePreview
               stackPrevious={previousAuthor === firstAgent}
               name={name(firstAgent)}
+              bylineHint={
+                <RemoteAgentHint
+                  session={session}
+                  viewer={session.viewer}
+                  pubkey={firstAgent}
+                />
+              }
               participants={agents.map((id) => ({
                 id,
                 name: name(id),
@@ -488,6 +503,16 @@ export function TypingIndicator({
                 }
                 content={
                   <ActivityStepPreview
+                    icon={
+                      visibleStep && (
+                        <RemoteWorkIcon
+                          session={session}
+                          viewer={session.viewer}
+                          pubkey={firstAgent}
+                          active
+                        />
+                      )
+                    }
                     state={
                       details.get(firstAgent)?.label ===
                         "Received · waiting to start" ||

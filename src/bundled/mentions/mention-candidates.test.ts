@@ -67,6 +67,30 @@ it("reads only the session stores its cache compares", () => {
   ]);
 });
 
+it("carries known execution into recipient choices without classifying directory-only agents", () => {
+  const session = fresh();
+  const identities = [
+    { pubkey: key(3), name: "Remote", execution: "remote" },
+    { pubkey: key(6), name: "Local", execution: "local", managed: true },
+  ];
+  Object.assign(session, {
+    agentChoices: { snapshot: () => ({ identities }) },
+  });
+  const candidates = rows(
+    [{ pubkey: key(8), name: "Unknown", isAgent: true }],
+    session,
+  );
+  expect(
+    candidates.find((row) => row.recipient.pubkey === key(3))?.execution,
+  ).toBe("remote");
+  expect(
+    candidates.find((row) => row.recipient.pubkey === key(6))?.execution,
+  ).toBe("local");
+  expect(
+    candidates.find((row) => row.recipient.pubkey === key(8))?.execution,
+  ).toBeUndefined();
+});
+
 it("directory people that change nothing can be left out", () => {
   const directory = [
     { pubkey: key(1), name: "Ada Lovelace" }, // named member: no change

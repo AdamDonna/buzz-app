@@ -5,6 +5,8 @@ import {
   type ReactNode,
 } from "react";
 import type { AgentViewProps } from "../../../features/agents/service";
+import { AgentExecutionNote } from "../../../features/agents/AgentExecutionNote";
+import { executionCopy } from "../../../features/agents/execution-location";
 import { PreferenceRow } from "../../../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import inlineStyles from "../../../shared/InlineReference.module.css";
@@ -98,8 +100,13 @@ export function createSettingsTab(
     settingsHost,
   }: AgentViewProps) {
     const [revision, setRevision] = useState(0);
+    const login = useSyncExternalStore(session.subscribe, session.snapshot);
+    const signedIn = login.status === "signed-in";
     return (
       <div className="grid gap-4">
+        {settingsSection !== "runtime" && signedIn && (
+          <AgentExecutionNote runtime={agent.type} />
+        )}
         {settingsSection !== "runtime" && (
           <Editor
             key={`${agent.pubkey}/${revision}`}
@@ -128,10 +135,12 @@ export function createSettingsTab(
                   </>
                 }
               />
-              <PreferenceRow
-                title="Workspace"
-                subtitle="Remote runtime shared with all agents by default."
-              />
+              {signedIn && (
+                <PreferenceRow
+                  title="Workspace"
+                  subtitle={`Remote runtime shared with your other agents in this workspace by default. ${executionCopy.remote.description}`}
+                />
+              )}
               <PreferenceRow
                 title="Sessions"
                 subtitle="One session per thread"

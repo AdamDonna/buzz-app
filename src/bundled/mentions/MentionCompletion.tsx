@@ -13,7 +13,10 @@ import { useMentionChoices } from "./use-mention-choices";
 import type { ComposerCompletionProps } from "../../features/conversation/contracts";
 import type { ComposerSession } from "../../features/messages/composer-session";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
-import { outsideMentionDetail } from "./mention-candidates";
+import {
+  outsideMentionDetail,
+  remoteMentionDetail,
+} from "./mention-candidates";
 import { matchesMentionQuery, pendingMentionQuery } from "./mention-query";
 import { continuedMention, matchingMentions } from "./mention-ranking";
 import { resolveSpaceMention } from "./resolve-space-mention";
@@ -209,12 +212,21 @@ export function MentionCompletion({
     const memberKeys = new Set(members);
     const available = [
       ...matching.map(
-        ({ recipient, label, elsewhere, disabled, fullName, agent }) => {
+        ({
+          recipient,
+          label,
+          elsewhere,
+          disabled,
+          fullName,
+          agent,
+          execution,
+        }) => {
           const detail =
             disabled ??
             // A verified full name sits beside the detail.
             ([
               fullName !== label ? fullName : undefined,
+              remoteMentionDetail(execution),
               model.managedBy.get(recipient.pubkey),
               memberKeys.has(recipient.pubkey)
                 ? undefined

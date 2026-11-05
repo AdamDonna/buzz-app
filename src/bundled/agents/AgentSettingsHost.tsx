@@ -14,6 +14,8 @@ import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { PreferenceRow } from "../../shared/design-system/ui/PreferenceRow";
 import { CaretDownIcon } from "../../shared/design-system/icons";
 import {
+  MenuGroup,
+  MenuGroupLabel,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -148,7 +150,7 @@ function TypeField({
   const selectedType = types.find((item) => item.key === selected) ?? type;
   const TypeIcon = selectedType?.icon;
   const [error, setError] = useState("");
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState<"Remote" | "Local">();
   const providerButton = useRef<HTMLButtonElement>(null);
   const [checking, setChecking] = useState(false);
   const [configuring, setConfiguring] = useState(false);
@@ -214,7 +216,7 @@ function TypeField({
               <MenuRoot
                 onOpenChange={(open) => {
                   if (open) setError("");
-                  else setHelpOpen(false);
+                  else setHelpOpen(undefined);
                 }}
               >
                 <MenuTrigger
@@ -238,7 +240,7 @@ function TypeField({
                     if (event.key === "Escape" && helpOpen) {
                       event.preventDefault();
                       event.stopPropagation();
-                      setHelpOpen(false);
+                      setHelpOpen(undefined);
                     }
                   }}
                 >
@@ -246,32 +248,53 @@ function TypeField({
                     value={selected}
                     onValueChange={(next) => choose(String(next))}
                   >
-                    {types
-                      .filter((item) => !unavailable.includes(item))
-                      .map((item) => {
-                        const Icon = item.icon;
-                        return (
-                          <MenuRadioItem
-                            key={item.key}
-                            value={item.key}
-                            selection="highlight"
-                            closeOnClick
-                          >
-                            <ChoiceRow
-                              label={item.title}
-                              leading={Icon ? <Icon size={20} /> : undefined}
+                    {[true, false].map((remote) => {
+                      const label = remote ? "Remote" : "Local";
+                      const choices = types.filter(
+                        (item) => Boolean(item.remote) === remote,
+                      );
+                      if (!choices.length) return null;
+                      const blocked = choices.filter((item) =>
+                        unavailable.includes(item),
+                      );
+                      return (
+                        <MenuGroup key={label}>
+                          <MenuGroupLabel emphasis="quiet">
+                            <span className="text-caption">{label}</span>
+                          </MenuGroupLabel>
+                          {choices
+                            .filter((item) => !unavailable.includes(item))
+                            .map((item) => {
+                              const Icon = item.icon;
+                              return (
+                                <MenuRadioItem
+                                  key={item.key}
+                                  value={item.key}
+                                  selection="highlight"
+                                  closeOnClick
+                                >
+                                  <ChoiceRow
+                                    label={item.title}
+                                    leading={
+                                      Icon ? <Icon size={20} /> : undefined
+                                    }
+                                  />
+                                </MenuRadioItem>
+                              );
+                            })}
+                          {blocked.length > 0 && (
+                            <UnavailableHarnessChoices
+                              types={blocked}
+                              source={type}
+                              open={helpOpen === label}
+                              onOpenChange={(open) =>
+                                setHelpOpen(open ? label : undefined)
+                              }
                             />
-                          </MenuRadioItem>
-                        );
-                      })}
-                    {unavailable.length > 0 && (
-                      <UnavailableHarnessChoices
-                        types={unavailable}
-                        source={type}
-                        open={helpOpen}
-                        onOpenChange={setHelpOpen}
-                      />
-                    )}
+                          )}
+                        </MenuGroup>
+                      );
+                    })}
                   </MenuRadioGroup>
                 </MenuPopup>
               </MenuRoot>

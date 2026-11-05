@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, useState } from "react";
@@ -826,10 +827,89 @@ it("dismisses Harness help before allowing Escape to close the agent pane", asyn
   expect(close).toHaveBeenCalledOnce();
 });
 
+it("shows the remote execution hint only while the shared account is signed in", async () => {
+  const h = await fixture(false);
+  renderTabs(h);
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  expect(h.request).not.toHaveBeenCalled();
+  const held = deferred<Awaited<ReturnType<typeof h.acquire>>>();
+  h.acquire.mockReturnValueOnce(held.promise);
+  let signingIn = Promise.resolve();
+  await act(async () => {
+    signingIn = h.session.signIn();
+  });
+  try {
+    expect(h.session.snapshot().status).toBe("pending");
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  } finally {
+    await act(async () => {
+      held.resolve({
+        revision: "credential",
+        account: {
+          subject: "account-a",
+          email: "a@example.com",
+          canUseRemoteAgents: true,
+          canUseBuilderlabDecisions: false,
+        },
+      });
+      await signingIn;
+    });
+  }
+  await loadedInstructions();
+  const note = screen.getByRole("note");
+  expect(within(note).getByText("Remote agent")).toBeVisible();
+  expect(within(note).getByText("Runs on a Builderlab machine")).toBeVisible();
+  expect(note).not.toHaveTextContent("It can’t open files on this computer.");
+  act(() => h.session.signOut());
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
+});
+
+it("hides the runtime Workspace hint while signed out without loading settings", async () => {
+  const h = await fixture(false);
+  render(<h.Tab agent={agent()} save={vi.fn()} settingsSection="runtime" />, {
+    wrapper: StrictMode,
+  });
+  expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
+  await act(async () => {
+    await h.session.signIn();
+  });
+  expect(screen.getByText("Workspace")).toBeVisible();
+  expect(
+    screen.getByText(
+      /shared with your other agents in this workspace by default/,
+    ),
+  ).toBeVisible();
+  expect(screen.getByText(/you can chat from your phone/)).toBeVisible();
+  act(() => h.session.signOut());
+  expect(
+    screen.queryByText(/you can chat from your phone/),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
+  expect(
+    screen.queryByText(
+      /shared with your other agents in this workspace by default/,
+    ),
+  ).not.toBeInTheDocument();
+  expect(h.request).not.toHaveBeenCalled();
+});
+
 it("keeps hosted instructions on cancellation and resets a confirmed discard", async () => {
   const h = await fixture();
   const user = userEvent.setup();
   renderTabs(h);
+  const identity = screen.getByRole("tabpanel", { name: "Identity" });
+  const note = within(identity).getByRole("note");
+  expect(within(note).getByText("Remote agent")).toBeVisible();
+  expect(within(note).getByText("Runs on a Builderlab machine")).toBeVisible();
+  const harness = within(identity).getByRole("button", {
+    name: "Change harness from Builderlab",
+  });
+  const container = harness.closest(".buzz-settings-group");
+  if (!container) throw new Error("Harness settings container is missing");
+  expect(container).not.toContainElement(note);
+  expect(
+    note.compareDocumentPosition(container) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "Instructions" })).toBeNull();
   expect(screen.getByRole("tab", { name: "Identity" })).toHaveAttribute(
     "aria-selected",
@@ -878,6 +958,7 @@ it("keeps hosted instructions on cancellation and resets a confirmed discard", a
   expect(screen.getByText("Workspace")).toBeVisible();
   expect(screen.getByText("One session per thread")).toBeVisible();
   expect(screen.getByText("Agent settings")).toBeVisible();
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
   const runtime = screen.getByRole("link", { name: "Builderlab" });
   expect(runtime).toHaveAttribute("href", "https://builderlab.example");
   expect(runtime.closest(".buzz-preference-row-description")).toHaveTextContent(

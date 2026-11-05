@@ -100,6 +100,76 @@ it("shows an incoming typing preview without invented details, retaining navigat
   expect(f.ensure).not.toHaveBeenCalled();
 });
 
+it("shows one owner-only remote hint beside the typing agent's name and follows execution changes", async () => {
+  const f = fixture();
+  const base = f.session.agentChoices.snapshot();
+  let choices = base;
+  const session = {
+    ...f.session,
+    agentChoices: { ...f.session.agentChoices, snapshot: () => choices },
+  };
+  const typing = (pubkey = agent) => ({ pubkey, channelId: "channel" });
+  const execution = (
+    pubkey: string,
+    value?: "remote" | "local",
+    runtime = "block.builderlab/builderlab",
+  ) => {
+    choices = {
+      ...base,
+      identities: base.identities.map((choice) =>
+        choice.pubkey === pubkey && value
+          ? { ...choice, execution: value, runtime }
+          : choice,
+      ),
+    };
+    f.update([typing()]);
+  };
+  f.update([typing()]);
+  const view = render(
+    <TypingIndicator inFlow session={session} channelId="channel" />,
+  );
+  expect(screen.queryByText("Remote")).toBeNull();
+  execution(agent, "remote");
+  const hint = screen.getByText("Remote");
+  expect(hint).toBeVisible();
+  expect(screen.getAllByText("Remote")).toHaveLength(1);
+  expect(hint.closest("strong")).toBeNull();
+  expect(hint.closest("button")).toBeNull();
+  expect(hint.parentElement).toHaveTextContent("Agent· Remote");
+  expect(document.querySelector(".tabler-icon-cloud")).toBeNull();
+  await userEvent.setup().hover(hint);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(
+    "Runs remotely on Builderlab",
+  );
+  execution(agent, "remote", "other/provider");
+  expect(screen.getByRole("tooltip")).toHaveTextContent(
+    "Runs on a remote machine",
+  );
+  execution(agent, "local");
+  expect(screen.queryByText("Remote")).toBeNull();
+  execution(agent);
+  expect(screen.queryByText("Remote")).toBeNull();
+  // Another participant's remote execution cannot label the first agent.
+  execution(other, "remote");
+  f.update([typing(), typing(other)]);
+  expect(screen.queryByText("Remote")).toBeNull();
+  f.update([typing(other)]);
+  expect(screen.getByText("Remote").parentElement).toHaveTextContent(
+    "Other· Remote",
+  );
+  view.rerender(
+    <TypingIndicator
+      inFlow
+      previousAuthor={other}
+      session={session}
+      channelId="channel"
+    />,
+  );
+  expect(screen.queryByText("Remote")).toBeNull();
+  f.update([typing("public-agent")]);
+  expect(screen.queryByText("Remote")).toBeNull();
+});
+
 it.each([
   [{ title: "unknown", kind: "__proto__" }, "Running a tool"],
   [{ title: "unknown", kind: "constructor" }, "Running a tool"],
@@ -110,6 +180,16 @@ it.each([
   async (tool, label) => {
     const f = fixture(),
       user = userEvent.setup();
+    const base = f.session.agentChoices.snapshot();
+    let choices = {
+      ...base,
+      identities: base.identities.map((choice) => ({
+        ...choice,
+        execution: "remote" as "remote" | "local",
+        runtime: "block.builderlab/builderlab",
+      })),
+    };
+    Object.assign(f.session.agentChoices, { snapshot: () => choices });
     const now = Date.parse("2026-10-08T12:00:00Z");
     f.update([], {
       turns: [
@@ -151,13 +231,28 @@ it.each([
       ],
     });
     render(<TypingIndicator session={f.session} channelId="channel" />);
-    await user.click(screen.getByRole("button", { name: label }));
+    const trigger = screen.getByRole("button", { name: label });
+    expect(trigger.querySelector(".tabler-icon-cloud")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+    await user.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Working now" });
     expect(within(dialog).getByText(label, { exact: true })).toBeVisible();
     expect(
       within(dialog).queryByText("Only typing updates are reaching this app."),
     ).toBeNull();
     expect(dialog).not.toHaveTextContent("report.txt");
+    await user.keyboard("{Escape}");
+    choices = {
+      ...choices,
+      identities: choices.identities.map((choice) => ({
+        ...choice,
+        execution: "local",
+      })),
+    };
+    f.update([]);
+    expect(trigger.querySelector(".tabler-icon-cloud")).toBeNull();
   },
 );
 
@@ -391,48 +486,82 @@ it.each([null, undefined])(
   },
 );
 
-it("opens Activity without a transcript when telemetry names no confirmed thread", async () => {
-  const f = fixture(),
-    user = userEvent.setup(),
-    open = vi.fn(() => true);
-  f.update([entry()], {
-    turns: [
-      {
-        agent,
-        channelId: "channel",
-        turnId: "unconfirmed",
-        state: "working",
-        timestamp: 1,
-      },
-    ],
-  });
-  render(
-    <TypingIndicator
-      session={f.session}
-      channelId="channel"
-      openActivity={open}
-      canOpenActivity={() => true}
-    />,
-  );
-  await user.click(
-    screen.getByRole("button", { name: "Activity: Agent working" }),
-  );
-  expect(
-    within(screen.getByRole("dialog", { name: "Working now" })).getByText(
-      /Work with unconfirmed thread/,
-    ),
-  ).toBeVisible();
-  expect(
-    within(screen.getByRole("dialog")).getByText(
-      "No current step details received.",
-    ),
-  ).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "View Agent activity" }));
-  // Unconfirmed work could be anywhere, so it opens Activity, not a transcript.
-  const activity = profileActivityViewTarget(agent) ?? "";
-  expect(open).toHaveBeenLastCalledWith(activity, undefined);
-  expect(claimProfileTranscript(activity)).toBeUndefined();
-});
+it.each([
+  {
+    execution: undefined,
+    runtime: undefined,
+    status: "No current step details received.",
+  },
+  {
+    execution: "local",
+    runtime: undefined,
+    status: "No current step details received.",
+  },
+  {
+    execution: "remote",
+    runtime: "block.builderlab/builderlab",
+    status: "Running remotely on Builderlab…",
+  },
+  {
+    execution: "remote",
+    runtime: "other/provider",
+    status: "Running on a remote machine…",
+  },
+] as const)(
+  "opens Activity without a transcript and uses the appropriate no-step fallback: $execution / $runtime",
+  async ({ execution, runtime, status }) => {
+    const f = fixture(),
+      user = userEvent.setup(),
+      open = vi.fn(() => true);
+    const base = f.session.agentChoices;
+    const choices = {
+      ...base.snapshot(),
+      identities: base
+        .snapshot()
+        .identities.map((choice) =>
+          choice.pubkey === agent ? { ...choice, execution, runtime } : choice,
+        ),
+    };
+    Object.assign(f.session, {
+      agentChoices: { ...base, snapshot: () => choices },
+    });
+    f.update([entry()], {
+      turns: [
+        {
+          agent,
+          channelId: "channel",
+          turnId: "unconfirmed",
+          state: "working",
+          timestamp: 1,
+        },
+      ],
+    });
+    render(
+      <TypingIndicator
+        session={f.session}
+        channelId="channel"
+        openActivity={open}
+        canOpenActivity={() => true}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Activity: Agent working" }),
+    );
+    expect(
+      within(screen.getByRole("dialog", { name: "Working now" })).getByText(
+        /Work with unconfirmed thread/,
+      ),
+    ).toBeVisible();
+    expect(within(screen.getByRole("dialog")).getByText(status)).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "View Agent activity" }),
+    );
+    // Unconfirmed work could be anywhere, so it opens Activity, not a transcript.
+    const activity = profileActivityViewTarget(agent) ?? "";
+    expect(open).toHaveBeenLastCalledWith(activity, undefined);
+    expect(claimProfileTranscript(activity)).toBeUndefined();
+  },
+);
 
 it.each(["hover", "keyboard"])(
   "consumes %s popup Escape before the owning panel and preserves IME",

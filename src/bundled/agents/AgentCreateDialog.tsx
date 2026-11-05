@@ -1,5 +1,5 @@
 // Avatar selection above the agent identity and type-owned setup fields.
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AgentCardDraft } from "../../features/agents/agent-card";
 import {
   agentAvatars,
@@ -25,6 +25,7 @@ import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { useNamePrompt, useShake } from "./useNamePrompt";
 import { MigrationPreview } from "./AgentSettingsHost";
+import { RemoteAgentIntroduction } from "./RemoteAgentIntroduction";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -143,11 +144,25 @@ export function AgentCreateDialog({
   const preview = migration(type);
   const [dirty, setDirty] = useState(Boolean(update));
   const [pending, setPending] = useState(false);
+  const [showRemoteIntro, setShowRemoteIntro] = useState(false);
   const [error, setError] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [configurationReady, setConfigurationReady] = useState(false);
   const avatarRef = useRef<{ prepare(): Promise<string> }>(null);
   const nameField = useRef<HTMLInputElement>(null);
+  const createButton = useRef<HTMLButtonElement>(null);
+  const introContinue = useRef<HTMLButtonElement>(null);
+  const previousIntro = useRef(false);
+  useLayoutEffect(() => {
+    if (previousIntro.current === showRemoteIntro) return;
+    previousIntro.current = showRemoteIntro;
+    const target = showRemoteIntro
+      ? introContinue.current
+      : pending
+        ? nameField.current?.closest<HTMLElement>('[role="dialog"]')
+        : createButton.current;
+    target?.focus({ preventScroll: true });
+  }, [showRemoteIntro, pending]);
   const namePrompt = useNamePrompt(nameField);
   const nameControl = useRef<HTMLDivElement>(null);
   useShake(nameControl, namePrompt.attempts);
@@ -166,6 +181,8 @@ export function AgentCreateDialog({
       ?.querySelector<HTMLElement>('[role="combobox"]')
       ?.focus();
   }, [harnessId, type?.key]);
+  const CreateAction = type?.CreateAction;
+  const canCreate = !Configuration || configurationReady;
   const close = () => setOpen(false);
   const chooseModel = (item: RegisteredAgentType, next: unknown) => {
     setTypeKey(item.key);
@@ -191,16 +208,14 @@ export function AgentCreateDialog({
         : next,
     );
   };
-  const create = async () => {
-    if (
-      !type ||
-      pending ||
-      avatarBusy ||
-      (Configuration && !configurationReady)
-    )
-      return;
+  const create = async (introduced = false) => {
+    if (!type || pending || avatarBusy || !canCreate) return;
     if (!name.trim()) {
       namePrompt.prompt();
+      return;
+    }
+    if (!update && type.remote && !introduced) {
+      setShowRemoteIntro(true);
       return;
     }
     setPending(true);
@@ -227,77 +242,123 @@ export function AgentCreateDialog({
       id={harnessId}
       title="Harness"
       trailing={
-        <Select
-          label="Harness"
-          variant="compact"
-          align="end"
-          value={type?.key ?? ""}
-          leading={<TypeIcon type={type} size={20} />}
-          disabled={pending || types.length < 2}
-          groups={[
-            {
-              label: "",
-              options: types.map((item) => ({
-                value: item.key,
-                leading: <TypeIcon type={item} size={20} />,
-                label: item.remote ? `${item.title} (hosted)` : item.title,
-              })),
-            },
-          ]}
-          onValueChange={choose}
-        />
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <Select
+            label="Harness"
+            variant="compact"
+            align="end"
+            value={type?.key ?? ""}
+            leading={<TypeIcon type={type} size={20} />}
+            disabled={pending || types.length < 2}
+            groups={[true, false]
+              .map((remote) => ({
+                label: remote ? "Remote" : "Local",
+                options: types
+                  .filter((item) => Boolean(item.remote) === remote)
+                  .map((item) => ({
+                    value: item.key,
+                    leading: <TypeIcon type={item} size={20} />,
+                    label: item.title,
+                  })),
+              }))
+              .filter((group) => group.options.length > 0)}
+            onValueChange={choose}
+          />
+          {CreateAction && (
+            <CreateAction key={type.key} disabled={pending || avatarBusy} />
+          )}
+        </div>
       }
     />
+  );
+  const errorMessage = error && (
+    <p
+      key={error}
+      ref={reveal}
+      role="alert"
+      className="m-0 text-body-sm text-danger"
+    >
+      {error}
+    </p>
   );
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) close();
+        if (!next) showRemoteIntro ? setShowRemoteIntro(false) : close();
       }}
       onOpenChangeComplete={(next) => {
         if (!next) onClose();
       }}
-      title={edited ? `Edit ${edited.name}` : "Create agent"}
-      description={
-        update
-          ? `${update.request.requesterName} proposed these changes. Nothing changes until you save.`
-          : request
-            ? `${request.requesterName} requested this agent. Review its settings before creating it.`
-            : draft
-              ? "From an agent card. Review its settings before creating it."
-              : undefined
+      title={
+        showRemoteIntro
+          ? "Meet your remote agent"
+          : edited
+            ? `Edit ${edited.name}`
+            : "Create agent"
       }
-      size="default"
+      description={
+        showRemoteIntro
+          ? undefined
+          : update
+            ? `${update.request.requesterName} proposed these changes. Nothing changes until you save.`
+            : request
+              ? `${request.requesterName} requested this agent. Review its settings before creating it.`
+              : draft
+                ? "From an agent card. Review its settings before creating it."
+                : undefined
+      }
+      size={showRemoteIntro ? "compact" : "default"}
+      closeLabel={showRemoteIntro ? "Back to agent settings" : "Close"}
       height="content"
       chromeSpacing="padded"
       initialFocus={nameField}
       // A started draft only closes from the close button.
       dismissOnOutsideClick={!dirty}
       onEscape={() => {
+        if (showRemoteIntro) return false;
         if (pending || avatarBusy) return true;
         return dirty || pending;
       }}
       preventClose={pending || avatarBusy}
       actions={
-        <Button
-          variant="primary"
-          type="submit"
-          form={form}
-          loading={pending}
-          disabled={
-            avatarBusy ||
-            pending ||
-            !type ||
-            !name.trim() ||
-            (!!Configuration && !configurationReady)
-          }
-        >
-          {update ? "Save changes" : "Create agent"}
-        </Button>
+        showRemoteIntro ? (
+          <>
+            <Button
+              disabled={pending}
+              onClick={() => setShowRemoteIntro(false)}
+            >
+              Back
+            </Button>
+            <Button
+              ref={introContinue}
+              variant="primary"
+              loading={pending}
+              disabled={!canCreate || avatarBusy}
+              onClick={() => void create(true)}
+            >
+              Let’s go
+            </Button>
+          </>
+        ) : (
+          <Button
+            ref={createButton}
+            variant="primary"
+            type="submit"
+            form={form}
+            loading={pending}
+            disabled={
+              avatarBusy || pending || !type || !canCreate || !name.trim()
+            }
+          >
+            {update ? "Save changes" : "Create agent"}
+          </Button>
+        )
       }
     >
+      {/* Preserve the draft and avatar preparation while showing the introduction. */}
       <form
+        hidden={showRemoteIntro}
         id={form}
         className={styles.form}
         data-error={error ? "" : undefined}
@@ -413,9 +474,7 @@ export function AgentCreateDialog({
             />
           ) : (
             <p className="m-0 text-body-sm text-secondary">
-              {type?.remote
-                ? "Its provider keeps its key and runs it, whether or not this app is open."
-                : "Set it up after it is made."}
+              Set it up after it is made.
             </p>
           )}
           {preview && type && (
@@ -427,17 +486,19 @@ export function AgentCreateDialog({
             />
           )}
         </div>
-        {error && (
-          <p
-            key={error}
-            ref={reveal}
-            role="alert"
-            className="m-0 text-body-sm text-danger"
-          >
-            {error}
-          </p>
-        )}
+        {!showRemoteIntro && errorMessage}
       </form>
+      {showRemoteIntro && (
+        <div className="grid gap-3">
+          <RemoteAgentIntroduction
+            name={name.trim()}
+            avatar={avatar}
+            community={community}
+            builderlab={type?.key === "block.builderlab/builderlab"}
+          />
+          {errorMessage}
+        </div>
+      )}
     </Dialog>
   );
 }

@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -8,13 +15,18 @@ import type { Host, HostResponse } from "../../../features/host/service";
 import { createAgentClient } from "../agents/client";
 import type { Credential } from "../session";
 import { deferred, createTestSession } from "../test-helpers";
-import { createCreationFields, EMPTY_CREATION } from "./Create";
+import {
+  createCreationAction,
+  createCreationFields,
+  EMPTY_CREATION,
+} from "./Create";
 
 beforeEach(() =>
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example"),
 );
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   delete document.documentElement.dataset.keyboardNavigation;
 });
@@ -59,6 +71,7 @@ async function fixture(signedIn = true) {
   const { Create, CreateConfiguration } = createCreationFields(client, session);
   const submit = vi.fn();
   const ready = vi.fn();
+  const Action = createCreationAction(session);
   let draft = { ...EMPTY_CREATION };
   function Form() {
     const [config, setConfig] = useState(draft);
@@ -71,6 +84,7 @@ async function fixture(signedIn = true) {
           submit();
         }}
       >
+        <Action disabled={false} />
         <CreateConfiguration
           config={config}
           onChange={setConfig}
@@ -253,7 +267,7 @@ it("requires new account choices while retaining the draft instructions", async 
   });
   await userEvent
     .setup()
-    .click(screen.getByRole("button", { name: "Sign in with Builderlab" }));
+    .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
   await screen.findByRole("button", { name: "Model: Sol 6.1" });
   expect(screen.getByRole("status")).toHaveTextContent(
     "another Builderlab account",
@@ -336,15 +350,37 @@ it("waits for explicit sign-in before loading the creation catalog", async () =>
   const h = await fixture(false);
   expect(h.acquire).not.toHaveBeenCalled();
   expect(h.request).not.toHaveBeenCalled();
+  expect(h.ready).toHaveBeenLastCalledWith(false);
+  expect(
+    screen.getByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  const signIn = screen.getByRole("button", { name: "Sign in to Builderlab" });
+  expect(signIn).toHaveAttribute("data-size", "sm");
   await act(async () => h.pending.resolve());
-  await userEvent
-    .setup()
-    .click(screen.getByRole("button", { name: "Sign in with Builderlab" }));
-  await screen.findByRole("button", { name: "Model: Choose a model" });
+  await userEvent.setup().click(signIn);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Model: Choose a model" }),
+    ).toBeEnabled(),
+  );
   expect(h.acquire).toHaveBeenCalledTimes(1);
+  // Sign-in enables choices; creation still waits for a model and thinking level.
+  expect(h.ready).toHaveBeenLastCalledWith(false);
+  expect(
+    screen.queryByRole("button", { name: "Sign in to Builderlab" }),
+  ).not.toBeInTheDocument();
+  await act(async () => h.session.signOut());
+  expect(h.ready).toHaveBeenLastCalledWith(false);
+  expect(
+    screen.getByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
 });
 
-it("can cancel a pending shared sign-in even while the creation form is disabled", async () => {
+it("matches pane sign-in: spinner first, then browser guidance and cancellation after three seconds", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const login = deferred<Credential>();
   let aborted = false;
   const session = createTestSession(
@@ -358,34 +394,100 @@ it("can cancel a pending shared sign-in even while the creation form is disabled
   const request = vi.fn<Host["request"]>();
   const client = createAgentClient(session, null);
   const { CreateConfiguration } = createCreationFields(client, session);
+  const Action = createCreationAction(session);
   render(
-    <CreateConfiguration
-      config={{ ...EMPTY_CREATION }}
-      disabled
-      onChange={() => {}}
-      harnessControl={null}
-    />,
+    <>
+      <Action disabled />
+      <CreateConfiguration
+        config={{ ...EMPTY_CREATION }}
+        disabled
+        onChange={() => {}}
+        harnessControl={null}
+      />
+    </>,
     { wrapper: StrictMode },
   );
   expect(
     screen.queryByRole("button", { name: "Cancel sign-in" }),
   ).not.toBeInTheDocument();
+  let signingIn = Promise.resolve();
   await act(async () => {
-    void session.signIn();
+    signingIn = session.signIn();
   });
+  const progress = screen.getByRole("button", {
+    name: "Sign in to Builderlab",
+  });
+  expect(progress).toHaveAttribute("aria-busy", "true");
+  expect(progress).toHaveAttribute("data-loading", "true");
+  expect(progress.querySelector(".buzz-button-spinner")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "Cancel sign-in" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(progress);
+  expect(aborted).toBe(false);
+  expect(session.snapshot().status).toBe("pending");
+  expect(
+    screen.getByRole("button", { name: "Model: Choose a model" }),
+  ).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeDisabled();
+  await act(() => vi.advanceTimersByTimeAsync(2999));
+  expect(progress).toHaveAttribute("aria-busy", "true");
+  expect(
+    screen.queryByRole("button", { name: "Cancel sign-in" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
+  await act(() => vi.advanceTimersByTimeAsync(1));
   expect(screen.getByRole("status")).toHaveTextContent(
-    "Finish sign-in in your browser",
+    "Finish signing in to Builderlab in your browser, then return to Buzz.",
   );
   const cancel = screen.getByRole("button", { name: "Cancel sign-in" });
   expect(cancel).toBeEnabled();
-  await userEvent.setup().click(cancel);
+  expect(cancel.querySelector(".buzz-button-spinner")).not.toBeInTheDocument();
+  fireEvent.click(cancel);
   expect(aborted).toBe(true);
   expect(session.snapshot().status).toBe("signed-out");
   expect(
     screen.queryByRole("button", { name: "Cancel sign-in" }),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Sign in to choose a model",
-  );
+  expect(
+    screen.getByRole("button", { name: "Sign in to Builderlab" }),
+  ).toBeDisabled();
   expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Finish signing in/)).not.toBeInTheDocument();
+  await act(async () => {
+    login.resolve({
+      revision: "late",
+      account: {
+        subject: "late",
+        email: "late@example.com",
+        canUseRemoteAgents: true,
+        canUseBuilderlabDecisions: false,
+      },
+    });
+    await signingIn;
+  });
+  expect(session.snapshot().status).toBe("signed-out");
+});
+
+it("keeps account verification non-cancellable beyond the browser deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const session = createTestSession(vi.fn());
+  const checking = { status: "pending" as const, checking: true };
+  const cancel = vi.fn();
+  const Action = createCreationAction({
+    ...session,
+    snapshot: () => checking,
+    cancel,
+  });
+  render(<Action disabled={false} />);
+  await act(() => vi.advanceTimersByTimeAsync(30_000));
+  const progress = screen.getByRole("button", {
+    name: "Sign in to Builderlab",
+  });
+  expect(progress).toHaveAttribute("aria-busy", "true");
+  expect(
+    screen.queryByRole("button", { name: "Cancel sign-in" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(progress);
+  expect(cancel).not.toHaveBeenCalled();
 });

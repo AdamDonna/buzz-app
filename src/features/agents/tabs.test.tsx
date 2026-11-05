@@ -65,6 +65,7 @@ it("leaves the device Attention switch out of Settings", () => {
   const section = sections.find((tab) => tab.value === "agent:settings");
   render(<div>{section?.render()}</div>);
   expect(screen.getByText("Provider")).toBeInTheDocument();
+  expect(screen.queryByRole("note")).not.toBeInTheDocument();
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 });
 

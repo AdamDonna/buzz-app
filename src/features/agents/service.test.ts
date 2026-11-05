@@ -497,6 +497,11 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     name: "Dedicated",
   });
   await service.retype(agent.key, "example/native");
+  const beforeBinding = service.local();
+  expect(
+    beforeBinding.agents.find((item) => item.pubkey === agent.pubkey)
+      ?.execution,
+  ).toBeUndefined();
   const observed: Agent[] = [];
   const off = service.subscribe(() => {
     const current = service.find(agent.key);
@@ -522,6 +527,14 @@ it("binds a dedicated native agent and preserves its target when a provider chan
     finishRetirement();
   }
   await changing;
+  expect(
+    service.local().agents.find((item) => item.pubkey === agent.pubkey)
+      ?.execution,
+  ).toBe("remote");
+  expect(
+    beforeBinding.agents.find((item) => item.pubkey === agent.pubkey)
+      ?.execution,
+  ).toBeUndefined();
   off();
   expect(observed.at(-1)?.executionBinding).toEqual({
     provider: "internal/remote",
@@ -9178,7 +9191,14 @@ it("creates a hosted agent through its provider, attesting the key it returns", 
   });
   expect(service.local().agents).toEqual([]);
   expect(choices.snapshot().identities).toEqual([
-    { pubkey: hostedKey, name: "Sky", managed: false, messageable: true },
+    {
+      pubkey: hostedKey,
+      name: "Sky",
+      managed: false,
+      messageable: true,
+      execution: "remote",
+      runtime: "example/cloud",
+    },
   ]);
   expect(choices.snapshot().identities.filter(canMessageAgent)).toHaveLength(1);
   expect(storage.get("buzz.agents.unfinished.v1")).toContain('"agents":[]');

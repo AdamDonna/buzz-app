@@ -3185,6 +3185,60 @@ it("keeps the timestamp seek action beside a detached session card", () => {
   }
 });
 
+it("marks remote activity steps and animates only while active", () => {
+  const subscribe = () => () => {};
+  const profiles = new Map();
+  const choices = {
+    identities: [{ pubkey: row.authorId, execution: "remote" }],
+  };
+  const session = {
+    viewer: "owner",
+    channels: { list: () => listed, subscribeList: subscribe },
+    messages: {},
+    profiles: { snapshot: () => profiles, subscribe },
+    agentChoices: { snapshot: () => choices, subscribe },
+  } as unknown as RelaySession;
+  const props = {
+    row: { ...row, audience: "agents" as const, replyCount: 0 },
+    profile: { name: "Agent" },
+    session,
+    media: () => undefined,
+    onOpenLink: () => false,
+    day: false,
+    retry: undefined,
+    recordedActivity: {
+      requestId: row.id,
+      active: true,
+      ownsLive: false,
+      container: "standalone" as const,
+    },
+  };
+  const view = renderDom(<MessageRow {...props} />);
+  try {
+    const trigger = screen.getByRole("button", { name: "Agent: Root" });
+    const cloud = () => trigger.querySelector(".tabler-icon-cloud");
+    expect(cloud()).toHaveAttribute("data-active", "true");
+    expect(cloud()).toHaveAttribute("aria-hidden", "true");
+    expect(trigger).not.toHaveTextContent("Remote");
+    view.rerender(
+      <MessageRow
+        {...props}
+        recordedActivity={{ ...props.recordedActivity, active: false }}
+      />,
+    );
+    expect(cloud()).not.toBeNull();
+    expect(cloud()).not.toHaveAttribute("data-active");
+    fireEvent.click(trigger);
+    expect(cloud()).toBeNull();
+    fireEvent.click(trigger);
+    expect(cloud()).not.toBeNull();
+    view.rerender(<MessageRow {...props} viewer="someone-else" />);
+    expect(cloud()).toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
 it("identifies the author on each activity summary in a message group", () => {
   const props = {
     row: { ...row, audience: "agents" as const },
@@ -4197,7 +4251,7 @@ it.each([
     viewer: undefined,
     label: "Logan’s agent",
   },
-  // The viewer's own agent shows only the mark.
+  // The viewer's own agent omits the owner attribution.
   { case: "viewer's agent", forged: false, viewer: "owner", label: undefined },
   { case: "forged owner", forged: true, viewer: undefined, label: undefined },
 ])(
@@ -4290,6 +4344,112 @@ it.each([
     } finally {
       view.unmount();
       directory.dispose();
+    }
+  },
+);
+
+it.each(["timeline", "thread", "continuation"] as const)(
+  "shows a reactive remote byline hint only to the agent's owner in %s",
+  async (layout) => {
+    const authorId = "a".repeat(64);
+    const ownerId = "b".repeat(64);
+    const user = userEvent.setup();
+    const subscribe = () => () => {};
+    const listeners = new Set<() => void>();
+    const profiles = new Map();
+    let choices: {
+      identities: {
+        pubkey: string;
+        execution: "remote" | "local" | undefined;
+        runtime?: string;
+      }[];
+    } = { identities: [] };
+    const session = {
+      viewer: ownerId,
+      channels: { list: () => listed, subscribeList: subscribe },
+      messages: {},
+      profiles: { snapshot: () => profiles, subscribe },
+      agentChoices: {
+        snapshot: () => choices,
+        subscribe(listener: () => void) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as RelaySession;
+    const props = {
+      layout,
+      row: { ...row, authorId, agentEnvelope: true as const, replyCount: 0 },
+      profile: { name: "Quinn" },
+      session,
+      stackPrevious: false,
+    };
+    const view = renderMessage(props);
+    const execution = (value?: "remote" | "local", runtime?: string) => {
+      act(() => {
+        choices = {
+          identities: [
+            {
+              pubkey: authorId,
+              execution: value,
+              ...(runtime ? { runtime } : {}),
+            },
+          ],
+        };
+        for (const listener of listeners) listener();
+      });
+    };
+    const rerender = (
+      patch: Partial<import("./MessageRow").MessageRowProps> = {},
+    ) =>
+      view.rerender(
+        <MessageRow
+          media={() => undefined}
+          onOpenLink={() => false}
+          day={false}
+          retry={undefined}
+          {...props}
+          {...patch}
+        />,
+      );
+    try {
+      expect(screen.queryByText("Remote")).toBeNull();
+      execution("remote", "block.builderlab/builderlab");
+      const hint = screen.getByText("Remote");
+      expect(hint).toBeVisible();
+      expect(hint.closest("strong")).toBeNull();
+      expect(hint).toHaveAttribute("tabindex", "0");
+      await user.hover(hint);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        "Runs remotely on Builderlab",
+      );
+      await user.unhover(hint);
+      await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+      act(() => hint.focus());
+      await waitFor(() =>
+        expect(hint).toHaveAccessibleDescription(/Runs remotely on Builderlab/),
+      );
+      execution("remote", "another/provider");
+      expect(screen.getByRole("tooltip")).toHaveTextContent(
+        "Runs on a remote machine",
+      );
+      execution("local");
+      expect(screen.queryByText("Remote")).toBeNull();
+      execution();
+      expect(screen.queryByText("Remote")).toBeNull();
+      execution("remote");
+      rerender({ viewer: "c".repeat(64) });
+      expect(screen.queryByText("Remote")).toBeNull();
+      rerender({ stackPrevious: true });
+      expect(screen.queryByText("Remote")).toBeNull();
+      rerender({ row: { ...props.row, workflowOwnerId: ownerId } });
+      expect(screen.queryByText("Remote")).toBeNull();
+      rerender({ row: { ...row, authorId, replyCount: 0 } });
+      expect(screen.queryByText("Remote")).toBeNull();
+      rerender();
+      expect(screen.getByText("Remote")).toBeVisible();
+    } finally {
+      view.unmount();
     }
   },
 );

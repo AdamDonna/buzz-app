@@ -1,11 +1,9 @@
 import {
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useId,
-  useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
@@ -22,6 +20,7 @@ import { Header } from "../../../shared/design-system/ui/Header";
 import { browserLoginAvailable, oauthTarget } from "../oauth/browser";
 import { brokerBuilderlab } from "../dev-session";
 import type { BuilderlabSession } from "../session";
+import { useSignInProgress } from "../login/use-sign-in-progress";
 
 /** Account status replaces profile actions; the pane footer owns sign-in. */
 export function createProfileActions(session: BuilderlabSession) {
@@ -201,15 +200,7 @@ export function AccountRecoverySheet({
 export function createSignInFooter(session: BuilderlabSession) {
   return function SignInFooter() {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
-    const [slow, setSlow] = useState(false);
-    useEffect(() => {
-      setSlow(false);
-      if (login.status !== "pending" || login.checking) return;
-      const timer = setTimeout(() => setSlow(true), 3000);
-      return () => clearTimeout(timer);
-    }, [login.status, login.checking]);
-    const pending = login.status === "pending";
-    const waiting = pending && !login.checking && slow;
+    const { pending, waiting } = useSignInProgress(login);
     const available = browserLoginAvailable();
     return (
       <AnimatePresence>

@@ -59,6 +59,8 @@ import styles from "./ActivityAccessory.module.css";
 import messageStyles from "../../features/messages/Messages.module.css";
 import { avatarMedia } from "../../shared/avatar-source";
 import { AgentResponsePreview } from "../../features/messages/AgentResponsePreview";
+import { RemoteAgentHint } from "../../features/messages/RemoteAgentHint";
+import { remoteWorkDetail } from "../../features/agents/execution-location";
 
 const noSubscribe = () => () => {};
 export type ActivityAgents = WorkStopAgents;
@@ -202,10 +204,16 @@ function MessageActivity(
     // replace this indicator (via recorded), including when Stop is unavailable.
     .filter(visible)
     .map((entry) => {
+      const choice = choices.identities.find(
+        (row) => row.pubkey === entry.agent,
+      );
       return {
         agent: entry.agent,
         name: named(entry.agent),
         picture: profiles.get(entry.agent)?.picture,
+        remoteStatus: session.viewer
+          ? remoteWorkDetail(choice?.execution, choice?.runtime)
+          : undefined,
         working: entry.working,
         state: entry.state,
         reason: entry.reason,
@@ -303,6 +311,13 @@ function MessageActivity(
     >
       <AgentResponsePreview
         name={primary.name}
+        bylineHint={
+          <RemoteAgentHint
+            session={session}
+            viewer={session.viewer}
+            pubkey={primary.agent}
+          />
+        }
         participants={bubble.map((entry) => ({
           id: entry.agent,
           name: entry.name,
@@ -334,6 +349,8 @@ type Entry = {
   agent: string;
   name: string;
   picture: string | undefined;
+  /** Active fallback for a known remote agent without current step details. */
+  remoteStatus: string | undefined;
   working: boolean;
   state: RequestWork["state"];
   reason: string | undefined;
@@ -549,7 +566,7 @@ function ActivityBubble({
             type="button"
             className={messageStyles.activityBubbleTrigger}
             data-activity-summary=""
-            aria-label={`View agent activity: ${entries.map((entry) => `${entry.name}, ${label(entry)}`).join("; ")}`}
+            aria-label={`View agent activity: ${entries.map((entry) => `${entry.name}, ${entry.remoteStatus ? "remote, " : ""}${label(entry)}`).join("; ")}`}
           >
             {content}
           </button>
@@ -611,6 +628,7 @@ function ActivityBubble({
                               : !entry.working
                                 ? "Activity interrupted or out of date"
                                 : (preview?.title ??
+                                  entry.remoteStatus ??
                                   "Waiting for activity details"))}
                         </ShimmerText>
                         {preview?.detail && (

@@ -1622,3 +1622,108 @@ it("hands live work to only the latest history for each agent and keeps Stop and
     f.dispose();
   }
 });
+
+it.each([
+  {
+    runtime: "block.builderlab/builderlab",
+    fallback: "Running remotely on Builderlab…",
+  },
+  { runtime: "other/provider", fallback: "Running on a remote machine…" },
+])(
+  "keeps one byline hint and a remote fallback until current steps arrive: $runtime",
+  async ({ runtime, fallback }) => {
+    const f = fixture();
+    const base = f.props.session.agentChoices;
+    const choices = {
+      ...base.snapshot(),
+      identities: [
+        {
+          pubkey: B,
+          name: "Bubbles",
+          managed: false,
+          execution: "remote",
+          runtime,
+        },
+      ],
+    };
+    Object.assign(f.props.session, {
+      agentChoices: { ...base, snapshot: () => choices },
+    });
+    const update = (seq: number, update: unknown) => {
+      // The latest step wins, so each one arrives later than the last.
+      vi.setSystemTime(Date.now() + 1000);
+      f.send(B, "b1", seq, "acp_read", {
+        method: "session/update",
+        params: { update },
+      });
+    };
+    const hint = () => {
+      const bubble = screen.getByRole("button", {
+        name: /View agent activity: Bubbles, remote, /,
+      });
+      const preview = bubble.closest("[data-agent-response-preview]");
+      if (!(preview instanceof HTMLElement)) throw new Error("Missing preview");
+      const labels = within(preview).getAllByText("Remote");
+      expect(labels).toHaveLength(1);
+      expect(labels[0]?.closest("strong")).toBeNull();
+      expect(labels[0]?.closest("button")).toBeNull();
+      expect(within(bubble).queryByText("Remote")).toBeNull();
+      return labels[0];
+    };
+    render(<ActivityAccessory {...f.props} />);
+    try {
+      f.send(B, "b1", 1, "turn_started", { triggeringEventIds: [root] });
+      expect(hint()).toBeVisible();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: /View agent activity: Bubbles, remote, /,
+          }),
+        );
+        vi.advanceTimersToNextFrame();
+      });
+      expect(screen.getByText(fallback)).toBeVisible();
+      update(2, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "On it" },
+      });
+      expect(hint()).toBeVisible();
+      expect(screen.queryByText(fallback)).toBeNull();
+      update(3, {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Checking the row" },
+      });
+      expect(hint()).toBeVisible();
+      update(4, {
+        sessionUpdate: "tool_call",
+        toolCallId: "read",
+        title: "buzz-dev-mcp__read_file",
+        status: "in_progress",
+        rawInput: { path: "/project/file.ts" },
+      });
+      expect(hint()).toBeVisible();
+      f.send(B, "b1", 5, "turn_completed");
+      // A local agent's tool call never shows it.
+      f.send(A, "a1", 1, "turn_started", { triggeringEventIds: [root] });
+      f.send(A, "a1", 2, "acp_read", {
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "read",
+            title: "buzz-dev-mcp__read_file",
+            status: "in_progress",
+            rawInput: { path: "/project/file.ts" },
+          },
+        },
+      });
+      const local = screen.getByRole("button", {
+        name: /View agent activity: Blossom/,
+      });
+      expect(local).not.toHaveAccessibleName(/remote/);
+      expect(within(local).queryByText("Remote")).not.toBeInTheDocument();
+    } finally {
+      f.dispose();
+    }
+  },
+);

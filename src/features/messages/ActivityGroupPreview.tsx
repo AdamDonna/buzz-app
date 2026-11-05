@@ -6,6 +6,7 @@ import { useActivityFocusHandoff } from "./use-activity-focus-handoff";
 import { useRef, type ReactNode } from "react";
 import { CaretUpIcon } from "../../shared/design-system/icons";
 import { AgentResponsePreview } from "./AgentResponsePreview";
+import { RemoteAgentHint, RemoteWorkIcon } from "./RemoteAgentHint";
 import { useActivityIndicator } from "./use-activity-indicator";
 import type { RelaySession } from "../relay/session";
 import { ShimmerText } from "../../shared/design-system/ui/ShimmerText";
@@ -113,6 +114,14 @@ export function ActivityGroupPreview({
               />
             </span>
           )}
+          {!expanded && (
+            <RemoteWorkIcon
+              session={session}
+              viewer={session?.viewer}
+              pubkey={row.authorId}
+              active={working || live}
+            />
+          )}
           <span className={styles.audiencePreviewText}>
             {expanded ? (
               "Collapse"
@@ -129,6 +138,13 @@ export function ActivityGroupPreview({
   return (
     <AgentResponsePreview
       name={name}
+      bylineHint={
+        <RemoteAgentHint
+          session={session}
+          viewer={session?.viewer}
+          pubkey={primary}
+        />
+      }
       participants={participants.map((id) => ({
         id,
         name: named(id),

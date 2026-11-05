@@ -4055,6 +4055,117 @@ it("blocks plain-text DM sends during compaction even after removing the mention
   expect(h.messages.send).toHaveBeenCalledWith("channel", "plain text", [], []);
 });
 
+it.each(["block.builderlab/builderlab", "other/remote", "codex-remote"])(
+  "does not add a composer workspace button for %s without model controls",
+  (runtime) => {
+    const viewer = localAgent.owner;
+    const control = localAgentsFixture();
+    control.set(
+      runtime === "codex-remote"
+        ? { agents: [{ ...localAgent, ...first, execution: "remote" }] }
+        : { hosted: [{ ...localAgent, ...first, runtime }] },
+    );
+    const h = mount(
+      { scope: `https://relay.example.test:${viewer}` },
+      control,
+      viewer,
+    );
+    act(() => h.commands().insertMention(first));
+    expect(
+      screen.queryByRole("button", { name: /workspace|Model.*effort/i }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeVisible();
+    expect(h.commands().recipients).toEqual([first]);
+    expect(h.messages.send).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["remote", first.pubkey],
+  ["local", second.pubkey],
+])(
+  "preserves existing model and session controls for the %s target beside a remote mention",
+  async (_location, controlled) => {
+    const viewer = localAgent.owner;
+    const control = localAgentsFixture();
+    control.set({
+      hosted: [
+        { ...localAgent, ...first, runtime: "block.builderlab/builderlab" },
+      ],
+    });
+    const agents = sessionAgents(
+      "channel",
+      [
+        {
+          id: "fast",
+          label: "Fast",
+          efforts: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+        },
+        {
+          id: "deep",
+          label: "Deep",
+          efforts: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+        },
+      ],
+      [controlled],
+    );
+    const h = mount(
+      { scope: `https://relay.example.test:${viewer}` },
+      control,
+      viewer,
+      agents,
+    );
+    act(() => {
+      h.commands().insertMention(first);
+      h.commands().insertMention(second);
+    });
+    const draft = h.input().value;
+    const trigger = await screen.findByRole("button", {
+      name: "Model, effort, and session controls",
+    });
+    expect(trigger.querySelector(".tabler-icon-gauge")).not.toBeNull();
+    expect(trigger.querySelector(".tabler-icon-cloud")).toBeNull();
+    await h.user.click(trigger);
+    const popup = await screen.findByRole("dialog", {
+      name: "Model, effort, and session controls",
+    });
+    expect(popup).not.toHaveTextContent(
+      "This agent works on another computer.",
+    );
+    const model = within(popup).getByRole("button", {
+      name: "Model for Honey's next run",
+    });
+    await h.user.click(model);
+    await h.user.click(
+      await screen.findByRole("menuitemradio", { name: "Deep" }),
+    );
+    expect(model).toHaveTextContent("Deep");
+    const slider = within(popup).getByLabelText("Effort for Honey's next run");
+    act(() => slider.focus());
+    await h.user.keyboard("{End}");
+    expect(slider).toHaveAttribute("aria-valuetext", "High");
+    await h.user.click(
+      within(popup).getByRole("button", { name: "Compact session" }),
+    );
+    expect(agents.session).toHaveBeenCalledWith(
+      controlled,
+      { channelId: "channel" },
+      "compact",
+    );
+    await h.user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
+    expect(h.input()).toHaveValue(draft);
+    expect(h.commands().recipients).toEqual([first, second]);
+    expect(h.messages.send).not.toHaveBeenCalled();
+  },
+);
+
 it("offers a one-to-one DM's agent its model and effort without a mention", async () => {
   const agents = sessionAgents("channel", [
     {

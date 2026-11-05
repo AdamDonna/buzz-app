@@ -314,6 +314,118 @@ it("marks agents, not people, in both mention menus", async () => {
   expect(screen.getByRole("button", { name: /^Member$/ })).toBeVisible();
   test.library.dispose();
 });
+it.each(["completion", "picker"] as const)(
+  "updates remote %s cues from the shared inventory without changing recipients",
+  async (surface) => {
+    const test = setup();
+    const lifetime = new AbortController();
+    const owner = "f".repeat(64);
+    const relayUrl = "https://relay.example";
+    const remote = {
+      pubkey: "c".repeat(64),
+      name: "Cloud agent",
+      owner,
+      relayUrl,
+      runtime: "block.builderlab/builderlab",
+    };
+    const local = { ...remote, pubkey: "d".repeat(64), name: "Device agent" };
+    const channel = test.session.channels.list().channels[0];
+    if (!channel) throw new Error("Missing fixture channel");
+    Object.assign(channel, {
+      members: [test.member, remote.pubkey],
+    });
+    const native = localAgentsFixture([local]);
+    native.set({ hosted: [remote] });
+    const agentChoices = createAgentChoices({
+      scope: `${relayUrl}:${owner}`,
+      library: test.library.queries,
+      native,
+      signal: lifetime.signal,
+    });
+    const publish = vi.fn();
+    const select = vi.fn(() => true);
+    const session = { ...test.session, agentChoices };
+    const view = render(
+      surface === "completion" ? (
+        <MentionCompletion
+          session={session}
+          scope="test"
+          channelId="parent"
+          inviteAgents
+          observation={{ revision: 1, text: "@", start: 1, end: 1 }}
+          query={{ start: 0, end: 1, query: "" }}
+          publish={publish}
+        />
+      ) : (
+        <MentionPicker
+          session={session}
+          scope="test"
+          channelId="parent"
+          inviteAgents
+          disabled={false}
+          select={select}
+        />
+      ),
+    );
+    const item = (key: string) =>
+      (publish.mock.lastCall?.[0] as CompletionResult | undefined)?.items.find(
+        (row) => row.id === key,
+      );
+    try {
+      if (surface === "picker")
+        await userEvent
+          .setup()
+          .click(screen.getByRole("button", { name: "Mention a member" }));
+      if (surface === "completion") {
+        await waitFor(() => expect(item(remote.pubkey)?.detail).toBe("Remote"));
+        expect(item(remote.pubkey)?.edit).toEqual({
+          mention: { pubkey: remote.pubkey, name: remote.name },
+        });
+        expect(item(local.pubkey)?.detail).toBe("Adds to channel");
+        await waitFor(() =>
+          expect(item(test.key)?.detail).toBe("Adds to channel"),
+        );
+      } else {
+        expect(
+          await screen.findByRole("button", {
+            name: rowName(remote.name, "Remote"),
+          }),
+        ).toBeVisible();
+        expect(
+          screen.getByRole("button", {
+            name: rowName(local.name, "Adds to channel when you send"),
+          }),
+        ).toBeVisible();
+        expect(
+          await screen.findByRole("button", {
+            name: rowName("Outside agent", "Adds to channel when you send"),
+          }),
+        ).toBeVisible();
+      }
+      act(() =>
+        native.set({ hosted: [{ ...remote, runtime: "other/provider" }] }),
+      );
+      if (surface === "completion")
+        await waitFor(() => expect(item(remote.pubkey)?.detail).toBe("Remote"));
+      else {
+        await userEvent.setup().click(
+          await screen.findByRole("button", {
+            name: rowName(remote.name, "Remote"),
+          }),
+        );
+        expect(select).toHaveBeenCalledWith({
+          pubkey: remote.pubkey,
+          name: remote.name,
+        });
+      }
+    } finally {
+      view.unmount();
+      lifetime.abort();
+      test.library.dispose();
+    }
+  },
+);
+
 function renderAudiencePicker(
   test: ReturnType<typeof setup>,
   recipients: readonly { pubkey: string; name: string }[],

@@ -3201,10 +3201,35 @@ it("opens deletion from the card menu without selecting it and requires confirma
   );
 });
 
+it.each([false, true])(
+  "keeps the production provider/model presentation on a remote card (model controls: %s)",
+  (model) => {
+    setup(
+      [{ ...agent("Ada", 1), place: "hosted", config: { reply: "Echo" } }],
+      { model },
+    );
+    const card = screen.getByRole("gridcell", { name: "Ada" });
+    expect(within(card).queryByText("Remote")).not.toBeInTheDocument();
+    if (model) {
+      expect(
+        within(card).getByRole("button", { name: "Change model" }),
+      ).toBeVisible();
+      expect(within(card).queryByText("Echo")).not.toBeInTheDocument();
+    } else {
+      const detail = within(card).getByText("Echo");
+      expect(detail.parentElement?.querySelector("svg")).toHaveAttribute(
+        "aria-hidden",
+        "true",
+      );
+    }
+  },
+);
+
 it("saves a card model through its type and keeps failures on the card", async () => {
   const user = userEvent.setup();
   const saved = agent("Ada", 1);
   const { agents } = setup([saved], { model: true });
+  expect(screen.queryByText("Local · Desktop")).not.toBeInTheDocument();
   agents.save.mockRejectedValueOnce(new Error("Model could not save"));
   await user.click(screen.getByRole("button", { name: "Change model" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(

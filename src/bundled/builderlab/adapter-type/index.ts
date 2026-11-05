@@ -4,6 +4,7 @@ import { createSettingsTab } from "./Instructions";
 import { createProfileActions, createSignInFooter } from "./SignInFooter";
 import {
   creationConfig,
+  createCreationAction,
   createCreationFields,
   EMPTY_CREATION,
   type CreationConfig,
@@ -126,6 +127,7 @@ export function builderlabType(
         carry.instructions ?? (saved as CreationConfig).instructions,
     }),
     ...createCreationFields(client, session),
+    CreateAction: createCreationAction(session),
     PanelFooter: createSignInFooter(session),
     ProfileActions: createProfileActions(session),
     tabs: [

@@ -6,9 +6,22 @@ One Builderlab account for communities and agents that Builderlab hosts for you,
 
 1. Go to **Settings → Plugins → Builderlab** and choose **Sign in with Builderlab**.
 2. To host a community, choose **Create community** under **Communities**, then **Copy address**, open the community picker and choose **Join a community**.
-3. To host an agent, in **Agents** choose **New agent** and pick **Builderlab (hosted)** as the **Harness**.
-4. Choose a model and thinking level, optionally add instructions, then create the agent.
+3. To host an agent, in **Agents** choose **New agent** and pick **Builderlab** under **Remote** in the **Harness** menu. It can answer while your desktop is off, but cannot open files on your computer.
+4. If signed out, choose the small **Sign in** button beside Harness. Model, Thinking and Create agent stay disabled until sign-in completes. Choose a model and thinking level, optionally add instructions, then choose **Create agent**. Review the introduction and choose **Let’s go** to create it.
 5. Edit model settings and instructions later in **Identity**.
+
+While signed in, Identity shows a cloud beside “Remote agent”, with “Runs on a
+Builderlab machine” underneath. Workspace in Settings explains that the remote
+runtime is shared with your other agents in the workspace by default, alongside
+availability and file access. These hints stay hidden while signed out or signing in.
+Current remote activity steps show a cloud that pulses while working and stays
+still with reduced motion.
+Cards and pane headings omit location captions. Both @ menus show
+Remote for known remote agents, alongside membership details.
+Local agents get no location caption. The Harness menu groups types under
+Remote and Local; local agents have no execution hint.
+Activity shows its transcript and feed guidance without a separate workspace
+note. Only the creation introduction speaks in the agent’s voice.
 
 ---
 
@@ -69,15 +82,18 @@ With a configured Builderlab, it also registers
 agent, activation submits the owner proof and community supplied by Agents, and
 removal deletes the provider runtime. Agents owns unfinished setup recovery and
 the runtime-tagged community registration; the provider keeps the key and runs
-the agent even while Buzz is closed. On desktop, Create agent and confirmed
-deletion start the native sign-in when needed, then continue the action. Both
-share an existing sign-in attempt; a failed or canceled sign-in leaves the
-action available for retry. Sign-out lives in Identity → Organization sign-in,
-because community sign-in shares the session.
-While Create agent waits for the browser, its dialog offers Cancel sign-in, which
-cancels the shared login (as Settings' does) and leaves Create available for
-retry. Deletion's wait has no such control; disabling the plugin or closing Buzz
-also cancels it.
+the agent even while Buzz is closed. On desktop, creation has a small Sign in
+action beside Harness. Create agent stays disabled until sign-in completes;
+Model and Thinking remain visible but disabled while signed out. The action
+starts the shared native sign-in and shows a loading spinner first; after three
+seconds it offers browser guidance and Cancel sign-in, matching the agent pane.
+Account verification keeps the spinner without cancellation. Login errors stay
+in the form; failed or cancelled sign-in preserves the draft for retry.
+Confirmed deletion still starts sign-in when needed and continues after it
+succeeds. Both flows share an existing sign-in attempt. Deletion's wait has no
+cancellation control; disabling the plugin or closing Buzz also cancels it.
+Sign-out lives in Identity → Organization sign-in, because community sign-in
+shares the session.
 Beekeeper accepts an owner proof only from the Buzz key bound to the signed-in
 Builderlab account. After sign-in, and again before each activation, the plugin
 checks `/v1/buzz/nostr-identities/current` and binds an unbound account to this

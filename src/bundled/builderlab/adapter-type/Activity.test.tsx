@@ -158,6 +158,7 @@ it("shows this agent's published turns, leaving the feed's lease to the plugin",
   expect(screen.getByText("Deployed the fix")).toBeInTheDocument();
   expect(screen.queryByText("Someone else's work")).not.toBeInTheDocument();
   expect(screen.getByText("Working")).toBeInTheDocument();
+  expect(screen.queryByText(/Remote workspace/)).not.toBeInTheDocument();
   expect(activity.activate).not.toHaveBeenCalled();
 });
 

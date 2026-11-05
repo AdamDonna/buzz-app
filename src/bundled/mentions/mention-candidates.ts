@@ -84,6 +84,11 @@ function recent<K, V>(map: Map<K, V>, key: K, value: V, limit: number) {
 }
 export type MentionCandidate = ReturnType<typeof buildCandidates>[number];
 
+/** A compact location caption for confirmed remote agents in both @ menus. */
+export function remoteMentionDetail(execution: MentionCandidate["execution"]) {
+  return execution === "remote" ? "Remote" : undefined;
+}
+
 /** What the chooser offers. The host admits recipients itself (mention-admission). No reads or writes. */
 export function mentionCandidates(
   session: ComposerSession,
@@ -173,6 +178,9 @@ function buildCandidates(
   const members = roster?.map((p) => p.pubkey) ?? channel?.members ?? [];
   const memberKeys = new Set(members);
   const agents = session.agentChoices.snapshot().identities;
+  const executions = new Map(
+    agents.map((agent) => [agent.pubkey, agent.execution]),
+  );
   const profiles = session.profiles.snapshot();
   const known = knownAgentPubkeys(profiles, {
     definitions: [],
@@ -251,11 +259,13 @@ function buildCandidates(
   return [...choices.values()]
     .filter((p) => admits(p.pubkey))
     .map((recipient) => {
+      const execution = executions.get(recipient.pubkey);
       const fullName =
         profiles.get(recipient.pubkey)?.verified?.fullName ??
         verified.get(recipient.pubkey)?.fullName;
       return {
         recipient,
+        ...(execution ? { execution } : {}),
         /** A community-verified full name, shown beside the row's detail. */
         ...(fullName ? { fullName } : {}),
         member: memberKeys.has(recipient.pubkey),
