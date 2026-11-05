@@ -355,6 +355,10 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
     transition-duration: var(--duration-fast);
   }
 }
+/* Read-only and busy pills reject clicks but still preview who reacted. */
+.reactionItem button[aria-disabled="true"] {
+  cursor: default;
+}
 .reactionNativeEmoji {
   display: inline-block;
   min-width: 0.75rem;
