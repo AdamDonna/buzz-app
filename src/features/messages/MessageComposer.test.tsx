@@ -4972,6 +4972,9 @@ it("keeps initial saved choices pending, then supports retry without submitting 
     screen.getByRole("button", { name: "Retry saved choices" }),
   );
   await choicesLoaded();
+  expect(
+    h.input().closest("form")?.querySelector(".buzz-loading-region"),
+  ).not.toBeInTheDocument();
   await send(h);
   await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
   expect(h.messages.send.mock.calls[0]?.at(-1)).toEqual({

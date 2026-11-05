@@ -51,7 +51,7 @@ export function ActivityGroupPreview({
     session,
     row,
     !hidden && (working || !group.followingMessage),
-    participants,
+    group.liveParticipants,
     group.requestId,
   );
   useActivityTypingReplacement(
@@ -65,7 +65,7 @@ export function ActivityGroupPreview({
         }
       : undefined,
     !hidden && !!group.requestId,
-    participants,
+    group.liveParticipants,
   );
   if (hidden && !group.retained) return null;
   const primary = history[0]?.authorId ?? row.authorId;

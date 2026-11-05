@@ -576,8 +576,8 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "hands live activity to published content without hiding other work (thread=%s)",
-  (thread) => {
+  "keeps live activity after a public reply without hiding other work (thread=%s)",
+  async (thread) => {
     const f = fixture();
     const onFocusedRemoval = vi.fn();
     const view = render(
@@ -615,13 +615,16 @@ it.each([false, true])(
           representedAgents={represented.get(root)}
         />,
       );
-      expect(screen.queryByTitle("Blossom")).toBeNull();
+      expect(screen.getByTitle("Blossom")).toBeInTheDocument();
       expect(screen.getByTitle("Bubbles")).toBeInTheDocument();
       expect(represented.get(next)).toBeUndefined();
       act(() =>
         screen.getByRole("button", { name: /View agent activity/ }).focus(),
       );
       f.send(B, "other", 2, "turn_completed");
+      expect(screen.getByTitle("Blossom")).toBeInTheDocument();
+      f.send(A, "here", 2, "turn_completed");
+      await act(async () => vi.runAllTicks());
       expect(onFocusedRemoval).toHaveBeenCalledOnce();
       expect(
         screen.queryByLabelText("Agent activity on this message"),
@@ -1453,19 +1456,22 @@ it.each([false, true])(
         screen.queryByRole("button", { name: "Reading notes.txt" }),
       ).toBeNull();
       view.rerender(ui([A]));
+      expect(
+        screen.getByRole("button", {
+          name: "View agent activity: Blossom, Reading notes.txt",
+        }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Reading notes.txt" }),
+      ).toBeNull();
+      openBubble();
       if (stoppable) {
-        openBubble();
         fireEvent.click(screen.getByRole("button", { name: "Stop Blossom" }));
         await settle();
         expect(stop).toHaveBeenCalledOnce();
         return;
       }
-      expect(
-        screen.queryByLabelText("Agent activity on this message"),
-      ).toBeNull();
-      expect(
-        screen.getByRole("button", { name: "Reading notes.txt" }),
-      ).toHaveTextContent("Reading notes.txt");
+      expect(stopButton()).toBeNull();
     } finally {
       view.unmount();
       f.dispose();
@@ -1531,7 +1537,7 @@ it.each([false, true])(
   },
 );
 
-it("hands request controls to recorded history and keeps Stop and transcript there", async () => {
+it("hands live work to only the latest history for each agent and keeps Stop and transcript there", async () => {
   const local = createLocalAgentActivity();
   const f = fixture(local);
   const stop = vi.fn(async () => {});
@@ -1544,6 +1550,7 @@ it("hands request controls to recorded history and keeps Stop and transcript the
     thread: true,
   });
   work.interruptible(stop);
+  work.step("Read", "files");
   const row = {
     ...f.props.message,
     id: "step",
@@ -1553,36 +1560,57 @@ it("hands request controls to recorded history and keeps Stop and transcript the
     audience: "agents" as const,
     content: "Checking the files",
   };
-  const group = activityPresentation(
-    [row],
+  const { audience: _audience, ...reply } = row;
+  const groups = activityPresentation(
+    [
+      row,
+      { ...reply, id: "reply" },
+      { ...row, id: "later", content: "Checking more files" },
+    ],
     f.props.session.agentActivity.snapshot(),
     new Set([A]),
     root,
-  ).groups[0];
-  if (!group) throw new Error("Missing group");
-  const view = render(
+  ).groups;
+  const ui = (expanded: boolean) => (
     <ActivityIndicatorPresentation>
       <ActivityAccessory {...f.props} messageLayout="thread" />
-      <ActivityGroupPreview
-        session={f.props.session}
-        group={group}
-        profiles={f.profiles}
-        media={() => undefined}
-        expanded
-        onToggle={() => {}}
-        openActivity={f.props.open}
-        canOpenActivity={f.props.canOpen}
-      />
-    </ActivityIndicatorPresentation>,
+      {groups.map((group) => (
+        <ActivityGroupPreview
+          key={group.ids[0]}
+          session={f.props.session}
+          group={group}
+          profiles={f.profiles}
+          media={() => undefined}
+          expanded={expanded}
+          onToggle={() => {}}
+          openActivity={f.props.open}
+          canOpenActivity={f.props.canOpen}
+        />
+      ))}
+    </ActivityIndicatorPresentation>
   );
+  const view = render(ui(false));
   try {
+    expect(screen.getByText("Checking the files")).not.toHaveAttribute(
+      "data-active",
+    );
+    expect(screen.getByText("Checking more files")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+    view.rerender(ui(true));
     expect(
       screen.queryByLabelText("Agent activity on this message"),
     ).toBeNull();
     expect(
       screen.getAllByRole("button", { name: "Stop Blossom" }),
     ).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "View transcript" }));
+    const transcript = screen.getAllByRole("button", {
+      name: "View transcript",
+    })[1];
+    if (!transcript)
+      throw new Error("Missing latest history transcript control");
+    fireEvent.click(transcript);
     const activity = `buzz:profile?agent=${A}&tab=activity`;
     expect(f.props.open).toHaveBeenCalledWith(activity, { rootId: root });
     expect(claimProfileTranscript(activity)).toBeDefined();

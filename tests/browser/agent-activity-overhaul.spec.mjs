@@ -500,9 +500,9 @@ test("message activity opens a grouped preview and the agent's profile without l
   await row.getByRole("button", { name: /^View thread:/ }).click();
   telemetryTime = await page.evaluate(() => new Date().toISOString());
   send(0, "turn_completed", 4);
-  // Published replies replace the thread's root placeholder; the channel
-  // retains request activity until the remaining agent finishes.
-  await expect(region).toHaveCount(0);
+  // Public replies do not complete work: both the thread and channel retain
+  // the remaining agent's request activity until its lifecycle finishes.
+  await expect(region.locator(".buzz-avatar")).toHaveCount(1);
   await expect(channelActivity.locator(".buzz-avatar")).toHaveCount(1);
   await expect(threadIndicator).toHaveCount(1);
   send(1, "turn_completed", 5);

@@ -427,6 +427,10 @@ account and community. Saved text, recipients, uploaded attachments, references,
 and model choices survive a reload or restart; uploads still in progress are not
 queued yet.
 
+Use the pencil button to edit queued text in the message composer. Save changes
+or cancel to return to your previous draft; attachments and recipients stay with
+the queued message. The X button removes it, and the up-arrow sends it.
+
 After restart, saved messages stay paused. **Send** sends a selected row, and
 **Remove** discards an unsent row. **Resume** restarts supported interrupted turns
 and unpauses saved follow-ups in those chats, sending them in order as turns finish.
@@ -522,7 +526,10 @@ available rather than silently discarding it.
   still shows when an agent is working there. Expand recorded work to
   open its transcript or **Stop** the running request; before any work updates
   arrive, those controls appear on the live indicator. Stop availability depends
-  on the agent type.
+  on the agent type. A reply does not hide ongoing work. If more updates arrive
+  after a reply, the newest update group carries that agent's live activity and
+  Stop control; earlier groups remain readable history. In Codex DMs, an accepted
+  follow-up takes over the live indicator; separate threads keep their own.
 - A Goose agent's Activity lists the sessions Buzz recorded on this device for
   each conversation. A conversation with no recorded session, such as one from
   an earlier version of Buzz or another computer, offers **Search older

@@ -1248,6 +1248,15 @@ reply. Once every represented agent has settled successfully, stopped, or been
 superseded, the updates leave the conversation flow. History and exact message
 links remain available.
 
+A public reply alone does not replace the request's live indicator. Mounted
+update history can take over that indicator and its controls. When public replies
+split one request's updates into several runs, only the latest run for each agent
+owns its live shimmer and Stop control; earlier runs remain readable history.
+Other agents and requests retain their own live presentation.
+Codex transfers live activity to an accepted follow-up in the same conversation.
+Top-level DM messages share that presentation scope; actual DM threads remain
+independent, even when they share a harness session.
+
 When lifecycle evidence is missing (including historical conversations after a
 reload), the next public reply can retire older updates from the same request
 if its author participated in the exchange or received the helper's last update.

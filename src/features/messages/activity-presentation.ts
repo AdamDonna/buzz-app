@@ -16,6 +16,8 @@ type ActivityRun = {
   followingMessage: ChannelMessage | undefined;
 };
 export type ActivityPresentation = ActivityRun & {
+  /** Only the latest update run for an agent/request owns live work and Stop. */
+  liveParticipants: string[];
   /** Display policy only; a public reply is not lifecycle completion. */
   hidden: boolean;
   retained?: boolean;
@@ -202,6 +204,18 @@ export function activityPresentation(
     for (const id of replies.values()) replyRequests.set(id, requestId);
   }
   const groups: ActivityPresentation[] = [];
+  const activityKey = (row: ChannelMessage) =>
+    JSON.stringify([
+      row.channelId,
+      row.threadRootId,
+      requests.get(row.id) ?? row.threadRootId,
+      row.authorId,
+    ]);
+  const latestUpdates = new Map(
+    rows
+      .filter((row) => row.audience === "agents" && !row.membership)
+      .map((row) => [activityKey(row), row.id]),
+  );
   const bubbleAnchors = new Set<string>();
   const byRow = new Map<string, ActivityRowPresentation>();
   for (const history of activityRuns(rows, requests)) {
@@ -209,6 +223,13 @@ export function activityPresentation(
     const latest = history.at(-1);
     if (!first || !latest) continue;
     const participants = [...new Set(history.map((row) => row.authorId))];
+    const liveParticipants = participants.filter((agent) =>
+      history.some(
+        (row) =>
+          row.authorId === agent &&
+          latestUpdates.get(activityKey(row)) === row.id,
+      ),
+    );
     const group: ActivityRun = {
       ids: history.map((row) => row.id),
       history,
@@ -242,9 +263,13 @@ export function activityPresentation(
       const last = lastByAgent.get(row.authorId) === row.id;
       byRow.set(row.id, {
         requestId: group.requestId,
-        active: last && working.has(row.authorId),
+        active:
+          last &&
+          liveParticipants.includes(row.authorId) &&
+          working.has(row.authorId),
         ownsLive:
           last &&
+          liveParticipants.includes(row.authorId) &&
           !hidden &&
           (working.has(row.authorId) || !group.followingMessage),
         container:
@@ -257,9 +282,10 @@ export function activityPresentation(
     }
     groups.push({
       ...group,
+      liveParticipants,
       hidden,
       retained,
-      working: working.size > 0,
+      working: liveParticipants.some((agent) => working.has(agent)),
       standalone,
     });
   }
@@ -301,6 +327,7 @@ export function useActivityPresentation(
         ? {
             ...previous,
             hidden: true,
+            liveParticipants: group.liveParticipants,
             working: group.working,
             retained: true,
             followingMessage: group.followingMessage,

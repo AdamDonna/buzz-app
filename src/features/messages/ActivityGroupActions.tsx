@@ -97,7 +97,7 @@ export function ActivityGroupActions({
       ? requestWork(snapshot, latest.channelId, requestId)
       : [];
   const controls = work.flatMap((entry) => {
-    if (!requestId || !participants.includes(entry.agent)) return [];
+    if (!requestId || !group.liveParticipants.includes(entry.agent)) return [];
     const control = workStop(
       entry,
       {
