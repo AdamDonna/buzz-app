@@ -1,6 +1,7 @@
 import { hoverMessage } from "./message-actions.mjs";
 import { test, expect } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
+import { frames } from "./timeline.mjs";
 
 // Browser boundary: Inbox plugin routing and portalled message-menu dismissal
 // must focus the same native decorated editor and preserve its reply draft.
@@ -44,6 +45,13 @@ test("Inbox edits an owned reply in place and restores the reply draft", async (
   const own = app.reply(root.id, true);
   const row = detail.locator(`[data-message-id="${own.id}"]`);
   await expect(row).toBeVisible();
+  // Opening the conversation reveals its entry reply by focusing that row. In
+  // WebKit the focus clears the editor selection, so a fill racing the reveal
+  // types nothing: let the focus and its next-frame acknowledgement land first.
+  await expect(
+    detail.locator('[data-message-id][tabindex="-1"]'),
+  ).toBeFocused();
+  await frames(page);
   await reply.fill("Unsent Inbox reply");
   const originalNode = await reply.elementHandle();
   const edit = async () => {
