@@ -938,8 +938,8 @@ export function ChannelInventory({
           key="lifecycle"
           separator={false}
           noun={lifecycleNoun(channel)}
-          channelId={channel.id}
-          lifecycle={lifecycle}
+          channel={channel}
+          session={queries}
           disabled={!!lifecycleDialog}
           choose={(action) => chooseLifecycle(channel, action)}
         />,

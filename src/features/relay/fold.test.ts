@@ -862,8 +862,14 @@ describe("discovery", () => {
         visibility: undefined,
         joinRole: "member",
         members: [alice.pubkey, bob.pubkey].sort(),
+        owners: [],
       },
-      { id: "zeta", name: "zeta".slice(0, 8), members: [alice.pubkey] },
+      {
+        id: "zeta",
+        name: "zeta".slice(0, 8),
+        members: [alice.pubkey],
+        owners: [],
+      },
     ]);
     expect(
       state.accept(roster(relay, "alpha", [bob.pubkey], 1_700_000_001)),

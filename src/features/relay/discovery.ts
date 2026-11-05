@@ -26,6 +26,24 @@ export function metadataName(event: RelayEvent): string | undefined {
 
 const noMembers: readonly string[] = Object.freeze([]);
 
+/** Distinct valid member keys of a signed roster, optionally with one role. */
+function rosterKeys(roster: RelayEvent, role?: string): readonly string[] {
+  return Object.freeze(
+    [
+      ...new Set(
+        roster.tags.flatMap(([name, value, , hint]) =>
+          name === "p" &&
+          value &&
+          /^[0-9a-f]{64}$/.test(value) &&
+          (!role || hint === role)
+            ? [value]
+            : [],
+        ),
+      ),
+    ].sort(),
+  );
+}
+
 /** A Solo chat: a stream carrying the Solo label. Never access. */
 export function soloChannelMetadata(event: RelayEvent): boolean {
   return (
@@ -305,7 +323,11 @@ export class DiscoveryState {
   // scanned for the (fixed) viewer again on every `get`.
   private readonly parsed = new WeakMap<
     RelayEvent,
-    { members: readonly string[]; viewerRole: ChannelSummary["viewerRole"] }
+    {
+      members: readonly string[];
+      owners: readonly string[];
+      viewerRole: ChannelSummary["viewerRole"];
+    }
   >();
   private parse(roster: RelayEvent) {
     let parsed = this.parsed.get(roster);
@@ -315,17 +337,8 @@ export class DiscoveryState {
       );
       const role = entries.length === 1 ? entries[0]?.[3] : undefined;
       parsed = {
-        members: Object.freeze(
-          [
-            ...new Set(
-              roster.tags.flatMap(([name, value]) =>
-                name === "p" && value && /^[0-9a-f]{64}$/.test(value)
-                  ? [value]
-                  : [],
-              ),
-            ),
-          ].sort(),
-        ),
+        members: rosterKeys(roster),
+        owners: rosterKeys(roster, "owner"),
         // A contradictory guest entry cannot restore writing through another role.
         viewerRole: entries.some((entry) => entry[3] === "guest")
           ? "guest"
@@ -385,7 +398,8 @@ export class DiscoveryState {
     // The relay tags a system roster too, so a roster that arrives before its
     // metadata (the full pass reads names later) never lists as a channel.
     const roster = this.rosters.get(id);
-    const viewerRole = this.authorized(id) ? this.viewerRole(id) : undefined;
+    const parsed = roster && this.parse(roster);
+    const viewerRole = this.authorized(id) ? parsed?.viewerRole : undefined;
     const type = this.isSolo(id)
       ? "solo"
       : event
@@ -433,7 +447,8 @@ export class DiscoveryState {
             description: tag(event, "about") ?? "",
           }
         : {}),
-      members: roster ? this.parse(roster).members : noMembers,
+      members: parsed?.members ?? noMembers,
+      ...(parsed ? { owners: parsed.owners } : {}),
       ...(this.hidden(id) ? { hidden: true } : {}),
       ...(this.isPrivate(id) ? { private: true } : {}),
       ...(this.autoJoin(id) ? { autoJoin: true } : {}),

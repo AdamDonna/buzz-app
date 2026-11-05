@@ -43,56 +43,21 @@ test("archive confirmation returns focus on cancel and retains the conversation 
       exact: true,
     }),
   ).toBeVisible();
-  // Hold the real permission request: the composed row menu must have no
-  // orphan divider or unchecked actions.
-  let release;
-  let intercepted;
-  const held = new Promise((resolve) => {
-    release = resolve;
-  });
-  const seen = new Promise((resolve) => {
-    intercepted = resolve;
-  });
+  // Lifecycle actions come from the live roster, so the composed row menu is
+  // complete when it opens and opening it reads no channel permissions.
+  const permissionReads = [];
   const permissionRoute = async (route) => {
     const filters = route.request().postDataJSON();
-    if (
-      !filters.some(
-        (filter) =>
-          filter.kinds?.includes(39001) &&
-          filter["#d"]?.includes("11111111-1111-4111-8111-111111111111"),
-      )
-    )
-      return route.continue();
-    intercepted();
-    await held;
+    if (filters.some((filter) => filter.kinds?.includes(39001)))
+      permissionReads.push(filters);
     await route.continue();
   };
   await page.route("**/api/relay/**/query", permissionRoute);
   const menu = page.getByRole("menu", {
     name: "Actions for Lifecycle channel",
   });
-  try {
-    await row.focus();
-    await page.keyboard.press("Shift+F10");
-    await seen;
-    await expect(menu).toBeVisible();
-    // Attention actions remain usable while lifecycle permissions are held;
-    // the menu stays divider-free before and after permission resolution.
-    await expect(menu.getByRole("separator")).toHaveCount(0);
-    await expect(menu.getByRole("menuitem")).toHaveText([
-      "Move channel",
-      "Mute",
-      "Mark as unread",
-      "Copy link",
-    ]);
-    await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
-  } finally {
-    release();
-  }
-  await expect(
-    menu.getByRole("menuitem", { name: "Archive channel", exact: true }),
-  ).toBeVisible();
-  await expect(menu.getByRole("separator")).toHaveCount(0);
+  await row.focus();
+  await page.keyboard.press("Shift+F10");
   await expect(menu.getByRole("menuitem")).toHaveText([
     "Move channel",
     "Mute",
@@ -101,6 +66,10 @@ test("archive confirmation returns focus on cancel and retains the conversation 
     "Archive channel",
     "Delete channel",
   ]);
+  await expect(menu.getByRole("separator")).toHaveCount(0);
+  await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
+  // The rendered lifecycle items are the barrier: a read would precede them.
+  expect(permissionReads).toEqual([]);
   await expect(
     page.getByRole("button", { name: /More options for/ }),
   ).toHaveCount(0);

@@ -473,6 +473,7 @@ it("hides DM channels behind the NIP-29 hidden tag", async () => {
       joinRole: "member",
       hidden: true,
       members: [viewer.pubkey, alice.pubkey].sort(),
+      owners: [],
       preview: undefined,
     },
   ]);

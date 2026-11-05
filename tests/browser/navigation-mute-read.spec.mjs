@@ -44,18 +44,15 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
   await beta.focus();
   await page.keyboard.press("Shift+F10");
   await expect(menu).toBeVisible();
-  // This fixture's legacy "beta" id cannot authorize lifecycle commands. Its
-  // failed permission group must not remove or disable the existing actions.
-  await expect(menu.getByRole("alert")).toHaveText(
-    "Channel actions unavailable",
-  );
+  // This fixture's legacy "beta" id cannot carry lifecycle commands, so the
+  // menu offers none beside the others.
   await expect(menu.getByRole("menuitem")).toHaveText([
     "Move channel",
     "Mute",
     "Mark as read",
     "Copy link",
-    "Retry channel permissions",
   ]);
+  await expect(menu.getByRole("alert")).toHaveCount(0);
   await expect(menu.getByRole("separator")).toHaveCount(0);
   for (const name of ["Mute", "Mark as read"]) {
     await expect(
@@ -285,7 +282,6 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
     "Mute",
     "Mark as unread",
     "Copy link",
-    "Retry channel permissions",
   ]);
   await expect(menu.getByRole("separator")).toHaveCount(0);
   await page.keyboard.press("Escape");

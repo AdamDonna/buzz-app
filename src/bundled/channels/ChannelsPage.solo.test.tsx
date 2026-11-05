@@ -136,7 +136,14 @@ function fixture({
     ...(!preview && { private: true as const }),
     creator: ownedBy ?? (placed ? viewer.pubkey : agent),
     members: [viewer.pubkey, agent, ...people],
-    ...(viewOnly && { readOnly: true as const, viewerRole: "guest" as const }),
+    // The signed roster's roles: a creator owns the chat, a viewer is a guest.
+    viewerRole: "owner",
+    owners: canLeave ? [viewer.pubkey, agent] : [viewer.pubkey],
+    ...(viewOnly && {
+      readOnly: true as const,
+      viewerRole: "guest" as const,
+      owners: [agent],
+    }),
     ...(preview && {
       members: [agent, ...people],
       readOnly: true,

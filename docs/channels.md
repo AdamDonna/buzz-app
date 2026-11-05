@@ -446,7 +446,7 @@ preview are omitted from Channel Settings; opening details does not read Canvas.
 
 Lifecycle actions extend the persistent sidebar’s existing context popup after
 Move channel and the mute/read group. Lifecycle items use shared leading icons and
-a separator only when they resolve and earlier actions exist. Right-click
+a separator only when there are lifecycle items and earlier actions exist. Right-click
 and keyboard access reuse the existing row trigger; no ⋮ control or second popup
 is added. Attention actions keep their existing owners. Solo chats in
 Messages use these same permission-checked
@@ -456,30 +456,37 @@ transcript layout, Share behavior and recipient rules do not change. Move/Star/g
 controls share this popup with independent eligibility; lifecycle actions do not
 change shared-menu styling.
 
-The row menu resolves fresh relay-authored metadata (`39000`), administrators
-(`39001`) and membership (`39002`) at exact channel coordinates before offering
-Archive/Unarchive/Delete/Leave or DM Hide. Archive and Unarchive require a direct
-owner/admin role or verified ownership evidence for an owner-role agent, matching
-the relay and desktop. Delete is offered to a direct owner or a member with that
-same evidence; the last direct owner cannot Leave. The menu omits Leave
-when it is forbidden, without an ownership-transfer explanation. Action labels
-have no trailing ellipsis. DMs offer Hide only.
+Every lifecycle surface (sidebar row, header, Solo chat menu and Settings)
+offers its actions as soon as it opens, from state the session already holds:
+the live relay-signed metadata (`39000`) and roster (`39002`). Opening a menu
+reads no channel permissions and waits on no relay read, so items do not shift. The roster's
+role fields (`["p", pubkey, relay_hint?, role?]`) agree with the administrator
+record (`39001`), as member administration requires, so they are a sound basis
+for what to offer. Archive and Unarchive are offered to a direct owner/admin or a
+verified owner-agent's human; Delete to a direct owner or that human; the last
+direct owner is not offered Leave, without an ownership-transfer explanation.
+Action labels have no trailing ellipsis. DMs offer Hide only. Channels whose id
+the lifecycle protocol rejects offer no lifecycle actions.
 
-Owner-agent eligibility follows the desktop's profile-based UX: read the channel
-owners' latest signed kind-0 profiles in bounded exact-author batches, then verify
-the unique NIP-OA tag, target binding, owner signature and conditions against the
-profile event. Display-only owner fields and agent hints never qualify. The
-existing shared verifier owns these checks; no new relay query or deployment is
-needed. Direct owners, DMs, Leave, and actions a direct role already grants do
-not require these optional profile reads. A failed five-second owner-profile lookup
-preserves independently established actions, omits the owner-agent actions and,
-on an active channel, exposes "Delete check unavailable" with explicit retry in
-both surfaces. Settings keeps
-its retry button focusable and busy during a fresh read, without retaining stale
-actions. Pending progress stays inside the button spinner, not a duplicate visible
-status sentence. If focus is still on recovery when the read finishes, it moves to the
-retry, an allowed action (Delete first), or a no-actions status. Moving focus
-elsewhere while waiting cancels that handoff.
+**What a surface offers is a hint; confirming authorizes.** Before signing and
+again before publishing, `run` reads fresh `39000`/`39001`/`39002` at exact
+channel coordinates and rejects a no-longer-permitted action in the
+confirmation result, and the relay enforces its own state. A stale roster can
+therefore offer an attempt that fails with an explanation, never a command the
+host would publish without a fresh check. Membership restored from the offline
+cache offers nothing until the relay confirms it, and membership the relay has
+revoked offers nothing.
+
+Owner-agent eligibility follows the desktop's profile-based UX: a channel owner's
+latest signed kind-0 profile must carry a unique NIP-OA tag whose target binding,
+owner signature and conditions verify against the profile event. Surfaces use
+the session profile cache's verified owner; if a roster owner's profile is not
+cached, they fetch it in the background and add Archive/Delete when it
+verifies, without holding back Leave. They ask again after a cache clear, an
+eviction or a failed read, at the directory's next change. `run` rereads the owner profiles in bounded
+exact-author batches with a five-second budget; failure there reports "Delete
+check unavailable. Try again." Display-only owner fields and agent hints never
+qualify.
 
 **Profile provenance is not the relay's persisted authorization mapping.** It is
 an eligibility hint for offering an attempt, not proof the command will succeed.
@@ -489,24 +496,16 @@ Profile replacement does not establish relay ownership transfer or revocation.
 The viewer signs the unchanged Delete command and the relay enforces its stored
 ownership and current channel state. A definitive rejection retains the channel
 and recoverable confirmation; uncertain delivery still blocks blind resubmission.
-Archive/Unarchive/Leave depend only on the viewer's own channel role. Existing
-membership requirements remain; nonmember access, owner-agent Archive/Unarchive authority and
-community-admin overrides are not added.
-Membership accepts NIP-29 `p` tags with optional relay and role fields
-(`["p", pubkey, relay_hint?, role?]`), including the relay's four-field roster.
-These fields never substitute for the separate administrator record. Invalid
-member keys and duplicate entries still fail closed. Failed menu permission reads
-show "Channel actions unavailable" with retry, not raw protocol errors. Pending
-permission reads show neither a loading row nor a lifecycle separator; the
-separator appears with the resolved actions or unavailable/retry section, and is
-omitted when there are no lifecycle items. Actions appear only after verification.
+Existing membership requirements remain; nonmember access and community-admin
+overrides are not added. Invalid member keys and duplicate entries still fail
+closed in the confirmation check.
 
 Channel Settings also offers **Leave channel**, **Archive channel** and **Delete
-channel** in its tools area, using one fresh lifecycle permission check. Each
-entry follows its own permission result: a last owner can Archive/Delete even
+channel** in its tools area, from the same live state. Each
+entry follows its own rule: a last owner can Archive/Delete even
 though Leave is forbidden, while an ordinary admin without owner-agent evidence can Archive but not Delete.
-Forbidden entries are omitted; failed checks offer retry and unsupported
-connections explain unavailability. DMs and read-only nonmember/cached views have no channel
+Forbidden entries are omitted and unsupported connections explain
+unavailability. DMs and read-only nonmember/cached views have no channel
 lifecycle entries. Archived channels cannot be deleted:
 the relay rejects Delete while archived. A direct owner/admin can restore it with
 **Unarchive channel**, which replaces Archive in the same Settings position, before
@@ -515,8 +514,8 @@ These controls hand off to the same persistent sidebar confirmation/navigation
 owner, so confirmed removal can unmount Settings without cancelling completion.
 Cancellation returns focus to the originating Settings button (or the sidebar
 fallback if that entry has gone away). Archive retains the current conversation,
-messages, membership and open Settings, replacing Archive with Unarchive after a
-fresh permission read. The conversation stays selected after reload; archived
+messages, membership and open Settings, replacing Archive with Unarchive once
+the confirmed metadata arrives. The conversation stays selected after reload; archived
 write restrictions still apply. Archived conversations and their threads replace the
 message composer with the lower archived-channel notice. If that composer owned
 focus, focus moves to the retained message history. Nonempty unsent text, including

@@ -124,8 +124,8 @@ behavior on the label, so a rename touches copy only.
   **Chats** section is not revealed during a drag.
 - **Archive chat** (⌃⌘A on Apple platforms, Ctrl+Shift+E elsewhere; rebindable in
   Settings → Shortcuts) opens the Chat actions Archive confirmation for the open
-  chat, including from the composer, after the menu's fresh permission read; it does
-  nothing where the menu offers no Archive. Success returns to Solo. Archived chats
+  chat, including from the composer, after a fresh permission read; it does
+  nothing where current relay state permits no Archive. Success returns to Solo. Archived chats
   are restored from search and Channel Settings, as before.
 - The owner can add agents from the same **Chat access** search without sending
   a message or starting a run. The chooser uses the same available agents as

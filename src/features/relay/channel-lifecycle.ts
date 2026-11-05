@@ -16,6 +16,7 @@ import {
   lifecycleRecord,
   lifecycleSettings,
   lifecycleTemplate,
+  ownerAgentGrant,
   type ChannelLifecycleCommand,
   type ChannelLifecycleSettings,
 } from "./channel-lifecycle-protocol";
@@ -241,13 +242,7 @@ export function createChannelLifecycle({
           const owner = profile && (await attestedOwner(profile));
           profileSignal.throwIfAborted();
           assertAccess(id);
-          if (owner === viewer)
-            return Object.freeze({
-              ...settings,
-              canArchive: !archived,
-              canUnarchive: archived,
-              canDelete: !archived,
-            });
+          if (owner === viewer) return ownerAgentGrant(settings, archived);
         }
       }
       return settings;
@@ -438,7 +433,7 @@ export function createChannelLifecycle({
             );
             if (settings.deleteUnavailable)
               throw new Error(
-                `${action === "delete" ? "Delete" : "Archive"} check unavailable. Retry channel permissions.`,
+                `${action === "delete" ? "Delete" : "Archive"} check unavailable. Try again.`,
               );
             const permitted = {
               archive: settings.canArchive,
