@@ -11,7 +11,7 @@ import { PanelView } from "../../features/panels/PanelView";
 import styles from "./Channels.module.css";
 
 const launcherOrder = (key: string) =>
-  key === "buzz.huddles/huddles" ? 0 : key === "buzz.github/object" ? 1 : 2;
+  key === "buzz.huddles/huddles" ? 2 : key === "buzz.github/object" ? 1 : 0;
 
 type Opening = {
   panel: RegisteredPanel;

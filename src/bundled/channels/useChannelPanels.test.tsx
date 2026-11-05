@@ -255,11 +255,11 @@ it.each(["bottom", "side"] as const)(
   },
 );
 
-it("keeps the linked PR immediately after the huddle regardless of registration order", () => {
+it("keeps the huddle last, with the linked PR just before it, regardless of registration order", () => {
   const available = [
+    "buzz.huddles/huddles",
     "other/tool",
     "buzz.github/object",
-    "buzz.huddles/huddles",
   ].map((key) => ({
     key,
     id: key,
@@ -290,5 +290,5 @@ it("keeps the linked PR immediately after the huddle regardless of registration 
   render(<Harness />);
   expect(
     screen.getAllByRole("button").map((button) => button.textContent),
-  ).toEqual(["buzz.huddles/huddles", "buzz.github/object", "other/tool"]);
+  ).toEqual(["other/tool", "buzz.github/object", "buzz.huddles/huddles"]);
 });
