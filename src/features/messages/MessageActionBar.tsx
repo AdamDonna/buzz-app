@@ -54,6 +54,7 @@ type Props = {
   link?: string | undefined;
   copyText(): string;
   quickControls?: ReactNode;
+  toolbarItems?: ReactNode;
   /** Menu items rendered above the built-in actions. */
   leadingItems?: ReactNode;
   overflowItems?: ReactNode;
@@ -97,6 +98,7 @@ function MessageActionBarControls({
   link,
   copyText,
   quickControls,
+  toolbarItems,
   leadingItems,
   overflowItems,
   messageId,
@@ -316,6 +318,7 @@ function MessageActionBarControls({
             aria-label="Message actions"
           >
             {quickControls}
+            {toolbarItems}
             {onReply && (
               <IconButton
                 hint={replyDisabled ? "helpful" : "familiar"}

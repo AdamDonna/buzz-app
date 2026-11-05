@@ -2132,6 +2132,17 @@ with an open action stays mounted while it scrolls out of view. Icon, component
 and marker failures each render nothing and leave the row and menu usable. The
 bundled Reminders plugin is the first consumer.
 
+`placement: "toolbar"` puts the action in the host's message toolbar. The
+toolbar appears on hover and keyboard focus. The host supplies an icon button
+with the action title and icon. Activation mounts the same component as a menu
+action. Removal closes the component. `placement: "menu"` mounts the component
+inside the menu instead.
+Coordination rows keep toolbar contributions in their context menu.
+
+Markdown links can use a registered panel target. The host checks `canOpenLink`
+when it renders the link and again on activation. Removing the panel makes the
+target unavailable. External links retain the HTTP(S) URL checks.
+
 The bundled **Diff viewer** (`buzz.diffs`) handles `ChannelMessage.diff` from legacy
 kind 40008. Shared history, live, thread and exact readers retain these messages
 independently of the plugin, preserving raw patches rather than interpreting them

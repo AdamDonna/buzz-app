@@ -237,6 +237,29 @@ async function choose(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("option", { name: /Avery Chen/ }));
 }
 
+it("keeps the verified name after choosing a forwarding recipient", async () => {
+  const user = userEvent.setup();
+  const { profiles } = setup();
+  profiles.set(recipient, {
+    name: "Editable name",
+    verified: {
+      displayName: "Verified recipient",
+      username: "verified",
+      issuerLabel: "Community",
+      verifiedAt: 1,
+      status: "checked",
+      multipleIssuers: false,
+    },
+  });
+  await user.click(screen.getByRole("button", { name: "Forward source" }));
+  await user.click(
+    await screen.findByRole("option", { name: /Verified recipient/ }),
+  );
+  expect(
+    screen.getByRole("button", { name: "Remove Verified recipient" }),
+  ).toBeInTheDocument();
+});
+
 it("forwards a note and permalink through the chosen person's DM and retires the completed dialog", async () => {
   const user = userEvent.setup();
   const { navigation, directMessages, messages, outbox, operations } = setup();

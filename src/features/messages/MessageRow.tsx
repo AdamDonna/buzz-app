@@ -13,7 +13,11 @@ import {
 } from "../conversation/typing-presentation";
 import { breathing, localActivity } from "../agents/local-activity";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
-import { LightningIcon, RobotIcon } from "../../shared/design-system/icons";
+import {
+  DotsThreeIcon,
+  LightningIcon,
+  RobotIcon,
+} from "../../shared/design-system/icons";
 import { useProfileOwner } from "../profiles/useProfileOwner";
 import { messagePreviewText } from "../conversation/message-preview-text";
 import { profileMentionParts } from "./profile-mentions";
@@ -399,9 +403,18 @@ function MessageRowContent({
       })
     : [];
   // The instance, not its key: a reinstalled plugin must not reopen a dialog.
-  const [openAction, setOpenAction] = useState<(typeof actions)[number]>();
+  const [openAction, setOpenAction] = useState<{
+    action: (typeof actions)[number];
+    session: RelaySession;
+    messageId: string;
+  }>();
   const opened =
-    openAction && actions.includes(openAction) ? openAction : undefined;
+    openAction &&
+    openAction.session === session &&
+    openAction.messageId === row.id &&
+    actions.includes(openAction.action)
+      ? openAction.action
+      : undefined;
   useEffect(() => {
     if (openAction && !opened) setOpenAction(undefined);
   }, [openAction, opened]);
@@ -437,33 +450,53 @@ function MessageRowContent({
       </MenuItem>
     </>
   );
-  const actionItems = actions.map((action) =>
-    action.placement === "menu" && session && extensions?.actions ? (
-      <ContributionBoundary key={contributionKey(action)} fallback={null}>
-        <WithTargetOpener
-          component={action.component}
-          props={{
-            message: row,
-            session,
-            close: () => setOpenAction(undefined),
-          }}
-          registry={extensions.actions}
-          entry={action}
-        />
-      </ContributionBoundary>
-    ) : (
-      <MenuItem key={action.key} onClick={() => setOpenAction(action)}>
-        {action.icon && (
-          <MenuIcon>
-            <ContributionBoundary key={contributionKey(action)} fallback={null}>
-              <action.icon />
-            </ContributionBoundary>
-          </MenuIcon>
-        )}
-        {action.title}
-      </MenuItem>
-    ),
-  );
+  const activateAction = (action: (typeof actions)[number]) => {
+    if (
+      !session ||
+      !active ||
+      !extensions?.actions?.snapshot().includes(action)
+    )
+      return;
+    try {
+      if (action.matches(row, session))
+        setOpenAction({ action, session, messageId: row.id });
+    } catch {
+      // A failed matcher makes this action unavailable.
+    }
+  };
+  const actionItems = (contextMenu: boolean) =>
+    actions
+      .filter((action) => action.placement !== "toolbar" || contextMenu)
+      .map((action) =>
+        action.placement === "menu" && session && extensions?.actions ? (
+          <ContributionBoundary key={contributionKey(action)} fallback={null}>
+            <WithTargetOpener
+              component={action.component}
+              props={{
+                message: row,
+                session,
+                close: () => setOpenAction(undefined),
+              }}
+              registry={extensions.actions}
+              entry={action}
+            />
+          </ContributionBoundary>
+        ) : (
+          <MenuItem key={action.key} onClick={() => activateAction(action)}>
+            {action.icon && (
+              <MenuIcon>
+                <ContributionBoundary
+                  key={contributionKey(action)}
+                  fallback={null}
+                >
+                  <action.icon />
+                </ContributionBoundary>
+              </MenuIcon>
+            )}
+            {action.title}
+          </MenuItem>
+        ),
+      );
   // A message renderer may draw some attachments itself. Its claims count only
   // while its card is mounted, and they return to the host list while its
   // fallback shows. A remounted card starts healthy and claims again.
@@ -683,6 +716,33 @@ function MessageRowContent({
       copyText={() =>
         messageCopyText(row, directory.profiles, directory.agents)
       }
+      toolbarItems={actions
+        .filter((action) => action.placement === "toolbar")
+        .map((action) => (
+          <IconButton
+            key={contributionKey(action)}
+            hint="helpful"
+            title={action.title}
+            aria-label={action.title}
+            size="sm"
+            icon={
+              action.icon ? (
+                <ContributionBoundary
+                  key={contributionKey(action)}
+                  fallback={null}
+                >
+                  <action.icon />
+                </ContributionBoundary>
+              ) : (
+                <DotsThreeIcon />
+              )
+            }
+            onClick={(event) => {
+              event.currentTarget.focus({ preventScroll: true });
+              activateAction(action);
+            }}
+          />
+        ))}
       quickControls={
         <>
           {stackPrevious && showTime && (
@@ -722,7 +782,7 @@ function MessageRowContent({
             (session ? (
               <MessageManagementItems row={row} session={session} />
             ) : undefined)}
-          {actionItems}
+          {actionItems(!!target)}
           {activityItem}
           {reportItem}
         </>

@@ -23,11 +23,14 @@ import type {
 import type { Contribution } from "../../plugins/contributions";
 import { CustomEmoji } from "../../bundled/emoji/CustomEmoji";
 import { emojiMatches } from "../relay/emoji";
-import { profileTarget } from "../profiles/target";
+import { profileKey, profileTarget } from "../profiles/target";
+import { parseBuzzLink } from "../navigation/buzz-links";
 import styles from "./Messages.module.css";
 import { LinkLabel } from "../../bundled/links/InlineLink";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { serializeSelection } from "./selection-copy";
+import { buzzCopyDocument } from "./composer-clipboard";
+import { projectComposerDocument } from "./composer-document";
 import { createRelaySession } from "../relay/session";
 import { createAgentDirectory } from "../identity-names/testing";
 import { bindNames } from "../identity-names/service";
@@ -86,7 +89,7 @@ function props(
     },
     media: () => undefined,
     onOpenLink: () => false,
-    canOpenLink: () => true,
+    canOpenLink: (target) => !!profileKey(target) || !!parseBuzzLink(target),
     participantProfiles: profiles,
     ...options,
   };
@@ -97,6 +100,52 @@ function render(content: string, options: RenderOptions = {}) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+it("admits registered panel links from cached Markdown and rechecks activation", () => {
+  const target = "example-plugin://task/123";
+  let installed = false;
+  const onOpenLink = vi.fn(() => true);
+  const canOpenLink = (value: string) => installed && value === target;
+  const content = `[Task](${target}) [Unsafe](https://user:secret@example.test)`;
+  const draw = () => (
+    <MessageMarkdown {...props(content, { canOpenLink, onOpenLink })} />
+  );
+  const view = renderDom(draw());
+  expect(screen.queryByRole("link")).toBeNull();
+  installed = true;
+  view.rerender(draw());
+  const link = screen.getByRole("link", { name: "Task" });
+  expect(link).toHaveAttribute("href", target);
+  const selection = document.getSelection() as Selection;
+  const range = document.createRange();
+  range.selectNodeContents(link);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  expect(serializeSelection(selection, "text")).toBe(`Task (${target})`);
+  expect(serializeSelection(selection, "markdown")).toBe(`[Task](${target})`);
+  const pasted = buzzCopyDocument(
+    `<div data-buzz-copy="timeline">${serializeSelection(selection, "html")}</div>`,
+  );
+  expect(pasted && projectComposerDocument(pasted).draft.text).toBe(
+    `[Task](${target})`,
+  );
+  selection.removeAllRanges();
+  fireEvent.click(link, { ctrlKey: true });
+  expect(onOpenLink).toHaveBeenCalledWith(target);
+  expect(link).toHaveFocus();
+  onOpenLink.mockClear();
+  installed = false;
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+  link.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(true);
+  expect(onOpenLink).not.toHaveBeenCalled();
+  view.rerender(draw());
+  expect(screen.queryByRole("link")).toBeNull();
+  installed = true;
+  view.rerender(draw());
+  fireEvent.click(screen.getByRole("link", { name: "Task" }));
+  expect(onOpenLink).toHaveBeenCalledOnce();
 });
 
 const party = {
@@ -1017,6 +1066,19 @@ it("keeps explicit profile links literal inside code", () => {
   expect(html).not.toContain("href=");
   expect(html).toContain(link);
 });
+
+it.each([
+  `buzz:agent-profile:${mic}`,
+  `buzz:profile?agent=${mic}&tab=activity`,
+  `${profileTarget(mic)}#version=1`,
+])(
+  "rejects app-local profile targets even when a panel matches: %s",
+  (target) => {
+    const html = render(`[Person](${target})`, { canOpenLink: () => true });
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("<button");
+  },
+);
 
 describe("text spoilers", () => {
   it("hides formatted content and link controls until reveal, and resets after edits", () => {

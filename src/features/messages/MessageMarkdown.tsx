@@ -32,11 +32,7 @@ import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { profileKey } from "../profiles/target";
 import referenceStyles from "../../shared/InlineReference.module.css";
-import Markdown, {
-  type Components,
-  type ExtraProps,
-  type UrlTransform,
-} from "react-markdown";
+import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { remarkSpoilers } from "./remark-spoilers";
@@ -411,9 +407,6 @@ function remarkInlineContent(protectedContent: ProtectedContent) {
   };
 }
 
-const transformUrl: UrlTransform = (value) =>
-  parseBuzzLink(value) || profileKey(value) ? value : safeLinkUrl(value);
-
 type MessageComponents = {
   [Tag in "p" | "a" | "img" | "span" | "pre"]: (
     props: ComponentPropsWithoutRef<Tag> & ExtraProps,
@@ -563,6 +556,7 @@ function PreparedMessageMarkdown({
         directoryLabel={channelLinkLabel(url, directory.channels)}
         registry={extensions?.links}
         onOpenLink={onOpenLink}
+        canOpenLink={canOpenLink}
         session={session}
         scope={scope}
         interactive={interactive}
@@ -708,7 +702,16 @@ function PreparedMessageMarkdown({
         />
       );
     },
-    a: ({ href, children }) => {
+    a: ({ href: target, children }) => {
+      const href =
+        target &&
+        (parseBuzzLink(target) ||
+        profileKey(target) ||
+        (interactive &&
+          !/^(?:https?|buzz|nostr):/i.test(target) &&
+          canOpenLink?.(target))
+          ? target
+          : safeLinkUrl(target));
       if (href && profileKey(href)) {
         const label = labelText(children);
         if (!interactive || !canOpenLink?.(href))
@@ -863,7 +866,9 @@ const MarkdownBody = memo(function MarkdownBody({
         rehypePlugins: [rehypeEditedSlot],
         components: markdownComponents,
         skipHtml: true,
-        urlTransform: transformUrl,
+        // The live anchor renderer validates URLs. Cached parsing cannot decide
+        // whether a panel contribution is still registered.
+        urlTransform: (value) => value,
         children: protectedContent.content,
       }),
   );

@@ -8,6 +8,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { watchPageErrors } from "./page-errors.mjs";
 import { createServer } from "./vite-server.mjs";
+import {
+  hoverMessage,
+  expectMessageActionsHidden,
+} from "./message-actions.mjs";
+import { settle } from "./timeline.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 test("independent packed author consumer and native-installed contribution survive removal, replacement and retarget", async ({
@@ -137,6 +142,70 @@ test("independent packed author consumer and native-installed contribution survi
     );
     const draft = page.getByRole("textbox", { name: /Message #General/ });
     await expect(draft).toBeVisible();
+    // Browser-only: host toolbar paint, focus, and panel integration must keep
+    // the conversation's real editor and scroll position.
+    const row = page
+      .locator("[data-channel-timeline] [data-message-id]")
+      .filter({ hasText: "History" })
+      .first();
+    const actions = row.getByRole("group", {
+      name: "Message actions",
+      includeHidden: true,
+    });
+    await draft.fill("Panel draft");
+    const scroll = page.locator("[data-channel-timeline]");
+    for (const mode of ["light", "dark"]) {
+      await page.setViewportSize({
+        width: mode === "light" ? 1440 : 800,
+        height: 950,
+      });
+      await page.locator("html").evaluate((node, mode) => {
+        node.style.fontSize = mode === "dark" ? "20px" : "";
+      }, mode);
+      await page.locator("html").evaluate((node, mode) => {
+        node.dataset.colorMode = mode;
+      }, mode);
+      await scroll.hover();
+      await page.mouse.wheel(0, -500);
+      await settle(page, scroll);
+      await row.evaluate((node) => node.scrollIntoView({ block: "center" }));
+      await settle(page, scroll);
+      await draft.focus();
+      await hoverMessage(row);
+      const inspect = row.getByRole("button", { name: "Inspect message" });
+      await expect(inspect).toBeVisible();
+      await page.mouse.move(0, 0);
+      await expectMessageActionsHidden(actions);
+      await inspect.focus();
+      await expect(inspect).toBeVisible();
+      await settle(page, scroll);
+      const before = await scroll.evaluate((node) => node.scrollTop);
+      expect(before).toBeGreaterThan(0);
+      await page.keyboard.press("Enter");
+      await expect(
+        page.getByText("Consumer message panel", { exact: true }),
+      ).toBeVisible();
+      await page.screenshot({
+        path: test.info().outputPath(`plugin-panel-${mode}.png`),
+      });
+      await page.keyboard.press("Escape");
+      await expect(
+        page.getByText("Consumer message panel", { exact: true }),
+      ).toHaveCount(0);
+      await settle(page, scroll);
+      await expect(draft).toHaveJSProperty("value", "Panel draft");
+      expect(await scroll.evaluate((node) => node.scrollTop)).toBe(before);
+      await row.getByRole("link", { name: "Inspect fixture" }).click();
+      await expect(
+        page.getByText("Consumer message panel", { exact: true }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+    }
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await page.locator("html").evaluate((node) => {
+      node.style.fontSize = "";
+    });
+    await draft.fill("");
     await expect(
       page
         .getByRole("navigation", { name: "Proof pages" })

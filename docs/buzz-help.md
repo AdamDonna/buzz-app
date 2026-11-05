@@ -129,6 +129,9 @@ that agent in Buzz; they do not notify the external app through this connection.
 - Hover over a message to reveal the capsule above it: add a reaction, reply,
   copy its link, forward it, or open More. **Copy message** is in More. Keyboard
   focus also reveals these actions; touch layouts keep actions inline.
+- Plugins can add actions to this toolbar. A link to an active plugin panel
+  opens that panel in the conversation. If the plugin is removed, its actions
+  and panel links become unavailable.
 - **Forward message** in a message's hover actions or message menu sends its link
   to one person in the current community, with an optional note. Buzz opens or
   creates the direct message for you. The link previews the original message;
