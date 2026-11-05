@@ -59,6 +59,23 @@ pub(crate) struct Approval {
     pub scopes: Vec<String>,
 }
 
+impl Approval {
+    fn valid_scopes(&self) -> bool {
+        !self.scopes.is_empty()
+            && self.scopes.len() <= 3
+            && self
+                .scopes
+                .iter()
+                .all(|scope| scope == "read" || scope == "post" || scope == "create")
+            && self
+                .scopes
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                == self.scopes.len()
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Grant {
@@ -291,18 +308,7 @@ pub(super) fn authorize<R: tauri::Runtime>(
                 || !pubkey(&approval.viewer)
                 || approval.agent.len() > 600
                 || !approval.agent.get(..64).is_some_and(pubkey)
-                || approval.scopes.is_empty()
-                || approval.scopes.len() > 2
-                || approval
-                    .scopes
-                    .iter()
-                    .any(|scope| scope != "read" && scope != "post")
-                || approval
-                    .scopes
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len()
-                    != approval.scopes.len()
+                || !approval.valid_scopes()
                 || url::Url::parse(&approval.community).is_err()
             {
                 return Err("Invalid Buzz approval".into());
@@ -415,6 +421,34 @@ pub(crate) async fn plugin_host_mcp_pairing<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_scopes_accept_create_without_widening_access() {
+        let mut approval = grant().approval;
+        for scopes in [
+            vec!["read"],
+            vec!["post"],
+            vec!["read", "post"],
+            vec!["create"],
+            vec!["read", "create"],
+            vec!["post", "create"],
+            vec!["create", "post", "read"],
+        ] {
+            approval.scopes = scopes.iter().map(|scope| (*scope).into()).collect();
+            assert!(approval.valid_scopes(), "{scopes:?}");
+        }
+        for scopes in [
+            vec![],
+            vec!["manage"],
+            vec!["create", "manage"],
+            vec!["read", "read"],
+            vec!["create", "create"],
+            vec!["read", "post", "create", "read"],
+        ] {
+            approval.scopes = scopes.iter().map(|scope| (*scope).into()).collect();
+            assert!(!approval.valid_scopes(), "{scopes:?}");
+        }
+    }
 
     fn grant() -> Grant {
         Grant {
