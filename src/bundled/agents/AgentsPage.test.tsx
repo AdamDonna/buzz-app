@@ -159,6 +159,7 @@ function setup(
   saved: Agent[],
   {
     shown = true,
+    scope = undefined as string | undefined,
     model = false,
     status = "ready" as AgentsSnapshot["status"],
     more = [] as RegisteredAgentType[],
@@ -422,7 +423,7 @@ function setup(
     execution: async () => undefined,
     harness: {} as Agents["harness"],
   } satisfies Agents;
-  const disconnected = { status: "disconnected", generation: 0 };
+  const disconnected = { status: "disconnected", generation: 0, scope };
   const relay = {
     snapshot: () => disconnected,
     subscribe: () => () => {},
@@ -5071,6 +5072,41 @@ it("offers Make my bestie on a stand-in for a missing chosen agent", async () =>
       await screen.findByRole("menu", { name: "Actions for Ada" }),
     ).queryByRole("menuitem", { name: "Make my bestie" }),
   ).toBeNull();
+});
+
+it("restores scoped card order without menu reorder actions or remounting neighbours", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const bo = agent("Bo", 2);
+  const nova = agent("Nova", 3);
+  const scope = "https://relay.example:owner";
+  const view = setup([ada, bo], { scope });
+  const order = () =>
+    screen
+      .getAllByRole("gridcell")
+      .map((card) => card.getAttribute("aria-label"));
+  await user.click(screen.getByRole("button", { name: "Actions for Ada" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for Ada" });
+  expect(
+    within(menu).queryByRole("menuitem", { name: "Move earlier" }),
+  ).toBeNull();
+  expect(
+    within(menu).queryByRole("menuitem", { name: "Move later" }),
+  ).toBeNull();
+  act(() => view.show([ada, bo, nova]));
+  expect(menu).toBeInTheDocument();
+  await user.keyboard("{Escape}");
+  act(() => writeView(scope, "agents:order", [bo.pubkey, ada.pubkey]));
+  expect(order()).toEqual(["Bo", "Ada", "Nova"]);
+  await user.click(screen.getByRole("gridcell", { name: "Bo" }));
+  await user.keyboard("{ArrowRight}");
+  expect(screen.getByRole("gridcell", { name: "Ada" })).toHaveFocus();
+  view.unmount();
+  const restored = setup([ada, bo, nova, agent("New", 4)], { scope });
+  expect(order()).toEqual(["Bo", "Ada", "Nova", "New"]);
+  restored.unmount();
+  setup([ada, bo], { scope: "https://other.example:owner" });
+  expect(order()).toEqual(["Ada", "Bo"]);
 });
 
 it("offers to save an automatic bestie to the account, and again after a failed save", async () => {

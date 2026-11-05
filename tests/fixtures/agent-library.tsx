@@ -448,6 +448,9 @@ const agents = {
 const disconnected = {
   status: "disconnected",
   generation: 0,
+  ...(new URLSearchParams(location.search).has("reorder")
+    ? { scope: "https://relay.example:fixture-owner" }
+    : {}),
   ...(teamImport
     ? {
         viewer: "owner",
