@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod access;
 pub mod imports;
 pub mod managed;
 mod migrate_agent_flag;
@@ -886,6 +887,10 @@ impl Manager {
             managed::path(&self.home, std::env::var_os(managed::PATH_ENV)),
             catalog,
         )
+    }
+    /// Repository access rules for Git imports, from the file beside the profile folders.
+    pub fn repository_access(&self) -> access::AccessRules {
+        access::load(&self.home, std::env::var_os(access::PATH_ENV))
     }
     fn lock(&self) -> Result<File> {
         fs::create_dir_all(&self.root).map_err(err)?;
