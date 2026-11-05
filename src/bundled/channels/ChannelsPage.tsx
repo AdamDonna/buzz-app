@@ -802,6 +802,27 @@ function ChannelWorkspace({
       },
     });
   };
+  const handleCommand = (command: string, signal: AbortSignal) => {
+    if (command.toLowerCase() !== "/leave" || !current || solo) return false;
+    return (async () => {
+      const permissions = await queries.channelLifecycle.load(
+        current.id,
+        signal,
+      );
+      signal.throwIfAborted();
+      if (!permissions.canLeave)
+        throw new Error(
+          permissions.leaveReason ??
+            "You can’t leave this channel with your current permissions.",
+        );
+      const trigger =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : undefined;
+      chooseLifecycle(current, "leave", trigger);
+      return true;
+    })();
+  };
   // A Solo start that fails leaves its chat for New chat only while this
   // workspace still shows that chat.
   const showing = useRef(requestedChannel);
@@ -1997,6 +2018,7 @@ function ChannelWorkspace({
               ) : undefined
             }
             onSend={onComposerSend}
+            onCommand={handleCommand}
             focusRequest={composerFocus}
           />
         )}

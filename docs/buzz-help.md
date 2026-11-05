@@ -240,6 +240,8 @@ that agent in Buzz; they do not notify the external app through this connection.
   Use **Leave chat** or **Leave channel** to remove your membership and sidebar
   entry. Joined viewers keep reading after a switch to Private until they leave
   or are removed in People.
+- In a channel, typing `/leave` by itself opens the same **Leave channel**
+  confirmation. The command is not posted as a message.
 - **Long text pastes** that exceed the message limit show an error and leave
   your draft unchanged. Shorten the text, or save it as a text file and use
   **Attach files** where uploads are available.
