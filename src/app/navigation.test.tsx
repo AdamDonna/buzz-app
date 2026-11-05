@@ -173,6 +173,60 @@ it("waits for a cold Settings provider address until its plugin registers", asyn
   expect(await screen.findByText(pageFailure)).toBeVisible();
 });
 
+it("Back closes a Settings provider while leaving Settings open and Forward reopens it", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  activation.release();
+  const current = createServices();
+  services = current;
+  render(<App services={current} />);
+  await waitFor(() =>
+    expect(current.navigation.snapshot().status).not.toBe("pending"),
+  );
+  void current.navigation.open({
+    version: 1,
+    kind: "settings",
+    section: "agents",
+  });
+  const trigger = await screen.findByRole("button", {
+    name: "Gated provider, ready",
+  });
+  const agentSetup = current.navigation.snapshot().entry.target;
+  expect(agentSetup).not.toHaveProperty("provider");
+  fireEvent.click(trigger);
+  const provider = await screen.findByRole("dialog", {
+    name: "Gated provider",
+  });
+  expect(provider).toHaveAttribute("data-navigation-visit");
+  expect(current.navigation.snapshot().entry.target).toEqual({
+    ...agentSetup,
+    provider: "test.gated/provider",
+  });
+  expect(fireEvent.keyDown(provider, { ctrlKey: true, key: "[" })).toBe(false);
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Gated provider" })).toBeNull(),
+  );
+  expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  expect(current.navigation.snapshot().entry.target).toEqual(agentSetup);
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Settings" }), {
+    ctrlKey: true,
+    key: "]",
+  });
+  expect(
+    await screen.findByRole("dialog", { name: "Gated provider" }),
+  ).toBeVisible();
+  expect(current.navigation.snapshot().entry.target).toEqual({
+    ...agentSetup,
+    provider: "test.gated/provider",
+  });
+});
+
 it("reports a settled plugin's absent Settings provider as unavailable", async () => {
   vi.stubGlobal(
     "ResizeObserver",

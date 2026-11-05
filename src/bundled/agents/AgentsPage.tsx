@@ -749,6 +749,7 @@ export function AgentsPage({
         <ProviderDialog
           type={types.find((type) => type.key === providerKey)}
           finalFocus={newAgentButton}
+          visit={routed}
           onClose={() => setProviderKey(undefined)}
         />
       )}

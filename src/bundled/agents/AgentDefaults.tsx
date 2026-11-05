@@ -179,6 +179,7 @@ function ProviderDefaults({
         <ProviderDialog
           type={type}
           finalFocus={trigger}
+          visit={routed}
           onClose={() => setOpen(false)}
         />
       )}

@@ -18,7 +18,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
+import { Context } from "@deepseek-ai/cordis";
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   Agent,
@@ -38,11 +39,17 @@ import { setDefaultAgent } from "../../features/solo/default-agent";
 import { readView, writeView } from "../../shared/view-state";
 import type { RelayData } from "../../features/relay/service";
 import type { CommunityReader } from "../../features/communities/service";
-import type { Navigation } from "../../features/navigation/controller";
+import {
+  createNavigationController,
+  type Navigation,
+} from "../../features/navigation/controller";
+import { createMemoryHistory } from "../../features/navigation/history";
 import type { PageNavigation } from "../../features/navigation/service";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { PlugIcon, RobotIcon } from "../../shared/design-system/icons";
 import { AgentSettings } from "../../app/AgentSettings";
+import { registerNavigationShortcuts } from "../../app/shortcuts";
+import { ShortcutsService } from "../../features/shortcuts/service";
 import { AgentsPage } from "./AgentsPage";
 import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
 
@@ -741,6 +748,88 @@ it("restores provider links and retires only that provider's visits after close 
   const { scope: _scope, ...unscoped } = routed;
   expect(matches(unscoped)).toBe(false);
   expect(open).not.toHaveBeenCalled();
+});
+
+it("lets the Back shortcut hide a routed provider's blocking work and Forward restore it", async () => {
+  const page = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.agents",
+    pageId: "agents",
+    scope: null,
+  } as const;
+  const ctx = new Context();
+  ctx.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const controller = createNavigationController(createMemoryHistory(page));
+  const navigator = controller.navigation;
+  const remove = registerNavigationShortcuts(
+    new ShortcutsService(ctx, window),
+    navigator,
+  );
+  /** The Agents page as the host presents each visit to it. */
+  function Host({ agents, relay }: { agents: Agents; relay: RelayData }) {
+    const { entry, attempt } = useSyncExternalStore(
+      navigator.subscribe,
+      navigator.snapshot,
+    );
+    const navigation = useMemo(() => {
+      const request: PageNavigation = {
+        entryId: entry.id,
+        target: entry.target,
+        signal: attempt.signal,
+        position: () => undefined,
+        savePosition() {},
+        forSession: () => request,
+        resolve: () => true,
+        complete: () => true,
+      };
+      return request;
+    }, [entry, attempt]);
+    return (
+      <AgentsPage
+        agents={agents}
+        relay={relay}
+        navigator={navigator}
+        navigation={navigation}
+      />
+    );
+  }
+  try {
+    const view = setup([agent("Ada", 1)]);
+    view.rerender(<Host agents={view.agents} relay={view.relay} />);
+    void navigator.open({
+      ...page,
+      route: { version: 1, params: { provider: "test/echo" } },
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Echo" });
+    act(() => view.echoProvider.set({ readiness: "ready", blocking: true }));
+    expect(
+      within(dialog).getByRole("button", { name: "Close" }),
+    ).toBeDisabled();
+    expect(dialog).toHaveAttribute("data-navigation-visit");
+    expect(fireEvent.keyDown(dialog, { key: "[", ctrlKey: true })).toBe(false);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Echo" })).toBeNull(),
+    );
+    expect(navigator.snapshot().entry.target).toEqual(page);
+    expect(screen.getByRole("grid", { name: "Agents" })).toBeVisible();
+    // Hiding is not a Close, which would retire the visit Forward returns to.
+    expect(fireEvent.keyDown(document.body, { key: "]", ctrlKey: true })).toBe(
+      false,
+    );
+    const restored = await screen.findByRole("dialog", { name: "Echo" });
+    expect(restored).toHaveAttribute("data-navigation-visit");
+    expect(
+      within(restored).getByRole("button", { name: "Close" }),
+    ).toBeDisabled();
+  } finally {
+    remove();
+    controller.dispose();
+    await ctx.fiber.dispose();
+  }
 });
 
 it("opens the agent a link names, on Your agents", async () => {
