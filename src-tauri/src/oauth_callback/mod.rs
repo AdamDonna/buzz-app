@@ -157,8 +157,8 @@ impl OAuthCallbackHost {
         } else {
             None
         };
-        // Native federated authorities keep the original neutral callback page.
-        let branded = callback_parameter == "redirect_uri";
+        // Generic OAuth keeps Builderlab presentation and browser-close behavior.
+        let builderlab = callback_parameter == "redirect_uri";
         let (send, receive) = oneshot::channel();
         let task = tokio::spawn(async move {
             let result = tokio::time::timeout(
@@ -168,7 +168,7 @@ impl OAuthCallbackHost {
                     &authority,
                     &path,
                     expected_state.as_deref(),
-                    branded,
+                    builderlab,
                 ),
             )
             .await
@@ -290,7 +290,7 @@ async fn receive_callback(
     authority: &str,
     path: &str,
     expected_state: Option<&str>,
-    branded: bool,
+    builderlab: bool,
 ) -> CallbackResult {
     loop {
         let (mut stream, _) = listener
@@ -300,7 +300,7 @@ async fn receive_callback(
         // Bound slow/oversize requests; malformed callbacks do not consume the attempt.
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            callback(&mut stream, authority, path, expected_state, branded),
+            callback(&mut stream, authority, path, expected_state, builderlab),
         )
         .await;
         if let Ok(Some(response)) = result {
@@ -316,7 +316,7 @@ async fn callback(
     authority: &str,
     path: &str,
     expected_state: Option<&str>,
-    branded: bool,
+    builderlab: bool,
 ) -> Option<OAuthCallback> {
     let mut bytes = Vec::new();
     let mut chunk = [0; 1024];
@@ -327,12 +327,12 @@ async fn callback(
         }
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.len() > 8192 {
-            reply(stream, 400, "Invalid callback", branded).await;
+            reply(stream, 400, "Invalid callback", builderlab).await;
             return None;
         }
     }
     let (status, message, result) = parse_callback(&bytes, authority, path, expected_state);
-    reply(stream, status, message, branded).await;
+    reply(stream, status, message, builderlab).await;
     result
 }
 
@@ -402,54 +402,86 @@ fn parse_callback(
     }
     (
         200,
-        "Sign-in received. Return to the app to finish verification.",
+        "Return to the app to finish verification.",
         Some(OAuthCallback { parameters: fields }),
     )
 }
 
-async fn reply(stream: &mut TcpStream, status: u16, message: &str, branded: bool) {
-    let (body, policy) = if branded {
-        // All copy comes from the fixed responses above, never from callback values.
-        let heading = match status {
-            200 => "Signing you in…",
-            404 => "Page not found",
-            _ => "Sign-in needs attention",
-        };
-        let style = include_str!("page.css").replace(
-            "{{font}}",
-            &base64::engine::general_purpose::STANDARD.encode(include_bytes!("inter-latin.woff2")),
-        );
-        let style_hash =
-            base64::engine::general_purpose::STANDARD.encode(Sha256::digest(style.as_bytes()));
+async fn reply(stream: &mut TcpStream, status: u16, message: &str, builderlab: bool) {
+    // All copy comes from the fixed responses above, never from callback values.
+    let heading = match status {
+        200 if builderlab => "Signing you in…",
+        200 => "Sign-in received",
+        404 => "Page not found",
+        _ => "Sign-in needs attention",
+    };
+    let style = include_str!("page.css").replace(
+        "{{font}}",
+        &base64::engine::general_purpose::STANDARD.encode(include_bytes!("inter-latin.woff2")),
+    );
+    let style_hash =
+        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(style.as_bytes()));
+    let mut policy = format!("default-src 'none'; img-src data:; font-src data:; style-src 'sha256-{style_hash}'; base-uri 'none'; frame-ancestors 'none'");
+    let (script, artwork) = if builderlab {
         let script = include_str!("page.js");
         let script_hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(script));
-        // Replace whole HTML comments so the template is valid without parsing placeholders as CSS/JS.
-        let body = include_str!("page.html")
-            .replace("<!-- {{style}} -->", &format!("<style>{style}</style>"))
-            .replace("<!-- {{script}} -->", &format!("<script>{script}</script>"))
-            .replace("{{complete}}", if status == 200 { "true" } else { "false" })
-            .replace(
-                "{{closeDelay}}",
-                &focus::READABLE_DELAY.as_secs().to_string(),
-            )
-            .replace(
-                "{{brand}}",
-                include_str!("../../../public/builderlab-mark.svg"),
-            )
-            .replace(
-                "{{artwork}}",
-                &base64::engine::general_purpose::STANDARD.encode(include_bytes!("cubes.webp")),
-            )
-            .replace("{{heading}}", heading)
-            .replace("{{message}}", if status == 200 { "" } else { message });
-        let policy = format!("default-src 'none'; img-src data:; font-src data:; style-src 'sha256-{style_hash}'; script-src 'sha256-{script_hash}'; base-uri 'none'; frame-ancestors 'none'");
-        (body, policy)
-    } else {
+        policy.push_str(&format!("; script-src 'sha256-{script_hash}'"));
+        let artwork =
+            base64::engine::general_purpose::STANDARD.encode(include_bytes!("cubes.webp"));
         (
-            format!("<!doctype html><title>Sign-in callback</title><p>{message}</p>"),
-            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'".into(),
+            format!("<script>{script}</script>"),
+            include_str!("artwork.html").replace("{{artwork}}", &artwork),
         )
+    } else {
+        (String::new(), String::new())
     };
+    let provider = if builderlab { "Builderlab" } else { "Buzz" };
+    let mark = if builderlab {
+        include_str!("../../../public/builderlab-mark.svg")
+    } else {
+        include_str!("../../../public/buzz-mark.svg")
+    };
+    let label = if builderlab { "" } else { "<span>Buzz</span>" };
+    let brand = include_str!("brand.html")
+        .replace("{{provider}}", provider)
+        .replace("{{mark}}", mark)
+        .replace("{{label}}", label);
+    // Replace whole HTML comments so the template remains valid on its own.
+    let body = include_str!("page.html")
+        .replace(
+            "<!-- {{pageBrand}} -->",
+            if builderlab { &brand } else { "" },
+        )
+        .replace(
+            "<!-- {{cardBrand}} -->",
+            if builderlab { "" } else { &brand },
+        )
+        .replace("<!-- {{style}} -->", &format!("<style>{style}</style>"))
+        .replace("<!-- {{script}} -->", &script)
+        .replace("<!-- {{artwork}} -->", &artwork)
+        .replace(
+            "<!-- {{closeHint}} -->",
+            if builderlab {
+                include_str!("close-hint.html")
+            } else {
+                ""
+            },
+        )
+        .replace("{{provider}}", provider)
+        .replace("{{complete}}", if status == 200 { "true" } else { "false" })
+        .replace(
+            "{{closeDelay}}",
+            &focus::READABLE_DELAY.as_secs().to_string(),
+        )
+        .replace("{{heading}}", heading)
+        .replace(
+            "{{message}}",
+            if builderlab && status == 200 {
+                ""
+            } else {
+                message
+            },
+        );
     let reason = match status {
         200 => "OK",
         404 => "Not Found",
