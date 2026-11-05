@@ -1,6 +1,7 @@
 import { ModelDiscoveryRecovery } from "../../features/agents/ModelDiscoveryRecovery";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { ArrowsClockwiseIcon } from "../../shared/design-system/icons";
@@ -815,6 +816,7 @@ export function createTabs({
     close?: AgentViewProps<Config>["close"];
     openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
+    useClockFormat();
     const sessions = useSyncExternalStore(
       (listener) => runtime.subscribe(listener),
       () => runtime.sessions(agent.key),

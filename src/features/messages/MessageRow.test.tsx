@@ -33,6 +33,7 @@ import {
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { ConversationPresentation } from "../conversation/ConversationPresentation";
 import { MessageRow } from "./MessageRow";
+import { setClockPreference } from "../../shared/clock-preference";
 import { MessageManagement } from "./MessageManagement";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import type { UnreadCapability, UnreadSnapshot } from "../relay/unread";
@@ -1491,6 +1492,32 @@ function renderMessage(
     />,
   );
 }
+
+it.each([
+  { channelType: "solo", visible: false },
+  { channelType: "stream", visible: true },
+] as const)(
+  "Hide in Solo chats keeps only the accessible date in Solo (%o)",
+  ({ channelType, visible }) => {
+    setClockPreference({ messageTimestamps: "hide-solo" });
+    const list = {
+      channels: [{ id: row.channelId, channelType }],
+      status: "ready",
+    };
+    const references = {
+      channels: { list: () => list, subscribeList: () => () => {} },
+    } as unknown as RelaySession;
+    const view = renderMessage({ references });
+    try {
+      const time = view.container.querySelector("time");
+      expect(time?.querySelector(".sr-only")).toHaveTextContent(/19(69|70)/);
+      expect(!!time?.querySelector('[aria-hidden="true"]')).toBe(visible);
+    } finally {
+      view.unmount();
+      setClockPreference({ messageTimestamps: "show" });
+    }
+  },
+);
 
 it.each([true, false])(
   "offers thread starts only where the conversation starts threads (startsThreads=%s)",

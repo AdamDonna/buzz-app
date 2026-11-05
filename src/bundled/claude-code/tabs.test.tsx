@@ -44,7 +44,10 @@ import { ClaudeSetup } from "./setup";
 import { ClaudeDefaults } from "./defaults";
 
 const desktop = vi.hoisted(() => ({ tauri: true }));
-vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => desktop.tauri }));
+vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: () => desktop.tauri,
+  invoke: async () => null,
+}));
 
 beforeEach(() => {
   desktop.tauri = true;

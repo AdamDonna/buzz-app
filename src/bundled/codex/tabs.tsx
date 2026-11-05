@@ -2,6 +2,7 @@ import type { AgentExecutionBinding } from "../../features/agents/execution";
 import type { AgentKey } from "../../features/agents/membership";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -1013,6 +1014,7 @@ export function createTabs(
     openConversation?: AgentViewProps<Config>["openConversation"];
     listed?: SavedConversation[];
   }) {
+    useClockFormat();
     const sessions = useSyncExternalStore(runtime.subscribe, () =>
       runtime.sessions(agent.key),
     );

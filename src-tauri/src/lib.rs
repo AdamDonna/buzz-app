@@ -78,6 +78,7 @@ mod relaunch;
 mod relay;
 mod relay_admin;
 mod sign_out;
+mod system_clock;
 use identity::{
     identity_create, identity_export, identity_import, identity_import_legacy,
     identity_legacy_available, identity_prepare_remote_agent_authorization, identity_restore,
@@ -724,6 +725,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         clipboard::clipboard_write_text,
         media_stream_base,
         get_os_idle_seconds,
+        system_clock::system_hour_cycle,
         workspace_pick_folder,
         repositories_folder_validate,
         legacy_communities,

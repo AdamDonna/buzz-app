@@ -139,6 +139,7 @@ fn native_command_permissions_isolate_webviews() {
         "clipboard_write_text",
         "media_stream_base",
         "get_os_idle_seconds",
+        "system_hour_cycle",
         "plugin_import_folder",
         "plugin_update_check",
         "plugin_update_preview",

@@ -27,6 +27,10 @@ import {
   messageAutocorrectPreference,
   setMessageAutocorrectPreference,
 } from "../features/messages/autocorrect-preference";
+import {
+  clockPreference,
+  setClockPreference,
+} from "../shared/clock-preference";
 
 const preferenceAppearances: ReturnType<typeof createAppearance>[] = [];
 function preferencesPage() {
@@ -43,6 +47,11 @@ afterEach(() => {
   setThreadPlacementPreference("side");
   setFollowUpBehaviorPreference("immediate");
   setMessageAutocorrectPreference(false);
+  setClockPreference({
+    hourCycle: "system",
+    seconds: false,
+    messageTimestamps: "show",
+  });
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -404,6 +413,30 @@ it("preserves follow-up choice and save recovery when Appearance is hidden", asy
   expect(localStorage.getItem("buzz-follow-up-behavior.v1")).toBe("queue");
   await waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+
+it("saves the clock, seconds and message timestamp choices", async () => {
+  const user = userEvent.setup();
+  render(preferencesPage(), { wrapper: ToastProvider });
+  const clock = screen.getByRole("combobox", { name: "Clock" });
+  expect(clock).toHaveTextContent("System");
+  await user.click(clock);
+  await user.click(await screen.findByRole("option", { name: "24-hour" }));
+  await user.click(screen.getByRole("switch", { name: "Show seconds" }));
+  await user.click(
+    screen.getByRole("combobox", { name: "Message timestamps" }),
+  );
+  await user.click(
+    await screen.findByRole("option", { name: "Hide in Solo chats" }),
+  );
+  expect(clockPreference()).toEqual({
+    hourCycle: "h23",
+    seconds: true,
+    messageTimestamps: "hide-solo",
+  });
+  expect(JSON.parse(localStorage.getItem("buzz-clock.v1") ?? "")).toEqual(
+    clockPreference(),
   );
 });
 

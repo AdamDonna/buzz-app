@@ -90,6 +90,7 @@
     "allow-clipboard-write-text",
     "allow-media-stream-base",
     "allow-get-os-idle-seconds",
+    "allow-system-hour-cycle",
     "allow-workspace-pick-folder",
     "allow-repositories-folder-validate",
     "allow-legacy-communities",

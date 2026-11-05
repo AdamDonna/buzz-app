@@ -4,6 +4,7 @@ import type { ActivityRowPresentation } from "./activity-presentation";
 import { ShimmerText } from "../../shared/design-system/ui/ShimmerText";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { formatItemTimestamp } from "../../shared/datetime";
+import { useClockPreference } from "../../shared/clock-preference";
 import { ProfilePeek } from "../profiles/ProfilePeek";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import {
@@ -258,6 +259,15 @@ function MessageRowContent({
     row.channelId,
     (channel) => !!channel?.readOnly,
   );
+  const { messageTimestamps } = useClockPreference();
+  const solo = useListedChannel(
+    references?.channels,
+    row.channelId,
+    (channel) => channel?.channelType === "solo",
+  );
+  const showTime =
+    messageTimestamps === "show" ||
+    (messageTimestamps === "hide-solo" && !solo);
   const unreadLabel =
     threadUnread?.manual === "local-only"
       ? "Thread marked unread on this device only"
@@ -672,7 +682,7 @@ function MessageRowContent({
       }
       quickControls={
         <>
-          {stackPrevious && (
+          {stackPrevious && showTime && (
             <span
               className={styles.keyboardMessageTime}
               data-message-keyboard-time
@@ -1018,7 +1028,10 @@ function MessageRowContent({
                   </span>
                 )}
                 {!stackPrevious && (
-                  <MessageTimestamp createdAt={row.createdAt} />
+                  <MessageTimestamp
+                    createdAt={row.createdAt}
+                    visible={showTime}
+                  />
                 )}
                 {session &&
                   actions.map(

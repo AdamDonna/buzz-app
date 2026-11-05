@@ -141,6 +141,7 @@ fn main() {
             "clipboard_write_text",
             "media_stream_base",
             "get_os_idle_seconds",
+            "system_hour_cycle",
             "workspace_pick_folder",
             "repositories_folder_validate",
             "legacy_communities",
