@@ -2095,6 +2095,7 @@ fn media_url(target: &str) -> Option<Url> {
     let (hash, extension) = name.split_once('.').unwrap_or((name, ""));
     let extension_ok = extension.is_empty()
         || extension == "thumb.jpg"
+        || extension == "thumb.webp"
         || (extension.len() <= 8
             && extension
                 .bytes()

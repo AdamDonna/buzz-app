@@ -27,6 +27,7 @@ export function AttachmentImage({
   attachment,
   session,
   source,
+  thumbnail,
   cached = false,
   compact = false,
   overlayCount = 0,
@@ -39,6 +40,7 @@ export function AttachmentImage({
   attachment: Attachment;
   session?: RelaySession | undefined;
   source: string | undefined;
+  thumbnail?: string | undefined;
   cached?: boolean;
   /** Square thumbnail geometry for a condensed image group. */
   compact?: boolean;
@@ -158,6 +160,7 @@ export function AttachmentImage({
               key={JSON.stringify([source, attachment.blurhash])}
               session={session}
               source={source}
+              thumbnail={thumbnail}
               blurhash={attachment.blurhash}
               onDecoded={onDecoded}
             />
@@ -198,11 +201,13 @@ export function AttachmentImage({
 function ImagePixels({
   session,
   source,
+  thumbnail,
   blurhash,
   onDecoded,
 }: {
   session: RelaySession | undefined;
   source: string;
+  thumbnail: string | undefined;
   blurhash: string | undefined;
   onDecoded: (dimensions: NonNullable<Attachment["dimensions"]>) => void;
 }) {
@@ -215,6 +220,7 @@ function ImagePixels({
     () => !!session && hasDecodedImage(session, source),
   );
   const [ready, setReady] = useState(false);
+  const [thumbnailLoaded, setThumbnailLoaded] = useState(false);
   const hash = validatedBlurhash(blurhash);
   useLayoutEffect(() => {
     if (!retained) return;
@@ -315,6 +321,17 @@ function ImagePixels({
         loading="lazy"
         style={{ visibility: ready ? "visible" : "hidden" }}
       />
+      {/* After the original, so preview queries still find the original first. */}
+      {thumbnail && !ready && (
+        <img
+          src={thumbnail}
+          alt=""
+          loading="lazy"
+          data-thumbnail=""
+          style={{ visibility: thumbnailLoaded ? "visible" : "hidden" }}
+          onLoad={() => setThumbnailLoaded(true)}
+        />
+      )}
     </>
   );
 }

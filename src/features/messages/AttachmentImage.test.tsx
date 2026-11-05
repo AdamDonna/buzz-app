@@ -23,6 +23,7 @@ function mount(
   owner: RelaySession,
   url = source,
   metadata?: typeof dimensions,
+  thumbnail?: string,
 ) {
   return render(
     <AttachmentImage
@@ -33,6 +34,7 @@ function mount(
         ...(metadata ? { dimensions: metadata } : {}),
       }}
       source={url}
+      thumbnail={thumbnail}
     />,
   );
 }
@@ -215,4 +217,63 @@ it("bounds retained geometry and refreshes a source on successful decode", () =>
   expect(imageDimensions(owner, `${source}/0`)).toEqual(dimensions);
   expect(imageDimensions(owner, `${source}/1`)).toBeUndefined();
   expect(imageDimensions(owner, `${source}/512`)).toEqual(dimensions);
+});
+
+const relaySource = `https://relay.test/media/${"a".repeat(64)}.png`;
+const relayThumbnail = `https://relay.test/media/${"a".repeat(64)}.thumb.jpg`;
+const thumbnailOf = (view: ReturnType<typeof render>) =>
+  view.container.querySelector<HTMLImageElement>("img[data-thumbnail]");
+
+it("shows the thumbnail once it loads and drops it when the original decodes", async () => {
+  const view = mount(session(), relaySource, undefined, relayThumbnail);
+  const thumbnail = thumbnailOf(view);
+  expect(thumbnail).toHaveAttribute("src", relayThumbnail);
+  expect(thumbnail).toHaveAttribute("loading", "lazy");
+  expect(thumbnail).toHaveStyle({ visibility: "hidden" });
+  fireEvent.load(thumbnail as HTMLImageElement);
+  expect(thumbnailOf(view)).toHaveStyle({ visibility: "visible" });
+  const original = view.container.querySelector("img");
+  expect(original).toHaveAttribute("src", relaySource);
+  expect(original).toHaveStyle({ visibility: "hidden" });
+  await decode(view).release();
+  expect(thumbnailOf(view)).toBeNull();
+  expect(original).toHaveStyle({ visibility: "visible" });
+});
+
+it("falls back to the blurhash placeholder when the thumbnail fails", () => {
+  const view = render(
+    <AttachmentImage
+      session={session()}
+      attachment={{
+        url: relaySource,
+        kind: "image",
+        blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+      }}
+      source={relaySource}
+      thumbnail={relayThumbnail}
+    />,
+  );
+  expect(view.container.querySelector("canvas")).not.toBeNull();
+  fireEvent.error(thumbnailOf(view) as HTMLImageElement);
+  expect(thumbnailOf(view)).toHaveStyle({ visibility: "hidden" });
+  expect(view.container.querySelector("canvas")).not.toBeNull();
+  expect(view.queryByRole("status")).toBeNull();
+});
+
+it("requests no thumbnail for third-party images", () => {
+  const view = mount(session(), source);
+  expect(thumbnailOf(view)).toBeNull();
+  expect(view.container.querySelectorAll("img")).toHaveLength(1);
+});
+
+it("requests no thumbnail for a re-adopted original", async () => {
+  const owner = session();
+  const first = mount(owner, relaySource, undefined, relayThumbnail);
+  await decode(first).release();
+  const original = first.container.querySelector("img");
+  first.unmount();
+  const next = mount(owner, relaySource, undefined, relayThumbnail);
+  expect(next.container.querySelector("img")).toBe(original);
+  expect(next.container.querySelectorAll("img")).toHaveLength(1);
+  expect(thumbnailOf(next)).toBeNull();
 });

@@ -1807,10 +1807,36 @@ it("rejects attachment URLs outside the shared safe-link policy", () => {
     const links = screen.getAllByRole("link", {
       name: "Open image attachment",
     });
-    expect(media).toHaveBeenCalledExactlyOnceWith("https://safe.test/a.png");
+    expect(media.mock.calls).toEqual([
+      ["https://safe.test/a.png"],
+      ["https://safe.test/a.png", "small"],
+    ]);
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute("href", "https://safe.test/a.png");
     expect(view.container.innerHTML).not.toContain("unsafe.test");
+  } finally {
+    view.unmount();
+  }
+});
+
+it.each([
+  ["jpg", "small:.jpg"],
+  ["png", ".thumb.webp"],
+  ["gif", ".thumb.webp"],
+])("passes a %s image attachment its relay thumbnail", (extension, suffix) => {
+  const hash = "a".repeat(64);
+  const url = `https://relay.test/media/${hash}.${extension}`;
+  const view = renderMessage({
+    row: { ...row, attachments: [{ url, kind: "image" }] },
+    media: (value, size) => (size ? `small:${value}` : value),
+  });
+  try {
+    expect(view.container.querySelector("img[data-thumbnail]")).toHaveAttribute(
+      "src",
+      suffix.startsWith("small:")
+        ? `small:${url}`
+        : `https://relay.test/media/${hash}${suffix}`,
+    );
   } finally {
     view.unmount();
   }
