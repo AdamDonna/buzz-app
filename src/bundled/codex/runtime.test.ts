@@ -2210,7 +2210,7 @@ it("serializes owner follow-ups and routes tool replies to the latest accepted r
     tags: expect.arrayContaining([["e", "c".repeat(64), "", "reply"]]),
   });
 });
-it("cuts delayed history off before the request, including same-second messages and edits", async () => {
+it("cuts delayed history messages off before the request while applying current edits", async () => {
   const f = fixture();
   const first = f.delivery("CURRENT_REQUEST");
   if (!("event" in first.trigger)) throw new Error("Expected a mention");
@@ -2273,7 +2273,7 @@ it("cuts delayed history off before the request, including same-second messages 
     JSON.parse(history ?? "{}").messages.map(
       (message: { content: string }) => message.content,
     ),
-  ).toEqual(["EARLIER_EDIT", "TIE_BEFORE"]);
+  ).toEqual(["FUTURE_EDIT", "TIE_BEFORE"]);
   expect(
     JSON.stringify(f.sent.find((wire) => wire.method === "turn/steer")?.params),
   ).toContain("LATER_REQUEST");
