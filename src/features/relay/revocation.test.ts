@@ -117,8 +117,23 @@ it.each([
   [{ authors: [alice.pubkey], kinds: [30177] }],
   [{ authors: [viewer.pubkey], kinds: [30177], "#h": ["a"] }],
   [{ authors: [viewer.pubkey], kinds: [30177], ids: ["a".repeat(64)] }],
+  [{ authors: [viewer.pubkey], kinds: [30078, 9] }],
+  [{ authors: [viewer.pubkey], kinds: [30078] }, { kinds: [9] }],
+  [{ authors: [alice.pubkey], kinds: [30078] }],
+  [{ authors: [viewer.pubkey, alice.pubkey], kinds: [30078] }],
+  [{ authors: [viewer.pubkey], kinds: [30078], "#h": ["a"] }],
+  [{ authors: [viewer.pubkey], kinds: [30078], ids: ["a".repeat(64)] }],
+  [{ authors: [viewer.pubkey], kinds: [30078], "#t": ["other-topic"] }],
+  [{ authors: [viewer.pubkey], kinds: [30078], "#d": ["other-setting"] }],
+  [
+    {
+      authors: [viewer.pubkey],
+      kinds: [30078],
+      "#d": [`read-state:${"a".repeat(32)}`, "other-setting"],
+    },
+  ],
 ])(
-  "does not exempt mixed or non-owner inventory-shaped reads from revocation: %j",
+  "does not exempt mixed, channel-scoped or non-owner personal reads from revocation: %j",
   async (...filters) => {
     const h = setup();
     h.emit([roster(relay, "a", [viewer.pubkey], 10)]);

@@ -16,7 +16,7 @@ function deferred() {
   });
   return { promise, release };
 }
-function setup(count = 1) {
+function setup(count = 1, snapshot = false) {
   const viewer = keypair(),
     relay = keypair(),
     peer = keypair();
@@ -60,7 +60,19 @@ function setup(count = 1) {
       relayAuthor: relay.pubkey,
       query,
       media: () => undefined,
-      readState: { decode: async () => [] },
+      readState: {
+        decode: async () => [],
+        ...(snapshot ? { communityId: "test-community" } : {}),
+      },
+      ...(snapshot
+        ? {
+            readStateSnapshot: (signal: AbortSignal) =>
+              query(
+                [{ kinds: [30078], authors: [viewer.pubkey], limit: 500 }],
+                signal,
+              ),
+          }
+        : {}),
       subscribe(callbacks) {
         live = callbacks;
         receive = callbacks.receive;
@@ -192,6 +204,31 @@ it("evidence gets its own deadline after a failed marker read; marker errors sta
   await h.session.unread.refresh();
   expect(h.session.unread.sync().status).toBe("reconciled");
 });
+
+it.each([false, true])(
+  "finishes read-state retry across a roster change (snapshot: %s)",
+  async (snapshot) => {
+    const h = setup(1, snapshot);
+    await h.session.unread.ensure();
+    const release = h.holdMarker();
+    const before = h.trace.length;
+    const retry = h.session.unread.retrySync();
+    try {
+      await vi.waitFor(() =>
+        expect(h.trace.slice(before).map(({ kind }) => kind)).toEqual([30078]),
+      );
+      h.receive([roster(h.relay, "other", [], 20)]);
+      expect(h.session.channels.get?.("other")).toBeUndefined();
+    } finally {
+      release();
+      await retry;
+    }
+    expect(h.session.unread.sync()).toMatchObject({
+      status: "reconciled",
+      error: undefined,
+    });
+  },
+);
 
 it("queries all 278 membership IDs with sequential relay-legal batches and publishes each batch", async () => {
   const h = setup(278);
