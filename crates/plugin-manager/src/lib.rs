@@ -467,6 +467,10 @@ pub fn bundled_manifests() -> Vec<Manifest> {
             .expect("github manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/inbox/manifest.json"))
             .expect("valid Inbox manifest"),
+        serde_json::from_str(include_str!(
+            "../../../src/bundled/drafts-sent/manifest.json"
+        ))
+        .expect("drafts-sent manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/reminders/manifest.json"))
             .expect("reminders manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/bestie/manifest.json"))
@@ -534,6 +538,7 @@ fn enabled_by_default(id: &str) -> bool {
             | "buzz.watching"
             | "buzz.pairing"
             | "buzz.inbox"
+            | "buzz.drafts-sent"
             | "buzz.repos"
             | "buzz.agents"
             | "buzz.claude-code"

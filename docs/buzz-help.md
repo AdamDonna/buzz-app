@@ -391,6 +391,14 @@ that agent in Buzz; they do not notify the external app through this connection.
   and Linux) an HTTP(S) link in a message to open it in your default browser
   instead of a side panel. You can also right-click the link and choose
   **Open in browser**.
+- **Drafts & sent** lists the messages you started but did not send, newest
+  change first, with the number of drafts shown beside it in the sidebar, and
+  your latest 100 sent messages in this community, grouped by day. A sent
+  message shows who replied after you ("2 after you") or that you were last
+  ("You're last"); a channel post shows its reply count. Select a draft to
+  continue it in its conversation, or a sent message to jump to it. Search
+  matches the conversation name and what you wrote. It reads only this
+  device's saved drafts and never changes them.
 - **Activity preview**: with a mouse or trackpad, rest the pointer on
   **Activity** in the sidebar to see recent mentions, DMs, thread replies, and reactions
   without opening the Activity page. Clicking a conversation opens it directly;

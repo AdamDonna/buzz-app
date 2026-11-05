@@ -44,6 +44,8 @@ import usageManifest from "./usage/manifest.json";
 import * as usage from "./usage";
 import inboxManifest from "./inbox/manifest.json";
 import * as inbox from "./inbox";
+import draftsSentManifest from "./drafts-sent/manifest.json";
+import * as draftsSent from "./drafts-sent";
 import focusManifest from "./focus/manifest.json";
 import * as focus from "./focus";
 import remindersManifest from "./reminders/manifest.json";
@@ -161,6 +163,11 @@ export const bundledPlugins: readonly BundledPlugin[] = [
   {
     manifest: { ...inboxManifest, apiVersion: 1 },
     module: inbox,
+    enabledByDefault: true,
+  },
+  {
+    manifest: { ...draftsSentManifest, apiVersion: 1 },
+    module: draftsSent,
     enabledByDefault: true,
   },
   {
