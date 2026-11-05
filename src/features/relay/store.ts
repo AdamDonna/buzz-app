@@ -993,7 +993,7 @@ export function createChannelStore(
       );
       if (
         rows.length > maxHistoryRows ||
-        byteSize(retained) > maxHistoryBytes
+        listByteSize(retained) > maxHistoryBytes
       ) {
         setWindow(state, {
           loadingOlder: false,
