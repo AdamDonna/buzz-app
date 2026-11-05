@@ -12,13 +12,19 @@ import {
 } from "../../shared/design-system/ui/Menu";
 import { CaretDownIcon } from "../../shared/design-system/icons";
 
-export type ActivityFilter = "all" | "threads" | "mentions" | "dms";
+export type ActivityFilter =
+  | "all"
+  | "threads"
+  | "mentions"
+  | "dms"
+  | "reactions";
 export type SenderFilter = "everyone" | "humans" | "agents";
 const views = [
   { value: "all", label: "All" },
   { value: "threads", label: "Threads" },
   { value: "mentions", label: "Mentions" },
   { value: "dms", label: "DMs" },
+  { value: "reactions", label: "Reactions" },
 ] as const;
 const senders = [
   { value: "everyone", label: "Anyone" },

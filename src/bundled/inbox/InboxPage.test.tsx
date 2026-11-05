@@ -2893,7 +2893,13 @@ it("combines the existing filter choices without placeholder actions", async () 
   expect(screen.queryByRole("combobox")).toBeNull();
   // Inbox's own tab holds the list; its only other tabs are the type filter.
   expect(tabs("Activity tabs")).toEqual(["Activity"]);
-  expect(tabs("Activity type")).toEqual(["All", "Threads", "Mentions", "DMs"]);
+  expect(tabs("Activity type")).toEqual([
+    "All",
+    "Threads",
+    "Mentions",
+    "DMs",
+    "Reactions",
+  ]);
   expect(activityType()).toBe("All");
   expect(
     within(screen.getByRole("tabpanel", { name: "Activity" }))
@@ -4375,7 +4381,7 @@ it("moves through the Activity type tabs with arrows, Home and End, then tabs ou
   const focusable = () => tab().filter((item) => item.tabIndex === 0);
   expect(focusable()).toHaveLength(1);
   expect(focusable()[0]).toHaveAttribute("aria-selected", "true");
-  const [all, , , last] = tab();
+  const [all, , , , last] = tab();
   if (!all || !last) throw new Error("Missing Activity type tabs");
   act(() => all.focus());
   await user.keyboard("{ArrowRight}");
@@ -4447,3 +4453,331 @@ it.each([
     expect(editor).toHaveFocus();
   },
 );
+
+it("shows reactions without unread actions and turns Unread off when selecting Reactions", async () => {
+  const h = fixture();
+  const root = h.root;
+  if (!root) throw new Error("Missing fixture root");
+  h.addEvent(
+    signed(h.alice, {
+      kind: 7,
+      content: "❤️",
+      created_at: 30,
+      tags: [
+        ["e", root.id],
+        ["p", h.viewer.pubkey],
+      ],
+    }),
+  );
+  render(h.view);
+  const reaction = await screen.findByRole("button", {
+    name: /Alice reacted with heart to your message: Our discussion/,
+  });
+  expect(reaction.closest("li")).not.toHaveAttribute("data-unread");
+  const row = reaction.closest("li");
+  if (!row) throw new Error("Missing reaction row");
+  expect(
+    within(row).queryByRole("button", {
+      name: /Mark as read/,
+    }),
+  ).not.toBeInTheDocument();
+  await chooseFilter("Unread only", "Attention");
+  expect(
+    screen.queryByRole("button", { name: /reacted with/ }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Reactions" }));
+  expect(screen.getByRole("switch", { name: "Unread" })).not.toBeChecked();
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Alice reacted with/ }),
+  );
+  await findReader();
+  await waitFor(() =>
+    expect(
+      reader().querySelector(`[data-message-id="${root.id}"]`),
+    ).toBeInTheDocument(),
+  );
+});
+
+it("explains an empty Reactions tab", async () => {
+  const h = fixture();
+  render(h.view);
+  fireEvent.click(screen.getByRole("tab", { name: "Reactions" }));
+  expect(await screen.findByText("No reactions yet.")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "When someone reacts to your messages, you’ll see it here.",
+    ),
+  ).toBeInTheDocument();
+});
+
+it("names all three reactors instead of saying one others", async () => {
+  const h = fixture();
+  if (!h.root) throw new Error("Missing fixture root");
+  const reactors = [h.alice, h.agent, h.unknown];
+  for (const [index, person] of reactors.entries()) {
+    h.addEvent(
+      profile(
+        person,
+        { name: ["Alice", "Bob", "Carol"][index], is_agent: index === 1 },
+        29,
+      ),
+    );
+    h.addEvent(
+      signed(person, {
+        kind: 7,
+        content: "❤️",
+        created_at: 30 + index,
+        tags: [
+          ["e", h.root.id],
+          ["p", h.viewer.pubkey],
+        ],
+      }),
+    );
+  }
+  h.addEvent(
+    signed(h.alice, {
+      kind: 7,
+      content: "👍",
+      created_at: 33,
+      tags: [
+        ["e", h.root.id],
+        ["p", h.viewer.pubkey],
+      ],
+    }),
+  );
+  render(h.view);
+  const row = await screen.findByRole("button", {
+    name: /reacted with heart to your message: Our discussion/,
+  });
+  expect(row).toHaveTextContent(/Carol, Bob and Alice reacted/);
+  expect(row).not.toHaveTextContent("1 others");
+  const solo = await screen.findByRole("button", {
+    name: /Alice reacted with \+1/,
+  });
+  fireEvent.click(solo);
+  expect(solo).toHaveAttribute("aria-current", "page");
+  expect(row).not.toHaveAttribute("aria-current");
+  await chooseFilter("Agents", "Sender");
+  expect(
+    await screen.findByRole("button", { name: /Bob reacted with heart/ }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /Alice reacted with/ }),
+  ).not.toBeInTheDocument();
+});
+
+it.each(["solo", "dm", "thread"] as const)(
+  "opens a reaction in its existing %s context and places context after the preview",
+  async (kind) => {
+    const h = fixture({
+      soloChannel: kind === "solo",
+      withDm: kind === "dm",
+      withWriter: true,
+    });
+    const channelId = kind === "dm" ? "dm-room" : "room";
+    const target = message(
+      h.viewer,
+      channelId,
+      "My acknowledged message",
+      25,
+      kind === "thread" ? [["e", h.root?.id ?? "", "", "reply"]] : [],
+    );
+    h.addEvent(target);
+    h.addEvent(
+      signed(h.alice, {
+        kind: 7,
+        content: "❤️",
+        created_at: 30,
+        tags: [
+          ["e", target.id],
+          ["p", h.viewer.pubkey],
+        ],
+      }),
+    );
+    render(h.view);
+    const row = await screen.findByRole("button", {
+      name: /Alice reacted with heart/,
+    });
+    const context = within(row).getByText(
+      kind === "dm"
+        ? "in DM with Alice"
+        : kind === "solo"
+          ? "in Design"
+          : "in #Design",
+    );
+    const preview = within(row).getByText("My acknowledged message");
+    expect(
+      preview.compareDocumentPosition(context) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(row);
+    const detail = await findReader();
+    const history = await within(detail).findByRole("region", {
+      name: kind === "thread" ? "Thread messages" : "Channel message history",
+    });
+    if (kind !== "thread") {
+      // jsdom has no layout, so the virtualized timeline's message visibility
+      // is exercised in inbox-tabs.spec.mjs in both real browser engines.
+      expect(history).toHaveAttribute("data-channel-timeline", channelId);
+      expect(
+        within(detail).queryByRole("region", { name: "Thread messages" }),
+      ).not.toBeInTheDocument();
+      await waitFor(() => expect(h.historyRequests).toContain(channelId));
+    } else {
+      await waitFor(() =>
+        expect(
+          history.querySelector(`[data-message-id="${target.id}"]`),
+        ).toBeInTheDocument(),
+      );
+      expect(
+        history.querySelector(`[data-message-id="${h.root?.id}"]`),
+      ).toBeInTheDocument();
+    }
+  },
+);
+
+it("mixes hover reactions by time, preserves unread filtering, and opens the exact target", async () => {
+  const h = fixture();
+  const target = message(h.viewer, "room", "Acknowledged reply", 24, [
+    ["e", h.root?.id ?? "", "", "reply"],
+  ]);
+  h.addEvent(target);
+  h.addEvent(
+    signed(h.alice, {
+      kind: 7,
+      content: "❤️",
+      created_at: 30,
+      tags: [
+        ["e", target.id],
+        ["p", h.viewer.pubkey],
+      ],
+    }),
+  );
+  const close = vi.fn();
+  render(previewAt(h, close));
+  const reaction = await screen.findByRole("button", {
+    name: /Alice reacted with heart/,
+  });
+  await waitFor(() => expect(previewRows()).toHaveLength(3));
+  expect(previewRows()[0]).toContainElement(reaction);
+  fireEvent.click(screen.getByRole("switch", { name: "Unread only" }));
+  expect(
+    screen.queryByRole("button", { name: /reacted with/ }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("switch", { name: "Unread only" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Alice reacted with heart/ }),
+  );
+  expect(close).toHaveBeenCalledOnce();
+  expect(h.open).toHaveBeenLastCalledWith({
+    version: 1,
+    kind: "conversation",
+    scope: h.scope,
+    channelId: "room",
+    messageId: target.id,
+    threadRootId: h.root?.id,
+  });
+});
+
+it("bounds mixed hover activity to 50 rows after sorting", async () => {
+  const h = fixture();
+  for (let index = 0; index < 50; index++) {
+    const target = message(
+      h.viewer,
+      "room",
+      `Acknowledged ${index}`,
+      100 + index,
+    );
+    h.addEvent(target);
+    h.addEvent(
+      signed(h.alice, {
+        kind: 7,
+        content: "❤️",
+        created_at: 200 + index,
+        tags: [
+          ["e", target.id],
+          ["p", h.viewer.pubkey],
+        ],
+      }),
+    );
+  }
+  render(previewAt(h));
+  await screen.findByRole("button", {
+    name: /Alice reacted with heart to your message: Acknowledged 49$/,
+  });
+  expect(previewRows()).toHaveLength(50);
+  expect(previewRows()[0]).toHaveTextContent("Acknowledged 49");
+  expect(previewRows()[49]).toHaveTextContent("Acknowledged 0");
+});
+
+it("retries failed reaction settlement from the hover card", async () => {
+  const h = fixture();
+  h.addEvent(
+    signed(h.alice, {
+      kind: 7,
+      content: "❤️",
+      created_at: 30,
+      tags: [
+        ["e", h.root?.id ?? ""],
+        ["p", h.viewer.pubkey],
+      ],
+    }),
+  );
+  h.failAux();
+  render(previewAt(h));
+  await screen.findByRole("alert");
+  expect(
+    screen.queryByRole("button", { name: /reacted with/ }),
+  ).not.toBeInTheDocument();
+  h.failAux(false);
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
+  await screen.findByRole("button", { name: /Alice reacted with heart/ });
+  await waitFor(() =>
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+  );
+});
+
+it("moves solo emoji into a shared row and back after a live removal", async () => {
+  const h = fixture();
+  const root = h.root;
+  if (!root) throw new Error("Missing root");
+  const reaction = (person: typeof h.alice, content: string, at: number) =>
+    signed(person, {
+      kind: 7,
+      content,
+      created_at: at,
+      tags: [
+        ["e", root.id],
+        ["p", h.viewer.pubkey],
+      ],
+    });
+  h.addEvent(reaction(h.alice, "❤️", 30));
+  h.addEvent(reaction(h.alice, "👍", 31));
+  render(h.view);
+  const label = /Alice reacted with heart, \+1/;
+  expect(
+    await screen.findByRole("button", { name: label }),
+  ).toBeInTheDocument();
+  const shared = reaction(h.agent, "❤️", 32);
+  h.addEvent(shared);
+  act(() => h.emit([shared]));
+  await waitFor(() =>
+    expect(
+      screen.getAllByRole("button", { name: /reacted with/ }),
+    ).toHaveLength(2),
+  );
+  const deletion = signed(h.agent, {
+    kind: 5,
+    content: "",
+    created_at: 33,
+    tags: [["e", shared.id]],
+  });
+  h.addEvent(deletion);
+  act(() => h.emit([deletion]));
+  expect(
+    await screen.findByRole("button", { name: label }),
+  ).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: /reacted with/ })).toHaveLength(
+    1,
+  );
+});

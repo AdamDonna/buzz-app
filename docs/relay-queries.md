@@ -1149,3 +1149,15 @@ edits in a writable conversation publish an empty, scoped kind-20002 pulse at
 most once every three seconds through the existing authenticated live socket.
 Opening a composer or restoring a draft does not publish. Pulses expire rather
 than retry; they never enter the durable outbox or trigger a reconnect.
+
+
+### Addressed reaction activity
+
+`session.inboxFeed.reactions` reads kind 7 with `#p: [viewer]` and a limit of 50.
+It retains at most 100 candidates, resolves exact message IDs, and reads paginated
+edit/deletion closure using `(until, before_id)`. Closure reads cap at 2,000 events
+or 4 MiB; combined evidence caps at 8 MiB. Incomplete or inaccessible overlay
+settlement fails closed. This evidence stays outside the unread projection.
+Live/replay provenance is carried through target hydration; only deduplicated eligible
+live events emit an arrival to the shell. App and MCP reaction writers now include
+the target author's `p` tag. Legacy unaddressed reactions are not searched.

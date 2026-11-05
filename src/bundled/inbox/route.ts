@@ -21,7 +21,13 @@ const filters: {
   readonly [K in keyof Filters]: Readonly<Record<Filters[K], true>>;
 } = {
   attention: { all: true, unread: true },
-  activity: { all: true, threads: true, mentions: true, dms: true },
+  activity: {
+    all: true,
+    threads: true,
+    mentions: true,
+    dms: true,
+    reactions: true,
+  },
   sender: { everyone: true, humans: true, agents: true },
 };
 // Links made while the page had Archived and Drafts views still open it:

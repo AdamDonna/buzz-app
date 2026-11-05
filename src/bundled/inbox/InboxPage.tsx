@@ -19,10 +19,12 @@ import type {
 import type { Navigation } from "../../features/navigation/controller";
 import type { NavigationScope } from "../../features/navigation/targets";
 import type { PageNavigation } from "../../features/navigation/service";
+import { reactionRows } from "./reaction-rows";
 import { routeOf } from "./route";
 import {
   hasUnread,
   InboxRowButton,
+  ReactionRowButton,
   rowIdentity,
   rowProfileIds,
 } from "./InboxRow";
@@ -65,7 +67,7 @@ import {
 
 type AttentionFilter = "all" | "unread";
 // Saved values, defaults first.
-const activities = ["all", "dms", "threads", "mentions"] as const;
+const activities = ["all", "dms", "threads", "mentions", "reactions"] as const;
 const senders = ["everyone", "humans", "agents"] as const;
 const attentions = ["all", "unread"] as const;
 type Filters = {
@@ -102,6 +104,8 @@ const matchesActivity = (
   switch (filter) {
     case "all":
       return true;
+    case "reactions":
+      return false;
     case "dms":
       return isDm;
     case "mentions":
@@ -118,10 +122,13 @@ const targetOf = (item: InboxItem) => ({
 
 /** DMs and a Solo chat's own messages open whole; others open at their message. */
 const tabTarget = (
-  item: InboxItem,
+  item: Pick<InboxItem, "channelId" | "messageId" | "rootId" | "thread"> & {
+    target?: InboxItem["target"];
+  },
   channel: { channelType?: string } | undefined,
 ): PageTabTarget =>
-  item.target.kind === "channel" ||
+  item.target?.kind === "channel" ||
+  channel?.channelType === "dm" ||
   (channel?.channelType === "solo" && !item.thread)
     ? { channelId: item.channelId }
     : {
@@ -130,7 +137,12 @@ const tabTarget = (
         messageId: item.messageId,
       };
 
-type Selection = { channelId: string; messageId: string; rootId?: string };
+type Selection = {
+  channelId: string;
+  messageId: string;
+  rootId?: string;
+  reaction?: string;
+};
 // The row a tab opened and the list's offset, kept as long as the session's
 // tabs so returning to Activity still selects the conversation it restores,
 // at the place it left. A relaunch starts at the top.
@@ -280,6 +292,10 @@ function InboxList({
     session.inboxFeed.snapshot,
     session.inboxFeed.snapshot,
   );
+  const reactionFeed = useSyncExternalStore(
+    session.inboxFeed.reactions.subscribe,
+    session.inboxFeed.reactions.snapshot,
+  );
   const choices = useSyncExternalStore(
     session.agentChoices.subscribe,
     session.agentChoices.snapshot,
@@ -300,7 +316,11 @@ function InboxList({
   const scroller = useRef<HTMLDivElement | null>(null);
   const placed = useRef<HTMLDivElement | null>(null);
   function setFilter(patch: Partial<Filters>) {
-    const next = { ...filters, ...patch };
+    const next = {
+      ...filters,
+      ...patch,
+      ...(patch.activity === "reactions" ? { attention: "all" as const } : {}),
+    };
     setFilters(next);
     writeView(viewScope, filtersKey, next);
     // A filter change keeps the list's current offset. A mounted list stays
@@ -406,10 +426,15 @@ function InboxList({
     if (list.status !== "ready") return;
     if (refreshAfterRoster) {
       setRefreshAfterRoster(false);
-      void Promise.all([session.unread.refresh(), session.inboxFeed.refresh()]);
+      void Promise.all([
+        session.unread.refresh(),
+        session.inboxFeed.refresh(),
+        session.inboxFeed.reactions.refresh(),
+      ]);
     } else {
       void session.unread.ensure();
       void session.inboxFeed.ensure();
+      void session.inboxFeed.reactions.ensure();
       session.agentChoices.ensure();
     }
   }, [session, list.status, list.asOf, refreshAfterRoster]);
@@ -433,10 +458,18 @@ function InboxList({
   // channel:root. Keep the captured visit by exact key, never by a namesake.
   const selected = items.find(
     (item) =>
+      !selectedTarget?.reaction &&
       item.channelId === selectedTarget?.channelId &&
       item.messageIds.includes(selectedTarget.messageId),
   );
-  const selectedId = selected?.id;
+  const selectedReaction = reactionFeed.items.find(
+    (item) =>
+      selectedTarget?.reaction &&
+      item.message.id === selectedTarget?.messageId &&
+      item.channelId === selectedTarget.channelId,
+  );
+  const selectedId =
+    selected?.id ?? (selectedReaction ? selectedTarget?.reaction : undefined);
   // A room reclassified as a Huddle belongs to its Huddle composer, not Inbox.
   const selectedRetired = list.channels.some(
     (channel) =>
@@ -446,7 +479,9 @@ function InboxList({
   useEffect(() => {
     if (
       selectedTarget &&
-      (selectedRetired || !showing || (!selected && inbox.status !== "loading"))
+      (selectedRetired ||
+        !showing ||
+        (!selected && !selectedReaction && inbox.status !== "loading"))
     ) {
       // Restoring the channel does not reopen its conversation.
       if (selectedRetired && opened && closeTab(opened))
@@ -462,6 +497,7 @@ function InboxList({
   }, [
     selectedTarget,
     selected,
+    selectedReaction,
     selectedRetired,
     showing,
     opened,
@@ -488,7 +524,12 @@ function InboxList({
   // Enrich bounded activity candidates before applying Sender: unknown authors
   // must be able to appear after their profiles arrive, even in an empty view.
   // Keep main's bounded optional profile demand, independent of presentation.
-  const candidateIds = activityItems.slice(0, 50).map((item) => item.authorId);
+  const candidateIds = [
+    ...activityItems.slice(0, 50).map((item) => item.authorId),
+    ...reactionFeed.items
+      .slice(0, 50)
+      .flatMap((item) => item.events.map((event) => event.pubkey)),
+  ];
   const matchingAuthors = [...new Set(candidateIds)].sort().join(":");
   const authorIds = useMemo(
     () => (matchingAuthors ? matchingAuthors.split(":") : []),
@@ -534,6 +575,23 @@ function InboxList({
         (item.id === selectedId &&
           item.messageIds.includes(selectedTarget?.messageId ?? ""))),
   );
+  const reactionItems =
+    !unreadOnly && (activity === "all" || activity === "reactions")
+      ? reactionRows(
+          reactionFeed.items,
+          (authorId) =>
+            senderFilter === "everyone" ||
+            senderKind(authorId) ===
+              (senderFilter === "agents" ? "agent" : "human"),
+        )
+      : [];
+  const rows = [
+    ...visible.map((item) => ({ kind: "conversation" as const, item })),
+    ...reactionItems.map((item) => ({ kind: "reaction" as const, item })),
+  ].sort(
+    (a, b) =>
+      b.item.createdAt - a.item.createdAt || a.item.id.localeCompare(b.item.id),
+  );
   const listView = useRef(visible);
   // The view a read's success is judged against, not the one it was clicked in.
   const readView = useRef({ unreadOnly, selectedId });
@@ -569,6 +627,12 @@ function InboxList({
   const profileKey = [
     ...new Set([
       ...authorIds,
+      ...reactionItems.slice(0, 50).flatMap((item) =>
+        rowProfileIds(
+          {},
+          list.channels.find((entry) => entry.id === item.channelId),
+        ),
+      ),
       ...visible.slice(0, 50).flatMap((item) =>
         rowProfileIds(
           item,
@@ -661,6 +725,7 @@ function InboxList({
         await Promise.all([
           session.unread.refresh(),
           session.inboxFeed.refresh(),
+          session.inboxFeed.reactions.refresh(),
         ]);
       }
       if (retrySync && active.current) await session.unread.retrySync();
@@ -838,12 +903,18 @@ function InboxList({
   }
   const canRead = sync.capability === "frontier-sync";
   const loading =
+    reactionFeed.status === "loading" ||
     list.status === "idle" ||
     list.status === "loading" ||
     inbox.status === "loading" ||
     feed.status === "loading";
   const failure =
-    error ?? list.error ?? inbox.error ?? feed.error ?? sync.error;
+    reactionFeed.error ??
+    error ??
+    list.error ??
+    inbox.error ??
+    feed.error ??
+    sync.error;
   useLayoutEffect(() => {
     if (!retryFocus.current) return;
     retryFocus.current = false;
@@ -950,7 +1021,7 @@ function InboxList({
                   </Button>
                 </div>
               )}
-            {!visible.length &&
+            {!rows.length &&
               (inbox.status === "ready" || feed.status === "ready") &&
               !loading &&
               !failure && (
@@ -958,16 +1029,20 @@ function InboxList({
                   <EmptyState
                     icon={caughtUp ? <CheckIcon /> : <BellIcon />}
                     title={
-                      caughtUp
-                        ? "All caught up"
-                        : unreadOnly
-                          ? "No unread activity in this view"
-                          : "No recent activity in this view"
+                      activity === "reactions" && senderFilter === "everyone"
+                        ? "No reactions yet."
+                        : caughtUp
+                          ? "All caught up"
+                          : unreadOnly
+                            ? "No unread activity in this view"
+                            : "No recent activity in this view"
                     }
                     description={
-                      caughtUp
-                        ? "New replies, mentions and DMs show up here."
-                        : "Mentions, direct messages, and replies in threads you participate in appear here."
+                      activity === "reactions"
+                        ? "When someone reacts to your messages, you’ll see it here."
+                        : caughtUp
+                          ? "New replies, mentions and DMs show up here."
+                          : "Mentions, direct messages, and replies in threads you participate in appear here."
                     }
                     action={
                       filtered ? (
@@ -1000,7 +1075,66 @@ function InboxList({
               aria-label="Activity"
               aria-busy={pending}
             >
-              {visible.map((item) => {
+              {rows.map((row) => {
+                if (row.kind === "reaction") {
+                  const item = row.item;
+                  return (
+                    <li
+                      key={item.id}
+                      className={styles.row}
+                      data-inbox-row={item.id}
+                    >
+                      <ReactionRowButton
+                        item={item}
+                        session={session}
+                        profiles={profiles}
+                        name={name}
+                        channel={list.channels.find(
+                          (channel) => channel.id === item.channelId,
+                        )}
+                        selected={selectedId === item.id}
+                        onClick={() => {
+                          const target: PageTabTarget = {
+                            ...tabTarget(
+                              {
+                                channelId: item.channelId,
+                                messageId: item.message.id,
+                                ...(item.message.threadRootId && {
+                                  rootId: item.message.threadRootId,
+                                }),
+                                thread: !!item.message.threadRootId,
+                              },
+                              list.channels.find(
+                                (channel) => channel.id === item.channelId,
+                              ),
+                            ),
+                            messageId: item.message.id,
+                          };
+                          const shown = openTab(target);
+                          setOpened(shown ? target : undefined);
+                          cancelRetry();
+                          setSelectedTarget({
+                            channelId: item.channelId,
+                            messageId: item.message.id,
+                            reaction: item.id,
+                          });
+                          if (!shown)
+                            void navigator.open({
+                              version: 1,
+                              kind: "conversation",
+                              scope,
+                              channelId: item.channelId,
+                              messageId: item.message.id,
+                              ...(item.message.threadRootId
+                                ? { threadRootId: item.message.threadRootId }
+                                : {}),
+                            });
+                        }}
+                      />
+                    </li>
+                  );
+                }
+                const item = row.item;
                 const channel = list.channels.find(
                   (candidate) => candidate.id === item.channelId,
                 );

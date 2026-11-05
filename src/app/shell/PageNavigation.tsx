@@ -1,3 +1,5 @@
+import { ACTIVITY_PAGE } from "./activity-context";
+import { ActivityNavigationIcon } from "./ActivityNavigation";
 import {
   useEffect,
   useId,
@@ -71,9 +73,24 @@ export function PageNavigation({
           return {
             value: page.key,
             label: presentation(page).label,
-            icon: (
-              <PageIcon icon={icon} image={image} size={16} strokeWidth={2.5} />
-            ),
+            icon:
+              page.key === ACTIVITY_PAGE ? (
+                <ActivityNavigationIcon>
+                  <PageIcon
+                    icon={icon}
+                    image={image}
+                    size={16}
+                    strokeWidth={2.5}
+                  />
+                </ActivityNavigationIcon>
+              ) : (
+                <PageIcon
+                  icon={icon}
+                  image={image}
+                  size={16}
+                  strokeWidth={2.5}
+                />
+              ),
             panelId: `shell-page-${page.key}`,
             trailing: Badge ? (
               <ContributionBoundary key={contributionKey(page)} fallback={null}>
@@ -97,7 +114,7 @@ export function PageNavigation({
       onSelect(page.key);
       document.getElementById("main-content")?.focus({ preventScroll: true });
     };
-    const pageIcon = avatar ? (
+    const baseIcon = avatar ? (
       <Avatar
         key={page.key}
         src={avatar.src}
@@ -115,6 +132,14 @@ export function PageNavigation({
         strokeWidth={2.5}
       />
     );
+    const pageIcon =
+      page.key === ACTIVITY_PAGE ? (
+        <ActivityNavigationIcon key={page.key}>
+          {baseIcon}
+        </ActivityNavigationIcon>
+      ) : (
+        baseIcon
+      );
     // The toolbar badge sits beside its icon-only button, not inside it, so
     // the button names the page and the badge describes it.
     const describedBy = badge ? `${badgeId}-${index}` : undefined;

@@ -21,7 +21,7 @@ outbox retain their existing ownership. No projects, approvals or reminders.
 
 ### Toolbar and Mark as read
 
-The Activity toolbar shows underline tabs sized to their labels, like Slack's Activity tabs, for the activity types (All, Threads, Mentions, DMs). A **From** menu follows the tabs about a tab gap after DMs, as part of the same group, and a labelled **Unread** switch follows From, so it stays in view on a wide page. The first tab's label starts on the same edge as the bell in the title bar above, and the tabs, From and Unread share one text baseline. From's button says only "From" with a chevron; its accessible name and tooltip say the choice in words ("From anyone", "From people", "From agents"), and it shows the shared subtle fill while People or Agents narrows the list (ghost, with no fill, for Anyone). Its menu is one plain-text choice of Anyone, People or Agents. Activity, sender and attention choices are saved on this device for the current account and community, with each missing or invalid choice using its own default; earlier saved sender values load unchanged, and a saved choice from the retired Archived view loads as the normal All list. The whole toolbar stays on one row at typical widths, including a 540px list. Narrower, Unread wraps first, to the start of the next line under All; narrower still, From wraps too and starts that line, with Unread after it. The refresh status fills the space after Unread, so it never adds a line.
+The Activity toolbar shows underline tabs sized to their labels, like Slack's Activity tabs, for the activity types (All, Threads, Mentions, DMs, Reactions). A **From** menu follows the tabs about a tab gap after Reactions, as part of the same group, and a labelled **Unread** switch follows From, so it stays in view on a wide page. The first tab's label starts on the same edge as the bell in the title bar above, and the tabs, From and Unread share one text baseline. From's button says only "From" with a chevron; its accessible name and tooltip say the choice in words ("From anyone", "From people", "From agents"), and it shows the shared subtle fill while People or Agents narrows the list (ghost, with no fill, for Anyone). Its menu is one plain-text choice of Anyone, People or Agents. Activity, sender and attention choices are saved on this device for the current account and community, with each missing or invalid choice using its own default; earlier saved sender values load unchanged, and a saved choice from the retired Archived view loads as the normal All list. The whole toolbar stays on one row at typical widths, including a 540px list. Narrower, Unread wraps first, to the start of the next line under All; narrower still, From wraps too and starts that line, with Unread after it. The refresh status fills the space after Unread, so it never adds a line.
 
 Activity has no Archive: every admitted conversation stays in the list, and the Unread switch narrows it to what is still unread, as in Slack's Activity view. **Mark as read** (✓) appears on unread rows that can be read, on hover or keyboard focus over the row's time, and remains visible without a hover pointer; read rows show only their time. The row context menu offers **Mark as read** and **Mark unread**. Mark as read uses the same explicit read as selecting an unread row; if it fails, the row stays unread with Retry. Row actions never open an unselected conversation, and no other conversation is opened or marked read.
 
@@ -49,7 +49,7 @@ Four shortcuts ("Open unread in Activity" and so on) open the Activity page with
 Resting a pointer on the sidebar's Activity row opens a card of recent conversations
 through the page contract's `preview`. It reads the same `session.unread.inbox()`
 and `session.inboxFeed` projection as the page, with All activity and Everyone,
-newest first and bounded to 50 rows, so it lists the same conversations as the
+newest first and bounded to 50 rows after mixing conversations and reactions, as on the
 page. The header counts unread
 conversations once each, as a DM, mention or thread. Unread only is the card's own
 choice, saved on this device per account and community, and never changes the
@@ -270,3 +270,34 @@ Common splitter checks stay in Inbox; Drafts keeps cross-view width, header
 alignment, narrow sizing, editing and modal/focus coverage. No browser cases were
 removed. Human confirmation and required review remain open; local synthetic
 checks do not attest native/live acceptance.
+
+
+## Reaction activity
+
+`session.inboxFeed.reactions` owns a separate bounded projection of recipient-tagged
+kind-7 events. App and MCP writers add the target author's `p` tag. It recovers
+50 recent addressed events and retains up to 100 candidates, including live arrivals;
+it does not backfill legacy tagless reactions. Exact target ownership, current channel
+eligibility and edit/deletion closure are checked before displaying any preview.
+Incomplete settlement withholds rows and offers retry rather than showing stale text.
+
+After filtering reactors, the page and hover preview group emoji used by multiple
+people into one row per emoji and target (custom emoji include their URL). Emoji
+used by only one person fold into that person's row for the target. Each row uses
+its newest active reaction for time and ordering and counts distinct people.
+Rows regroup after additions, removals or sender-filter changes. The page derives names
+from the filtered reactors
+and opens that message through the existing conversation navigator. Reactions have
+no unread state, mark-read actions or badge contribution. Selecting Reactions turns
+Unread off; All with Unread on excludes reactions. The hover preview mixes reactions
+with conversations by time within its 50-row bound; its own Unread only switch hides reactions.
+Reaction rows show reactor names and emoji, a one-line grey message preview, then
+subtle “in <conversation>” context. Only names truncate in the heading. Solo and DM
+reactions open the whole conversation at the message; thread replies open their thread,
+using the same tab rules as message activity.
+
+The shell shares one Activity emoji state across icon placements. The first eligible
+live arrival holds for three seconds, ignores subsequent arrivals during the hold,
+and fades back to the bell. History/replay never triggers it. Hidden windows skip it;
+custom images must load within one second. Reduced motion removes scale. The icon
+is decorative and preserves the Activity accessible name.

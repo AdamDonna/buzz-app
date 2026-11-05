@@ -480,6 +480,7 @@ export function createMessages(
         tags: [
           ["h", channelId],
           ["e", messageId],
+          ["p", messageAuthor(original, signingAuthority)],
           ...(emoji && value.toLowerCase() === `:${emoji.shortcode}:`
             ? [["emoji", emoji.shortcode, emoji.url]]
             : emojiTags(value)),

@@ -1,3 +1,8 @@
+import { useState } from "react";
+import type { InboxReaction } from "../../features/relay/inbox-reactions";
+import { groupReactions } from "../../features/relay/fold";
+import { reactionName } from "../../features/messages/reaction-name";
+import { relativeTimestamp } from "../../shared/relative-timestamp";
 import type { ComponentProps, ReactNode } from "react";
 import { channelText } from "../../features/channels/channel-icon";
 import type { ChannelSummary, Profile } from "../../features/relay/contracts";
@@ -49,7 +54,7 @@ export function rowIdentity(
 
 /** Profiles a row names: its sender or workflow owner and up to three DM participants. */
 export const rowProfileIds = (
-  item: InboxItem,
+  item: Pick<InboxItem, "workflowOwnerId">,
   channel: ChannelSummary | undefined,
 ): string[] => [
   ...(item.workflowOwnerId ? [item.workflowOwnerId] : []),
@@ -149,5 +154,136 @@ export function InboxRowButton({
         )
       }
     />
+  );
+}
+
+/** Reaction activity is context, never an unread conversation or a read action. */
+export function ReactionRowButton({
+  item,
+  session,
+  profiles,
+  name,
+  channel,
+  time = relativeTimestamp(item.createdAt),
+  ...props
+}: {
+  item: InboxReaction;
+  time?: ReactNode;
+  session: RelaySession;
+  profiles: ReadonlyMap<string, Profile>;
+  name: ResolveName;
+  channel: ChannelSummary | undefined;
+} & Pick<ComponentProps<typeof NavigationItem>, "selected" | "onClick">) {
+  const authors = [...new Set(item.events.map((event) => event.pubkey))];
+  const names = authors
+    .slice(0, authors.length === 3 ? 3 : 2)
+    .map((id) =>
+      name(
+        id,
+        profiles.get(id)?.name ?? formatPublicKey(id) ?? "Someone",
+        channel?.members,
+      ),
+    );
+  const sender =
+    authors.length > 3
+      ? `${names.join(", ")} and ${authors.length - 2} others`
+      : authors.length === 3
+        ? `${names[0]}, ${names[1]} and ${names[2]}`
+        : names.join(" and ");
+  const profile = profiles.get(authors[0] ?? "");
+  const context =
+    channel?.channelType === "dm"
+      ? `DM with ${dmLabel(channel.participants, profiles, name, channel.name ?? "Direct message")}`
+      : channel
+        ? channelText(channel)
+        : "Conversation";
+  const reactions = groupReactions(item.events);
+  const preview = messagePreview(item.message.content);
+  const emojiNames = reactions
+    .map((reaction) =>
+      reaction.emoji
+        ? `:${reaction.emoji.shortcode}:`
+        : reactionName(reaction.content)
+            .replaceAll(":", "")
+            .replaceAll("_", " "),
+    )
+    .join(", ");
+  return (
+    <NavigationItem
+      {...props}
+      aria-label={`${sender} reacted with ${emojiNames} to your message: ${preview}`}
+      icon={
+        <Avatar
+          size="default"
+          alt=""
+          fallback={sender}
+          src={avatarMedia(profile?.picture, session.media)}
+          shape={profile?.isAgent ? "squircle" : "circle"}
+        />
+      }
+      trailing={<span className={styles.unreadSlot} aria-hidden="true" />}
+      label={
+        <span className={styles.content}>
+          <span className={styles.heading}>
+            <span className={styles.identity}>
+              <span className={styles.reactionHeading}>
+                <strong
+                  className={`text-label-sm text-standard ${styles.sender}`}
+                >
+                  {sender}
+                </strong>
+                <span
+                  className={`text-body-sm text-standard ${styles.reactionTail}`}
+                >
+                  {"\u00a0reacted "}
+                  {reactions.map((reaction) => (
+                    <ActivityReactionGlyph
+                      key={JSON.stringify([
+                        reaction.content,
+                        reaction.emoji?.url,
+                      ])}
+                      reaction={reaction}
+                      session={session}
+                    />
+                  ))}
+                </span>
+              </span>
+            </span>
+            <time
+              className={`text-caption text-subtle ${styles.rowDate}`}
+              dateTime={new Date(item.createdAt * 1000).toISOString()}
+            >
+              {time}
+            </time>
+          </span>
+          <span className={`text-body text-subtle ${styles.reactionPreview}`}>
+            {preview}
+          </span>
+          <span className={`text-caption ${styles.source}`}>in {context}</span>
+        </span>
+      }
+    />
+  );
+}
+function ActivityReactionGlyph({
+  reaction,
+  session,
+}: {
+  reaction: ReturnType<typeof groupReactions>[number];
+  session: RelaySession;
+}) {
+  const source = reaction.emoji ? session.media(reaction.emoji.url) : undefined;
+  const [failed, setFailed] = useState<string>();
+  return source && source !== failed ? (
+    <img
+      src={source}
+      className={styles.reactionEmoji}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      onError={() => setFailed(source)}
+    />
+  ) : (
+    <span aria-hidden="true">{reaction.content} </span>
   );
 }

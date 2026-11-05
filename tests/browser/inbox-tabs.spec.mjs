@@ -1,6 +1,13 @@
+import { finalizeEvent, generateSecretKey } from "nostr-tools";
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
-import { openPage } from "./navigation.mjs";
+import {
+  openPage,
+  openSettings,
+  selectSettingsSection,
+  chooseColorMode,
+  closeSettings,
+} from "./navigation.mjs";
 
 test.use({
   productionBroker: true,
@@ -339,3 +346,284 @@ for (const variant of Object.keys(titles))
     if (offscreen) await expect(row).not.toBeInViewport();
     else await expect(row).toBeInViewport();
   });
+
+// Browser-only: grouped reaction navigation uses the real tab workspace and exact
+// message seek, with responsive toolbar geometry in both rendering engines.
+test("Reaction activity turns Unread off and opens the exact message", async ({
+  page,
+  app,
+}, testInfo) => {
+  const history = app.histories.get("primary/alpha");
+  const target = history.find(
+    (event) => event.kind === 9 && event.pubkey === app.viewer,
+  );
+  expect(target).toBeTruthy();
+  const reactor = generateSecretKey();
+  const reaction = finalizeEvent(
+    {
+      kind: 7,
+      content: "❤️",
+      created_at: target.created_at + 100,
+      tags: [
+        ["h", "alpha"],
+        ["e", target.id],
+        ["p", app.viewer],
+      ],
+    },
+    reactor,
+  );
+  history.push(reaction);
+  app.relay.publish("primary", reaction, { requireSubscriber: false });
+  await open(page, app);
+  await openPage(page, "Activity");
+  const inbox = page.getByRole("region", { name: "Activity", exact: true });
+  const unread = inbox.getByRole("switch", { name: "Unread", exact: true });
+  await unread.check();
+  await inbox.getByRole("tab", { name: "Reactions", exact: true }).click();
+  await expect(unread).not.toBeChecked();
+  const row = inbox
+    .getByRole("list", { name: "Activity", exact: true })
+    .getByRole("listitem");
+  await expect(row).toHaveCount(1);
+  await expect(row).not.toHaveAttribute("data-unread", "true");
+  // Rendered integration: real sidebar slot, full-colour glyph and both themes.
+  const liveReaction = finalizeEvent(
+    {
+      kind: 7,
+      content: "✅",
+      created_at: reaction.created_at + 1,
+      tags: [
+        ["h", "alpha"],
+        ["e", target.id],
+        ["p", app.viewer],
+      ],
+    },
+    reactor,
+  );
+  history.push(liveReaction);
+  app.relay.publish("primary", liveReaction);
+  const icon = page.locator(".shell-page-icon [data-active]");
+  await expect(icon).toHaveText("✅");
+  await expect(icon).toHaveAttribute("aria-hidden", "true");
+  await page.screenshot({ path: testInfo.outputPath("reaction-bell.png") });
+  await expect(icon).toHaveCount(0);
+  await page.route("**/reaction-custom.svg", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="15" fill="#b557dd"/><path d="M8 16l5 5 11-12" stroke="white" stroke-width="4" fill="none"/></svg>',
+    }),
+  );
+  const custom = finalizeEvent(
+    {
+      kind: 7,
+      content: ":done:",
+      created_at: reaction.created_at + 2,
+      tags: [
+        ["h", "alpha"],
+        ["e", target.id],
+        ["p", app.viewer],
+        ["emoji", "done", "https://primary.example/reaction-custom.svg"],
+      ],
+    },
+    reactor,
+  );
+  history.push(custom);
+  app.relay.publish("primary", custom);
+  await expect(icon.locator("img")).toBeVisible();
+  await expect(icon.locator("img")).toHaveCSS("width", "14px");
+  await expect(icon.locator("img").locator("..")).toHaveCSS("opacity", "1");
+  await page.screenshot({ path: testInfo.outputPath("reaction-custom.png") });
+  await expect(icon).toHaveCount(0);
+  for (const theme of ["light", "dark"]) {
+    await openSettings(page);
+    await selectSettingsSection(page, "Appearance");
+    await chooseColorMode(page, theme === "dark" ? "Dark" : "Light");
+    await closeSettings(page);
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-color-mode",
+      theme,
+    );
+    await expect(page.locator("html")).not.toHaveAttribute(
+      "data-palette-changing",
+    );
+    await page.evaluate(() =>
+      Promise.allSettled(
+        document
+          .getAnimations()
+          .filter(
+            (animation) =>
+              animation.effect?.getComputedTiming().endTime !== Infinity,
+          )
+          .map((animation) => animation.finished),
+      ),
+    );
+    await page.screenshot({
+      path: testInfo.outputPath(`reaction-${theme}.png`),
+    });
+  }
+
+  for (const width of [1280, 558, 540, 420]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(
+      inbox.getByRole("tab", { name: "Reactions", exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      )
+      .toBe(true);
+    const tail = row.locator('[class*="reactionTail"]');
+    await expect(tail).toHaveText(/reacted ❤️ ✅/);
+    await expect(tail.locator("img")).toBeVisible();
+    expect(
+      await tail.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const row = element.closest("li").getBoundingClientRect();
+        return box.left >= row.left && box.right <= row.right;
+      }),
+    ).toBe(true);
+    const geometry = await inbox.evaluate((element) => {
+      const centerY = (selector) => {
+        const box = element.querySelector(selector).getBoundingClientRect();
+        return box.y + box.height / 2;
+      };
+      return {
+        width: element.getBoundingClientRect().width,
+        tabsY: centerY(
+          '[role="tablist"][aria-label="Activity type"] [role="tab"]',
+        ),
+        fromY: centerY('button[aria-label="From anyone"]'),
+        unreadY: centerY('[role="switch"][aria-label="Unread"]'),
+      };
+    });
+    if (width === 558) {
+      expect(geometry.width).toBe(540);
+      expect(Math.abs(geometry.tabsY - geometry.unreadY)).toBeLessThan(3);
+    } else if (width === 540) {
+      expect(geometry.unreadY).toBeGreaterThan(geometry.tabsY + 20);
+      expect(Math.abs(geometry.tabsY - geometry.fromY)).toBeLessThan(3);
+    } else if (width === 420) {
+      expect(geometry.fromY).toBeGreaterThan(geometry.tabsY + 20);
+      expect(Math.abs(geometry.fromY - geometry.unreadY)).toBeLessThan(3);
+    }
+    await page.screenshot({
+      path: testInfo.outputPath(`reaction-width-${width}.png`),
+    });
+  }
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("--buzz-text-scale", "1.5"),
+  );
+  await expect(
+    inbox.getByRole("tab", { name: "Reactions", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("reaction-enlarged.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const sharedHeart = finalizeEvent(
+    {
+      kind: 7,
+      content: "❤️",
+      created_at: reaction.created_at + 3,
+      tags: [
+        ["h", "alpha"],
+        ["e", target.id],
+        ["p", app.viewer],
+      ],
+    },
+    generateSecretKey(),
+  );
+  history.push(sharedHeart);
+  app.relay.publish("primary", sharedHeart);
+  await expect(row).toHaveCount(2);
+  await expect(row.filter({ hasText: "reacted ❤️" })).toContainText(" and ");
+  const typeTabs = inbox.getByRole("tablist", { name: "Activity type" });
+  await typeTabs.evaluate(async (element) => {
+    await Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    );
+  });
+  await expect
+    .poll(() =>
+      typeTabs.evaluate((element) => {
+        const selected = element
+          .querySelector('[aria-selected="true"]')
+          .getBoundingClientRect();
+        const indicator = element
+          .querySelector(".buzz-tabs-indicator")
+          .getBoundingClientRect();
+        return (
+          Math.abs(selected.left - indicator.left) < 2 &&
+          Math.abs(selected.width - indicator.width) < 2
+        );
+      }),
+    )
+    .toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("reaction-shared-and-solo.png"),
+  });
+  await row.getByRole("button", { name: /reacted with heart/ }).click();
+  await expect(
+    inbox.getByRole("tablist", { name: "Panel tabs" }).getByRole("tab"),
+  ).toHaveCount(1);
+  await expect(inbox.locator(`[data-message-id="${target.id}"]`)).toBeVisible();
+});
+
+// Browser-only: the real virtualized timeline must reveal the exact reaction
+// target inside Solo/DM conversation tabs, rather than opening isolated threads.
+test.describe("reaction conversation targets", () => {
+  test.use({ soloChannels: ["beta"] });
+  test("Solo and DM reactions reveal their message in the existing conversation", async ({
+    page,
+    app,
+  }) => {
+    const targets = ["beta", "dm-peer"].map((channelId, index) => {
+      const message = app.sign({
+        kind: 9,
+        content: `Acknowledged ${channelId}`,
+        created_at: 1700000950 + index,
+        tags: [["h", channelId]],
+      });
+      const reaction = finalizeEvent(
+        {
+          kind: 7,
+          content: "❤️",
+          created_at: 1700001000 + index,
+          tags: [
+            ["h", channelId],
+            ["e", message.id],
+            ["p", app.viewer],
+          ],
+        },
+        generateSecretKey(),
+      );
+      app.histories.get(`primary/${channelId}`).push(message, reaction);
+      for (const event of [message, reaction])
+        app.relay.publish("primary", event, { requireSubscriber: false });
+      return { channelId, message };
+    });
+    await open(page, app);
+    await openPage(page, "Activity");
+    const inbox = page.getByRole("region", { name: "Activity", exact: true });
+    await inbox.getByRole("tab", { name: "Reactions", exact: true }).click();
+    for (const { channelId, message } of targets) {
+      await inbox
+        .getByRole("button", {
+          name: new RegExp(
+            `reacted with heart to your message: Acknowledged ${channelId}$`,
+          ),
+        })
+        .click();
+      const history = inbox.getByRole("region", {
+        name: "Channel message history",
+      });
+      await expect(history).toHaveAttribute("data-channel-timeline", channelId);
+      await expect(
+        history.locator(`[data-message-id="${message.id}"]`),
+      ).toBeInViewport();
+      await expect(
+        inbox.getByRole("region", { name: "Thread messages" }),
+      ).toHaveCount(0);
+    }
+  });
+});

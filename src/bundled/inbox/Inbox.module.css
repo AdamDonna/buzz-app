@@ -236,3 +236,28 @@
     padding-bottom: var(--space-3);
   }
 }
+
+.reactionEmoji {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
+.reactionHeading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+}
+.reactionTail {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.reactionPreview {
+  max-inline-size: 64ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

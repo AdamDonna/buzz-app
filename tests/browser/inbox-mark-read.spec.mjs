@@ -180,12 +180,13 @@ test("the toolbar keeps tabs, From and Unread on one row in a 540px list and wra
       .getByRole("list", { name: "Activity", exact: true })
       .getByRole("listitem"),
   ).toHaveCount(1);
-  // Drafts left Activity: only the four activity types remain.
+  // Drafts left Activity: the four activity types and Reactions remain.
   await expect(types.getByRole("tab")).toHaveText([
     "All",
     "Threads",
     "Mentions",
     "DMs",
+    "Reactions",
   ]);
   // From's label stays short; its name says the choice, and a fill shows a
   // narrowing choice.
@@ -221,7 +222,7 @@ test("the toolbar keeps tabs, From and Unread on one row in a 540px list and wra
         tabGap: textBox(tab("Mentions")).left - textBox(tab("Threads")).right,
         fromGap:
           textBox(toolbar.querySelector('button[aria-haspopup="menu"]')).left -
-          textBox(tab("DMs")).right,
+          textBox(tab("Reactions")).right,
         unreadText: textBox(toolbar.querySelector(".buzz-switch")).left,
         controls: [
           '[role="tablist"][aria-label="Activity type"]',
@@ -245,13 +246,17 @@ test("the toolbar keeps tabs, From and Unread on one row in a 540px list and wra
   // One row, left-aligned: tabs, then From, then Unread right after it.
   expect(Math.abs(middle(tabs) - middle(from))).toBeLessThan(2);
   expect(Math.abs(middle(tabs) - middle(unread))).toBeLessThan(2);
-  // From reads as part of the tab group: about one tab gap after DMs.
+  // From reads as part of the tab group: about one tab gap after the last tab, Reactions.
   expect(from.left).toBeGreaterThan(tabs.right);
   expect(mid.fromGap - mid.tabGap).toBeLessThanOrEqual(8);
   // Unread follows From at the row's control gap, not pushed to the far edge.
   expect(unread.left).toBeGreaterThan(from.right);
   expect(unread.left - from.right).toBeLessThanOrEqual(mid.fromGap + 8);
-  expect(mid.toolbar.right - mid.inset - unread.right).toBeGreaterThan(40);
+  // With the Reactions tab, a 540px list still fits the row inside its inset,
+  // with little room to spare; the gap check above keeps it left-aligned.
+  expect(mid.toolbar.right - mid.inset - unread.right).toBeGreaterThanOrEqual(
+    0,
+  );
   for (const width of [420, 390, 280]) {
     await page.setViewportSize({ width, height: 720 });
     await expect(trigger).toBeVisible();

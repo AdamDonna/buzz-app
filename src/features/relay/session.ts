@@ -1230,6 +1230,14 @@ export function createRelaySession(
     follows: browserThreadFollows(readScope),
   });
   const inboxFeed = createInboxFeed({
+    reactionReader: {
+      read: (filters, settings) =>
+        finiteRead(filters, settings, (signal) =>
+          relayRead(filters, { ...settings, signal }),
+        ),
+    },
+    relayAuthor: transport?.relayAuthor,
+    signingAuthority: transport?.archiveAuthority,
     // A withheld auxiliary event is not proof of an exhausted history page.
     // Fail closed at raw/admitted admission; do not relax reference visibility.
     reader: {
@@ -3407,6 +3415,8 @@ export function createRelaySession(
         liveSnapshot.status === "connected"
       )
         channelActivity.accept(visible);
+      if (!closed && epoch === accessEpoch && generation === liveGeneration)
+        inboxFeed.reactions.receive(events, provenance?.phase);
       const replay = provenance?.phase === "replay";
       if (
         (provenance?.phase === "live" || replay) &&

@@ -1,3 +1,4 @@
+import { messageAuthor } from "../features/relay/fold";
 // The Buzz tools: what an agent does in Buzz, in the wire formats the `buzz`
 // CLI writes. Names, arguments and descriptions are kept short because every
 // session pays for them in context. Each tool answers in plain text.
@@ -629,7 +630,21 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     const id = required(args, "id");
     const emoji = required(args, "emoji");
     if (args.off !== true) {
-      await client.publish({ kind: 7, content: emoji, tags: [["e", id]] });
+      const target = await tools.event(id);
+      await client.publish({
+        kind: 7,
+        content: emoji,
+        tags: [
+          ["e", id],
+          [
+            "p",
+            messageAuthor(
+              { ...target, tags: target.tags.map((tag) => [...tag]) },
+              client.signingAuthority,
+            ),
+          ],
+        ],
+      });
       return "reacted";
     }
     const mine = await client.query([

@@ -1,3 +1,4 @@
+import { reactionRows } from "./reaction-rows";
 import {
   useCallback,
   useEffect,
@@ -31,6 +32,7 @@ import { readView, writeView } from "../../shared/view-state";
 import {
   hasUnread,
   InboxRowButton,
+  ReactionRowButton,
   rowIdentity,
   rowProfileIds,
 } from "./InboxRow";
@@ -116,6 +118,11 @@ function InboxPreviewCard({
     session.inboxFeed.snapshot,
     session.inboxFeed.snapshot,
   );
+  const reactions = useSyncExternalStore(
+    session.inboxFeed.reactions.subscribe,
+    session.inboxFeed.reactions.snapshot,
+    session.inboxFeed.reactions.snapshot,
+  );
   const sync = useSyncExternalStore(
     session.unread.subscribeSync,
     session.unread.sync,
@@ -137,10 +144,15 @@ function InboxPreviewCard({
     // Retry after a roster failure also refreshes activity that failed meanwhile.
     if (refreshAfterRoster) {
       setRefreshAfterRoster(false);
-      void Promise.all([session.unread.refresh(), session.inboxFeed.refresh()]);
+      void Promise.all([
+        session.unread.refresh(),
+        session.inboxFeed.refresh(),
+        session.inboxFeed.reactions.refresh(),
+      ]);
     } else {
       void session.unread.ensure();
       void session.inboxFeed.ensure();
+      void session.inboxFeed.reactions.ensure();
     }
   }, [session, list.status, list.asOf, refreshAfterRoster]);
   const channelOf = (channelId: string) =>
@@ -149,12 +161,32 @@ function InboxPreviewCard({
     (a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id),
   );
   const unread = recent.filter(hasUnread);
-  const rows = (unreadOnly ? unread : recent).slice(0, maxRows);
+  const rows = [
+    ...(unreadOnly ? unread : recent).map((item) => ({
+      kind: "conversation" as const,
+      item,
+    })),
+    ...(!unreadOnly ? reactionRows(reactions.items) : []).map((item) => ({
+      kind: "reaction" as const,
+      item,
+    })),
+  ]
+    .sort(
+      (a, b) =>
+        b.item.createdAt - a.item.createdAt ||
+        a.item.id.localeCompare(b.item.id),
+    )
+    .slice(0, maxRows);
   const profileKey = [
     ...new Set(
-      rows.flatMap((item) => [
-        item.authorId,
-        ...rowProfileIds(item, channelOf(item.channelId)),
+      rows.flatMap((row) => [
+        ...(row.kind === "reaction"
+          ? row.item.events.map((event) => event.pubkey)
+          : [row.item.authorId]),
+        ...rowProfileIds(
+          row.kind === "reaction" ? {} : row.item,
+          channelOf(row.item.channelId),
+        ),
       ]),
     ),
   ]
@@ -185,10 +217,15 @@ function InboxPreviewCard({
     list.status === "idle" ||
     list.status === "loading" ||
     inbox.status === "loading" ||
-    feed.status === "loading";
+    feed.status === "loading" ||
+    reactions.status === "loading";
   // As on the page, an empty result is only shown once activity was checked.
-  const checked = inbox.status === "ready" || feed.status === "ready";
-  const failure = list.error ?? inbox.error ?? feed.error ?? sync.error;
+  const checked =
+    inbox.status === "ready" ||
+    feed.status === "ready" ||
+    reactions.status === "ready";
+  const failure =
+    list.error ?? inbox.error ?? feed.error ?? reactions.error ?? sync.error;
   const retry = async () => {
     if (list.status !== "ready") {
       setRefreshAfterRoster(true);
@@ -197,6 +234,7 @@ function InboxPreviewCard({
       await Promise.all([
         session.unread.refresh(),
         session.inboxFeed.refresh(),
+        session.inboxFeed.reactions.refresh(),
       ]);
     await session.unread.retrySync();
   };
@@ -237,7 +275,15 @@ function InboxPreviewCard({
       : checked
         ? "Nothing unread"
         : undefined;
-  const open = (item: (typeof rows)[number]) => {
+  const open = (row: (typeof rows)[number]) => {
+    const item =
+      row.kind === "reaction"
+        ? {
+            channelId: row.item.channelId,
+            messageId: row.item.message.id,
+            rootId: row.item.message.threadRootId,
+          }
+        : row.item;
     close();
     void navigator.open({
       version: 1,
@@ -267,23 +313,38 @@ function InboxPreviewCard({
       )}
       {rows.length ? (
         <ul className={styles.list} aria-label="Recent activity">
-          {rows.map((item) => (
-            <li key={item.id}>
-              <InboxRowButton
-                item={item}
-                identity={rowIdentity(
-                  item,
-                  channelOf(item.channelId),
-                  profiles,
-                  name,
+          {rows.map((row) => {
+            const item = row.item;
+            return (
+              <li key={item.id}>
+                {row.kind === "reaction" ? (
+                  <ReactionRowButton
+                    item={row.item}
+                    session={session}
+                    profiles={profiles}
+                    name={name}
+                    channel={channelOf(item.channelId)}
+                    time={shortAge(item.createdAt)}
+                    onClick={() => open(row)}
+                  />
+                ) : (
+                  <InboxRowButton
+                    item={row.item}
+                    identity={rowIdentity(
+                      row.item,
+                      channelOf(item.channelId),
+                      profiles,
+                      name,
+                    )}
+                    media={session.media}
+                    feed={feed}
+                    time={shortAge(item.createdAt)}
+                    onClick={() => open(row)}
+                  />
                 )}
-                media={session.media}
-                feed={feed}
-                time={shortAge(item.createdAt)}
-                onClick={() => open(item)}
-              />
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       ) : loading ? (
         [0, 1, 2].map((row) => (
@@ -306,7 +367,7 @@ function InboxPreviewCard({
               title="You're all caught up"
               description="No unread mentions, direct messages, or thread replies."
               action={
-                recent.length ? (
+                recent.length || reactions.items.length ? (
                   <Button
                     size="sm"
                     variant="ghost"
@@ -323,7 +384,7 @@ function InboxPreviewCard({
               level={4}
               icon={<ChecksIcon />}
               title="No recent activity"
-              description="Mentions, direct messages, and replies in threads you participate in appear here."
+              description="Mentions, direct messages, thread replies, and reactions to your messages appear here."
             />
           )}
         </div>

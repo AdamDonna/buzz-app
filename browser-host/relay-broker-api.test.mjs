@@ -1494,6 +1494,7 @@ test("reaction sign and publish preserve kind 7 and reject malformed targets bef
       tags: [
         ["h", "c"],
         ["e", "a".repeat(64)],
+        ["p", "b".repeat(64)],
         ["emoji", "party", "https://a.test/party.png"],
       ],
     };

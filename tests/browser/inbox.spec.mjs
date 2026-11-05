@@ -74,6 +74,7 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     "Threads",
     "Mentions",
     "DMs",
+    "Reactions",
   ]);
   await expect(
     types.getByRole("tab", { name: "All", exact: true }),

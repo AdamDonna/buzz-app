@@ -1547,8 +1547,14 @@ export const test = base.extend({
               ),
             ),
         ];
-      if (filter["#p"] && !filter["#h"] && filter.kinds?.includes(9)) {
-        expect([...filter.kinds].sort((a, b) => a - b)).toEqual([9, 40002]);
+      if (
+        filter["#p"] &&
+        !filter["#h"] &&
+        (filter.kinds?.includes(9) || filter.kinds?.includes(7))
+      ) {
+        expect([...filter.kinds].sort((a, b) => a - b)).toEqual(
+          filter.kinds.includes(7) ? [7] : [9, 40002],
+        );
         expect(filter["#p"]).toEqual([viewer]);
         expect(filter.limit).toBe(50);
         const candidates = [...histories.entries()]

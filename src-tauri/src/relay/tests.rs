@@ -4349,3 +4349,18 @@ async fn finished_native_reads_release_their_cancel_slot() {
         }
     }
 }
+
+#[test]
+fn reaction_author_address_is_accepted_by_packaged_signing() {
+    let event = EventTemplate {
+        kind: 7,
+        created_at: 123,
+        content: "❤️".into(),
+        tags: vec![
+            vec!["h".into(), "room".into()],
+            vec!["e".into(), "a".repeat(64)],
+            vec!["p".into(), "b".repeat(64)],
+        ],
+    };
+    assert!(validate_event("https://relay.test", &event).is_ok());
+}

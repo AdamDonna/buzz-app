@@ -1,3 +1,4 @@
+import { ActivityNavigationProvider } from "./ActivityNavigation";
 import {
   useEffect,
   useLayoutEffect,
@@ -50,7 +51,12 @@ export function AppShell(props: ComponentProps<typeof AppShellContent>) {
       pages={props.pages}
       relay={props.communities.relay}
     >
-      <AppShellContent {...props} />
+      <ActivityNavigationProvider
+        pages={props.pages}
+        relay={props.communities.relay}
+      >
+        <AppShellContent {...props} />
+      </ActivityNavigationProvider>
     </BestieNavigationProvider>
   );
 }
