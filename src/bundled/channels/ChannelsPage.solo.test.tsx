@@ -222,6 +222,11 @@ function fixture({
     coverage: "observed" as const,
     freshness: "observed" as const,
   };
+  const readSync = {
+    capability,
+    status: "reconciled" as const,
+    completeness: "snapshot" as const,
+  };
   const session = {
     ...owner.session,
     profiles: {
@@ -293,11 +298,7 @@ function fixture({
         ? owner.session.unread
         : {
             ...owner.session.unread,
-            sync: () => ({
-              capability,
-              status: "reconciled" as const,
-              completeness: "snapshot" as const,
-            }),
+            sync: () => readSync,
             snapshot: (
               target: Parameters<typeof owner.session.unread.snapshot>[0],
             ) => {

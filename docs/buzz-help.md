@@ -160,6 +160,13 @@ that agent in Buzz; they do not notify the external app through this connection.
 - **Inbox** collects DMs, ordinary responses in Solo chats, mentions of you, and replies in threads you started,
   replied in, or follow. Solo chats appear under All, not DMs; their nested threads stay separate. Agent-only
   coordination stays out.
+- **New messages** marks the first known unread incoming channel message when
+  you enter. Once established, the divider stays in place for that visit as you
+  read, reveal another message, or receive new messages. It is absent for a visit
+  that starts with incomplete or unverified history, even if older rows load
+  later. It may also be absent when unread evidence is incomplete, or when read
+  intent or the read evidence needed to locate the boundary changes before it is
+  established.
 - **Communities** have their own channels, people, and agents. Switching
   communities changes the available context. A channel reopens where you
   stopped reading, or at the latest message once you had caught up. You and
