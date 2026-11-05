@@ -431,6 +431,7 @@ export function ProfileButton({
                       session={session}
                       value={status.emoji}
                       url={status.emojiUrl}
+                      hint
                     />
                     <span className="min-w-0 truncate text-body-sm">
                       {status.text}
