@@ -19,6 +19,7 @@ import {
   useProfileGeneration,
 } from "../../features/relay/react";
 import { useSavedHiddenDmIds } from "../../bundled/channels/useHiddenDms";
+import { useUnreadChannelIds } from "../../bundled/channels/useSidebarFilters";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import { canMessageAgent } from "../../features/agents/choices";
 import { useMentionArchives } from "../../features/messages/use-mention-archives";
@@ -47,6 +48,7 @@ import type {
 } from "./SearchChoices";
 import { type SearchChip, SearchChoices } from "./SearchChoices";
 import { MatchRank, matchName, matchRank } from "../../features/search/match";
+import { useUnreadFirstPreference } from "../../features/search/unread-first-preference";
 import {
   noSearchUsage,
   readSearchUsage,
@@ -108,8 +110,16 @@ function conversationName(
   );
 }
 
+const noMutes: readonly string[] = [];
+/** Confirmed mutes only: optimistic menu intents do not quiet unread. */
+const confirmedMutes = (
+  snapshot: ReturnType<RelaySession["sidebarPreferences"]["snapshot"]>,
+) => (snapshot.cached ? noMutes : (snapshot.data?.muted ?? noMutes));
+
 /** The most rows the People and Agents groups each show. */
 const PERSON_ROWS = 6;
+/** The most unread conversations an empty search leads with. */
+const UNREAD_ROWS = 6;
 const noMembers: readonly string[] = [];
 
 /** "Search in this conversation" narrows the search and "Show more messages"
@@ -1257,7 +1267,7 @@ export function SearchResults({
     .filter(({ person }) => person.agent)
     .slice(0, PERSON_ROWS)
     .map(personDestination);
-  const recent: SearchDestination[] = channels
+  const suggestions = channels
     .filter(
       (channel) =>
         (!channel.readOnly || channel.viewerRole === "guest") &&
@@ -1268,12 +1278,37 @@ export function SearchResults({
       (a, b) =>
         (b.lastActivityAt ?? b.updatedAt ?? 0) -
         (a.lastActivityAt ?? a.updatedAt ?? 0),
-    )
+    );
+  // Other unread conversations lead an empty search, so Enter opens the
+  // latest, unless turned off. Muted ones stay quiet, as in the app's unread
+  // indicator.
+  const unreadFirst = useUnreadFirstPreference().enabled;
+  const unreadIds = useUnreadChannelIds(
+    session.unread,
+    JSON.stringify(suggestions.map(({ id }) => id)),
+  );
+  const muted = useSyncExternalStore(
+    session.sidebarPreferences.subscribe,
+    () => confirmedMutes(session.sidebarPreferences.snapshot()),
+    () => confirmedMutes(session.sidebarPreferences.snapshot()),
+  );
+  const isUnread = ({ id }: ChannelSummary) =>
+    unreadFirst &&
+    id !== currentChannelId &&
+    unreadIds.has(id) &&
+    !muted.includes(id);
+  const suggestion = (channel: ChannelSummary): SearchDestination => ({
+    ...conversationDestination(channel),
+    ...(channel.preview ? { detail: channel.preview } : {}),
+  });
+  const unread = suggestions
+    .filter(isUnread)
+    .slice(0, UNREAD_ROWS)
+    .map(suggestion);
+  const recent = suggestions
+    .filter((channel) => !isUnread(channel))
     .slice(0, 4)
-    .map((channel) => ({
-      ...conversationDestination(channel),
-      ...(channel.preview ? { detail: channel.preview } : {}),
-    }));
+    .map(suggestion);
   const currentChannel = currentChannelId
     ? channels.find((channel) => channel.id === currentChannelId)
     : undefined;
@@ -1425,17 +1460,24 @@ export function SearchResults({
             ]
           : !query.trim()
             ? [
+                ...(unread.length
+                  ? [{ label: "Unread", destinations: unread }]
+                  : []),
                 ...(scopeAction.length
                   ? [{ label: "This conversation", destinations: scopeAction }]
                   : []),
-                {
-                  label: "Recent activity",
-                  destinations: recent,
-                  empty:
-                    list.status === "loading"
-                      ? "Loading recent conversations…"
-                      : "No recent activity yet.",
-                },
+                ...(recent.length || !unread.length
+                  ? [
+                      {
+                        label: "Recent activity",
+                        destinations: recent,
+                        empty:
+                          list.status === "loading"
+                            ? "Loading recent conversations…"
+                            : "No recent activity yet.",
+                      },
+                    ]
+                  : []),
               ]
             : [
                 // Named destinations lead, so typed text selects one first.
@@ -1613,6 +1655,7 @@ export function SearchResults({
       }
       groups={groups}
       open={open}
+      highlightEmpty={!scopedChannelId && !query.trim() && unread.length > 0}
       // Enter before any row, or on search actions alone, waits for a
       // channel or person row, or for the lookups to settle, rather than
       // opening a message that lands first. A cold joined list has not yet

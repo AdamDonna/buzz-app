@@ -33,6 +33,10 @@ import {
   setMessageAutocorrectPreference,
   useMessageAutocorrectPreference,
 } from "../features/messages/autocorrect-preference";
+import {
+  setUnreadFirstPreference,
+  useUnreadFirstPreference,
+} from "../features/search/unread-first-preference";
 import { macWebKit } from "../features/messages/mac-webkit";
 import { SwitchPreferenceRow } from "../shared/design-system/ui/SwitchPreferenceRow";
 import {
@@ -52,6 +56,7 @@ export function AppearanceSettings({
 }) {
   const followUp = useFollowUpBehaviorPreference();
   const autocorrect = useMessageAutocorrectPreference();
+  const unreadFirst = useUnreadFirstPreference();
   const clock = useClockPreference();
   const { placement, unsaved } = useThreadPlacementPreference();
   const increaseButton = useRef<HTMLButtonElement>(null);
@@ -359,6 +364,12 @@ export function AppearanceSettings({
               onCheckedChange={setMessageAutocorrectPreference}
             />
           )}
+          <SwitchPreferenceRow
+            label="Show unread first in search"
+            description="With nothing typed, search leads with unread channels and DMs and selects the newest."
+            checked={unreadFirst.enabled}
+            onCheckedChange={setUnreadFirstPreference}
+          />
         </SettingsGroup>
         {active && followUp.unsaved && (
           <ToastNotice
@@ -400,6 +411,20 @@ export function AppearanceSettings({
               }
             >
               Retry saving spelling correction
+            </Button>
+          </ToastNotice>
+        )}
+        {active && unreadFirst.unsaved && (
+          <ToastNotice
+            title="Search preference wasn’t saved"
+            description="This choice is active, but could not be saved on this device. Try again."
+          >
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setUnreadFirstPreference(unreadFirst.enabled)}
+            >
+              Retry saving search preference
             </Button>
           </ToastNotice>
         )}
