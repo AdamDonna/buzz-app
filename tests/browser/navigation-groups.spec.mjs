@@ -671,6 +671,13 @@ test("dismissing a failed move restores keyboard focus to its placement or a sur
       .getByRole("menuitemradio", { name: "Starred", exact: true })
       .click();
     await expect(error).toContainText("Relay request failed (502)");
+    // The alert arrives with the rollback, but the optimistic Starred copy of
+    // the row stays laid out while it fades out, and its removal moves every
+    // section below it. Wait for the exit, or a press on Work's header can
+    // finish on the row that slid under it, which is no click.
+    await expect(sidebar(page).locator('[data-channel-id="beta"]')).toHaveCount(
+      1,
+    );
     await expect(beta).toBeVisible();
   };
   const dismiss = async () => {
