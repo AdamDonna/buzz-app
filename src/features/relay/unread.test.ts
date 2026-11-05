@@ -4173,3 +4173,91 @@ it("catch-up applies to agent-audience rows, and unread intent cannot make them 
   expect(unread.activity("room").items).toHaveLength(0);
   expect(unread.inbox().items).toHaveLength(0);
 });
+
+it("live content events extend the evidence index and match a full rebuild", () => {
+  const run = (live: boolean) => {
+    const h = setup();
+    h.grant("room");
+    h.grant("other");
+    const { alice, viewer } = h;
+    const mention = [["p", viewer.pubkey]];
+    const root = message(alice, "room", "root", 11);
+    const old = [1, 2].map((i) =>
+      message(alice, "other", `old ${i}`, 20 + i, mention),
+    );
+    // A rebuild of the index reads every retained event, including these
+    // messages of another channel.
+    let tagReads = 0;
+    for (const event of old) {
+      const tags = event.tags;
+      Object.defineProperty(event, "tags", {
+        get() {
+          tagReads++;
+          return tags;
+        },
+      });
+    }
+    const replyTo = (id: string) => [["e", id, "", "reply"]];
+    const m1 = message(alice, "room", "live one", 40, mention);
+    const quiet = message(alice, "room", "quiet reply", 41, replyTo(root.id));
+    const own = message(viewer, "room", "own reply", 42, replyTo(root.id));
+    const answer = message(alice, "room", "answer", 43, replyTo(root.id));
+    // A deletion of a live message, and a reply whose parent arrives after it.
+    const late = message(alice, "room", "late parent", 46);
+    const child = message(alice, "room", "child", 45, [
+      ...mention,
+      ...replyTo(late.id),
+    ]);
+    const removal = signed(alice, {
+      kind: 5,
+      content: "",
+      created_at: 47,
+      tags: [
+        ["h", "room"],
+        ["e", m1.id],
+        ["k", "9"],
+      ],
+    });
+    const last = message(alice, "room", "last", 48, mention);
+    const sequence = [m1, quiet, own, answer, removal, last, child, late];
+    const labels = new Map<string, string>([
+      [alice.pubkey, "alice"],
+      [viewer.pubkey, "viewer"],
+      ...[root, ...old, ...sequence].map(
+        (event, i) => [event.id, `event${i}`] as const,
+      ),
+    ]);
+    const read = () => {
+      const { unread } = h.session;
+      let text = JSON.stringify({
+        inbox: unread.inbox().items,
+        snapshot: h.snapshot(),
+        activity: unread.activity("room"),
+        attention: [root, ...sequence].map(({ id }) =>
+          unread.attention("room", id),
+        ),
+        other: unread.activity("other"),
+      });
+      for (const [id, label] of labels) text = text.split(id).join(label);
+      return text;
+    };
+    h.emit([root, ...old]);
+    read();
+    if (live) {
+      tagReads = 0;
+      h.emit([m1]);
+      h.session.unread.attention("room", m1.id);
+      // The index was extended by the new message, not rebuilt over the rest.
+      expect(tagReads).toBe(0);
+      read();
+      for (const event of sequence.slice(1)) {
+        h.emit([event]);
+        read();
+      }
+    } else {
+      h.emit(sequence);
+    }
+    return read();
+  };
+  expect(run(true)).toBe(run(false));
+});

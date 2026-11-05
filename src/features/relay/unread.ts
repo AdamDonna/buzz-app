@@ -388,6 +388,9 @@ export function createUnread({
   const byChannel = new Map<string, Evidence[]>();
   const byId = new Map<string, Evidence>();
   const tombstones = new Set<string>();
+  // Ids named by an `e` tag of any retained or fetched event: a deletion, edit
+  // or reply that arrived before its target. Built with the index.
+  const referenced = new Set<string>();
   // Conversation membership: the viewer's own messages, and the parents the
   // viewer has replied to, each keyed by channel. A conversation is the set of
   // replies to one parent.
@@ -475,6 +478,62 @@ export function createUnread({
       return tagged("buzz:workflow-mention", viewer);
     return true;
   }
+  function markReferenced(event: RelayEvent) {
+    for (const [name, id] of event.tags)
+      if (name === "e" && id) referenced.add(id.toLowerCase());
+  }
+  /** Indexes one counted content event: the body of one `indexEvidence` step. */
+  function indexContent(event: RelayEvent) {
+    const channel = channelOf(event);
+    if (!channel) return;
+    const rootId = root(event);
+    const reference = threadReference(event);
+    const parentId = reference?.parentId;
+    if (event.pubkey === viewer) {
+      own.set(event.id, channel);
+      ownThreads.add(conversationKey(channel, reference?.rootId ?? event.id));
+      if (parentId) {
+        joined.add(`${channel}:${parentId}`);
+        // A later reply of the viewer outlives the window that showed it.
+        const lookup = lookups.get(conversationKey(channel, parentId));
+        if (lookup?.done) witness(lookup, event);
+      }
+    }
+    const rows = byChannel.get(channel) ?? [];
+    const entry: Evidence = {
+      event,
+      channelId: channel,
+      rootId: parentId ? rootId : undefined,
+      parentId,
+      threadRootId: reference?.rootId,
+      mentioned: mentionsViewer(event),
+      broadcast: event.tags.some(
+        ([name, value]) => name === "broadcast" && value === "1",
+      ),
+      quiet: agentAudience(event),
+    };
+    rows.push(entry);
+    byChannel.set(channel, rows);
+    byId.set(event.id, entry);
+    return channel;
+  }
+  /** Adds a just-stored live event to a valid index as `indexEvidence` would
+   * after it, or says it cannot: only another person's content event that no
+   * stored or fetched event named first qualifies. Everything it could change
+   * (a tombstone, a reply's root, the viewer's own conversations and lookup
+   * witnesses) comes from such a reference or from the viewer's authorship. */
+  function extendIndex(event: RelayEvent) {
+    if (
+      !contentKind(event) ||
+      event.pubkey === viewer ||
+      referenced.has(event.id)
+    )
+      return false;
+    markReferenced(event);
+    const channel = indexContent(event);
+    if (channel) foldedRows.delete(channel);
+    return true;
+  }
   function indexEvidence() {
     if (indexed) return;
     indexed = true;
@@ -482,9 +541,12 @@ export function createUnread({
     byChannel.clear();
     byId.clear();
     tombstones.clear();
+    referenced.clear();
     own.clear();
     joined.clear();
     ownThreads.clear();
+    for (const event of events.values()) markReferenced(event);
+    for (const event of lookupEvents.values()) markReferenced(event);
     for (const event of events.values()) {
       if (event.kind !== 5 && event.kind !== 9005) continue;
       for (const [name, id] of event.tags) {
@@ -497,40 +559,8 @@ export function createUnread({
           tombstones.add(target.id);
       }
     }
-    for (const event of events.values()) {
-      if (!contentKind(event) || tombstones.has(event.id)) continue;
-      const channel = channelOf(event);
-      if (!channel) continue;
-      const rootId = root(event);
-      const reference = threadReference(event);
-      const parentId = reference?.parentId;
-      if (event.pubkey === viewer) {
-        own.set(event.id, channel);
-        ownThreads.add(conversationKey(channel, reference?.rootId ?? event.id));
-        if (parentId) {
-          joined.add(`${channel}:${parentId}`);
-          // A later reply of the viewer outlives the window that showed it.
-          const lookup = lookups.get(conversationKey(channel, parentId));
-          if (lookup?.done) witness(lookup, event);
-        }
-      }
-      const rows = byChannel.get(channel) ?? [];
-      const entry: Evidence = {
-        event,
-        channelId: channel,
-        rootId: parentId ? rootId : undefined,
-        parentId,
-        threadRootId: reference?.rootId,
-        mentioned: mentionsViewer(event),
-        broadcast: event.tags.some(
-          ([name, value]) => name === "broadcast" && value === "1",
-        ),
-        quiet: agentAudience(event),
-      };
-      rows.push(entry);
-      byChannel.set(channel, rows);
-      byId.set(event.id, entry);
-    }
+    for (const event of events.values())
+      if (contentKind(event) && !tombstones.has(event.id)) indexContent(event);
     for (const { channelId, evidence } of lookups.values()) {
       const event =
         evidence === undefined ? undefined : witnesses.get(evidence);
@@ -1905,6 +1935,8 @@ export function createUnread({
         : [],
     );
     if (!ids.length) return;
+    // Lookup witnesses and fetched events feed the evidence index.
+    indexed = false;
     const changed = new Set<string>();
     for (const id of ids) {
       retracted.delete(id);
@@ -1931,7 +1963,6 @@ export function createUnread({
     if (closed) return false;
     retract(batch);
     const changed = new Set<string>();
-    indexed = false;
     const incoming = new Map(batch.map((event) => [event.id, event]));
     const owners = channelOwnership((id) => incoming.get(id) ?? events.get(id));
     for (const event of batch) {
@@ -1946,6 +1977,7 @@ export function createUnread({
       const size = new TextEncoder().encode(JSON.stringify(event)).byteLength;
       if (events.size >= 4096 || bytes + size > 8 * 1024 * 1024) {
         events.clear();
+        indexed = false;
         forget();
         known.clear();
         bytes = 0;
@@ -1957,6 +1989,7 @@ export function createUnread({
       }
       events.set(event.id, event);
       bytes += size;
+      if (indexed && !extendIndex(event)) indexed = false;
       for (const channel of channels) {
         known.add(channel);
         changed.add(channel);
