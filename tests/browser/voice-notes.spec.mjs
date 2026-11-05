@@ -1,27 +1,48 @@
 import { watchPageErrors } from "./page-errors.mjs";
 import { test, expect } from "./playwright-test.mjs";
-import { createServer } from "./vite-server.mjs";
+import { build, preview } from "./vite-server.mjs";
 import react from "@vitejs/plugin-react";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-let server, origin;
+let server, directory, url;
+// A dev server serves this fixture as about 800 modules. On a busy runner,
+// WebKit's first navigation took longer than the navigation timeout to load
+// them, so build the page once and serve the bundle.
 test.beforeAll(async () => {
-  server = await createServer({
-    root: fileURLToPath(new URL("../../", import.meta.url)),
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  directory = await mkdtemp(join(tmpdir(), "buzz-voice-notes-"));
+  const config = {
+    root,
     configFile: false,
     envDir: false,
+    logLevel: "error",
     plugins: [react()],
-    server: { host: "127.0.0.1", port: 0 },
+    // Development React, as the dev server served, keeps StrictMode's checks.
+    define: {
+      "import.meta.env.DEV": "true",
+      "process.env.NODE_ENV": '"development"',
+    },
+    build: {
+      rollupOptions: {
+        input: join(root, "tests/fixtures/voice-notes.html"),
+      },
+      outDir: join(directory, "dist"),
+      emptyOutDir: true,
+      target: "esnext",
+    },
+  };
+  await build(config);
+  server = await preview({
+    ...config,
+    preview: { host: "127.0.0.1", port: 0, strictPort: true },
   });
-  await server.listen();
-  origin = server.resolvedUrls.local[0];
-  // A new server transforms the fixture's modules, Tailwind's globals.css
-  // among them, during its first navigation. On a slow runner that took longer
-  // than the navigation timeout, so transform them before any test navigates.
-  await server.warmupRequest("/tests/fixtures/voice-notes.tsx");
-  await server.waitForRequestsIdle();
+  url = `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/voice-notes.html`;
 });
 test.afterAll(async () => {
-  await server?.close();
+  if (server) await new Promise((resolve) => server.httpServer.close(resolve));
+  if (directory) await rm(directory, { recursive: true, force: true });
 });
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/relay/media?*", async (route) => {
@@ -38,7 +59,7 @@ test.beforeEach(async ({ page }) => {
       body: Buffer.from(bytes),
     });
   });
-  await page.goto(`${origin}tests/fixtures/voice-notes.html`);
+  await page.goto(url);
   await page.evaluate(() => {
     const mic = {
       mode: "allow",
@@ -376,18 +397,12 @@ test("rejects a full attachment draft before opening the microphone", async ({
   await expect(
     page.getByRole("status").filter({ hasText: /file-\d+\.txt:.*Ready/ }),
   ).toHaveCount(10);
-  const uploaded = await page.evaluate(async () => {
-    const { attachmentDraft } = await import(
-      "/src/features/messages/attachment-draft.ts"
-    );
-    return attachmentDraft(
-      window.voiceFixture.session,
-      "voice-fixture:draft:general",
-      "general",
-    )
+  const uploaded = await page.evaluate(() =>
+    window.voiceFixture
+      .attachmentDraft("voice-fixture:draft:general", "general")
       .snapshot()
-      .map((item) => item.uploaded);
-  });
+      .map((item) => item.uploaded),
+  );
   expect(uploaded.map((item) => item.type)).toEqual(
     Array(10).fill("text/plain"),
   );

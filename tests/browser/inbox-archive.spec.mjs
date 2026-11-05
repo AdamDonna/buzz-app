@@ -1,6 +1,7 @@
 import { test, expect } from "./fixture.mjs";
 import { openPage } from "./navigation.mjs";
 import { readJournal } from "./reading.mjs";
+import { frames } from "./timeline.mjs";
 
 const channel = "f12918e7-88d0-4ddd-aa6b-d4888ff6d3bd";
 // The Archive shortcut acts on the last opened conversation.
@@ -24,6 +25,23 @@ test.use({
   historyCounts: { alpha: 1, [channel]: 0 },
   screenshot: "off",
 });
+
+// Opening a conversation reveals its entry reply, the window's first, by
+// focusing that row. In WebKit the focus clears the editor selection, so a
+// fill racing the reveal types nothing. The row can be in view before the
+// reveal runs, and list aria-busy does not cover reader positioning: wait for
+// the focus and the reveal's next-frame acknowledgement before filling.
+async function revealed(page, inbox, app) {
+  await expect(
+    inbox.getByRole("list", { name: "Inbox conversations" }),
+  ).toHaveAttribute("aria-busy", "false");
+  await expect(
+    conversations(inbox).locator(
+      `[data-message-id="${app.inboxWindow.replies[0].id}"]`,
+    ),
+  ).toBeFocused();
+  await frames(page);
+}
 
 async function choose(page, inbox, control, option) {
   await inbox
@@ -449,6 +467,7 @@ test("Inbox sending keeps the conversation open until manually archived", async 
   await expect(
     inbox.getByRole("checkbox", { name: "Archive on send" }),
   ).toHaveCount(0);
+  await revealed(page, inbox, app);
   const detail = conversations(inbox);
   const editor = detail.getByRole("textbox");
   await editor.fill("Keep this conversation");
@@ -540,6 +559,7 @@ test("selected row button advances and menu closes without losing the original d
   const next = rows.filter({ hasText: "Unread neighbor" });
   await expect(rows).toHaveCount(2);
   await thread.getByRole("button", { name: /^Open / }).click();
+  await revealed(page, inbox, app);
   const editor = conversations(inbox).getByRole("textbox");
   await editor.fill("Keep the selected archive draft");
   await editor.evaluate((el) => {
@@ -607,18 +627,7 @@ test("unselected row Archive preserves the open editor and unread neighbor", asy
   const next = rows.filter({ hasText: "Unread neighbor" });
   await expect(rows).toHaveCount(2);
   await thread.getByRole("button", { name: /^Open / }).click();
-  const target = conversations(inbox).locator(
-    `[data-message-id="${app.inboxWindow.replies[0].id}"]`,
-  );
-  await expect(target).toBeInViewport();
-  // Finish entry reveal and its next-frame acknowledgement before taking the
-  // editor/row-focus baseline; list aria-busy does not cover reader positioning.
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  );
+  await revealed(page, inbox, app);
   const editor = conversations(inbox).getByRole("textbox");
   await editor.fill("Keep the unselected archive draft");
   await editor.evaluate((el) => {
@@ -671,6 +680,7 @@ test("reply and fresh mention reopen their filters without replacing composer dr
   await choose(page, inbox, "Show", "Archived");
   await expect(rows).toHaveCount(1);
   await rows.getByRole("button", { name: /^Open / }).click();
+  await revealed(page, inbox, app);
   const detail = conversations(inbox);
   const editor = detail.getByRole("textbox");
   await editor.fill("Unsent mention retention draft");

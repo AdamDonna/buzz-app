@@ -884,13 +884,18 @@ test("Create new retains its draft when preferences fail before submission and r
   await page.getByText("Diagnostics", { exact: true }).click();
   const held = gate(),
     started = gate();
+  // Transient at first, so relay recovery owns the failure and shows its notice.
+  let status = 502;
   const failLegacy = async (route) => {
     started.resolve();
     await held.promise;
-    app.report.sidebarPreferenceFailures ??= [];
-    app.report.sidebarPreferenceFailures.push(route.request().url());
+    const failed = status;
+    const failures =
+      failed === 502 ? "sidebarPreferenceFailures" : "relayFailures";
+    app.report[failures] ??= [];
+    app.report[failures].push(route.request().url());
     await route.fulfill({
-      status: 502,
+      status: failed,
       contentType: "application/json",
       body: JSON.stringify({ error: "Preferences unavailable" }),
     });
@@ -930,10 +935,19 @@ test("Create new retains its draft when preferences fail before submission and r
     await expect(dialog.getByRole("alert")).toContainText("Retry preferences");
     expect(app.report.sidebarPublications ?? []).toHaveLength(0);
     // Another failed recovery must keep both the draft and recovery action.
+    // Recovery would retry a transient failure on its own seconds later, and
+    // after the unroute below that read could remove Retry preferences while
+    // the final click is still landing. A 4xx is not transient, so recovery
+    // leaves it alone and the dialog's Retry is the only way out. The test
+    // flips the status here, not the click, so a recovery read that lands
+    // first also gets a 403 and can satisfy the response wait. Reads
+    // serialize behind the disabled Retry, so toBeEnabled still waits for the
+    // manual read.
+    status = 403;
     const retryFailed = page.waitForResponse(
       (response) =>
         new URL(response.url()).pathname.endsWith("/sidebar-preferences") &&
-        response.status() === 502,
+        response.status() === 403,
     );
     await dialog
       .getByRole("button", { name: "Retry preferences", exact: true })
