@@ -55,6 +55,15 @@ function hostDeclarations(
   types: readonly RegisteredAgentType[],
 ) {
   return [
+    ...(manifest.host?.agentExecution ?? []).map((harness) => ({
+      key: `agentExecution:${harness}`,
+      signature: `Agent execution: ${harness}`,
+      title: "Agent execution:",
+      label: `Run ${types.find((type) => type.key === harness)?.title ?? harness} on another host`,
+      hint: "Can run native agent code and read files on that host. Buzz keeps the agent's identity.",
+      icon: PlugIcon,
+      details: <code className={styles.sourcePath}>{harness}</code>,
+    })),
     ...(manifest.host?.agentHooks ?? []).map((harness) => ({
       key: `agentHooks:${harness}`,
       signature: `Agent hooks: ${harness}`,

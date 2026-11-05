@@ -7,7 +7,8 @@
 // Storage reads are synchronous, so the app reads every file once before it
 // starts, and then keeps a copy in memory. Each write changes the copy at once
 // and is then saved, in order, to its key's file. Another program's later
-// writes reach this copy only when the app starts again.
+// writes reach this copy only when the app starts again. `read` reads saved
+// state without changing this copy.
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { CONFIG_STORAGE_KEY } from "./agent-config";
 import { CATCH_UP_KEY, CATCH_UP_PREFIX } from "./catch-up";
@@ -37,6 +38,7 @@ export function isAgentKey(key: string) {
     key.startsWith(CATCH_UP_PREFIX) ||
     key.startsWith(INTERRUPTED_PREFIX) ||
     key.startsWith(RECORD_PREFIX) ||
+    key.startsWith("buzz.agent.execution.v1:") ||
     // The sessions the bundled agent types save.
     key.startsWith("buzz.claude-code.sessions.") ||
     key.startsWith("buzz.codex.sessions.") ||
@@ -62,8 +64,27 @@ export function agentStorage(): AgentStore {
   return loaded ?? localStore();
 }
 
+/** A window without native storage cannot know which agents are bound. */
+export function executionStorage(fallback: AgentStore): AgentStore {
+  if (!isTauri()) return fallback;
+  if (loaded) return loaded;
+  return Object.freeze({
+    ...fallback,
+    read: async () => {
+      throw new Error(
+        "Native agent storage is unavailable. Restart Buzz before running agents.",
+      );
+    },
+    add: async () => {
+      throw new Error(
+        "Native agent storage is unavailable. Restart Buzz before running agents.",
+      );
+    },
+  });
+}
+
 type Native = Readonly<{
-  load(): Promise<Record<string, string>>;
+  load(key?: string): Promise<Record<string, string>>;
   set(key: string, value: string | null): Promise<void>;
   /** Saves `value` only if no file holds `key`, in one step; resolves with
    * what the file held when one did, else null. */
@@ -71,7 +92,7 @@ type Native = Readonly<{
 }>;
 
 const native: Native = {
-  load: () => invoke("app_agent_state_load"),
+  load: (key) => invoke("app_agent_state_load", { key }),
   set: async (key, value) => {
     await invoke("app_agent_state_set", { key, value });
   },
@@ -97,6 +118,7 @@ export async function loadAgentStorage(
   files: Native | undefined = isTauri() ? native : undefined,
   timeoutMs = 15_000,
 ): Promise<AgentStore> {
+  loaded = undefined;
   if (!files) return localStore(local);
   let late = false;
   const move = async () => {
@@ -104,6 +126,13 @@ export async function loadAgentStorage(
       new Map(Object.entries(await files.load())),
       files.set,
       files.add,
+      async (key) => (await files.load(key))[key] ?? null,
+      async (prefix) =>
+        Object.fromEntries(
+          Object.entries(await files.load()).filter(([key]) =>
+            key.startsWith(prefix),
+          ),
+        ),
     );
     const moved: string[] = [];
     for (let index = 0; index < local.length; index++) {
@@ -158,9 +187,9 @@ export async function loadAgentStorage(
   }
 }
 
-/** Agent storage held in memory and saved through `save`, one write at a
- * time, in order. A failed write puts back the key's saved value, so the
- * copy never keeps what is not saved and the same value can be set again. */
+/** Agent storage holds a copy in memory and saves updates in order.
+ * Atomic inserts wait only for writes to the same key. A failed write puts
+ * back the saved value, so callers can retry it. */
 export function fileStore(
   items: Map<string, string>,
   save: Native["set"],
@@ -168,6 +197,8 @@ export function fileStore(
     await save(key, value);
     return null;
   },
+  read?: (key: string) => Promise<string | null>,
+  scan?: AgentStore["scan"],
 ): AgentStore {
   /** What each key's file holds, as far as this program saved it. */
   const durable = new Map(items);
@@ -175,7 +206,11 @@ export function fileStore(
   const pending = new Map<string, Promise<unknown>>();
   let queue: Promise<unknown> = Promise.resolve();
   const write = (key: string, value: string | null, absent = false) => {
-    const next = queue.then(async () =>
+    const same = pending.get(key)?.catch(() => {});
+    const before = absent
+      ? (same ?? Promise.resolve())
+      : Promise.all([queue, same]);
+    const next = before.then(async () =>
       absent && value !== null ? add(key, value) : save(key, value),
     );
     pending.set(key, next);
@@ -200,12 +235,28 @@ export function fileStore(
         throw error;
       },
     );
-    queue = done.catch(() => {});
+    if (!absent) queue = done.catch(() => {});
     return done;
   };
   return Object.freeze({
     keys: () => [...items.keys()],
     get: (key: string) => items.get(key) ?? null,
+    read: async (key: string) => {
+      await pending.get(key);
+      return read ? read(key) : (durable.get(key) ?? null);
+    },
+    scan: async (prefix: string) => {
+      await Promise.all(
+        [...pending]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([, saved]) => saved),
+      );
+      return scan
+        ? scan(prefix)
+        : Object.fromEntries(
+            [...durable].filter(([key]) => key.startsWith(prefix)),
+          );
+    },
     set: async (key: string, value: string | null) => {
       if (value === null) items.delete(key);
       else items.set(key, value);
@@ -213,7 +264,10 @@ export function fileStore(
     },
     add: async (key: string, value: string) => {
       const held = items.get(key);
-      if (held !== undefined) return held;
+      if (held !== undefined) {
+        await pending.get(key);
+        return durable.get(key) ?? held;
+      }
       items.set(key, value);
       return (await write(key, value, true)) ?? value;
     },

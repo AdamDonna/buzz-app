@@ -1102,6 +1102,8 @@ function InventoryCard({
             >
               {Model && (
                 <Model
+                  agent={agent}
+                  openSettings={onBuild}
                   config={agent.config}
                   modelAppearance="glass-ghost"
                   disabled={saving}

@@ -85,6 +85,8 @@ it("keeps each agent's record under its own key and moves the old shared value",
   const writes: string[] = [];
   const watched = {
     get: storage.get,
+    read: storage.read,
+    scan: storage.scan,
     keys: storage.keys,
     add: storage.add,
     set: (key: string, value: string | null) => {

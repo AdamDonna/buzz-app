@@ -22,6 +22,7 @@ import { useState, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   Agent,
+  AgentCreateProps,
   AgentProviderSnapshot,
   AgentViewProps,
   Agents,
@@ -244,21 +245,24 @@ function setup(
     Peek: ({ agent }: { agent: Agent }) => <p>Peek of {agent.name}</p>,
     CreateModel: model
       ? ({
+          agent,
+          openSettings,
           config,
           onChange,
           disabled,
-        }: {
-          config: { reply: string };
-          onChange(config: { reply: string }): void;
-          disabled: boolean;
-        }) => (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange({ ...config, reply: "New model" })}
-          >
-            Change model
-          </button>
+        }: AgentCreateProps<{ reply: string }>) => (
+          <>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange({ ...config, reply: "New model" })}
+            >
+              Change model
+            </button>
+            <button type="button" onClick={openSettings}>
+              Model settings for {agent?.name}
+            </button>
+          </>
         )
       : undefined,
     provider: echoProvider.contribution,
@@ -400,6 +404,11 @@ function setup(
     addedTabs: () => [],
     registerTab: () => {},
     controlAttention: () => {},
+    registerExecution: () => {},
+    bindExecution: async () => {},
+    executionBinding: () => undefined,
+    inspectExecution: async () => undefined,
+    execution: async () => undefined,
     harness: {} as Agents["harness"],
   } satisfies Agents;
   const disconnected = { status: "disconnected", generation: 0 };
@@ -3116,6 +3125,12 @@ it("saves a card model through its type and keeps failures on the card", async (
     expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
   );
   expect(agents.save).toHaveBeenCalledTimes(2);
+  await user.click(
+    screen.getByRole("button", { name: "Model settings for Ada" }),
+  );
+  expect(
+    await screen.findByRole("complementary", { name: "Ada identity" }),
+  ).toBeVisible();
 });
 
 it("opens marketplace beside Your teams without a modal", async () => {

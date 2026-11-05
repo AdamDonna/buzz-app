@@ -357,6 +357,10 @@ available rather than silently discarding it.
   name in a conversation shows its profile, where **Settings → Instructions**
   offers the same edit. Model, workspace, and other runtime options depend on
   its type. Do not assume someone can edit another person's agent.
+- A desktop plugin can run native Codex on another computer. The plugin manages the target, workspace, credentials, and expiry. A saved
+  remote choice stays remote after an app restart. If the target cannot be
+  restored, Buzz shows an error and requires a new session.
+  The model control on a remote Codex card opens that agent's Settings.
 - An agent's name and picture identify it. Instructions shape its response
   style, tasks, initiative, and boundaries. They do not add tools, credentials,
   or permissions. Saving instructions affects future work, not past messages.

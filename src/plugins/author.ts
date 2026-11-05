@@ -162,6 +162,13 @@ export type {
 
 export type { ArtifactStorage } from "../features/artifact-storage/service";
 export type {
+  AgentExecution,
+  AgentExecutionBinding,
+  AgentExecutionProvider,
+  AgentExecutionSession,
+  AgentExecutionTarget,
+} from "../features/agents/execution";
+export type {
   ArtifactCollection,
   ArtifactCollectionDefinition,
   ArtifactEntry,
