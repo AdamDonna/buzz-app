@@ -411,6 +411,14 @@ it("existing backend signs only canonical workflow sign/publish with exact own e
           ["a", `30620:${h.viewer}:${id}`],
         ],
       },
+      // The human signs an agent-targeted deletion; the relay checks ownership.
+      {
+        ...template(5),
+        tags: [
+          ["h", runId],
+          ["a", `30620:${"a".repeat(64)}:${id}`],
+        ],
+      },
     ]) {
       const event = await t.writer.sign(input, signal());
       expect(verifyEvent(event)).toBe(true);
@@ -421,7 +429,7 @@ it("existing backend signs only canonical workflow sign/publish with exact own e
       expect(await t.writer.publish(event, signal())).toBe("workflow-result");
       expect(h.publications.at(-1)).toEqual(JSON.parse(JSON.stringify(event)));
     }
-    expect(h.publications).toHaveLength(4);
+    expect(h.publications).toHaveLength(5);
     expect(h.calls).toHaveLength(0);
   } finally {
     live?.dispose();
@@ -462,12 +470,12 @@ const invalidCommands = [
     }),
   ],
   [
-    "other owner",
+    "malformed owner",
     () => ({
       ...template(5),
       tags: [
         ["h", runId],
-        ["a", `30620:${"a".repeat(64)}:${id}`],
+        ["a", `30620:invalid:${id}`],
       ],
     }),
   ],

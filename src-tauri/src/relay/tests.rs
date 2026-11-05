@@ -837,16 +837,22 @@ fn isolated_agent_ipc_probe() {
         }
     })).is_err());
     let id = "11111111-1111-4111-8111-111111111111";
-    assert!(invoke(
+    let agent_deletion = invoke(
         "relay_sign",
         serde_json::json!({
             "community": "https://relay.test", "event": {
                 "kind": 5, "created_at": 123,
                 "tags": [["h", id], ["a", format!("30620:{}:{id}", "a".repeat(64))]], "content": ""
             }
-        })
+        }),
     )
-    .is_err());
+    .unwrap();
+    verify(&agent_deletion);
+    assert_eq!(agent_deletion["pubkey"], public);
+    assert_eq!(
+        agent_deletion["tags"][1][1],
+        format!("30620:{}:{id}", "a".repeat(64))
+    );
     let deletion = invoke("relay_sign", serde_json::json!({
         "community": "https://relay.test", "event": {
             "kind": 5, "created_at": 123,

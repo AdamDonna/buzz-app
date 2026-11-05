@@ -313,9 +313,12 @@ pub(crate) async fn relay_sign(
     {
         return Err("Relay event is too large".into());
     }
-    if coordinate_delete
-        .is_some_and(|coordinate| coordinate.split(':').nth(1) != signed["pubkey"].as_str())
-    {
+    // Canonical workflow deletes may target an agent owned by the signer.
+    // The relay authorizes ownership; other coordinate deletes remain author-only.
+    if coordinate_delete.is_some_and(|coordinate| {
+        !coordinate.starts_with("30620:")
+            && coordinate.split(':').nth(1) != signed["pubkey"].as_str()
+    }) {
         return Err("Only the author can delete this event".into());
     }
     Ok(signed)

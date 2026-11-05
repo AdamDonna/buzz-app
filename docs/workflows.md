@@ -31,8 +31,16 @@ See the [capability contract](../src/features/workflows/types.ts).
   the active naming policy. Fallbacks lengthen their suffix to stay distinct across
   visible owners. Visible owners hydrate together in background profile
   batches of up to 500 identities. Narrow rows reflow their artwork, text, and
-  independent controls as text grows. Ownership and management
-  permissions remain tied to the signing identity, including agent-owned workflows.
+  independent controls as text grows. Editing, enabling and running remain tied
+  to the workflow author. A verified owner of an agent can also delete that
+  agent's workflows, signing as themselves;
+  select All channel workflows to find them. This ownership-authorized deletion
+  also works with a Guest channel role. Ownership claims in display metadata
+  do not grant permission, and the relay authorizes every deletion. Losing the
+  verified ownership proof disables deletion in the app; it does not clear the
+  relay's separately recorded agent owner.
+  If permission changes during confirmation, an error explains why deletion
+  could not start; the editor retains its draft.
   Clearing the owner filter or Clear all shows all channel workflows.
   Enabled and Disabled match saved configuration (omitted means enabled), not
   confirmed runtime activity; unreadable configurations are excluded from both.
