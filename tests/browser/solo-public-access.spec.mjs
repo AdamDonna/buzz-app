@@ -524,8 +524,15 @@ test.describe("visitor", () => {
       );
     }
     await present(page, presentations[0]);
+    const actions = page.getByRole("button", {
+      name: "Chat actions",
+      exact: true,
+    });
     await page.reload();
     await expect(row).toBeVisible();
+    // Cached startup renders Share access too. Its local dialog is replaced
+    // with the live session; Chat actions exists only on the live header.
+    await expect(actions).toBeVisible();
     await page
       .getByRole("button", { name: /^Share access/ })
       .last()
@@ -544,10 +551,6 @@ test.describe("visitor", () => {
     await expect(article.locator("[data-message-id]").last()).toBeVisible();
     await expect(row).toBeVisible();
     await expect(page.locator('[contenteditable="true"]')).toHaveCount(0);
-    const actions = page.getByRole("button", {
-      name: "Chat actions",
-      exact: true,
-    });
     await actions.click();
     await expect(
       page.getByRole("menuitem", { name: "Archive chat", exact: true }),
