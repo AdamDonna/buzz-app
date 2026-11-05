@@ -2,6 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { createMediaPreparation } from "../relay/media";
 import type { RelaySession } from "../relay/session";
 import { AttachmentImage } from "./AttachmentImage";
 import { imageDimensions, rememberImageDimensions } from "./image-dimensions";
@@ -13,6 +14,8 @@ const session = () => ({}) as RelaySession;
 
 afterEach(() => {
   cleanup();
+  // Decoded originals are retained module-wide until session media disposal.
+  createMediaPreparation().dispose();
   vi.restoreAllMocks();
 });
 
@@ -53,6 +56,12 @@ function decode(view: ReturnType<typeof render>) {
   return {
     release: () => act(async () => resolve()),
     fail: () => act(async () => reject(new Error("decode failed"))),
+    // The component awaited the gate first, so its continuation has run but
+    // React has not committed the resulting update.
+    resolveUncommitted: async () => {
+      resolve();
+      await gate;
+    },
   };
 }
 
@@ -73,7 +82,7 @@ it("keeps compact geometry through decoding and unavailable sources", async () =
 });
 
 for (const metadata of [undefined, { width: 700, height: 900 }]) {
-  it(`retains learned geometry across remount with ${metadata ? "wrong" : "missing"} metadata, but still decodes pixels`, async () => {
+  it(`retains learned geometry across media disposal with ${metadata ? "wrong" : "missing"} metadata, but still decodes pixels`, async () => {
     const owner = session();
     const first = mount(owner, source, metadata);
     const pending = decode(first);
@@ -84,6 +93,7 @@ for (const metadata of [undefined, { width: 700, height: 900 }]) {
       aspectRatio: "360 / 30",
     });
     first.unmount();
+    createMediaPreparation().dispose();
     const next = mount(owner, source, metadata);
     expect(next.getByRole("link")).toHaveStyle({
       width: "360px",
@@ -99,6 +109,65 @@ for (const metadata of [undefined, { width: 700, height: 900 }]) {
     expect(next.getByRole("link")).not.toHaveAttribute("data-image-ready");
   });
 }
+
+it("re-adopts a decoded original across remount without decoding again", async () => {
+  const owner = session();
+  const first = mount(owner);
+  await decode(first).release();
+  const original = first.container.querySelector("img");
+  first.unmount();
+  const next = mount(owner);
+  const adopted = next.container.querySelector("img");
+  expect(adopted).toBe(original);
+  expect(adopted).toHaveStyle({ visibility: "visible" });
+  expect(adopted?.decode).toHaveBeenCalledOnce();
+  expect(next.getByRole("link")).toHaveAttribute("data-image-ready");
+  expect(next.getByRole("link")).toHaveStyle({ aspectRatio: "360 / 30" });
+  expect(next.container.querySelector("canvas")).toBeNull();
+  // One element has one owner: a concurrent mount loads its own original.
+  const concurrent = mount(owner);
+  const own = concurrent.container.querySelector("img");
+  expect(own).not.toBe(original);
+  expect(own).toHaveStyle({ visibility: "hidden" });
+  next.unmount();
+  concurrent.unmount();
+  const other = mount(session());
+  expect(other.container.querySelector("img")).not.toBe(original);
+  expect(other.container.querySelector("img")).toHaveStyle({
+    visibility: "hidden",
+  });
+});
+
+it("shows a re-adopted original whose row unmounted before ready committed", async () => {
+  const owner = session();
+  const first = mount(owner);
+  await decode(first).resolveUncommitted();
+  const original = first.container.querySelector("img");
+  expect(original).toHaveStyle({ visibility: "hidden" });
+  first.unmount();
+  const next = mount(owner);
+  expect(next.container.querySelector("img")).toBe(original);
+  expect(original).toHaveStyle({ visibility: "visible" });
+});
+
+it("retains neither undecoded originals nor those decoded before media disposal", async () => {
+  const owner = session();
+  const pending = mount(owner);
+  decode(pending);
+  const undecoded = pending.container.querySelector("img");
+  pending.unmount();
+  const next = mount(owner);
+  expect(next.container.querySelector("img")).not.toBe(undecoded);
+  await decode(next).release();
+  const stale = next.container.querySelector("img");
+  createMediaPreparation().dispose();
+  next.unmount();
+  const later = mount(owner);
+  expect(later.container.querySelector("img")).not.toBe(stale);
+  expect(later.container.querySelector("img")).toHaveStyle({
+    visibility: "hidden",
+  });
+});
 
 it("isolates geometry by session and exact source; absent sources cannot borrow it", async () => {
   const owner = session();
