@@ -425,7 +425,9 @@ it.each([
   ],
   [
     "a Buzz relay with no community here",
-    Response.json({ name: "Buzz Relay" }),
+    new Response("relay: no community is configured for this host", {
+      status: 404,
+    }),
     "No community is set up at this address.",
   ],
 ])("%s offers only Cancel", async (_label, answer, message) => {
