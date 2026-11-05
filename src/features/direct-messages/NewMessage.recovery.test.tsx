@@ -43,6 +43,7 @@ import { mentionQuery } from "../../bundled/mentions/mention-query";
 import { attachmentDraft } from "../messages/attachment-draft";
 import { NewMessage } from "./NewMessage";
 import { OutboxStatus } from "../../bundled/channels/OutboxStatus";
+import { useHiddenDms } from "../../bundled/channels/useHiddenDms";
 import { createRelayProfiler } from "../relay/profiling";
 import { readView, writeView } from "../../shared/view-state";
 
@@ -51,8 +52,10 @@ composerDOMFixture();
 const viewer = keypair(),
   other = keypair(),
   another = keypair(),
+  third = keypair(),
   relay = keypair();
 const channel = "11111111-1111-4111-8111-111111111111";
+const group = "33333333-3333-4333-8333-333333333333";
 
 const emptyPanels: never[] = [];
 const scope = `https://relay.example:${viewer.pubkey}`;
@@ -123,22 +126,32 @@ function setup(
   const events = [
     profile(other, { name: "Avery", ...metadata }),
     profile(another, { name: "Zoe" }),
+    // Relay-signed DM metadata carries the NIP-29 `hidden` and `private` tags.
     signed(relay, {
       kind: 39000,
       tags: [
         ["d", channel],
+        ["hidden", ""],
         ["t", "dm"],
+        ["private", ""],
       ],
       content: JSON.stringify({ name: "Avery", channel_type: "dm" }),
     }),
     roster(relay, channel, [viewer.pubkey, other.pubkey]),
   ];
   const query = vi.fn(async (filters: readonly ReadFilter[]) => {
-    if (filters.some((filter) => filter.kinds?.includes(9)))
+    const history = filters.find((filter) => filter.kinds?.includes(9));
+    if (history) {
+      const id = history["#h"]?.[0] ?? channel;
       return [
-        ...events.filter((event) => event.kind === 9),
-        bounds(relay, channel, "head", { has_more: false, next_cursor: null }),
+        ...events.filter(
+          (event) =>
+            event.kind === 9 &&
+            event.tags.some(([name, value]) => name === "h" && value === id),
+        ),
+        bounds(relay, id, "head", { has_more: false, next_cursor: null }),
       ];
+    }
     return events.filter((event) =>
       filters.some(
         (filter) =>
@@ -774,6 +787,252 @@ it("loads matching DM history inline and keeps the draft while recipients change
     ).toContain("Earlier conversation"),
   );
   expect(screen.getByRole("textbox")).toHaveTextContent("Keep this draft");
+});
+
+/** A group DM with Avery and Zoe, plus one earlier message in each DM. */
+function groupHistory(t: ReturnType<typeof setup>) {
+  t.events.unshift(
+    profile(third, { name: "Kai" }),
+    signed(relay, {
+      kind: 39000,
+      tags: [
+        ["d", group],
+        ["hidden", ""],
+        ["t", "dm"],
+        ["private", ""],
+      ],
+      content: JSON.stringify({ name: "Avery, Zoe", channel_type: "dm" }),
+    }),
+    roster(relay, group, [viewer.pubkey, other.pubkey, another.pubkey]),
+    message(other, channel, "Earlier conversation", 1_700_000_001),
+    message(another, group, "Group history", 1_700_000_002),
+  );
+}
+/** The DM whose timeline the page shows; rows stay virtual in jsdom. */
+const previewed = () =>
+  screen
+    .queryByRole("region", { name: "Channel message history" })
+    ?.getAttribute("data-channel-timeline");
+async function showsHistory(
+  owner: ReturnType<ReturnType<typeof setup>["create"]>,
+  id: string,
+  content: string,
+) {
+  await waitFor(() => expect(previewed()).toBe(id));
+  expect(
+    owner.session.channels.window(id).rows.map((row) => row.content),
+  ).toContain(content);
+}
+async function addRecipient(t: ReturnType<typeof setup>, name: string) {
+  await t.user.click(
+    screen.getByRole("combobox", { name: "Message recipients" }),
+  );
+  await t.user.click(await screen.findByRole("option", { name }));
+}
+
+it("previews locally and relay-hidden DMs without restoring them until Send", async () => {
+  const t = setup();
+  groupHistory(t);
+  t.events.unshift(
+    signed(relay, {
+      kind: 30622,
+      tags: [
+        ["d", viewer.pubkey],
+        ["p", viewer.pubkey],
+        ["h", group],
+      ],
+      content: "",
+    }),
+  );
+  const owner = t.create();
+  // The sidebar's owner of local hides, mounted beside the page as in Messages.
+  let sidebar: ReturnType<typeof useHiddenDms> | undefined;
+  function Sidebar() {
+    sidebar = useHiddenDms(
+      scope,
+      owner.session,
+      useChannelList(owner.session.channels),
+    );
+    return null;
+  }
+  render(<Sidebar />);
+  await owner.session.channelLifecycle.refreshVisibility();
+  expect(owner.session.channelLifecycle.snapshot().hidden).toEqual([group]);
+  await waitFor(() =>
+    expect(owner.session.channels.list().status).toBe("ready"),
+  );
+  act(() => sidebar?.hide(channel));
+  // Settle the hide's own history baseline before anything previews the DM.
+  await waitFor(() =>
+    expect(readView(scope, "hidden-dms", [])).toEqual([
+      expect.objectContaining({ id: channel, knownIds: expect.any(Array) }),
+    ]),
+  );
+  t.mount(owner);
+  await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+  await showsHistory(owner, channel, "Earlier conversation");
+  await addRecipient(t, "Zoe");
+  await showsHistory(owner, group, "Group history");
+  await t.user.click(screen.getByRole("button", { name: "Remove Zoe" }));
+  await showsHistory(owner, channel, "Earlier conversation");
+  // Neither preview restored its row or opened the DM.
+  expect(sidebar?.hiddenIds).toEqual(new Set([channel]));
+  expect(owner.session.channelLifecycle.snapshot().hidden).toEqual([group]);
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+  // Send keeps the existing confirmed open, which restores the row.
+  await t.user.type(screen.getByRole("textbox"), "Back again");
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  expect(t.openDirectMessage).toHaveBeenCalledOnce();
+  expect(t.openDirectMessage.mock.calls[0]?.[0]).toEqual([other.pubkey]);
+  expect(sidebar?.hiddenIds).toEqual(new Set());
+});
+
+it("previews only the DM whose participants exactly match, in any order", async () => {
+  const t = setup();
+  groupHistory(t);
+  const owner = t.create();
+  const view = t.mount(owner);
+  const introduces = (name: string) =>
+    view.container.querySelector(`[data-new-message-body] [title="${name}"]`);
+  // Zoe alone is a subset of the group and has no 1:1 DM.
+  await t.user.click(await screen.findByRole("option", { name: "Zoe" }));
+  expect(previewed()).toBeUndefined();
+  expect(introduces("Zoe")).toBeInTheDocument();
+  await addRecipient(t, "Avery");
+  await showsHistory(owner, group, "Group history");
+  // A superset leaves the group as soon as it is chosen.
+  await addRecipient(t, "Kai");
+  expect(previewed()).toBeUndefined();
+  expect(introduces("Kai")).toBeInTheDocument();
+  await t.user.click(screen.getByRole("button", { name: "Remove Kai" }));
+  await showsHistory(owner, group, "Group history");
+  // Avery alone, also a subset of the group, matches the separate 1:1 DM.
+  await t.user.click(screen.getByRole("button", { name: "Remove Zoe" }));
+  expect(previewed()).not.toBe(group);
+  await showsHistory(owner, channel, "Earlier conversation");
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+});
+
+it("never shows a previous match's history that finishes loading after an edit", async () => {
+  const t = setup();
+  groupHistory(t);
+  const read = t.query.getMockImplementation();
+  assert.exists(read);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started = false;
+  let answered = false;
+  t.query.mockImplementation(async (filters) => {
+    if (
+      !filters.some(
+        (filter) => filter.kinds?.includes(9) && filter["#h"]?.includes(group),
+      )
+    )
+      return read(filters);
+    started = true;
+    await held;
+    try {
+      return await read(filters);
+    } finally {
+      answered = true;
+    }
+  });
+  const owner = t.create();
+  t.mount(owner);
+  try {
+    await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+    await showsHistory(owner, channel, "Earlier conversation");
+    await addRecipient(t, "Zoe");
+    await waitFor(() => expect(started).toBe(true));
+    // The new match loads in place of the 1:1 timeline, never beside it.
+    expect(previewed()).toBeUndefined();
+    expect(screen.getByText("Loading messages…")).toBeVisible();
+    await t.user.click(screen.getByRole("button", { name: "Remove Zoe" }));
+    await showsHistory(owner, channel, "Earlier conversation");
+  } finally {
+    release();
+  }
+  await waitFor(() => expect(answered).toBe(true));
+  // Let the store apply or retire the late page before checking the page.
+  await act(async () => {});
+  expect(previewed()).toBe(channel);
+  expect(screen.queryByText("Loading messages…")).not.toBeInTheDocument();
+  // Matching the group again shows its own history.
+  await addRecipient(t, "Zoe");
+  await showsHistory(owner, group, "Group history");
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+});
+
+it("matches the recipients chosen by the time the DM roster loads", async () => {
+  const t = setup();
+  groupHistory(t);
+  const read = t.query.getMockImplementation();
+  assert.exists(read);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started = false;
+  t.query.mockImplementation(async (filters) => {
+    if (
+      filters.some(
+        (filter) =>
+          filter.kinds?.includes(39002) && filter["#p"] && !filter["#d"],
+      )
+    ) {
+      started = true;
+      await held;
+    }
+    return read(filters);
+  });
+  const owner = t.create();
+  t.mount(owner);
+  try {
+    await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+    await addRecipient(t, "Zoe");
+    await waitFor(() => expect(started).toBe(true));
+    expect(owner.session.channels.list().status).not.toBe("ready");
+    expect(previewed()).toBeUndefined();
+    await t.user.click(screen.getByRole("button", { name: "Remove Zoe" }));
+  } finally {
+    release();
+  }
+  await showsHistory(owner, channel, "Earlier conversation");
+  await addRecipient(t, "Zoe");
+  await showsHistory(owner, group, "Group history");
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+});
+
+it("still previews history when this connection cannot start DMs", async () => {
+  const t = setup();
+  t.events.unshift(
+    message(other, channel, "Earlier conversation", 1_700_000_001),
+  );
+  const live = t.create();
+  const owner = {
+    ...live,
+    session: {
+      ...live.session,
+      directMessages: { ...live.session.directMessages, available: false },
+    },
+  };
+  t.mount(owner);
+  await t.user.click(await screen.findByRole("option", { name: "Avery" }));
+  await showsHistory(owner, channel, "Earlier conversation");
+  expect(
+    screen.getByText(
+      "Starting direct messages is unavailable on this connection.",
+    ),
+  ).toBeVisible();
+  await t.user.type(screen.getByRole("textbox"), "Hello");
+  expect(send()).toBeDisabled();
+  expect(t.openDirectMessage).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
 });
 
 it.each([40003, 5])(

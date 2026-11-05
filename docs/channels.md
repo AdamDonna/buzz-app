@@ -361,7 +361,16 @@ only the selected recipient identities and names to both mention tools. Removing
 a selection updates both menus; an already-inserted mention still requires actual
 DM membership on Send. Mentioning never opens the DM early or adds recipients.
 The existing `MessageComposer` owns the draft and ordinary input behavior. Its placeholder is blank before selection and lists the selected names
-afterward. Disabled mention and emoji icons stay unfilled. No timeline is mounted before the first message is confirmed. DMs omit the date
+afterward. Disabled mention and emoji icons stay unfilled. When the recipients
+plus the viewer are exactly an existing DM's participants, in any order, that
+DM's history loads inline above the draft. This includes a DM removed with
+Remove from Team or Hide conversation. A subset or superset of a group's
+participants shows the recipients' avatars instead. Each recipient change
+replaces the preview with the newly matched DM's timeline, or with the avatars.
+Previewing does not open, restore or mark the DM read, and it remains when
+this connection cannot start DMs. Send performs the confirmed
+open, which clears a local removal and asks the relay to unhide the DM. With no
+match, no timeline is mounted before the first message is confirmed. DMs omit the date
 pill at the beginning of their complete history, while retaining message times
 and date separators between days.
 
@@ -590,11 +599,13 @@ acceptance remains outstanding.
 Main’s DM × remains local removal, including restoration on new message evidence.
 The separate, confirmed Hide conversation action publishes `41012`, not Leave or Delete. The separate relay-authored `30622`
 visibility snapshot (`d=viewer`, `p=viewer`, hidden DM `h` tags) only filters sidebar
-rows; it does not deny access or prevent exact conversation navigation. Visibility
+rows; it does not deny access, prevent exact conversation navigation or stop
+New message from previewing the DM's history (see
+[Starting a direct message](#starting-a-direct-message)). Visibility
 refreshes with the channel roster, preserves the last good set on failure and
-rejects older snapshots. Live cross-device visibility updates and an in-app DM
-reopen/unhide flow are deferred; opening a DM through another supported client's
-`41010` flow and refreshing restores the row.
+rejects older snapshots. Live cross-device visibility updates are deferred; any
+confirmed `41010` open, including New message Send, unhides the DM, and its row
+returns when visibility next refreshes.
 
 A definitive rejection offers retry without optimistic removal. If publication or
 confirmation has an uncertain outcome, the dialog warns that the command may have

@@ -1138,15 +1138,17 @@ export function SearchResults({
         (channel) =>
           channel.channelType === "dm" &&
           !channel.archived &&
-          !channel.hidden &&
           channel.participants?.length === 1 &&
           channel.participants[0] === pubkey,
       );
     // Opening a DM hidden on this device goes through the confirmed open,
-    // which restores its sidebar row. A visible DM just opens.
+    // which restores its sidebar row. So does any DM opened while the relay's
+    // hidden set is not ready, since it may be hidden: before the first load,
+    // during every refresh and after a failed one. A visible DM just opens.
     if (
       existing &&
-      (!sidebarHidden(existing) || !session.directMessages.available)
+      (!session.directMessages.available ||
+        (dmVisibility.status === "ready" && !sidebarHidden(existing)))
     )
       return openConversation(existing.id);
     if (
