@@ -455,24 +455,13 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
     } else {
         process_command(&program, helper.as_deref(), None, &declared.args, &args)
     };
-    // Never pass on an identity the app itself was started with.
-    for (name, _) in std::env::vars_os() {
-        let text = name.to_string_lossy();
-        if text.starts_with("BUZZ_") || text.starts_with("NOSTR_") {
-            command.env_remove(&name);
-        }
-    }
-    command.env("PATH", &path);
     let environment = env.unwrap_or_default();
-    for (name, value) in &environment {
-        if name.is_empty() || name.contains(['=', '\0']) {
-            return Err("Invalid environment variable".into());
-        }
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+    set_environment(
+        &mut command,
+        &path,
+        &environment,
+        &app.package_info().version.to_string(),
+    )?;
     if protected {
         for name in std::env::vars_os()
             .map(|(name, _)| name)
@@ -513,6 +502,37 @@ pub(crate) async fn plugin_host_process_spawn<R: tauri::Runtime>(
         read_lease,
         claude_hooks,
     )
+}
+
+/// Sets a process's environment: the app's own, less any Buzz identity it was
+/// started with, plus the plugin's `environment` (`None` removes a variable).
+/// `BUZZ_VERSION` is always this app's version, so a command can tell it runs
+/// under Buzz.
+fn set_environment(
+    command: &mut Command,
+    path: &OsStr,
+    environment: &HashMap<String, Option<String>>,
+    version: &str,
+) -> Result<(), String> {
+    // Never pass on an identity the app itself was started with.
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with("BUZZ_") || text.starts_with("NOSTR_") {
+            command.env_remove(&name);
+        }
+    }
+    command.env("PATH", path);
+    for (name, value) in environment {
+        if name.is_empty() || name.contains(['=', '\0']) {
+            return Err("Invalid environment variable".into());
+        }
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    command.env("BUZZ_VERSION", version);
+    Ok(())
 }
 
 /// The verified target stays inside the MCP prefix and the same containment.
