@@ -131,7 +131,12 @@ the row's alignment. A row is not an extra click target around its input. Preser
 visible labels and connect help/error text; placeholders cannot replace labels.
 Use `Accordion` for optional details, retaining mounted draft input where needed.
 Use `Accordion variant="settings"` for disclosures alongside preference rows.
-Its full-row trigger uses the settings container shape and spacing; the chevron
+Inside a row-layout `SettingsGroup`, it shares the group's frame and content inset,
+with square trigger corners so the hover fill follows the flat row dividers.
+The disclosure spans the group's inner width; its trigger and content retain the
+group's horizontal inset, so text has padding inside the hover fill. No divider
+separates the trigger from its expanded content.
+Standalone triggers use the settings container shape and spacing; the chevron
 is decorative, and the entire row expands the content. `Select variant="preference"` uses the same
 label and compact choice control without adding a group container.
 See [settings fills and spacing](../../../docs/design-system.md#content-headers-and-settings-fills).

@@ -1,3 +1,4 @@
+import { profileHistoryTarget, profileHistoryRoute } from "./target";
 import { expect, it } from "vitest";
 import {
   claimProfileTranscript,
@@ -70,6 +71,30 @@ it("recognizes only the exact local profile Activity destination", () => {
     expect(profileActivityViewKey(invalid)).toBeUndefined();
 });
 
+it.each([false, true])(
+  "preserves the Activity opening through version addresses (transcript %s)",
+  (transcript) => {
+    const pubkey = "a".repeat(64);
+    const base = profileActivityViewTarget(pubkey) as string;
+    const version = profileHistoryTarget(base, {
+      side: "instructions",
+      id: "b".repeat(64),
+    });
+    for (const target of [profileHistoryTarget(base), version]) {
+      expect(profileActivityViewKey(target)).toBe(pubkey);
+      expect(profilePanelKey(target)).toBe(pubkey);
+    }
+    if (transcript) {
+      openProfileTranscript(base, () => true);
+      expect(profileTranscriptRequest(version)).toBe(
+        profileTranscriptRequest(base),
+      );
+      expect(claimProfileTranscript(version)).toBeDefined();
+      expect(profileTranscriptRequest(base)).toBeUndefined();
+    }
+  },
+);
+
 it("gives an agent one Activity destination, with no transcript variant", () => {
   const key = "ab".repeat(32);
   const plain = profileActivityViewTarget(key) ?? "";
@@ -108,4 +133,26 @@ it("asks for a transcript once per opening until its profile claims it", () => {
   // Opening the same target again is a new opening.
   openProfileTranscript(activity, open);
   expect(claimProfileTranscript(activity)).toBeGreaterThan(first ?? 0);
+});
+
+it("restores version addresses only for a recognized underlying profile", () => {
+  const pubkey = "a".repeat(64);
+  const selected = { side: "instructions", id: "b".repeat(64) } as const;
+  for (const base of [
+    profileTarget(pubkey),
+    profileTarget(pubkey, { agent: true }),
+    profileActivityViewTarget(pubkey),
+  ]) {
+    const opened = profileHistoryTarget(base as string, selected);
+    expect(profileHistoryRoute(opened)).toEqual(selected);
+    expect(profilePanelKey(opened)).toBe(pubkey);
+    expect(profileHistoryTarget(opened)).toBe(`${base}#versions`);
+    expect(profilePanelKey(`${base}#versions`)).toBe(pubkey);
+    expect(profilePanelKey(`${opened}#extra`)).toBeUndefined();
+  }
+  expect(
+    profilePanelKey(
+      `https://example.com#version=instructions/${"b".repeat(64)}`,
+    ),
+  ).toBeUndefined();
 });
