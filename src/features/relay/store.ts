@@ -71,6 +71,10 @@ type WindowState = {
    * reached the start. Only falls while the window lives: a catch-up head can
    * move `cursor` past rows the reader already has, and those must stay. */
   floor?: number | undefined;
+  /** The viewer's sends this window saw unconfirmed. They show whatever
+   * their date, as they did while sending; confirmed sends from before the
+   * window wait for their page. */
+  sent: Set<string>;
   generation: number;
   controller?: AbortController | undefined;
   /** Rows came from IndexedDB and no relay read has replaced them. Freshness
@@ -458,25 +462,43 @@ export function createChannelStore(
   function setWindow(state: WindowState, patch: Partial<ChannelWindow>) {
     let rows = patch.rows ?? state.snapshot.rows;
     if (authorized(state.channelId) && transport) {
-      // Session reads (agents, search, previews) and the live tail can carry
-      // rows from before the loaded history. Showing one leaves a gap that a
-      // later page fills mid-list, where the timeline can neither anchor the
-      // reader nor tell it from new arrivals. That page shows them instead.
-      const floor =
-        (patch.hasMore ?? state.snapshot.hasMore) ? state.floor : undefined;
+      // Session reads (agents, search, previews), the live tail and the
+      // viewer's own confirmed sends can carry rows from before the loaded
+      // history. Showing one leaves a gap that a later page fills mid-list,
+      // where the timeline can neither anchor the reader nor tell it from new
+      // arrivals. That page shows them instead.
+      const more = patch.hasMore ?? state.snapshot.hasMore;
+      const shown =
+        (floor: number | undefined) => (event: import("./events").EventData) =>
+          !channelRowKind(event.kind) ||
+          ((floor === undefined || event.created_at >= floor) &&
+            (state.ceiling === undefined || event.created_at < state.ceiling));
       const combined = new Map(
         [...state.events, ...state.notices.values(), ...state.traffic.values()]
-          .filter(
-            (event) =>
-              !channelRowKind(event.kind) ||
-              ((floor === undefined || event.created_at >= floor) &&
-                (state.ceiling === undefined ||
-                  event.created_at < state.ceiling)),
-          )
+          .filter(shown(more ? state.floor : undefined))
           .map((event) => [event.id, event as import("./events").EventData]),
       );
       const ids = new Set(combined.keys());
-      for (const item of local?.snapshot() ?? [])
+      const outbox = local?.snapshot() ?? [];
+      // An unconfirmed send's row is the only place that offers Retry. Only
+      // rows the outbox still holds need the exemption.
+      state.sent = new Set(
+        outbox
+          .filter(
+            ({ event, delivery }) =>
+              state.sent.has(event.id) ||
+              (delivery !== "seen" && channelRowKind(event.kind)),
+          )
+          .map(({ event }) => event.id),
+      );
+      // Until a page sets the floor, history's extent is unknown, not
+      // unbounded: a confirmed send waits for the page that holds it.
+      const own = outbox.filter(
+        ({ event }) =>
+          state.sent.has(event.id) ||
+          shown(more ? (state.floor ?? Infinity) : undefined)(event),
+      );
+      for (const item of own)
         if (
           [9, 40002, 40008].includes(item.event.kind) &&
           item.event.tags.some(
@@ -484,7 +506,7 @@ export function createChannelStore(
           )
         )
           ids.add(item.event.id);
-      const operations = (local?.snapshot() ?? []).filter((item) =>
+      const operations = own.filter((item) =>
         item.event.tags.some(
           (tag) =>
             (tag[0] === "h" && tag[1] === state.channelId) ||
@@ -598,6 +620,7 @@ export function createChannelStore(
       events: [],
       notices: new Map(),
       atHead: true,
+      sent: new Set(),
       generation: 0,
     };
     windows.set(channelId, state);

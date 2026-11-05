@@ -1639,3 +1639,88 @@ it("skips the reads a continuous global replay covers, and keeps them after a cu
     owner.dispose();
   }
 });
+
+it("shows the viewer's own sends from before the loaded history only once paging reaches them", async () => {
+  // The outbox keeps confirmed sends. One older than the head page must wait
+  // for the older page, as every other row does: shown early, the reader
+  // scrolls up through their own messages with everyone else's missing, even
+  // while the head page loads. A failed send stays, since only its row offers
+  // Retry.
+  const relay = keypair(),
+    viewer = keypair(),
+    alice = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const lost = message(viewer, "c", "lost", 3),
+    mine = message(viewer, "c", "mine", 5),
+    before = message(alice, "c", "before", 4),
+    after = message(alice, "c", "after", 6),
+    seen = message(alice, "c", "seen", 10);
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      writer: {
+        sign: async () => {
+          throw new Error("unused");
+        },
+        publish: async () => {},
+      },
+    },
+    {
+      prepared: true,
+      outboxStorage: {
+        load: () => [
+          { event: lost, delivery: "failed" },
+          { event: mine, signed: mine, delivery: "seen" },
+        ],
+        save() {},
+      },
+    },
+  );
+  const rows = () =>
+    owner.session.channels.window("c").rows.map((row) => row.id);
+  try {
+    await owner.session.outbox?.ready();
+    owner.session.channels.ensureList();
+    wire
+      .next()
+      .respond([
+        roster(relay, "c", [viewer.pubkey]),
+        metadata(relay, "c", "C"),
+      ]);
+    await flush();
+    owner.session.channels.ensure("c");
+    await flush();
+    // Before the head answers, the history's extent is unknown, not unbounded.
+    expect(rows()).toEqual([lost.id]);
+    wire.next().respond([
+      seen,
+      bounds(relay, "c", "head", {
+        has_more: true,
+        next_cursor: { created_at: 10, id: seen.id },
+      }),
+    ]);
+    await flush();
+    expect(rows()).toEqual([lost.id, seen.id]);
+    // Other reads (profiles, outbox readback) answer empty.
+    for (const entry of wire.pending.splice(0)) entry.respond([]);
+    await flush();
+    owner.session.channels.loadOlder("c");
+    const older = wire.pending.find(
+      ({ filters }) => filters[0]?.before_id === seen.id,
+    );
+    assert.exists(older);
+    older.respond([
+      after,
+      mine,
+      before,
+      bounds(relay, "c", `10:${seen.id}`, {
+        has_more: false,
+        next_cursor: null,
+      }),
+    ]);
+    await flush();
+    expect(rows()).toEqual([lost.id, before.id, mine.id, after.id, seen.id]);
+  } finally {
+    owner.dispose();
+  }
+});
