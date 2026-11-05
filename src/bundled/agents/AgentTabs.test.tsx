@@ -274,14 +274,24 @@ it("discards a staged harness change together with the section draft", async () 
 });
 
 it.each(["here", "hosted"] as const)(
-  "releases Memory on leaving and reads fresh memories on return for agents %s",
+  "unmounts Memory on leaving, shows its kept listing on return and reads fresh memories for agents %s",
   async (place) => {
     const user = userEvent.setup();
     let body = "Original memory";
-    const read = vi.fn(async () => ({
-      entries: [{ slug: "core", body, eventId: "b".repeat(64), createdAt: 1 }],
-      partial: false,
-    }));
+    let answer: (() => void) | undefined;
+    const read = vi.fn(async () => {
+      const listing = {
+        entries: [
+          { slug: "core", body, eventId: "b".repeat(64), createdAt: 1 },
+        ],
+        partial: false,
+      };
+      if (read.mock.calls.length > 1)
+        await new Promise<void>((resolve) => {
+          answer = resolve;
+        });
+      return listing;
+    });
     const owner = createAgentMemories(read, "c".repeat(64), () => true);
     const agent: Agent = {
       key: "a".repeat(64),
@@ -322,6 +332,8 @@ it.each(["here", "hosted"] as const)(
     expect(read).not.toHaveBeenCalled();
     expect(screen.queryByRole("tab", { name: "Attention" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Memory" }));
+    // A closed memory's body is not rendered; open core to read it.
+    await user.click(await screen.findByRole("button", { name: "core" }));
     expect(await screen.findByText("Original memory")).toBeInTheDocument();
     expect(
       screen.queryAllByRole("button", { name: "Memory scope: example.com" }),
@@ -341,8 +353,13 @@ it.each(["here", "hosted"] as const)(
     }
     body = "Updated memory";
     await user.click(screen.getByRole("tab", { name: "Memory" }));
-    expect(await screen.findByText("Updated memory")).toBeInTheDocument();
+    // Within 30 seconds the kept listing shows before the relay answers,
+    // and it is read again.
+    await user.click(await screen.findByRole("button", { name: "core" }));
+    expect(await screen.findByText("Original memory")).toBeInTheDocument();
     expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => answer?.());
+    expect(await screen.findByText("Updated memory")).toBeInTheDocument();
     expect(screen.queryByText("Original memory")).not.toBeInTheDocument();
   },
 );

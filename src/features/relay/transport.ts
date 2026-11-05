@@ -770,12 +770,17 @@ export async function connectBrokerTransport(
             agent: string,
             signal: AbortSignal,
           ): Promise<MemoryListing> => {
+            // Bounds the request and its body, so a stalled read ends in error.
+            const bounded = AbortSignal.any([
+              signal,
+              AbortSignal.timeout(10000),
+            ]);
             const response = await fetch(`${endpoint}/agent-memories`, {
               method: "POST",
               credentials: "same-origin",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ agent }),
-              signal,
+              signal: bounded,
             });
             if (!response.ok) {
               await response.body?.cancel();
@@ -787,7 +792,7 @@ export async function connectBrokerTransport(
             const listing = JSON.parse(
               await memoryResponseText(response),
             ) as MemoryListing;
-            signal.throwIfAborted();
+            bounded.throwIfAborted();
             return listing;
           },
         }

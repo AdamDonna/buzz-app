@@ -383,7 +383,12 @@ export type Lookup = Readonly<{
   agent: string;
   workspace: string;
   sessionId?: string;
+  /** The ids saved for `place`, read without searching goose. */
+  sessions?: readonly string[];
   place?: Place;
+  /** Also search goose's history for the place's sessions, which takes
+   * seconds; for one that saved no ids. */
+  search?: boolean;
   /** The session still working, whose last turn has not ended. */
   working?: string;
 }>;
@@ -391,22 +396,6 @@ export type Lookup = Readonly<{
 /** goose's history for an agent, each read in its own short-lived `goose-acp`. */
 export class GooseHistory {
   constructor(private readonly host: GooseHost | undefined) {}
-
-  /** The agent's latest sessions in `workspace`, newest first: those whose
-   * first prompt names its key, `agent`. */
-  recent(agent: string, workspace: string, signal: AbortSignal) {
-    return this.with(signal, async (goose, { resolveDirectory }) => {
-      const cwd = await absolute(resolveDirectory, workspace);
-      const rows: GooseSessionRow[] = [];
-      for (const row of await list(goose, cwd, agent)) {
-        if (rows.length >= RECENT_LIMIT) break;
-        signal.throwIfAborted();
-        const read = await listed(goose, row.sessionId);
-        if (opening(read)?.("Agent") === agent) rows.push(row);
-      }
-      return rows;
-    });
-  }
 
   /** Every session in `workspace` used since `since`, newest first, and the
    * messages of those `wanted` picks, all from one `goose-acp`: every agent
@@ -430,15 +419,22 @@ export class GooseHistory {
     });
   }
 
-  /** The agent's newest session for `place`, or undefined when goose has none
-   * for it in this workspace. */
-  find(agent: string, workspace: string, place: Place, signal: AbortSignal) {
+  /** The listed rows of `ids`, read from goose's sessions in `workspace`
+   * newest first, page by page, until every one is found or none are left:
+   * no search and no session's messages. */
+  listed(workspace: string, ids: ReadonlySet<string>, signal: AbortSignal) {
     return this.with(signal, async (goose, { resolveDirectory }) => {
       const cwd = await absolute(resolveDirectory, workspace);
-      for (const row of await candidates(goose, cwd, place))
-        if (startedFor(await messages(goose, row.sessionId), agent, place))
-          return row;
-      return undefined;
+      const found = new Map<string, GooseSessionRow>();
+      let cursor: string | undefined;
+      do {
+        const read = await page(goose, cwd, undefined, cursor);
+        for (const row of read.rows)
+          if (ids.has(row.sessionId)) found.set(row.sessionId, row);
+        cursor = read.next;
+        signal.throwIfAborted();
+      } while (cursor && found.size < ids.size);
+      return found;
     });
   }
 
@@ -450,8 +446,12 @@ export class GooseHistory {
     name?: Names,
   ): Promise<GooseTranscript | undefined> {
     return this.with(signal, async (goose, { resolveDirectory }) => {
-      const ids = new Set(lookup.sessionId ? [lookup.sessionId] : []);
-      if (lookup.place) {
+      const saved = new Set(lookup.sessions);
+      const ids = new Set([
+        ...(lookup.sessionId ? [lookup.sessionId] : []),
+        ...saved,
+      ]);
+      if (lookup.place && lookup.search) {
         const cwd = await absolute(resolveDirectory, lookup.workspace);
         for (const row of await candidates(goose, cwd, lookup.place))
           ids.add(row.sessionId);
@@ -470,6 +470,7 @@ export class GooseHistory {
         if (
           lookup.place &&
           sessionId !== lookup.sessionId &&
+          !saved.has(sessionId) &&
           !startedFor(read, lookup.agent, lookup.place)
         )
           continue;

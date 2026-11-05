@@ -15,6 +15,7 @@ import {
   type SavedConversation,
   ServerPool,
   SharedProcess,
+  type SessionsOptions,
 } from "./sessions";
 
 const tools: ToolServer = async (_conversation, message) => ({
@@ -33,9 +34,11 @@ const setup = (
     silent,
     onChange,
     store,
+    started,
     wrap,
   }: Readonly<{
     pool?: ServerPool;
+    started?: SessionsOptions["started"];
     onChange?: () => void;
     store?: Map<string, SavedConversation>;
     /** Wraps the fake's `serve`. */
@@ -74,8 +77,9 @@ const setup = (
       pool,
       ...(onChange && { onChange }),
       ...(store && {
-        store: { set: (key: string, saved) => void store.set(key, saved) },
+        store,
       }),
+      ...(started && { started }),
       launch: async () => settings,
       choice: () => choice,
       fingerprint: () =>
@@ -505,13 +509,66 @@ describe("AgentSessions", () => {
     const { sessions } = setup({}, false, { store });
     await sessions.deliver("a", "one", 1);
     const at = sessions.snapshot()[0]?.at;
-    expect(store.get("a")).toEqual({ at });
+    expect(store.get("a")).toEqual({ at, sessions: ["session-1"] });
     await vi.advanceTimersByTimeAsync(IDLE_MS);
     expect(sessions.snapshot()).toEqual([]);
-    expect(store.get("a")).toEqual({ at });
+    expect(store.get("a")).toEqual({ at, sessions: ["session-1"] });
     // A one-off turn joins no conversation.
     await sessions.runOnce("watch/x", () => "look");
     expect([...store.keys()]).toEqual(["a"]);
+  });
+
+  it("keeps a conversation's session ids as each message and reopening saves it, newest first", async () => {
+    vi.useFakeTimers();
+    const store = new Map<string, SavedConversation>([
+      [
+        "a",
+        { at: 1, sessions: Array.from({ length: 10 }, (_, i) => `old-${i}`) },
+      ],
+    ]);
+    const { sessions } = setup({}, false, { store });
+    await sessions.deliver("a", "one", 1);
+    await sessions.deliver("a", "two", 2);
+    const first = store.get("a")?.sessions;
+    expect(first?.[0]).toBe(sessions.snapshot()[0]?.sessionId);
+    expect(first).toHaveLength(10);
+    expect(first?.at(-1)).toBe("old-8");
+    await vi.advanceTimersByTimeAsync(IDLE_MS);
+    await sessions.deliver("a", "three", 3);
+    const reopened = sessions.snapshot()[0]?.sessionId;
+    expect(reopened).not.toBe(first?.[0]);
+    expect(store.get("a")?.sessions?.slice(0, 3)).toEqual([
+      reopened,
+      first?.[0],
+      "old-0",
+    ]);
+  });
+
+  it("says which conversation each session started for, and none for a one-off turn", async () => {
+    vi.useFakeTimers();
+    const started = vi.fn();
+    const { sessions } = setup({}, false, { started });
+    await sessions.deliver("chan/root", "one", 1);
+    await sessions.runOnce("watch/x", () => "look");
+    expect(started.mock.calls.map((call) => call[3])).toEqual([
+      "chan/root",
+      undefined,
+    ]);
+  });
+
+  it("keeps delivering past a damaged saved conversation, saving it afresh", async () => {
+    vi.useFakeTimers();
+    for (const sessions of [{ not: "a list" }, "s9", null, [7, "kept"]]) {
+      const store = new Map([
+        ["a", { at: 1, sessions } as unknown as SavedConversation],
+      ]);
+      const { sessions: agent } = setup({}, false, { store });
+      await agent.deliver("a", "one", 1);
+      const id = agent.snapshot()[0]?.sessionId;
+      expect(store.get("a")?.sessions).toEqual(
+        Array.isArray(sessions) ? [id, "kept"] : [id],
+      );
+    }
   });
 
   it("dates a session by the messages it takes in and the turns it ends, not by a long turn keeping it open", async () => {
@@ -561,7 +618,7 @@ describe("AgentSessions", () => {
       tools,
       process: new SharedProcess(fake, fake.serve),
       pool: new ServerPool(),
-      store: { set: (key, saved) => void store.set(key, saved) },
+      store,
       launch: async () => {
         await held;
         return { workspace: "/w", systemPrompt: "" };
@@ -1113,6 +1170,46 @@ it("keeps saved conversations per agent in storage, most recent first", () => {
     ["c/root", { at: 1 }],
   ]);
   expect(localSessions(storage, "two").list()).toEqual([["c/root", { at: 2 }]]);
+  expect(one.get("dm")).toEqual({ at: 3 });
+  one.set("dm", { at: 4, sessions: ["s1"] });
+  expect(localSessions(storage, "one").get("dm")).toEqual({
+    at: 4,
+    sessions: ["s1"],
+  });
+  data.set(
+    "buzz.goose.sessions.v1",
+    JSON.stringify({
+      one: {
+        kept: {
+          at: 5,
+          sessions: [
+            "s1",
+            "s1",
+            3,
+            "x".repeat(300),
+            ...Array.from({ length: 12 }, (_, i) => `n${i}`),
+          ],
+        },
+        legacy: { at: 4 },
+        list: { at: 6, sessions: { 0: "s" } },
+        infinite: { at: null },
+        far: { at: -1e20 },
+        empty: null,
+      },
+      two: "damaged",
+    }),
+  );
+  expect(one.list()).toEqual([
+    [
+      "kept",
+      {
+        at: 5,
+        sessions: ["s1", ...Array.from({ length: 9 }, (_, i) => `n${i}`)],
+      },
+    ],
+    ["legacy", { at: 4 }],
+  ]);
+  expect(localSessions(storage, "two").list()).toEqual([]);
   data.set("buzz.goose.sessions.v1", "not json");
   expect(one.list()).toEqual([]);
 });

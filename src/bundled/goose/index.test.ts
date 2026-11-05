@@ -11,9 +11,9 @@ afterEach(() => vi.restoreAllMocks());
 it("observes saved conversations with the status of open sessions", () => {
   vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
   vi.spyOn(GooseRuntime.prototype, "conversations").mockReturnValue([
-    { key: "room/r", at: 3 },
-    { key: "dm", at: 2 },
-    { key: "old", at: 1 },
+    { key: "room/r", at: 3, sessions: [] },
+    { key: "dm", at: 2, sessions: [] },
+    { key: "old", at: 1, sessions: [] },
   ]);
   vi.spyOn(GooseRuntime.prototype, "sessions").mockReturnValue([
     { key: "room/r", busy: true, sessionId: "s1", at: 3 },

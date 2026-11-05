@@ -45,8 +45,18 @@ const scopeAgents: AgentScopeReader = {
   ],
 };
 
+/** Opens core, whose body renders only while it is open. */
+async function openCore() {
+  fireEvent.click(await screen.findByRole("button", { name: "core" }));
+}
+
 function setup(
-  read: () => Promise<MemoryListing>,
+  read: (
+    agent: string,
+    signal: AbortSignal,
+    slug?: string,
+    onPage?: (page: MemoryListing) => void,
+  ) => Promise<MemoryListing>,
   communities?: CommunityReader,
 ) {
   const owner = createAgentMemories(vi.fn(read), "c".repeat(64), () => true);
@@ -92,6 +102,8 @@ it("shows core first, then other memories in Markdown accordions", async () => {
   ).not.toBeInTheDocument();
   const coreTrigger = within(core).getByRole("button", { name: "core" });
   expect(coreTrigger).toHaveAttribute("aria-expanded", "false");
+  // A closed memory's body, core's too, is not rendered until it opens.
+  expect(within(core).queryByText("Keep it short.")).toBeNull();
   await user.click(within(coreTrigger).getByText("core"));
   expect(coreTrigger).toHaveAttribute("aria-expanded", "true");
   await user.keyboard("{Enter}");
@@ -108,7 +120,12 @@ it("shows core first, then other memories in Markdown accordions", async () => {
   expect(
     within(references).getByTitle(formatFullTimestamp(1_700_000_000)),
   ).toBeInTheDocument();
-  expect(within(references).getByText("Cold detail.")).toBeInTheDocument();
+  // A closed memory's body is not rendered until it opens.
+  expect(within(references).queryByText("Cold detail.")).toBeNull();
+  await user.click(
+    within(references).getByRole("button", { name: "mem/notes" }),
+  );
+  expect(within(references).getByText("Cold detail.")).toBeVisible();
   expect(within(references).queryByText("core")).not.toBeInTheDocument();
 });
 
@@ -193,6 +210,64 @@ it("announces that memories are loading", async () => {
     await screen.findByRole("status", { name: "Loading memories" }),
   ).toBeInTheDocument();
   expect(screen.queryByText("Loading memory…")).not.toBeInTheDocument();
+});
+
+it("shows memories as each page arrives and says more are loading", async () => {
+  let finish: (listing: MemoryListing) => void = () => {};
+  let page: ((page: MemoryListing) => void) | undefined;
+  setup((_agent, _signal, _slug, onPage) => {
+    page = onPage;
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  await vi.waitFor(() => expect(page).toBeDefined());
+  act(() => page?.({ entries: [entry("mem/first", "One.")], partial: false }));
+  expect(
+    await screen.findByRole("button", { name: /first/ }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Loading more memories…",
+  );
+  act(() => page?.({ entries: [entry("mem/second", "Two.")], partial: false }));
+  expect(
+    await screen.findByRole("button", { name: /second/ }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /first/ })).toBeInTheDocument();
+  await act(async () =>
+    finish({
+      entries: [entry("mem/first", "One."), entry("mem/second", "Two.")],
+      partial: false,
+    }),
+  );
+  await vi.waitFor(() =>
+    expect(
+      screen.queryByText("Loading more memories…"),
+    ).not.toBeInTheDocument(),
+  );
+  expect(
+    screen.queryByText("Some memories couldn't be shown."),
+  ).not.toBeInTheDocument();
+});
+
+it("stops a streamed read and drops its memories when the panel closes mid-stream", async () => {
+  let signal: AbortSignal | undefined;
+  let page: ((page: MemoryListing) => void) | undefined;
+  const { owner, unmount } = setup((_agent, aborted, _slug, onPage) => {
+    signal = aborted;
+    page = onPage;
+    return new Promise(() => {});
+  });
+  await vi.waitFor(() => expect(page).toBeDefined());
+  act(() => page?.({ entries: [entry("mem/first", "One.")], partial: false }));
+  await screen.findByRole("button", { name: /first/ });
+  unmount();
+  expect(signal?.aborted).toBe(true);
+  // A page landing after the close is not kept anywhere.
+  const view = owner.capability.open(pubkey);
+  page?.({ entries: [entry("mem/late", "Late.")], partial: false });
+  expect(view.snapshot().listing).toBeUndefined();
+  view.dispose();
 });
 
 it("shows memories newest first without a sorting control", async () => {
@@ -302,7 +377,45 @@ it("reports a failed read and reads again on refresh", async () => {
   );
   fail = false;
   await user.click(screen.getByRole("button", { name: "Refresh" }));
+  await openCore();
   expect(await screen.findByText("Back.")).toBeInTheDocument();
+});
+
+it("shows pages streamed by a Retry of a partial listing before it finishes", async () => {
+  const user = userEvent.setup();
+  let page: ((page: MemoryListing) => void) | undefined;
+  let finish: (listing: MemoryListing) => void = () => {};
+  let calls = 0;
+  setup((_agent, _signal, _slug, onPage) => {
+    if (++calls === 1)
+      return Promise.resolve({
+        entries: [entry("mem/first", "One.")],
+        partial: true,
+      });
+    page = onPage;
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  await screen.findByText("Some memories couldn't be shown.");
+  await user.click(
+    screen.getByRole("button", { name: "Retry loading memories" }),
+  );
+  await vi.waitFor(() => expect(page).toBeDefined());
+  act(() => page?.({ entries: [entry("mem/second", "Two.")], partial: false }));
+  expect(
+    await screen.findByRole("button", { name: /second/ }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /first/ })).toBeInTheDocument();
+  await act(async () =>
+    finish({
+      entries: [entry("mem/first", "One."), entry("mem/second", "Two.")],
+      partial: false,
+    }),
+  );
+  await vi.waitFor(() =>
+    expect(screen.queryByText("Some memories couldn't be shown.")).toBeNull(),
+  );
 });
 
 it("shows nothing to read without a session", () => {
@@ -318,10 +431,10 @@ it("clears displayed plaintext when its session invalidates the view", async () 
     entries: [entry("core", "I am Ada.")],
     partial: false,
   }));
-  await screen.findByText("I am Ada.");
-  const trigger = screen.getByRole("button", { name: "core" });
+  const trigger = await screen.findByRole("button", { name: "core" });
   await user.click(trigger);
   expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await screen.findByText("I am Ada.");
 
   owner.clear();
 
@@ -340,6 +453,7 @@ it("holds one revocable memory view until the panel unmounts", async () => {
     entries: [entry("core", "I am Ada.")],
     partial: false,
   }));
+  await openCore();
   await screen.findByText("I am Ada.");
   // The panel retains one of the session's four views while it retains text.
   const views = Array.from({ length: 3 }, () => memories.open(pubkey));
@@ -377,10 +491,17 @@ it("retries a partial listing while retaining its memories until recovery", asyn
     .mockReturnValueOnce(pending);
   setup(read);
   await screen.findByText("Some memories couldn't be shown.");
+  await openCore();
   const retry = screen.getByRole("button", { name: "Retry loading memories" });
   await user.click(retry);
-  expect(retry).toHaveAttribute("aria-disabled", "true");
-  await user.click(retry);
+  // The retry shows what it holds and says more are loading, in place of the
+  // Retry it replaces.
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Loading more memories…",
+  );
+  expect(
+    screen.queryByRole("button", { name: "Retry loading memories" }),
+  ).toBeNull();
   expect(screen.getByText("Retained.")).toBeInTheDocument();
   expect(document.querySelector("[data-memory-list]")).toHaveAttribute(
     "data-refreshing",
@@ -395,4 +516,96 @@ it("retries a partial listing while retaining its memories until recovery", asyn
   expect(
     screen.queryByRole("button", { name: /Retry loading memories|Refresh/ }),
   ).toBeNull();
+});
+
+it("keeps shown memories beside the error when a later page fails, then recovers", async () => {
+  const user = userEvent.setup();
+  let calls = 0;
+  setup(async (_agent, _signal, _slug, onPage) => {
+    if (++calls === 1) {
+      onPage?.({ entries: [entry("mem/first", "One.")], partial: true });
+      throw new Error("HTTP 500");
+    }
+    return {
+      entries: [entry("mem/first", "One."), entry("mem/second", "Two.")],
+      partial: false,
+    };
+  });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Memory couldn't be read.",
+  );
+  expect(screen.getByRole("button", { name: /first/ })).toBeInTheDocument();
+  await user.click(
+    screen.getByRole("button", { name: "Retry loading memories" }),
+  );
+  expect(
+    await screen.findByRole("button", { name: /second/ }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("keeps a failed page's memories through a pending and failed Retry, then recovers", async () => {
+  const user = userEvent.setup();
+  const held: {
+    resolve: (listing: MemoryListing) => void;
+    reject: (error: Error) => void;
+  }[] = [];
+  const read = vi.fn(
+    (
+      _agent: string,
+      _signal: AbortSignal,
+      _slug?: string,
+      onPage?: (page: MemoryListing) => void,
+    ) =>
+      new Promise<MemoryListing>((resolve, reject) => {
+        if (read.mock.calls.length === 1)
+          onPage?.({
+            entries: [entry("core", "Kept."), entry("mem/first", "One.")],
+            partial: true,
+          });
+        held.push({ resolve, reject });
+      }),
+  );
+  setup(read);
+  const fail = async () =>
+    act(async () => held.at(-1)?.reject(new Error("broken")));
+  const shown = () => {
+    expect(screen.getByRole("button", { name: "core" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /first/ })).toBeInTheDocument();
+  };
+  // 1–2: a page loads, then a later page fails.
+  await screen.findByRole("button", { name: /first/ });
+  await fail();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Memory couldn't be read.",
+  );
+  shown();
+  // 3: Retry is held pending.
+  await user.click(
+    screen.getByRole("button", { name: "Retry loading memories" }),
+  );
+  const retries = read.mock.calls.length;
+  expect(retries).toBeGreaterThan(1);
+  shown();
+  // 4: the Retry fails before sending any page.
+  await fail();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Memory couldn't be read.",
+  );
+  shown();
+  // 5: a read succeeds and recovers.
+  await user.click(
+    screen.getByRole("button", { name: "Retry loading memories" }),
+  );
+  await act(async () =>
+    held.at(-1)?.resolve({
+      entries: [entry("core", "Kept."), entry("mem/second", "Two.")],
+      partial: false,
+    }),
+  );
+  expect(
+    await screen.findByRole("button", { name: /second/ }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /first/ })).toBeNull();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });

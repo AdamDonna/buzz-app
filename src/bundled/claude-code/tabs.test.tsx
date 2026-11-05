@@ -564,6 +564,33 @@ it("sets the conversation the profile was opened from apart from recent conversa
   ).toBeNull();
 });
 
+it("lists the opened conversation's channel above newer conversations", () => {
+  const [one, two] = ["e".repeat(64), "f".repeat(64)];
+  localStorage.setItem(
+    "buzz.claude-code.sessions.v1",
+    JSON.stringify({
+      [agent().key]: {
+        newest: { id: "newest-session", seen: 0, at: 3 },
+        [`here/${one}`]: { id: "here-session", seen: 0, at: 1 },
+        older: { id: "older-session", seen: 0, at: 2 },
+      },
+    }),
+  );
+  const Activity = tab(installed().type, 1);
+  render(
+    <Activity
+      agent={agent()}
+      save={vi.fn()}
+      conversation={{ channelId: "here", rootId: two }}
+    />,
+  );
+  expect(
+    screen
+      .getAllByRole("listitem")
+      .map((item) => within(item).getByTitle(/ · /).getAttribute("title")),
+  ).toEqual(["here · thread eeeeeeee", "newest · channel", "older · channel"]);
+});
+
 it("finds the thread's Claude session another build started", async () => {
   const root = "f".repeat(64);
   const started = JSON.stringify({

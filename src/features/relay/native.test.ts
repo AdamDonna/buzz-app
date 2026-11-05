@@ -1314,6 +1314,77 @@ it("sorts host memory projections with the same locale collation as the broker",
   ).toEqual(["mem/b", "mem/b_c", "mem/b-c", "mem/b/c", "mem/bc"]);
 });
 
+it("streams memory pages as they land and cancels native paging on abort", async () => {
+  const transport = await connectNativeTransport(community);
+  const agent = keypair();
+  const entry = (slug: string, i: number) => ({
+    slug,
+    body: slug,
+    eventId: i.toString(16).padStart(64, "0"),
+    createdAt: 1,
+  });
+  let finish: (value: unknown) => void = () => {};
+  let readId = "";
+  const dispatch = vi.mocked(invoke);
+  dispatch.mockImplementationOnce(async (command, args) => {
+    expect(command).toBe("relay_agent_memories_read");
+    const { id, onPage } = args as { id: string; onPage: { id: string } };
+    readId = id;
+    progressChannels.get(onPage.id)?.({
+      entries: [entry("mem/a", 1)],
+      partial: false,
+    });
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  const pages: string[][] = [];
+  const controller = new AbortController();
+  const read = transport.readAgentMemories?.(
+    agent.pubkey,
+    controller.signal,
+    undefined,
+    (page) => pages.push(page.entries.map((e) => e.slug)),
+  );
+  await vi.waitFor(() => expect(pages).toEqual([["mem/a"]]));
+  // Leaving mid-stream cancels the native read by its ID.
+  dispatch.mockResolvedValueOnce(undefined);
+  controller.abort();
+  expect(dispatch).toHaveBeenLastCalledWith("relay_http_cancel", {
+    id: readId,
+  });
+  finish({ entries: [entry("mem/a", 1), entry("mem/b", 2)], partial: false });
+  await expect(read).rejects.toThrow();
+});
+
+it("skips a streamed Memory page that fails validation and still answers", async () => {
+  const transport = await connectNativeTransport(community);
+  const agent = keypair();
+  const entry = {
+    slug: "mem/a",
+    body: "a",
+    eventId: "1".padStart(64, "0"),
+    createdAt: 1,
+  };
+  vi.mocked(invoke).mockImplementationOnce(async (_command, args) => {
+    const { onPage } = args as { onPage: { id: string } };
+    const page = progressChannels.get(onPage.id);
+    expect(() => page?.({ entries: [null], partial: true })).not.toThrow();
+    page?.({ entries: [entry], partial: true });
+    return { entries: [entry], partial: false };
+  });
+  const pages: string[][] = [];
+  await expect(
+    transport.readAgentMemories?.(
+      agent.pubkey,
+      new AbortController().signal,
+      undefined,
+      (page) => pages.push(page.entries.map((e) => e.slug)),
+    ),
+  ).resolves.toEqual({ entries: [entry], partial: false });
+  expect(pages).toEqual([["mem/a"]]);
+});
+
 it("exposes purpose-bound agent readers and fences obsolete observer decoding", async () => {
   const transport = await connectNativeTransport(community);
   expect(transport.agentActivity).toBe(true);
@@ -1330,7 +1401,13 @@ it("exposes purpose-bound agent readers and fences obsolete observer decoding", 
   });
   dispatch.mockImplementationOnce(async (command, args) => {
     expect(command).toBe("relay_agent_memories_read");
-    expect(args).toEqual({ community, agent: agent.pubkey, slug: null });
+    expect(args).toEqual({
+      community,
+      agent: agent.pubkey,
+      slug: null,
+      id: expect.any(String),
+      onPage: null,
+    });
     return { entries: [], partial: true };
   });
   expect(await transport.readAgentMemories?.(agent.pubkey, signal)).toEqual({

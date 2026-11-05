@@ -9,6 +9,7 @@ import {
   type TranscriptItem,
   type TranscriptTurn,
 } from "./activity-transcript";
+import { validTime } from "../agent-harness/acp/agent-sessions";
 import type { AgentKey } from "./membership";
 import type { AgentStore } from "./store";
 
@@ -20,34 +21,106 @@ export const PROMPTS_PREFIX = "buzz.session-prompts.v1:";
  * reads all of it at startup. */
 export const PROMPTS_BUDGET = 1_000_000;
 
-/** Sessions oldest first, each `[id, parts]`, a part `[label, text index]`.
- * Null parts mark a prompt that was too large to keep. Identical texts are
- * kept once. */
+/** When a session started, the title it was given, and the conversation it
+ * started for: its key, or null for one started outside any, such as a
+ * watch's or timer's turn. Starts saved before that was kept have none. */
+export type SessionStart = Readonly<{
+  at: number;
+  title: string;
+  conversation?: string | null;
+}>;
+
+/** Sessions oldest first, each `[id, parts, start]`, a part `[label, text
+ * index]`. Null parts mark a prompt that was too large to keep. Identical
+ * texts are kept once. Sessions saved before starts were kept have none. */
 type Stored = {
   version: 1;
   texts: string[];
-  sessions: [string, [string, number][] | null][];
+  sessions: [string, [string, number][] | null, SessionStart?][];
 };
+type Session = readonly [
+  string,
+  readonly PromptPart[] | null,
+  (SessionStart | undefined)?,
+];
 
 const size = (text: string) => new TextEncoder().encode(text).length;
 
+/** The longest session id or label kept; longer ones are taken as damaged. */
+const ID_LIMIT = 256;
+const short = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= ID_LIMIT;
+
+/** A saved session as stored, or undefined when it is damaged. One saved
+ * before starts were kept has none. */
+function storedSession(value: unknown): Stored["sessions"][number] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const [id, parts, start] = value as unknown[];
+  if (!short(id) || !id) return undefined;
+  if (
+    parts !== null &&
+    !(
+      Array.isArray(parts) &&
+      parts.every(
+        (part) =>
+          Array.isArray(part) &&
+          short(part[0]) &&
+          Number.isInteger(part[1]) &&
+          part[1] >= 0,
+      )
+    )
+  )
+    return undefined;
+  if (start === undefined) return [id, parts];
+  const { at, title, conversation } = (start ?? {}) as {
+    at?: unknown;
+    title?: unknown;
+    conversation?: unknown;
+  };
+  if (
+    !validTime(at) ||
+    typeof title !== "string" ||
+    !(
+      conversation === undefined ||
+      conversation === null ||
+      short(conversation)
+    )
+  )
+    return undefined;
+  return [
+    id,
+    parts,
+    conversation === undefined ? { at, title } : { at, title, conversation },
+  ];
+}
+
+/** The stored value, its damaged sessions dropped and the rest kept. */
 function read(text: string | null): Stored {
   try {
-    const stored = JSON.parse(text ?? "null") as Stored | null;
+    const stored = JSON.parse(text ?? "null") as Partial<Stored> | null;
     if (
       stored?.version === 1 &&
       Array.isArray(stored.texts) &&
       Array.isArray(stored.sessions)
-    )
-      return stored;
+    ) {
+      const seen = new Set<string>();
+      return {
+        version: 1,
+        texts: stored.texts,
+        sessions: stored.sessions.flatMap((value) => {
+          const session = storedSession(value);
+          if (!session || seen.has(session[0])) return [];
+          seen.add(session[0]);
+          return [session];
+        }),
+      };
+    }
   } catch {}
   return { version: 1, texts: [], sessions: [] };
 }
 
 /** `sessions` with only the texts they use, each once. */
-function packed(
-  sessions: readonly (readonly [string, readonly PromptPart[] | null])[],
-): Stored {
+function packed(sessions: readonly Session[]): Stored {
   const texts: string[] = [];
   const index = new Map<string, number>();
   const at = (text: string) => {
@@ -61,10 +134,12 @@ function packed(
   return {
     version: 1,
     texts,
-    sessions: sessions.map(([id, parts]) => [
-      id,
-      parts ? parts.map(({ label, text }) => [label, at(text)]) : null,
-    ]),
+    sessions: sessions.map(([id, parts, start]) => {
+      const kept = parts
+        ? parts.map(({ label, text }): [string, number] => [label, at(text)])
+        : null;
+      return start ? [id, kept, start] : [id, kept];
+    }),
   };
 }
 
@@ -91,27 +166,38 @@ export function sessionPrompts(
   const all = () => {
     const { texts, sessions } = read(storage.get(key));
     return sessions.map(
-      ([id, parts]) =>
-        [
-          id,
-          parts
-            ? parts.flatMap(([label, text]) =>
-                typeof texts[text] === "string"
-                  ? [{ label, text: texts[text] }]
-                  : [],
-              )
-            : null,
-        ] as const,
+      ([id, parts, start]): Session => [
+        id,
+        parts
+          ? parts.flatMap(([label, text]) =>
+              typeof texts[text] === "string"
+                ? [{ label, text: texts[text] }]
+                : [],
+            )
+          : null,
+        start,
+      ],
     );
   };
   const get = (session: string) => all().find(([id]) => id === session)?.[1];
   return {
     get,
+    /** The sessions kept, oldest first, with how each started when that was
+     * kept. */
+    sessions: () =>
+      read(storage.get(key)).sessions.map(([id, , start]) => ({
+        id,
+        ...start,
+      })),
     /** Keeps what a new session was sent, unless one is kept for it already:
      * the first save wins. Only a runtime's new-session path calls this, so a
      * resumed or dropped session is never filled in. A failed save is
      * logged, never thrown, so the agent keeps working. */
-    async save(session: string, parts: readonly PromptPart[]) {
+    async save(
+      session: string,
+      parts: readonly PromptPart[],
+      start?: SessionStart,
+    ) {
       try {
         // Read, changed and written with no wait between, so saves of one
         // value never interleave and none drops another's session.
@@ -123,6 +209,7 @@ export function sessionPrompts(
           size(JSON.stringify(packed([[session, kept]]))) > PROMPTS_BUDGET
             ? null
             : kept,
+          start,
         ]);
         let value = JSON.stringify(packed(sessions));
         while (size(value) > PROMPTS_BUDGET && sessions.length > 1) {

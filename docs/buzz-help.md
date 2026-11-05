@@ -391,6 +391,12 @@ available rather than silently discarding it.
   open its transcript or **Stop** the running request; before any work updates
   arrive, those controls appear on the live indicator. Stop availability depends
   on the agent type.
+- A Goose agent's Activity lists the sessions Buzz recorded on this device for
+  each conversation. A conversation with no recorded session, such as one from
+  an earlier version of Buzz or another computer, offers **Search older
+  sessions**, which searches goose's local history and can take a while. Watch
+  and timer turns from before this version aren't listed, and **Search older
+  sessions** doesn't find them, because it only matches channel conversations.
 - When a request to an agent running on this device fails, the activity under
   the message offers **Retry**, which asks the agent again, and **Dismiss**,
   which hides the failure.
