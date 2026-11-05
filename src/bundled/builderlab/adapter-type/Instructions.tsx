@@ -14,11 +14,6 @@ import type { AgentClient, RemoteAgent } from "../agents/client";
 import type { BuilderlabSession } from "../session";
 import { ModelSettings } from "./ModelSettings";
 
-const message = (reason: unknown) =>
-  reason instanceof Error
-    ? reason.message
-    : "Could not load Builderlab settings.";
-
 /** Hosted settings belong to Builderlab, rather than Agents' local config. */
 export function createSettingsTab(
   client: AgentClient,
@@ -32,7 +27,7 @@ export function createSettingsTab(
   }: {
     pubkey: string;
     retry(): void;
-    harnessControl: ReactNode;
+    harnessControl: (action: ReactNode) => ReactNode;
   }) {
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
     const [loaded, setLoaded] = useState<{
@@ -41,7 +36,7 @@ export function createSettingsTab(
       email: string;
     }>();
     const [busy, setBusy] = useState(true);
-    const [error, setError] = useState("");
+    const [error, setError] = useState<unknown>("");
     useEffect(() => {
       if (loaded || login.status !== "signed-in") return;
       setBusy(true);
@@ -70,7 +65,7 @@ export function createSettingsTab(
       };
       void load()
         .catch((reason: unknown) => {
-          if (!current.signal.aborted) setError(message(reason));
+          if (!current.signal.aborted) setError(reason);
         })
         .finally(() => {
           if (!current.signal.aborted) setBusy(false);
@@ -112,7 +107,9 @@ export function createSettingsTab(
             key={`${agent.pubkey}/${revision}`}
             pubkey={agent.pubkey}
             retry={() => setRevision((value) => value + 1)}
-            harnessControl={settingsHost?.typeControl?.(false)}
+            harnessControl={(action) =>
+              settingsHost?.typeControl?.(false, action)
+            }
           />
         )}
         {settingsSection !== "identity" && (

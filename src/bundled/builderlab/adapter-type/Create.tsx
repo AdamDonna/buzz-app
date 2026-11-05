@@ -19,7 +19,7 @@ import {
   validInstructions,
 } from "../agents/client";
 import type { BuilderlabSession } from "../session";
-import { useSignInProgress } from "../login/use-sign-in-progress";
+import { SignInAction } from "./SignInAction";
 import { effortLabel, modelChoice } from "./models";
 
 export type CreationConfig = {
@@ -53,35 +53,7 @@ export function creationConfig(value: unknown): CreationConfig {
 
 export function createCreationAction(session: BuilderlabSession) {
   return function CreationAction({ disabled }: { disabled: boolean }) {
-    const login = useSyncExternalStore(session.subscribe, session.snapshot);
-    const { pending, waiting } = useSignInProgress(login);
-    if (login.status === "signed-in") return null;
-    return (
-      <>
-        <Button
-          size="sm"
-          variant={waiting ? "outline" : "subtle"}
-          disabled={disabled && !waiting}
-          loading={pending && !waiting}
-          aria-label={waiting ? "Cancel sign-in" : "Sign in to Builderlab"}
-          onClick={() => {
-            if (waiting) session.cancel();
-            else if (!pending) void session.signIn();
-          }}
-        >
-          {waiting ? "Cancel sign-in" : "Sign in"}
-        </Button>
-        {waiting && (
-          <p
-            role="status"
-            className="m-0 basis-full text-right text-body-sm text-secondary"
-          >
-            Finish signing in to Builderlab in your browser, then return to
-            Buzz.
-          </p>
-        )}
-      </>
-    );
+    return <SignInAction session={session} disabled={disabled} />;
   };
 }
 
@@ -234,11 +206,6 @@ export function createCreationFields(
             }}
           />
         </SettingsGroup>
-        {!signedIn && login.error && (
-          <p role="alert" className="m-0 text-body-sm text-danger">
-            {login.error}
-          </p>
-        )}
         {signedIn && wrongAccount && (
           <p role="status" className="m-0 text-body-sm text-secondary">
             These choices belong to another Builderlab account. Choose a model

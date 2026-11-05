@@ -1041,9 +1041,12 @@ it.for([
         }),
       ).toBeVisible();
       const name = within(createDialog).getByRole("textbox", { name: "Name" });
-      let create = within(createDialog).getByRole("button", {
-        name: "Create agent",
-      });
+      // The introduction retains the hidden form. Query only its action
+      // footer so role/name lookups do not walk those unrelated controls.
+      const footer = createDialog.querySelector("footer");
+      if (!footer) throw new Error("Missing creation actions");
+      const actions = within(footer);
+      let create = actions.getByRole("button", { name: "Create agent" });
       expect(create).toBeDisabled();
       // Fixed setup values; this journey exercises provisioning and recovery,
       // rather than the individual keystrokes already covered by the form.
@@ -1077,22 +1080,21 @@ it.for([
           ).toHaveTextContent("Builderlab sign-in did not finish. Try again.");
           expect(create).toBeDisabled();
           expect(name).toHaveValue("Browser");
-          // The inline action shows progress and cannot start another attempt.
+          // Pending native sign-in shows a cancellable spinner.
           signInGate = deferred();
           await user.click(signIn());
           const progress = await within(createDialog).findByRole("button", {
-            name: "Sign in to Builderlab",
+            name: "Cancel sign-in",
           });
           expect(progress).toHaveAttribute("aria-busy", "true");
           expect(
-            progress.querySelector(".buzz-button-spinner"),
+            progress.querySelector('[class~="motion-safe:animate-spin"]'),
           ).toBeInTheDocument();
           expect(create).toBeDisabled();
           await waitFor(() =>
             expect(signIns).toHaveBeenCalledTimes(beforeCreateLogin + 2),
           );
-          await user.click(progress);
-          expect(signIns).toHaveBeenCalledTimes(beforeCreateLogin + 2);
+          expect(progress).toBeEnabled();
           // Browser cancellation still returns to a retryable form.
           await act(async () => {
             await identity.service.cancelSignIn();
@@ -1213,9 +1215,7 @@ it.for([
         });
         expect(introduction).toHaveTextContent("Builderlab");
         phase = "submit first attempt";
-        await user.click(
-          within(introduction).getByRole("button", { name: "Let’s go" }),
-        );
+        await user.click(actions.getByRole("button", { name: "Let’s go" }));
         await waitFor(() =>
           expect(
             requestsTo("update-agent").filter(
@@ -1227,11 +1227,9 @@ it.for([
           screen.getByRole("dialog", { name: "Meet your remote agent" }),
         ).toBe(introduction);
         expect(
-          within(introduction).getByRole("button", { name: "Let’s go" }),
+          actions.getByRole("button", { name: "Let’s go" }),
         ).toHaveAttribute("aria-busy", "true");
-        expect(
-          within(introduction).getByRole("button", { name: "Back" }),
-        ).toBeDisabled();
+        expect(actions.getByRole("button", { name: "Back" })).toBeDisabled();
         for (const control of controls) expect(control).toBeDisabled();
         phase = "reject first attempt";
         instructionsSave.reject(new Error("offline"));
@@ -1239,12 +1237,8 @@ it.for([
           await within(createDialog).findByRole("alert"),
         ).toHaveTextContent("Could not reach Builderlab");
         phase = "return to retained draft";
-        await user.click(
-          within(introduction).getByRole("button", { name: "Back" }),
-        );
-        create = within(createDialog).getByRole("button", {
-          name: "Create agent",
-        });
+        await user.click(actions.getByRole("button", { name: "Back" }));
+        create = actions.getByRole("button", { name: "Create agent" });
         for (const control of controls) expect(control).toBeEnabled();
         expect(create).toBeEnabled();
         expect(agents.find(browserKey)?.unfinished).toBe(true);
@@ -1262,7 +1256,9 @@ it.for([
       }
       phase = "retry creation";
       await user.click(create);
-      await user.click(await screen.findByRole("button", { name: "Let’s go" }));
+      await user.click(
+        await actions.findByRole("button", { name: "Let’s go" }),
+      );
       phase = "await created agent";
       await waitFor(() =>
         expect(agents.find(browserKey)).toMatchObject({
@@ -1302,13 +1298,13 @@ it.for([
     await user.click(await screen.findByRole("gridcell", { name: /^Browser/ }));
     phase = "await existing agent Identity";
     await user.click(await screen.findByRole("tab", { name: "Identity" }));
-    const instructions = await screen.findByRole("textbox", {
+    let instructions = await screen.findByRole("textbox", {
       name: "Instructions",
     });
     await waitFor(() => expect(instructions).toHaveValue("Be concise."));
     await user.clear(instructions);
     await user.type(instructions, "New direction.");
-    const save = screen.getByRole("button", { name: "Save" });
+    let save = screen.getByRole("button", { name: "Save" });
     instructionsSave = deferred();
     const updatesBeforeEdit = requestsTo("update-agent").length;
     try {
@@ -1336,14 +1332,16 @@ it.for([
     await act(() => identity.service.signOut());
     // Sign-in stays user-started and the failed instructions draft survives it.
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
     await user.click(
-      within(
-        await screen.findByRole("region", { name: "Sign in to Builderlab" }),
-      ).getByRole("button", { name: "Sign in to Builderlab" }),
+      screen.getByRole("button", { name: "Sign in to Builderlab" }),
     );
     await waitFor(() =>
       expect(identity.service.snapshot().status).toBe("signed-in"),
     );
+    instructions = await screen.findByRole("textbox", { name: "Instructions" });
+    expect(instructions).toHaveValue("New direction.");
+    save = screen.getByRole("button", { name: "Save" });
     await user.click(save);
     await waitFor(() => expect(instructions).toBeEnabled());
     expect(save).toHaveAttribute("aria-disabled", "true");

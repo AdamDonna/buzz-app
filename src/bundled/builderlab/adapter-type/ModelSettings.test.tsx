@@ -9,7 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode } from "react";
+import { StrictMode, useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host } from "../../../features/host/service";
 import {
@@ -28,6 +28,121 @@ afterEach(() => {
   cleanup();
   vi.unstubAllEnvs();
 });
+
+it.each(["deadline", "cancel"] as const)(
+  "waits for broker sign-out before the account-switch spinner and Retry (%s)",
+  async (finish) => {
+    vi.stubEnv("VITE_BUZZ_LIVE", "1");
+    vi.stubEnv("VITE_BUZZ_FEDERATED_IDENTITY", "0");
+    let allowed = false;
+    const session = createTestSession(
+      async () => ({
+        revision: crypto.randomUUID(),
+        account: {
+          subject: "user",
+          email: "a@example.com",
+          canUseRemoteAgents: allowed,
+          canUseBuilderlabDecisions: false,
+        },
+      }),
+      undefined,
+      {
+        request: vi.fn(async () => ({
+          status: 200,
+          headers: {},
+          body: '{"models":[]}',
+        })),
+      },
+    );
+    await session.signIn();
+    const signIn = vi.spyOn(session, "signIn");
+    const signedOutCommits: { action: string | null; hint: boolean }[] = [];
+    function ObserveCommit({ children }: { children: ReactNode }) {
+      const control = useRef<HTMLDivElement>(null);
+      // Observe the committed DOM before ModelSettings' passive effect runs.
+      useLayoutEffect(() => {
+        if (session.snapshot().status !== "signed-out") return;
+        signedOutCommits.push({
+          action:
+            control.current
+              ?.querySelector("button")
+              ?.getAttribute("aria-label") ?? null,
+          hint:
+            control.current?.parentElement?.textContent?.includes(
+              "Sign in to edit settings. You can still message this agent.",
+            ) ?? false,
+        });
+      });
+      return <div ref={control}>{children}</div>;
+    }
+    const signedOut = deferred<void>();
+    const signOut = session.signOut;
+    const pendingSignOut = vi.fn(async () => {
+      await signedOut.promise;
+      signOut();
+    });
+    vi.spyOn(session, "signOut").mockImplementation(() => {
+      void pendingSignOut();
+    });
+    try {
+      render(
+        <ModelSettings
+          client={createAgentClient(session, null)}
+          session={session}
+          harnessControl={(action) => <ObserveCommit>{action}</ObserveCommit>}
+          settings={{
+            subject: "user",
+            agent: {
+              id: "agent",
+              name: "Helper",
+              pubkey: "ab".repeat(32),
+              status: "Active",
+              modelSelectionStatus: "valid",
+            },
+          }}
+        />,
+      );
+      const recovery = await screen.findByRole("button", {
+        name: "Use another account",
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      fireEvent.click(recovery);
+      expect(pendingSignOut).toHaveBeenCalledOnce();
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(session.snapshot().status).toBe("signed-in");
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await act(async () => signedOut.resolve());
+      expect(session.snapshot().status).toBe("signed-out");
+      expect(signedOutCommits[0]).toEqual({
+        action: "Cancel sign-in",
+        hint: false,
+      });
+      const spinner = screen.getByRole("button", { name: "Cancel sign-in" });
+      expect(spinner).toHaveAttribute("aria-busy", "true");
+      await act(() => vi.advanceTimersByTimeAsync(2999));
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      if (finish === "cancel") fireEvent.click(spinner);
+      else await act(() => vi.advanceTimersByTimeAsync(1));
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry).toBeEnabled();
+      expect(signIn).not.toHaveBeenCalled();
+      vi.useRealTimers();
+      allowed = true;
+      fireEvent.click(retry);
+      await waitFor(() => expect(session.snapshot().status).toBe("signed-in"));
+      expect(signIn).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      act(() => signOut());
+      expect(
+        screen.getByRole("button", { name: "Sign in to Builderlab" }),
+      ).toBeEnabled();
+    } finally {
+      await act(async () => signedOut.resolve());
+      session.dispose();
+      vi.useRealTimers();
+    }
+  },
+);
 async function fixture(
   selection: Partial<RemoteAgent> = {},
   catalog?: readonly RemoteAgentModel[],
@@ -439,6 +554,49 @@ it("checks the live credential before saving even when the displayed session has
   }
 });
 
+it.each(["save", "catalog"])(
+  "recovers from a forbidden %s request through another account without losing the draft",
+  async (operation) => {
+    vi.stubEnv("VITE_BUZZ_LIVE", "1");
+    const h = await fixture({
+      modelId: "model-one",
+      reasoningEffort: "high",
+      modelSelectionStatus: "valid",
+      instructions: "Saved instructions.",
+    });
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByRole("textbox", { name: "Instructions" }),
+      " Draft",
+    );
+    h.request.mockResolvedValueOnce({ status: 403, headers: {}, body: "{}" });
+    if (operation === "save")
+      await user.click(screen.getByRole("button", { name: "Save" }));
+    else {
+      act(() => h.session.signOut());
+      await act(() => h.session.signIn());
+    }
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This Builderlab account cannot manage remote agents.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Use another account" }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /Retry|Try again|Save/ }),
+    ).toBeNull();
+    act(() => h.session.signOut());
+    await act(() => h.session.signIn());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),
+    );
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue(
+      "Saved instructions. Draft",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
+
 it("replaces a previous account's catalog error with mismatch guidance and recovers on the original account", async () => {
   const h = await fixture({
     modelId: "model-one",
@@ -447,7 +605,7 @@ it("replaces a previous account's catalog error with mismatch guidance and recov
     instructions: "Saved instructions.",
   });
   const user = userEvent.setup();
-  const field = screen.getByRole("textbox", { name: "Instructions" });
+  let field = screen.getByRole("textbox", { name: "Instructions" });
   await user.type(field, " Draft");
   h.offline(true);
   act(() => h.session.signOut());
@@ -466,6 +624,7 @@ it("replaces a previous account's catalog error with mismatch guidance and recov
   expect(
     screen.queryByRole("button", { name: /Retry|Refresh|Save/ }),
   ).toBeNull();
+  field = screen.getByRole("textbox", { name: "Instructions" });
   expect(field).toBeDisabled();
   expect(field).toHaveValue("Saved instructions. Draft");
   await user.type(field, " Ignored");
@@ -478,6 +637,7 @@ it("replaces a previous account's catalog error with mismatch guidance and recov
   await waitFor(() =>
     expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),
   );
+  field = screen.getByRole("textbox", { name: "Instructions" });
   expect(field).toBeEnabled();
   expect(field).toHaveValue("Saved instructions. Draft");
   expect(screen.queryByRole("alert")).toBeNull();
@@ -524,10 +684,17 @@ it.each(["save", "catalog"])(
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: /Retry|Refresh/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(field).toBeDisabled();
-    expect(field).toHaveValue("Saved instructions. Draft");
+    expect(screen.queryByRole("textbox", { name: "Instructions" })).toBeNull();
     expect(h.request).toHaveBeenCalledTimes(before);
     expect(signIn).not.toHaveBeenCalled();
+    h.offline(false);
+    await act(() => h.session.signIn());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),
+    );
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue(
+      "Saved instructions. Draft",
+    );
   },
 );
 
@@ -577,7 +744,9 @@ it("retries a failed catalog request without saving the draft", async () => {
     expect(screen.getByRole("button", { name: /^Model:/ })).toBeEnabled(),
   );
   expect(screen.queryByRole("alert")).toBeNull();
-  expect(field).toHaveValue("Saved instructions. Draft");
+  expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue(
+    "Saved instructions. Draft",
+  );
   expect(
     h.request.mock.calls.filter(([request]) =>
       request.url.endsWith("/update-agent"),
