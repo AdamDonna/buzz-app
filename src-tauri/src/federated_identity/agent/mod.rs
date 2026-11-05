@@ -41,11 +41,12 @@ pub(super) struct Inner {
     identity: FederatedIdentity,
     store: Arc<dyn GrantStore>,
     /// One turn per agent, so concurrent requests share one enrollment.
-    slots: Mutex<HashMap<String, Arc<AsyncMutex<Slot>>>>,
+    /// Shared by every server's tokens, as are incarnations.
+    slots: Arc<Mutex<HashMap<String, Arc<AsyncMutex<Slot>>>>>,
     /// Key incarnations use the pubkey; community rows use pubkey + NUL + relay.
     /// Row removal fences just that membership; last removal retires the key.
     /// Both are process-local fences for requests already in flight.
-    incarnations: Mutex<HashMap<String, Incarnation>>,
+    incarnations: Arc<Mutex<HashMap<String, Incarnation>>>,
     /// Grant writes and retirements are one transaction under this lock: every
     /// write checks it, and a retirement is recorded and wiped under it.
     retired: Arc<Mutex<Retired>>,
@@ -53,6 +54,9 @@ pub(super) struct Inner {
     /// record of a retirement whose wipe is still to come.
     wiping: Arc<AsyncMutex<()>>,
     agents: std::sync::OnceLock<Arc<Agents>>,
+    /// The tokens of the build's other sign-in servers, one per peer of
+    /// `identity`; only the first server's tokens have them.
+    peers: Vec<AgentTokens>,
     /// Signalled when the next sign-out waits for a grant write holding `retired`.
     #[cfg(test)]
     contended: Mutex<Option<std::sync::mpsc::Sender<()>>>,
@@ -209,9 +213,12 @@ impl Admission {
 }
 
 impl AgentTokens {
+    /// Each server's grants are stored under its own account, so the first
+    /// server's grants keep the keys they had as the only server.
     pub(crate) fn new(identity: FederatedIdentity) -> Self {
-        let store = Arc::new(SecureGrantStore(identity.0.account.clone()));
-        Self::with_store(identity, store)
+        Self::with_stores(identity, &|server| {
+            Arc::new(SecureGrantStore(server.0.account.clone()))
+        })
     }
     /// Tokens for a build without an organization: agents send no evidence.
     #[cfg(test)]
@@ -221,12 +228,45 @@ impl AgentTokens {
             Arc::new(grant::tests::MemoryGrants::default()),
         )
     }
+    #[cfg(test)]
     fn with_store(identity: FederatedIdentity, store: Arc<dyn GrantStore>) -> Self {
+        Self::with_stores(identity, &|_| store.clone())
+    }
+    fn with_stores(
+        identity: FederatedIdentity,
+        store: &dyn Fn(&FederatedIdentity) -> Arc<dyn GrantStore>,
+    ) -> Self {
+        let (slots, incarnations) = (Arc::default(), Arc::default());
+        let peers = identity
+            .0
+            .peers
+            .iter()
+            .map(|peer| {
+                let (slots, incarnations) = (Arc::clone(&slots), Arc::clone(&incarnations));
+                Self::server(peer.clone(), store(peer), slots, incarnations, Vec::new())
+            })
+            .collect();
+        Self::server(
+            identity.clone(),
+            store(&identity),
+            slots,
+            incarnations,
+            peers,
+        )
+    }
+    fn server(
+        identity: FederatedIdentity,
+        store: Arc<dyn GrantStore>,
+        slots: Arc<Mutex<HashMap<String, Arc<AsyncMutex<Slot>>>>>,
+        incarnations: Arc<Mutex<HashMap<String, Incarnation>>>,
+        peers: Vec<AgentTokens>,
+    ) -> Self {
         let tokens = Self(Arc::new(Inner {
             identity: identity.clone(),
             store,
-            slots: Mutex::default(),
-            incarnations: Mutex::default(),
+            slots,
+            incarnations,
+            peers,
             retired: Arc::default(),
             wiping: Arc::default(),
             agents: std::sync::OnceLock::new(),
@@ -280,6 +320,25 @@ impl AgentTokens {
             marked,
             _wiping: wiping,
         }))
+    }
+    /// The tokens of the server a community's host routes to, never chosen
+    /// by the relay. A community no server covers stays with these, which
+    /// attach no evidence for it.
+    fn server_for(&self, relay: &str) -> Result<&Self, String> {
+        for peer in &self.0.peers {
+            if let Some(config) = &peer.0.identity.0.config {
+                if config.matches_relay(relay)? {
+                    return Ok(peer);
+                }
+            }
+        }
+        Ok(self)
+    }
+    /// The tokens of a sign-in server of this build.
+    pub(crate) fn for_server(&self, server: &FederatedIdentity) -> Option<&Self> {
+        std::iter::once(self)
+            .chain(&self.0.peers)
+            .find(|tokens| tokens.0.identity.is(server))
     }
     fn slot(&self, agent: &str) -> Arc<AsyncMutex<Slot>> {
         lock(&self.0.slots).entry(agent.into()).or_default().clone()
@@ -395,15 +454,18 @@ impl AgentTokens {
         incarnation: Stamp,
         valid_for: Duration,
     ) -> Result<Admission, String> {
+        let tokens = self.server_for(&agent.relay)?;
         let mut admission = Admission {
-            tokens: self.clone(),
+            tokens: tokens.clone(),
             agent: agent.pubkey.clone(),
             incarnation,
             row: row_key(&agent.pubkey, &agent.relay)?,
             cached: None,
         };
         admission.dispatch()?;
-        admission.cached = self.acquire(agent, key, incarnation.key, valid_for).await?;
+        admission.cached = tokens
+            .acquire(agent, key, incarnation.key, valid_for)
+            .await?;
         admission.dispatch()?;
         Ok(admission)
     }
@@ -438,6 +500,11 @@ impl AgentTokens {
             return Ok(None);
         }
         let relay = canonical_relay(&agent.relay)?;
+        // As for people: a community that does not advertise NIP-FI gets no
+        // evidence, and a failed discovery sends nothing.
+        if !self.0.identity.requires_federated_identity(&relay).await? {
+            return Ok(None);
+        }
         let slot = self.slot(&agent.pubkey);
         let mut slot = slot.lock().await;
         if !self.live(&agent.pubkey, incarnation) {
@@ -647,27 +714,53 @@ impl AgentTokens {
     /// lock, so a write already past its check lands before it and is wiped,
     /// and a cleanup interrupted by failure or restart finishes before any
     /// grant is admitted again. Without that record nothing is signed out.
-    pub(crate) async fn sign_out(&self) -> Result<Snapshot, String> {
+    ///
+    /// With `expected`, only while that revision is current, checked in the
+    /// same lock that retires it: a session installed meanwhile stays signed
+    /// in, its grants untouched.
+    pub(crate) async fn sign_out(&self, expected: Option<&str>) -> Result<Snapshot, String> {
         let _wiping = self.0.wiping.lock().await;
+        // A stale target never records a retirement: sessions install while
+        // holding `wiping` (`preparing_session`), so none replaces it before
+        // the authoritative check in `begin_sign_out`. Unfenced sign-out
+        // takes no state lock here, keeping its order with local commits.
+        if let Some(expected) = expected {
+            let current = self.0.identity.snapshot();
+            if current.revision != expected {
+                return Ok(current);
+            }
+        }
         let (retired, at) = (self.0.retired.clone(), self.retiring_key());
         #[cfg(test)]
         let contended = lock(&self.0.contended).take();
-        self.storage(move |store| {
-            #[cfg(test)]
-            if let (Err(std::sync::TryLockError::WouldBlock), Some(contended)) =
-                (retired.try_lock().map(drop), contended)
-            {
-                let _ = contended.send(());
-            }
-            let mut retired = lock(&retired);
-            store.set_pending(&at, true)?;
-            retired.pending = Some(true);
-            Ok(())
-        })
-        .await?;
+        let before = self
+            .storage(move |store| {
+                #[cfg(test)]
+                if let (Err(std::sync::TryLockError::WouldBlock), Some(contended)) =
+                    (retired.try_lock().map(drop), contended)
+                {
+                    let _ = contended.send(());
+                }
+                let mut retired = lock(&retired);
+                let before = store.pending(&at)?;
+                store.set_pending(&at, true)?;
+                retired.pending = Some(true);
+                Ok(before)
+            })
+            .await?;
         // Publish retirement before releasing the wipe lock, then wait for
         // session persistence without holding it (restore takes operation first).
-        let retiring = self.0.identity.begin_sign_out();
+        let Some(retiring) = self.0.identity.begin_sign_out(expected) else {
+            // Superseded: undo the record, still under the wipe lock.
+            let (retired, at) = (self.0.retired.clone(), self.retiring_key());
+            self.storage(move |store| {
+                store.set_pending(&at, before)?;
+                lock(&retired).pending = Some(before);
+                Ok(())
+            })
+            .await?;
+            return Ok(self.0.identity.snapshot());
+        };
         drop(_wiping);
         let snapshot = self.0.identity.finish_sign_out(retiring).await;
         let _wiping = self.0.wiping.lock().await;
@@ -787,8 +880,12 @@ impl AgentTokens {
         let slot = self.slot(agent);
         let mut slot = slot.lock().await;
         slot.assertion = None;
-        let at = self.0.identity.agent_grant_key(owner, agent);
-        self.storage(move |store| store.delete(&at)).await
+        // Its grant may be with any server.
+        for tokens in std::iter::once(self).chain(&self.0.peers) {
+            let at = tokens.0.identity.agent_grant_key(owner, agent);
+            tokens.storage(move |store| store.delete(&at)).await?;
+        }
+        Ok(())
     }
 
     /// Follows the owner's account: an explicit sign-out or another account,
@@ -800,7 +897,13 @@ impl AgentTokens {
         &self,
         agents: impl Fn() -> Result<Vec<(String, String)>, String> + Send + Sync + 'static,
     ) {
-        let _ = self.0.agents.set(Arc::new(agents));
+        let agents: Arc<Agents> = Arc::new(agents);
+        for tokens in std::iter::once(self).chain(&self.0.peers) {
+            tokens.follow_account(agents.clone());
+        }
+    }
+    fn follow_account(&self, agents: Arc<Agents>) {
+        let _ = self.0.agents.set(agents);
         let tokens = self.clone();
         let mut changes = self.0.identity.account_changes();
         tauri::async_runtime::spawn(async move {

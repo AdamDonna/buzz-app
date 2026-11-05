@@ -15,6 +15,7 @@ import { watchPageErrors } from "./page-errors.mjs";
 const test = base.extend({
   developmentReact: [false, { scope: "worker" }],
   builderlabLogin: [false, { scope: "worker" }],
+  federatedIdentity: [false, { scope: "worker" }],
   pluginFixtures: [false, { scope: "worker" }],
   companionFixture: [false, { scope: "worker" }],
   pairingFixture: [false, { scope: "worker" }],

@@ -1,14 +1,13 @@
 //! Browser sign-in startup and loopback OAuth authorization-code responses.
 //! RFC 8252 §§7.3, 8.3, 8.4, 8.9; RFC 6749 §§4.1.2, 4.1.2.1; RFC 9700 §2.1.
-//! See this folder's README.md for the command contract, ownership, and limits.
-mod focus;
+//! See this folder's README.md for ownership and limits.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri_plugin_opener::OpenerExt;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -16,13 +15,12 @@ use tokio::{
     task::JoinHandle,
 };
 
-#[derive(Debug, PartialEq, serde::Serialize)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct OAuthCallback {
-    // Preserve ordering and duplicates so the plugin can validate known parameters.
+    // Preserve ordering and duplicates so the caller can validate known parameters.
     pub(crate) parameters: Vec<(String, String)>,
 }
-#[derive(Debug, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, PartialEq)]
 pub(crate) struct OAuthAttempt {
     pub(crate) id: String,
     // Reuse this exact redirect_uri in token exchange (RFC 6749 §4.1.3).
@@ -31,9 +29,11 @@ pub(crate) struct OAuthAttempt {
 pub(crate) struct OAuthRequest {
     pub(crate) authorization_url: String,
     pub(crate) callback_path: String,
-    pub(crate) use_state: Option<bool>,
+    pub(crate) use_state: bool,
 }
 type CallbackResult = Result<OAuthCallback, String>;
+/// How long a generic callback page stays readable before it closes.
+const READABLE_DELAY: Duration = Duration::from_secs(3);
 struct Attempt {
     id: String,
     result: Option<oneshot::Receiver<CallbackResult>>,
@@ -45,8 +45,9 @@ impl Drop for Attempt {
         self.task.abort();
     }
 }
+/// One pending attempt per owner, keyed by the caller's owner key.
 #[derive(Clone, Default)]
-pub(crate) struct OAuthCallbackHost(Arc<Mutex<Option<Attempt>>>, focus::FocusReturn);
+pub(crate) struct OAuthCallbackHost(Arc<Mutex<HashMap<String, Attempt>>>);
 
 impl OAuthCallbackHost {
     pub(crate) fn document_load(
@@ -56,45 +57,46 @@ impl OAuthCallbackHost {
     ) -> Result<(), String> {
         if label == "main" && event == tauri::webview::PageLoadEvent::Started {
             // The new document cannot recover the previous plugin's attempt ID.
-            self.0.lock().map_err(|_| "Sign-in unavailable")?.take();
-            self.1.cancel(None);
+            self.0.lock().map_err(|_| "Sign-in unavailable")?.clear();
         }
         Ok(())
     }
 
     pub(crate) fn begin(
         &self,
+        owner: &str,
         request: OAuthRequest,
         open: impl FnOnce(&str) -> Result<(), String>,
     ) -> Result<OAuthAttempt, String> {
-        self.begin_with_parameter(request, "redirect_uri", open, None)
+        self.begin_with_parameter(owner, request, "redirect_uri", open)
     }
 
     /// NIP-FA binds its handoff secret instead of requiring echoed OAuth state.
     /// The attempt and all callback values stay inside the native session owner.
     pub(crate) fn begin_federated(
         &self,
+        owner: &str,
         authorization_url: String,
         open: impl FnOnce(&str) -> Result<(), String>,
     ) -> Result<OAuthAttempt, String> {
         self.begin_with_parameter(
+            owner,
             OAuthRequest {
                 authorization_url,
                 callback_path: format!("/federated/{}", uuid::Uuid::new_v4()),
-                use_state: Some(false),
+                use_state: false,
             },
             "return_to",
             open,
-            None,
         )
     }
 
     fn begin_with_parameter(
         &self,
+        owner: &str,
         request: OAuthRequest,
         callback_parameter: &str,
         open: impl FnOnce(&str) -> Result<(), String>,
-        browser: Option<String>,
     ) -> Result<OAuthAttempt, String> {
         let mut authorization =
             url::Url::parse(&request.authorization_url).map_err(|_| "Invalid authorization URL")?;
@@ -123,9 +125,9 @@ impl OAuthCallbackHost {
         {
             return Err("Invalid callback path".into());
         }
-        let mut current = self.0.lock().map_err(|_| "Sign-in unavailable")?;
-        if current
-            .as_ref()
+        let mut attempts = self.0.lock().map_err(|_| "Sign-in unavailable")?;
+        if attempts
+            .get(owner)
             .is_some_and(|attempt| attempt.retain_result || !attempt.task.is_finished())
         {
             return Err("An OAuth callback is already pending".into());
@@ -148,7 +150,7 @@ impl OAuthCallbackHost {
             .append_pair(callback_parameter, &callback);
         // Native-owned, single-use CSRF correlation (RFC 8252 §8.9; RFC 9700 §2.1).
         // Disabled only for an explicit custom-protocol compatibility exception.
-        let expected_state = if request.use_state.unwrap_or(true) {
+        let expected_state = if request.use_state {
             let mut random = [0; 32];
             getrandom::fill(&mut random).map_err(|_| "Could not start sign-in")?;
             let value = URL_SAFE_NO_PAD.encode(random);
@@ -176,16 +178,18 @@ impl OAuthCallbackHost {
             let _ = send.send(result);
         });
         let id = uuid::Uuid::new_v4().to_string();
-        *current = Some(Attempt {
-            id: id.clone(),
-            result: Some(receive),
-            task,
-            // A native FI login retains its completed handoff until wait/cancel.
-            // Generic OAuth keeps its existing finished-task replacement rule.
-            retain_result: callback_parameter == "return_to",
-        });
-        self.1.arm(&id, browser);
-        drop(current);
+        attempts.insert(
+            owner.to_owned(),
+            Attempt {
+                id: id.clone(),
+                result: Some(receive),
+                task,
+                // A native FI login retains its completed handoff until wait/cancel.
+                // Generic OAuth keeps its existing finished-task replacement rule.
+                retain_result: callback_parameter == "return_to",
+            },
+        );
+        drop(attempts);
         if open(authorization.as_str()).is_err() {
             self.cancel(&id)?;
             return Err("Could not open the sign-in browser".into());
@@ -197,92 +201,28 @@ impl OAuthCallbackHost {
     }
 
     pub(crate) async fn wait(&self, id: &str) -> CallbackResult {
-        let receiver = {
-            let mut current = self.0.lock().map_err(|_| "Sign-in unavailable")?;
-            current
-                .as_mut()
-                .filter(|attempt| attempt.id == id)
-                .and_then(|attempt| attempt.result.take())
-                .ok_or("Sign-in is no longer available")?
-        };
+        let receiver = self
+            .0
+            .lock()
+            .map_err(|_| "Sign-in unavailable")?
+            .values_mut()
+            .find(|attempt| attempt.id == id)
+            .and_then(|attempt| attempt.result.take())
+            .ok_or("Sign-in is no longer available")?;
         let result = receiver
             .await
             .unwrap_or_else(|_| Err("Sign-in canceled.".into()));
-        let mut current = self.0.lock().map_err(|_| "Sign-in unavailable")?;
-        if current.as_ref().is_some_and(|attempt| attempt.id == id) {
-            current.take();
-        }
-        self.1.received(
-            id,
-            result.as_ref().is_ok_and(|callback| {
-                callback.parameters.iter().any(|(name, _)| name == "code")
-                    && !callback.parameters.iter().any(|(name, _)| name == "error")
-            }),
-        );
+        self.cancel(id)?;
         result
     }
 
     pub(crate) fn cancel(&self, id: &str) -> Result<(), String> {
-        let mut current = self.0.lock().map_err(|_| "Sign-in unavailable")?;
-        if current.as_ref().is_some_and(|attempt| attempt.id == id) {
-            *current = None;
-        }
-        self.1.cancel(Some(id));
+        self.0
+            .lock()
+            .map_err(|_| "Sign-in unavailable")?
+            .retain(|_, attempt| attempt.id != id);
         Ok(())
     }
-}
-
-#[tauri::command]
-pub(crate) fn oauth_callback_begin<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: tauri::State<'_, OAuthCallbackHost>,
-    authorization_url: String,
-    callback_path: String,
-    use_state: Option<bool>,
-) -> Result<OAuthAttempt, String> {
-    let browser = focus::capture(&app, &authorization_url);
-    // Register and launch inline so reload cleanup cannot overtake a queued begin.
-    // Enter the runtime for the Tokio listener; startup does not await anything.
-    tauri::async_runtime::block_on(async {
-        state.begin_with_parameter(
-            OAuthRequest {
-                authorization_url,
-                callback_path,
-                use_state,
-            },
-            "redirect_uri",
-            |url| {
-                app.opener()
-                    .open_url(url, None::<&str>)
-                    .map_err(|_| "Could not open the sign-in browser".into())
-            },
-            browser,
-        )
-    })
-}
-#[tauri::command]
-pub(crate) async fn oauth_callback_wait(
-    state: tauri::State<'_, OAuthCallbackHost>,
-    id: String,
-) -> CallbackResult {
-    state.wait(&id).await
-}
-/// Called by the trusted main webview only after code exchange and account verification.
-#[tauri::command]
-pub(crate) async fn oauth_callback_complete<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: tauri::State<'_, OAuthCallbackHost>,
-    id: String,
-) -> Result<(), String> {
-    state.1.complete(app, id).await;
-    Ok(())
-}
-#[tauri::command]
-pub(crate) fn oauth_callback_cancel(
-    state: tauri::State<'_, OAuthCallbackHost>,
-    id: String,
-) -> Result<(), String> {
-    state.cancel(&id)
 }
 
 async fn receive_callback(
@@ -469,10 +409,7 @@ async fn reply(stream: &mut TcpStream, status: u16, message: &str, builderlab: b
         )
         .replace("{{provider}}", provider)
         .replace("{{complete}}", if status == 200 { "true" } else { "false" })
-        .replace(
-            "{{closeDelay}}",
-            &focus::READABLE_DELAY.as_secs().to_string(),
-        )
+        .replace("{{closeDelay}}", &READABLE_DELAY.as_secs().to_string())
         .replace("{{heading}}", heading)
         .replace(
             "{{message}}",
