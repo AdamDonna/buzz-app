@@ -13,6 +13,7 @@ import { SearchField } from "../../shared/design-system/ui/SearchField";
 import { isApplePlatform } from "../../features/shortcuts/format";
 import { MatchedLabel } from "../../features/search/MatchedLabel";
 import { useSearchHighlight } from "../../features/search/use-search-highlight";
+import { channelIconClass } from "../../shared/inline-reference";
 import { PageIcon } from "./PageIcon";
 import "./SearchChoices.css";
 
@@ -24,6 +25,12 @@ export type SearchDestination = {
   detail?: string;
   /** Quiet metadata at the row's end, such as a count. */
   trailing?: ReactNode;
+  /** Leads `detail`, as a channel mention's icon leads its name in a
+   * message. */
+  detailIcon?: typeof ChatCircleIcon | undefined;
+  /** What `detailIcon` shows, read before `detail` but neither shown nor
+   * matched. */
+  detailIconLabel?: string | undefined;
   /** Code points of `label` that match the typed text. */
   matches?: readonly number[];
   icon: typeof ChatCircleIcon;
@@ -577,6 +584,8 @@ export function SearchChoices({
                             key,
                             label,
                             detail,
+                            detailIcon: DetailIcon,
+                            detailIconLabel,
                             trailing,
                             matches,
                             icon,
@@ -651,7 +660,12 @@ export function SearchChoices({
                                 role={hasControls ? "row" : "presentation"}
                                 aria-label={
                                   hasControls
-                                    ? [label, detail]
+                                    ? [
+                                        label,
+                                        detail && detailIconLabel
+                                          ? `${detailIconLabel}, ${detail}`
+                                          : detail,
+                                      ]
                                         .filter(Boolean)
                                         .join(" — ")
                                     : undefined
@@ -741,6 +755,23 @@ export function SearchChoices({
                                         </span>
                                         {detail && (
                                           <span className="block truncate text-body-sm text-subtle">
+                                            {/* Read in place of the icon. jsdom (dom-accessibility-api) trims
+                                                each element's text, so the space sits outside the span;
+                                                browsers don't trim it. Shown, the space collapses at the
+                                                line's start. */}
+                                            {detailIconLabel && (
+                                              <>
+                                                <span className="sr-only">{`${detailIconLabel},`}</span>{" "}
+                                              </>
+                                            )}
+                                            {/* Text-sized and spaced as LinkLabel shows a channel mention's icon. */}
+                                            {DetailIcon && (
+                                              <DetailIcon
+                                                className={channelIconClass(
+                                                  DetailIcon,
+                                                )}
+                                              />
+                                            )}
                                             {detail}
                                           </span>
                                         )}

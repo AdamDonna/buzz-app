@@ -896,7 +896,7 @@ it("keeps resolved private channel labels and lock icons for Buzz links", () => 
   expect(container.textContent).toContain("design");
   expect(container.textContent).not.toContain("buzz://");
   const lock = renderToStaticMarkup(
-    <LockIcon className={referenceStyles.icon} />,
+    <LockIcon className={`${referenceStyles.icon} ${referenceStyles.snug}`} />,
   );
   expect(html.split(lock)).toHaveLength(3);
 });
