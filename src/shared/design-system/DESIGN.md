@@ -172,6 +172,10 @@ Ordinary flow Dialogs use sticky header and footer bars over the scrolling body.
 Their full backgrounds combine a surface-color gradient and progressive blur;
 labels and actions remain sharp. Reduced transparency uses an opaque surface.
 `ScrollEdgeMaterial` owns this treatment, shared with the agent Save footer.
+Only the sticky footer's gradient gutter passes pointer input to the body.
+Its content row owns pointer input and horizontal overflow, including text,
+controls, gaps, and the bottom inset. When reduced transparency or forced colors
+make the gutter opaque, it also blocks input to the body beneath it.
 Its host supplies overlap and isolation; `--scroll-edge-surface` selects the
 host surface when it differs from the default popover surface.
 `--scroll-edge-fill` can supply a stronger backing behind text within that fade.

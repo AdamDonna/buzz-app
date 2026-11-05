@@ -239,6 +239,9 @@
     padding: var(--space-1);
     margin: calc(-1 * var(--space-1));
   }
+  .buzz-dialog-action-row {
+    display: contents;
+  }
   /* This gutter stays outside the scrollport when long content is clipped. */
   :where(.buzz-dialog-body) + .buzz-dialog-actions {
     padding-top: calc(var(--space-4) + var(--space-1));
@@ -540,7 +543,7 @@
     .buzz-dialog {
       --dialog-padding: var(--space-4);
     }
-    .buzz-dialog-actions > .buzz-button {
+    :is(.buzz-dialog-actions, .buzz-dialog-action-row) > .buzz-button {
       flex: 1 0 auto;
     }
   }
@@ -746,11 +749,31 @@ html[data-keyboard-navigation]
     }
 
     > .buzz-dialog-actions {
-      /* Preserve access to oversized actions at narrow widths/enlarged text. */
-      overflow-x: auto;
+      /* Only the gradient gutter passes input through to the form beneath it. */
+      display: block;
+      pointer-events: none;
+      padding-inline: 0;
       bottom: calc(-1 * var(--dialog-padding));
       margin-bottom: calc(-1 * var(--dialog-padding));
-      padding-bottom: var(--dialog-padding);
+      padding-bottom: 0;
+
+      @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+        /* ScrollEdgeMaterial is fully opaque, including its former fade gutter. */
+        pointer-events: auto;
+      }
+
+      > .buzz-dialog-action-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: safe end;
+        gap: var(--space-3);
+        pointer-events: auto;
+        /* Keep ring space, the opaque bottom band and overflow input in this row. */
+        overflow-x: auto;
+        margin-top: calc(-1 * var(--space-1));
+        padding: var(--space-1) var(--dialog-padding) var(--dialog-padding);
+      }
     }
   }
 }
