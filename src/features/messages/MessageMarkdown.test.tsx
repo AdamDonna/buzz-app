@@ -862,6 +862,39 @@ describe("Markdown inline extensions", () => {
     },
   );
 
+  it.each([
+    [
+      "https://github.com/block/buzz-app。",
+      "https://github.com/block/buzz-app",
+    ],
+    ["看这个 https://example.com/spec，大家看一下", "https://example.com/spec"],
+    ["（https://example.com）", "https://example.com/"],
+    ["他说“https://example.com/a”。", "https://example.com/a"],
+    [
+      "https://github。com/block/buzz-app。",
+      "https://github.com/block/buzz-app",
+    ],
+    ["http://localhost:3000。OK", "http://localhost:3000/"],
+    [
+      "https://zh.wikipedia.org/wiki/中文 ok",
+      "https://zh.wikipedia.org/wiki/%E4%B8%AD%E6%96%87",
+    ],
+    ["<https://example.com/a。>", "https://example.com/a%E3%80%82"],
+    [
+      "https://a.com，https://zh.wikipedia.org/wiki/中文",
+      "https://a.com/",
+      "https://zh.wikipedia.org/wiki/%E4%B8%AD%E6%96%87",
+    ],
+  ])("ends a bare link at fullwidth punctuation: %s", (content, ...hrefs) => {
+    const html = render(content);
+    expect([...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])).toEqual(
+      hrefs,
+    );
+    expect(html.replace(/<[^>]*>/g, "")).toBe(
+      content.replace(/^<(.*)>$/, "$1"),
+    );
+  });
+
   it("keeps emoji-only sizing and readable fallback when media or extensions are unavailable", () => {
     const options = { emoji: [party], extensions, largeEmoji: true };
     const html = render(":party_parrot:", {

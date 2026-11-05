@@ -410,6 +410,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   and Linux) an HTTP(S) link in a message to open it in your default browser
   instead of a side panel. You can also right-click the link and choose
   **Open in browser**.
+- **Link boundaries**: a bare http(s) or buzz link ends at whitespace and at
+  fullwidth, CJK or curly-quote punctuation such as `，`, `。`, `」` or `’`. In a
+  host name, `。` works as a dot. Wrap it as `<url>` to keep them in it.
 - **Drafts & sent** lists the messages you started but did not send, newest
   change first, with the number of drafts shown beside it in the sidebar, and
   your latest 100 sent messages in this community, grouped by day. A sent
