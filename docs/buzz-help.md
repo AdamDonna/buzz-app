@@ -230,6 +230,10 @@ that agent in Buzz; they do not notify the external app through this connection.
 - **Long text pastes** that exceed the message limit show an error and leave
   your draft unchanged. Shorten the text, or save it as a text file and use
   **Attach files** where uploads are available.
+- In the composer, Enter sends and Shift+Enter adds a new line by default.
+  **Settings → Shortcuts → Sending messages → Send with ⌘ Enter** (Ctrl+Enter
+  outside Apple platforms) swaps that on this device: Enter adds a line and
+  ⌘/Ctrl+Enter sends. It starts off.
 - **File sharing** is available through **Attach files** in the composer when
   uploads are available. Files and media are shared with the conversation's
   members. If an upload fails, its attachment shows the reason, **Retry**, and

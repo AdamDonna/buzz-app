@@ -65,6 +65,9 @@ import {
   seedMentions,
 } from "./remembered-mentions";
 import { rememberAgentsPreference } from "./mention-preferences";
+import { useSendWithModEnterPreference } from "./send-key-preference";
+import { matches } from "../shortcuts/bindings";
+import { isApplePlatform } from "../shortcuts/format";
 import { useChosenAgent } from "../solo/default-agent";
 import { useAgentChoices } from "../agents/use-choices";
 import {
@@ -1029,6 +1032,7 @@ function Composer({
   const [activeFormats, setActiveFormats] = useState<readonly ComposerFormat[]>(
     [],
   );
+  const sendWithModEnter = useSendWithModEnterPreference();
   const saveDraft = (next: MentionDraft, save = true) => {
     next = stageChatCards(
       {
@@ -3382,7 +3386,21 @@ function Composer({
                   }
                   return;
                 }
+                // With ⌘/Ctrl+Enter chosen, plain Enter falls through to the editor's line break.
                 if (
+                  sendWithModEnter &&
+                  matches(
+                    [{ key: "Enter", mod: true }],
+                    event.nativeEvent,
+                    isApplePlatform(navigator.platform),
+                  )
+                ) {
+                  event.preventDefault();
+                  if (!event.repeat) send();
+                  return;
+                }
+                if (
+                  !sendWithModEnter &&
                   event.key === "Enter" &&
                   !event.shiftKey &&
                   !event.altKey &&

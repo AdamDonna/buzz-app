@@ -94,6 +94,7 @@ import { profileTarget } from "../profiles/target";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { setRememberAgentsPreference } from "./mention-preferences";
 import * as modelStorage from "./solo-model-picks-storage";
+import { setSendWithModEnterPreference } from "./send-key-preference";
 import { setDefaultAgent } from "../solo/default-agent";
 import { ResourcePicker } from "../../bundled/repos/ResourcePicker";
 import { entityHref } from "../repos/routes";
@@ -6105,6 +6106,45 @@ it("sends channel messages and thread replies through real form and keyboard eve
   expect(h.messages.send).toHaveBeenCalledTimes(1);
   expect(h.onSend.mock.calls).toEqual([["channel-id"], ["reply-id"]]);
   expect(h.input()).toHaveValue("");
+});
+
+it("sends with Ctrl+Enter and adds lines with Enter once that is chosen", async () => {
+  const h = mount();
+  try {
+    act(() => {
+      setSendWithModEnterPreference(true);
+    });
+    await h.user.type(h.input(), "first{Enter}second");
+    expect(h.input()).toHaveValue("first\nsecond");
+    fireEvent.keyDown(h.input(), { key: "Enter", ctrlKey: true, repeat: true });
+    expect(h.messages.send).not.toHaveBeenCalled();
+    await h.user.keyboard("{Control>}{Enter}{/Control}");
+    expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+      "channel",
+      "first\nsecond",
+      [],
+      [],
+    );
+    expect(h.input()).toHaveValue("");
+    // In a list, Enter still continues it and Ctrl+Enter still sends.
+    await h.user.type(h.input(), "- one{Enter}two");
+    expect(h.input().querySelectorAll("ul > li")).toHaveLength(2);
+    await h.user.keyboard("{Control>}{Enter}{/Control}");
+    expect(h.messages.send).toHaveBeenLastCalledWith(
+      "channel",
+      "- one\n- two",
+      [],
+      [],
+    );
+    act(() => {
+      setSendWithModEnterPreference(false);
+    });
+    await h.user.type(h.input(), "back{Enter}");
+    expect(h.messages.send).toHaveBeenLastCalledWith("channel", "back", [], []);
+  } finally {
+    setSendWithModEnterPreference(false);
+    localStorage.clear();
+  }
 });
 
 it.each([

@@ -153,7 +153,7 @@ The chat button between microphone and Leave opens a panel beside the avatar
 cloud as a flush region with a subtle divider, without separate rounded corners,
 shadow or a close button. The same chat button closes it. The shared tabs separate **Thread** from **Live transcript**. Thread uses
 the full regular rich-text composer, attachments, emoji, and mentions, with Enter
-to send and Shift+Enter for a new line. The detached window sends typed requests
+to send and Shift+Enter for a new line by default (the composer's send-key setting applies). The detached window sends typed requests
 through a per-room capability to the main app, which retains upload preparation,
 membership checks, signing, and outbox admission. GIF discovery and search also
 run through this owner, using its community and the enabled emoji contribution;

@@ -198,6 +198,7 @@ it("lists live host and plugin shortcuts without search or intro text and follow
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent);
     expect(groups).toEqual([
+      "Sending messages",
       "Buzz",
       "Shortcut counter",
       "Terminal",
@@ -975,6 +976,7 @@ it("keeps the host group distinct from a plugin whose manifest id is buzz", asyn
         .getAllByRole("heading", { level: 3 })
         .map((heading) => heading.textContent),
     ).toEqual([
+      "Sending messages",
       "Buzz",
       "Buzz plugin",
       "Shortcut counter",
@@ -1114,6 +1116,34 @@ it("lists the message editor's formatting keys read-only and warns when a shortc
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The message editor handles Ctrl+Shift+U itself while you are typing",
     );
+  } finally {
+    await h.dispose();
+  }
+});
+
+it("switches sending to Ctrl+Enter and shows the editor keys that follow", async () => {
+  const h = await harness();
+  try {
+    render(
+      <ShortcutSettings
+        shortcuts={h.shortcuts}
+        bindings={h.bindings}
+        plugins={h.plugins}
+      />,
+    );
+    const chords = (title: string) =>
+      [...row(title).querySelectorAll(".buzz-keyboard-shortcut")].map((chord) =>
+        chord.getAttribute("data-binding"),
+      );
+    const toggle = screen.getByRole("switch", { name: "Send with Ctrl+Enter" });
+    expect(toggle).not.toBeChecked();
+    expect(chords("Send message")).toEqual(["Enter"]);
+    expect(chords("New line")).toEqual(["Shift+Enter"]);
+    await userEvent.setup().click(toggle);
+    expect(toggle).toBeChecked();
+    expect(localStorage.getItem("buzz-send-with-mod-enter.v1")).toBe("on");
+    expect(chords("Send message")).toEqual(["Ctrl+Enter"]);
+    expect(chords("New line")).toEqual(["Enter", "Shift+Enter"]);
   } finally {
     await h.dispose();
   }

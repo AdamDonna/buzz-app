@@ -1502,7 +1502,8 @@ the new block, and one undo restores the typed marker and its space. The typed
 `• ` alias sends as Markdown `- `. The channel placeholder appears only in an empty plain
 paragraph, not beside a list marker. Enter
 continues a list and exits an empty item; use the Send button to send while the caret is
-in a list (or Save changes when editing). Enter in ordinary prose still sends or saves. Inside a
+in a list (or Save changes when editing). Enter in ordinary prose still sends or saves;
+with **Send with ⌘ Enter** on, ⌘/Ctrl+Enter sends or saves instead, including in a list. Inside a
 quote the markers nest: `- ` opens a list and `> ` a second quote. Inside a list item only a
 marker of the item's own list kind, typed as the only text of an item after the first,
 converts, nesting that item as Tab does. A marker typed after prose on the same line, as
