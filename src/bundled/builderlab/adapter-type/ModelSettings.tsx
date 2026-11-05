@@ -110,7 +110,7 @@ export function ModelSettings({
       .modelCatalog(current.signal)
       .then(
         (catalog) => {
-          if (!current.signal.aborted) setModels(catalog);
+          if (!current.signal.aborted) setModels(catalog.models);
         },
         (reason) => {
           if (!current.signal.aborted) setCatalogError(message(reason));

@@ -219,17 +219,47 @@ it("loads the standalone catalog with model-specific effort identifiers", async 
       ],
     }),
   );
-  expect(await h.client.modelCatalog(h.signal)).toEqual([
-    {
-      id: "model-one",
-      displayName: "Friendly Model",
-      supportedReasoningEfforts: ["none", "max"],
-    },
-  ]);
+  expect(await h.client.modelCatalog(h.signal)).toEqual({
+    models: [
+      {
+        id: "model-one",
+        displayName: "Friendly Model",
+        supportedReasoningEfforts: ["none", "max"],
+      },
+    ],
+  });
   expect(vi.mocked(h.host.request).mock.calls[0]?.[0].url).toBe(
     "https://builderlab.example/api/goose/v3/beekeeper/get-model-catalog",
   );
 });
+it.each([
+  [{ model_id: "model-one", reasoning_effort: "max" }, true],
+  [{ model_id: "model-one", reasoning_effort: "high" }, false],
+  [{ model_id: "missing", reasoning_effort: "max" }, false],
+  [{ model_id: "model-one" }, false],
+  ["model-one", false],
+  [null, false],
+])(
+  "keeps only a recommendation the catalog offers: %j",
+  async (recommended_selection, kept) => {
+    const h = await fixture();
+    vi.mocked(h.host.request).mockResolvedValueOnce(
+      response({
+        models: [
+          {
+            id: "model-one",
+            display_name: "Friendly Model",
+            supported_reasoning_efforts: ["none", "max"],
+          },
+        ],
+        recommended_selection,
+      }),
+    );
+    expect((await h.client.modelCatalog(h.signal)).recommended).toEqual(
+      kept ? { modelId: "model-one", reasoningEffort: "max" } : undefined,
+    );
+  },
+);
 it.each([
   null,
   [null],
@@ -239,7 +269,7 @@ it.each([
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(response({ models }));
   if (models === null)
-    expect(await h.client.modelCatalog(h.signal)).toEqual([]);
+    expect(await h.client.modelCatalog(h.signal)).toEqual({ models: [] });
   else
     await expect(h.client.modelCatalog(h.signal)).rejects.toThrow(
       "invalid model catalog",

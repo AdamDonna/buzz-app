@@ -42,7 +42,7 @@ const catalog = [
     supported_reasoning_efforts: ["none"],
   },
 ];
-async function fixture(signedIn = true) {
+async function fixture(signedIn = true, recommended?: unknown) {
   const acquire = vi.fn(async () => ({
     revision: "credential",
     account: {
@@ -64,7 +64,10 @@ async function fixture(signedIn = true) {
     return {
       status: 200,
       headers: {},
-      body: JSON.stringify({ models: catalog }),
+      body: JSON.stringify({
+        models: catalog,
+        recommended_selection: recommended,
+      }),
     };
   });
   const client = createAgentClient(session, null);
@@ -208,6 +211,126 @@ it("loads the catalog and keeps instructions alongside explicit model and effort
     ),
   ).toBe(true);
 });
+
+it("preselects Builderlab's recommendation and keeps the person's later choice", async () => {
+  const h = await fixture(true, { model_id: "one", reasoning_effort: "high" });
+  await act(async () => h.pending.resolve());
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "High",
+  );
+  expect(h.draft()).toEqual({
+    instructions: "",
+    modelId: "one",
+    reasoningEffort: "high",
+    subject: "account",
+  });
+  // Untouched recommended choices are complete, so creation is ready.
+  expect(h.ready).toHaveBeenLastCalledWith(true);
+  await choose("Model", "Model Two");
+  await choose("Thinking", "None");
+  // A reloaded catalog recommends again, but only into untouched choices.
+  act(() => h.session.signOut());
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
+  await screen.findByRole("button", { name: "Model: Model Two" });
+  expect(h.draft()).toEqual({
+    instructions: "",
+    modelId: "two",
+    reasoningEffort: "none",
+    subject: "account",
+  });
+});
+
+it("moves an untouched recommendation to a newly signed-in account", async () => {
+  const h = await fixture(true, { model_id: "one", reasoning_effort: "high" });
+  await act(async () => h.pending.resolve());
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  act(() => h.session.signOut());
+  h.acquire.mockResolvedValue({
+    revision: "other-credential",
+    account: {
+      subject: "other",
+      email: "b@example.com",
+      canUseRemoteAgents: true,
+      canUseBuilderlabDecisions: false,
+    },
+  });
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
+  await screen.findByRole("button", { name: "Model: Sol 6.1" });
+  expect(h.draft()).toEqual({
+    instructions: "",
+    modelId: "one",
+    reasoningEffort: "high",
+    subject: "other",
+  });
+  expect(screen.queryByText(/another Builderlab account/)).toBeNull();
+  expect(h.ready).toHaveBeenLastCalledWith(true);
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toBeEnabled();
+});
+
+it.each([
+  { field: "Thinking", recommendation: "changed" },
+  { field: "Thinking", recommendation: "missing" },
+  { field: "Model", recommendation: "changed" },
+  { field: "Model", recommendation: "missing" },
+])(
+  "preserves an explicit $field choice that returns to the suggestion before an account switch with a $recommendation recommendation",
+  async ({ field, recommendation }) => {
+    const h = await fixture(true, {
+      model_id: "one",
+      reasoning_effort: "high",
+    });
+    await act(async () => h.pending.resolve());
+    await screen.findByRole("button", { name: "Model: Sol 6.1" });
+    if (field === "Model") {
+      await choose("Model", "Model Two");
+      await choose("Thinking", "None");
+      await choose("Model", "Sol 6.1");
+    } else {
+      await choose("Thinking", "Low");
+    }
+    await choose("Thinking", "High");
+    const explicit = { ...h.draft() };
+    expect(explicit).toMatchObject({
+      modelId: "one",
+      reasoningEffort: "high",
+      subject: "account",
+    });
+    act(() => h.session.signOut());
+    h.acquire.mockResolvedValue({
+      revision: "other-credential",
+      account: {
+        subject: "other",
+        email: "b@example.com",
+        canUseRemoteAgents: true,
+        canUseBuilderlabDecisions: false,
+      },
+    });
+    h.request.mockResolvedValue({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        models: catalog,
+        recommended_selection:
+          recommendation === "changed"
+            ? { model_id: "two", reasoning_effort: "none" }
+            : undefined,
+      }),
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sign in to Builderlab" }));
+    const thinking = await screen.findByRole("combobox", { name: "Thinking" });
+    expect(h.draft()).toEqual(explicit);
+    expect(screen.getByText(/another Builderlab account/)).toBeVisible();
+    expect(thinking).toBeDisabled();
+    expect(h.ready).toHaveBeenLastCalledWith(false);
+  },
+);
 
 it("retains instructions when catalog loading fails and is retried", async () => {
   const h = await fixture();

@@ -323,7 +323,10 @@ export type AgentCreateProps<Config = unknown> = {
   /** Hide effort editing in streamlined connection setup. */
   showEffort?: boolean;
   config: Config;
-  onChange(config: Config): void;
+  /** `suggested` fills choices the person has not made yet, such as a
+   * provider's recommended model, without counting as a started draft.
+   * The creation dialog honors it for CreateConfiguration. */
+  onChange(config: Config, options?: { suggested?: boolean }): void;
   disabled: boolean;
 };
 export type AgentTab<Config = unknown> = Readonly<{

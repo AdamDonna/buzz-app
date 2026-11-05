@@ -36,6 +36,12 @@ export type RemoteAgentModel = Readonly<{
   supportedReasoningEfforts: readonly string[];
 }>;
 
+export type RemoteAgentModelCatalog = Readonly<{
+  models: readonly RemoteAgentModel[];
+  /** Builderlab's creation default; present only when the catalog offers it. */
+  recommended?: Readonly<{ modelId: string; reasoningEffort: string }>;
+}>;
+
 function modelSelectionStatus(
   value: unknown,
 ): NonNullable<RemoteAgent["modelSelectionStatus"]> {
@@ -349,9 +355,7 @@ export function createAgentClient(
   return {
     link,
     activate,
-    async modelCatalog(
-      signal: AbortSignal,
-    ): Promise<readonly RemoteAgentModel[]> {
+    async modelCatalog(signal: AbortSignal): Promise<RemoteAgentModelCatalog> {
       const result = await readRequest("get-model-catalog", {}, signal);
       const models = result.models ?? [];
       if (
@@ -371,11 +375,21 @@ export function createAgentClient(
         )
       )
         throw new Error("Builderlab returned an invalid model catalog.");
-      return models.map((model) => ({
-        id: model.id,
-        displayName: model.display_name,
-        supportedReasoningEfforts: model.supported_reasoning_efforts,
-      }));
+      const { model_id: modelId, reasoning_effort: reasoningEffort } =
+        (result.recommended_selection ?? {}) as Record<string, unknown>;
+      const recommended = models.find((model) => model.id === modelId);
+      return {
+        models: models.map((model) => ({
+          id: model.id,
+          displayName: model.display_name,
+          supportedReasoningEfforts: model.supported_reasoning_efforts,
+        })),
+        // Advisory: an unknown or unsupported pair is dropped, never an error.
+        ...(typeof reasoningEffort === "string" &&
+        recommended?.supported_reasoning_efforts.includes(reasoningEffort)
+          ? { recommended: { modelId: recommended.id, reasoningEffort } }
+          : {}),
+      };
     },
     async updateModel(
       agent: RemoteAgent,

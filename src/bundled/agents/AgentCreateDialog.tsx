@@ -184,9 +184,14 @@ export function AgentCreateDialog({
   const CreateAction = type?.CreateAction;
   const canCreate = !Configuration || configurationReady;
   const close = () => setOpen(false);
-  const chooseModel = (item: RegisteredAgentType, next: unknown) => {
+  const chooseModel = (
+    item: RegisteredAgentType,
+    next: unknown,
+    options?: { suggested?: boolean },
+  ) => {
     setTypeKey(item.key);
     setConfig(next);
+    if (options?.suggested) return;
     setDirty(true);
     setError("");
   };
@@ -427,7 +432,7 @@ export function AgentCreateDialog({
                 disabled={pending}
                 harnessControl={harnessControl}
                 onReadyChange={setConfigurationReady}
-                onChange={(next) => chooseModel(type, next)}
+                onChange={(next, options) => chooseModel(type, next, options)}
               />
             ) : (
               <SettingsGroup>

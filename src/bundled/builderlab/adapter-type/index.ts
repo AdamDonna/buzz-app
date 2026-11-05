@@ -105,7 +105,7 @@ export function builderlabType(
         "Sign in to the Builderlab account that selected these model settings.",
       );
     if (
-      !catalog
+      !catalog.models
         .find((model) => model.id === draft.modelId)
         ?.supportedReasoningEfforts.includes(draft.reasoningEffort)
     )

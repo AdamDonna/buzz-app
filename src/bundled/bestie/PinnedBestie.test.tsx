@@ -69,6 +69,7 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
 });
 const pollen = "b".repeat(64),
   fizz = "c".repeat(64),
@@ -95,6 +96,8 @@ async function fixture({
   archived = false,
   withReply = false,
 } = {}) {
+  // jsdom has no native scrolling; thread reveals still use this DOM boundary.
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   // The timeline waits for a measurable host before mounting its virtualizer.
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);

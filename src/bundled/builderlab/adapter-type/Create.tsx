@@ -15,7 +15,7 @@ import { Select } from "../../../shared/design-system/ui/Select";
 import { SettingsGroup } from "../../../shared/design-system/ui/SettingsGroup";
 import {
   type AgentClient,
-  type RemoteAgentModel,
+  type RemoteAgentModelCatalog,
   validInstructions,
 } from "../agents/client";
 import type { BuilderlabSession } from "../session";
@@ -101,11 +101,11 @@ export function createCreationFields(
   }) {
     const draft = config as CreationConfig;
     const login = useSyncExternalStore(session.subscribe, session.snapshot);
-    const [catalog, setCatalog] = useState<{
-      login: typeof login;
-      models: readonly RemoteAgentModel[];
-    }>();
-    const models = catalog?.login === login ? catalog.models : undefined;
+    const [catalog, setCatalog] = useState<
+      RemoteAgentModelCatalog & { login: typeof login }
+    >();
+    const loaded = catalog?.login === login ? catalog : undefined;
+    const models = loaded?.models;
     const [error, setError] = useState("");
     const [revision, setRevision] = useState(0);
     const controls = useRef<HTMLDivElement>(null);
@@ -116,8 +116,8 @@ export function createCreationFields(
       setCatalog(undefined);
       setError("");
       void client.modelCatalog(controller.signal).then(
-        (models) => {
-          if (!controller.signal.aborted) setCatalog({ login, models });
+        (next) => {
+          if (!controller.signal.aborted) setCatalog({ ...next, login });
         },
         (reason) => {
           if (!controller.signal.aborted)
@@ -130,6 +130,28 @@ export function createCreationFields(
       );
       return () => controller.abort();
     }, [client, login, revision]);
+    const suggestion = useRef<CreationConfig>(undefined);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: each loaded catalog suggests once; later draft edits are the person's.
+    useEffect(() => {
+      if (!loaded || !login.account) return;
+      const last = suggestion.current;
+      const suggested =
+        draft.modelId === last?.modelId &&
+        draft.reasoningEffort === last.reasoningEffort &&
+        draft.subject === last.subject;
+      const blank = !draft.modelId && !draft.reasoningEffort;
+      // Only blank or still-suggested choices follow a newly loaded catalog.
+      if (!suggested && !(blank && loaded.recommended)) return;
+      const next = {
+        ...draft,
+        modelId: "",
+        reasoningEffort: "",
+        ...loaded.recommended,
+        subject: login.account.subject,
+      };
+      suggestion.current = next;
+      onChange(next, { suggested: true });
+    }, [catalog]);
     const signedIn = login.status === "signed-in";
     const choicesDisabled = disabled || !signedIn || !models?.length;
     const model = models?.find((choice) => choice.id === draft.modelId);
@@ -179,14 +201,15 @@ export function createCreationFields(
             }
             models={(models ?? []).map(modelChoice)}
             disabled={choicesDisabled}
-            onChange={(modelId) =>
+            onChange={(modelId) => {
+              suggestion.current = undefined;
               onChange({
                 ...draft,
                 modelId,
                 reasoningEffort: "",
                 subject: login.account?.subject,
-              })
-            }
+              });
+            }}
           />
           <Select
             label="Thinking"
@@ -205,9 +228,10 @@ export function createCreationFields(
                 ),
               },
             ]}
-            onValueChange={(reasoningEffort) =>
-              onChange({ ...draft, reasoningEffort })
-            }
+            onValueChange={(reasoningEffort) => {
+              suggestion.current = undefined;
+              onChange({ ...draft, reasoningEffort });
+            }}
           />
         </SettingsGroup>
         {!signedIn && login.error && (
