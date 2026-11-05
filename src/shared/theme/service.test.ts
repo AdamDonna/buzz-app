@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import {
   APPEARANCE_KEY,
   FONT_SCALE_KEY,
+  MESSAGE_WIDTH_KEY,
   createAppearance,
   parseColorMode,
   parseColorModePreference,
@@ -108,6 +109,8 @@ it.each([
       preference: parseColorModePreference(value),
       mode,
       error: null,
+      messageWidth: "narrow",
+      messageWidthError: null,
       fontScale: 1,
       fontError: null,
       accent: "citrus",
@@ -448,6 +451,75 @@ it("keeps contrast active on storage failure, retries, and follows other windows
   app.dispose();
   app.setContrast("high");
   expect(b.root.dataset.colorLevel).toBe("touch");
+});
+
+it.each([null, "narrow", "wide", "invalid"])(
+  "bootstraps and restores message width %j consistently",
+  (saved) => {
+    const b = browser();
+    if (saved !== null) b.values.set(MESSAGE_WIDTH_KEY, saved);
+    runInNewContext(readFileSync("public/appearance-init.js", "utf8"), {
+      localStorage: b.storage,
+      document: b.host.document,
+    });
+    const measure = saved === "wide" ? "78rem" : "52rem";
+    expect(b.root.style.setProperty).toHaveBeenCalledWith(
+      "--buzz-message-width",
+      measure,
+    );
+    b.root.style.setProperty.mockClear();
+    const app = createAppearance(b.host);
+    expect(app.snapshot().messageWidth).toBe(
+      saved === "wide" ? "wide" : "narrow",
+    );
+    expect(b.root.style.setProperty).toHaveBeenCalledWith(
+      "--buzz-message-width",
+      measure,
+    );
+    app.dispose();
+  },
+);
+
+it("applies message width immediately, persists it, and follows storage changes", () => {
+  const b = browser();
+  const app = createAppearance(b.host);
+  app.setMessageWidth("wide");
+  expect(b.values.get(MESSAGE_WIDTH_KEY)).toBe("wide");
+  expect(b.root.style.setProperty).toHaveBeenCalledWith(
+    "--buzz-message-width",
+    "78rem",
+  );
+  app.dispose();
+  const restored = createAppearance(b.host);
+  expect(restored.snapshot().messageWidth).toBe("wide");
+  b.values.set(MESSAGE_WIDTH_KEY, "narrow");
+  b.change(MESSAGE_WIDTH_KEY);
+  expect(restored.snapshot().messageWidth).toBe("narrow");
+  b.values.set(MESSAGE_WIDTH_KEY, "wide");
+  b.change(MESSAGE_WIDTH_KEY);
+  b.values.clear();
+  b.change(null);
+  expect(restored.snapshot().messageWidth).toBe("narrow");
+  restored.dispose();
+});
+
+it("keeps message width active when saving fails and clears the error on retry", () => {
+  const b = browser();
+  const app = createAppearance(b.host);
+  b.storage.setItem.mockImplementationOnce(() => {
+    throw new Error("denied");
+  });
+  app.setMessageWidth("wide");
+  expect(app.snapshot().messageWidth).toBe("wide");
+  expect(app.snapshot().messageWidthError).toContain("could not be saved");
+  expect(b.root.style.setProperty).toHaveBeenCalledWith(
+    "--buzz-message-width",
+    "78rem",
+  );
+  app.setMessageWidth("wide");
+  expect(app.snapshot().messageWidthError).toBeNull();
+  expect(b.values.get(MESSAGE_WIDTH_KEY)).toBe("wide");
+  app.dispose();
 });
 
 it.each([

@@ -55,6 +55,17 @@
   }
   document.documentElement.dataset.colorLevel =
     contrast === "low" ? "touch" : contrast;
+  let messageWidth = "52rem";
+  try {
+    if (localStorage.getItem("buzz-message-width.v1") === "wide")
+      messageWidth = "78rem";
+  } catch {
+    /* Narrow remains usable without storage. */
+  }
+  document.documentElement.style.setProperty(
+    "--buzz-message-width",
+    messageWidth,
+  );
   let density = "default";
   try {
     if (localStorage.getItem("buzz-message-density.v1") === "compact")

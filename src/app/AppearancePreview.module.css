@@ -66,6 +66,13 @@
 .heading span {
   width: 25%;
 }
+.messageColumn {
+  width: calc(100% / 1.5);
+  margin-inline: auto;
+}
+.messageColumn[data-message-width="wide"] {
+  width: 100%;
+}
 .messages {
   display: flex;
   flex-direction: column;

@@ -13,6 +13,10 @@ import {
 export type ColorMode = "light" | "dark";
 export type ColorModePreference = ColorMode | "system";
 export const APPEARANCE_KEY = "buzz-appearance.v1";
+export type MessageWidth = "narrow" | "wide";
+export const MESSAGE_WIDTH_KEY = "buzz-message-width.v1";
+export const parseMessageWidth = (value: unknown): MessageWidth =>
+  value === "wide" ? "wide" : "narrow";
 export const FONT_SCALE_KEY = "buzz-font-scale.v1";
 export const MIN_FONT_SCALE = 0.8;
 export const MAX_FONT_SCALE = 2;
@@ -41,6 +45,8 @@ export const parseMessageDensity = (value: unknown): MessageDensity =>
 export interface AppearanceSnapshot {
   readonly preference: ColorModePreference;
   readonly mode: ColorMode;
+  readonly messageWidth: MessageWidth;
+  readonly messageWidthError: string | null;
   readonly fontScale: number;
   readonly fontError: string | null;
   readonly accent: Accent;
@@ -66,6 +72,8 @@ export function createAppearance(
     preference: "system",
     mode: "light",
     error: null,
+    messageWidth: "narrow",
+    messageWidthError: null,
     fontScale: 1,
     fontError: null,
     accent: DEFAULT_ACCENT,
@@ -104,6 +112,10 @@ export function createAppearance(
         }),
       );
     }
+    root.style.setProperty(
+      "--buzz-message-width",
+      state.messageWidth === "wide" ? "78rem" : "52rem",
+    );
     root.dataset.messageDensity = state.density;
     root.style.setProperty("--buzz-text-scale", String(state.fontScale));
     // CSS owns the palette; browser chrome derives from the same canvas token.
@@ -157,6 +169,24 @@ export function createAppearance(
         ...state,
         fontError:
           "Interface size could not be restored. Choose a size to try saving it again.",
+      };
+    }
+    notify();
+  };
+  const restoreMessageWidth = () => {
+    try {
+      state = {
+        ...state,
+        messageWidth: parseMessageWidth(
+          host?.localStorage.getItem(MESSAGE_WIDTH_KEY),
+        ),
+        messageWidthError: null,
+      };
+    } catch {
+      state = {
+        ...state,
+        messageWidthError:
+          "Message width could not be restored. Choose a width to try saving it again.",
       };
     }
     notify();
@@ -219,6 +249,7 @@ export function createAppearance(
     if (
       event.key !== APPEARANCE_KEY &&
       event.key !== FONT_SCALE_KEY &&
+      event.key !== MESSAGE_WIDTH_KEY &&
       event.key !== ACCENT_KEY &&
       event.key !== CONTRAST_KEY &&
       event.key !== DENSITY_KEY &&
@@ -231,6 +262,8 @@ export function createAppearance(
       if (event.storageArea !== host?.localStorage) return;
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
+      if (event.key === null || event.key === MESSAGE_WIDTH_KEY)
+        restoreMessageWidth();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
       if (event.key === null || event.key === DENSITY_KEY) restoreDensity();
       if (
@@ -242,6 +275,8 @@ export function createAppearance(
     } catch {
       if (event.key === null || event.key === APPEARANCE_KEY) restore();
       if (event.key === null || event.key === FONT_SCALE_KEY) restoreFont();
+      if (event.key === null || event.key === MESSAGE_WIDTH_KEY)
+        restoreMessageWidth();
       if (event.key === null || event.key === CONTRAST_KEY) restoreContrast();
       if (event.key === null || event.key === DENSITY_KEY) restoreDensity();
       if (
@@ -254,6 +289,7 @@ export function createAppearance(
   };
   restore();
   restoreFont();
+  restoreMessageWidth();
   restoreAccent();
   restoreContrast();
   restoreDensity();
@@ -301,6 +337,20 @@ export function createAppearance(
           "This interface size is active, but could not be saved on this device. Try again.";
       }
       state = { ...state, fontScale, fontError };
+      notify();
+    },
+    setMessageWidth(value: MessageWidth) {
+      if (disposed) return;
+      const messageWidth = parseMessageWidth(value);
+      let messageWidthError: string | null = null;
+      try {
+        if (!host) throw new Error("No browser storage");
+        host.localStorage.setItem(MESSAGE_WIDTH_KEY, messageWidth);
+      } catch {
+        messageWidthError =
+          "This message width is active, but could not be saved on this device. Try again.";
+      }
+      state = { ...state, messageWidth, messageWidthError };
       notify();
     },
     setAccent(value: Accent) {

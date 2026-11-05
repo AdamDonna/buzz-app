@@ -332,6 +332,15 @@ function setup({
       scoped.props,
     );
     section.props.ref.current = element;
+    const edge = section.props.children[0] as ReactElement<{
+      ref: { current: unknown };
+    }>;
+    edge.props.ref.current = {
+      get clientWidth() {
+        return element.clientWidth;
+      },
+      getBoundingClientRect: () => ({ height: 0 }),
+    };
     const virtualizer = section.props.children.find(
       (child) =>
         !!child &&
