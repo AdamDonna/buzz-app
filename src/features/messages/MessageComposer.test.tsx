@@ -11753,6 +11753,106 @@ it.each(["A ||hidden|| caption", "Use `a || b` here"])(
   },
 );
 
+it.each(["saved", "recovered", "typed before the default"])(
+  "adds the required submission recipient to prose %s without losing rich content",
+  async (source) => {
+    const draft = {
+      text: "Keep this brief",
+      recipients: [],
+      document: {
+        version: 1 as const,
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "text",
+                  text: "Keep this brief",
+                  marks: [{ type: "bold" }],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    if (source === "saved") writeView("scope", "task-brief", draft);
+    const submit = vi.fn();
+    const h = mount({
+      requireMention: true,
+      defaultMention: source === "typed before the default" ? undefined : first,
+      submission: {
+        draftKey: "task-brief",
+        recoveredDraft: source === "recovered" ? draft : undefined,
+        locked: false,
+        disabled: false,
+        submit,
+      },
+    });
+    if (source === "typed before the default") {
+      h.fill("Keep this brief");
+      act(() => {
+        h.input().setSelectionRange(0, draft.text.length);
+        h.input().toggleFormat("bold");
+      });
+      expect(
+        screen.getByRole("button", { name: "Send message" }),
+      ).toHaveAttribute("aria-disabled", "true");
+      h.retarget({ defaultMention: first });
+    }
+    expect(h.input()).toHaveValue("@Honey Keep this brief");
+    expect(h.input().querySelector("strong")).toHaveTextContent(
+      "Keep this brief",
+    );
+    expect(h.commands().recipients).toEqual([first]);
+    await h.user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(submit).toHaveBeenCalledOnce();
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      text: "@Honey Keep this brief",
+      recipients: [{ ...first, start: 0, end: 6 }],
+      document: { version: 1 },
+    });
+    expect(h.input().querySelector("strong")).toHaveTextContent(
+      "Keep this brief",
+    );
+  },
+);
+
+it.each(["channel", "optional submission", "explicit recipient"])(
+  "keeps a saved draft unchanged for %s when a default arrives",
+  (mode) => {
+    const draft = typedDraft({
+      text:
+        mode === "explicit recipient"
+          ? "@Honey Keep this brief"
+          : "Keep this brief",
+      recipients:
+        mode === "explicit recipient" ? [{ ...second, start: 0, end: 6 }] : [],
+    });
+    const submission =
+      mode === "channel"
+        ? undefined
+        : {
+            draftKey: "task-brief",
+            locked: false,
+            disabled: false,
+            submit: vi.fn(),
+          };
+    writeView("scope", submission?.draftKey ?? "draft:channel", draft);
+    const h = mount({
+      ...(submission ? { submission } : {}),
+      requireMention: mode !== "optional submission",
+    });
+    h.retarget({ defaultMention: first });
+    expect(h.input()).toHaveValue(draft.text);
+    expect(h.commands().recipients).toEqual(
+      mode === "explicit recipient" ? [second] : [],
+    );
+  },
+);
+
 it("does not take focus when a default recipient arrives after mount", () => {
   const h = mount();
   const outside = document.createElement("input");

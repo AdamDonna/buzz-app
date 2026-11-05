@@ -302,6 +302,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   **Settings → Shortcuts → Sending messages → Send with ⌘ Enter** (Ctrl+Enter
   outside Apple platforms) swaps that on this device: Enter adds a line and
   ⌘/Ctrl+Enter sends. It starts off.
+- A plugin can require a recipient for a new conversation. Its default recipient
+  also applies to a saved draft with no recipients. Your text and formatting stay.
+  A recipient you select takes priority.
 - **File sharing** is available through **Attach files** in the composer when
   uploads are available. Files and media are shared with the conversation's
   members. If an upload fails, its attachment shows the reason, **Retry**, and
