@@ -357,6 +357,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   header. Swipes need System Settings → Trackpad → More Gestures → Swipe
   between pages set to three fingers (or two or three fingers). Two-finger
   scrolling does not navigate.
+- **Closing the window** in the macOS app hides it; Buzz and its agents keep
+  running. Switching back to Buzz, for example with ⌘Tab or its Dock icon,
+  shows it again. A minimized window stays in the Dock. ⌘Q quits.
 - **Sharing a Solo chat** grants access to its conversation history, not only
   the next message. Search for a channel in its access dialog and click **Share**
   beside the result. This makes a Private chat **View only** and posts a link

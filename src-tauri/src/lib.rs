@@ -61,6 +61,8 @@ mod media_context_menu;
 mod microphone;
 #[cfg(target_os = "macos")]
 mod mouse_nav;
+#[cfg(target_os = "macos")]
+mod reshow;
 
 mod notifications;
 mod os_idle;
@@ -933,6 +935,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             mouse_nav::install(app.handle());
             #[cfg(target_os = "macos")]
+            reshow::install(app.handle());
+            #[cfg(target_os = "macos")]
             if let Some(home) = dirs::home_dir() {
                 if let Err(error) = legacy_cli_shortcut::remove_stale(&home.join(".local/bin")) {
                     eprintln!("Could not remove old Buzz's CLI shortcut: {error}");
@@ -1147,6 +1151,8 @@ pub fn run() {
                     api.prevent_close();
                     if let Err(error) = window.hide() {
                         eprintln!("Could not close Buzz window: {error}");
+                    } else {
+                        reshow::closed();
                     }
                     return;
                 }
