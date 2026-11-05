@@ -467,6 +467,21 @@ confirmation.
   A saved plugin sort can briefly wait for its plugin at startup, within the
   sidebar's 1.5-second loading budget. If unavailable, it falls back to A–Z
   without forgetting the saved choice.
+- On desktop, plugins can support update checks and set them on or off by default.
+  Use **Check for updates automatically** in the plugin's actions menu to change
+  this choice. Buzz saves your choice across updates and restarts. Plugins without
+  update support keep their existing manual import flow. Buzz checks eligible Git
+  sources at startup and once per hour while the app is visible. Checks do not
+  install or reload plugins. A notice
+  offers **Update and reload**, or **Review permissions** when access increases.
+  Click the notice body to open that plugin’s update checkbox in Manage plugins.
+  Its Update, Later, and Dismiss controls keep their own actions.
+  Save unfinished forms and stop active plugin workers before you update.
+  **Later** hides the notice for this candidate until the next app run. The
+  update stays in the profile menu under **Plugins**. A newer candidate can show
+  a notice again. Failed checks offer **Retry**. If the updated plugin cannot
+  start, use **Retry activation** or its recovery menu to **Roll back**, when
+  available. Checks, review, Later, and cancellation keep plugin work running.
 - **Reminders** and **Workflows** start off on fresh installs. Upgrades preserve
   their previous state, including when no choice was saved. Enable or disable
   them in **Manage plugins**; saved choices persist.
