@@ -72,6 +72,16 @@
 .card:is([role="option"], [role="gridcell"]) {
   cursor: pointer;
 }
+/* While a save is pending the selection stays, so the other cards grey as
+   the panel's other section tabs do. */
+[aria-busy="true"] > [role="row"] > .card[role="gridcell"] {
+  cursor: progress;
+}
+[aria-busy="true"]
+  > [role="row"]
+  > .card[role="gridcell"]:not([aria-selected="true"]) {
+  opacity: 0.5;
+}
 .card:is([aria-selected="true"], [data-selected="true"]) {
   border-color: var(--border-prominent);
   box-shadow: var(--shadow-sm);

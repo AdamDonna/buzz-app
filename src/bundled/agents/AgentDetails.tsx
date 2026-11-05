@@ -15,7 +15,10 @@ import {
   usePanelTabHost,
   usePanelTabTitle,
 } from "../../features/panels/PanelWorkspace";
-import { AgentSaveFooter } from "../../features/agents/AgentSaveButton";
+import {
+  AgentSaveFooter,
+  useAgentSaveState,
+} from "../../features/agents/AgentSaveButton";
 import type { ChannelChoice } from "../../features/agents/attention";
 import type { AgentMemories } from "../../features/agents/MemoryPanel";
 import type {
@@ -215,6 +218,8 @@ export function AgentDetails({
   const [name, setName] = useState(agent.name);
   const [namePending, setNamePending] = useState(false);
   const [nameError, setNameError] = useState("");
+  // The name editor sits outside the sections, so it reports to the host.
+  useAgentSaveState(editingName && name !== agent.name, namePending);
   const nameInput = useRef<HTMLInputElement>(null);
   const nameEditor = useRef<HTMLDivElement>(null);
   const namePrompt = useNamePrompt(nameInput);

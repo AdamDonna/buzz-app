@@ -1018,3 +1018,54 @@ test.each([false, true])(
     expect(closeSide).toHaveBeenCalledTimes(1);
   },
 );
+
+test("native Close from the main conversation leaves focus to a side tab that asks first", () => {
+  visibleWorkspace();
+  // A close that keeps its tab may be asking, and its prompt takes focus.
+  let answer: false | undefined = false;
+  const close = vi.fn(() => {
+    screen.getByRole("button", { name: "Keep editing" }).focus();
+    return answer;
+  });
+  render(
+    <>
+      <button type="button">Keep editing</button>
+      <PanelWorkspace
+        main
+        label="Main tabs"
+        value="conversation"
+        select={() => {}}
+        items={[
+          {
+            id: "conversation",
+            label: "Channel",
+            content: <input aria-label="Channel composer" />,
+          },
+        ]}
+      />
+      <PanelWorkspace
+        label="Side tabs"
+        value="side-thread"
+        select={() => {}}
+        items={[
+          {
+            id: "side-thread",
+            label: "Side thread",
+            content: <input aria-label="Side reply" />,
+            close,
+          },
+        ]}
+      />
+    </>,
+  );
+  const composer = screen.getByRole("textbox", { name: "Channel composer" });
+  composer.focus();
+  act(() => expect(requestClose()).toBe("handled"));
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "Keep editing" })).toHaveFocus();
+  answer = undefined;
+  composer.focus();
+  act(() => expect(requestClose()).toBe("handled"));
+  expect(close).toHaveBeenCalledTimes(2);
+  expect(composer).toHaveFocus();
+});

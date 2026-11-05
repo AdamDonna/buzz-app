@@ -1,9 +1,7 @@
 import {
-  useCallback,
   useEffect,
   useEffectEvent,
   useId,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -21,9 +19,12 @@ import type { AgentMemories } from "../../features/agents/MemoryPanel";
 import type { CommunityReader } from "../../features/communities/service";
 import { agentSections } from "../../features/agents/tabs";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
-import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
-import { Button } from "../../shared/design-system/ui/Button";
-import { AgentSaveState } from "../../features/agents/AgentSaveButton";
+import {
+  AgentSaveState,
+  DiscardChanges,
+  useAgentSaveReports,
+  useAgentSaveState,
+} from "../../features/agents/AgentSaveButton";
 
 /** An agent's sections as tabs, opening on the first. */
 export function AgentTabs(props: {
@@ -72,19 +73,11 @@ export function AgentTabs(props: {
         ? "agent:activity"
         : (sections[0]?.value ?? ""),
   );
-  const [draft, setDraft] = useState({ dirty: false, saving: false });
-  const drafts = useRef(new Map<string, { dirty: boolean; saving: boolean }>());
-  const reportDraft = useCallback(
-    (state: { dirty: boolean; saving: boolean } | null, id: string) => {
-      if (state) drafts.current.set(id, state);
-      else drafts.current.delete(id);
-      const states = [...drafts.current.values()];
-      setDraft({
-        dirty: states.some((state) => state.dirty),
-        saving: states.some((state) => state.saving),
-      });
-    },
-    [],
+  const [draft, reportDraft] = useAgentSaveReports();
+  // Hosts that replace or close the whole pane ask with the same total.
+  useAgentSaveState(
+    draft.dirty || Boolean(props.settingsHost.pendingSave),
+    draft.saving,
   );
   const [pendingTab, setPendingTab] = useState<string>();
   const panelPrefix = useId();
@@ -170,28 +163,14 @@ export function AgentTabs(props: {
           </div>
         ))}
       {pendingTab && (
-        <AlertDialog
-          title="Discard changes?"
+        <DiscardChanges
           description="Your unsaved changes will be lost if you switch tabs."
-          onClose={() => setPendingTab(undefined)}
-          actions={
-            <>
-              <Button onClick={() => setPendingTab(undefined)}>
-                Keep editing
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  props.onDiscard?.();
-                  setDraft({ dirty: false, saving: false });
-                  setTab(pendingTab);
-                  setPendingTab(undefined);
-                }}
-              >
-                Discard changes
-              </Button>
-            </>
-          }
+          onKeep={() => setPendingTab(undefined)}
+          onDiscard={() => {
+            props.onDiscard?.();
+            setTab(pendingTab);
+            setPendingTab(undefined);
+          }}
         />
       )}
     </AgentSaveState>
