@@ -22,6 +22,7 @@ import { useState, type ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   Agent,
+  AgentCreateProps,
   AgentProviderSnapshot,
   AgentViewProps,
   Agents,
@@ -244,21 +245,24 @@ function setup(
     Peek: ({ agent }: { agent: Agent }) => <p>Peek of {agent.name}</p>,
     CreateModel: model
       ? ({
+          agent,
+          openSettings,
           config,
           onChange,
           disabled,
-        }: {
-          config: { reply: string };
-          onChange(config: { reply: string }): void;
-          disabled: boolean;
-        }) => (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange({ ...config, reply: "New model" })}
-          >
-            Change model
-          </button>
+        }: AgentCreateProps<{ reply: string }>) => (
+          <>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange({ ...config, reply: "New model" })}
+            >
+              Change model
+            </button>
+            <button type="button" onClick={openSettings}>
+              Model settings for {agent?.name}
+            </button>
+          </>
         )
       : undefined,
     provider: echoProvider.contribution,
@@ -400,6 +404,11 @@ function setup(
     addedTabs: () => [],
     registerTab: () => {},
     controlAttention: () => {},
+    registerExecution: () => {},
+    bindExecution: async () => {},
+    executionBinding: () => undefined,
+    inspectExecution: async () => undefined,
+    execution: async () => undefined,
     harness: {} as Agents["harness"],
   } satisfies Agents;
   const disconnected = { status: "disconnected", generation: 0 };
@@ -3116,6 +3125,12 @@ it("saves a card model through its type and keeps failures on the card", async (
     expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
   );
   expect(agents.save).toHaveBeenCalledTimes(2);
+  await user.click(
+    screen.getByRole("button", { name: "Model settings for Ada" }),
+  );
+  expect(
+    await screen.findByRole("complementary", { name: "Ada identity" }),
+  ).toBeVisible();
 });
 
 it("opens marketplace beside Your teams without a modal", async () => {
@@ -4283,4 +4298,143 @@ it("offers to save an automatic bestie to the account, and again after a failed 
     key: "Escape",
   });
   expect(await make("Bea")).toBeNull();
+});
+
+it("opens a restored version address in Settings, closes on Back, and retires only that scoped version on Close", async () => {
+  const user = userEvent.setup();
+  const ada = agent("Ada", 1);
+  const bea = agent("Bea", 2);
+  const revision = {
+    id: "a".repeat(64),
+    pubkey: ada.pubkey,
+    sig: "b".repeat(128),
+    kind: 45010,
+    created_at: 1700000000,
+    content: JSON.stringify({ version: 1, text: "Help." }),
+    tags: [
+      ["ar", "1"],
+      ["h", "c"],
+      ["d", "instructions"],
+      ["type", "buzz.agent.instructions"],
+      ["op", "create"],
+    ],
+  };
+  const base = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.agents",
+    pageId: "agents",
+    scope: null,
+    route: { version: 1, params: { agent: ada.pubkey, revision: "" } },
+  } as const;
+  const opened = {
+    ...base,
+    route: {
+      version: 1,
+      params: { agent: ada.pubkey, revision: `instructions/${revision.id}` },
+    },
+  } as const;
+  let current: { id: string; target: OpenTarget } = {
+    id: "version",
+    target: opened,
+  };
+  const dismiss = vi.fn();
+  const navigator = {
+    snapshot: () => ({ entry: current }),
+    open: vi.fn(),
+    dismiss,
+  } as unknown as Navigation;
+  const request = (): PageNavigation => {
+    const navigation = {
+      entryId: current.id,
+      target: current.target,
+      signal: new AbortController().signal,
+      position: () => undefined,
+      savePosition() {},
+      forSession: () => navigation,
+      resolve: () => true,
+      complete: () => true,
+    };
+    return navigation;
+  };
+  const view = setup([ada, bea]);
+  const read = vi.fn(async () => [revision]);
+  const revise = vi.fn();
+  Object.assign(view.agents, {
+    configHistory: () => ({
+      read,
+      revise,
+      sides: [
+        {
+          side: "instructions",
+          expected: {
+            channel: "c",
+            d: "instructions",
+            type: "buzz.agent.instructions",
+          },
+          head: revision,
+        },
+      ],
+    }),
+  });
+  const page = () => (
+    <AgentsPage
+      agents={view.agents}
+      relay={view.relay}
+      navigation={request()}
+      navigator={navigator}
+    />
+  );
+  view.rerender(page());
+  expect(
+    await screen.findByRole("heading", {
+      name: "Instructions version Current",
+    }),
+  ).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Revert to this" })).toBeNull();
+  current = { id: "base", target: base };
+  view.rerender(page());
+  expect(
+    screen.queryByRole("dialog", { name: "Instructions version Current" }),
+  ).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Previous versions" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  current = { id: "version", target: opened };
+  view.rerender(page());
+  expect(
+    await screen.findByRole("dialog", { name: "Instructions version Current" }),
+  ).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  const [matches, fallback] = dismiss.mock.calls[0] as unknown as [
+    (target: OpenTarget) => boolean,
+    OpenTarget,
+  ];
+  expect(fallback).toEqual(base);
+  expect(matches(opened)).toBe(true);
+  expect(matches(base)).toBe(false);
+  expect(
+    matches({
+      ...opened,
+      scope: {
+        viewer: "f".repeat(64),
+        communityOrigin: "https://elsewhere.example",
+      },
+    }),
+  ).toBe(false);
+  expect(revise).not.toHaveBeenCalled();
+  current = { id: "base", target: base };
+  view.rerender(page());
+  await user.click(
+    within(screen.getByRole("grid", { name: "Agents" })).getByText("Bea"),
+  );
+  expect(screen.getByRole("heading", { name: "Bea" })).toBeVisible();
+  expect(screen.getByRole("tab", { name: "Reply" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+  expect(
+    screen.getByRole("button", { name: "Previous versions" }),
+  ).toHaveAttribute("aria-expanded", "false");
 });

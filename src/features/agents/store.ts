@@ -24,6 +24,10 @@ import { AGENT_KEY, type AgentKey } from "./membership";
 export type AgentStore = Readonly<{
   keys(): readonly string[];
   get(key: string): string | null;
+  /** Reads saved state after this program's pending writes to the key. */
+  read(key: string): Promise<string | null>;
+  /** Reads saved entries under a prefix without changing this program's copy. */
+  scan(prefix: string): Promise<Record<string, string>>;
   /** Saves `value` under `key`; null removes the key. */
   set(key: string, value: string | null): Promise<void>;
   /** Saves `value` only if no program saved a value under `key`. Resolves
@@ -42,6 +46,16 @@ export function localStore(
         storage.key(index),
       ).filter((key): key is string => key !== null),
     get: (key: string) => storage.getItem(key),
+    read: async (key: string) => storage.getItem(key),
+    scan: async (prefix: string) =>
+      Object.fromEntries(
+        Array.from({ length: storage.length }, (_, index) => storage.key(index))
+          .filter((key): key is string => Boolean(key?.startsWith(prefix)))
+          .flatMap((key) => {
+            const value = storage.getItem(key);
+            return value === null ? [] : [[key, value]];
+          }),
+      ),
     set: async (key: string, value: string | null) => {
       if (value === null) storage.removeItem(key);
       else storage.setItem(key, value);

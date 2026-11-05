@@ -11,6 +11,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import type {} from "../../features/agents/external-connection";
 import { ExternalConnectionSettings } from "./ExternalConnectionSettings";
 import { externalMcpEnabled } from "../../features/agents/external-connection";
+import { forgetMemoryListingsOnSelection } from "../../features/agents/memory";
 
 export const inject = [
   "pages",
@@ -28,6 +29,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   registerAttention(ctx);
   registerDiscovery(ctx.agents);
   registerDecideTool(ctx.agents, ctx.decisions);
+  ctx.effect(() => forgetMemoryListingsOnSelection(ctx.communityReader));
   const { relay, navigation: navigator } = ctx;
   const agents = developerMode ? withImportScenario(ctx.agents) : ctx.agents;
   if (isTauri()) {

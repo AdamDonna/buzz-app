@@ -441,6 +441,16 @@ test("agent cards expose selection and creation preserves focus and avatar choic
   const dialog = page.getByRole("dialog");
   const name = dialog.getByRole("textbox", { name: "Name", exact: true });
   await expect(name).toBeFocused();
+  const create = dialog.getByRole("button", {
+    name: "Create agent",
+    exact: true,
+  });
+  await expect(create).toBeDisabled();
+  await name.fill("Nova");
+  await expect(create).toBeEnabled();
+  await name.fill("   ");
+  await expect(create).toBeDisabled();
+  await name.fill("");
   await expect
     .poll(() =>
       name.evaluate((field) => getComputedStyle(field).borderBottomColor),
@@ -528,10 +538,16 @@ test("agent cards expose selection and creation preserves focus and avatar choic
       }),
     )
     .toBe(true);
+  // Ordinary creation is gated; a direct submit still reveals invalid fields.
+  await expect(create).toBeDisabled();
+  await expect(name).not.toBeFocused();
   await dialog
-    .getByRole("button", { name: "Create agent", exact: true })
-    .click();
+    .getByRole("form", { name: "New agent", exact: true })
+    .evaluate((form) => form.requestSubmit());
   await expect(name).toBeFocused();
+  await expect(
+    dialog.getByText("Add a name to create your agent", { exact: true }),
+  ).toBeVisible();
   await expect
     .poll(() =>
       name.evaluate((field) => {

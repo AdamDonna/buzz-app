@@ -1,4 +1,11 @@
 import { visibleTeams } from "../../features/agents/visible-teams";
+import type { OpenTarget } from "../../features/navigation/targets";
+import {
+  agentHistoryActive,
+  agentHistoryRoute,
+  agentHistoryTarget,
+} from "./routes";
+import { historyPresentation } from "../../features/agents/history-presentation";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import { AgentDetails } from "./AgentDetails";
 import { communityDestination } from "../../features/communities/destination";
@@ -295,6 +302,10 @@ export function AgentsPage({
     routed && navigation.target.kind === "page"
       ? agentRoute(navigation.target.route?.params)
       : undefined;
+  const historyParams =
+    navigation?.target.kind === "page" && routedAgent === selected?.pubkey
+      ? navigation.target.route?.params
+      : undefined;
   const routedEntry = navigation?.entryId;
   useEffect(() => {
     if (!routedAgent || !routedEntry) return;
@@ -493,6 +504,25 @@ export function AgentsPage({
       />
     ) : (
       <AgentDetails
+        historyPresentation={
+          navigation &&
+          navigator &&
+          !navigation.signal.aborted &&
+          navigator.snapshot().entry.id === navigation.entryId &&
+          navigation.target.kind === "page"
+            ? historyPresentation(
+                navigator,
+                agentHistoryRoute(historyParams),
+                (selection) =>
+                  agentHistoryTarget(
+                    navigation.target as Extract<OpenTarget, { kind: "page" }>,
+                    selected.pubkey,
+                    selection,
+                  ),
+                agentHistoryActive(historyParams),
+              )
+            : undefined
+        }
         communities={communities}
         messageAction={(variant) => (
           <AgentMessageButton
@@ -1072,6 +1102,8 @@ function InventoryCard({
             >
               {Model && (
                 <Model
+                  agent={agent}
+                  openSettings={onBuild}
                   config={agent.config}
                   modelAppearance="glass-ghost"
                   disabled={saving}

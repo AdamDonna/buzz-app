@@ -46,6 +46,8 @@ export function appClient(
     return found;
   };
   const handoff = agent.handoff;
+  const plugins = agent.plugins;
+  const { settings } = agent;
   return {
     ...(agent.protection
       ? {
@@ -197,6 +199,30 @@ export function appClient(
         throw new Error("Agent changes are unavailable on this host");
       return agent.updateAgent(input);
     },
+    ...(plugins && {
+      plugins: {
+        list: () => {
+          check();
+          return plugins.list();
+        },
+        discover: (repository, reference) => {
+          check();
+          return plugins.discover(repository, reference);
+        },
+        disable: (id) => {
+          check();
+          return plugins.disable(id);
+        },
+        request: (input) => {
+          check();
+          return plugins.request(input);
+        },
+        status: (requestId) => {
+          check();
+          return plugins.status(requestId);
+        },
+      },
+    }),
     ...(handoff
       ? {
           handoff: (wake: AgentHandoff) => {
@@ -215,6 +241,25 @@ export function appClient(
       close: (channel, root) => tabs().close(channel, root),
       rename: (channel, root, name) => tabs().rename(channel, root, name),
     },
+    ...(settings
+      ? {
+          settings: {
+            list: () => {
+              check();
+              return settings.list();
+            },
+            get: (key) => {
+              check();
+              return settings.get(key);
+            },
+            // Synchronous, so the check holds until the write is read back.
+            set: (key, value) => {
+              check();
+              return settings.set(key, value);
+            },
+          },
+        }
+      : {}),
   };
 }
 

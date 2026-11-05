@@ -562,16 +562,26 @@ the returned command, and confirms relay-owned state before removing a row. Arch
 confirmed Delete/Leave use the existing access-loss purge. Commands use narrow
 development-broker routes or the packaged native `relay_channel_sign` and
 `relay_channel_publish` commands, never the message outbox or automatic replay.
+The same route carries the **Starter channel for new members** switch as two commands
+without a confirmation dialog, `auto-join-on` and `auto-join-off`, each a `9002`
+with `auto_join=true|false`. The lifecycle owner requires fresh relay metadata for an
+active public stream channel before signing (channel roles cannot show community
+ownership; the relay accepts the flag only from community owners and admins) and
+confirms the result from the republished `39000`: the relay advertises the flag
+as a bare `auto_join` tag only while it is in effect, so success is that tag's
+presence or absence, not the written value.
 A published lifecycle command keeps its bounded, fresh, strong confirmation
 when access loss retires access-dependent work. Retired confirmation reads
 are reread; caller cancellation, session clear/disposal and the original deadline
 still abort its signal. A rejected publication or definitive confirmation-read
 failure still fails the command; an aborted read alone never confirms it. These signals
 do not forcibly interrupt an in-flight native publication IPC.
-Both hosts admit only the exact two-tag `9002` shape with `archived=true` (Archive)
-or `archived=false` (Unarchive); other values, extra tags, cross-route commands and
+Both hosts admit only the exact two-tag `9002` shape with `archived=true` (Archive),
+`archived=false` (Unarchive) or `auto_join=true|false` (the switch); other values,
+extra tags, cross-route commands and
 altered or foreign signatures are rejected. Hosts without this capability display
-an unavailable notice. Native Unarchive requires rebuilding/restarting the desktop
+an unavailable notice. Native Unarchive and the auto-join switch require
+rebuilding/restarting the desktop
 binary; updating the frontend alone does not update the Rust validator. Rust
 validator and production-IPC tests cover both values, but do not establish an
 installed desktop Archive → Unarchive round trip against a live relay; that
@@ -642,6 +652,23 @@ row are omitted.
 Duration uses Create's Ongoing/Temporary cards. Access controls live in the members
 dialog, separate from the text and lifespan draft. These details controls stage
 changes; none publishes immediately.
+**Starter channel for new members**, between Description and Members, is separate: an
+immediate switch that publishes its own narrow `9002` (see
+[Channel lifecycle](#channel-lifecycle)) and shows pending, the relay's refusal
+or, when the change is not confirmed, a prompt to try again beside itself. Once the
+channel's metadata shows the value that toggle wanted, the prompt clears, so trying
+again cannot undo a change that landed. It appears only to community owners and admins
+(the relay-signed kind `13534` roster) who are members of an active public stream
+channel, not previewing it or a guest in it, and only once the channel is loaded
+live rather than from cache. The relay checks the community role, not channel
+membership, so the gate is display-only and narrower: an owner or admin must join
+the channel to see the switch.
+Archiving a starter channel or making it private hides the switch and pauses the
+flag without clearing it: the relay stops advertising and applying it, refuses
+to change it on a private channel, and resumes adding new members on Unarchive
+or once the channel is public again. For a starter channel, the Archive and
+**Change general access?** (to Private) confirmations say so, so an owner or
+admin can turn the switch off first.
 **Save changes** submits the draft together and is enabled only for valid, changed values.
 **Cancel** explicitly discards edits and closes without confirmation. Close, Escape
 and backdrop clicks close untouched forms immediately; changed drafts first show
@@ -1041,7 +1068,12 @@ addition to the heading’s own top inset; invitation/recovery spacing is unchan
 The search composition reduces the shared header-to-body gap by `--space-2`
 (16px normally, 8px at the compact breakpoint) without affecting other dialogs.
 The member-list area flexes into the remaining dialog height and owns the only
-scrollbar, including search results and recovery messages. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
+scrollbar, including search results and data recovery messages. Member
+administration errors, refused additions, Send message progress and errors, and
+Copy link failures sit above the list instead, so a long roster never hides them.
+Refused additions are grouped by reason: one alert names the people (up to three,
+then a count) and its one **Retry** resubmits all of them; Solo agents, which join
+directly, keep one alert each. Current-member groups render at most 50 rows per page, with Previous/Next controls and whole-group counts. Search still filters the whole roster, and query or role-filter changes reset paging. Live roster changes retain the current page, clamped to the last available page. Subsequent growth retains that clamped page. Large-roster ordering and group membership stay stable while names update; live roster changes remove departed identities and append arrivals without re-sorting survivors. Reopening or refreshing takes a new ordering. Agents counts and the role filter reflect agent identities known at that point and can be partial when profiles have not loaded; newly learned agent badges can appear under People until reopen or refresh. Large rosters show the verified list without waiting for optional names; name enrichment requests only the displayed member pages through the existing profile directory, without warming the entire roster. Name search combines cached labels with paged relay name-search results for existing roster members, including when the viewer cannot add members; public-key search covers every member. Public-key labels remain available when a name is absent or evicted from that shared directory. The role groups and
 Not in this channel flow naturally one after the other; empty groups are hidden. Only the bordered viewport fills spare
 height, never a group inside it. The shared Dialog's opt-in flex body
 keeps the outer body non-scrolling; other dialogs are unchanged.
@@ -1197,7 +1229,8 @@ The port retains the prepared-store implementation and its behavior tests:
   open and active (not a retained background tab), it reserves room for its whole
   roster on top of that base, up to 10,240 entries. Leaving gives the room back
   after the current task, so a remount or a roster count change keeps the loaded
-  profiles; the shrink cancels background profile reads still in flight, and
+  profiles; the shrink cancels background profile reads asked for before
+  leaving, not the next view's, and
   stops the verified-name syncs it emptied. Verified-name syncs (128 people
   each) have their own pool of 80, enough for the largest cache, apart from the
   32 artifact syncs. A background profile read of many pages publishes once,
@@ -1238,6 +1271,26 @@ The relay service restores a read-only session from the account/relay-scoped cac
 concurrently with the real connection handshake. Saved groups, stars and channel
 names are display data, not a confirmed preference mutation base. No cache means
 the ordinary cold connection flow; unavailable/corrupt storage never grants access.
+
+With no saved selection, Messages opens the first channel the relay flags
+`auto_join` (its starter channel for new members), then the first non-Solo
+channel; an explicit empty route bypasses both. The relay adds people to its
+`auto_join` channels itself, and the resulting membership hints populate the
+sidebar live:
+
+- A community that requires relay membership adds a member once, when they join
+  its roster: an invite claim that answers `joined`, or an admin's kind `9030`
+  add. A reclaim answering `already_member` adds nothing, and existing members
+  are not added to a channel flagged later.
+- An open community has no roster to join. After each human WebSocket AUTH
+  (agents are skipped) the relay adds the person to every `auto_join` channel
+  they have never been a member of, including channels flagged after they first
+  connected.
+
+Either way a later leave stands: the roster path does not run again for an
+existing member, and on the open path a leave or removal keeps a membership
+record, so the relay does not add the person back. The client only reads the
+flag; it never sends a join on a member's behalf.
 
 A cached roster can display previously downloaded, reverified history for up to
 24 hours. It cannot authorize head/history reads, unread evidence, typing or

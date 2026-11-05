@@ -13,6 +13,12 @@ deliberately.
 - `solo-worker.ts`: the Solo worker tools (`solo_worker_*`), which ask an
   owner's Buzz to run its workers; `solo-worker-protocol.ts` is their wire
   contract, pinned by `solo-worker-vectors.json`.
+- `plugins.ts`: the plugin tools (`plugin_*`), which read this device's plugins
+  and ask the owner to change them, which also posts the request's card message
+  into the conversation; `src/plugins/requests.ts` owns the requests.
+- `settings.ts`: the settings tools (`settings_list`, `settings_get`,
+  `settings_set`). The settings themselves are the host's catalog
+  (`src/app/device-settings.ts`); the tools never name one.
 - `session-tools.ts`: what a session lists, each tool's `load` (`always` or
   `search`), and the server instructions that cover the whole tool set.
 - `prompt.md`: the posting conventions every agent gets after the shared base

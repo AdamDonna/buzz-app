@@ -1,3 +1,8 @@
+import {
+  historySelection,
+  historySelectionKey,
+  type HistorySelection,
+} from "../agents/history-presentation";
 import { npubEncode, decode } from "nostr-tools/nip19";
 
 /** Public identity locator, not a relay hint or an authority claim. */
@@ -18,6 +23,10 @@ export function profileAgentHint(target: string): boolean {
 }
 
 export function profilePanelKey(target: string): string | undefined {
+  if (profileHistoryActive(target)) {
+    const base = profileHistoryBase(target);
+    return profilePanelKey(base) ?? profileActivityViewKey(base);
+  }
   return profileAgentHint(target)
     ? target.slice("buzz:agent-profile:".length)
     : profileKey(target);
@@ -45,6 +54,7 @@ export function profileActivityViewTarget(pubkey: string): string | undefined {
     : undefined;
 }
 export function profileActivityViewKey(target: string): string | undefined {
+  target = profileHistoryBase(target);
   try {
     const agent = new URL(target).searchParams.get("agent");
     return agent && target === profileActivityViewTarget(agent)
@@ -76,20 +86,52 @@ export function openProfileTranscript(
   open: (target: string) => boolean,
 ): boolean {
   if (!profileActivityViewKey(target)) return open(target);
-  transcriptRequests.set(target, ++transcriptOpenings);
+  const base = profileHistoryBase(target);
+  transcriptRequests.set(base, ++transcriptOpenings);
   const opened = open(target);
-  if (!opened) transcriptRequests.delete(target);
+  if (!opened) transcriptRequests.delete(base);
   changed();
   return opened;
 }
 /** The opening still asking `target`'s profile for its transcript. */
 export function profileTranscriptRequest(target: string): number | undefined {
-  return transcriptRequests.get(target);
+  return transcriptRequests.get(profileHistoryBase(target));
 }
 /** Takes `target`'s opening for the profile now showing it, so a profile
  * mounted later, as on returning to the channel, finds nothing to act on. */
 export function claimProfileTranscript(target: string): number | undefined {
+  target = profileHistoryBase(target);
   const opening = transcriptRequests.get(target);
   if (transcriptRequests.delete(target)) changed();
   return opening;
+}
+/** A config version inspector within the existing owned-agent profile. */
+export function profileHistoryRoute(target: string) {
+  const [base, fragment, extra] = target.split("#");
+  return base && fragment?.startsWith("version=") && extra === undefined
+    ? historySelection(fragment.slice("version=".length))
+    : undefined;
+}
+export function profileHistoryTarget(
+  target: string,
+  selected?: HistorySelection,
+) {
+  const base = profileHistoryBase(target);
+  return selected
+    ? `${base}#version=${historySelectionKey(selected)}`
+    : `${base}#versions`;
+}
+
+export function profileHistoryActive(target: string) {
+  return (
+    (target.split("#").length === 2 && target.endsWith("#versions")) ||
+    !!profileHistoryRoute(target)
+  );
+}
+
+/** A profile's version addresses share its opening; unknown fragments stay exact. */
+export function profileHistoryBase(target: string): string {
+  return profileHistoryActive(target)
+    ? (target.split("#")[0] as string)
+    : target;
 }

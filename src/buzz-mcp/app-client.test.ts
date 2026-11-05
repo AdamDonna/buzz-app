@@ -308,3 +308,69 @@ it("proposes no picture for a turn stopped during its upload", async () => {
   release();
   await expect(picture).rejects.toThrow("Turn ended");
 });
+
+it("refuses plugin calls after the calling turn ends", async () => {
+  const plugins = {
+    list: vi.fn(async () => ({ plugins: [] })),
+    discover: vi.fn(),
+    disable: vi.fn(),
+    request: vi.fn(),
+    status: vi.fn(),
+  };
+  const controller = new AbortController();
+  const client = appClient({ plugins } as unknown as AgentHandle, {
+    read: vi.fn(),
+    signal: controller.signal,
+    memories: async () => ({ entries: [], partial: false }),
+  });
+  expect(await client.plugins?.list()).toEqual({ plugins: [] });
+  controller.abort(new Error("Turn ended"));
+  await expect(async () => client.plugins?.list()).rejects.toThrow(
+    "Turn ended",
+  );
+  expect(() => client.plugins?.status("r")).toThrow("Turn ended");
+  expect(plugins.list).toHaveBeenCalledOnce();
+  expect(
+    appClient({} as AgentHandle, {
+      read: vi.fn(),
+      memories: async () => ({ entries: [], partial: false }),
+    }).plugins,
+  ).toBeUndefined();
+});
+
+it("offers the handle's settings, checking the turn before each call", () => {
+  const settings = {
+    list: vi.fn(() => []),
+    get: vi.fn(),
+    set: vi.fn(() => ({ key: "example.mood" }) as never),
+  };
+  const agent = { pubkey: "agent", settings } as unknown as AgentHandle;
+  const memories = async () => ({ entries: [], partial: false });
+  expect(
+    appClient({ pubkey: "agent" } as unknown as AgentHandle, {
+      read: vi.fn(),
+      memories,
+    }).settings,
+  ).toBeUndefined();
+  let ended = false;
+  const controller = new AbortController();
+  const client = appClient(agent, {
+    read: vi.fn(),
+    memories,
+    signal: controller.signal,
+    check: () => {
+      if (ended) throw new Error("The turn has ended");
+    },
+  });
+  client.settings?.set("example.mood", "busy");
+  expect(settings.set).toHaveBeenCalledExactlyOnceWith("example.mood", "busy");
+  ended = true;
+  expect(() => client.settings?.set("example.mood", "calm")).toThrow("ended");
+  expect(() => client.settings?.list()).toThrow("ended");
+  ended = false;
+  controller.abort(new Error("Turn stopped"));
+  expect(() => client.settings?.get("example.mood")).toThrow("Turn stopped");
+  expect(settings.set).toHaveBeenCalledOnce();
+  expect(settings.list).not.toHaveBeenCalled();
+  expect(settings.get).not.toHaveBeenCalled();
+});

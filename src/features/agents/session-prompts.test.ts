@@ -52,6 +52,20 @@ it("keeps every session's first save, each text once", async () => {
   expect(sessionPrompts(storage, "pi", AGENT).get("one")).toBeUndefined();
 });
 
+it("keeps when each session started and its title, alongside ones saved without", async () => {
+  const prompts = sessionPrompts(memory(), "goose", AGENT);
+  await prompts.save("old", [{ label: "", text: "a" }]);
+  await prompts.save("new", [{ label: "", text: "b" }], {
+    at: 5,
+    title: "Gander · #general",
+  });
+  expect(prompts.sessions()).toEqual([
+    { id: "old" },
+    { id: "new", at: 5, title: "Gander · #general" },
+  ]);
+  expect(prompts.get("new")).toEqual([{ label: "", text: "b" }]);
+});
+
 it("drops the oldest sessions to stay in budget, never cutting text", async () => {
   const prompts = sessionPrompts(memory(), "codex", AGENT);
   const big = (n: number) => `${n}`.repeat(PROMPTS_BUDGET / 3);
@@ -154,4 +168,35 @@ it("shows a Pi prompt as the full system prompt's tagged sections", async () => 
     "team",
     "core-memory",
   ]);
+});
+
+it("drops damaged saved sessions and keeps their neighbors", () => {
+  const storage = memory();
+  void storage.set(
+    `buzz.session-prompts.v1:goose:${AGENT}`,
+    JSON.stringify({
+      version: 1,
+      texts: ["hello"],
+      sessions: [
+        ["legacy", [["", 0]]],
+        ["started", null, { at: 5, title: "Gander · #general" }],
+        ["badStart", [], { at: "later", title: "x" }],
+        ["badPlace", [], { at: 1, title: "x", conversation: 7 }],
+        ["far", [], { at: 1e20, title: "x", conversation: null }],
+        ["timer", [], { at: 2, title: "t", conversation: null }],
+        ["badParts", { 0: ["", 0] }],
+        [7, []],
+        ["x".repeat(300), []],
+        ["legacy", []],
+        null,
+      ],
+    }),
+  );
+  const prompts = sessionPrompts(storage, "goose", AGENT);
+  expect(prompts.sessions()).toEqual([
+    { id: "legacy" },
+    { id: "started", at: 5, title: "Gander · #general" },
+    { id: "timer", at: 2, title: "t", conversation: null },
+  ]);
+  expect(prompts.get("legacy")).toEqual([{ label: "", text: "hello" }]);
 });

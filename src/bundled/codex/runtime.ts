@@ -1,3 +1,8 @@
+import type {
+  AgentExecution,
+  AgentExecutionSession,
+} from "../../features/agents/execution";
+import { CodexExecution } from "./execution";
 import { callbackHookArgs, openHookBridge } from "./hook-bridge";
 import type { Host } from "../../features/host/service";
 import { nativeHookState } from "./hooks";
@@ -128,6 +133,8 @@ type Saved = {
   workspace: string;
   at?: number;
   tools?: string;
+  /** A lost first-turn response must not be treated as an empty session. */
+  pending?: true;
   protection?: string;
 };
 type Active = {
@@ -256,16 +263,44 @@ function textOf(event: EventData, name: string) {
   return text;
 }
 
-/** Agents owns admission/identity. This plugin owns work after hand-over, and
- * uses one app-server for every agent. Each conversation is its own Codex
- * thread carrying its agent's workspace, instructions and tools, and tool
- * calls find their agent by thread and turn. */
+/** Local agents share one app-server. Each remote session owns its server.
+ * Each conversation carries its agent's workspace, instructions and tools.
+ * Tool calls find their agent by thread and turn. */
 export class CodexRuntime {
+  private remote = new Map<
+    string,
+    {
+      agent: AgentKey;
+      runtime: CodexRuntime;
+      execution: AgentExecution;
+    }
+  >();
+  private disposed = false;
+  private opening = new Map<
+    string,
+    {
+      agent: AgentKey;
+      abort: AbortController;
+      ready: Promise<CodexRuntime>;
+    }
+  >();
   private entries = new Map<AgentKey, Entry>();
+  private actions = new Map<
+    AgentKey,
+    Set<{ abort: AbortController; done: Promise<void> }>
+  >();
   private server: Server | undefined;
   private protectedServers = new Map<AgentKey, Server>();
   private stopping = new Map<AgentKey, Promise<void>>();
+  private stopped = new Map<AgentKey, Entry>();
+  private disposals = new Map<
+    AgentKey,
+    Map<AgentExecution, { done: Promise<void>; failed: boolean }>
+  >();
   private views = new Map<AgentKey, readonly SessionView[]>();
+  private inventories = new Map<AgentKey, SavedConversation[] | null>();
+  private inventoryReads = new Map<AgentKey, object>();
+  private inventoryVersions = new Map<AgentKey, number>();
   private listeners = new Set<() => void>();
   /** Read-only model discovery, kept until effective model settings change. */
   private previews = new Map<
@@ -280,7 +315,10 @@ export class CodexRuntime {
     /** The agent's `core` memory as the host keeps it (`Agents.core`). */
     private readonly core: Agents["core"],
     private readonly storage: AgentStore = localStore(),
-    private readonly resolveConfig: (raw: unknown) => Config = config,
+    private readonly resolveConfig: (
+      raw: unknown,
+      remote?: boolean,
+    ) => Config = config,
     /** The tools plugins add to every thread now. */
     private readonly added: () => readonly AddedTool[] = () => [],
     /** Desktop-local repository instructions; standalone hosts keep their own layout. */
@@ -295,10 +333,138 @@ export class CodexRuntime {
         input: unknown,
       ): Promise<Record<string, unknown>>;
     },
+    private readonly execution?: Agents["execution"],
+    private readonly target?: AgentExecution,
+    private readonly inspect?: Agents["inspectExecution"],
+    private readonly targetKey?: string,
     private readonly protectionHost?: Pick<Host, "spawn" | "serveMcp">,
     private readonly handle: (pubkey: string) => AgentHandle | undefined = () =>
       undefined,
   ) {}
+  private executionKey(agent: AgentKey, scope: string, conversation: string) {
+    return `buzz.codex.sessions.execution.v1:${scope}:${agent}:${conversation}`;
+  }
+  private sessionRecord(text: string): {
+    key: string;
+    intent: "new" | "existing";
+  } {
+    const value = JSON.parse(text);
+    if (
+      !value ||
+      typeof value.key !== "string" ||
+      !value.key ||
+      (value.intent !== "new" && value.intent !== "existing")
+    )
+      throw new Error("Invalid saved execution session");
+    return value;
+  }
+  private async connection(
+    agent: AgentKey,
+    scope: string,
+    conversation: string,
+    signal?: AbortSignal,
+  ): Promise<CodexRuntime> {
+    if (this.disposed) throw new Error("Codex runtime is disposed");
+    if (!this.execution || !(await this.inspect?.(agent))) return this;
+    const key = this.executionKey(agent, scope, conversation);
+    const held = this.remote.get(key);
+    if (held && !held.execution.signal.aborted) return held.runtime;
+    const pending = this.opening.get(key);
+    if (pending) return pending.ready;
+    const abort = new AbortController();
+    const cancel = () => abort.abort(signal?.reason);
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    const lifetime = abort.signal;
+    const ready = (async () => {
+      const stored = this.sessionRecord(
+        (await this.storage.read(key)) ??
+          (await this.storage.add(
+            key,
+            JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+          )),
+      );
+      const sessionKey = stored.key;
+      lifetime.throwIfAborted();
+      const savedKey = this.storageKey(scope, agent, sessionKey);
+      const saved = this.load(
+        savedKey,
+        await this.storage.read(savedKey),
+        true,
+      );
+      const session: AgentExecutionSession = {
+        key: sessionKey,
+        intent: stored.intent,
+        signal: lifetime,
+      };
+      const execution = await this.execution?.(agent, session);
+      if (this.disposed || lifetime.aborted) {
+        if (execution) await this.disposeExecution(agent, execution);
+        throw new Error("Codex runtime is retired");
+      }
+      if (!execution) return this;
+      try {
+        if (stored.intent === "new")
+          await this.storage.set(
+            key,
+            JSON.stringify({ key: sessionKey, intent: "existing" }),
+          );
+        lifetime.throwIfAborted();
+        execution.signal.throwIfAborted();
+      } catch (error) {
+        await this.disposeExecution(agent, execution);
+        throw error;
+      }
+      const transport = new CodexExecution(execution);
+      const runtime = new CodexRuntime(
+        transport.spawn,
+        (key) => (key === agent ? this.reads(key) : undefined),
+        this.core,
+        this.storage,
+        (raw) => ({
+          ...this.resolveConfig(raw, true),
+          workspace: execution.workspace,
+        }),
+        this.added,
+        () => "",
+        this.hooks && { serve: transport.serve, run: this.hooks.run },
+        undefined,
+        execution,
+        undefined,
+        sessionKey,
+      );
+      const update = () => {
+        this.views.set(
+          agent,
+          [...this.remote.values()]
+            .filter((entry) => entry.agent === agent)
+            .flatMap((entry) => entry.runtime.sessions(agent)),
+        );
+        for (const listener of this.listeners) listener();
+      };
+      runtime.entry(agent, scope, saved);
+      runtime.subscribe(update);
+      this.remote.set(key, { agent, runtime, execution });
+      execution.signal.addEventListener(
+        "abort",
+        () => {
+          runtime.dispose();
+          update();
+        },
+        { once: true },
+      );
+      return runtime;
+    })();
+    this.opening.set(key, { agent, abort, ready });
+    for (const listener of this.listeners) listener();
+    try {
+      return await ready;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      if (this.opening.get(key)?.ready === ready) this.opening.delete(key);
+      for (const listener of this.listeners) listener();
+    }
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -319,19 +485,107 @@ export class CodexRuntime {
     ]);
   }
   sessionState(agent: Agent, place: SessionPlace): SessionState {
+    const scope = this.reads(agent.key)?.scope;
+    const remoteKey =
+      scope &&
+      this.executionKey(agent.key, scope, this.controlKey(agent, place));
+    const remote = remoteKey ? this.remote.get(remoteKey) : undefined;
     const key = this.controlKey(agent, place);
     if (this.controls.compacting(`${agent.key}/${key}`)) return "compacting";
+    if (remote?.runtime.sessionState(agent, place) === "compacting")
+      return "compacting";
+    if (this.controls.active(`${agent.key}/${key}`)) return "active";
+    if (remote) return remote.runtime.sessionState(agent, place);
+    if (remoteKey && this.opening.has(remoteKey)) return "active";
     return this.controls.active(`${agent.key}/${key}`) ||
       this.entries.get(agent.key)?.lanes.has(key)
       ? "active"
       : "idle";
   }
-  async session(
+  session(agent: Agent, place: SessionPlace, action: SessionControlAction) {
+    const abort = new AbortController();
+    const pending = {
+      abort,
+      done: this.changeSession(agent, place, action, abort.signal),
+    };
+    const actions = this.actions.get(agent.key) ?? new Set();
+    this.actions.set(agent.key, actions);
+    actions.add(pending);
+    return pending.done.finally(() => {
+      actions.delete(pending);
+      if (!actions.size) this.actions.delete(agent.key);
+    });
+  }
+  private async changeSession(
     agent: Agent,
     place: SessionPlace,
     action: SessionControlAction,
-  ) {
+    lifetime: AbortSignal,
+  ): Promise<void> {
     const reads = this.reads(agent.key);
+    const remote = await this.inspect?.(agent.key);
+    lifetime.throwIfAborted();
+    if (reads && remote) {
+      const conversation = this.controlKey(agent, place);
+      const key = this.executionKey(agent.key, reads.scope, conversation);
+      if (action === "interrupt") {
+        if (this.controls.interrupt(`${agent.key}/${conversation}`)) return;
+        const pending = this.opening.get(key);
+        if (pending) {
+          pending.abort.abort();
+          return;
+        }
+        const held = this.remote.get(key);
+        if (held && !held.execution.signal.aborted)
+          await held.runtime.session(agent, place, action);
+        return;
+      }
+      if (this.sessionState(agent, place) !== "idle")
+        throw new Error("Wait for the active turn to finish first.");
+      if (action === "new")
+        return this.controls.run(
+          `${agent.key}/${conversation}`,
+          action,
+          async () => {
+            await this.storage.set(
+              key,
+              JSON.stringify({ key: crypto.randomUUID(), intent: "new" }),
+            );
+            this.inventoryReads.delete(agent.key);
+            this.inventories.set(
+              agent.key,
+              (this.inventories.get(agent.key) ?? []).filter(
+                (row) => row.key !== conversation,
+              ),
+            );
+            this.inventoryVersions.set(
+              agent.key,
+              this.conversationVersion(agent.key) + 1,
+            );
+            const prior = this.remote.get(key);
+            this.remote.delete(key);
+            prior?.runtime.dispose();
+            if (prior) await this.disposeExecution(agent.key, prior.execution);
+            this.views.set(
+              agent.key,
+              [...this.remote.values()]
+                .filter((entry) => entry.agent === agent.key)
+                .flatMap((entry) => entry.runtime.sessions(agent.key)),
+            );
+            for (const listener of this.listeners) listener();
+          },
+        );
+      if ((await this.storage.read(key)) === null) {
+        throw new Error("There is no session here to compact yet.");
+      }
+      const runtime = await this.connection(
+        agent.key,
+        reads.scope,
+        conversation,
+        lifetime,
+      );
+      return runtime.session(agent, place, action);
+    }
     if (!reads) throw new Error("Connect to the agent's community first.");
     const key = this.controlKey(agent, place);
     const control = `${agent.key}/${key}`;
@@ -345,7 +599,7 @@ export class CodexRuntime {
     if (this.sessionState(agent, place) !== "idle")
       throw new Error("Wait for the active turn to finish first.");
     return this.controls.run(control, action, async (cancel) => {
-      const signal = AbortSignal.any([entry.abort.signal, cancel]);
+      const signal = AbortSignal.any([entry.abort.signal, cancel, lifetime]);
       signal.throwIfAborted();
       const saved = entry.saved[key];
       if (action === "new") {
@@ -406,8 +660,9 @@ export class CodexRuntime {
       }
     });
   }
-  preview(agent: Agent) {
+  preview(agent: Agent): Promise<Models> {
     const handle = this.handle(agent.key);
+    if (handle?.protection) this.assertRetired(agent.key, true);
     if (agent.protection && !handle?.protection)
       throw new Error("The protected agent has no live policy binding");
     handle?.protection?.assertAvailable();
@@ -419,9 +674,23 @@ export class CodexRuntime {
     ]);
     const existing = this.previews.get(agent.key);
     if (existing?.key === key) return existing.ready;
-    const server = this.open(handle);
-    const rpc = server.rpc;
-    const ready = (async () => {
+    const ready = Promise.resolve().then(async () => {
+      const binding = await this.inspect?.(agent.key);
+      if (this.disposed) throw new Error("Codex runtime is disposed");
+      if (this.previews.get(agent.key) !== entry)
+        throw new Error("Codex model preview is retired");
+      if (binding) {
+        const remote = this.resolveConfig(agent.config, true);
+        return {
+          current: remote.model,
+          sendDefaults: true,
+          models: remote.model
+            ? [{ id: remote.model, label: remote.model, efforts: [] }]
+            : [],
+        };
+      }
+      const server = this.open(handle);
+      const rpc = server.rpc;
       await server.opening;
       const models = await listModels(rpc);
       const model = resolveModel(settings.model, models);
@@ -449,7 +718,7 @@ export class CodexRuntime {
             sendDefaults: true,
             models: [{ id: model, label: model, efforts: [] }, ...offered],
           };
-    })();
+    });
     const entry = { key, ready };
     this.previews.set(agent.key, entry);
     void ready.catch(() => {
@@ -460,6 +729,7 @@ export class CodexRuntime {
   }
 
   private async workspace(path: string) {
+    if (this.target) return this.target.resolveDirectory(this.target.workspace);
     if (absoluteWorkspace(path)) return path;
     let directory = "";
     const process = await this.spawn("workspace", {
@@ -476,6 +746,7 @@ export class CodexRuntime {
   }
   /** Copies `threadId` from the user's Codex home, if it is there. */
   private async adopt(threadId: string) {
+    if (this.target) return;
     const process = await this.spawn("adopt", { args: [threadId] });
     await process.exited;
   }
@@ -499,40 +770,110 @@ export class CodexRuntime {
     );
     for (const listener of this.listeners) listener();
   }
-  private readonly retirements = new Map<string, Promise<void>>();
-  /** Protected servers whose retirement has not confirmed the process exited. */
-  private readonly unretired = new Map<string, Server>();
-  private assertRetired(agent: AgentKey) {
-    if (this.retirements.has(agent) || this.unretired.has(agent))
-      throw new Error("This agent’s previous native sessions have not retired");
+  private disposeExecution(
+    agent: AgentKey,
+    execution: AgentExecution,
+    retry = false,
+  ) {
+    const disposals = this.disposals.get(agent) ?? new Map();
+    const prior = disposals.get(execution);
+    if (prior && (!retry || !prior.failed)) return prior.done;
+    const disposal = { done: Promise.resolve(), failed: false };
+    this.disposals.set(agent, disposals);
+    disposals.set(execution, disposal);
+    disposal.done = Promise.resolve()
+      .then(() => execution.dispose())
+      .then(
+        () => {
+          disposals.delete(execution);
+          if (!disposals.size) this.disposals.delete(agent);
+        },
+        (error) => {
+          disposal.failed = true;
+          throw error;
+        },
+      );
+    return disposal.done;
   }
-  async retire(pubkey: string) {
-    this.previews.delete(pubkey);
-    let retiring = this.retirements.get(pubkey);
-    if (!retiring) {
-      retiring = (async () => {
-        const entry = this.entries.get(pubkey);
-        if (entry) {
-          entry.abort.abort();
-          this.entries.delete(pubkey);
-          this.views.delete(pubkey);
-          const server = this.protectedServers.get(pubkey) ?? this.server;
-          if (server) this.stop(server, pubkey, entry);
+  retire(agent: AgentKey): Promise<void> {
+    const prior = this.stopping.get(agent);
+    const disposals = [...(this.disposals.get(agent)?.keys() ?? [])].map(
+      (execution) => this.disposeExecution(agent, execution, true),
+    );
+    const entry = this.entries.get(agent) ?? this.stopped.get(agent);
+    const protectedServer =
+      this.protectedServers.get(agent) ?? this.unretired.get(agent);
+    const actions = [...(this.actions.get(agent) ?? [])];
+    for (const action of actions) action.abort.abort();
+    entry?.abort.abort();
+    if (entry) this.stopped.set(agent, entry);
+    this.entries.delete(agent);
+    this.views.delete(agent);
+    this.previews.delete(agent);
+    this.inventories.delete(agent);
+    this.inventoryReads.delete(agent);
+    this.inventoryVersions.delete(agent);
+    const pending = [...this.opening.values()].filter(
+      (opening) => opening.agent === agent,
+    );
+    for (const opening of pending) opening.abort.abort();
+    const remotes = [...this.remote].filter(
+      ([, remote]) => remote.agent === agent,
+    );
+    const stopped = Promise.allSettled([
+      prior,
+      ...disposals,
+      ...actions.map((action) => action.done.catch(() => undefined)),
+      ...(entry
+        ? [
+            (async () => {
+              if (protectedServer) await this.shutdown(agent, protectedServer);
+              const server = protectedServer ?? this.server;
+              if (server) await this.stop(server, agent, entry);
+              if (this.stopped.get(agent) === entry) this.stopped.delete(agent);
+            })(),
+          ]
+        : []),
+      ...(!entry && protectedServer
+        ? [this.shutdown(agent, protectedServer)]
+        : []),
+      ...pending.map((opening) => opening.ready.catch(() => undefined)),
+      ...remotes.map(async ([key, remote]) => {
+        try {
+          await remote.runtime.retire(agent);
+        } finally {
+          remote.runtime.dispose();
+          await this.disposeExecution(agent, remote.execution);
         }
-        const protectedServer =
-          this.protectedServers.get(pubkey) ?? this.unretired.get(pubkey);
-        if (protectedServer) await this.shutdown(pubkey, protectedServer);
-        await this.stopping.get(pubkey);
-      })();
-      this.retirements.set(pubkey, retiring);
-    }
-    try {
-      await retiring;
-    } finally {
-      // A failed retirement is retried by the next one, not kept.
-      if (this.retirements.get(pubkey) === retiring)
-        this.retirements.delete(pubkey);
-    }
+        if (this.remote.get(key) === remote) this.remote.delete(key);
+      }),
+    ]).then(async (results) => {
+      const disposed = await Promise.allSettled(
+        [...(this.disposals.get(agent)?.values() ?? [])].map(
+          (disposal) => disposal.done,
+        ),
+      );
+      const failure = [...results, ...disposed].find(
+        (result) => result.status === "rejected",
+      );
+      if (failure?.status === "rejected") throw failure.reason;
+    });
+    this.stopping.set(agent, stopped);
+    const clear = () => {
+      if (this.stopping.get(agent) === stopped) this.stopping.delete(agent);
+    };
+    void stopped.then(clear, clear);
+    for (const listener of this.listeners) listener();
+    return stopped;
+  }
+  /** Protected servers whose retirement has not confirmed the process exited. */
+  private readonly unretired = new Map<AgentKey, Server>();
+  private assertRetired(agent: AgentKey, protectedStart = false) {
+    if (
+      this.unretired.has(agent) ||
+      (protectedStart && this.stopping.has(agent))
+    )
+      throw new Error("This agent’s previous native sessions have not retired");
   }
   /** Closes a protected server; starts for its agent stay refused until the
    * process has exited. */
@@ -549,28 +890,25 @@ export class CodexRuntime {
   }
   sync(agents: readonly Agent[]) {
     const present = new Set(agents.map((agent) => agent.key));
-    for (const key of this.previews.keys())
-      if (!present.has(key)) {
-        this.previews.delete(key);
-      }
-    // A protected server may serve only a model preview, with no entry.
-    for (const key of [
+    const held = new Set([
+      ...this.entries.keys(),
       ...this.protectedServers.keys(),
       ...this.unretired.keys(),
-    ])
-      if (!present.has(key) && !this.entries.has(key))
-        void this.retire(key).catch(() => undefined);
-    for (const [key, entry] of this.entries)
-      if (!present.has(key)) {
-        if (this.protectedServers.has(key)) {
-          void this.retire(key).catch(() => undefined);
-        } else {
-          entry.abort.abort();
-          this.entries.delete(key);
-          this.views.delete(key);
-          if (this.server) this.stop(this.server, key, entry);
-        }
-      }
+      ...this.stopped.keys(),
+      ...this.disposals.keys(),
+      ...this.actions.keys(),
+      ...this.views.keys(),
+      ...this.previews.keys(),
+      ...this.inventories.keys(),
+      ...this.inventoryReads.keys(),
+      ...[...this.opening.values()].map((opening) => opening.agent),
+      ...[...this.remote.values()].map((remote) => remote.agent),
+    ]);
+    for (const agent of held)
+      if (!present.has(agent))
+        void this.retire(agent).catch((error) =>
+          console.error("Codex could not retire an agent", agent, error),
+        );
     if (!present.size) {
       void this.server?.rpc.close();
       this.server = undefined;
@@ -596,24 +934,28 @@ export class CodexRuntime {
             this.protectedServers.get(agent) !== server
           )
             return;
+          await server.rpc.request("thread/backgroundTerminals/clean", {
+            threadId,
+          });
           server.threads.delete(threadId);
-          await server.rpc
-            .request("thread/backgroundTerminals/clean", { threadId })
-            .catch((error) =>
-              console.error(
-                "Codex could not clean a stopped agent's terminals",
-                error,
-              ),
-            );
         }
     })();
-    this.stopping.set(agent, stopped);
-    void stopped.finally(() => {
-      if (this.stopping.get(agent) === stopped) this.stopping.delete(agent);
-    });
+    return stopped;
   }
   dispose() {
+    this.disposed = true;
+    for (const actions of this.actions.values())
+      for (const action of actions) action.abort.abort();
+    for (const opening of this.opening.values()) opening.abort.abort();
+    for (const remote of this.remote.values()) {
+      remote.runtime.dispose();
+      void remote.execution.dispose();
+    }
+    this.remote.clear();
     this.previews.clear();
+    this.inventories.clear();
+    this.inventoryReads.clear();
+    this.inventoryVersions.clear();
     for (const entry of this.entries.values()) entry.abort.abort();
     this.entries.clear();
     this.views.clear();
@@ -636,7 +978,7 @@ export class CodexRuntime {
   private open(agent?: Pick<AgentHandle, "key" | "pubkey" | "protection">) {
     if (agent?.protection) {
       const protection = agent.protection;
-      this.assertRetired(agent.key);
+      this.assertRetired(agent.key, true);
       protection.assertAvailable();
       // A prior worker with another key belongs to a replaced provider, which
       // is already stopping it; the replacement starts once it has exited.
@@ -726,7 +1068,7 @@ export class CodexRuntime {
             ...options,
             args: [
               ...(options?.args ?? []),
-              ...(this.hooks ? callbackHookArgs : []),
+              ...(this.hooks && !this.target ? callbackHookArgs : []),
             ],
           }),
         defaults.workspace,
@@ -745,15 +1087,21 @@ export class CodexRuntime {
     this.server = server;
     return server;
   }
-  private entry(agent: AgentKey, scope: string) {
+  private entry(
+    agent: AgentKey,
+    scope: string,
+    initial?: Record<string, Saved>,
+  ) {
     this.assertRetired(agent);
     const prior = this.entries.get(agent);
     if (prior) return prior;
-    const saved = this.load(this.storageKey(scope, agent));
+    const saved = initial ?? this.load(this.storageKey(scope, agent));
     const entry: Entry = {
       storageKey: this.storageKey(scope, agent),
       abort: new AbortController(),
-      after: this.stopping.get(agent) ?? Promise.resolve(),
+      after:
+        this.stopping.get(agent) ??
+        (this.stopped.has(agent) ? this.retire(agent) : Promise.resolve()),
       saved,
       lanes: new Map(),
       onces: new Set(),
@@ -762,9 +1110,26 @@ export class CodexRuntime {
     this.entries.set(agent, entry);
     return entry;
   }
-  private load(storageKey: string) {
+  private load(
+    storageKey: string,
+    text = this.storage.get(storageKey),
+    strict = !!this.target,
+  ) {
     try {
-      const stored: unknown = JSON.parse(this.storage.get(storageKey) ?? "{}");
+      const stored: unknown = JSON.parse(text ?? "{}");
+      if (
+        strict &&
+        (!stored ||
+          typeof stored !== "object" ||
+          Array.isArray(stored) ||
+          Object.values(stored).some(
+            (value) =>
+              !value ||
+              typeof value.threadId !== "string" ||
+              typeof value.workspace !== "string",
+          ))
+      )
+        throw new Error("Invalid saved Codex session");
       if (stored && typeof stored === "object" && !Array.isArray(stored))
         return Object.fromEntries(
           Object.entries(stored).filter(
@@ -774,18 +1139,97 @@ export class CodexRuntime {
               typeof value.workspace === "string",
           ),
         ) as Record<string, Saved>;
-    } catch {
+    } catch (error) {
+      if (strict) throw error;
       /* Start fresh after malformed local data. */
     }
     return {};
   }
-  /** The agent's bindings in this community, most recently used first. */
+  async listConversations(agent: AgentKey): Promise<SavedConversation[]> {
+    const request = {};
+    this.inventoryReads.set(agent, request);
+    let rows: SavedConversation[] | null = null;
+    if (await this.inspect?.(agent)) {
+      const reads = this.reads(agent);
+      if (!reads) throw new Error("The agent's community is unavailable.");
+      rows = [];
+      const prefix = `buzz.codex.sessions.execution.v1:${reads.scope}:${agent}:`;
+      const pointers = await this.storage.scan(prefix);
+      for (const text of Object.values(pointers)) {
+        const key = this.storageKey(
+          reads.scope,
+          agent,
+          this.sessionRecord(text).key,
+        );
+        rows.push(
+          ...this.savedConversations(
+            agent,
+            this.load(key, await this.storage.read(key), true),
+          ),
+        );
+      }
+      rows.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+    }
+    if (!this.disposed && this.inventoryReads.get(agent) === request)
+      this.inventories.set(agent, rows);
+    return rows
+      ? this.withHeldConversations(agent, rows)
+      : this.localConversations(agent);
+  }
+  conversationVersion = (agent: AgentKey) =>
+    this.inventoryVersions.get(agent) ?? 0;
+  /** The last observed bindings, most recently used first. */
   conversations(agent: AgentKey): SavedConversation[] {
+    if (this.inventories.has(agent)) {
+      const rows = this.inventories.get(agent);
+      return rows
+        ? this.withHeldConversations(agent, rows)
+        : this.localConversations(agent);
+    }
+    if (this.execution) {
+      const scope = this.reads(agent)?.scope;
+      if (scope) {
+        const prefix = `buzz.codex.sessions.execution.v1:${scope}:${agent}:`;
+        const remote = this.storage
+          .keys()
+          .filter((key) => key.startsWith(prefix))
+          .flatMap((key) => {
+            const stored = this.storage.get(key);
+            if (!stored) return [];
+            return this.savedConversations(
+              agent,
+              this.load(
+                this.storageKey(scope, agent, this.sessionRecord(stored).key),
+              ),
+            );
+          })
+          .sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+        const conversations = this.withHeldConversations(agent, remote);
+        if (conversations.length) return conversations;
+      }
+    }
+    return this.localConversations(agent);
+  }
+  private withHeldConversations(
+    agent: AgentKey,
+    saved: readonly SavedConversation[],
+  ) {
+    const held = [...this.remote.values()]
+      .filter((entry) => entry.agent === agent)
+      .flatMap((entry) => entry.runtime.conversations(agent));
+    return [
+      ...new Map([...saved, ...held].map((row) => [row.key, row])).values(),
+    ].sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+  }
+  private localConversations(agent: AgentKey) {
     const reads = this.reads(agent);
     const saved =
       this.entries.get(agent)?.saved ??
       (reads ? this.load(this.storageKey(reads.scope, agent)) : {});
-    // Untimestamped bindings keep save order, newest last; listed newest first.
+    return this.savedConversations(agent, saved);
+  }
+  private savedConversations(agent: AgentKey, saved: Record<string, Saved>) {
+    const reads = this.reads(agent);
     return Object.entries(saved)
       .reverse()
       .flatMap(([key, { threadId, at }]) => {
@@ -820,6 +1264,7 @@ export class CodexRuntime {
     place: Readonly<{ channelId: string; root?: string }>,
     signal: AbortSignal,
   ): Promise<SavedConversation | undefined> {
+    if (this.target || (await this.inspect?.(agent.key))) return;
     const label = this.reads(agent.key)?.channelLabel(place.channelId);
     const found = await findConversation(
       this.spawn,
@@ -843,7 +1288,11 @@ export class CodexRuntime {
   prompts(agent: AgentKey) {
     return sessionPrompts(this.storage, "codex", agent);
   }
-  private storageKey(scope: string, agent: AgentKey) {
+  private storageKey(
+    scope: string,
+    agent: AgentKey,
+    sessionKey = this.targetKey,
+  ) {
     // Resume restores the persisted tool schema, so a binding from before a
     // tool change starts fresh. v5 added channel and member management; v6
     // added the shared session tools; v7 added shared notes; v8 added agent
@@ -853,7 +1302,7 @@ export class CodexRuntime {
     // canvas_set; v15 removes message keywords; v16 splits channel and
     // channels into the channel_* tools; v17 splits members into the
     // member_* tools.
-    return `buzz.codex.sessions.v17:${scope}:${agent}`;
+    return `buzz.codex.sessions.v17:${scope}:${agent}${sessionKey ? `:session:${sessionKey}` : ""}`;
   }
   private save(request: Request, entry: Entry, key: string, saved: Saved) {
     // Reinserted so the bounded set keeps the most recently used bindings.
@@ -861,25 +1310,39 @@ export class CodexRuntime {
     entry.saved[key] = saved;
     // Retain a bounded set of bindings; this never deletes Codex's own history.
     entry.saved = Object.fromEntries(Object.entries(entry.saved).slice(-200));
-    void this.storage
-      .set(entry.storageKey, JSON.stringify(entry.saved))
-      .catch((error: unknown) =>
-        this.status(
-          request.agent.key,
-          key,
-          "Session could not be saved",
-          message(error),
-        ),
-      );
+    const savedWrite = this.storage.set(
+      entry.storageKey,
+      JSON.stringify(entry.saved),
+    );
+    if (this.target) return savedWrite;
+    void savedWrite.catch((error: unknown) =>
+      this.status(
+        request.agent.key,
+        key,
+        "Session could not be saved",
+        message(error),
+      ),
+    );
   }
   /** Dates the binding now, when it takes in a message or ends a turn. */
   private touch(request: Request, entry: Entry, key: string) {
     const saved = entry.saved[key];
     if (!saved) return;
-    this.save(request, entry, key, { ...saved, at: Date.now() });
+    void Promise.resolve(
+      this.save(request, entry, key, { ...saved, at: Date.now() }),
+    ).catch((error) =>
+      this.status(
+        request.agent.key,
+        key,
+        "Session could not be saved",
+        message(error),
+      ),
+    );
+
     for (const listener of this.listeners) listener();
   }
-  async run(delivery: Delivery) {
+  async run(delivery: Delivery): Promise<void> {
+    if (this.disposed) throw new Error("Codex runtime is disposed");
     delivery.signal.throwIfAborted();
     const { trigger, agent } = delivery;
     // Unaddressed watches and timers come as standalone turns (`runOnce`).
@@ -927,6 +1390,24 @@ export class CodexRuntime {
     delivery.signal.throwIfAborted();
     const toolRoot = channel?.dm || topLevel ? undefined : rootOf(event);
     const root = settings.scope === "channel" ? undefined : toolRoot;
+    delivery.signal.throwIfAborted();
+    const conversationKey = JSON.stringify([channelId, root ?? "channel"]);
+    if (await this.inspect?.(agent.key)) {
+      const handoff = this.controls.deliver(
+        `${agent.key}/${conversationKey}`,
+        async () => {
+          const runtime = await this.connection(
+            agent.key,
+            reads.scope,
+            conversationKey,
+            delivery.signal,
+          );
+          await runtime.run(delivery);
+        },
+      );
+      return handoff.done;
+    }
+    if (this.disposed) throw new Error("Codex runtime is disposed");
     delivery.signal.throwIfAborted();
     let finishActivity!: (result: WorkOutcome) => void;
     const replied = new Promise<WorkOutcome>((resolve) => {
@@ -1118,11 +1599,40 @@ export class CodexRuntime {
     signal: turnSignal,
     prompt,
   }: StandaloneTurn): Promise<TurnResult> {
+    if (this.disposed) throw new Error("Codex runtime is disposed");
     const { agent } = delivery;
     const reads = this.reads(agent.key);
     if (!reads)
       return { ok: false, error: "Connect to the agent's community first" };
     const { scope } = reads;
+    if (this.execution && (await this.inspect?.(agent.key))) {
+      const conversation = `once:${crypto.randomUUID()}`;
+      const storageKey = this.executionKey(agent.key, scope, conversation);
+      let runtime: CodexRuntime | undefined;
+      try {
+        runtime = await this.connection(
+          agent.key,
+          scope,
+          conversation,
+          turnSignal,
+        );
+        return await runtime.runOnce({
+          delivery,
+          key,
+          signal: turnSignal,
+          prompt,
+        });
+      } finally {
+        this.remote.delete(storageKey);
+        runtime?.dispose();
+        if (runtime?.target)
+          await this.disposeExecution(agent.key, runtime.target);
+        await this.storage.set(storageKey, null);
+      }
+    }
+    if (this.disposed) throw new Error("Codex runtime is disposed");
+    if (turnSignal.aborted)
+      return { ok: false, error: message(turnSignal.reason) };
     const entry = this.entry(agent.key, scope);
     const settings = this.resolveConfig(delivery.config);
     const team = delivery.team ?? "";
@@ -1134,7 +1644,7 @@ export class CodexRuntime {
         error:
           "Choose an absolute workspace path or ~/.buzz in Codex settings first.",
       };
-    await entry.after.catch(() => undefined);
+    await entry.after;
     if (entry.abort.signal.aborted)
       return { ok: false, error: "Codex was stopped" };
     const server = this.open(agent);
@@ -1352,7 +1862,13 @@ export class CodexRuntime {
           request.answered();
           return;
         }
-        await this.execute(request, text, key, current, entry);
+        try {
+          await entry.after;
+          await this.execute(request, text, key, current, entry);
+        } catch (error) {
+          request.failActivity(message(error));
+          throw error;
+        }
       });
     lane.tail = job;
     this.status(request.agent.key, key, "Starting");
@@ -1457,13 +1973,15 @@ export class CodexRuntime {
       relayAuthor: this.reads(agent.key)?.relayAuthor?.(),
       signingAuthority: this.reads(agent.key)?.workflowAuthority(),
       read: (path) =>
-        readFile(
-          this.spawn,
-          turn.workspace,
-          path,
-          turn.signal,
-          agent.protection?.processProtection,
-        ),
+        this.target
+          ? this.target.readFile(path, { cwd: turn.workspace })
+          : readFile(
+              this.spawn,
+              turn.workspace,
+              path,
+              turn.signal,
+              agent.protection?.processProtection,
+            ),
       check,
       signal: turn.signal,
       memories: async (slug) => {
@@ -1492,7 +2010,17 @@ export class CodexRuntime {
       : {};
     const final = isFinalMessage(call.tool, args);
     const reply = await callSessionTool(
-      client,
+      this.target
+        ? {
+            ...client,
+            media: async () => {
+              this.target?.signal.throwIfAborted();
+              throw new Error(
+                "Media download is unavailable for remote Codex agents.",
+              );
+            },
+          }
+        : client,
       context,
       call.tool,
       args,
@@ -1845,6 +2373,13 @@ export class CodexRuntime {
           threadId,
           excludeTurns: true,
         });
+      if (this.target && existing && !resuming)
+        throw Object.assign(
+          new Error(
+            "The Codex workspace or tools changed. Start a new session to continue.",
+          ),
+          { code: "EXECUTION_SESSION_RESET_REQUIRED" },
+        );
       let started: Started;
       // Only a thread started here keeps what it started with.
       let fresh = !resuming;
@@ -1853,6 +2388,13 @@ export class CodexRuntime {
         const missing = (error: unknown) => {
           if (message(error) !== `no rollout found for thread id ${threadId}`)
             throw error;
+          if (this.target)
+            throw Object.assign(
+              new Error(
+                "The remote Codex session cannot be restored. Start a new session to continue.",
+              ),
+              { code: "EXECUTION_SESSION_RESET_REQUIRED" },
+            );
         };
         // A thread saved before Buzz had its own Codex home is in the user's;
         // continue a copy, or start fresh if there is none.
@@ -1868,6 +2410,10 @@ export class CodexRuntime {
             return start();
           });
       } else started = await start();
+      if (this.target && resuming && existing.pending) {
+        const { pending: _, ...accepted } = existing;
+        await this.save(request, entry, key, accepted);
+      }
       active.threadId = started.thread.id;
       // A refusal outside this turn does not explain how it ends.
       explain = server.explainer?.(active.threadId);
@@ -1902,31 +2448,54 @@ export class CodexRuntime {
         memory,
         this.repositories(request.scope),
       );
-      const turn = await rpc.request<{ turn: { id: string } }>("turn/start", {
-        threadId: active.threadId,
-        input: input(
-          `${context}${request.project ?? ""}${turnInput(request.agent.key, request.event, request.conversation, text, false, noteOf(request), wake)}`,
-        ),
-        model,
-        effort,
-        ...summary,
-        // Application context is a developer message that updates on each turn.
-        additionalContext,
-      });
+      if (this.target && !resuming)
+        await this.save(request, entry, key, {
+          pending: true,
+          threadId: started.thread.id,
+          workspace,
+          at: Date.now(),
+          ...(tools ? { tools } : {}),
+        });
+      const turn = await rpc
+        .request<{ turn: { id: string } }>("turn/start", {
+          threadId: active.threadId,
+          input: input(
+            `${context}${request.project ?? ""}${turnInput(request.agent.key, request.event, request.conversation, text, false, noteOf(request), wake)}`,
+          ),
+          model,
+          effort,
+          ...summary,
+          // Application context is a developer message that updates on each turn.
+          additionalContext,
+        })
+        .catch(async (error: unknown) => {
+          if (this.target && !resuming && error instanceof Refused) {
+            const { [key]: _, ...saved } = entry.saved;
+            await this.storage.set(entry.storageKey, JSON.stringify(saved));
+            entry.saved = saved;
+          }
+          throw error;
+        });
+
       active.turnId = turn.turn.id;
       if (fresh)
-        void this.prompts(agent.key).save(active.threadId, [
-          {
-            label: "base",
-            text: params.developerInstructions,
-          },
-          {
-            label: EACH_TURN,
-            text: Object.values(additionalContext)
-              .map(({ value }) => value)
-              .join(""),
-          },
-        ]);
+        void this.prompts(agent.key).save(
+          this.targetKey
+            ? JSON.stringify([this.targetKey, active.threadId])
+            : active.threadId,
+          [
+            {
+              label: "base",
+              text: params.developerInstructions,
+            },
+            {
+              label: EACH_TURN,
+              text: Object.values(additionalContext)
+                .map(({ value }) => value)
+                .join(""),
+            },
+          ],
+        );
       this.acknowledgeActivity(active, request);
       // A conversation new to this agent: name its Solo chat meanwhile.
       if (request.named && !saved && !server.protection)
@@ -1941,7 +2510,7 @@ export class CodexRuntime {
             console.warn("Codex could not title the chat", error);
         });
       // Empty threads have no resumable rollout until a user turn is accepted.
-      this.save(request, entry, key, {
+      await this.save(request, entry, key, {
         threadId: started.thread.id,
         workspace,
         at: Date.now(),

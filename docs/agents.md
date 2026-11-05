@@ -129,6 +129,38 @@ the linked message's channel and thread; it cannot combine with `channel` or
 Unknown fields are rejected. File access, commands, Git credentials, and plugin
 tools are unavailable. Connection credentials must stay out of logs and messages.
 
+## Managing plugins from a conversation
+
+An agent in the desktop app can read and request changes to this device's
+plugins with the `plugin_*` tools, which load on search. `plugin_list` reports
+each plugin's state and source, and `plugin_discover` lists the built plugins in
+a Git repository without taking the install preview. `plugin_disable` applies at
+once: it only stops code, and an enable request reverses it.
+
+`plugin_request` asks the person using Buzz to install, update, enable or remove a
+plugin and returns a request ID with `applied: false`. Install and update read the
+repository when the agent asks and pin the commit it saw, so the code reviewed is
+the code requested. The tool also posts a message, signed as the agent, in the
+conversation the agent is working in, such as "Requested: install Browser — Open the
+staging site", and that message draws as a card with the plugin, the agent's name and
+reason, and **Review** and **Decline**. Review opens the same access review as a
+[managed recommendation](managed-plugins.md) at that commit; enable shows the
+plugin's access; remove confirms like Delete. Decline refuses it, and closing a review
+leaves it pending. Once decided, the card shows the outcome (such as Installed or
+Declined) without buttons. Only the device that holds the request shows the buttons;
+on another device, or after a restart, the card is the message alone. The request
+also stays under **Requested by agents** in **Settings → Plugins → Manage plugins**,
+for an agent with no conversation or a message that did not post.
+`plugin_request_status` tells only the requesting agent whether the request is
+pending, approved, declined or expired. Requests are local, at most 16 and one per plugin, and do not survive a
+restart. Agents cannot read Buzz-hosted repositories, since the desktop signs those
+reads as the owner; the owner adds them in Settings. A plugin listed in the
+[managed plugin file](managed-plugins.md) installs and updates only from its
+recommendation, and plugins Settings gates on admin access are not enabled by
+request. Only an agent's own runs get these tools, not a plugin's `Agents.handle`.
+The standalone tool server and the browser build have no plugins to manage, so the
+tools refuse there.
+
 ## Product help for agents
 
 The read-only `buzz_help` tool returns [the Buzz quick guide](buzz-help.md), bundled
@@ -150,6 +182,41 @@ older app or remote host.
 Attention itself (the runtime, tools, storage and sources) is core, but it runs on this device only while a plugin that shows it is on. The bundled Attention plugin (`buzz.watching`, on by default) adds an Attention tab to the settings of every agent running on this device, whatever its type. The tab explains Attention, holds the switch that lets this device run the agent's watches, then groups that agent's subscriptions by Interest. It shows instructions, listening and delivery destinations, enabled state and available wake history, and suggests asks while the agent has none. Ask an agent to create watches through its Attention tools; pausing or removing one preserves the other saved objects. Empty Interests remain visible and can be deleted after their watches are removed. Turning the plugin off hides the tab and turns every agent's Attention off on this device; mentions still wake agents, and each agent keeps its saved switch for when the plugin is back on. The former standalone Agent Attention page is gone, so an old link to `buzz.agents/attention` opens as an unavailable destination.
 
 ## Agent types and providers
+
+### Plugin execution (preview)
+
+A native harness can opt into plugin execution with `execution: true` and a
+per-agent `retire` hook. A plugin declares `host.agentExecution` with the harness
+keys and calls `agents.registerExecution`. Its provider supplies `connect`, an
+absolute `workspace`, process I/O, file reads, directory resolution, and
+idempotent cleanup. The adapter owns transport, target credentials, allocation,
+reuse, expiry, and file access limits.
+
+The adapter selects itself with `agents.bindExecution(agent.key, { id, config })`.
+This write-once choice belongs to the agent's membership. It does not name a
+fixed workstation. The runner requires native custody and idle turns, then
+retires the current harness before it saves the choice. Admission reads durable
+state so another window's remote choice cannot start local work. Protected
+agents cannot use plugin execution.
+Agent snapshots include `executionBinding` so mounted controls observe a saved choice.
+
+The harness saves a session key before it calls
+`agents.execution(agent.key, { key, intent, signal })`. The first successful open
+changes `intent` from `new` to `existing`. Retries and app restarts keep the key.
+The adapter receives the trusted agent identity, key, intent, and abort signal.
+Repeated opens with the same key must use the same allocation.
+
+Buzz keeps identity, tools, hooks, and session controls with their existing
+owners. Adapter unload or session abort stops owned processes and rejects new
+work. Cleanup preserves the adapter's saved target mapping. A missing target
+returns `code: "EXECUTION_SESSION_RESET_REQUIRED"`; the harness must not resume
+old state in an empty replacement.
+
+Codex uses this contract to run `codex app-server` on the target. Each conversation
+session keeps its key and workspace across later turns and app restarts. **Start
+a new session** requests another allocation. **Interrupt** stops pending setup
+and keeps the key for retry. Activity reads the saved session inventory. Remote
+usage is unavailable. Settings and model discovery do not create targets.
 
 Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run
@@ -1244,6 +1311,13 @@ guidance. Keep the selected model and effort accessible, preserve compact chip
 appearance and truncation, and offer a trailing action to restore inheritance
 without duplicating the current model as the first option. Provider selection
 continues to use a searchable Combobox.
+
+Builderlab Identity and creation reuse the shared family → model menu, with a
+separate compact Thinking selector. Builderlab requires an explicit supported
+model/thinking pair rather than an inherited default. Its plugin owns catalog
+family aliases; changing the model clears the thinking choice. Creation places
+these controls beside the host-owned Harness row in one SettingsGroup, while
+keeping sign-in/recovery and Instructions outside the group.
 
 Provider dropdowns are intentionally text-only. The model control shows the
 selected model family icon, not the Goose runtime or Databricks/provider mark,

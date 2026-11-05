@@ -103,7 +103,17 @@ test("saved top resumes automatic history on an upward gesture after remount", a
     }),
   ).toHaveCount(0);
   await history(page).hover();
-  await page.mouse.wheel(0, -100000);
+  // Establish the saved top with real input; remeasurement can consume part
+  // of a gesture. Each settled gesture must make progress toward the top.
+  while (true) {
+    const before = await history(page).evaluate((e) => e.scrollTop);
+    if (before <= 0) break;
+    await wheel(page, -before);
+    expect(
+      await history(page).evaluate((e) => e.scrollTop),
+      "saved-top setup retains upward progress",
+    ).toBeLessThan(before);
+  }
   await expect.poll(() => app.pending.length).toBe(1);
   await settle(page);
   await expect.poll(() => history(page).evaluate((e) => e.scrollTop)).toBe(0);

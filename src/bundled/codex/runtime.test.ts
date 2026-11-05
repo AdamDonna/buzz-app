@@ -1,3 +1,4 @@
+import type { AgentExecution } from "../../features/agents/execution";
 import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
@@ -5,7 +6,11 @@ import { apply } from "./index";
 import { describe, afterEach, expect, it, vi } from "vitest";
 import { pubkeyOf } from "../../features/agents/membership";
 import { ownerReads } from "../../features/agents/reads";
-import { localStore } from "../../features/agents/state";
+import {
+  localStore,
+  fileStore,
+  type AgentStore,
+} from "../../features/agents/state";
 import { RESUMED_PROMPT } from "../../buzz-mcp/prompt";
 import type {
   Agent,
@@ -26,6 +31,7 @@ import type {
 } from "../../features/host/service";
 import { BUZZ_PROMPT, TOP_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
 import { CodexRuntime, codexStep, programs } from "./runtime";
+import { codexRun } from "./run";
 import { config } from "./config";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { wake } from "../../features/agent-harness/wakes";
@@ -49,6 +55,7 @@ const runtimes: CodexRuntime[] = [];
 afterEach(() => {
   for (const runtime of runtimes) runtime.dispose();
   runtimes.length = 0;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -67,9 +74,12 @@ function fixture(
   } = {},
   repositories?: (scope: string | undefined) => string,
   hooks?: ConstructorParameters<typeof CodexRuntime>[7],
+  execution?: ConstructorParameters<typeof CodexRuntime>[8],
+  persisted?: AgentStore,
+  inspect?: ConstructorParameters<typeof CodexRuntime>[10],
   security?: {
-    host: ConstructorParameters<typeof CodexRuntime>[8];
-    handle: ConstructorParameters<typeof CodexRuntime>[9];
+    host: ConstructorParameters<typeof CodexRuntime>[12];
+    handle: ConstructorParameters<typeof CodexRuntime>[13];
   },
 ) {
   let terminals = remainingTerminals;
@@ -80,6 +90,7 @@ function fixture(
   const modelIds: [string, string] = ["test-model", "deep-model"];
   /** Methods the server answers with a JSON-RPC error instead of a result. */
   const failing = new Set<string>();
+  const failures = new Map<string, string>();
   /** Methods the server answers only once their promise settles. */
   const held = new Map<string, Promise<void>>();
   const toolCalls = new Map<
@@ -111,10 +122,15 @@ function fixture(
       }
       if (request.id == null) return;
       await held.get(request.method ?? "");
-      if (request.method && failing.has(request.method)) {
+      if (
+        request.method &&
+        (failing.has(request.method) || failures.has(request.method))
+      ) {
         emit({
           id: request.id,
-          error: { message: `${request.method} failed` },
+          error: {
+            message: failures.get(request.method) ?? `${request.method} failed`,
+          },
         });
         return;
       }
@@ -336,6 +352,13 @@ function fixture(
   };
   const relay = { snapshot: () => snapshot } as unknown as RelayData;
   const local = {
+    get length() {
+      return storage.size;
+    },
+    key: (index: number) => [...storage.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
     getItem: (key: string) => storage.get(key) ?? null,
     setItem: (key: string, value: string) => {
       storage.set(key, value);
@@ -356,11 +379,16 @@ function fixture(
     spawn,
     (key) => ownerReads(relay, pubkeyOf(key)),
     core,
-    store,
+    persisted ?? store,
     config,
     () => added,
     repositories,
     hooks,
+    execution,
+    undefined,
+    inspect ??
+      (execution ? async () => ({ provider: "test/guest" }) : undefined),
+    undefined,
     security?.host,
     security?.handle,
   );
@@ -484,6 +512,9 @@ function fixture(
       agentProtection: { registerModels: vi.fn() },
       host: { spawn },
       agents: {
+        executionBinding: () => undefined,
+        inspectExecution: async () => undefined,
+        execution: async () => undefined,
         snapshot: () => ({ status: "ready", agents: [], running }),
         relay: () => relay,
         core,
@@ -617,6 +648,7 @@ function fixture(
     sent,
     modelIds,
     failing,
+    failures,
     held,
     emit,
     publish,
@@ -805,7 +837,15 @@ it("stops a removed agent's turn without ending the server the others share", as
   await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
   const removed = (f.starts()[1]?.params as { threadId: string } | undefined)
     ?.threadId;
+  const cleanup = deferred<void>();
+  f.held.set("thread/unsubscribe", cleanup.promise);
   f.runtime.sync([{ key: pubkey, pubkey } as Agent]);
+  const driver = codexRun(f.runtime);
+  if (!driver.retire) throw new Error("Codex cannot retire its agents");
+  let retired = false;
+  const retirement = driver.retire(b.agent.key).then(() => {
+    retired = true;
+  });
   await vi.waitFor(() =>
     expect(
       f.sent.some(
@@ -815,6 +855,12 @@ it("stops a removed agent's turn without ending the server the others share", as
       ),
     ).toBe(true),
   );
+  try {
+    expect(retired).toBe(false);
+  } finally {
+    cleanup.resolve();
+  }
+  await retirement;
   for (const method of ["turn/interrupt", "thread/backgroundTerminals/clean"])
     expect(f.sent.find((wire) => wire.method === method)?.params).toMatchObject(
       { threadId: removed },
@@ -874,7 +920,7 @@ it("ends a stopped agent's leftover shells and lets it start again only after le
     "BACK",
   ]);
 });
-it("logs a failed idle terminal clean without ending the shared server or blocking the agent's return", async () => {
+it("rejects failed terminal cleanup and retries the same agent without ending the shared server", async () => {
   const f = fixture([{ processId: "dev-server" }]);
   const b = second(f);
   await f.runtime.run(f.delivery("work"));
@@ -883,29 +929,47 @@ it("logs a failed idle terminal clean without ending the shared server or blocki
   const thread = (f.starts()[1]?.params as { threadId: string } | undefined)
     ?.threadId;
   await f.complete(1, "SERVER RUNNING");
-  await vi.waitFor(() => expect(b.agent.publish).toHaveBeenCalledTimes(1));
-  f.failing.add("thread/backgroundTerminals/clean");
-  const error = vi.spyOn(console, "error").mockImplementation(() => {});
-  f.runtime.sync([{ key: pubkey, pubkey } as Agent]);
   await vi.waitFor(() =>
-    expect(error).toHaveBeenCalledWith(
-      "Codex could not clean a stopped agent's terminals",
-      new Error("thread/backgroundTerminals/clean failed"),
-    ),
+    expect(
+      f.runtime.sessionState(
+        { ...b.agent, config: f.delivery("unused").config } as unknown as Agent,
+        { channelId: "channel", root: "7".repeat(64) },
+      ),
+    ).toBe("idle"),
   );
-  error.mockRestore();
+  const gate = deferred<void>();
+  f.held.set("thread/backgroundTerminals/clean", gate.promise);
+  f.failing.add("thread/backgroundTerminals/clean");
+  const driver = codexRun(f.runtime);
+  if (!driver.retire) throw new Error("Codex cannot retire its agents");
+  const retirement = driver.retire(b.agent.key);
+  const rejected = expect(retirement).rejects.toThrow(
+    "thread/backgroundTerminals/clean failed",
+  );
+  try {
+    await vi.waitFor(() =>
+      expect(
+        f.sent.filter(
+          (wire) => wire.method === "thread/backgroundTerminals/clean",
+        ),
+      ).toHaveLength(1),
+    );
+    expect(f.process.end).not.toHaveBeenCalled();
+    await f.complete(0, "STILL HERE");
+    await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+  } finally {
+    gate.resolve();
+  }
+  await rejected;
+  f.failing.delete("thread/backgroundTerminals/clean");
+  f.held.delete("thread/backgroundTerminals/clean");
+  await driver.retire(b.agent.key);
   expect(
-    f.sent.find((wire) => wire.method === "thread/backgroundTerminals/clean")
-      ?.params,
-  ).toMatchObject({ threadId: thread });
+    f.sent
+      .filter((wire) => wire.method === "thread/backgroundTerminals/clean")
+      .map((wire) => wire.params),
+  ).toEqual([{ threadId: thread }, { threadId: thread }]);
   expect(f.process.end).not.toHaveBeenCalled();
-  await f.complete(0, "STILL HERE");
-  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
-  expect(contents(f.publish)).toEqual(["STILL HERE"]);
-  f.runtime.sync([
-    { key: pubkey, pubkey } as Agent,
-    { key: "9".repeat(64), pubkey: "9".repeat(64) } as Agent,
-  ]);
   await f.runtime.run(b.delivery("back"));
   await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
   expect(
@@ -913,6 +977,7 @@ it("logs a failed idle terminal clean without ending the shared server or blocki
   ).toMatchObject({ threadId: thread });
   await f.complete(2, "BACK");
   await vi.waitFor(() => expect(b.agent.publish).toHaveBeenCalledTimes(2));
+  expect(contents(f.publish)).toEqual(["STILL HERE"]);
   expect(contents(b.agent.publish as never)).toEqual([
     "SERVER RUNNING",
     "BACK",
@@ -1114,21 +1179,32 @@ function protectedPreview() {
     processProtection: { readOnlyPaths: [], hiddenPaths: [] },
     spawn: (options) => worker.spawn("app-server", options),
   });
-  const f = fixture([], undefined, false, {}, undefined, undefined, {
-    host: {
-      serveMcp: async (handler: McpHandler) => {
-        security = handler;
-        const closed = deferred<void>();
-        return {
-          url: "http://127.0.0.1:1/mcp",
-          headers: [{ name: "Authorization", value: "Bearer fixture" }],
-          closed: closed.promise,
-          close: async () => closed.resolve(),
-        };
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      host: {
+        serveMcp: async (handler: McpHandler) => {
+          security = handler;
+          const closed = deferred<void>();
+          return {
+            url: "http://127.0.0.1:1/mcp",
+            headers: [{ name: "Authorization", value: "Bearer fixture" }],
+            closed: closed.promise,
+            close: async () => closed.resolve(),
+          };
+        },
       },
+      handle: (key) => (key === pubkey ? handle : undefined),
     },
-    handle: (key) => (key === pubkey ? handle : undefined),
-  });
+  );
   const original = {
     ...f.delivery("unused").agent,
     protection: protection("generation-1"),
@@ -1570,8 +1646,13 @@ it("starts no protected server for a standalone turn whose agent was retired whi
     signal: new AbortController().signal,
     prompt: async () => "check",
   });
-  await f.runtime.retire(pubkey);
-  letting.resolve();
+  const retiring = f.runtime.retire(pubkey);
+  try {
+    expect(f.worker.spawn).not.toHaveBeenCalled();
+  } finally {
+    letting.resolve();
+  }
+  await retiring;
   await expect(running).resolves.toMatchObject({ ok: false });
   expect(f.worker.spawn).not.toHaveBeenCalled();
 });
@@ -5149,6 +5230,54 @@ describe("session actions", () => {
     await f.complete();
   });
 
+  it("waits for a compact action to release its thread when its agent retires", async () => {
+    const f = fixture();
+    const delivery = f.delivery("first");
+    const agent = {
+      ...delivery.agent,
+      config: delivery.config,
+    } as unknown as Agent;
+    const place = { channelId: "channel", root };
+    await f.runtime.run(delivery);
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    await f.complete();
+    await vi.waitFor(() =>
+      expect(f.runtime.sessionState(agent, place)).toBe("idle"),
+    );
+    const compacted = f.runtime
+      .session(agent, place, "compact")
+      .catch((error) => error);
+    await vi.waitFor(() =>
+      expect(methods(f)).toContain("thread/compact/start"),
+    );
+    const released = () =>
+      f.sent.filter((wire) => wire.method === "thread/unsubscribe");
+    const before = released().length;
+    const cleanup = deferred<void>();
+    f.held.set("thread/unsubscribe", cleanup.promise);
+    let retired = false;
+    const retirement = f.runtime.retire(pubkey).then(() => {
+      retired = true;
+    });
+    f.emit({
+      method: "turn/started",
+      params: { threadId: "thread-1", turn: { id: "compact" } },
+    });
+    try {
+      await vi.waitFor(() => expect(released()).toHaveLength(before + 1));
+      expect(methods(f)).toContain("turn/interrupt");
+      expect(retired).toBe(false);
+    } finally {
+      cleanup.resolve();
+    }
+    expect(await compacted).toBeInstanceOf(Error);
+    await retirement;
+    expect(f.runtime.sessions(pubkey)).toEqual([]);
+    await f.runtime.run(f.delivery("after retirement"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    await f.complete();
+  });
+
   it("resets durably without a message or its old status, and preserves the binding if the write fails", async () => {
     const f = fixture();
     const delivery = f.delivery("first");
@@ -5537,3 +5666,754 @@ it("keeps interrupting an idle existing conversation a no-op", async () => {
     f.runtime.session(agent, { channelId: "channel", root }, "interrupt"),
   ).resolves.toBeUndefined();
 });
+
+it("rejects an execution open that completes after the agent retires", async () => {
+  const opened = deferred<AgentExecution>();
+  const started = deferred<void>();
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => {
+      started.resolve();
+      return opened.promise;
+    },
+  );
+  const lifetime = new AbortController();
+  const cleanup = deferred<void>();
+  const cleaning = deferred<void>();
+  const target: AgentExecution = {
+    workspace: "/guest/project",
+    signal: lifetime.signal,
+    spawn: f.spawn,
+    resolveDirectory: async (path) => path,
+    readFile: async () => new Uint8Array(),
+    dispose: vi.fn(async () => {
+      lifetime.abort();
+      cleaning.resolve();
+      await cleanup.promise;
+    }),
+  };
+  const result = f.runtime.run(f.delivery("open"));
+  const rejected = expect(result).rejects.toThrow("Codex runtime is retired");
+  await started.promise;
+  let retired = false;
+  const retirement = f.runtime.retire(pubkey).then(() => {
+    retired = true;
+  });
+  opened.resolve(target);
+  await cleaning.promise;
+  try {
+    expect(retired).toBe(false);
+  } finally {
+    cleanup.resolve();
+  }
+  await retirement;
+  await rejected;
+  expect(target.dispose).toHaveBeenCalledOnce();
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
+it("runs bound Codex tools in the guest workspace, resumes, and stops on provider unload", async () => {
+  vi.useFakeTimers();
+  try {
+    const lifetime = new AbortController();
+    let f!: ReturnType<typeof fixture>;
+    const target: AgentExecution = {
+      workspace: "/guest/project",
+      signal: lifetime.signal,
+      spawn: vi.fn(async (_program, options) => {
+        options?.onStdout?.(
+          `${JSON.stringify({ buzzCodexHook: "ready", url: "http://127.0.0.1:1234" })}\n`,
+        );
+        return f.spawn("app-server", options);
+      }),
+      resolveDirectory: vi.fn(async (path) => path),
+      readFile: vi.fn(async () => new TextEncoder().encode("GUEST FILE")),
+      dispose: vi.fn(async () => {
+        lifetime.abort(new Error("Provider unloaded"));
+      }),
+    };
+    const execution = vi.fn(async () => {
+      lifetime.signal.throwIfAborted();
+      return target;
+    });
+    f = fixture([], undefined, false, {}, undefined, undefined, execution);
+    await f.runtime.run(f.delivery("first"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+    expect(
+      f.sent.find((wire) => wire.method === "thread/start")?.params,
+    ).toMatchObject({ cwd: "/guest/project" });
+    expect(
+      (await f.tool("send", { audience: "everyone", path: "answer.txt" }))
+        ?.result,
+    ).toMatchObject({ success: true });
+    expect(target.readFile).toHaveBeenCalledWith("answer.txt", {
+      cwd: "/guest/project",
+    });
+    expect(f.fileReads).toEqual([]);
+    expect(
+      (
+        await f.tool("send", { audience: "everyone", text: "wrong turn" }, 0, {
+          turnId: "wrong",
+        })
+      )?.result,
+    ).toMatchObject({ success: false });
+    expect(
+      (await f.tool("media_get", { url: "clip.mp4" }))?.result,
+    ).toMatchObject({ success: false });
+    expect(f.media).not.toHaveBeenCalled();
+    await f.complete();
+    await vi.waitFor(() =>
+      expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
+    );
+    await f.runtime.run(f.delivery("resume"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+    expect(f.sent.some((wire) => wire.method === "thread/resume")).toBe(true);
+    const delivery = f.delivery("unused");
+    await f.runtime.session(
+      { ...delivery.agent, config: delivery.config } as unknown as Agent,
+      { channelId: "channel", root },
+      "interrupt",
+    );
+    expect(f.sent.some((wire) => wire.method === "turn/interrupt")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Stopped");
+    await f.runtime.run(f.delivery("active at unload"));
+    await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
+    const observed: unknown[] = [];
+    f.runtime.subscribe(() => observed.push(f.runtime.sessions(pubkey)));
+    await target.dispose();
+    expect(observed.at(-1)).toEqual([]);
+    await vi.waitFor(() => expect(f.process.end).toHaveBeenCalled());
+    await expect(f.runtime.run(f.delivery("provider missing"))).rejects.toThrow(
+      "Provider unloaded",
+    );
+    expect(target.spawn).toHaveBeenCalledTimes(1);
+    expect(f.spawn.mock.calls.every(([id]) => id === "app-server")).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+function guestTarget(guest: ReturnType<typeof fixture>): AgentExecution {
+  const lifetime = new AbortController();
+  return {
+    workspace: "/guest/project",
+    signal: lifetime.signal,
+    spawn: async (_program, options) => {
+      options?.onStdout?.(
+        `${JSON.stringify({ buzzCodexHook: "ready", url: "http://127.0.0.1:1234" })}\n`,
+      );
+      return guest.spawn("app-server", options);
+    },
+    readFile: async () => new Uint8Array(),
+    resolveDirectory: async (path) => path,
+    dispose: async () => {
+      lifetime.abort();
+    },
+  };
+}
+
+it.each(["open", "new"])(
+  "rejects and retries target cleanup that fails during %s",
+  async (operation) => {
+    const guest = fixture();
+    const execution = guestTarget(guest);
+    const gate = deferred<void>();
+    const cleaning = deferred<void>();
+    const target = {
+      ...execution,
+      dispose: vi
+        .fn(async () => execution.dispose())
+        .mockImplementationOnce(async () => {
+          cleaning.resolve();
+          await gate.promise;
+          throw new Error("Target cleanup failed");
+        }),
+    };
+    const opened = deferred<AgentExecution>();
+    const connect = vi.fn(async () => opened.promise);
+    const f = fixture([], undefined, false, {}, undefined, undefined, connect);
+    const delivery = f.delivery("work");
+    let result = f.runtime.run(delivery).catch((error) => error);
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+    if (operation === "new") {
+      opened.resolve(target);
+      await result;
+      await vi.waitFor(() => expect(guest.starts()).toHaveLength(1));
+      await guest.complete();
+      const agent = {
+        ...delivery.agent,
+        config: delivery.config,
+      } as unknown as Agent;
+      const place = { channelId: "channel", root };
+      await vi.waitFor(() =>
+        expect(f.runtime.sessionState(agent, place)).toBe("idle"),
+      );
+      result = f.runtime.session(agent, place, "new").catch((error) => error);
+      await cleaning.promise;
+    }
+    const retiring = f.runtime.retire(pubkey);
+    const rejected = expect(retiring).rejects.toThrow("Target cleanup failed");
+    if (operation === "open") opened.resolve(target);
+    try {
+      await cleaning.promise;
+      expect(target.dispose).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+    }
+    expect(await result).toEqual(new Error("Target cleanup failed"));
+    await rejected;
+    await f.runtime.retire(pubkey);
+    expect(target.dispose).toHaveBeenCalledTimes(2);
+    expect(target.signal.aborted).toBe(true);
+  },
+);
+
+it("waits for remote turn and target cleanup when an agent retires", async () => {
+  const guest = fixture();
+  const execution = guestTarget(guest);
+  const cleaned = deferred<void>();
+  const cleaning = deferred<void>();
+  const target = {
+    ...execution,
+    dispose: vi.fn(async () => {
+      cleaning.resolve();
+      await cleaned.promise;
+      await execution.dispose();
+    }),
+  };
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => target,
+  );
+  await f.runtime.run(f.delivery("work"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(1));
+  let retired = false;
+  const retirement = f.runtime.retire(pubkey).then(() => {
+    retired = true;
+  });
+  await cleaning.promise;
+  try {
+    expect(retired).toBe(false);
+    expect(guest.sent.some((wire) => wire.method === "turn/interrupt")).toBe(
+      true,
+    );
+    expect(
+      guest.sent.some((wire) => wire.method === "thread/unsubscribe"),
+    ).toBe(true);
+    expect(guest.process.end).toHaveBeenCalled();
+    expect(f.runtime.sessions(pubkey)).toEqual([]);
+    expect(f.publish).not.toHaveBeenCalled();
+  } finally {
+    cleaned.resolve();
+  }
+  await retirement;
+  expect(target.signal.aborted).toBe(true);
+});
+
+it("gives each conversation a durable target key and rotates only its New session", async () => {
+  vi.useFakeTimers();
+  const guests: ReturnType<typeof fixture>[] = [];
+  const execution = vi.fn(async () => {
+    const guest = fixture();
+    guests.push(guest);
+    return guestTarget(guest);
+  });
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const first = f.delivery("first");
+  const otherRoot = "e".repeat(64);
+  expect(await f.runtime.listConversations(pubkey)).toEqual([]);
+  await f.runtime.run(first);
+  await vi.waitFor(() => expect(guests[0]?.starts()).toHaveLength(1));
+  await f.runtime.run(f.delivery("second conversation", otherRoot));
+  await vi.waitFor(() => expect(guests[1]?.starts()).toHaveLength(1));
+  expect(f.runtime.conversations(pubkey).map(({ root }) => root)).toEqual(
+    expect.arrayContaining([root, otherRoot]),
+  );
+  const calls = execution.mock.calls as unknown as [
+    string,
+    { key: string; intent: string },
+  ][];
+  const firstKey = calls[0]?.[1].key;
+  expect(firstKey).toBeTruthy();
+  expect(calls[1]?.[1].key).not.toBe(firstKey);
+  expect(calls.map((call) => call[1].intent)).toEqual(["new", "new"]);
+  await vi.waitFor(() =>
+    expect(savedPrompts(f.storage).map(([id]) => id)).toEqual([
+      JSON.stringify([calls[0]?.[1].key, "thread-1"]),
+      JSON.stringify([calls[1]?.[1].key, "thread-1"]),
+    ]),
+  );
+  const agent = { ...first.agent, config: first.config } as unknown as Agent;
+  await f.runtime.session(agent, { channelId: "channel", root }, "interrupt");
+  expect(guests[0]?.sent.some((wire) => wire.method === "turn/interrupt")).toBe(
+    true,
+  );
+  expect(guests[1]?.sent.some((wire) => wire.method === "turn/interrupt")).toBe(
+    false,
+  );
+  await guests[1]?.complete();
+  await vi.waitFor(() =>
+    expect(
+      f.runtime.sessionState(agent, { channelId: "channel", root: otherRoot }),
+    ).toBe("idle"),
+  );
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  await f.runtime.session(agent, { channelId: "channel", root }, "new");
+  await f.runtime.run(f.delivery("after new"));
+  await vi.waitFor(() => expect(guests[2]?.starts()).toHaveLength(1));
+  expect(calls[2]?.[1]).toMatchObject({ intent: "new" });
+  expect(calls[2]?.[1].key).not.toBe(firstKey);
+  await guests[2]?.complete();
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  await f.runtime.run(f.delivery("same session"));
+  await vi.waitFor(() => expect(guests[2]?.starts()).toHaveLength(2));
+  expect(execution).toHaveBeenCalledTimes(3);
+  await guests[2]?.complete();
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  const saved = new Map(f.storage);
+  f.runtime.dispose();
+  const restored = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+  );
+  for (const [key, value] of saved) restored.storage.set(key, value);
+  await restored.runtime.run(restored.delivery("after restart"));
+  await vi.waitFor(() => expect(guests[3]?.starts()).toHaveLength(1));
+  expect(calls[3]?.[1]).toMatchObject({
+    key: calls[2]?.[1].key,
+    intent: "existing",
+  });
+  expect(guests[3]?.sent.some((wire) => wire.method === "thread/resume")).toBe(
+    true,
+  );
+  await guests[3]?.complete();
+});
+
+it("does not open execution when the session key cannot be saved", async () => {
+  const execution = vi.fn(async () => undefined);
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  vi.spyOn(f.storage, "set").mockImplementationOnce(() => {
+    throw new Error("State write failed");
+  });
+  await expect(f.runtime.run(f.delivery("first"))).rejects.toThrow(
+    "State write failed",
+  );
+  expect(execution).not.toHaveBeenCalled();
+  expect(f.spawn).not.toHaveBeenCalled();
+});
+
+it("keeps discovery and saved session reads free of execution allocation", async () => {
+  const execution = vi.fn(async () => undefined);
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const delivery = f.delivery("unused");
+  await f.runtime.preview({
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent);
+  await f.runtime.find(
+    { key: pubkey, name: "Codex" },
+    { channelId: "channel", root },
+    new AbortController().signal,
+  );
+  expect(f.runtime.conversations(pubkey)).toEqual([]);
+  expect(execution).not.toHaveBeenCalled();
+  expect(f.spawn).not.toHaveBeenCalled();
+  expect(f.storage.size).toBe(0);
+});
+
+it("keeps New disabled during an open and lets Stop cancel that open", async () => {
+  const opened = deferred<AgentExecution>();
+  const started = deferred<void>();
+  const execution = vi.fn(async () => {
+    started.resolve();
+    return opened.promise;
+  });
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const delivery = f.delivery("first");
+  const run = f.runtime.run(delivery);
+  const failed = expect(run).rejects.toThrow("Codex runtime is retired");
+  await started.promise;
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await expect(
+    f.runtime.session(agent, { channelId: "channel", root }, "new"),
+  ).rejects.toThrow("Wait for the active turn");
+  await f.runtime.session(agent, { channelId: "channel", root }, "interrupt");
+  const guest = fixture();
+  const target = guestTarget(guest);
+  opened.resolve(target);
+  await failed;
+  expect(target.signal.aborted).toBe(true);
+  expect(guest.spawn).not.toHaveBeenCalled();
+});
+
+it("retries a refused first turn but requires New when an accepted remote rollout is missing", async () => {
+  const guest = fixture();
+  const target = guestTarget(guest);
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => target,
+  );
+  const delivery = f.delivery("first attempt");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  guest.failing.add("turn/start");
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Needs attention");
+  guest.failing.delete("turn/start");
+  guest.failures.set(
+    "thread/resume",
+    "no rollout found for thread id thread-1",
+  );
+  await f.runtime.run(f.delivery("retry first turn"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(2));
+  expect(
+    guest.sent.filter((wire) => wire.method === "thread/start"),
+  ).toHaveLength(2);
+  await guest.complete(1);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  guest.failures.set(
+    "thread/resume",
+    "no rollout found for thread id thread-2",
+  );
+  await f.runtime.run(f.delivery("resume accepted turn"));
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(guest.starts()).toHaveLength(2);
+  expect(
+    guest.sent.filter((wire) => wire.method === "thread/start"),
+  ).toHaveLength(2);
+  expect(f.runtime.sessions(pubkey)[0]?.detail).toContain(
+    "Start a new session",
+  );
+});
+
+it("resumes the durably saved thread even when the host cache has no thread", async () => {
+  const conversation = JSON.stringify(["channel", root]);
+  const key = `buzz.codex.sessions.execution.v1:${scope}:${pubkey}:${conversation}`;
+  const savedKey = `buzz.codex.sessions.v17:${scope}:${pubkey}:session:durable-session`;
+  const durable = new Map([
+    [key, JSON.stringify({ key: "durable-session", intent: "existing" })],
+    [
+      savedKey,
+      JSON.stringify({
+        [conversation]: {
+          threadId: "external-thread",
+          workspace: "/guest/project",
+        },
+      }),
+    ],
+  ]);
+  const store = fileStore(
+    new Map(),
+    async (key, value) => {
+      if (value === null) durable.delete(key);
+      else durable.set(key, value);
+    },
+    undefined,
+    async (key) => durable.get(key) ?? null,
+  );
+  const guest = fixture();
+  const execution = vi.fn(async () => guestTarget(guest));
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+    store,
+  );
+  await f.runtime.session(
+    {
+      ...f.delivery("unused").agent,
+      config: f.delivery("unused").config,
+    } as unknown as Agent,
+    { channelId: "channel", root },
+    "interrupt",
+  );
+  expect(execution).not.toHaveBeenCalled();
+  await f.runtime.run(f.delivery("resume"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(1));
+  expect(
+    guest.sent.find((wire) => wire.method === "thread/resume")?.params,
+  ).toMatchObject({ threadId: "external-thread" });
+  expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+  await guest.complete();
+});
+
+it("saves accepted thread state after its first durable write fails", async () => {
+  const durable = new Map<string, string>();
+  let failed = false;
+  const store = fileStore(new Map(), async (key, value) => {
+    if (
+      !failed &&
+      value?.includes('"threadId"') &&
+      !value.includes('"pending":true')
+    ) {
+      failed = true;
+      throw new Error("Accepted state write failed");
+    }
+    if (value === null) durable.delete(key);
+    else durable.set(key, value);
+  });
+  const guest = fixture();
+  const target = guestTarget(guest);
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    async () => target,
+    store,
+  );
+  const delivery = f.delivery("first");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(failed).toBe(true);
+  const savedKey = [...durable.keys()].find((key) => key.includes(":session:"));
+  if (!savedKey) throw new Error("No thread state was saved");
+  const saved = JSON.parse((await store.read(savedKey)) ?? "{}");
+  expect(saved[JSON.stringify(["channel", root])]).toMatchObject({
+    threadId: "thread-1",
+  });
+  expect(saved[JSON.stringify(["channel", root])].pending).toBeUndefined();
+});
+
+it("keeps restored history when the next turn is refused after a lost first response", async () => {
+  const guest = fixture();
+  const f = fixture([], undefined, false, {}, undefined, undefined, async () =>
+    guestTarget(guest),
+  );
+  const conversation = JSON.stringify(["channel", root]);
+  f.storage.set(
+    `buzz.codex.sessions.execution.v1:${scope}:${pubkey}:${conversation}`,
+    JSON.stringify({ key: "restored", intent: "existing" }),
+  );
+  const savedKey = `buzz.codex.sessions.v17:${scope}:${pubkey}:session:restored`;
+  f.storage.set(
+    savedKey,
+    JSON.stringify({
+      [conversation]: {
+        threadId: "accepted-history",
+        workspace: "/guest/project",
+        pending: true,
+      },
+    }),
+  );
+  guest.failing.add("turn/start");
+  const delivery = f.delivery("next turn");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  expect(
+    JSON.parse(f.storage.get(savedKey) ?? "{}")[conversation],
+  ).toMatchObject({ threadId: "accepted-history" });
+  expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+  guest.failing.delete("turn/start");
+  await f.runtime.run(f.delivery("retry"));
+  await vi.waitFor(() => expect(guest.starts()).toHaveLength(2));
+  expect(
+    guest.sent
+      .filter((wire) => wire.method === "thread/resume")
+      .map((wire) => wire.params),
+  ).toEqual([
+    expect.objectContaining({ threadId: "accepted-history" }),
+    expect.objectContaining({ threadId: "accepted-history" }),
+  ]);
+  expect(guest.sent.some((wire) => wire.method === "thread/start")).toBe(false);
+  await guest.complete(1);
+});
+
+it("keeps existing intent after restart when the first target opens but its turn is refused", async () => {
+  const guests: ReturnType<typeof fixture>[] = [];
+  const execution = vi.fn(async () => {
+    const guest = fixture();
+    if (!guests.length) guest.failing.add("turn/start");
+    guests.push(guest);
+    return guestTarget(guest);
+  });
+  const f = fixture([], undefined, false, {}, undefined, undefined, execution);
+  const delivery = f.delivery("first attempt");
+  const agent = {
+    ...delivery.agent,
+    config: delivery.config,
+  } as unknown as Agent;
+  await f.runtime.run(delivery);
+  await vi.waitFor(() =>
+    expect(f.runtime.sessionState(agent, { channelId: "channel", root })).toBe(
+      "idle",
+    ),
+  );
+  const saved = new Map(f.storage);
+  f.runtime.dispose();
+  const restored = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+  );
+  for (const [key, value] of saved) restored.storage.set(key, value);
+  await restored.runtime.run(restored.delivery("retry after restart"));
+  await vi.waitFor(() => expect(guests[1]?.starts()).toHaveLength(1));
+  const calls = execution.mock.calls as unknown as [
+    string,
+    { key: string; intent: string },
+  ][];
+  expect(calls[0]?.[1].intent).toBe("new");
+  expect(calls[1]?.[1]).toMatchObject({
+    key: calls[0]?.[1].key,
+    intent: "existing",
+  });
+  await guests[1]?.complete();
+});
+
+it("uses the default local flow without opening or claiming execution", async () => {
+  const execution = vi.fn(async (): Promise<AgentExecution | undefined> => {
+    throw new Error("A local turn must not open an execution target");
+  });
+  const inspect = vi.fn(async () => undefined);
+  const f = fixture(
+    [],
+    undefined,
+    false,
+    {},
+    undefined,
+    undefined,
+    execution,
+    undefined,
+    inspect,
+  );
+  await f.runtime.run(f.delivery("local turn"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  expect(
+    f.sent.find((wire) => wire.method === "thread/start")?.params,
+  ).toMatchObject({ cwd: "/tmp/codex-test" });
+  expect(inspect).toHaveBeenCalledWith(pubkey);
+  expect(execution).not.toHaveBeenCalled();
+  expect(
+    [...f.storage.keys()].some(
+      (key) =>
+        key.startsWith("buzz.agent.execution.") ||
+        key.startsWith("buzz.codex.sessions.execution."),
+    ),
+  ).toBe(false);
+  await f.complete();
+});
+
+it.each(["conversation", "standalone", "preview"])(
+  "does not revive disposed local work after %s inspection",
+  async (mode) => {
+    const inspected = deferred<undefined>();
+    const started = deferred<void>();
+    const execution = vi.fn(async () => undefined);
+    const f = fixture(
+      [],
+      undefined,
+      false,
+      {},
+      undefined,
+      undefined,
+      execution,
+      undefined,
+      async () => {
+        started.resolve();
+        return inspected.promise;
+      },
+    );
+    const delivery = f.delivery("local work");
+    const result =
+      mode === "preview"
+        ? f.runtime.preview({
+            ...delivery.agent,
+            config: delivery.config,
+          } as unknown as Agent)
+        : mode === "conversation"
+          ? f.runtime.run(delivery)
+          : f.runtime.runOnce({
+              delivery,
+              key: "watch",
+              signal: delivery.signal,
+              prompt: async () => undefined,
+            });
+    const rejected = expect(result).rejects.toThrow(
+      "Codex runtime is disposed",
+    );
+    await started.promise;
+    f.runtime.dispose();
+    inspected.resolve(undefined);
+    await rejected;
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(execution).not.toHaveBeenCalled();
+  },
+);

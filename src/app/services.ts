@@ -33,6 +33,7 @@ import { AccountActionsService } from "../features/account-actions/service";
 import { ShortcutsService } from "../features/shortcuts/service";
 import { DecisionsService } from "../features/decisions/service";
 import { AgentsService } from "../features/agents/service";
+import { deviceSettings } from "./device-settings";
 import { createShortcutBindings } from "../features/shortcuts/preferences";
 import { ConversationService } from "../features/conversation/service";
 import { createAppearance } from "../shared/theme/service";
@@ -46,6 +47,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { BrowserService } from "../features/browser/service";
 import { PagesService } from "../features/pages/service";
 import { SoloNavigationService } from "../features/channel-navigation/solo-navigation";
+import { SidebarRowsService } from "../features/channel-navigation/sidebar-rows-service";
 import { SidebarSectionsService } from "../features/channel-navigation/sidebar-sections-service";
 import { SidebarScopeService } from "../features/channel-navigation/sidebar-scope-service";
 import { bundledPlugins } from "../bundled";
@@ -99,6 +101,7 @@ export function createServices() {
   });
   createPluginInstallerService(ctx, { core: pluginInstallCore });
   const sidebarScope = new SidebarScopeService(ctx);
+  const sidebarRows = new SidebarRowsService(ctx);
   const panels = new PanelsService(ctx);
   const accountActions = new AccountActionsService(ctx);
   const conversation = new ConversationService(ctx);
@@ -145,6 +148,8 @@ export function createServices() {
     undefined,
     localActivity,
     decisions,
+    undefined,
+    deviceSettings(appearance),
   );
   ctx.effect(() =>
     localAgents.bind({
@@ -264,6 +269,7 @@ export function createServices() {
     sidebarSections,
     pluginInstallRequests,
     sidebarScope,
+    sidebarRows,
     panels,
     plugins,
     federatedIdentity,

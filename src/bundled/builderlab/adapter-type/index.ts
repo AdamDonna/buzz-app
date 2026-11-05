@@ -101,7 +101,7 @@ export function builderlabType(
     icon: BuilderlabLogoIcon,
     description: "Sign in to Builderlab when creating an agent.",
     defaults: () => ({ config: { ...EMPTY_CREATION } }),
-    Create: createCreationFields(client, session),
+    ...createCreationFields(client, session),
     PanelFooter: createSignInFooter(session),
     ProfileActions: createProfileActions(session),
     tabs: [

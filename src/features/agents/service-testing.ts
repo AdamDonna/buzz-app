@@ -312,7 +312,7 @@ function held(identities: AgentIdentity[]) {
 
 export function fakeNative(identities: AgentIdentity[] = []) {
   let published = 0;
-  const keys = [bot, sibling];
+  const keys = [bot, sibling, "e".repeat(64)];
   const removals = held(identities);
   const wss = (relay: string) => relay.replace(/^https:/, "wss:");
   /** Its live row in the membership's community, as native finds it. */

@@ -143,6 +143,7 @@ function fixture(
     ],
   };
   const unread = {
+    revision: () => 0,
     sync: () => ({ capability: "unsupported" }),
     snapshot: () => undefined,
     subscribe: () => () => {},
@@ -166,7 +167,11 @@ function fixture(
       loadMore: async () => {},
       dispose() {},
     }),
-    channels: { subscribeList: () => () => {}, list: () => channels },
+    channels: {
+      subscribeList: () => () => {},
+      list: () => channels,
+      window: () => ({ rows: [] }),
+    },
     profiles: {
       ensure: async () => {},
       snapshot: () => profiles,

@@ -47,6 +47,8 @@ export type ChannelSummary = Readonly<{
   channelType?: "stream" | "forum" | "dm" | "solo" | "system";
   /** Relay-authored channel visibility; private channels use restricted presentation. */
   private?: true;
+  /** Relay-advertised default: the relay joins new community members here. */
+  autoJoin?: true;
   /** Presentation-only parent from signed channel metadata; never grants access. */
   parentChannelId?: string | undefined;
   /** Marked Huddle room; presented through its parent conversation, not the sidebar. */
@@ -138,6 +140,9 @@ export type ChannelMessage = Readonly<{
     truncated: boolean;
   }>;
   membership?: MembershipChange;
+  /** Signed `plugin-request` tag: an agent's plugin change request, by id.
+   * Untrusted display metadata; the device that holds the request decides. */
+  pluginRequest?: Readonly<{ id: string }>;
   huddle?: Readonly<{
     room: string;
     state: "started" | "ended";

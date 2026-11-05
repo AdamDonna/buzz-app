@@ -4,6 +4,7 @@ import { ModelDiscoveryRecovery } from "../../features/agents/ModelDiscoveryReco
 import {
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -19,7 +20,6 @@ import {
 } from "../../features/agents/ModelPicker";
 import {
   OpenedConversation,
-  useOpenedSession,
   useOpenTranscript,
 } from "../../features/agents/OpenedConversation";
 import type {
@@ -121,11 +121,89 @@ type Row = Readonly<{
   channelId: string;
   root?: string;
   at?: number;
+  /** The goose sessions saved for its place. */
+  sessions?: readonly string[];
+  /** Its channel's name, when the community lists it. */
+  name?: string;
 }>;
 const placeOf = (key: string): Place => {
   const [channelId = key, root] = key.split("/");
   return { channelId, ...(root ? { root } : {}) };
 };
+/** Each conversation's row, from its saved sessions and any still running,
+ * read by id with no search of goose, newest first; and the sessions started
+ * outside any conversation, newest first. */
+export function activityRows(
+  saved: readonly { key: string; at: number; sessions: readonly string[] }[],
+  live: readonly { key: string; sessionId?: string; at?: number }[],
+  starts: readonly {
+    id: string;
+    at?: number;
+    title?: string;
+    conversation?: string | null;
+  }[],
+  label: (channelId: string) => { name?: string } | undefined = () => undefined,
+) {
+  const running = new Map(
+    live.flatMap((session) =>
+      session.sessionId ? [[session.key, session] as const] : [],
+    ),
+  );
+  const byKey = new Map(
+    saved.map(({ key, at, sessions }) => [key, { at, sessions }]),
+  );
+  for (const [key, session] of running)
+    if (!byKey.has(key))
+      byKey.set(key, { at: session.at ?? Date.now(), sessions: [] });
+  const conversations = [...byKey]
+    .sort(([, a], [, b]) => b.at - a.at)
+    .map(([key, { at, sessions }]): Row => {
+      const id = running.get(key)?.sessionId;
+      const ids = [...new Set([...(id ? [id] : []), ...sessions])];
+      const place = placeOf(key);
+      return {
+        key,
+        sessionId: ids[0] ?? "",
+        title: "",
+        ...place,
+        at,
+        sessions: ids,
+        ...label(place.channelId),
+      };
+    });
+  // A session started outside any conversation, such as a watch's or
+  // timer's turn, by what it saved as it started. One saved before that was
+  // kept is never taken as one.
+  const standalone = starts
+    .flatMap(({ id, at, title = "", conversation }): Row[] =>
+      conversation === null && at !== undefined
+        ? [{ key: id, sessionId: id, title, at, channelId: "" }]
+        : [],
+    )
+    .reverse()
+    .slice(0, RECENT_LIMIT);
+  return { conversations, standalone };
+}
+/** The recent rows: the opened conversation's channel first and the rest
+ * newest first, each kind then kept to its own limit so neither crowds out
+ * the other, and the opened conversation left out. */
+export function recentRows(
+  kinds: readonly (readonly Row[])[],
+  here: string | undefined,
+  channel: string | undefined,
+) {
+  const order = (a: Row, b: Row) =>
+    Number(b.channelId === channel) - Number(a.channelId === channel) ||
+    (b.at ?? 0) - (a.at ?? 0);
+  return kinds
+    .flatMap((rows) =>
+      rows
+        .filter((row) => row.key !== here)
+        .sort(order)
+        .slice(0, RECENT_LIMIT),
+    )
+    .sort(order);
+}
 /** Buzz titles a session `Agent · place · root`; the agent's name is the
  * profile's own. */
 const titled = (name: string, title: string) =>
@@ -730,8 +808,12 @@ export function createTabs({
     >();
     const [loading, setLoading] = useState(true);
     const [attempt, setAttempt] = useState(0);
+    // Searching goose's history takes seconds, so only on request.
+    const [search, setSearch] = useState(false);
     // A turn ending rereads, so its last steps show without a Refresh.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is the explicit Refresh.
+    // Read again when the conversation saves or opens another session.
+    const ids = [row.sessionId, ...(row.sessions ?? [])].join(" ");
+    // biome-ignore lint/correctness/useExhaustiveDependencies: row is read by its key and ids; attempt is the explicit Refresh.
     useEffect(() => {
       const abort = new AbortController();
       setLoading(true);
@@ -740,8 +822,9 @@ export function createTabs({
           {
             agent: agent.key,
             workspace,
-            sessionId: row.sessionId,
-            ...(row.channelId ? { place: placeOf(row.key) } : {}),
+            ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+            ...(row.sessions ? { sessions: row.sessions } : {}),
+            ...(row.channelId ? { place: placeOf(row.key), search } : {}),
             ...(working ? { working } : {}),
           },
           abort.signal,
@@ -767,7 +850,7 @@ export function createTabs({
           setLoading(false);
         });
       return () => abort.abort();
-    }, [row, workspace, working, attempt]);
+    }, [row.key, ids, workspace, working, attempt, search]);
     return (
       <div className="grid gap-4">
         <div>
@@ -784,6 +867,26 @@ export function createTabs({
           <p role="status" className="m-0">
             Reading the goose session…
           </p>
+        ) : read.status === "missing" && row.channelId && !search ? (
+          <div className="grid gap-2">
+            <p className="m-0 text-body-sm text-subtle">
+              {row.sessions?.length
+                ? "goose no longer has the sessions Buzz saved for this conversation."
+                : "Buzz saved no goose session for this conversation."}{" "}
+              One from an earlier version of Buzz can be found by searching
+              goose's history, which can take a while.
+            </p>
+            <div>
+              <Button
+                type="button"
+                variant="subtle"
+                size="sm"
+                onClick={() => setSearch(true)}
+              >
+                Search older sessions
+              </Button>
+            </div>
+          </div>
         ) : read.status === "missing" ? (
           <p className="m-0 text-body-sm text-subtle">
             goose has no session for this conversation on this computer. It may
@@ -827,43 +930,53 @@ export function createTabs({
     close?: AgentViewProps<Config>["close"];
     openConversation?: AgentViewProps<Config>["openConversation"];
   }) {
-    const workspace = readConfig(agent.config).workspace;
     const live = useSyncExternalStore(
       (listener) => runtime.subscribe(listener),
       () => runtime.sessions(agent.key),
     );
-    const running = live.map(
-      (session): Row => ({
-        key: session.key,
-        sessionId: session.sessionId ?? "",
-        title: "",
-        ...placeOf(session.key),
-      }),
+    // Each read again only when a session changes.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: a session change can save one.
+    const saved = useMemo(
+      () => runtime.conversations(agent.key),
+      [agent.key, live],
     );
-    const {
-      session: here,
-      searching,
-      error: lookupError,
-    } = useOpenedSession(
-      running.filter((row) => row.sessionId),
-      conversation,
-      async (place, signal) => {
-        const found = await history.find(agent.key, workspace, place, signal);
-        return (
-          found && {
-            ...found,
-            ...place,
-            key: place.root
-              ? `${place.channelId}/${place.root}`
-              : place.channelId,
-          }
-        );
-      },
+    // biome-ignore lint/correctness/useExhaustiveDependencies: a session change can save one.
+    const starts = useMemo(
+      () => runtime.prompts(agent.key).sessions(),
+      [agent.key, live],
     );
-    const [recent, reload] = useRead(() => {
-      const abort = new AbortController();
-      return history.recent(agent.key, workspace, abort.signal);
-    }, `${agent.key}\u0000${workspace}`);
+    const { conversations, standalone } = activityRows(
+      saved,
+      live,
+      starts,
+      (id) => runtime.channelLabel(agent.key, id),
+    );
+    // The opened conversation's session: a thread's saved or live one, else
+    // its channel's, read again each render so a first save is picked up.
+    // With neither, its transcript offers to search goose's history, in the
+    // place the agent keeps its sessions.
+    const match = (channelId: string, root?: string) =>
+      conversations.find(
+        (row) =>
+          row.sessionId && row.channelId === channelId && row.root === root,
+      );
+    const here =
+      conversation &&
+      (() => {
+        const { channelId, rootId } = conversation;
+        const found = (rootId && match(channelId, rootId)) || match(channelId);
+        if (found) return found;
+        const root =
+          readConfig(agent.config).scope === "channel" ? undefined : rootId;
+        return {
+          key: root ? `${channelId}/${root}` : channelId,
+          sessionId: "",
+          title: "",
+          channelId,
+          ...(root && { root }),
+          ...runtime.channelLabel(agent.key, channelId),
+        } satisfies Row;
+      })();
     const busy = (sessionId: string) =>
       live.find((session) => session.sessionId === sessionId)?.busy;
     const status = (sessionId: string) => {
@@ -873,17 +986,25 @@ export function createTabs({
     const label = (row: Row) =>
       row.title
         ? titled(agent.name, row.title)
-        : `${row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
+        : `${row.name || row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
     const { open, show, back } = useOpenTranscript(
       conversation,
       label,
-      initialTranscript && { initial: here, searching, ...initialTranscript },
+      initialTranscript && { initial: here, ...initialTranscript },
       close,
     );
-    const rows = (recent.value ?? [])
-      .filter((row) => row.sessionId !== here?.sessionId)
-      .slice(0, RECENT_LIMIT)
-      .map((row): Row => ({ ...row, key: row.sessionId, channelId: "" }));
+    const rows = recentRows(
+      [conversations, standalone],
+      here?.key,
+      conversation?.channelId,
+    );
+    // The open transcript follows its conversation's current sessions.
+    const shown =
+      open &&
+      ([...conversations, ...standalone, ...(here ? [here] : [])].find(
+        (row) => row.key === open.key,
+      ) ??
+        open);
     return (
       <div className={activityStyles.activity}>
         {conversation && (
@@ -891,36 +1012,17 @@ export function createTabs({
             conversation={conversation}
             harness="goose"
             session={here}
-            searching={searching}
-            error={lookupError}
             status={here && status(here.sessionId)}
             onView={() => here && show(here)}
           />
         )}
         <section className={activityStyles.section}>
-          <InlineHeader
-            title="Recent sessions"
-            actions={
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                loading={recent.status === "loading"}
-                onClick={reload}
-              >
-                Refresh
-              </Button>
-            }
-          />
-          {recent.status === "error" ? (
-            <p role="alert" className="buzz-field-error m-0">
-              Could not list goose's sessions: {recent.error}
-            </p>
-          ) : rows.length ? (
+          <InlineHeader title="Recent sessions" />
+          {rows.length ? (
             <SettingsGroup layout="form">
               <ul className={activityStyles.list}>
                 {rows.map((row) => (
-                  <li key={row.sessionId} className={activityStyles.entry}>
+                  <li key={row.key} className={activityStyles.entry}>
                     <div className={activityStyles.row}>
                       <span className={activityStyles.copy}>
                         <span
@@ -955,27 +1057,23 @@ export function createTabs({
                 ))}
               </ul>
             </SettingsGroup>
-          ) : recent.status === "ready" ? (
+          ) : (
             <p className="m-0 text-body-sm text-subtle">
               None. A conversation's session starts when the agent is mentioned.
             </p>
-          ) : (
-            <p role="status" className="m-0 text-body-sm text-subtle">
-              Reading goose's sessions…
-            </p>
           )}
         </section>
-        {open && (
+        {shown && (
           <PanelSubview
-            title={label(open)}
+            title={label(shown)}
             backLabel="Back to profile"
             onBack={back}
           >
             <TranscriptView
-              key={open.key}
+              key={shown.key}
               agent={agent}
-              row={open}
-              working={busy(open.sessionId) ? open.sessionId : undefined}
+              row={shown}
+              working={busy(shown.sessionId) ? shown.sessionId : undefined}
               openConversation={openConversation}
             />
           </PanelSubview>

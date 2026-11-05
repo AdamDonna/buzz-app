@@ -1,3 +1,9 @@
+import { historyPresentation } from "../../features/agents/history-presentation";
+import {
+  profileHistoryActive,
+  profileHistoryRoute,
+  profileHistoryTarget,
+} from "../../features/profiles/target";
 import { useProfileMessage } from "../../features/profiles/useProfileMessage";
 import { AgentDetails } from "../agents/AgentDetails";
 import { AgentMessageButton } from "../agents/AgentMessageButton";
@@ -165,6 +171,7 @@ export function ProfilePanel({
   )
     return (
       <OwnedAgentProfile
+        target={target}
         key={`${connection.scope}:${connection.generation}:${pubkey}:${opening}`}
         agents={agents}
         communities={communities}
@@ -199,6 +206,7 @@ export function ProfilePanel({
   );
 }
 function OwnedAgentProfile({
+  target,
   agents,
   communities,
   initialActivity,
@@ -211,6 +219,7 @@ function OwnedAgentProfile({
   openConversation,
   close,
 }: {
+  target: string;
   agents: Agents;
   communities: CommunityReader | undefined;
   initialActivity: boolean;
@@ -227,8 +236,27 @@ function OwnedAgentProfile({
   const owned = useAgent(agents, pubkey);
   const channels = useChannelChoices(session.channels);
   if (!owned) return null;
+  const address = navigation?.snapshot().entry.target;
   return (
     <AgentDetails
+      historyPresentation={
+        navigation &&
+        address?.kind === "conversation" &&
+        address.detail?.target === target
+          ? historyPresentation(
+              navigation,
+              profileHistoryRoute(target),
+              (selected) => ({
+                ...address,
+                detail: {
+                  ...address.detail,
+                  target: profileHistoryTarget(target, selected),
+                },
+              }),
+              profileHistoryActive(target),
+            )
+          : undefined
+      }
       agents={agents}
       communities={communities}
       agent={owned.agent}

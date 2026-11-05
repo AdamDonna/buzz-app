@@ -1,4 +1,12 @@
-import { useCallback, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { ChannelChoice } from "../../features/agents/attention";
 import type {
   Agent,
@@ -19,6 +27,7 @@ import { AgentSaveState } from "../../features/agents/AgentSaveButton";
 
 /** An agent's sections as tabs, opening on the first. */
 export function AgentTabs(props: {
+  showSettings?: boolean | undefined;
   agents: Agents;
   agent: Agent;
   type: RegisteredAgentType | undefined;
@@ -50,7 +59,6 @@ export function AgentTabs(props: {
     ...supplied.filter((section) => section.value === "agent:memory"),
     ...supplied.filter((section) => section.value === "agent:activity"),
     ...supplied.filter((section) => section.value.startsWith("agent:added:")),
-    ...supplied.filter((section) => section.value === "agent:history"),
     {
       value: "agent:management",
       label: "Settings",
@@ -58,7 +66,11 @@ export function AgentTabs(props: {
     },
   ];
   const [tab, setTab] = useState<string>(
-    props.initialActivity ? "agent:activity" : (sections[0]?.value ?? ""),
+    props.showSettings
+      ? "agent:management"
+      : props.initialActivity
+        ? "agent:activity"
+        : (sections[0]?.value ?? ""),
   );
   const [draft, setDraft] = useState({ dirty: false, saving: false });
   const drafts = useRef(new Map<string, { dirty: boolean; saving: boolean }>());
@@ -78,6 +90,15 @@ export function AgentTabs(props: {
   const panelPrefix = useId();
   const selected =
     sections.find((section) => section.value === tab) ?? sections[0];
+  const choose = (value: string) => {
+    if (value === selected?.value || draft.saving) return;
+    if (draft.dirty || props.settingsHost.pendingSave) setPendingTab(value);
+    else setTab(value);
+  };
+  const requestSettings = useEffectEvent(() => choose("agent:management"));
+  useEffect(() => {
+    if (props.showSettings) requestSettings();
+  }, [props.showSettings]);
   const settingsSelected =
     selected?.value === "agent:settings" ||
     selected?.value === "agent:management";
@@ -95,11 +116,6 @@ export function AgentTabs(props: {
       ? "agent:management"
       : "agent:settings";
   const panelId = (value: string) => `${panelPrefix}-${value}`;
-  const choose = (value: string) => {
-    if (value === selected?.value || draft.saving) return;
-    if (draft.dirty || props.settingsHost.pendingSave) setPendingTab(value);
-    else setTab(value);
-  };
   // A new transcript request shows Activity, as choosing its tab would.
   const opening = props.initialTranscript?.opening;
   const [asked, setAsked] = useState(opening);

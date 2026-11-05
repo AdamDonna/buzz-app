@@ -67,6 +67,7 @@ export const test = base.extend({
   lifecycleRole: ["owner", { option: true }],
   lifecycleOwnerAgent: [false, { option: true }],
   lifecycleVisibility: [{ archived: [], hidden: [] }, { option: true }],
+  autoJoinChannels: [[], { option: true }],
   sidebarIcons: [false, { option: true }],
   channelNames: [{}, { option: true }],
   expectedPageFailure: [false, { option: true }],
@@ -142,6 +143,7 @@ export const test = base.extend({
       lifecycleRole,
       lifecycleOwnerAgent,
       lifecycleVisibility,
+      autoJoinChannels,
       sidebarIcons,
       channelNames,
       expectedPageFailure,
@@ -1304,6 +1306,7 @@ export const test = base.extend({
                   ],
                   ...(id === guestChannelId ? [["join_role", "guest"]] : []),
                   ...(archivedIds.has(id) ? [["archived", "true"]] : []),
+                  ...(autoJoinChannels.includes(id) ? [["auto_join"]] : []),
                   // Ordinary channels are explicitly public; do not add a public
                   // flag to private Solo chats or change the separate DM fixtures.
                   ...(!soloChannels.includes(id) &&
@@ -2322,6 +2325,10 @@ export const test = base.extend({
             : 3,
         );
         const filter = body[0];
+        if (body.length === 1 && filter.read_state_snapshot === 1) {
+          report.queries.push({ community, filter });
+          return send(response, answer(community, filter));
+        }
         const result = [
           ...new Map(
             body
@@ -2871,6 +2878,7 @@ export const test = base.extend({
           root,
           parent,
           attachmentTags = [],
+          createdAt,
         ) {
           const history = histories.get(`${community}/${channel}`);
           const event = sign(
@@ -2889,7 +2897,7 @@ export const test = base.extend({
             ],
             content ?? `Live append ${history.length}`,
             own ? userKey : peerKey,
-            (history.at(-1)?.created_at ?? 1700000900) + 1,
+            createdAt ?? (history.at(-1)?.created_at ?? 1700000900) + 1,
           );
           history.push(event);
           if (relay && deliver) relay.publish(community, event);

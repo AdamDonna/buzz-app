@@ -28,6 +28,12 @@ export type {
   Pages,
 } from "../features/pages/service";
 export type {
+  SidebarRow,
+  SidebarRowSortMode,
+  SidebarRowContribution,
+  SidebarRows,
+} from "../features/channel-navigation/sidebar-rows-service";
+export type {
   SidebarSectionAction,
   SidebarSectionContribution,
   SidebarSectionRow,
@@ -155,6 +161,13 @@ export type {
 } from "../features/agent-harness/kit";
 
 export type { ArtifactStorage } from "../features/artifact-storage/service";
+export type {
+  AgentExecution,
+  AgentExecutionBinding,
+  AgentExecutionProvider,
+  AgentExecutionSession,
+  AgentExecutionTarget,
+} from "../features/agents/execution";
 export type {
   ArtifactCollection,
   ArtifactCollectionDefinition,

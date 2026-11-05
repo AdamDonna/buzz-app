@@ -40,7 +40,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (key) => ownerReads(ctx.agents.relay(key), pubkeyOf(key)),
     (key, signal) => ctx.agents.core(key, signal),
     ctx.agents.storage,
-    (raw) => providerController.resolve(raw),
+    (raw, remote) => providerController.resolve(raw, remote),
     () => ctx.agents.tools(),
     repositoriesContext,
     ctx.host.serveMcp
@@ -64,6 +64,10 @@ export const apply: PluginModule["apply"] = (ctx) => {
           },
         }
       : undefined,
+    (key, session) => ctx.agents.execution(key, session),
+    undefined,
+    (key) => ctx.agents.inspectExecution(key),
+    undefined,
     ctx.host,
     (pubkey) => ctx.agents.handle(pubkey),
   );
@@ -99,7 +103,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     // Once loaded, and when the first Codex agent runs, the copy is brought
     // up to date; that is also when a first copy is downloaded.
     const was = needed;
-    needed = running.length > 0;
+    needed = running.some((agent) => !ctx.agents.executionBinding(agent.key));
     if (spawn && (was === undefined || (needed && !was))) {
       const updated = setup.update(needed);
       // Then, after the check that follows it (two first starts of Codex
@@ -142,9 +146,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
     ProviderDialogBody,
     SettingsTab,
     ActivityTab,
-  } = createTabs(providerController, runtime, start, setup);
+  } = createTabs(providerController, runtime, start, setup, (key) =>
+    ctx.agents.inspectExecution(key),
+  );
   ctx.agents.register<Config>({
     id: TYPE_ID,
+    execution: true,
     hooks: { events: CODEX_HOOK_EVENTS },
     retire: (pubkey) => runtime.retire(pubkey),
     protection: true,
@@ -198,8 +205,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
     summary: (agent) => config(agent.config).model || "Codex",
     ...(spawn &&
       readFile && {
-        usage: (agent, { since, signal }) =>
-          readUsage({ spawn, readFile }, agent, since, signal),
+        usage: async (agent, { since, signal }) => {
+          if (await ctx.agents.inspectExecution(agent.key))
+            throw new Error("Usage is unavailable for remote Codex agents.");
+          return readUsage({ spawn, readFile }, agent, since, signal);
+        },
       }),
     provider: {
       snapshot: providerController.snapshot,
@@ -243,7 +253,8 @@ export const apply: PluginModule["apply"] = (ctx) => {
       },
     ],
     // A mention during the first download waits for it, within its deadline.
-    ...codexRun(runtime, async (signal) => {
+    ...codexRun(runtime, async (signal, agent) => {
+      if (await ctx.agents.inspectExecution(agent)) return;
       await setup.installed(signal);
       if (providerController.snapshot().readiness === "checking")
         await providerController.check();

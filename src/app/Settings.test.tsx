@@ -25,8 +25,16 @@ import type { DecisionsService } from "../features/decisions/service";
 import type { RelayData } from "../features/relay/service";
 import type { Contribution } from "../plugins/contributions";
 import { createPluginInstallRequests } from "../plugins/installer";
+import { createPluginRequests } from "../plugins/requests";
 
 afterEach(cleanup);
+// Settings reads agent plugin requests from every plugin manager.
+const noRequests = createPluginRequests({
+  catalog: () => undefined,
+  imports: undefined,
+  change: vi.fn(),
+  error: () => null,
+});
 vi.mock("../bundled/icons", () => ({
   bundledIcons: new Map([
     ["buzz.channels", "/channels-icon.png"],
@@ -123,12 +131,16 @@ const communityState = {
   selected: "primary",
   sync: { known: [], outbox: [] },
 };
+const disconnected = { status: "disconnected" };
+const connecting = { status: "connecting" };
+const relay = { subscribe: () => () => {}, snapshot: () => disconnected };
 const host = {
   plugins: { subscribe: () => () => {}, snapshot: () => pluginState },
   communities: {
     retainPresentation: () => () => {},
     subscribe: () => () => {},
     snapshot: () => communityState,
+    relay,
   },
 } as unknown as Parameters<typeof Settings>[0];
 
@@ -242,6 +254,7 @@ it.each([false, true])("groups plugins (Essentials=%s)", async (essentials) => {
         {
           subscribe: () => () => {},
           snapshot: () => ready,
+          requests: noRequests,
           change: vi.fn(async () => true),
           reload: vi.fn(async () => true),
           dismissError: vi.fn(),
@@ -465,6 +478,7 @@ it("opens each plugin's existing metadata and controls in a detail aside", () =>
   const plugins = {
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(),
     reload: vi.fn(),
     dismissError: vi.fn(),
@@ -689,6 +703,7 @@ function reviewPluginFixture(
       return () => listeners.delete(listener);
     },
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(async (action: string, id: string) => {
       if (action === "remove") {
         snapshot.configuration = {
@@ -1151,6 +1166,7 @@ it("keeps grouped cards available without a selected community", () => {
           retainPresentation: () => () => {},
           subscribe: () => () => {},
           snapshot: () => noCommunityState,
+          relay,
         } as unknown as Parameters<typeof Settings>[0]["communities"]
       }
       cards={cards}
@@ -1193,6 +1209,7 @@ it("shows administration only within a selected community", () => {
     retainPresentation: () => () => {},
     subscribe: () => () => {},
     snapshot: () => noCommunityState,
+    relay,
   } as unknown as Parameters<typeof Settings>[0]["communities"];
   view.rerender(<Settings {...host} communities={noCommunity} cards={cards} />);
   expect(nav).not.toHaveTextContent("Community admin");
@@ -1475,6 +1492,7 @@ it("renders a bundled plugin's README below its status, never an external one's"
   const plugins = {
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(),
     reload: vi.fn(),
     dismissError: vi.fn(),
@@ -1590,6 +1608,7 @@ it("keeps related plugins out of the pane even when tags overlap", () => {
     },
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(),
     reload: vi.fn(),
     dismissError: vi.fn(),
@@ -2267,7 +2286,7 @@ it("recommends managed plugins in Settings and points to them from navigation", 
   const fixture = reviewPluginFixture({
     communities: {
       ...host.communities,
-      relay: { snapshot: () => ({ status: "connecting" }) },
+      relay: { subscribe: () => () => {}, snapshot: () => connecting },
     } as never,
   });
   Object.assign(fixture.manager, {
@@ -2371,7 +2390,7 @@ it("routes a managed plugin's updates through the managed review instead of the 
   const fixture = reviewPluginFixture({
     communities: {
       ...host.communities,
-      relay: { snapshot: () => ({ status: "connecting" }) },
+      relay: { subscribe: () => () => {}, snapshot: () => connecting },
     } as never,
   });
   const external = fixture.snapshot.configuration.catalog.plugins[1];
@@ -2437,6 +2456,7 @@ function installRequestFixture(imports: object | undefined) {
     imports,
     subscribe: () => () => {},
     snapshot: () => snapshot,
+    requests: noRequests,
     change: vi.fn(async () => true),
     dismissError: vi.fn(),
   } as unknown as Parameters<typeof Settings>[0]["plugins"];

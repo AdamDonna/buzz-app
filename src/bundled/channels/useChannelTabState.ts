@@ -9,6 +9,12 @@ import {
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import type { PanelOpening } from "../../features/panels/service";
+import {
+  profileActivityViewKey,
+  profileHistoryActive,
+  profileHistoryBase,
+  profilePanelKey,
+} from "../../features/profiles/target";
 
 export type ConversationTab =
   | {
@@ -111,8 +117,15 @@ const empty: State = {
   thread: undefined,
   settings: undefined,
 };
+/** A version inspector changes the address within one profile, not its tab. */
+export const panelContentTarget = (entry: PanelOpening) =>
+  entry.panel.key === "buzz.profiles/profile" &&
+  profileHistoryActive(entry.target) &&
+  profilePanelKey(entry.target)
+    ? (entry.target.split("#")[0] as string)
+    : entry.target;
 export const panelTabId = (entry: PanelOpening) =>
-  `${entry.panel.key}:${entry.target}`;
+  `${entry.panel.key}:${panelContentTarget(entry)}`;
 /** Which pane a panel tab is in, given its state's main-pane ids. */
 export const entryPane = (
   mainEntries: readonly string[] | undefined,
@@ -861,13 +874,18 @@ export function useChannelTabState(
     [key, snapshot],
   );
   const detailVisits = useCallback(
-    (channelId: string, target: string) =>
-      Object.entries(snapshot()[key]?.detailVisits ?? {}).flatMap(
+    (channelId: string, target: string) => {
+      const profile = profilePanelKey(target) ?? profileActivityViewKey(target);
+      const address = profile ? profileHistoryBase(target) : target;
+      return Object.entries(snapshot()[key]?.detailVisits ?? {}).flatMap(
         ([id, detail]) =>
-          detail.channelId === channelId && detail.target === target
+          detail.channelId === channelId &&
+          (profile ? profileHistoryBase(detail.target) : detail.target) ===
+            address
             ? [id]
             : [],
-      ),
+      );
+    },
     [key, snapshot],
   );
   const renameTab = useCallback(
