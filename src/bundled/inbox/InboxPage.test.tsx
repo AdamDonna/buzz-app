@@ -5117,6 +5117,14 @@ it("shows only your sent messages newest first, opens the exact message, and res
   h.addEvent(older);
   h.addEvent(newer);
   h.addEvent(other);
+  h.addEvent(
+    metadata(h.relayKey, "public-room", "Open room", 10, [
+      ["public"],
+      ["t", "stream"],
+    ]),
+  );
+  h.addEvent(roster(h.relayKey, "public-room", [h.alice.pubkey], 10));
+  h.addEvent(message(h.viewer, "public-room", "My public send", 75));
   render(h.view);
   await waitFor(() => expect(h.session.channels.list().status).toBe("ready"));
   await waitFor(() =>
@@ -5126,6 +5134,12 @@ it("shows only your sent messages newest first, opens the exact message, and res
   fireEvent.click(within(mailbox).getByRole("tab", { name: "Sent" }));
   const sent = screen.getByRole("list", { name: "Sent messages" });
   await within(sent).findByText("My latest send");
+  await within(sent).findByText("My public send");
+  expect(
+    h.session.channels
+      .list()
+      .channels.some((channel) => channel.id === "public-room"),
+  ).toBe(false);
   const text = sent.textContent ?? "";
   expect(text.indexOf("My latest send")).toBeLessThan(
     text.indexOf("My earlier send"),
@@ -5142,6 +5156,17 @@ it("shows only your sent messages newest first, opens the exact message, and res
       channelId: "room",
       messageId: newer.id,
     }),
+  );
+  act(() =>
+    h.emit([
+      metadata(h.relayKey, "public-room", "Open room", 100, [
+        ["private"],
+        ["t", "stream"],
+      ]),
+    ]),
+  );
+  await waitFor(() =>
+    expect(within(sent).queryByText("My public send")).not.toBeInTheDocument(),
   );
   act(() => h.revokeRoom());
   await waitFor(() =>

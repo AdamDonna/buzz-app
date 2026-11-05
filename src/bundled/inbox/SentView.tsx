@@ -25,7 +25,8 @@ export function SentView({
   scope: NavigationScope;
   navigator: Navigation;
 }) {
-  const channels = useChannelList(session.channels);
+  // Subscribe to access changes, including destinations outside the joined list.
+  useChannelList(session.channels);
   const [request, setRequest] = useState({ page: 1, attempt: 0 });
   const [events, setEvents] = useState<readonly VisibleEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,9 +81,8 @@ export function SentView({
   }, [session, scope.viewer, request]);
   const visible = events.flatMap((event) => {
     const destinations = event.tags.filter(([name]) => name === "h");
-    const channel = channels.channels.find(
-      (item) => item.id === destinations[0]?.[1],
-    );
+    const channelId = destinations[0]?.[1];
+    const channel = channelId ? session.channels.get?.(channelId) : undefined;
     return destinations.length === 1 &&
       channel &&
       !channel.huddle &&
