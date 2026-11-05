@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -18,6 +19,10 @@ import { useConversationPresentation } from "../conversation/ConversationPresent
 import { canMessageAgent } from "../agents/choices";
 import { RecipientPicker } from "../direct-messages/RecipientPicker";
 import type { Recipient } from "../direct-messages/usePeople";
+import {
+  useVerifiedNames,
+  withVerifiedNames,
+} from "../profiles/useVerifiedNames";
 import type { Navigation } from "../navigation/controller";
 import type { OpenTarget } from "../navigation/targets";
 import type { ChannelMessage } from "../relay/contracts";
@@ -292,6 +297,26 @@ function ForwardMessageDialog({
   const noteField = useRef<HTMLTextAreaElement>(null);
   const operation = useRef<AbortController | undefined>(undefined);
   useEffect(() => () => operation.current?.abort(), []);
+  // Labels follow current verification, then the current profile name.
+  const verified = useVerifiedNames(session, people);
+  const profiles = useSyncExternalStore(
+    session.profiles.subscribe,
+    session.profiles.snapshot,
+  );
+  const named = useMemo(
+    () =>
+      withVerifiedNames(
+        people.map((person) => {
+          const current = profiles.get(person.pubkey);
+          return current && !current.verified
+            ? { ...person, name: current.name }
+            : person;
+        }),
+        verified,
+        profiles,
+      ),
+    [people, verified, profiles],
+  );
   const person = people[0];
   const locked = pending || !!recovered;
   const submit = async () => {
@@ -443,6 +468,7 @@ function ForwardMessageDialog({
             session={session}
             scope={scope}
             selected={people}
+            labels={named}
             disabled={locked}
             maxRecipients={1}
             appearance="field"
