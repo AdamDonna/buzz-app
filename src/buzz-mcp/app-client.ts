@@ -47,6 +47,7 @@ export function appClient(
   };
   const handoff = agent.handoff;
   const plugins = agent.plugins;
+  const { settings } = agent;
   return {
     ...(agent.protection
       ? {
@@ -240,6 +241,25 @@ export function appClient(
       close: (channel, root) => tabs().close(channel, root),
       rename: (channel, root, name) => tabs().rename(channel, root, name),
     },
+    ...(settings
+      ? {
+          settings: {
+            list: () => {
+              check();
+              return settings.list();
+            },
+            get: (key) => {
+              check();
+              return settings.get(key);
+            },
+            // Synchronous, so the check holds until the write is read back.
+            set: (key, value) => {
+              check();
+              return settings.set(key, value);
+            },
+          },
+        }
+      : {}),
   };
 }
 

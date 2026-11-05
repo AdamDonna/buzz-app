@@ -416,6 +416,12 @@ available rather than silently discarding it.
 - When a request to an agent running on this device fails, the activity under
   the message offers **Retry**, which asks the agent again, and **Dismiss**,
   which hides the failure.
+- Any agent running on this device can read and change some Buzz settings
+  here when you ask it to: appearance mode, interface size, accent color,
+  vibe level, where new threads open, Solo follow-up behavior, automatic
+  spelling correction (Mac only) and remembering mentioned agents. There is
+  no switch to turn on. A change shows as not saved when it is active but
+  could not be saved on this device.
 
 Saved teams from **Your teams** appear in the inline `@` suggestions and the
 mention picker. Select a team to insert its members as individual mentions.

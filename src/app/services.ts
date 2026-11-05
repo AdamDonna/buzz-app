@@ -33,6 +33,7 @@ import { AccountActionsService } from "../features/account-actions/service";
 import { ShortcutsService } from "../features/shortcuts/service";
 import { DecisionsService } from "../features/decisions/service";
 import { AgentsService } from "../features/agents/service";
+import { deviceSettings } from "./device-settings";
 import { createShortcutBindings } from "../features/shortcuts/preferences";
 import { ConversationService } from "../features/conversation/service";
 import { createAppearance } from "../shared/theme/service";
@@ -147,6 +148,8 @@ export function createServices() {
     undefined,
     localActivity,
     decisions,
+    undefined,
+    deviceSettings(appearance),
   );
   ctx.effect(() =>
     localAgents.bind({

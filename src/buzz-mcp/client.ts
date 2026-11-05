@@ -5,6 +5,7 @@ import type { ProtectionAction } from "../features/agent-protection/service";
 import type { GitAuth } from "../features/agents/native";
 import type { AgentAttention } from "../features/agents/service";
 import type { AgentPlugins } from "../plugins/requests";
+import type { SettingState } from "../shared/device-settings";
 
 export type BuzzEvent = Readonly<{
   id: string;
@@ -160,6 +161,13 @@ export interface BuzzClient {
   readonly attention?: AgentAttention;
   /** The owner's thread tabs, where the host shows them. */
   tabs?: ThreadTabs;
+  /** Buzz settings on this device, in an agent's own run. Each call checks
+   * the turn first, as the other tools do. */
+  settings?: Readonly<{
+    list(): readonly SettingState[];
+    get(key: unknown): SettingState;
+    set(key: unknown, value: unknown): SettingState;
+  }>;
 }
 
 /** Where the agent is working, so tools can default to it. `topLevel` keeps

@@ -189,6 +189,7 @@ import {
   forgetDefaultAgent,
 } from "../solo/default-agent";
 import type { AgentPlugins } from "../../plugins/requests";
+import type { DeviceSettings } from "../../shared/device-settings";
 
 /** Where an agent runs: `here`, with its key on this device; `hosted`, by its
  * type's provider; or `elsewhere`, on another of the owner's devices. Only an
@@ -473,6 +474,8 @@ export type AgentHandle = Readonly<{
   /** The owner's thread tabs on this device in the agent's community;
    * undefined while it is not connected. */
   tabs(): ReturnType<typeof channelTabs> | undefined;
+  /** On a run's handle only: Buzz settings on this device. */
+  settings?: DeviceSettings;
   /** Takes notes for this conversation, oldest first. A thread session passes
    * its root; a channel session omits it and takes all notes in the channel. */
   notes?(channelId: string, root?: string): readonly string[];
@@ -1676,6 +1679,8 @@ export class AgentsService extends Service implements Agents {
     /** Which artifact types an agent has synced, from its config channel
      * binding. Unset, every agent starts `local`. */
     private readonly bindingFor?: (agent: Agent) => ConfigBinding,
+    /** The Buzz settings on this device that agents' runs can change. */
+    private readonly deviceSettings?: DeviceSettings,
   ) {
     super(ctx, "agents");
     this.contributions = createContributions<AgentType>(ctx);
@@ -1984,6 +1989,7 @@ export class AgentsService extends Service implements Agents {
         const session = this.bindingOf(agent)?.session;
         return session && channelTabs(session, ctx.navigation);
       },
+      settings: () => this.deviceSettings,
       classifier: () => this.classifier(),
       decisions: () => this.decisions,
       context: (agent, event) => this.context(agent, event),

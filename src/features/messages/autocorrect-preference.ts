@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { DeviceSetting } from "../../shared/device-settings";
 
 const preferenceKey = "buzz-message-autocorrect.v1";
 const changedEvent = "buzz-message-autocorrect-changed";
@@ -45,3 +46,19 @@ export function setMessageAutocorrectPreference(enabled: boolean): void {
   }
   window.dispatchEvent(new Event(changedEvent));
 }
+
+/** The composer's spelling-correction opt-in as a device setting. */
+export const autocorrectSetting: DeviceSetting = {
+  key: "conversations.autocorrect",
+  description: "Lets macOS correct misspelled words in messages.",
+  schema: { type: "boolean" },
+  applies: "Only in the message box on a Mac.",
+  read: () => ({
+    value: messageAutocorrectPreference(),
+    unsaved:
+      unsavedPreference === undefined
+        ? null
+        : "This choice is active, but could not be saved on this device.",
+  }),
+  write: (value) => setMessageAutocorrectPreference(value as boolean),
+};

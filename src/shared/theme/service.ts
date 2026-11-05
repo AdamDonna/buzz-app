@@ -301,6 +301,8 @@ export function createAppearance(
       state = { ...state, contrast, contrastError };
       notify();
     },
+    /** After `dispose`, setters change nothing. */
+    isDisposed: () => disposed,
     dispose() {
       disposed = true;
       host?.removeEventListener("storage", onStorage);

@@ -13,6 +13,7 @@ import { BUZZ_PROMPT } from "./prompt";
 import { respond } from "./rpc";
 import { turnNote } from "./session-tools";
 import { PLUGIN_TOOLS } from "./plugins";
+import { SETTINGS_TOOLS } from "./settings";
 import { SOLO_WORKER_TOOLS } from "./solo-worker";
 import { TOOLS } from "./tools";
 
@@ -105,7 +106,11 @@ describe("the tool list", () => {
       ...SOLO_WORKER_TOOLS,
       ...PLUGIN_TOOLS,
     ].map((tool) => tool.name);
-    expect(await list()).toEqual(names);
+    // Clients without settings don't list their tools; no client lists all.
+    expect(await list()).toEqual([
+      ...names,
+      ...SETTINGS_TOOLS.map((tool) => tool.name),
+    ]);
     for (const enabled of [true, false])
       expect(
         await list({
