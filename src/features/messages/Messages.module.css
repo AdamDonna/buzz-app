@@ -880,13 +880,15 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   max-width: 100%;
   align-self: flex-start;
   margin-inline-start: var(--space-3);
+  margin-top: var(--space-1);
+}
+/* Channel and thread-branch reply summaries share one caption treatment. */
+.messageBody [data-thread-summary],
+.replyBranchSummary > [data-thread-summary] {
   font-size: var(--text-caption);
   line-height: var(--text-caption--line-height);
   letter-spacing: var(--text-caption--letter-spacing);
   font-weight: var(--type-weight-regular);
-  margin-top: var(--space-1);
-}
-.messageBody [data-thread-summary] {
   padding: var(--space-1);
   padding-right: var(--space-1h);
 }
