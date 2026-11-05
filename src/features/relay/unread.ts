@@ -166,6 +166,13 @@ const order = (a: RelayEvent, b: RelayEvent) =>
   eventMs(a) - eventMs(b) || a.id.localeCompare(b.id);
 const contentKind = (event: RelayEvent) =>
   event.kind === 9 || event.kind === 40002 || event.kind === 40008;
+/**
+ * Live Inbox recompute window. Each recompute folds every channel (7-70 ms at
+ * 100-1000 items), so a burst would otherwise cost that per message. 200 ms
+ * caps it at 5 per second and stays at the edge of perceived-instant feedback
+ * for a list nobody is typing into; read marks and user actions bypass it.
+ */
+const INBOX_COALESCE_MS = 200;
 const channelIds = new WeakMap<RelayEvent, string | undefined>();
 /** Verified events are frozen, and every evidence index asks for each one. */
 const channelOf = (event: RelayEvent) => {
@@ -271,6 +278,10 @@ export function createUnread({
   const inboxListeners = new Set<() => void>();
   let inboxSnapshot: InboxSnapshot | undefined;
   let inboxDirty = true;
+  // Pending coalesced recompute for live evidence; see publish().
+  let inboxTimer: ReturnType<typeof setTimeout> | undefined;
+  // Snapshot listeners last saw: a direct inbox() read must not hide the change.
+  let inboxBase: InboxSnapshot | undefined;
   let inboxLoading = false;
   const handles = new Set<() => void>();
   const views = new Map<
@@ -1225,11 +1236,32 @@ export function createUnread({
       if (!set.size) activityListeners.delete(channelId);
     };
   }
-  function publish(channelIds?: ReadonlySet<string>) {
+  function clearInboxTimer() {
+    clearTimeout(inboxTimer);
+    inboxTimer = undefined;
+  }
+  function flushInbox() {
+    inboxTimer = undefined;
+    if (closed || !inboxListeners.size) return;
+    if (inbox() !== inboxBase)
+      for (const listener of inboxListeners) notify(listener);
+  }
+  /**
+   * `deferInbox` coalesces the Inbox projection of live evidence into one
+   * recompute per window; every other publish settles it synchronously.
+   */
+  function publish(channelIds?: ReadonlySet<string>, deferInbox = false) {
     if (closed) return;
     inboxDirty = true;
-    const previousInbox = inboxSnapshot;
-    const nextInbox = inboxListeners.size ? inbox() : undefined;
+    const defer = deferInbox && inboxListeners.size > 0;
+    // A pending window compares against what listeners last saw: a direct
+    // inbox() read since then may already hold the newer snapshot.
+    const previousInbox = inboxTimer ? inboxBase : inboxSnapshot;
+    if (defer && !inboxTimer) {
+      inboxBase = inboxSnapshot;
+      inboxTimer = setTimeout(flushInbox, INBOX_COALESCE_MS);
+    } else if (!defer) clearInboxTimer();
+    const nextInbox = inboxListeners.size && !defer ? inbox() : undefined;
     const changed: string[] = [];
     const changedActivity: string[] = [];
     for (const [key, old] of snapshots) {
@@ -1746,7 +1778,8 @@ export function createUnread({
           // An overflow or refresh while this read was out discarded what the
           // mark stands for: an overflow waits for refresh, a refresh reads again.
           if (!current()) return;
-          // Accepting notifies subscribers, and one may refresh from there.
+          // Accepting notifies subscribers (the Inbox after its window), and one
+          // may refresh from there.
           if (!accept(result) || !current()) return;
           // The mark is anchored on what the relay returned, not the clock: a
           // skewed clock or a future-dated event cannot move the window past
@@ -1952,7 +1985,8 @@ export function createUnread({
         });
       const global = freshness !== "observed";
       freshness = "observed";
-      publish(global ? undefined : changed);
+      // A freshness change is state, not just new evidence: settle it now.
+      publish(global ? undefined : changed, !global);
     }
     return true;
   }
@@ -2743,6 +2777,7 @@ export function createUnread({
       activitySnapshots.clear();
       activityDirty.clear();
       events.clear();
+      clearInboxTimer();
       inboxSnapshot = undefined;
       inboxDirty = true;
       inboxListeners.clear();

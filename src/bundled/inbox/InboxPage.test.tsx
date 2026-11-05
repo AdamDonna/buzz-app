@@ -1688,10 +1688,13 @@ it.each([false, true])(
     h.addEvent(progress);
     act(() => h.emit([response, progress]));
     if (selectProgress) {
-      const progressRow = rows().find((row) =>
-        row.textContent?.includes("Ordinary progress"),
-      );
-      if (!progressRow) throw new Error("Missing ordinary progress row");
+      const progressRow = await waitFor(() => {
+        const row = rows().find((candidate) =>
+          candidate.textContent?.includes("Ordinary progress"),
+        );
+        if (!row) throw new Error("Missing ordinary progress row");
+        return row;
+      });
       fireEvent.click(
         within(progressRow).getByRole("button", { name: /^Open / }),
       );

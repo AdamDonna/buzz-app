@@ -2580,6 +2580,79 @@ it("exposes immutable verified member facts through the shared session without I
   stop();
 });
 
+it("coalesces live Inbox notifications per window while read marks notify synchronously", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const h = setup();
+    h.grant("room");
+    const first = message(h.alice, "room", "Mention 0", 20, [
+      ["p", h.viewer.pubkey],
+    ]);
+    h.emit([first]);
+    const unread = h.session.unread;
+    const listener = vi.fn();
+    const stop = unread.subscribeInbox(listener);
+    const mentions = Array.from({ length: 5 }, (_, i) =>
+      message(h.alice, "room", `Mention ${i + 1}`, 21 + i, [
+        ["p", h.viewer.pubkey],
+      ]),
+    );
+    for (const mention of mentions) h.emit([mention]);
+    expect(listener).not.toHaveBeenCalled();
+    // A direct read is fresh immediately and must not swallow the notification.
+    expect(unread.inbox().items).toHaveLength(6);
+    vi.advanceTimersByTime(199);
+    expect(listener).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(listener).toHaveBeenCalledTimes(1);
+    // A read mark settles the Inbox now and supersedes a pending window.
+    h.emit([
+      message(h.alice, "room", "Mention 6", 30, [["p", h.viewer.pubkey]]),
+    ]);
+    const item = unread.inbox().items[0];
+    assert(item);
+    await unread.markThrough(item.target, item.messageId);
+    const settled = listener.mock.calls.length;
+    expect(settled).toBeGreaterThan(1);
+    vi.advanceTimersByTime(1000);
+    expect(listener).toHaveBeenCalledTimes(settled);
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("a synchronous publish delivers a pending Inbox window after a direct read", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const h = setup();
+    h.grant("room");
+    h.grant("other");
+    const chatter = message(h.alice, "other", "Chatter", 20);
+    h.emit([chatter]);
+    const unread = h.session.unread;
+    const listener = vi.fn();
+    const stop = unread.subscribeInbox(listener);
+    const before = unread.inbox().items.length;
+    h.emit([message(h.alice, "room", "Mention", 21, [["p", h.viewer.pubkey]])]);
+    expect(listener).not.toHaveBeenCalled();
+    expect(unread.inbox().items).toHaveLength(before + 1);
+    // This publish leaves the Inbox as the direct read saw it, but listeners
+    // have not seen the mention yet.
+    await unread.markThrough(
+      { kind: "channel", channelId: "other" },
+      chatter.id,
+    );
+    expect(unread.inbox().items).toHaveLength(before + 1);
+    expect(listener).toHaveBeenCalled();
+    stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("inbox projects only matching mention evidence when a followed thread has newer unread progress", async () => {
   const h = setup();
   h.grant("room");
