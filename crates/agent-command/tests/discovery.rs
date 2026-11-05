@@ -424,7 +424,14 @@ fn a_second_build_waits_then_takes_over_the_attention_source() {
     let connection = connection(&server("singleton", &[]), "singleton", false);
     let mut first = running_command(home.path(), &connection, "agent/watch");
     let second_binary = home.path().join("other-build");
-    std::fs::copy(env!("CARGO_BIN_EXE_buzz-agent-command"), &second_binary).unwrap();
+    // A parallel test's fork can retain fs::copy's writable descriptor until exec,
+    // causing ETXTBSY here. Keep the writer in a separate process and wait for exit.
+    assert!(Command::new("cp")
+        .arg(env!("CARGO_BIN_EXE_buzz-agent-command"))
+        .arg(&second_binary)
+        .status()
+        .unwrap()
+        .success());
     let marker = home.path().join("duplicate-executed");
     let mut second = Command::new(&second_binary)
         .args(["--launch", "/usr/bin/touch", marker.to_str().unwrap()])
