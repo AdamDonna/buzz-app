@@ -57,7 +57,12 @@ import {
 } from "../claude-code/prompt";
 import { readAuthorNames } from "../../features/agent-harness/author-names";
 import { ownerCanvas, readProject } from "../../features/agent-harness/project";
-import { REQUEST_TIMEOUT_MS, type ServeMcp, type ToolServer } from "./goose";
+import {
+  type GooseProcess,
+  REQUEST_TIMEOUT_MS,
+  type ServeMcp,
+  type ToolServer,
+} from "./goose";
 import { AgentSessions, localSessions, SharedProcess } from "./sessions";
 
 export type Config = Readonly<{
@@ -118,7 +123,7 @@ type Entry = {
   protected?: boolean;
   worker?: SharedProcess;
   workerKey?: string;
-  /** A replaced provider's worker, which its successor waits out. */
+  /** Every replaced provider's worker, which its successor waits out. */
   stopping?: Promise<void>;
   sessions: AgentSessions;
   config: Config;
@@ -820,15 +825,15 @@ export class GooseRuntime {
           signal: entry.lifetime.signal,
           // Its pre-tool check reviews every call, Buzz's extension included.
           nativeToolGate: true,
+          // Read from the process hosting the session, which it never starts.
           protectionContext: async () => {
-            const sessionId =
-              conversation && entry.sessions.sessionId(conversation);
-            if (!sessionId || !entry.worker)
+            const serving =
+              conversation && entry.sessions.serving(conversation);
+            if (!serving)
               throw new Error("The native Goose session is unavailable");
-            const process = await entry.worker.get();
-            const { data } = (await process.request(
+            const { data } = (await serving.process.request(
               "_goose/unstable/session/export",
-              { sessionId, format: "json" },
+              { sessionId: serving.sessionId, format: "json" },
               REQUEST_TIMEOUT_MS,
             )) as { data: string };
             return JSON.parse(data);
@@ -852,36 +857,40 @@ export class GooseRuntime {
       const context = (conversation && entry.contexts.get(conversation)) || {};
       return respond(client, context, message, this.added());
     };
+    const get = (): Promise<GooseProcess> => {
+      const protection = entry.handle?.protection;
+      if (!protection) {
+        if (entry.protected)
+          throw new Error("The protected agent has no live policy binding");
+        return this.goose.get();
+      }
+      protection.assertAvailable();
+      // Another key means a replaced provider, which is already stopping its
+      // worker; the replacement starts once every replaced one has exited.
+      if (entry.worker && entry.workerKey !== protection.key) {
+        entry.stopping = Promise.all([
+          entry.stopping,
+          entry.worker.shutdown().catch(() => undefined),
+        ]).then(() => undefined);
+        delete entry.worker;
+      }
+      entry.workerKey = protection.key;
+      entry.worker ??= new SharedProcess(
+        this.desktop,
+        (handler) => this.serve(handler),
+        protection,
+      );
+      const worker = entry.worker;
+      const { stopping } = entry;
+      // One replaced while this waited is never started: ask for the current.
+      return stopping
+        ? stopping.then(() => (entry.worker === worker ? worker.get() : get()))
+        : worker.get();
+    };
     entry.sessions = new AgentSessions({
       resolveDirectory: (path) => this.desktop.resolveDirectory(path),
       tools,
-      process: {
-        get: () => {
-          const protection = entry.handle?.protection;
-          if (!protection) {
-            if (entry.protected)
-              throw new Error("The protected agent has no live policy binding");
-            return this.goose.get();
-          }
-          protection.assertAvailable();
-          // Another key means a replaced provider, which is already stopping
-          // its worker; the replacement starts once that one has exited.
-          if (entry.worker && entry.workerKey !== protection.key) {
-            entry.stopping = entry.worker.shutdown().catch(() => undefined);
-            delete entry.worker;
-          }
-          entry.workerKey = protection.key;
-          entry.worker ??= new SharedProcess(
-            this.desktop,
-            (handler) => this.serve(handler),
-            protection,
-          );
-          const worker = entry.worker;
-          return entry.stopping
-            ? entry.stopping.then(() => worker.get())
-            : worker.get();
-        },
-      },
+      process: { get },
       store: localSessions(this.storage, agent),
       started: (session, text, title, conversation) =>
         void this.prompts(agent).save(session, [{ label: "", text }], {
