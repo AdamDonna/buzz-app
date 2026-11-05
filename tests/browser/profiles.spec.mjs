@@ -358,6 +358,145 @@ test("closing a profile beside a main thread preserves the thread destination", 
     .toBe(true);
 });
 
+// Close returns through native history, which lands a task or more later, and
+// the dock keeps its exit motion. Hold both so a reopen arrives before them.
+async function holdCloseReturn(page) {
+  await page.evaluate(() => {
+    const go = history.go.bind(history);
+    const held = [];
+    history.go = (delta) => held.push(delta);
+    // Pause the exit while it is still pending, so it cannot finish first.
+    const exit = new MutationObserver(() => {
+      const dock = document.querySelector("[data-panel-dock][data-closing]");
+      for (const animation of [
+        ...(dock?.getAnimations() ?? []),
+        ...(dock?.parentElement?.getAnimations() ?? []),
+      ])
+        animation.pause();
+    });
+    exit.observe(document.body, {
+      subtree: true,
+      attributeFilter: ["data-closing"],
+    });
+    window.releaseReturn = () => {
+      exit.disconnect();
+      history.go = go;
+      for (const delta of held) go(delta);
+      return held.length;
+    };
+  });
+  return () => page.evaluate(() => window.releaseReturn());
+}
+
+async function openReturnFixture(page) {
+  await page.goto("/tests/fixtures/profiles.html");
+  await page.waitForFunction(() => !!window.profilesFixture);
+  const read = async () =>
+    (await page.evaluate(() => window.profilesFixture.navigation.snapshot()))
+      .entry;
+  return {
+    read,
+    ...(await page.evaluate(() => ({
+      npubs: window.profilesFixture.npubs,
+      targets: window.profilesFixture.targets,
+    }))),
+    channel: (await read()).id,
+    panel: page.getByRole("complementary", { name: "Profile", exact: true }),
+    mention: page.getByRole("button", {
+      name: "View Mic profile",
+      exact: true,
+    }),
+    closing: page.locator("[data-panel-dock][data-closing]:not([hidden])"),
+  };
+}
+
+test("a Profile reopened before its close returns stays open with a fresh visit", async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  const { read, npubs, targets, channel, panel, mention, closing } =
+    await openReturnFixture(page);
+  for (const activation of ["click", "Space"]) {
+    await mention.click();
+    await expect(panel.locator("code")).toHaveText(npubs.mic);
+    const closed = (await read()).id;
+    const release = await holdCloseReturn(page);
+    let held;
+    try {
+      await page
+        .getByRole("tablist", { name: "Panel tabs" })
+        .getByRole("button", { name: "Close Mic tab", exact: true })
+        .click();
+      await expect(panel).toHaveCount(0);
+      await expect(closing).toHaveCount(1);
+      if (activation === "click") await mention.click();
+      else await mention.press(activation);
+      await expect(panel.locator("code")).toHaveText(npubs.mic);
+      expect((await read()).id).toBe(closed);
+    } finally {
+      held = await release();
+    }
+    expect(held).toBe(1);
+    // The return lands; the reopened Profile then needs its own visit.
+    await expect
+      .poll(async () => {
+        const entry = await read();
+        return entry.id !== closed && entry.target.detail?.target;
+      })
+      .toBe(targets.mic);
+    await expect(panel.locator("code")).toHaveText(npubs.mic);
+    await page.goBack();
+    await expect.poll(async () => (await read()).id).toBe(channel);
+    await expect(panel).toHaveCount(0);
+  }
+  expect(errors.unexplained()).toEqual([]);
+});
+
+test("a Profile opened after closing a thread and its Profile stays open with a fresh visit", async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  const { read, npubs, targets, channel, panel, mention, closing } =
+    await openReturnFixture(page);
+  await page
+    .getByRole("button", { name: "View thread: 1 reply", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "View Pinky profile", exact: true })
+    .click();
+  await expect(panel.locator("code")).toHaveText(npubs.pinky);
+  const closed = (await read()).id;
+  const tabs = page.getByRole("tablist", { name: "Panel tabs" });
+  const release = await holdCloseReturn(page);
+  let held;
+  try {
+    await tabs
+      .getByRole("button", { name: "Close Pinky tab", exact: true })
+      .click();
+    // The second close retires the thread under the pending return, which
+    // then lands on the channel instead.
+    await tabs.getByRole("button", { name: /^Close .* tab$/ }).click();
+    await expect(closing).toHaveCount(1);
+    await mention.click();
+    await expect(panel.locator("code")).toHaveText(npubs.mic);
+    expect((await read()).id).toBe(closed);
+  } finally {
+    held = await release();
+  }
+  expect(held).toBe(1);
+  await expect
+    .poll(async () => {
+      const entry = await read();
+      return entry.id !== closed && entry.target.detail?.target;
+    })
+    .toBe(targets.mic);
+  await expect(panel.locator("code")).toHaveText(npubs.mic);
+  await page.goBack();
+  await expect.poll(async () => (await read()).id).toBe(channel);
+  await expect(panel).toHaveCount(0);
+  expect(errors.unexplained()).toEqual([]);
+});
+
 test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecycle and recovery", async ({
   page,
 }, testInfo) => {

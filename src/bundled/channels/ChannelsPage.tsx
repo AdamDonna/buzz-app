@@ -1009,10 +1009,23 @@ function ChannelWorkspace({
   const returnFocus = useRef<
     { trigger: HTMLElement; channelId: string | undefined } | undefined
   >(undefined);
+  // A close's native return lands a task or more after its dismissal. Until
+  // then the navigator still shows the retiring visit.
+  const pendingReturn = useRef<{
+    from: string;
+    target: string;
+    reopen?: PanelOpening;
+  }>(undefined);
   const visitPanel = useCallback(
     (entry: PanelOpening) => {
-      const target = navigator?.snapshot().entry.target;
+      const { id, target } = navigator?.snapshot().entry ?? {};
       if (!navigator || target?.kind !== "conversation") return;
+      // Opening now would revisit or stack on the retiring visit. The panel
+      // takes its own visit once the return lands.
+      if (pendingReturn.current?.from === id) {
+        pendingReturn.current.reopen = entry;
+        return;
+      }
       if (
         target.channelId === entry.channelId &&
         target.detail?.target === entry.target &&
@@ -1114,6 +1127,21 @@ function ChannelWorkspace({
       };
     }
     navigator.dismiss(visits, fallback);
+    // A later close can retire more visits before the return lands, moving
+    // where it lands.
+    const pending =
+      pendingReturn.current?.from === current.id
+        ? pendingReturn.current
+        : undefined;
+    if (
+      (pending || visits.includes(current.id)) &&
+      navigator.snapshot().entry.id === current.id
+    )
+      pendingReturn.current = {
+        ...pending,
+        from: current.id,
+        target: targetKey(fallback),
+      };
   };
   const secondary = useConversationTabs({
     state: tabState,
@@ -1358,6 +1386,20 @@ function ChannelWorkspace({
         (kept.pane === "main"
           ? tabState.getMainSelected()
           : tabState.getSelected()) === kept.id;
+      // A panel opened before the close's return landed supersedes that
+      // close, unless it has since closed or the return went elsewhere.
+      const returned = pendingReturn.current;
+      const reopen =
+        returned?.reopen &&
+        navigation.entryId !== returned.from &&
+        targetKey(navigation.target) === returned.target &&
+        [tabState.getSelected(), tabState.getMainSelected()].includes(
+          panelTabId(returned.reopen),
+        )
+          ? returned.reopen
+          : undefined;
+      if (returned && navigation.entryId !== returned.from)
+        pendingReturn.current = undefined;
       tabState.enterVisit(
         `${navigation.entryId}:${detail ? "detail" : routedThread ? "thread" : "channel"}`,
         detail ? undefined : routedThread,
@@ -1366,7 +1408,9 @@ function ChannelWorkspace({
           ? { channelId: currentId, target: detail.target }
           : undefined,
       );
-      if (detail && currentId) {
+      // A re-render while the return is pending must not reapply the detail
+      // that was just closed.
+      if (detail && currentId && navigation.entryId !== returned?.from) {
         const entry = panelOpening(
           panels,
           currentId,
@@ -1376,6 +1420,8 @@ function ChannelWorkspace({
         if (entry && historyPanel(entry)) open(entry);
         else navigation.complete({ status: "failed", reason: "unavailable" });
       }
+      // Reselect it over the restored selection and give it its own visit.
+      if (reopen) open(reopen);
       if (kept && navigation.entryId !== kept.from) {
         keptTabReturn.current = undefined;
         if (retained && targetKey(navigation.target) === kept.target) {
