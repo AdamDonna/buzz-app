@@ -4610,6 +4610,57 @@ it.each([
   [
     "Ship 🚀 guide",
     'Ship <img data-stringify-type="emoji" alt="🚀"> <a href="https://example.com">guide</a>',
+    "Ship 🚀 [guide](https://example.com/)",
+  ],
+  [
+    "Hello :wave: Review the pull request",
+    'Hello <img alt=":wave:" src="https://example.com/emoji.png"> Review <a href="https://example.com/review">the pull request</a>',
+    "Hello :wave: Review [the pull request](https://example.com/review)",
+  ],
+  [
+    "Read 🚀 guide",
+    'Read <a href="https://example.com"><img alt="🚀"> guide</a>',
+    "Read [🚀 guide](https://example.com/)",
+  ],
+  [
+    "Read 🚀",
+    'Read <a href="https://example.com"><img alt="🚀"></a>',
+    "Read [🚀](https://example.com/)",
+  ],
+  [
+    "Read guide",
+    'Read <img src="https://example.com/image.png"><img alt=""> <a href="https://example.com">guide</a>',
+    "Read  [guide](https://example.com/)",
+  ],
+  [
+    "Read <img src=x onerror=alert(1)> guide",
+    'Read <img alt="&lt;img src=x onerror=alert(1)&gt;"> <a href="https://example.com">guide</a>',
+    "Read <img src=x onerror=alert(1)> [guide](https://example.com/)",
+  ],
+])(
+  "preserves image alt text and safe external links: %s",
+  (plain, html, expected) => {
+    const h = mount();
+    paste(h.input, plain, html);
+    expect(h.markdown()).toBe(expected);
+    expect(h.input.querySelector("img")).toBeNull();
+    act(() => h.input.undo(false));
+    expect(h.markdown()).toBe("");
+  },
+);
+
+it.each([
+  [
+    "Ship 🚀 guide",
+    'Ship <img alt="different"> <a href="https://example.com">guide</a>',
+  ],
+  [
+    "Read guide",
+    'Read <img alt="extra"> <a href="https://example.com">guide</a>',
+  ],
+  [
+    "Ship 🚀 guide",
+    'Ship <img alt="🚀" onerror="alert(1)"> <a href="javascript:alert(1)">guide</a>',
   ],
   [
     "guide",

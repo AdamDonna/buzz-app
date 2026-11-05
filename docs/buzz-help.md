@@ -274,6 +274,9 @@ that agent in Buzz; they do not notify the external app through this connection.
   or are removed in People.
 - In a channel, typing `/leave` by itself opens the same **Leave channel**
   confirmation. The command is not posted as a message.
+- **Pasted web links** keep their labels when the clipboard's HTML and plain
+  text agree, including image alt text. Use ordinary paste; plain-text paste
+  uses only the clipboard's plain text.
 - **Long text pastes** that exceed the message limit show an error and leave
   your draft unchanged. Shorten the text, or save it as a text file and use
   **Attach files** where uploads are available.
