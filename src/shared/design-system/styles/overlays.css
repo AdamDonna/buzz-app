@@ -739,6 +739,12 @@ html[data-keyboard-navigation]
       padding-bottom: var(--space-6);
     }
 
+    > .buzz-dialog-header:has(
+        + .buzz-dialog-content[data-header-gap="compact"]
+      ) {
+      padding-bottom: 0;
+    }
+
     > .buzz-dialog-actions {
       /* Preserve access to oversized actions at narrow widths/enlarged text. */
       overflow-x: auto;

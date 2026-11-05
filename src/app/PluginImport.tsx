@@ -866,19 +866,17 @@ export function PluginImport({
   const updateActions = (
     <>
       {!savedSource && !preview && addButton}
-      {savedSource &&
-        "repository" in savedSource &&
-        !(preview && !error && !upToDate) && (
-          <Button
-            ref={checkAgain}
-            variant="subtle"
-            size="sm"
-            disabled={blocked || checking}
-            onClick={() => checkSavedGit()}
-          >
-            Check for updates
-          </Button>
-        )}
+      {savedSource && "repository" in savedSource && (
+        <Button
+          ref={checkAgain}
+          variant="subtle"
+          size="sm"
+          disabled={blocked || checking}
+          onClick={() => checkSavedGit()}
+        >
+          Check for updates
+        </Button>
+      )}
       {updateAvailable && (
         <Button
           ref={trigger}
@@ -1004,6 +1002,8 @@ export function PluginImport({
             ? "compact"
             : "wide"
         }
+        headerGap={reviewing && updating ? "compact" : "default"}
+        footerGap={reviewing && updating ? "compact" : "default"}
         leadingActions={
           !error &&
           !showUnchanged &&
@@ -1368,10 +1368,7 @@ export function PluginImport({
                     </p>
                   )}
                 {reviewing && updating && (
-                  <section
-                    aria-label="Update source"
-                    className="text-body-sm mb-4"
-                  >
+                  <section aria-label="Update source" className="text-body-sm">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-muted">
                         {preview.commit ? "Source" : "Source folder"}

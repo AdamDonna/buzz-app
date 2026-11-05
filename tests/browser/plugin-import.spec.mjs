@@ -727,6 +727,26 @@ test("folder/Git preview selects the exact subfolder and preserves enabled state
   await activate(enabled);
   await expect(enabled).toHaveAccessibleName("Disable Example two");
   await expect(button(page, "Reload")).toHaveCount(0);
+  const details = page.getByRole("complementary", {
+    name: "Example two details",
+  });
+  const actionPositions = () =>
+    details
+      .getByRole("button", { name: /^(Disable|More plugin actions)$/ })
+      .evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const { x, y, width, height } = button.getBoundingClientRect();
+          return { x, y, width, height };
+        }),
+      );
+  await details.evaluate(async (node) => {
+    await Promise.all(
+      node
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    );
+  });
+  const settledActions = await actionPositions();
   await page.evaluate(() => {
     window.importCategory = "productivity";
   });
@@ -738,7 +758,8 @@ test("folder/Git preview selects the exact subfolder and preserves enabled state
   });
   await expect(
     updatingPane.getByRole("button", { name: "Disable", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
+  await expect.poll(actionPositions).toEqual(settledActions);
   await expect(button(page, "Update Example two")).toBeVisible();
   await updatingPane.screenshot({
     path: info.outputPath("primary-update-pane.png"),
@@ -746,15 +767,18 @@ test("folder/Git preview selects the exact subfolder and preserves enabled state
   await button(page, "More plugin actions").click();
   await expect(page.getByRole("menuitem")).toHaveText([
     "Review access",
-    "Disable",
     "Delete",
   ]);
   await page
     .getByRole("menu")
     .screenshot({ path: info.outputPath("primary-update-menu.png") });
-  await page.getByRole("menuitem", { name: "Disable", exact: true }).click();
-  await button(page, "More plugin actions").click();
-  await page.getByRole("menuitem", { name: "Enable", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await updatingPane
+    .getByRole("button", { name: "Disable", exact: true })
+    .click();
+  await updatingPane
+    .getByRole("button", { name: "Enable", exact: true })
+    .click();
   await button(page, "More plugin actions").click();
   await page
     .getByRole("menuitem", { name: "Review access", exact: true })
@@ -820,6 +844,7 @@ test("folder/Git preview selects the exact subfolder and preserves enabled state
     page.getByRole("status").filter({ hasText: "Up to date" }),
   ).toBeVisible();
   await expect(button(page, "Update")).toHaveCount(0);
+  await expect.poll(actionPositions).toEqual(settledActions);
   const pane = page.getByRole("complementary", { name: "Example two details" });
   const paneActions = pane.getByRole("button", {
     name: /^Disable$/,

@@ -1309,9 +1309,9 @@ or `1rem` at viewport widths up to `30rem`. Do not add an outer flex gap
 on top of that body padding. Footers following body content also reserve a fixed
 `--space-4` (`1rem`) top gutter outside the scrollport, so scrolling content never
 meets the buttons directly. Header-only confirmations retain their header-to-action
-gap. Create/Edit channel forms opt into
+gap. Create/Edit channel forms and plugin update reviews opt into
 `headerGap="compact"` for a 12px heading-to-body gap at every breakpoint;
-other dialog compositions retain their default spacing. Their privacy confirmation
+other dialog compositions retain their default spacing. Channel privacy confirmation
 steps also opt into `footerGap="compact"` for `0.5rem` of body-bottom padding
 before the fixed footer gutter; returning to the form restores the normal
 body-bottom padding.
