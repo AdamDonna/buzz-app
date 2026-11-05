@@ -1,7 +1,7 @@
 import { pauseClock } from "./clock.mjs";
 import { openChannelDetails } from "./channel-details.mjs";
 import { test, expect } from "./fixture.mjs";
-import { open, virtuaIdle } from "./timeline.mjs";
+import { clickRow, open, virtuaIdle } from "./timeline.mjs";
 import {
   holdReadingFocus,
   readJournal,
@@ -209,10 +209,12 @@ test.describe("mentioned reply priority", () => {
       rows.find((row) => row.content === content),
     );
     for (const root of [x, t]) {
-      await page
-        .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
-        .getByRole("button", { name: /^View thread:/ })
-        .click();
+      await clickRow(
+        page,
+        page
+          .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+          .getByRole("button", { name: /^View thread:/ }),
+      );
       await expect(
         page.getByRole("complementary", { name: "Thread", exact: true }),
       ).toBeVisible();
@@ -1014,10 +1016,12 @@ test("a live reply in a main-pane thread stays unread while focus is in the side
     .get("primary/alpha")
     .filter((row) => row.content.startsWith("Thread root"));
   for (const root of roots.slice(0, 2)) {
-    await page
-      .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
-      .getByRole("button", { name: /^View thread:/ })
-      .click();
+    await clickRow(
+      page,
+      page
+        .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+        .getByRole("button", { name: /^View thread:/ }),
+    );
     await expect(
       page.getByRole("complementary", { name: "Thread", exact: true }),
     ).toBeVisible();

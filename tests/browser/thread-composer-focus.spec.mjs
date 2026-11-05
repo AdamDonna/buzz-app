@@ -1,5 +1,5 @@
 import { test, expect } from "./fixture.mjs";
-import { activate, open, virtuaIdle } from "./timeline.mjs";
+import { activate, clickRow, open, virtuaIdle } from "./timeline.mjs";
 
 test.use({
   productionBroker: true,
@@ -44,7 +44,7 @@ for (const pane of ["side", "main"]) {
         .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
         .getByRole("button", { name: /^View thread:/ });
       if (keyboard) await activate(trigger);
-      else await trigger.click();
+      else await clickRow(page, trigger);
       await expect(reply).toBeFocused();
     };
     await openThread(roots[0]);

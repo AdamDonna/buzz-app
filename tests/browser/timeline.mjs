@@ -243,4 +243,21 @@ export async function hoverRow(page, locator, scroller = history(page)) {
   const box = await locator.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 }
+// Click a control inside a timeline row once the timeline is at rest. Opening
+// a panel resizes the timeline, and its rows rewrap and move through scroll
+// events. Each scroll event restarts Virtua's pointer-event hold. On Linux
+// WebKit CI, a click sent during that movement reached the scroller, and the
+// control never saw it. A scroll event reaches Virtua in a later rendering
+// update, so wait for those updates, and check pointer events again after the
+// geometry settles. Then the control must be fully visible: locator.click()
+// scrolls a control into view, and that would hide a reading position the app
+// moved during the wait.
+export async function clickRow(page, locator, scroller = history(page)) {
+  await virtuaIdle(page, scroller);
+  await frames(page);
+  await virtuaIdle(page, scroller);
+  await expect(scroller.locator("ol")).toHaveCSS("pointer-events", "auto");
+  await expect(locator).toBeInViewport({ ratio: 1 });
+  await locator.click();
+}
 export { activate } from "./navigation.mjs";
