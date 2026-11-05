@@ -9,4 +9,5 @@ Preview GitHub repositories, pull requests, issues, and commits without leaving 
    `buzz#42 · Fix the thing`, all kept current while shown. Click any
    github.com link to open it in a side panel.
 2. On a pull request, switch between **Discussion** and **Checks**.
-3. Choose **Open on GitHub** to see the full page.
+3. Switch a pull request from **Summary** to **Changes** to read its diff.
+4. Choose **Open on GitHub** to see the full page.

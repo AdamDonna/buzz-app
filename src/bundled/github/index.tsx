@@ -1,6 +1,7 @@
 import { ResolvePull } from "./ResolvePull";
 import type { PullChecklist as Checklist } from "./pull";
 import { Button } from "../../shared/design-system/ui/Button";
+import { Tabs } from "../../shared/design-system/ui/Tabs";
 import {
   useCallback,
   useEffect,
@@ -21,7 +22,13 @@ import {
 import type { PluginModule } from "../../plugins/api";
 import type { PanelProps } from "../../features/panels/service";
 import { parseGitHubReference, type GitHubReference } from "./references";
-import { gitHubCli, GitHubError, type GitHubCli } from "./gh";
+import {
+  gitHubCli,
+  gitHubDiff,
+  GitHubError,
+  type GitHubCli,
+  type GitHubDiff,
+} from "./gh";
 import { loadGitHubObject, readable, type GitHubObject } from "./object";
 import { PublicChecklist, PullChecklist } from "./PullChecklist";
 import styles from "./GitHub.module.css";
@@ -50,6 +57,7 @@ import {
 import { watchPulls } from "./watcher";
 import { presentPull } from "./attention";
 import { SubmitReview } from "./SubmitReview";
+import { PullFiles } from "./PullFiles";
 import { AuthorSettings } from "./AuthorSettings";
 
 /** How often an open pull request panel reads GitHub again. */
@@ -58,6 +66,7 @@ export const REFRESH_MS = PANEL_REFRESH_MS;
 export const inject = ["panels", "host", "conversation", "relay", "agents"];
 export const apply: PluginModule["apply"] = (ctx) => {
   const gh = gitHubCli(ctx.host);
+  const diff = gitHubDiff(ctx.host);
   // A pull request's state is nobody's community's: one store serves every
   // session's sidebar, every link in messages, the panel and agents, so one
   // shown in several places costs one read.
@@ -85,6 +94,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
         <GitHubPanel
           {...props}
           gh={gh}
+          diff={diff}
           states={states}
           {...(channelId && {
             resolveActions: (
@@ -309,6 +319,7 @@ const icons = {
 export function GitHubPanel({
   target,
   gh,
+  diff,
   states: shared,
   chatLink,
   resolveActions,
@@ -322,6 +333,7 @@ export function GitHubPanel({
     | undefined;
   /** The person's `gh`, where the app can run it. */
   gh?: GitHubCli | undefined;
+  diff?: GitHubDiff | undefined;
   /** The plugin's pull request store; a panel alone keeps its own. */
   states?: PullStates | undefined;
   /** Links a pull request to the chat the panel was opened from. */
@@ -339,6 +351,7 @@ export function GitHubPanel({
       key={`${reference.url}:${attempt}`}
       reference={reference}
       gh={gh}
+      diff={diff}
       states={states}
       chatLink={chatLink}
       resolveActions={resolveActions}
@@ -352,6 +365,7 @@ export function GitHubPanel({
 function ObjectPanel({
   reference,
   gh,
+  diff,
   states,
   chatLink,
   resolveActions,
@@ -359,6 +373,7 @@ function ObjectPanel({
 }: {
   reference: GitHubReference;
   gh: GitHubCli | undefined;
+  diff: GitHubDiff | undefined;
   states: PullStates;
   chatLink: ((url: string) => ReactNode) | undefined;
   resolveActions:
@@ -372,6 +387,10 @@ function ObjectPanel({
 }) {
   const isPull = reference.kind === "pull";
   const pull = usePullPanel(states, reference.url, isPull);
+  const [view, setView] = useState<"summary" | "changes">("summary");
+  // Files changed stays mounted once shown, so going back to it doesn't read
+  // the diff again.
+  const [changesShown, setChangesShown] = useState(false);
   const other = useGitHubObject(reference, gh, !isPull);
   const loaded = isPull ? pull.loaded : other.loaded;
   const load = isPull ? pull.load : other.load;
@@ -384,6 +403,29 @@ function ObjectPanel({
       ? stateIcons[state as keyof typeof stateIcons]
       : undefined;
   const [owner, repositoryName] = reference.repository.split("/");
+  const files =
+    diff && gh && typeof loaded === "object" && loaded.checklist
+      ? {
+          repository: reference.repository,
+          base: loaded.checklist.base,
+          head: loaded.checklist.head,
+          merged:
+            loaded.checklist.state === "merged"
+              ? Number(reference.label.slice(1))
+              : undefined,
+          diff,
+        }
+      : undefined;
+  const counts =
+    typeof result === "object"
+      ? result.facts
+          .map(([, value]) => value)
+          .find(
+            (value): value is { additions: number; deletions: number } =>
+              typeof value === "object" && "additions" in value,
+          )
+      : undefined;
+  const showChanges = !!files && view === "changes";
   const title = (
     <h2 className={reference.kind === "pull" ? styles.pullTitle : undefined}>
       {reference.kind === "pull" ? (
@@ -450,6 +492,47 @@ function ObjectPanel({
             </span>
           )}
       </div>
+      {files && (
+        <div className={styles.views}>
+          <Tabs
+            label="Pull request view"
+            variant="segmented"
+            size="sm"
+            value={view}
+            items={[
+              { value: "summary", label: "Summary" },
+              {
+                value: "changes",
+                label: "Changes",
+                trailing: counts && (
+                  <span className={styles.tabCounts}>
+                    <span className={styles.additions}>
+                      +{counts.additions}
+                    </span>{" "}
+                    <span className={styles.deletions}>
+                      −{counts.deletions}
+                    </span>
+                  </span>
+                ),
+              },
+            ]}
+            onValueChange={(next) => {
+              setView(next);
+              if (next === "changes") setChangesShown(true);
+            }}
+          />
+        </div>
+      )}
+      {files && changesShown && (
+        <div hidden={!showChanges}>
+          <PullFiles
+            key={`${files.base}...${files.head}:${files.merged}`}
+            url={reference.url}
+            pull={files}
+            diff={files.diff}
+          />
+        </div>
+      )}
       {reference.kind !== "pull" && (
         <a
           className={styles.external}
@@ -460,191 +543,199 @@ function ObjectPanel({
           Open on GitHub <ArrowSquareOutIcon size={14} />
         </a>
       )}
-      {reference.kind === "pull" && typeof result !== "object" && title}
-      {result === undefined ? (
-        <p role="status">Loading from GitHub…</p>
-      ) : typeof result === "string" ? (
-        <div role="alert">
-          <p>{result}</p>
-          <div className={styles.errorActions}>
-            <Button
-              variant="prominent"
-              nativeButton={false}
-              role="link"
-              render={
-                <a
-                  className={styles.errorExternal}
-                  href={link}
-                  target="_blank"
-                  rel="noreferrer"
-                />
-              }
-            >
-              <span className={styles.errorActionLabel}>Open on Github</span>
-            </Button>
-            <Button type="button" onClick={retry}>
-              Retry
-            </Button>
-          </div>
-        </div>
-      ) : (
+      {!showChanges && (
         <>
-          {reference.kind === "pull" && title}
-          <div className={styles.byline}>
-            {result.state && (
-              <span
-                className={styles.state}
-                data-pr-state={
-                  reference.kind === "pull"
-                    ? result.state.toLowerCase()
-                    : undefined
-                }
-              >
-                {StateIcon && <StateIcon size={12} aria-hidden="true" />}
-                {result.state}
-              </span>
-            )}
-            {result.author && (
-              <span>
-                by{" "}
-                {result.authorUrl ? (
-                  <a
-                    className={inlineStyles.link}
-                    href={result.authorUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {result.author}
-                  </a>
-                ) : (
-                  result.author
-                )}
-              </span>
-            )}
-          </div>
-          {reference.kind !== "pull" && title}
-          {(!!result.facts.length || reference.kind === "pull") && (
-            <dl className={styles.facts}>
-              {result.facts.map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>
-                    {typeof value !== "object" ? (
-                      value
-                    ) : "head" in value ? (
-                      <>
-                        {value.head.url ? (
-                          <a
-                            className={styles.branch}
-                            href={value.head.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {value.head.label}
-                          </a>
-                        ) : (
-                          <span className={styles.branchLabel}>
-                            {value.head.label}
-                          </span>
-                        )}
-                        {" → "}
-                        {value.base.url ? (
-                          <a
-                            className={styles.branch}
-                            href={value.base.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {value.base.label}
-                          </a>
-                        ) : (
-                          <span className={styles.branchLabel}>
-                            {value.base.label}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <span className={styles.additions}>
-                          +{value.additions}
-                        </span>
-                        {" / "}
-                        <span className={styles.deletions}>
-                          −{value.deletions}
-                        </span>
-                      </>
-                    )}
-                  </dd>
-                </div>
-              ))}
-              {reference.kind === "pull" && (
-                <div>
-                  <dt>Last updated</dt>
-                  <dd>
-                    {result.updatedAt ? (
-                      <time
-                        dateTime={result.updatedAt}
-                        title={new Date(result.updatedAt).toLocaleString()}
-                      >
-                        {relativeTimestamp(Date.parse(result.updatedAt) / 1000)}
-                      </time>
-                    ) : (
-                      "Unavailable"
-                    )}
-                  </dd>
-                </div>
-              )}
-            </dl>
-          )}
-          {reference.kind === "pull" ? (
+          {reference.kind === "pull" && typeof result !== "object" && title}
+          {result === undefined ? (
+            <p role="status">Loading from GitHub…</p>
+          ) : typeof result === "string" ? (
+            <div role="alert">
+              <p>{result}</p>
+              <div className={styles.errorActions}>
+                <Button
+                  variant="prominent"
+                  nativeButton={false}
+                  role="link"
+                  render={
+                    <a
+                      className={styles.errorExternal}
+                      href={link}
+                      target="_blank"
+                      rel="noreferrer"
+                    />
+                  }
+                >
+                  <span className={styles.errorActionLabel}>
+                    Open on Github
+                  </span>
+                </Button>
+                <Button type="button" onClick={retry}>
+                  Retry
+                </Button>
+              </div>
+            </div>
+          ) : (
             <>
-              {typeof loaded === "object" && loaded.checklist && gh ? (
-                <PullChecklist
-                  url={reference.url}
-                  details={result}
-                  checklist={loaded.checklist}
-                  gh={gh}
-                  refresh={load}
-                  resolveAction={(action) =>
-                    loaded.checklist
-                      ? resolveActions?.(
-                          reference.url,
-                          loaded.checklist,
-                          action,
-                        )
-                      : undefined
-                  }
-                />
-              ) : (
-                <PublicChecklist
-                  url={reference.url}
-                  sha={result.headSha}
-                  checks={
-                    typeof loaded === "object" && "publicChecks" in loaded
-                      ? (loaded as PullDetails).publicChecks
-                      : undefined
-                  }
-                />
+              {reference.kind === "pull" && title}
+              <div className={styles.byline}>
+                {result.state && (
+                  <span
+                    className={styles.state}
+                    data-pr-state={
+                      reference.kind === "pull"
+                        ? result.state.toLowerCase()
+                        : undefined
+                    }
+                  >
+                    {StateIcon && <StateIcon size={12} aria-hidden="true" />}
+                    {result.state}
+                  </span>
+                )}
+                {result.author && (
+                  <span>
+                    by{" "}
+                    {result.authorUrl ? (
+                      <a
+                        className={inlineStyles.link}
+                        href={result.authorUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {result.author}
+                      </a>
+                    ) : (
+                      result.author
+                    )}
+                  </span>
+                )}
+              </div>
+              {reference.kind !== "pull" && title}
+              {(!!result.facts.length || reference.kind === "pull") && (
+                <dl className={styles.facts}>
+                  {result.facts.map(([label, value]) => (
+                    <div key={label}>
+                      <dt>{label}</dt>
+                      <dd>
+                        {typeof value !== "object" ? (
+                          value
+                        ) : "head" in value ? (
+                          <>
+                            {value.head.url ? (
+                              <a
+                                className={styles.branch}
+                                href={value.head.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {value.head.label}
+                              </a>
+                            ) : (
+                              <span className={styles.branchLabel}>
+                                {value.head.label}
+                              </span>
+                            )}
+                            {" → "}
+                            {value.base.url ? (
+                              <a
+                                className={styles.branch}
+                                href={value.base.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {value.base.label}
+                              </a>
+                            ) : (
+                              <span className={styles.branchLabel}>
+                                {value.base.label}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className={styles.additions}>
+                              +{value.additions}
+                            </span>
+                            {" / "}
+                            <span className={styles.deletions}>
+                              −{value.deletions}
+                            </span>
+                          </>
+                        )}
+                      </dd>
+                    </div>
+                  ))}
+                  {reference.kind === "pull" && (
+                    <div>
+                      <dt>Last updated</dt>
+                      <dd>
+                        {result.updatedAt ? (
+                          <time
+                            dateTime={result.updatedAt}
+                            title={new Date(result.updatedAt).toLocaleString()}
+                          >
+                            {relativeTimestamp(
+                              Date.parse(result.updatedAt) / 1000,
+                            )}
+                          </time>
+                        ) : (
+                          "Unavailable"
+                        )}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
               )}
-              {chatLink?.(reference.url)}
-              {result.body && (
-                <div className={styles.description}>
+              {reference.kind === "pull" ? (
+                <>
+                  {typeof loaded === "object" && loaded.checklist && gh ? (
+                    <PullChecklist
+                      url={reference.url}
+                      details={result}
+                      checklist={loaded.checklist}
+                      gh={gh}
+                      refresh={load}
+                      resolveAction={(action) =>
+                        loaded.checklist
+                          ? resolveActions?.(
+                              reference.url,
+                              loaded.checklist,
+                              action,
+                            )
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <PublicChecklist
+                      url={reference.url}
+                      sha={result.headSha}
+                      checks={
+                        typeof loaded === "object" && "publicChecks" in loaded
+                          ? (loaded as PullDetails).publicChecks
+                          : undefined
+                      }
+                    />
+                  )}
+                  {chatLink?.(reference.url)}
+                  {result.body && (
+                    <div className={styles.description}>
+                      <GitHubBody
+                        body={result.body}
+                        bodyHtml={result.bodyHtml}
+                        url={reference.url}
+                      />
+                    </div>
+                  )}
+                </>
+              ) : (
+                result.body && (
                   <GitHubBody
                     body={result.body}
                     bodyHtml={result.bodyHtml}
                     url={reference.url}
                   />
-                </div>
+                )
               )}
             </>
-          ) : (
-            result.body && (
-              <GitHubBody
-                body={result.body}
-                bodyHtml={result.bodyHtml}
-                url={reference.url}
-              />
-            )
           )}
         </>
       )}

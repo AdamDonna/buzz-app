@@ -386,6 +386,18 @@
 .description {
   margin-top: var(--space-4);
 }
+.views {
+  margin-top: var(--space-4);
+}
+.tabCounts {
+  margin-inline-start: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+.files {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
 /* A Solo chat's linked pull request, in the sidebar's chat icon slot. */
 .soloPull {
   display: inline-flex;
