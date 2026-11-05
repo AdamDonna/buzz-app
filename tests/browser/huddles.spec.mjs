@@ -57,6 +57,7 @@ test("the header cancels a pending Huddle and ignores late connection events", a
     header.getByRole("button", { name: "Start or join a huddle" }),
   ).toBeVisible();
   await header.getByRole("button", { name: "Start or join a huddle" }).click();
+  await page.getByRole("button", { name: "Start huddle" }).click();
   await expect
     .poll(() => page.evaluate(() => window.huddleFixture.stats.opens))
     .toBe(2);
@@ -227,9 +228,8 @@ test("connected Huddles keep compact controls beside the default window", async 
   expect(
     await page.evaluate(() => window.huddleFixture.stats.audioClosed),
   ).toBe(1);
-  await header
-    .getByRole("button", { name: /Start or join a huddle|Join active huddle/ })
-    .click();
+  await header.getByRole("button", { name: "Start or join a huddle" }).click();
+  await page.getByRole("button", { name: "Start huddle" }).click();
   await page.evaluate(() => window.huddleFixture.disconnect());
   const notifications = page.getByRole("region", { name: "App notifications" });
   await expect(notifications).toContainText("Huddle disconnected");
@@ -238,9 +238,8 @@ test("connected Huddles keep compact controls beside the default window", async 
     .getByRole("button", { name: "Dismiss Huddle error" })
     .click();
   await expect(notifications.getByRole("dialog")).toHaveCount(0);
-  await header
-    .getByRole("button", { name: /Start or join a huddle|Join active huddle/ })
-    .click();
+  await header.getByRole("button", { name: "Start or join a huddle" }).click();
+  await page.getByRole("button", { name: "Start huddle" }).click();
   await expect
     .poll(() => page.evaluate(() => window.huddleFixture.stats.opens))
     .toBe(3);
@@ -848,9 +847,8 @@ test("active chat has a split Huddle menu for members and a join-path link", asy
   ).toBe(1);
   // A DM call opens the room picker, leaving DM membership unchanged.
   await page.getByRole("button", { name: "Switch conversation" }).click();
-  await page
-    .getByRole("button", { name: /Start or join a huddle|Join active huddle/ })
-    .click();
+  await page.getByRole("button", { name: "Start or join a huddle" }).click();
+  await page.getByRole("button", { name: "Start huddle" }).click();
   await page.getByRole("button", { name: "Close Huddle window" }).click();
   await active.getByRole("button", { name: "Huddle options" }).click();
   await page.getByRole("menuitem", { name: "Add someone" }).click();

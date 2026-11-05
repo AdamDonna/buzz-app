@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
@@ -144,9 +144,31 @@ it("moves idle Solo huddles to the menu while preserving Team's header action", 
     vi.mocked(huddles.snapshot).mockRestore();
     channel.channelType = "stream";
     view.rerender(<HuddleLauncher {...props} />);
-    expect(
-      screen.getByRole("button", { name: "Start or join a huddle" }),
-    ).toBeVisible();
+    start.mockClear();
+    const headphones = screen.getByRole("button", {
+      name: "Start or join a huddle",
+    });
+    // A stray tap on the header button asks before starting a call.
+    await userEvent.click(headphones);
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Start a huddle?",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(dialog).not.toBeInTheDocument();
+    expect(start).not.toHaveBeenCalled();
+    await userEvent.click(headphones);
+    await userEvent.click(screen.getByRole("button", { name: "Start huddle" }));
+    expect(start).toHaveBeenCalledWith(context);
+    // A pending confirmation never carries over to another conversation.
+    await userEvent.click(headphones);
+    const other = { ...context, channelId: "other", channelName: "Other" };
+    view.rerender(<HuddleLauncher {...props} context={other} />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    view.rerender(<HuddleLauncher {...props} />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     view.unmount();
   } finally {
     await huddles.dispose();
