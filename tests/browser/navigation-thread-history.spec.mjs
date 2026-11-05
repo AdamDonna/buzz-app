@@ -344,10 +344,12 @@ test("choosing a thread tab resumes typing where its reply was left", async ({
     exact: true,
   });
   for (const [index, root] of roots.slice(0, 2).entries()) {
-    await page
-      .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
-      .getByRole("button", { name: /^View thread:/ })
-      .click();
+    // Opening the pane rewraps the timeline; setup must survive its pointer hold.
+    await activate(
+      page
+        .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+        .getByRole("button", { name: /^View thread:/ }),
+    );
     await expect(
       panel.getByText(`Thread root ${index}`, { exact: true }),
     ).toBeVisible();
