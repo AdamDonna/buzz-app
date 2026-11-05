@@ -359,6 +359,7 @@ one session (2026-11-05). Each change that moves these numbers adds its row.
 | Build | p95 frame interval | Frames over two 60 Hz frames | Dropped frames | Blank frames | Longest blank |
 | --- | --- | --- | --- | --- | --- |
 | Before thread scrolling fixes | 85 ms | 76 | 194 | 54 | 300 ms |
+| Closed action bars skip the glass | 50 ms | 44 | 94 | 9 | 133 ms |
 
 ## Results and iteration
 
