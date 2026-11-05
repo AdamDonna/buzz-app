@@ -1763,6 +1763,28 @@ export const test = base.extend({
             (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
           )
           .slice(0, filter.limit);
+      // Authored history across the current community (Inbox's Sent view).
+      if (
+        filter.kinds?.includes(9) &&
+        filter.authors &&
+        !filter["#h"] &&
+        !filter["#e"] &&
+        filter.search === undefined
+      ) {
+        const hits = [...histories.entries()]
+          .filter(([key]) => key.startsWith(`${community}/`))
+          .flatMap(([, events]) => events)
+          .filter(
+            (event) =>
+              filter.kinds.includes(event.kind) &&
+              filter.authors.includes(event.pubkey),
+          )
+          .toSorted(
+            (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+          );
+        const offset = ((filter.page ?? 1) - 1) * filter.limit;
+        return hits.slice(offset, offset + filter.limit);
+      }
       // Unread evidence is not a top-level window, even for a one-ID final batch.
       if (
         filter.kinds?.includes(9) &&

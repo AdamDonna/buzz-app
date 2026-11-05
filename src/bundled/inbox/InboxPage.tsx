@@ -15,6 +15,8 @@ import type { RelaySession } from "../../features/relay/session";
 import type { InboxItem } from "../../features/relay/inbox";
 import { usePanelSplit } from "../../features/panels/usePanelSplit";
 import { DraftsView } from "./DraftsView";
+import { SentView } from "./SentView";
+import { Tabs as ViewTabs } from "../../shared/design-system/ui/Tabs";
 import type {
   ConversationExtensions,
   PageTabsProps,
@@ -353,6 +355,8 @@ function InboxList({
     writeView(archiveScope, filtersKey, next);
   }
   const [drafts, setDrafts] = useState(false);
+  const [mailbox, setMailbox] = useState<"inbox" | "sent">("inbox");
+  const mailboxId = useId();
   // A shortcut's open carries filters; a plain open carries none and changes nothing.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Only a new presentation applies its route; later filter edits are the user's.
   useEffect(() => {
@@ -366,6 +370,7 @@ function InboxList({
     )
       return;
     appliedRoutes.add(navigation);
+    setMailbox("inbox");
     // Like the menu, entering or leaving Drafts retires the Inbox action and
     // restores focus the swapped surface dropped. Only focus in this page or
     // its popups can drop; a fresh open leaves focus where navigation put it.
@@ -892,7 +897,14 @@ function InboxList({
   const canRead = sync.capability === "frontier-sync";
   // The Archive shortcut acts on the conversation opened last.
   useLayoutEffect(() => {
-    if (!archiveShortcut || !selected || pending || drafts) return;
+    if (
+      !archiveShortcut ||
+      !selected ||
+      pending ||
+      drafts ||
+      mailbox === "sent"
+    )
+      return;
     const current = () => archive(selected, !archived(selected));
     archiveShortcut.current = current;
     return () => {
@@ -964,51 +976,73 @@ function InboxList({
       data-buzz-ui=""
       className={styles.page}
     >
-      {!drafts && failure && (
-        <div className={styles.notice} role="alert">
-          <p className="text-body">{failure}</p>
-          <Button ref={retryButton} size="sm" loading={pending} onClick={retry}>
-            Retry inbox
-          </Button>
-        </div>
-      )}
-      {drafts ? (
-        <DraftsView
-          toolbar={toolbar}
-          resizeHandle={split.handle}
-          onEmptyRetire={() => fallbackControl.current?.focus()}
-          session={session}
-          scope={scope}
-          navigator={navigator}
-          extensions={extensions}
-          host={host}
+      <div className={styles.toolbar}>
+        <ViewTabs
+          variant="segmented"
+          size="sm"
+          value={mailbox}
+          label="Mailbox"
+          items={[
+            { value: "inbox", label: "Inbox", panelId: `${mailboxId}-inbox` },
+            { value: "sent", label: "Sent", panelId: `${mailboxId}-sent` },
+          ]}
+          onValueChange={(value) => {
+            cancelRetry();
+            setMailbox(value);
+          }}
         />
-      ) : (
-        <div ref={workspace} className={styles.workspace}>
-          <div className={styles.listPane}>
-            {toolbar}
-            <div className={styles.scroll}>
-              {inbox.freshness === "stale" && !failure && (
-                <div className={styles.notice} role="status">
-                  <span className="text-body text-subtle">
-                    Showing retained activity.
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    loading={pending}
-                    onClick={() => refresh()}
-                  >
-                    Refresh
-                  </Button>
-                </div>
-              )}
-              {(inbox.status === "idle" || feed.status === "idle") &&
-                !loading &&
-                !failure && (
+      </div>
+      <div
+        id={`${mailboxId}-sent`}
+        role="tabpanel"
+        aria-labelledby={`${mailboxId}-sent-tab`}
+        hidden={mailbox !== "sent"}
+        className={styles.mailboxPanel}
+      >
+        {mailbox === "sent" && (
+          <SentView session={session} scope={scope} navigator={navigator} />
+        )}
+      </div>
+      <div
+        id={`${mailboxId}-inbox`}
+        role="tabpanel"
+        aria-labelledby={`${mailboxId}-inbox-tab`}
+        hidden={mailbox !== "inbox"}
+        className={styles.mailboxPanel}
+      >
+        {!drafts && failure && (
+          <div className={styles.notice} role="alert">
+            <p className="text-body">{failure}</p>
+            <Button
+              ref={retryButton}
+              size="sm"
+              loading={pending}
+              onClick={retry}
+            >
+              Retry inbox
+            </Button>
+          </div>
+        )}
+        {drafts ? (
+          <DraftsView
+            toolbar={toolbar}
+            resizeHandle={split.handle}
+            onEmptyRetire={() => fallbackControl.current?.focus()}
+            session={session}
+            scope={scope}
+            navigator={navigator}
+            extensions={extensions}
+            host={host}
+          />
+        ) : (
+          <div ref={workspace} className={styles.workspace}>
+            <div className={styles.listPane}>
+              {toolbar}
+              <div className={styles.scroll}>
+                {inbox.freshness === "stale" && !failure && (
                   <div className={styles.notice} role="status">
                     <span className="text-body text-subtle">
-                      Check recent activity.
+                      Showing retained activity.
                     </span>
                     <Button
                       size="sm"
@@ -1020,198 +1054,216 @@ function InboxList({
                     </Button>
                   </div>
                 )}
-              {!visible.length &&
-                (inbox.status === "ready" || feed.status === "ready") &&
-                !loading &&
-                !failure && (
-                  <div className={styles.empty} role="status">
-                    <EmptyState
-                      icon={
-                        show === "archived" ? <ArchiveIcon /> : <BellIcon />
-                      }
-                      title={
-                        show === "archived"
-                          ? unreadOnly
-                            ? "No archived conversations match Unread only"
-                            : "No archived conversations in this view"
-                          : unreadOnly
-                            ? "No unread activity in this view"
-                            : "No recent activity in this view"
-                      }
-                      description={
-                        show === "archived"
-                          ? activity === "mentions"
-                            ? "Archived mentions stay here until you restore them or receive a new mention."
-                            : "Archived conversations stay here until you restore them, receive a new participating-thread reply, or receive a new mention."
-                          : "Mentions, direct messages, and replies in threads you participate in appear here."
-                      }
-                      action={
-                        filtered || show === "archived" ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              // Status stays; an unfiltered archive returns to Inbox.
-                              if (filtered)
-                                setFilter({
-                                  activity: "all",
-                                  sender: "everyone",
-                                  attention: "all",
-                                });
-                              else showView("inbox");
-                              fallbackControl.current?.focus();
-                            }}
-                          >
-                            {filtered ? "Clear filters" : "Show Inbox"}
-                          </Button>
-                        ) : undefined
-                      }
-                    />
-                  </div>
-                )}
-              <ul
-                className={styles.list}
-                aria-label="Inbox conversations"
-                aria-busy={pending}
-              >
-                {visible.map((item) => {
-                  const channel = list.channels.find(
-                    (candidate) => candidate.id === item.channelId,
-                  );
-                  const identity = rowIdentity(item, channel, profiles, name);
-                  const { sender, context } = identity;
-                  const unread = hasUnread(item);
-                  const rowArchived = archived(item);
-                  return (
-                    <li
-                      key={item.id}
-                      data-inbox-row={item.id}
-                      className={styles.row}
-                      data-unread={unread || undefined}
-                      data-selected={selectedId === item.id || undefined}
-                    >
-                      <ContextMenuRoot
-                        open={menu?.id === item.id}
-                        onOpenChange={(open) =>
-                          setMenu(open ? { id: item.id } : undefined)
-                        }
+                {(inbox.status === "idle" || feed.status === "idle") &&
+                  !loading &&
+                  !failure && (
+                    <div className={styles.notice} role="status">
+                      <span className="text-body text-subtle">
+                        Check recent activity.
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={pending}
+                        onClick={() => refresh()}
                       >
-                        <ContextMenuTrigger
-                          render={<div className={styles.rowSurface} />}
-                          onKeyDown={(event) => {
-                            if (
-                              event.key === "ContextMenu" ||
-                              (event.shiftKey && event.key === "F10")
-                            ) {
-                              event.preventDefault();
-                              setMenu({
-                                id: item.id,
-                                anchor: event.target as HTMLElement,
-                              });
-                            }
-                          }}
-                        >
-                          <InboxRowButton
-                            item={item}
-                            identity={identity}
-                            media={session.media}
-                            feed={feed}
-                            time={relativeTimestamp(item.createdAt)}
-                            previewId={`${previewId}-${item.id}`}
-                            disabled={pending}
-                            selected={selectedId === item.id}
-                            ref={
-                              item.id === visible[0]?.id
-                                ? fallbackRow
-                                : undefined
-                            }
-                            onClick={() => {
-                              if (busy.current) return;
-                              // The selected row reveals its current message in
-                              // its captured tab, even after regrouping would
-                              // open a whole conversation as a thread.
-                              const reselect =
-                                selectedId === item.id &&
-                                opened &&
-                                !opened.threadId !==
-                                  !tabTarget(item, channel).threadId
-                                  ? opened
-                                  : undefined;
-                              if (
-                                reselect
-                                  ? !openTab(reselect)
-                                  : !openRow(item, channel)
-                              )
-                                void navigator.open({
-                                  version: 1,
-                                  kind: "conversation",
-                                  scope,
-                                  channelId: item.channelId,
-                                  messageId: item.messageId,
-                                  ...(item.rootId && {
-                                    threadRootId: item.rootId,
-                                  }),
-                                });
-                              // The selected row is the same visit, even when its
-                              // current representative changed after reading.
-                              if (selectedId === item.id) return;
-                              cancelRetry();
-                              setSelectedTarget(targetOf(item));
-                              if (unread && canRead) mutate(item, false);
-                            }}
-                          />
-                          <span className={styles.rowArchive}>
-                            <IconButton
+                        Refresh
+                      </Button>
+                    </div>
+                  )}
+                {!visible.length &&
+                  (inbox.status === "ready" || feed.status === "ready") &&
+                  !loading &&
+                  !failure && (
+                    <div className={styles.empty} role="status">
+                      <EmptyState
+                        icon={
+                          show === "archived" ? <ArchiveIcon /> : <BellIcon />
+                        }
+                        title={
+                          show === "archived"
+                            ? unreadOnly
+                              ? "No archived conversations match Unread only"
+                              : "No archived conversations in this view"
+                            : unreadOnly
+                              ? "No unread activity in this view"
+                              : "No recent activity in this view"
+                        }
+                        description={
+                          show === "archived"
+                            ? activity === "mentions"
+                              ? "Archived mentions stay here until you restore them or receive a new mention."
+                              : "Archived conversations stay here until you restore them, receive a new participating-thread reply, or receive a new mention."
+                            : "Mentions, direct messages, and replies in threads you participate in appear here."
+                        }
+                        action={
+                          filtered || show === "archived" ? (
+                            <Button
                               size="sm"
                               variant="ghost"
-                              disabled={pending}
-                              aria-label={`${rowArchived ? "Restore" : "Archive"} ${sender} in ${context}`}
-                              title={rowArchived ? "Restore" : "Archive"}
-                              onClick={() => archive(item, !rowArchived)}
-                              icon={
-                                rowArchived ? (
-                                  <ArchiveOffIcon
-                                    size={16}
-                                    aria-hidden="true"
-                                  />
-                                ) : (
-                                  <ArchiveIcon size={16} aria-hidden="true" />
-                                )
-                              }
-                            />
-                          </span>
-                        </ContextMenuTrigger>
-                        <MenuPopup
-                          size="compact"
-                          aria-label={`Actions for ${sender} in ${context}`}
-                          anchor={
-                            menu?.id === item.id ? menu.anchor : undefined
+                              onClick={() => {
+                                // Status stays; an unfiltered archive returns to Inbox.
+                                if (filtered)
+                                  setFilter({
+                                    activity: "all",
+                                    sender: "everyone",
+                                    attention: "all",
+                                  });
+                                else showView("inbox");
+                                fallbackControl.current?.focus();
+                              }}
+                            >
+                              {filtered ? "Clear filters" : "Show Inbox"}
+                            </Button>
+                          ) : undefined
+                        }
+                      />
+                    </div>
+                  )}
+                <ul
+                  className={styles.list}
+                  aria-label="Inbox conversations"
+                  aria-busy={pending}
+                >
+                  {visible.map((item) => {
+                    const channel = list.channels.find(
+                      (candidate) => candidate.id === item.channelId,
+                    );
+                    const identity = rowIdentity(item, channel, profiles, name);
+                    const { sender, context } = identity;
+                    const unread = hasUnread(item);
+                    const rowArchived = archived(item);
+                    return (
+                      <li
+                        key={item.id}
+                        data-inbox-row={item.id}
+                        className={styles.row}
+                        data-unread={unread || undefined}
+                        data-selected={selectedId === item.id || undefined}
+                      >
+                        <ContextMenuRoot
+                          open={menu?.id === item.id}
+                          onOpenChange={(open) =>
+                            setMenu(open ? { id: item.id } : undefined)
                           }
                         >
-                          <MenuItem
-                            disabled={pending}
-                            onClick={() => archive(item, !rowArchived)}
+                          <ContextMenuTrigger
+                            render={<div className={styles.rowSurface} />}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key === "ContextMenu" ||
+                                (event.shiftKey && event.key === "F10")
+                              ) {
+                                event.preventDefault();
+                                setMenu({
+                                  id: item.id,
+                                  anchor: event.target as HTMLElement,
+                                });
+                              }
+                            }}
                           >
-                            {rowArchived
-                              ? "Restore conversation"
-                              : "Archive conversation"}
-                          </MenuItem>
-                          <MenuItem
-                            disabled={pending || unread || !canRead}
-                            onClick={() => mutate(item, true)}
+                            <InboxRowButton
+                              item={item}
+                              identity={identity}
+                              media={session.media}
+                              feed={feed}
+                              time={relativeTimestamp(item.createdAt)}
+                              previewId={`${previewId}-${item.id}`}
+                              disabled={pending}
+                              selected={selectedId === item.id}
+                              ref={
+                                item.id === visible[0]?.id
+                                  ? fallbackRow
+                                  : undefined
+                              }
+                              onClick={() => {
+                                if (busy.current) return;
+                                // The selected row reveals its current message in
+                                // its captured tab, even after regrouping would
+                                // open a whole conversation as a thread.
+                                const reselect =
+                                  selectedId === item.id &&
+                                  opened &&
+                                  !opened.threadId !==
+                                    !tabTarget(item, channel).threadId
+                                    ? opened
+                                    : undefined;
+                                if (
+                                  reselect
+                                    ? !openTab(reselect)
+                                    : !openRow(item, channel)
+                                )
+                                  void navigator.open({
+                                    version: 1,
+                                    kind: "conversation",
+                                    scope,
+                                    channelId: item.channelId,
+                                    messageId: item.messageId,
+                                    ...(item.rootId && {
+                                      threadRootId: item.rootId,
+                                    }),
+                                  });
+                                // The selected row is the same visit, even when its
+                                // current representative changed after reading.
+                                if (selectedId === item.id) return;
+                                cancelRetry();
+                                setSelectedTarget(targetOf(item));
+                                if (unread && canRead) mutate(item, false);
+                              }}
+                            />
+                            <span className={styles.rowArchive}>
+                              <IconButton
+                                size="sm"
+                                variant="ghost"
+                                disabled={pending}
+                                aria-label={`${rowArchived ? "Restore" : "Archive"} ${sender} in ${context}`}
+                                title={rowArchived ? "Restore" : "Archive"}
+                                onClick={() => archive(item, !rowArchived)}
+                                icon={
+                                  rowArchived ? (
+                                    <ArchiveOffIcon
+                                      size={16}
+                                      aria-hidden="true"
+                                    />
+                                  ) : (
+                                    <ArchiveIcon size={16} aria-hidden="true" />
+                                  )
+                                }
+                              />
+                            </span>
+                          </ContextMenuTrigger>
+                          <MenuPopup
+                            size="compact"
+                            aria-label={`Actions for ${sender} in ${context}`}
+                            anchor={
+                              menu?.id === item.id ? menu.anchor : undefined
+                            }
                           >
-                            Mark unread
-                          </MenuItem>
-                        </MenuPopup>
-                      </ContextMenuRoot>
-                    </li>
-                  );
-                })}
-              </ul>
+                            <MenuItem
+                              disabled={pending}
+                              onClick={() => archive(item, !rowArchived)}
+                            >
+                              {rowArchived
+                                ? "Restore conversation"
+                                : "Archive conversation"}
+                            </MenuItem>
+                            <MenuItem
+                              disabled={pending || unread || !canRead}
+                              onClick={() => mutate(item, true)}
+                            >
+                              Mark unread
+                            </MenuItem>
+                          </MenuPopup>
+                        </ContextMenuRoot>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

@@ -872,7 +872,7 @@ it.each([
     await waitFor(() => {
       const list = screen
         .getAllByRole("tablist")
-        .find((item) => item.getAttribute("aria-label") !== "Inbox tabs");
+        .find((item) => item.getAttribute("aria-label") === "Panel tabs");
       if (!list) throw new Error("Missing side tabs");
       const tab = within(list).getByRole("tab", { selected: true });
       const panel = document.getElementById(
@@ -905,7 +905,7 @@ it("Archive from the composer focuses the successor's tab while its message cann
       expect(document.activeElement).toBe(
         screen
           .getAllByRole("tablist")
-          .find((item) => item.getAttribute("aria-label") !== "Inbox tabs")
+          .find((item) => item.getAttribute("aria-label") === "Panel tabs")
           ?.querySelector('[role="tab"][aria-selected="true"]'),
       ),
     );
@@ -2474,7 +2474,7 @@ const tabs = (name: string) =>
 const sideTabs = () => {
   const list = screen
     .queryAllByRole("tablist")
-    .find((item) => item.getAttribute("aria-label") !== "Inbox tabs");
+    .find((item) => item.getAttribute("aria-label") === "Panel tabs");
   return list
     ? within(list)
         .getAllByRole("tab")
@@ -3065,7 +3065,7 @@ it("reads a reopened row again after its tab closes", async () => {
   await waitFor(() => expect(unread()).toBeInTheDocument());
   const side = screen
     .getAllByRole("tablist")
-    .find((item) => item.getAttribute("aria-label") !== "Inbox tabs");
+    .find((item) => item.getAttribute("aria-label") === "Panel tabs");
   if (!side) throw new Error("Missing side tabs");
   fireEvent.click(within(side).getByRole("button", { name: /^Close / }));
   await waitFor(() => expect(queryReader()).not.toBeInTheDocument());
@@ -3810,11 +3810,13 @@ it("combines the existing filter choices without placeholder actions", async () 
   expect(
     screen.getByRole("button", { name: "Inbox filters" }),
   ).toHaveTextContent("All");
-  // Inbox's own tab holds the list; its filters are not tabs.
+  // Mailbox views are separate from the conversation filters.
   expect(tabs("Inbox tabs")).toEqual(["Inbox"]);
   expect(
-    within(screen.getByRole("tabpanel", { name: "Inbox" })).queryByRole("tab"),
-  ).toBeNull();
+    within(screen.getByRole("tablist", { name: "Mailbox" }))
+      .getAllByRole("tab")
+      .map((tab) => tab.textContent),
+  ).toEqual(["Inbox", "Sent"]);
   expect(
     screen.queryByRole("button", {
       name: /Mark shown as read|Mark as read|Mark unread/,
@@ -5106,3 +5108,87 @@ it.each([false, true])(
       ).toBe(true);
   },
 );
+
+it("shows only your sent messages newest first, opens the exact message, and restores Inbox", async () => {
+  const h = fixture();
+  const older = message(h.viewer, "room", "My earlier send", 70);
+  const newer = message(h.viewer, "room", "My latest send", 80);
+  const other = message(h.alice, "room", "Someone else's send", 90);
+  h.addEvent(older);
+  h.addEvent(newer);
+  h.addEvent(other);
+  render(h.view);
+  await waitFor(() => expect(h.session.channels.list().status).toBe("ready"));
+  await waitFor(() =>
+    expect(h.session.inboxFeed.snapshot().status).toBe("ready"),
+  );
+  const mailbox = screen.getByRole("tablist", { name: "Mailbox" });
+  fireEvent.click(within(mailbox).getByRole("tab", { name: "Sent" }));
+  const sent = screen.getByRole("list", { name: "Sent messages" });
+  await within(sent).findByText("My latest send");
+  const text = sent.textContent ?? "";
+  expect(text.indexOf("My latest send")).toBeLessThan(
+    text.indexOf("My earlier send"),
+  );
+  expect(
+    within(sent).queryByText("Someone else's send"),
+  ).not.toBeInTheDocument();
+  fireEvent.click(within(sent).getByRole("button", { name: /My latest send/ }));
+  await waitFor(() =>
+    expect(h.open).toHaveBeenCalledWith({
+      version: 1,
+      kind: "conversation",
+      scope: h.scope,
+      channelId: "room",
+      messageId: newer.id,
+    }),
+  );
+  act(() => h.revokeRoom());
+  await waitFor(() =>
+    expect(within(sent).queryByText("My latest send")).not.toBeInTheDocument(),
+  );
+  fireEvent.click(within(mailbox).getByRole("tab", { name: "Inbox" }));
+  expect(
+    screen.getByRole("list", { name: "Inbox conversations" }),
+  ).toBeVisible();
+});
+
+it("retries failed Sent reads and loads older pages without duplicate messages", async () => {
+  const h = fixture();
+  const newest = message(h.viewer, "room", "Latest paged send", 80);
+  const older = message(h.viewer, "room", "Older paged send", 70);
+  const read = vi
+    .spyOn(h.session, "readPage")
+    .mockRejectedValue(new Error("offline"));
+  render(h.view);
+  fireEvent.click(
+    within(screen.getByRole("tablist", { name: "Mailbox" })).getByRole("tab", {
+      name: "Sent",
+    }),
+  );
+  const retry = await screen.findByRole("button", {
+    name: "Retry sent messages",
+  });
+  read
+    .mockResolvedValueOnce({ events: [newest], relayCount: 50 })
+    .mockResolvedValueOnce({
+      events: [
+        newest,
+        older,
+        { ...message(h.viewer, "room", "Failed send", 90), delivery: "failed" },
+      ],
+      relayCount: 2,
+    });
+  fireEvent.click(retry);
+  await screen.findByText("Latest paged send");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Show more sent messages" }),
+  );
+  await screen.findByText("Older paged send");
+  const sent = screen.getByRole("list", { name: "Sent messages" });
+  expect(within(sent).getAllByRole("listitem")).toHaveLength(2);
+  expect(read).toHaveBeenLastCalledWith(
+    [{ kinds: [9], authors: [h.viewer.pubkey], limit: 50, page: 2 }],
+    expect.objectContaining({ fresh: true }),
+  );
+});

@@ -328,3 +328,12 @@ html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
     padding-bottom: var(--space-3);
   }
 }
+
+.mailboxPanel:not([hidden]),
+.sent {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
