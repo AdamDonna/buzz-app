@@ -504,20 +504,9 @@ export function EditableInput({
     // `buzz:paste-plain` sent just before its command, marks it as raw.
     let plainPaste = false;
     const editable = () => !current.current.disabled && !locked.current;
-    // A projection depends only on the immutable document, but selection events
-    // and completion read value/selection several times per keystroke.
-    let projected:
-      | {
-          doc: EditorState["doc"];
-          value: ReturnType<typeof projectComposerDocument>;
-        }
-      | undefined;
-    const projection = () => {
-      const { doc } = editor.state;
-      if (projected?.doc !== doc)
-        projected = { doc, value: projectComposerDocument(doc) };
-      return projected.value;
-    };
+    // Selection events and completion read value/selection several times per
+    // keystroke; projectComposerDocument memoizes per immutable document.
+    const projection = () => projectComposerDocument(editor.state.doc);
     const tokenViews = () => refresh((revision) => revision + 1);
     let formats: string | undefined;
     const selected = () => {
