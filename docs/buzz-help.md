@@ -507,6 +507,10 @@ confirmation.
   macOS (inside the app's installed name, such as `Buzz Foundation.app`), with
   no setup or token. Without such a plugin there are no tools to
   offer; do not promise them.
+- **Settings → Plugins → GitHub → Links → Open GitHub links in Buzz** controls
+  whether supported GitHub links and the linked-PR shortcut open in a side
+  panel or your browser. It starts on and is saved on this device across all
+  communities. Turning it off keeps pull request indicators and agent tools enabled.
 - The **GitHub** plugin’s pull request panel offers **Queue for merge** when
   the target branch requires a merge queue. After confirmation, it queues the
   displayed commit and shows **Queued for merge**; GitHub controls when it merges.
