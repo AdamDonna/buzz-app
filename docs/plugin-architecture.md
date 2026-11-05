@@ -2185,7 +2185,7 @@ pinch, Ctrl/⌘-scroll, drag, double-click and keyboard and offers Copy code.
 Invalid source shows Pele's error with the source.
 
 The conversation preview exposes top-level `registerTool`, `registerCompletion` and `registerInline`
-methods and stable `conversation.ui.Composer` / `.Message` / `.Thread` components, plus `.Tabs` while a plugin provides it. Generated
+methods and stable `conversation.ui.Composer` / `.Message` / `.Thread` / `.Conversation` components, plus `.Tabs` while a plugin provides it. Generated
 type-only `@buzz/author` declarations are exercised by a source-only external consumer
 fixture in `tests/fixtures/conversation-consumer`; it is built and installed only in
 the browser test's temporary profile.
@@ -2214,6 +2214,22 @@ Channels, showing a thread is one visit to its channel for unread state, and
 that visit lasts across threads of the same channel. The page holds no second
 message reader, cache or outbox.
 Exact message links still navigate to Channels rather than the page's route.
+
+`conversation.ui.Conversation({ session, scope, channelId, channelName?, threadId?, children })`
+gives a page's own `ui.Message` rows and `ui.Composer` for one channel the host
+behavior Channels rows have, without showing a thread or visiting the channel:
+mounting it never marks anything read, follows a thread or holds the channel's
+roster. `children(interactions)` receives the host's `onOpenLink`, `canOpenLink`
+and `onOpenMediaReview` for those rows. Inside it, rows offer Edit and Delete
+under the usual permissions; Edit fills the `ui.Composer` inside the same
+`ui.Conversation` (pass the rows it may edit as `editMessages`), and a row has
+no Edit without one. Delete asks for confirmation, and a failed edit or deletion
+shows a notice to retry or discard it before `children`. Media review and
+registered panels open over the page and stop opening once its session is no
+longer the ready one. Render one `ui.Conversation` per channel or card, so each
+card's edits and recovery stay its own; `threadId` keeps panels opened from a
+card in that thread. Writes, mark read/unread and follow remain explicit menu
+actions.
 
 `conversation.ui.Tabs({ id, session, scope, label, icon, children })` makes the
 page's content the first main tab of the host's conversation tab workspace.
