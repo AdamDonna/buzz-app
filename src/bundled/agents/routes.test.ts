@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  agentCardRoute,
   agentHistoryRoute,
   agentHistoryTarget,
   agentProviderRoute,
@@ -74,4 +75,18 @@ it("validates a version locator without treating it as authority or accepting ex
       extra: true,
     }),
   ).toBeUndefined();
+});
+
+it("admits an agent card to start an agent from, by its id", () => {
+  expect(agentCardRoute({ card: "tinker" })).toBe("tinker");
+  expect(availableAgentProviderRoute({ card: "av_x-1" })).toBe(true);
+  for (const invalid of [
+    { card: "" },
+    { card: "../x" },
+    { card: 1 },
+    { card: "tinker", extra: true },
+  ] as const) {
+    expect(agentCardRoute(invalid)).toBeUndefined();
+    expect(availableAgentProviderRoute(invalid)).toBe(false);
+  }
 });

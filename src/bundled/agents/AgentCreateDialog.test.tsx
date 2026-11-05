@@ -1183,3 +1183,119 @@ it("preserves the existing avatar and requested name when saving a proposed upda
   expect(agents.create).not.toHaveBeenCalled();
   expect(onCreated).not.toHaveBeenCalled();
 });
+
+it("starts from an agent card's name, picture and instructions, in each harness that takes them", async () => {
+  const adopting = (key: string, title: string): RegisteredAgentType => ({
+    ...notes,
+    key,
+    title,
+    adopt: (carry, config) => ({
+      ...(config as Notes),
+      instructions: carry.instructions ?? (config as Notes).instructions,
+    }),
+  });
+  const agents = { create: vi.fn(async () => made) } as unknown as Agents & {
+    create: ReturnType<typeof vi.fn>;
+  };
+  render(
+    <AgentCreateDialog
+      agents={agents}
+      types={[echo, adopting("test/card", "Card")]}
+      draft={{
+        name: "Tinker",
+        picture: "https://cdn.example/tinker/avatar.png",
+        instructions: "You are Tinker.",
+      }}
+      onClose={vi.fn()}
+      onCreated={vi.fn()}
+    />,
+  );
+  const user = userEvent.setup();
+  const dialog = screen.getByRole("dialog", { name: "Create agent" });
+  expect(dialog).toHaveAccessibleDescription(
+    "From an agent card. Review its settings before creating it.",
+  );
+  expect(within(dialog).getByLabelText("Name")).toHaveValue("Tinker");
+  // Echo has no instructions to take; the card's follow to one that does.
+  expect(within(dialog).queryByLabelText("Instructions")).toBeNull();
+  await user.click(within(dialog).getByRole("combobox", { name: "Harness" }));
+  await user.click(await screen.findByRole("option", { name: "Card" }));
+  expect(within(dialog).getByLabelText("Instructions")).toHaveValue(
+    "You are Tinker.",
+  );
+  await user.click(createButton());
+  expect(agents.create).toHaveBeenCalledWith({
+    type: "test/card",
+    name: "Tinker",
+    picture: "https://cdn.example/tinker/avatar.png",
+    config: { notes: "start", instructions: "You are Tinker." },
+  });
+});
+
+it("keeps an agent card's instructions cleared when choosing another harness", async () => {
+  // Like the bundled harnesses, empty instructions are not carried.
+  const carrying = (key: string, title: string): RegisteredAgentType => ({
+    ...notes,
+    key,
+    title,
+    carry: (config) => {
+      const { instructions } = config as Notes;
+      return instructions.trim() ? { instructions } : {};
+    },
+    adopt: (carry, config) => ({
+      ...(config as Notes),
+      instructions: carry.instructions ?? (config as Notes).instructions,
+    }),
+  });
+  const agents = { create: vi.fn(async () => made) } as unknown as Agents & {
+    create: ReturnType<typeof vi.fn>;
+  };
+  render(
+    <AgentCreateDialog
+      agents={agents}
+      types={[carrying("test/notes", "Notes"), carrying("test/other", "Other")]}
+      draft={{
+        name: "Tinker",
+        picture: "https://cdn.example/tinker/avatar.png",
+        instructions: "You are Tinker.",
+      }}
+      onClose={vi.fn()}
+      onCreated={vi.fn()}
+    />,
+  );
+  const user = userEvent.setup();
+  const dialog = screen.getByRole("dialog", { name: "Create agent" });
+  await user.clear(within(dialog).getByLabelText("Instructions"));
+  await user.click(within(dialog).getByRole("combobox", { name: "Harness" }));
+  await user.click(await screen.findByRole("option", { name: "Other" }));
+  expect(within(dialog).getByLabelText("Instructions")).toHaveValue("");
+  await user.click(createButton());
+  expect(agents.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: "test/other",
+      config: { notes: "start", instructions: "" },
+    }),
+  );
+});
+
+it("shows an agent card's pack avatar as that Gloopie", () => {
+  const pack = agentAvatars.find((avatar) => avatar.id === "gloopies-13");
+  if (!pack) throw new Error("gloopies-13 is missing from the catalog");
+  render(
+    <AgentCreateDialog
+      agents={{ create: vi.fn() } as unknown as Agents}
+      types={[echo]}
+      draft={{ name: "Tinker", picture: pack.url, instructions: "" }}
+      onClose={vi.fn()}
+      onCreated={vi.fn()}
+    />,
+  );
+  const dialog = screen.getByRole("dialog", { name: "Create agent" });
+  const tabs = within(
+    within(dialog).getByRole("tablist", { name: "Avatar type" }),
+  );
+  expect(tabs.getByRole("tab", { name: "Gloopies" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});

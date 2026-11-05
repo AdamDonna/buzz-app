@@ -461,6 +461,11 @@ available rather than silently discarding it.
   the model clears the thinking choice. Instructions are optional. **Create agent**
   stays disabled until its name and required choices are complete; Builderlab
   also waits for sign-in and its model catalog.
+- An agent card link, `buzz://agent/new?card=<id>` (a Builderlab card's
+  **Add to Buzz**), opens **Create agent** filled in with the card's name,
+  picture and instructions, on desktop and mobile. Nothing is created until you
+  review it and choose **Create agent**. Choose the harness and model yourself;
+  instructions go to harnesses that keep them.
 - An agent's name and picture identify it. Instructions shape its response
   style, tasks, initiative, and boundaries. They do not add tools, credentials,
   or permissions. Saving instructions affects future work, not past messages.

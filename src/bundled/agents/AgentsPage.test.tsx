@@ -5325,3 +5325,124 @@ it("opens a restored version address in Settings, closes on Back, and retires on
     screen.getByRole("button", { name: "Previous versions" }),
   ).toHaveAttribute("aria-expanded", "false");
 });
+
+it("opens Create agent from an agent card's link and retires the link's visits when it closes", async () => {
+  const user = userEvent.setup();
+  const base = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.agents",
+    pageId: "agents",
+    scope: null,
+  } as const;
+  const routed = {
+    ...base,
+    route: { version: 1, params: { card: "tinker" } },
+  } as const;
+  const dismiss = vi.fn();
+  const navigator = {
+    snapshot: () => ({ entry: { id: "card", target: routed } }),
+    open: vi.fn(),
+    dismiss,
+  } as unknown as Navigation;
+  const navigation: PageNavigation = {
+    entryId: "card",
+    target: routed,
+    signal: new AbortController().signal,
+    focus: "content",
+    position: () => undefined,
+    savePosition() {},
+    forSession: () => navigation,
+    resolve: () => true,
+    complete: () => true,
+  };
+  const fetch = vi.fn(async () =>
+    Response.json({
+      id: "tinker",
+      name: "Tinker",
+      avatarUrl: "https://cdn.example/tinker/avatar.png",
+      instructions: "You are Tinker.",
+    }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const { agents } = setup([agent("Ada", 1)], {
+      page: { navigator, navigation },
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Create agent" });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://d2z0pbxrxbsiz5.cloudfront.net/tinker/agent.json",
+      expect.anything(),
+    );
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Tinker");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create agent" }),
+    );
+    expect(agents.create).toHaveBeenCalledWith({
+      type: "test/echo",
+      name: "Tinker",
+      picture: "https://cdn.example/tinker/avatar.png",
+      config: { reply: "" },
+    });
+    await vi.waitFor(() => expect(dismiss).toHaveBeenCalledOnce());
+    const [matches, fallback] = dismiss.mock.calls[0] as unknown as [
+      (target: OpenTarget) => boolean,
+      OpenTarget,
+    ];
+    expect(fallback).toEqual(base);
+    expect(matches(routed)).toBe(true);
+    expect(matches(base)).toBe(false);
+    expect(
+      matches({ ...routed, route: { version: 1, params: { card: "occam" } } }),
+    ).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("explains an agent card that can't be loaded, and retries it", async () => {
+  const user = userEvent.setup();
+  const routed = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.agents",
+    pageId: "agents",
+    scope: null,
+    route: { version: 1, params: { card: "gone" } },
+  } as const;
+  const dismiss = vi.fn();
+  const navigator = {
+    snapshot: () => ({ entry: { id: "card", target: routed } }),
+    open: vi.fn(),
+    dismiss,
+  } as unknown as Navigation;
+  const navigation: PageNavigation = {
+    entryId: "card",
+    target: routed,
+    signal: new AbortController().signal,
+    focus: "content",
+    position: () => undefined,
+    savePosition() {},
+    forSession: () => navigation,
+    resolve: () => true,
+    complete: () => true,
+  };
+  const fetch = vi.fn(async () => new Response("", { status: 404 }));
+  vi.stubGlobal("fetch", fetch);
+  try {
+    setup([agent("Ada", 1)], { page: { navigator, navigation } });
+    const dialog = await screen.findByRole("dialog", { name: "Agent card" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "This agent card isn’t available.",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Try again" }));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Close" }),
+    );
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "Create agent" })).toBeNull();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

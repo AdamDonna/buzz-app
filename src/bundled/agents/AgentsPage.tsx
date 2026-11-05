@@ -123,11 +123,13 @@ import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import { readView, writeView } from "../../shared/view-state";
 import {
+  agentCardRoute,
   agentProviderRoute,
   agentProviderTarget,
   agentRoute,
   conversationOpener,
 } from "./routes";
+import { AgentCardCreate } from "./AgentCardCreate";
 import { writeClipboardText } from "../../shared/clipboard";
 
 const message = (error: unknown) =>
@@ -279,6 +281,30 @@ export function AgentsPage({
         target,
       );
     }
+  };
+  // Opened from an agent card's link: Create agent, filled in from the card.
+  const card =
+    routed && navigation.target.kind === "page"
+      ? agentCardRoute(navigation.target.route?.params)
+      : undefined;
+  const closeCard = () => {
+    if (
+      !navigation ||
+      !navigator ||
+      navigation.signal.aborted ||
+      navigation.target.kind !== "page" ||
+      navigator.snapshot().entry.id !== navigation.entryId
+    )
+      return;
+    const target = agentProviderTarget(navigation.target);
+    const pageKey = targetKey(target);
+    navigator.dismiss(
+      (visit) =>
+        visit.kind === "page" &&
+        agentCardRoute(visit.route?.params) === card &&
+        targetKey(agentProviderTarget(visit)) === pageKey,
+      target,
+    );
   };
   const typeOf = (agent: Agent) =>
     types.find((type) => type.key === agent.type);
@@ -804,6 +830,23 @@ export function AgentsPage({
           onClose={() => setCreating(false)}
           onCreated={(agent) => {
             setCreating(false);
+            changeTab("yours");
+            build(agent.pubkey);
+          }}
+        />
+      )}
+      {card && (
+        <AgentCardCreate
+          key={`${routedEntry}:${card}`}
+          card={card}
+          agents={agents}
+          types={types}
+          community={
+            connection.status === "ready" ? connection.origin : undefined
+          }
+          onClose={closeCard}
+          onCreated={(agent) => {
+            closeCard();
             changeTab("yours");
             build(agent.pubkey);
           }}

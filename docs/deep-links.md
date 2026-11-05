@@ -29,6 +29,7 @@ The OS ingress accepts the Buzz link forms and nothing else:
 - `buzz://connect?relay=<wss-url>`
 - `buzz://add-community?relay=<wss-url>[&name=<name>]`
 - `buzz://plugin?id=<plugin id>[&page=<page id>][&route.<key>=<value>...]`
+- `buzz://agent/new?card=<id>`
 
 External authorization links show owner consent. They never grant access on arrival. The [external app protocol](agents.md#external-app-authorization) defines the callback, S256 exchange, scopes, and expiry. Handshake values stay outside navigation history.
 
@@ -52,6 +53,17 @@ that community to be selected and connected for authentication. See
 Query-based invite, message and plugin links also accept a single `/` before `?`,
 as supplied by Windows URL activation (for example, `buzz://join/?relay=…&code=…`).
 Non-root paths remain unsupported for these forms; channel paths are unchanged.
+
+Agent card links open **Agents** with **Create agent** filled in from a
+published Builderlab agent card, as Buzz mobile does. `card` is 1-64 ASCII
+letters, digits, `_` or `-`. The app reads `<id>/agent.json` from this build's
+avatars CDN (staging for a `https://app.builderlabstaging.xyz` build, production
+otherwise), never from a host the link names: `id` must match, `name` and an
+HTTPS `avatarUrl` are required, and `instructions` is optional. The card's
+`model` is not applied. Instructions are filled in for harnesses that keep
+them. Opening the link creates nothing; Close retires it. A card that can't be
+loaded says why and offers **Try again**. Like the other navigation forms, it
+binds to the selected community and viewer.
 
 Plugin page links open a page contributed by an installed, enabled plugin. `id` and
 `page` use the same 1-128 character lowercase token as plugin and page IDs (letters

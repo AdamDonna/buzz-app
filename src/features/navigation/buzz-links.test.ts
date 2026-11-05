@@ -381,3 +381,42 @@ it.each([
   expect(parseBuzzLink(href), href).toBeNull();
   expect(buzzLinkTarget(href, scope)).toBeNull();
 });
+it("opens an agent card's link as Create agent on the Agents page in the receiving community", () => {
+  const href = "buzz://agent/new?card=tinker&utm=qr";
+  expect(buzzLinkKind(href)).toBe("buzz");
+  const target = {
+    version: 1,
+    kind: "page",
+    pluginId: "buzz.agents",
+    pageId: "agents",
+    scope,
+    route: { version: 1, params: { card: "tinker" } },
+  };
+  expect(buzzLinkTarget(href, scope)).toEqual(target);
+  expect(
+    deepLinkStep(href, {
+      viewer: scope.viewer,
+      selected: scope.communityOrigin,
+    }),
+  ).toEqual({ open: target });
+  expect(deepLinkStep(href, { selected: null })).toEqual({
+    fail: "unavailable",
+  });
+  expect(parseBuzzLink("buzz://agent/new?card=av_Abc-123")).toEqual({
+    format: "agent-card",
+    card: "av_Abc-123",
+  });
+  for (const invalid of [
+    "buzz://agent/new",
+    "buzz://agent/new?card=",
+    "buzz://agent/new?card=a&card=b",
+    "buzz://agent/new?card=..",
+    "buzz://agent/new?card=a%2Fb",
+    "buzz://agent/new?card=a.b",
+    `buzz://agent/new?card=${"a".repeat(65)}`,
+    "buzz://agent/edit?card=tinker",
+    "buzz://agent/new/extra?card=tinker",
+    "buzz://agent/new?card=tinker#x",
+  ])
+    expect(parseBuzzLink(invalid), invalid).toBeNull();
+});

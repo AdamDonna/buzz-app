@@ -1,4 +1,5 @@
 import type { AgentViewProps } from "../../features/agents/service";
+import { AGENT_CARD_ID } from "../../features/navigation/buzz-links";
 import type { Navigation } from "../../features/navigation/controller";
 import type {
   JsonValue,
@@ -43,8 +44,23 @@ export function agentRoute(value: JsonValue | undefined) {
     : undefined;
 }
 
+/** A published agent card to start an agent from, as `{ card: id }`. */
+export function agentCardRoute(value: JsonValue | undefined) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const keys = Object.keys(value);
+  const card = (value as Readonly<Record<string, JsonValue>>).card;
+  return keys.length === 1 &&
+    keys[0] === "card" &&
+    typeof card === "string" &&
+    AGENT_CARD_ID.test(card)
+    ? card
+    : undefined;
+}
+
 export const availableAgentProviderRoute = (value: JsonValue) =>
-  Boolean(agentProviderRoute(value) ?? agentRoute(value));
+  Boolean(
+    agentProviderRoute(value) ?? agentRoute(value) ?? agentCardRoute(value),
+  );
 
 /** The Agents page with `pubkey` open. */
 export const agentTarget = (pubkey: string) =>
