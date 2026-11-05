@@ -80,10 +80,11 @@ the interface unless an available tool actually supports that action.
 - Where a community verifies names, the profile check appears beside the verified
   full name, or the verified username when no full name is supplied. The profile
   shows the issuer and verification time; cached verification has no check.
-  When you search for people (search, @mentions and adding channel members), a
-  verified person shows their verified name with the full name beside it.
-  Search finds people by their profile names; once found, a verified full name
-  also matches as you refine.
+  When you search for people (search, @mentions, adding channel members and new
+  direct messages), a verified person shows their verified name with the full
+  name beside it. Search finds people by their profile names; once found, a
+  verified full name also matches as you refine. Search and new direct messages
+  also find people already verified by a matching verified name or username.
 
 ## Connect an external app
 
