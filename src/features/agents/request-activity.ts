@@ -12,26 +12,30 @@ type Parsed = Readonly<{
   };
 }>;
 // Snapshot record arrays are immutable and every mounted message row asks about
-// the same agent/channel. Parse each projection once per record array.
+// the same agent/channel. Admitted record objects are frozen and reused across
+// snapshots, and a record's projection depends on no other record, so parse each
+// record once per scope and assemble each array from those results.
 const parsedRecords = new WeakMap<object, Map<string, readonly Parsed[]>>();
+const parsedArrays = new WeakMap<object, Map<string, readonly Parsed[]>>();
 
-function parseRecords(
-  records: readonly Omit<ActivityRecord, "envelopeId">[],
+function parseRecord(
+  record: Omit<ActivityRecord, "envelopeId">,
   agent: string,
   channelId: string,
+  scope: string,
 ): readonly Parsed[] {
-  let byScope = parsedRecords.get(records);
-  if (!byScope) {
+  // Only a frozen record can be cached by identity.
+  let byScope = parsedRecords.get(record);
+  if (!byScope && Object.isFrozen(record)) {
     byScope = new Map();
-    parsedRecords.set(records, byScope);
+    parsedRecords.set(record, byScope);
   }
-  const scope = `${agent}\n${channelId}`;
-  const cached = byScope.get(scope);
+  const cached = byScope?.get(scope);
   if (cached) return cached;
-  const parsed = activityRecords(records, agent, channelId).flatMap(
-    (record): Parsed[] => {
+  const parsed = activityRecords([record], agent, channelId).flatMap(
+    (projected): Parsed[] => {
       try {
-        const value = JSON.parse(record.plaintext);
+        const value = JSON.parse(projected.plaintext);
         if (
           !value ||
           typeof value !== "object" ||
@@ -41,11 +45,31 @@ function parseRecords(
           value.turnId.length > 256
         )
           return [];
-        return [{ record, value }];
+        return [{ record: projected, value }];
       } catch {
         return [];
       }
     },
+  );
+  byScope?.set(scope, parsed);
+  return parsed;
+}
+
+function parseRecords(
+  records: readonly Omit<ActivityRecord, "envelopeId">[],
+  agent: string,
+  channelId: string,
+): readonly Parsed[] {
+  let byScope = parsedArrays.get(records);
+  if (!byScope) {
+    byScope = new Map();
+    parsedArrays.set(records, byScope);
+  }
+  const scope = `${agent}\n${channelId}`;
+  const cached = byScope.get(scope);
+  if (cached) return cached;
+  const parsed = records.flatMap((record) =>
+    parseRecord(record, agent, channelId, scope),
   );
   byScope.set(scope, parsed);
   return parsed;
