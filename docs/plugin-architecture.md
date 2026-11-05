@@ -556,7 +556,7 @@ which uploads of local files use. The kit grants nothing `ctx.agents` and
 `ctx.host` do not already give the plugin.
 
 A plugin, bundled or installed, can add a tab to the settings of agents
-running on this device, whatever their type, with
+running here or hosted, whatever their type, with
 `ctx.agents.registerTab({ id, title, component, when, subscribe })`. The component receives
 `{ agent }`; it reads and saves through the plugin's own `ctx.agents`. An
 optional `when(agent)` limits the tab to the agents it returns true for, and an
@@ -564,7 +564,11 @@ optional `subscribe(listener)` tells the host when `when` may answer
 differently, so the tab appears or goes without a reload. A `when` that throws
 hides only its own tab. The tab
 follows Activity and precedes History and Settings, in the agent's Build view and
-its profile panel, and is not offered for hosted or elsewhere agents. It is
+its profile panel. An agent on another device (`elsewhere`) shows no sections,
+so no added tab either. Between here and hosted the host does not filter: a tab
+meant only for agents running here says so in its `when`
+(`agent.place === "here"`), and one offered for hosted agents saves their instructions through
+`ctx.agents.hostedInstructions`, never `save`. It is
 removed when the plugin is turned off or its scope ends. The bundled Agent
 Attention UI plugin uses it.
 

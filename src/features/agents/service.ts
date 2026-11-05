@@ -335,9 +335,10 @@ export type AgentTab<Config = unknown> = Readonly<{
   splitSettings?: boolean;
   component: ComponentType<AgentViewProps<Config>>;
 }>;
-/** A tab a plugin adds to the settings of every agent running on this device,
- * whatever its type, or only those `when` accepts. It reads the agent and
- * saves through the plugin's own `agents`. */
+/** A tab a plugin adds to the settings of every agent shown on this device,
+ * whatever its type or place, or only those `when` accepts: a tab for local
+ * agents only says so in its `when`. It reads the agent and saves through the
+ * plugin's own `agents`. */
 export type AgentAddedTab = Readonly<{
   id: string;
   title: string;
@@ -920,11 +921,43 @@ export type RemoteAgentType = Readonly<{
       signal: AbortSignal;
     }>,
   ): Promise<boolean>;
+  /** Reads and replaces the instructions its provider holds for the agent,
+   * so a plugin can edit them as a local agent's are. `set` rejects what the
+   * provider refuses, such as instructions too long. Without it, its
+   * instructions can only be edited in the provider's own settings. */
+  instructions?: Readonly<{
+    get(
+      input: Readonly<{
+        pubkey: string;
+        community: string;
+        signal: AbortSignal;
+      }>,
+    ): Promise<string>;
+    set(
+      input: Readonly<{
+        pubkey: string;
+        community: string;
+        instructions: string;
+        signal: AbortSignal;
+      }>,
+    ): Promise<void>;
+  }>;
   /** Stops it and deletes its key. An agent already gone counts as removed. */
   remove(
     input: Readonly<{ pubkey: string; community: string; signal: AbortSignal }>,
   ): Promise<void>;
 }>;
+/** A hosted agent's instructions, read and replaced through its provider. */
+export type HostedInstructions = Readonly<{
+  get(signal?: AbortSignal): Promise<string>;
+  /** Replaces them only while the provider still holds `base`, the copy the
+   * caller last read; otherwise it rejects and replaces nothing, so an edit
+   * saved elsewhere is never overwritten from an older copy. */
+  set(instructions: string, base: string, signal?: AbortSignal): Promise<void>;
+}>;
+/** A hosted agent's instructions changed since the caller read them. */
+export const HOSTED_INSTRUCTIONS_CHANGED =
+  "Its instructions were changed elsewhere. Check the latest, then try again.";
 export type RegisteredAgentType = Contribution<AgentType>;
 export type RetypePreview = Readonly<{
   /** Destination settings after applying the target type's migration policy. */
@@ -1268,6 +1301,10 @@ export type Agents = {
   leave(agent: AgentKey): Promise<void>;
   /** Whether the owner can stop a hosted agent's turns through its provider. */
   interruptible(agent: AgentKey): boolean;
+  /** A hosted agent's instructions, through its provider; undefined unless
+   * the agent is hosted here and its provider offers them. Each call stops
+   * with the agent's community connection. */
+  hostedInstructions(agent: AgentKey): HostedInstructions | undefined;
   /** Session controls are available only in the copy holding this agent. */
   sessionState(agent: AgentKey, place: SessionPlace): SessionState;
   session(
@@ -3883,6 +3920,35 @@ export class AgentsService extends Service implements Agents {
     );
     return !!this.types().find((entry) => entry.key === agent?.type)?.remote
       ?.interrupt;
+  }
+  hostedInstructions(pubkey: AgentKey): HostedInstructions | undefined {
+    const agent = this.state.agents.find(
+      (entry) => entry.pubkey === pubkey && entry.place === "hosted",
+    );
+    const provider = this.types().find((entry) => entry.key === agent?.type)
+      ?.remote?.instructions;
+    if (!provider) return undefined;
+    const call = (signal?: AbortSignal) => {
+      const { agent, binding } = this.hosted(pubkey);
+      return {
+        pubkey,
+        community: agent.relay,
+        signal: signal
+          ? AbortSignal.any([signal, binding.controller.signal])
+          : binding.controller.signal,
+      };
+    };
+    return {
+      get: (signal) => provider.get(call(signal)),
+      async set(instructions, base, signal) {
+        // No provider offers compare-and-swap, so read again just before
+        // replacing. An edit saved between this read and the write can still
+        // be lost; one saved before the owner acted cannot.
+        if ((await provider.get(call(signal))) !== base)
+          throw new Error(HOSTED_INSTRUCTIONS_CHANGED);
+        await provider.set({ ...call(signal), instructions });
+      },
+    };
   }
   /** Stops the hosted agent's turn in `place`; false when none was running. */
   async interrupt(
