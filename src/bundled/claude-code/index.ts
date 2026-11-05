@@ -45,7 +45,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (key) => ownerReads(agents.relay(key), pubkeyOf(key)),
     (key, signal) => agents.core(key, signal),
     agents.storage,
-    (raw) => providerDefaults.resolve(raw),
+    (raw, remote) => (remote ? config(raw) : providerDefaults.resolve(raw)),
     () => agents.tools(),
     repositoriesContext,
     async (agent, session, event, input) => {
@@ -64,6 +64,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
         },
       )) ?? {}) as Record<string, unknown>;
     },
+    (key, session) => agents.execution(key, session),
+    (key) => agents.inspectExecution(key),
+    (key) => !!agents.executionBinding(key),
   );
   /** A Claude agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */
@@ -78,7 +81,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     // Once loaded, and when the first Claude agent runs, the copy is brought
     // up to date; that is also when a first copy is downloaded.
     const was = needed;
-    needed = running.length > 0;
+    needed = running.some((agent) => !agents.executionBinding(agent.key));
     if (was === undefined || (needed && !was)) void setup.update(needed);
   };
   // One spare session waits for whichever running agent needs it next.
@@ -114,6 +117,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
   });
   agents.register<Config>({
     id: TYPE_ID,
+    execution: true,
     hooks: { events: CLAUDE_HOOK_EVENTS },
     retire: (pubkey) => runtime.retire(pubkey),
     protection: true,
@@ -162,15 +166,18 @@ export const apply: PluginModule["apply"] = (ctx) => {
     summary: (agent) => config(agent.config).model || "Claude",
     ...(spawn &&
       readFile && {
-        usage: (agent, { since, signal }) =>
-          readUsage(
+        usage: async (agent, { since, signal }) => {
+          if (await agents.inspectExecution(agent.key))
+            throw new Error("Usage is unavailable for remote Claude agents.");
+          return readUsage(
             { spawn, readFile },
             config(agent.config).workspace,
             agent.key,
             runtime.conversations(agent.key).map((saved) => saved.sessionId),
             since,
             signal,
-          ),
+          );
+        },
       }),
     provider: {
       snapshot: setup.providerSnapshot,
@@ -226,10 +233,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
       },
     ],
     // A mention during the first download waits for it, within its deadline.
-    ...claudeRun(runtime, (signal, agent) =>
-      agent?.protection
+    ...claudeRun(runtime, async (signal, agent) => {
+      if (agent && (await agents.inspectExecution(agent.key))) return;
+      return agent?.protection
         ? setup.protectedInstalled(signal)
-        : setup.installed(signal),
-    ),
+        : setup.installed(signal);
+    }),
   });
 };

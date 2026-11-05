@@ -463,11 +463,14 @@ available rather than silently discarding it.
   its type. Where offered, **Create agent** also lets people choose Thinking
   before the first config is saved; **Default** follows the provider's setting.
   Do not assume someone can edit another person's agent.
-- A desktop plugin can run native Codex on another computer. The plugin manages the target, workspace, credentials, and expiry. A saved
+- A desktop plugin can run native Codex or Claude on another computer. The plugin manages the target, workspace, credentials, and expiry. A saved
   remote choice stays remote after an app restart. If the target cannot be
   restored, Buzz shows an error and requires a new session.
-  The model control on a remote Codex card opens that agent's Settings. In update
+  The model control on a remote agent card opens that agent's Settings. In update
   reviews, its Thinking choice is read-only rather than using this computer's options.
+  Remote Claude uses the Claude sign-in on the target. It keeps each saved
+  conversation in that target's workspace. Stop ends its active turn.
+  Remote Claude usage totals and transcripts are unavailable.
 - When creating a Builderlab agent, sign in, choose a model from its family menu,
   then choose a supported **Thinking** level. Both choices are required; changing
   the model clears the thinking choice. Instructions are optional. **Create agent**

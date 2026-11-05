@@ -294,6 +294,17 @@ a new session** requests another allocation. **Interrupt** stops pending setup
 and keeps the key for retry. Activity reads the saved session inventory. Remote
 usage is unavailable. Settings and model discovery do not create targets.
 
+Claude uses the same contract with its stream-json process. Its tools and hooks
+use that process connection. Files come from the target. Each conversation
+keeps its execution key, workspace, and Claude session across app restarts.
+**Start a new session** selects a new execution key. An established session
+requires this reset when Claude cannot restore it. A session with no recorded
+submission can retry on the same target. The target must supply Claude
+Code 2.1.169 or later and its own authentication. No local credentials go to the
+target. Local Claude retains its device defaults. Remote Claude uses explicit
+agent settings or the target defaults. Model discovery does not allocate a
+target. Remote usage totals and transcript views are unavailable.
+
 Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run
 behavior for its agents. Plugins can add a tab to every local agent with

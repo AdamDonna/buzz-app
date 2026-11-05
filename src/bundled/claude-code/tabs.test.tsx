@@ -147,9 +147,11 @@ function applied({
   catalog = { listed: true },
   storage,
   channels,
+  remote = false,
 }: {
   /** Agent storage; this page's localStorage without it. */
   storage?: AgentStore;
+  remote?: boolean;
   /** The community's channels; no community connection without them. */
   channels?: readonly ChannelSummary[];
   loggedIn?: boolean;
@@ -272,6 +274,13 @@ function applied({
     },
     agents: {
       storage,
+      executionBinding: () => (remote ? { provider: "nexus/blox" } : undefined),
+      inspectExecution: vi.fn(async () =>
+        remote ? { provider: "nexus/blox" } : undefined,
+      ),
+      execution: vi.fn(async () => {
+        throw new Error("Settings must not open a target");
+      }),
       register: (registered: AgentType<Config>) => {
         type = registered;
       },
@@ -289,12 +298,20 @@ function applied({
     effect: vi.fn(),
   };
   apply(ctx as never);
-  return { type, spawn, home };
+  return {
+    type,
+    spawn,
+    home,
+    execution: ctx.agents.execution,
+    setRemote: (value: boolean) => {
+      remote = value;
+    },
+  };
 }
 function installed(options?: Parameters<typeof applied>[0]) {
-  const { type, spawn, home } = applied(options);
-  if (!type) throw new Error("no type registered");
-  return { type, spawn, home };
+  const result = applied(options);
+  if (!result.type) throw new Error("no type registered");
+  return { ...result, type: result.type };
 }
 function tab(type: AgentType<Config>, index: number) {
   const component = type.tabs?.[index]?.component;
@@ -1515,7 +1532,9 @@ it("keeps settings editable while a provider change waits for Save", async () =>
     />,
   );
   const user = userEvent.setup();
-  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(),
+  );
   expect(screen.getByRole("combobox", { name: "Model" })).toBeEnabled();
   expect(screen.getByRole("textbox", { name: "Workspace" })).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "Save" }));
@@ -2138,4 +2157,54 @@ it("cancels a pending save when the dialog closes", async () => {
   expect(steps[0]?.killed).toBe(false);
   view.unmount();
   expect(steps[0]?.killed).toBe(true);
+});
+
+it("uses target model settings for remote Claude without a local catalog or a target allocation", async () => {
+  const { type, spawn, execution } = installed({ remote: true });
+  const Settings = tab(type, 0);
+  const save = vi.fn(async () => {});
+  render(<Settings agent={agent()} save={save} />);
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "Target default",
+    ),
+  );
+  expect(screen.getByLabelText("Workspace")).toBeDisabled();
+  expect(
+    screen.getByText("The execution provider sets the remote workspace."),
+  ).toBeVisible();
+  await userEvent
+    .setup()
+    .click(screen.getByRole("combobox", { name: "Model" }));
+  expect(
+    screen.queryByRole("option", { name: "Opus 5.5" }),
+  ).not.toBeInTheDocument();
+  expect(
+    spawn.mock.calls.some(([, options]) =>
+      options?.args?.includes("--input-format"),
+    ),
+  ).toBe(false);
+  expect(execution).not.toHaveBeenCalled();
+});
+
+it("refreshes mounted Claude Settings after an execution binding changes", async () => {
+  const f = installed();
+  const Settings = tab(f.type, 0);
+  const save = vi.fn(async () => {});
+  const view = render(<Settings agent={agent()} save={save} />);
+  await waitFor(() => expect(screen.getByLabelText("Workspace")).toBeEnabled());
+  f.setRemote(true);
+  view.rerender(
+    <Settings
+      agent={{ ...agent(), executionBinding: { provider: "nexus/blox" } }}
+      save={save}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "Target default",
+    ),
+  );
+  expect(screen.getByLabelText("Workspace")).toBeDisabled();
+  expect(f.execution).not.toHaveBeenCalled();
 });

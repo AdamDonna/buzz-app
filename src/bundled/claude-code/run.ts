@@ -23,7 +23,7 @@ export const claudeRun = (
   | "syncedSettings"
   | "resumes"
 > => ({
-  models: (agent) => runtime.models(agent.key),
+  models: (agent) => runtime.models(agent.key, agent.config),
   sessionControls: {
     scope: (agent) => config(agent.config).scope,
     state: (agent, place) => runtime.sessionState(agent, place),
