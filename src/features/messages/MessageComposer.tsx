@@ -66,6 +66,7 @@ import {
 } from "./remembered-mentions";
 import { rememberAgentsPreference } from "./mention-preferences";
 import { useSendWithModEnterPreference } from "./send-key-preference";
+import { useEditWithUpArrowPreference } from "./edit-key-preference";
 import { matches } from "../shortcuts/bindings";
 import { isApplePlatform } from "../shortcuts/format";
 import { useChosenAgent } from "../solo/default-agent";
@@ -1039,6 +1040,7 @@ function Composer({
     [],
   );
   const sendWithModEnter = useSendWithModEnterPreference();
+  const editWithUpArrow = useEditWithUpArrowPreference();
   const saveDraft = (next: MentionDraft, save = true) => {
     next = stageChatCards(
       {
@@ -3453,18 +3455,20 @@ function Composer({
                   !editDisabled &&
                   !submission &&
                   !editing.target &&
-                  ((event.currentTarget.value === "" &&
-                    !valueRef.current.recipients.length) ||
+                  ((valueRef.current.text === "" &&
+                    !valueRef.current.recipients.length &&
+                    composerMarkdown(valueRef.current) === "") ||
                     automaticTag.current ===
                       JSON.stringify(valueRef.current)) &&
                   !valueRef.current.chatCards?.length &&
                   !valueRef.current.gifs?.length &&
                   !attachments.items.length
                 ) {
-                  // Like Slack, Up selects the newest message; E edits it.
-                  // ⌘↑ and surfaces without a selectable list keep Up-to-edit.
+                  // The default selects the newest message; the preference
+                  // and ⌘↑ edit using the same conversation-scoped lookup.
                   if (
                     !event.metaKey &&
+                    !editWithUpArrow &&
                     selectNewestMessage(editScope?.list.current)
                   ) {
                     event.preventDefault();

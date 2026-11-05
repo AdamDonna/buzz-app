@@ -72,6 +72,7 @@ import { MessageMarkdown } from "./MessageMarkdown";
 import { InlineChip } from "../../shared/design-system/ui/InlineChip";
 import { MessageEditScope, useMessageEditScope } from "./MessageEditScope";
 import { registerMessageList } from "./message-selection";
+import { setEditWithUpArrowPreference } from "./edit-key-preference";
 import { createRelaySession, type RelaySession } from "../relay/session";
 import { keypair, metadata, roster, signed } from "../relay/testing";
 import type { EventTemplate } from "nostr-tools";
@@ -8751,63 +8752,81 @@ it("edits in the same composer, cancels without persisting edit text, and restor
   expect(h.messages.edit).not.toHaveBeenCalled();
 });
 
-it("selects the newest message on Up when the scope has a message list, instead of editing", () => {
-  const base = mount({}, undefined, first.pubkey);
-  base.unmount();
-  const row = editableMessage();
-  let scope: ReturnType<typeof useMessageEditScope>;
-  function Probe() {
-    scope = useMessageEditScope();
-    return null;
-  }
-  const list = document.createElement("ol");
-  list.innerHTML =
-    '<li data-message-id="older"><div data-layout="timeline">Older</div></li>' +
-    '<li data-message-id="newest"><div data-layout="timeline">Newest</div></li>';
-  document.body.append(list);
-  const unregister = registerMessageList(list, {
-    row: (id) => ({ id }) as ChannelMessage,
-    newest: () => "newest",
-    canEdit: () => false,
-    edit: () => {},
-    canDelete: () => false,
-    remove: () => {},
-    canMarkUnread: () => false,
-    markUnread: () => {},
-    composer: () => null,
-  });
-  try {
-    render(
-      <MessageEditScope>
-        <Probe />
-        <MessageComposer
-          session={base.session}
-          scope="scope"
-          channelId="channel"
-          channelName="General"
-          editMessages={[row]}
-        />
-      </MessageEditScope>,
-      { wrapper: ToastProvider },
-    );
-    if (scope) scope.list.current = list;
-    const input = screen.getByRole("textbox");
-    act(() => input.focus());
-    fireEvent.keyDown(input, { key: "ArrowUp" });
-    expect(
-      list.querySelector('[data-message-id="newest"] > div'),
-    ).toHaveFocus();
-    expect(input).not.toHaveAccessibleName("Edit message");
-    // Without a connected list, Up keeps editing the last own message.
-    list.remove();
-    act(() => input.focus());
-    fireEvent.keyDown(input, { key: "ArrowUp" });
-    expect(input).toHaveAccessibleName("Edit message");
-  } finally {
-    unregister();
-    list.remove();
-  }
-});
+it.each([
+  { enabled: false, metaKey: false, eligible: true },
+  { enabled: false, metaKey: true, eligible: true },
+  { enabled: true, metaKey: false, eligible: true },
+  { enabled: true, metaKey: true, eligible: true },
+  { enabled: true, metaKey: false, eligible: false },
+])(
+  "uses the Up Arrow preference with a message list: %j",
+  ({ enabled, metaKey, eligible }) => {
+    setEditWithUpArrowPreference(enabled);
+    const base = mount({}, undefined, first.pubkey);
+    base.unmount();
+    const row = editableMessage();
+    let scope: ReturnType<typeof useMessageEditScope>;
+    function Probe() {
+      scope = useMessageEditScope();
+      return null;
+    }
+    const list = document.createElement("ol");
+    list.innerHTML =
+      '<li data-message-id="older"><div data-layout="timeline">Older</div></li>' +
+      '<li data-message-id="newest"><div data-layout="timeline">Newest</div></li>';
+    document.body.append(list);
+    const unregister = registerMessageList(list, {
+      row: (id) => ({ id }) as ChannelMessage,
+      newest: () => "newest",
+      canEdit: () => false,
+      edit: () => {},
+      canDelete: () => false,
+      remove: () => {},
+      canMarkUnread: () => false,
+      markUnread: () => {},
+      composer: () => null,
+    });
+    try {
+      render(
+        <MessageEditScope>
+          <Probe />
+          <MessageComposer
+            session={base.session}
+            scope="scope"
+            channelId="channel"
+            channelName="General"
+            editMessages={eligible ? [row] : []}
+          />
+        </MessageEditScope>,
+        { wrapper: ToastProvider },
+      );
+      if (scope) scope.list.current = list;
+      const input = screen.getByRole("textbox");
+      act(() => input.focus());
+      fireEvent.keyDown(input, { key: "ArrowUp", metaKey });
+      if (enabled || metaKey) {
+        expect(input).toHaveFocus();
+        expect(input).toHaveAccessibleName(
+          eligible ? "Edit message" : "Message #General",
+        );
+        expect(input).toHaveValue(eligible ? row.content : "");
+        return;
+      }
+      expect(
+        list.querySelector('[data-message-id="newest"] > div'),
+      ).toHaveFocus();
+      expect(input).not.toHaveAccessibleName("Edit message");
+      // Without a connected list, Up keeps editing the last own message.
+      list.remove();
+      act(() => input.focus());
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(input).toHaveAccessibleName("Edit message");
+    } finally {
+      unregister();
+      list.remove();
+    }
+  },
+);
 
 it.each(["cancel", "accepted"])(
   "restores rich draft history and mention provenance after an edit is %s",
@@ -9103,6 +9122,7 @@ it.each([
   { isComposing: true },
   { keyCode: 229 },
 ])("does not take over modified/repeated/composing ArrowUp: %j", (keys) => {
+  setEditWithUpArrowPreference(true);
   const h = mount({}, undefined, first.pubkey);
   h.setRows([editableMessage()]);
   fireEvent.keyDown(h.input(), { key: "ArrowUp", ...keys });
@@ -9111,6 +9131,7 @@ it.each([
 });
 
 it("does not replace a nonempty draft and confines channel/thread targets to their owner", () => {
+  setEditWithUpArrowPreference(true);
   const h = mount({}, undefined, first.pubkey);
   const channelRow = editableMessage();
   const reply = editableMessage({
@@ -9137,6 +9158,26 @@ it("does not replace a nonempty draft and confines channel/thread targets to the
   expect(h.input()).toHaveValue("");
   expect(h.messages.edit).not.toHaveBeenCalled();
 });
+
+describe.each([false, true])(
+  "empty rich drafts with Up Arrow editing enabled: %s",
+  (enabled) => {
+    it.each(["code_block", "bullet_list", "blockquote"] as const)(
+      "preserves an empty-looking rich %s draft on Up Arrow",
+      (format) => {
+        setEditWithUpArrowPreference(enabled);
+        const h = mount({}, undefined, first.pubkey);
+        h.setRows([editableMessage()]);
+        act(() => h.input().toggleFormat(format));
+        expect(h.input()).toHaveValue("");
+        for (const metaKey of [false, true]) {
+          fireEvent.keyDown(h.input(), { key: "ArrowUp", metaKey });
+          expect(screen.queryByText("Editing message")).not.toBeInTheDocument();
+        }
+      },
+    );
+  },
+);
 
 it.each([false, true])(
   "renders preserved mention links as chips when editing (already edited: %s)",
