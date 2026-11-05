@@ -1,4 +1,5 @@
 import { useContext, useEffect, useState, useSyncExternalStore } from "react";
+import { readView, subscribeView, writeView } from "../../shared/view-state";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { avatarMedia } from "../../shared/avatar-source";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -132,19 +133,21 @@ export function AgentConnectionSetup({
               agents={agents}
               session={session}
               peer={mentioned}
+              channelId={channel.id}
               message={message}
             />
           ))}
       </>
     );
   }
-  if (!peer || !isAgent(peer)) return null;
+  if (!channel || !peer || !isAgent(peer)) return null;
   return (
     <Candidate
-      key={`${session.scope}:${peer}`}
+      key={`${session.scope}:${channel.id}:${peer}`}
       agents={agents}
       session={session}
       peer={peer}
+      channelId={channel.id}
     />
   );
 }
@@ -153,14 +156,21 @@ function Candidate({
   agents,
   session,
   peer,
+  channelId,
   message,
 }: {
   agents: Agents;
   session: RelaySession;
   peer: string;
+  channelId: string;
   message?: ChannelMessage;
 }) {
   const notify = useToastNotification();
+  const dismissalKey = `agent-connection-dismissed:${JSON.stringify([channelId, peer])}`;
+  const dismissed = useSyncExternalStore(
+    (listener) => subscribeView(session.scope, listener),
+    () => readView<unknown>(session.scope, dismissalKey, false) === true,
+  );
   const owned = useAgentOwnerEvidence(session, peer);
   const existing = useAgent(agents, peer)?.agent.key;
   const choices = useSyncExternalStore(
@@ -174,7 +184,12 @@ function Candidate({
   const [candidate, setCandidate] = useState<PortableAgent>();
   const [phase, setPhase] = useState<"idle" | "pending" | "done">("idle");
   useEffect(() => {
-    if (owned.status !== "ready" || owned.owner !== session.viewer || existing)
+    if (
+      dismissed ||
+      owned.status !== "ready" ||
+      owned.owner !== session.viewer ||
+      existing
+    )
       return;
     let active = true;
     void agents
@@ -194,10 +209,19 @@ function Candidate({
     return () => {
       active = false;
     };
-  }, [agents, peer, owned.status, owned.owner, session.viewer, existing]);
+  }, [
+    agents,
+    peer,
+    owned.status,
+    owned.owner,
+    session.viewer,
+    existing,
+    dismissed,
+  ]);
   // Retain in-flight UI and successful results through inventory changes.
   // A failed attempt returns to live eligibility checks before offering retry.
   if (
+    dismissed ||
     !candidate ||
     (phase === "idle" &&
       (!choices.complete ||
@@ -217,6 +241,10 @@ function Candidate({
       agents={agents}
       candidate={candidate}
       scope={session.scope}
+      onDismiss={() => {
+        if (!writeView(session.scope, dismissalKey, true))
+          notify("Could not save dismissal. Try again.", "error");
+      }}
       onStart={() => setPhase("pending")}
       onFinish={(success, error) => {
         if (error)
@@ -251,6 +279,7 @@ export function AgentConnectionForm({
   agents,
   candidate,
   scope,
+  onDismiss,
   onStart,
   onFinish,
   preview = false,
@@ -259,6 +288,7 @@ export function AgentConnectionForm({
   agents: Agents;
   candidate: PortableAgent;
   scope: string;
+  onDismiss?: () => void;
   onStart?: () => void;
   onFinish?: (success: boolean, error?: string) => void;
   preview?: boolean;
@@ -328,14 +358,27 @@ export function AgentConnectionForm({
           <div className="w-full max-w-xl">
             <div className={messages.messageBubble}>
               <div className="flex flex-col gap-4 py-2">
-                <div className="size-12">
-                  <Avatar
-                    src={candidate.picture}
-                    fallback={candidate.name}
-                    alt=""
-                    shape="squircle"
-                    size="fill"
-                  />
+                <div className="flex items-start justify-between gap-3">
+                  <div className="size-12">
+                    <Avatar
+                      src={candidate.picture}
+                      fallback={candidate.name}
+                      alt=""
+                      shape="squircle"
+                      size="fill"
+                    />
+                  </div>
+                  {onDismiss && (
+                    <Button
+                      size="sm"
+                      variant="subtle"
+                      disabled={pending}
+                      aria-label={`Dismiss connection setup for ${candidate.name}`}
+                      onClick={onDismiss}
+                    >
+                      Dismiss
+                    </Button>
+                  )}
                 </div>
                 <div className="flex flex-col gap-1">
                   <h3 className="m-0 text-label">

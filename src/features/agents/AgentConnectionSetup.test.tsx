@@ -13,7 +13,11 @@ import type { Agents, RegisteredAgentType } from "./service";
 import type { ChannelMessage } from "../relay/contracts";
 import type { PortableAgent } from "./native";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  vi.restoreAllMocks();
+});
 const candidate: PortableAgent = {
   source: "installed",
   pubkey: "a".repeat(64),
@@ -95,7 +99,7 @@ it("connects the exact identity with reviewed defaults and retains errors for re
 });
 
 it.each(["dm", "stream", "forum"] as const)(
-  "shows setup only for the exact owned %s identity and hides it when that agent is online",
+  "persists channel-scoped dismissal for the exact owned %s identity and preserves explicit connection",
   async (channelType) => {
     const { schnorr } = await import("@noble/curves/secp256k1.js");
     const { bytesToHex } = await import("nostr-tools/utils");
@@ -195,12 +199,12 @@ it.each(["dm", "stream", "forum"] as const)(
     const { AgentConnectionSetup } = await import("./AgentConnectionSetup");
     const { AgentsContext } = await import("./react");
     const { act } = await import("@testing-library/react");
-    render(
+    const setup = (sessionValue = session, channelValue = channel) => (
       <ToastProvider>
         <AgentsContext.Provider value={agents}>
           <AgentConnectionSetup
-            session={session}
-            channel={channel}
+            session={sessionValue}
+            channel={channelValue}
             rows={[
               {
                 id: "b".repeat(64),
@@ -218,8 +222,9 @@ it.each(["dm", "stream", "forum"] as const)(
             ]}
           />
         </AgentsContext.Provider>
-      </ToastProvider>,
+      </ToastProvider>
     );
+    let mounted = render(setup());
     await waitFor(() => expect(portable).toHaveBeenCalledOnce());
     expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
     act(() => {
@@ -244,7 +249,43 @@ it.each(["dm", "stream", "forum"] as const)(
       { kinds: [0], authors: [candidate.pubkey], limit: 1 },
     ]);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    const storage = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementationOnce(() => {
+        throw new Error("Storage unavailable");
+      });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Dismiss connection setup for Helper",
+      }),
+    );
+    expect(
+      await screen.findByText("Could not save dismissal. Try again."),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
+    storage.mockRestore();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Dismiss connection setup for Helper",
+      }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Agent connection setup" }),
+    ).toBeNull();
+    expect(agents.port).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+    // Navigation to another channel remains eligible; returning retains dismissal.
+    mounted.rerender(setup(session, { ...channel, id: "other-channel" }));
+    await screen.findByRole("button", { name: "Connect" });
+    mounted.rerender(setup());
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    // A fresh mount reads durable state, as after reload. A new scope is independent.
+    mounted.unmount();
+    mounted = render(setup());
+    await waitFor(() => expect(observe).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    mounted.rerender(setup({ ...session, scope: "other-viewer-community" }));
+    await user.click(await screen.findByRole("button", { name: "Connect" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Import interrupted",
     );
@@ -278,6 +319,50 @@ it.each(["dm", "stream", "forum"] as const)(
     }
   },
 );
+
+it("keeps dismissal disabled while an explicit import is pending", async () => {
+  let finish!: (result: { notes: string[] }) => void;
+  const port = vi.fn(
+    () =>
+      new Promise<{ notes: string[] }>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const types = [type];
+  const snapshot = {};
+  const agents = {
+    types: () => types,
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+    port,
+  } as unknown as Agents;
+  const onDismiss = vi.fn();
+  render(
+    <AgentConnectionForm
+      agents={agents}
+      candidate={candidate}
+      scope="scope"
+      onDismiss={onDismiss}
+    />,
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Connect" }));
+  const dismiss = screen.getByRole("button", {
+    name: "Dismiss connection setup for Helper",
+  });
+  try {
+    expect(port).toHaveBeenCalledOnce();
+    expect(dismiss).toBeDisabled();
+    await user.click(dismiss);
+    expect(onDismiss).not.toHaveBeenCalled();
+  } finally {
+    finish({ notes: [] });
+  }
+  await screen.findByRole("heading", { name: "Helper connected" });
+  expect(dismiss).toBeEnabled();
+  await user.click(dismiss);
+  expect(onDismiss).toHaveBeenCalledOnce();
+});
 
 it("removes a disabled harness from the choices and never imports from a preview", async () => {
   const { act } = await import("@testing-library/react");
