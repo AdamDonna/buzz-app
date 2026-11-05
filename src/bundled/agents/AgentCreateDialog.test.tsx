@@ -13,7 +13,9 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useEffect } from "react";
 import { CreateModelChoices } from "../../features/agents/CreateModelChoices";
+import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { agentAvatars } from "../../features/agents/avatar-packs";
 import type {
@@ -182,6 +184,9 @@ function setup(
 }
 
 const createButton = () => screen.getByRole("button", { name: "Create agent" });
+// The disabled action blocks ordinary attempts; direct submits retain a guard.
+const submitForm = (dialog: HTMLElement) =>
+  fireEvent.submit(within(dialog).getByRole("form", { name: "New agent" }));
 
 it("creates with the name, a pack picture and the config from the type's view", async () => {
   const { agents, onCreated, dialog, user } = setup([echo]);
@@ -498,7 +503,7 @@ it("shows the sole harness as a disabled choice", async () => {
   expect(screen.getByRole("combobox", { name: "Harness" })).toBeDisabled();
 });
 
-it("flags an empty name on Create and clears it once named", async () => {
+it("disables Create until named and guards direct form submissions", async () => {
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
   const animate = vi.fn();
@@ -506,13 +511,13 @@ it("flags an empty name on Create and clears it once named", async () => {
   const { agents, dialog, user } = setup([echo]);
   const name = () => within(dialog).getByLabelText("Name");
   const alert = () => within(dialog).queryByRole("alert");
-  expect(createButton()).toBeEnabled();
+  expect(createButton()).toBeDisabled();
   expect(
     screen.queryByRole("button", { name: "Next" }),
   ).not.toBeInTheDocument();
   expect(alert()).not.toBeInTheDocument();
   await user.type(name(), "   ");
-  await user.click(createButton());
+  submitForm(dialog);
   expect(agents.create).not.toHaveBeenCalled();
   expect(alert()).toHaveTextContent("Add a name to create your agent");
   expect(name()).toHaveAccessibleDescription("Add a name to create your agent");
@@ -524,12 +529,13 @@ it("flags an empty name on Create and clears it once named", async () => {
   expect(animate).toHaveBeenCalledOnce();
   expect(name()).toHaveValue("   ");
   // Each further empty submit shakes again.
-  await user.click(createButton());
+  submitForm(dialog);
   expect(animate).toHaveBeenCalledTimes(2);
   expect(agents.create).not.toHaveBeenCalled();
   await user.type(name(), "Nova");
   expect(alert()).not.toBeInTheDocument();
   expect(name()).not.toHaveAttribute("aria-invalid");
+  expect(createButton()).toBeEnabled();
   await user.click(createButton());
   expect(agents.create).toHaveBeenCalledOnce();
 });
@@ -563,16 +569,16 @@ const scrolledName = (dialog: HTMLElement) => {
 it("scrolls an out-of-view name to center, then flags it as the glide slows", async () => {
   Element.prototype.animate = vi.fn();
   const step = stepFrames();
-  const { dialog, user } = setup([echo]);
+  const { dialog } = setup([echo]);
   const { position, scrollIntoView } = scrolledName(dialog);
   const alert = () => within(dialog).queryByRole("alert");
-  await user.click(createButton());
+  submitForm(dialog);
   expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({
     block: "center",
     behavior: "smooth",
   });
   // Pressing again mid-scroll doesn't start a second scroll.
-  await user.click(createButton());
+  submitForm(dialog);
   expect(scrollIntoView).toHaveBeenCalledOnce();
   step();
   // Easing in: barely moving, and just in view, but not yet past the glide.
@@ -595,9 +601,9 @@ it("scrolls an out-of-view name to center, then flags it as the glide slows", as
 it("does not flag a name typed while it scrolls into view", async () => {
   Element.prototype.animate = vi.fn();
   const step = stepFrames();
-  const { dialog, user } = setup([echo]);
+  const { dialog } = setup([echo]);
   const { name, position } = scrolledName(dialog);
-  await user.click(createButton());
+  submitForm(dialog);
   step();
   fireEvent.change(name, { target: { value: "Nova" } });
   position.top = 300;
@@ -617,9 +623,9 @@ it("jumps instead of gliding, and skips the shake, under reduced motion", async 
     removeEventListener() {},
   }));
   motion.reduced = true;
-  const { dialog, user } = setup([echo]);
+  const { dialog } = setup([echo]);
   const { position, scrollIntoView } = scrolledName(dialog);
-  await user.click(createButton());
+  submitForm(dialog);
   expect(scrollIntoView).toHaveBeenCalledWith(
     expect.objectContaining({ behavior: "auto" }),
   );
@@ -666,6 +672,106 @@ it("shows registered logos in the harness value and choices with independent SVG
   expect(select).toHaveTextContent("Notes");
   expect(select.querySelector("svg")).not.toBeNull();
   expect(select.querySelector("mask")).toBeNull();
+});
+
+it("keeps keyboard focus on Harness when switching into and out of a configuration group", async () => {
+  const grouped: RegisteredAgentType = {
+    ...notes,
+    key: "test/grouped",
+    title: "Grouped",
+    CreateModel: () => <span>Legacy model field</span>,
+    CreateConfiguration: ({ harnessControl }) => (
+      <SettingsGroup>{harnessControl}</SettingsGroup>
+    ),
+  };
+  const { dialog, user } = setup([echo, grouped]);
+  await waitFor(() =>
+    expect(within(dialog).getByLabelText("Name")).toHaveFocus(),
+  );
+  const harness = () =>
+    within(dialog).getByRole("combobox", { name: "Harness" });
+  harness().focus();
+  await user.keyboard("{ArrowDown}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Echo" })).toHaveFocus(),
+  );
+  await user.keyboard("{End}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Grouped" })).toHaveFocus(),
+  );
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(harness()).toHaveTextContent("Grouped"));
+  await waitFor(() => expect(harness()).toHaveFocus());
+  expect(
+    within(dialog).queryByText("Legacy model field"),
+  ).not.toBeInTheDocument();
+  await user.keyboard("{ArrowDown}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Grouped" })).toHaveFocus(),
+  );
+  await user.keyboard("{Home}");
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Echo" })).toHaveFocus(),
+  );
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(harness()).toHaveTextContent("Echo"));
+  await waitFor(() => expect(harness()).toHaveFocus());
+});
+
+it("uses displayed configuration readiness without interpreting or editing raw config", async () => {
+  let report: ((ready: boolean) => void) | undefined;
+  const grouped: RegisteredAgentType = {
+    ...notes,
+    key: "test/ready",
+    title: "Ready",
+    defaults: () => ({ config: { modelId: "", reasoningEffort: "" } }),
+    Create: () => null,
+    CreateConfiguration: ({ harnessControl, onReadyChange }) => {
+      useEffect(() => {
+        report = onReadyChange;
+        onReadyChange?.(false);
+      }, [onReadyChange]);
+      return (
+        <SettingsGroup>
+          {harnessControl}
+          <p>Recommended choices</p>
+        </SettingsGroup>
+      );
+    },
+  };
+  const { agents, dialog, user } = setup([echo, grouped]);
+  const name = within(dialog).getByLabelText("Name");
+  await user.type(name, "Nova");
+  expect(createButton()).toBeEnabled();
+  const chooseHarness = async (title: string) => {
+    await user.click(within(dialog).getByRole("combobox", { name: "Harness" }));
+    await user.click(await screen.findByRole("option", { name: title }));
+  };
+  await chooseHarness("Ready");
+  expect(createButton()).toBeDisabled();
+  act(() => report?.(true));
+  expect(createButton()).toBeEnabled();
+  await user.clear(name);
+  expect(createButton()).toBeDisabled();
+  await user.type(name, "   ");
+  expect(createButton()).toBeDisabled();
+  await user.type(name, "Nova");
+  act(() => report?.(false));
+  expect(createButton()).toBeDisabled();
+  submitForm(dialog);
+  expect(agents.create).not.toHaveBeenCalled();
+  act(() => report?.(true));
+  await chooseHarness("Echo");
+  expect(createButton()).toBeEnabled();
+  await chooseHarness("Ready");
+  expect(createButton()).toBeDisabled();
+  act(() => report?.(true));
+  await user.click(createButton());
+  expect(agents.create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: { modelId: "", reasoningEffort: "" },
+    }),
+  );
 });
 
 it("switches harness, starting over on the new type's defaults", async () => {

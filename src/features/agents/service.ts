@@ -775,6 +775,17 @@ export type AgentType<Config = unknown> = {
   /** The type's choices in the New agent dialog, such as model and
    * instructions; the new agent starts with the config it settles on. */
   Create?: ComponentType<AgentCreateProps<Config>>;
+  /** Optional creation configuration group. The type places the host's Harness
+   * row alongside its own controls and keeps discovery/recovery with them.
+   * Takes precedence over CreateModel in the creation dialog. Report readiness
+   * of the displayed choices through onReadyChange, independently of edits;
+   * the dialog waits for true before allowing creation. */
+  CreateConfiguration?: ComponentType<
+    AgentCreateProps<Config> & {
+      harnessControl: ReactNode;
+      onReadyChange?: (ready: boolean) => void;
+    }
+  >;
   /** Provider-owned account notice, pinned across the agent's tabs.
    * Return null when no account notice is needed. The active settings view may
    * replace this slot through the AgentSaveFooter context's setPanelNotice(content),

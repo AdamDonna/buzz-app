@@ -1,5 +1,5 @@
 // Avatar selection above the agent identity and type-owned setup fields.
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { randomAgentAvatar } from "../../features/agents/avatar-packs";
 import type {
   Agent,
@@ -126,14 +126,26 @@ export function AgentCreateDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [configurationReady, setConfigurationReady] = useState(false);
   const avatarRef = useRef<{ prepare(): Promise<string> }>(null);
   const nameField = useRef<HTMLInputElement>(null);
   const namePrompt = useNamePrompt(nameField);
   const nameControl = useRef<HTMLDivElement>(null);
   useShake(nameControl, namePrompt.attempts);
   const form = useId();
+  const harnessId = useId();
+  const restoreHarnessFocus = useRef<string | null>(null);
   const Create = type?.Create;
   const Model = type?.CreateModel;
+  const Configuration = type?.CreateConfiguration;
+  useEffect(() => {
+    if (restoreHarnessFocus.current !== type?.key) return;
+    restoreHarnessFocus.current = null;
+    document
+      .getElementById(harnessId)
+      ?.querySelector<HTMLElement>('[role="combobox"]')
+      ?.focus();
+  }, [harnessId, type?.key]);
   const close = () => setOpen(false);
   const chooseModel = (item: RegisteredAgentType, next: unknown) => {
     setTypeKey(item.key);
@@ -149,13 +161,21 @@ export function AgentCreateDialog({
     const instructions = update
       ? undefined
       : type?.carry?.(config).instructions;
+    restoreHarnessFocus.current = item.key;
+    setConfigurationReady(false);
     chooseModel(
       item,
       instructions && item.adopt ? item.adopt({ instructions }, next) : next,
     );
   };
   const create = async () => {
-    if (!type || pending || avatarBusy) return;
+    if (
+      !type ||
+      pending ||
+      avatarBusy ||
+      (Configuration && !configurationReady)
+    )
+      return;
     if (!name.trim()) {
       namePrompt.prompt();
       return;
@@ -179,6 +199,33 @@ export function AgentCreateDialog({
       setPending(false);
     }
   };
+  const harnessControl = (
+    <PreferenceRow
+      id={harnessId}
+      title="Harness"
+      trailing={
+        <Select
+          label="Harness"
+          variant="compact"
+          align="end"
+          value={type?.key ?? ""}
+          leading={<TypeIcon type={type} size={20} />}
+          disabled={pending || types.length < 2}
+          groups={[
+            {
+              label: "",
+              options: types.map((item) => ({
+                value: item.key,
+                leading: <TypeIcon type={item} size={20} />,
+                label: item.remote ? `${item.title} (hosted)` : item.title,
+              })),
+            },
+          ]}
+          onValueChange={choose}
+        />
+      }
+    />
+  );
   return (
     <Dialog
       open={open}
@@ -213,7 +260,13 @@ export function AgentCreateDialog({
           type="submit"
           form={form}
           loading={pending}
-          disabled={avatarBusy || pending || !type}
+          disabled={
+            avatarBusy ||
+            pending ||
+            !type ||
+            !name.trim() ||
+            (!!Configuration && !configurationReady)
+          }
         >
           {update ? "Save changes" : "Create agent"}
         </Button>
@@ -278,47 +331,33 @@ export function AgentCreateDialog({
             aria-label="AI configuration"
             className={styles.configuration}
           >
-            <SettingsGroup>
-              <PreferenceRow
-                title="Harness"
-                trailing={
-                  <Select
-                    label="Harness"
-                    variant="compact"
-                    align="end"
-                    value={type?.key ?? ""}
-                    leading={<TypeIcon type={type} size={20} />}
-                    disabled={pending || types.length < 2}
-                    groups={[
-                      {
-                        label: "",
-                        options: types.map((item) => ({
-                          value: item.key,
-                          leading: <TypeIcon type={item} size={20} />,
-                          label: item.remote
-                            ? `${item.title} (hosted)`
-                            : item.title,
-                        })),
-                      },
-                    ]}
-                    onValueChange={choose}
-                  />
-                }
+            {Configuration ? (
+              <Configuration
+                key={type.key}
+                config={config}
+                disabled={pending}
+                harnessControl={harnessControl}
+                onReadyChange={setConfigurationReady}
+                onChange={(next) => chooseModel(type, next)}
               />
-              {Model && (
-                <PreferenceRow
-                  title="Model"
-                  trailing={
-                    <Model
-                      key={type.key}
-                      config={config}
-                      disabled={pending}
-                      onChange={(next) => chooseModel(type, next)}
-                    />
-                  }
-                />
-              )}
-            </SettingsGroup>
+            ) : (
+              <SettingsGroup>
+                {harnessControl}
+                {Model && (
+                  <PreferenceRow
+                    title="Model"
+                    trailing={
+                      <Model
+                        key={type.key}
+                        config={config}
+                        disabled={pending}
+                        onChange={(next) => chooseModel(type, next)}
+                      />
+                    }
+                  />
+                )}
+              </SettingsGroup>
+            )}
           </section>
           {Create ? (
             <Create
