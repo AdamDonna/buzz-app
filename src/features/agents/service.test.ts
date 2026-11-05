@@ -373,6 +373,7 @@ const internals = (service: AgentsService) =>
   service as unknown as {
     configStore: AgentConfigStore;
     communityConfigs: Map<string, unknown>;
+    records: Record<string, { config: unknown }>;
   };
 
 /** The events native published as an agent, of `kind`, in order. */
@@ -2407,6 +2408,29 @@ describe("a type without synced settings", () => {
       f.service.save(bot, { config: { reply: "local", instructions: "x" } }),
     ).rejects.toThrow("Waiting for this agent's config to sync");
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it("deletes a synced agent whose type left it no config", async () => {
+    const instructions = {
+      ...subject,
+      type: "buzz.agent.instructions" as const,
+    };
+    const f = await setup({
+      binding: () => ({
+        instructions: { mode: "synced", subject: instructions },
+      }),
+    });
+    fixtures.push(f);
+    await f.service.create({ type: "example/echo", name: "Echo" });
+    internals(f.service).communityConfigs.set("https://relay.example.test", {
+      attach: vi.fn(),
+      remove: vi.fn(),
+    } as never);
+    // As while its type isn't registered yet.
+    const { records } = internals(f.service);
+    records[bot] = { ...records[bot], config: undefined };
+    await f.service.remove(bot);
+    expect(f.service.find(bot)).toBeUndefined();
   });
 
   it.each(["local", "migrating"] as const)(

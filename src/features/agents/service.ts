@@ -4216,9 +4216,14 @@ export class AgentsService extends Service implements Agents {
     if (!native) throw new Error("Agents run only in the desktop app");
     const identity = this.liveRows(pubkey)[0];
     if (!identity) throw new Error("No such agent on this device");
+    // A list that fails to show must not stop the removal.
+    const refresh = () =>
+      this.refresh().catch((error: unknown) =>
+        console.warn(`Agents list was not refreshed`, error),
+      );
     // Saved first, so neither a relaunch nor another copy runs it again.
     await native.beginDelete(pubkey);
-    await this.refresh();
+    await refresh();
     // The community shown goes last, and only once the others are done, so
     // one that is not stays listed here with Forget.
     const shown = this.selectedOrigin();
@@ -4265,14 +4270,14 @@ export class AgentsService extends Service implements Agents {
       );
     if (left.length) {
       // Shows it gone from the communities it did leave.
-      await this.refresh();
+      await refresh();
       throw new Error(
         `${unfinished} It is still in ${left.map(hostOf).join(", ")}.`,
       );
     }
     for (const origin of this.listings.keys()) this.unlist(origin, pubkey);
     // Drops its settings.
-    await this.refresh();
+    await refresh();
     forgetDefaultAgent(pubkey);
     const failed: string[] = [];
     for (const binding of roleBindings)
@@ -5442,7 +5447,8 @@ export class AgentsService extends Service implements Agents {
     );
     return {
       config: Object.fromEntries(
-        Object.entries(local).filter(([name]) => !stale.has(name)),
+        // Undefined while its type isn't registered here.
+        Object.entries(local ?? {}).filter(([name]) => !stale.has(name)),
       ),
       base: Object.freeze(base),
       problem: resolved.reason,
