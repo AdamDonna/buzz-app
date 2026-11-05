@@ -2,7 +2,8 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { ReadError } from "./errors";
 import { createRelaySession } from "./session";
 import type { LiveCallbacks } from "./live";
-import type { HeadPersistence } from "./persistence";
+import type { HeadPersistence, SavedStartup } from "./persistence";
+import type { RelayEvent } from "./events";
 import {
   bounds,
   flush,
@@ -659,6 +660,61 @@ it("keeps a cached denial and never reads for a channel it does not authorize", 
     });
     expect(queries.get?.("alpha")).toBeUndefined();
   } finally {
+    owner.dispose();
+  }
+});
+it("writes one startup snapshot with the final content after a burst of discovery batches", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const writeStartup = vi.fn(async (_patch: SavedStartup) => {});
+  let live!: LiveCallbacks;
+  const owner = createRelaySession(
+    {
+      ...wire.transport,
+      subscribe(callbacks) {
+        live = callbacks;
+        return { update() {}, retry() {}, dispose() {} };
+      },
+    },
+    {
+      persistence: {
+        read: async () => [],
+        readStartup: async () => undefined,
+        writeStartup,
+        write: async () => {},
+        remove: async () => {},
+        retain: async () => {},
+        clear: async () => {},
+        close: () => {},
+      },
+      prepared: true,
+    },
+  );
+  try {
+    const ids = ["a", "b", "c", "d"];
+    for (const channel of ids)
+      live.receive([roster(relay, channel, [viewer.pubkey])]);
+    live.receive([metadata(relay, "a", "Alpha")]);
+    vi.advanceTimersByTime(499);
+    expect(writeStartup).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(writeStartup).toHaveBeenCalledTimes(1);
+    const [patch] = writeStartup.mock.calls[0] ?? [];
+    assert(patch);
+    const saved = (patch.discovery?.events ?? []) as RelayEvent[];
+    expect(
+      saved.map((event) => [event.kind, event.tags[0]?.[1]]).sort(),
+    ).toEqual([
+      [39000, "a"],
+      [39002, "a"],
+      [39002, "b"],
+      [39002, "c"],
+      [39002, "d"],
+    ]);
+    vi.advanceTimersByTime(5_000);
+    expect(writeStartup).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
     owner.dispose();
   }
 });

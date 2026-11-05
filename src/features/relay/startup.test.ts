@@ -655,11 +655,14 @@ describe("device-local startup", () => {
       );
       expect(channels.list().coverage).toBe("partial");
       expect(channels.get?.("alpha")?.cached).toBe(true);
-      expect(
-        (await storage.readStartup?.())?.discovery?.events.some((e) =>
-          (e as RelayEvent).tags.some(([k, v]) => k === "d" && v === "alpha"),
-        ),
-      ).toBe(false);
+      // The snapshot write is coalesced behind a short delay.
+      await vi.waitFor(async () =>
+        expect(
+          (await storage.readStartup?.())?.discovery?.events.some((e) =>
+            (e as RelayEvent).tags.some(([k, v]) => k === "d" && v === "alpha"),
+          ),
+        ).toBe(false),
+      );
       channels.ensure("alpha");
       channels.refresh?.("alpha");
       channels.loadOlder("alpha");
