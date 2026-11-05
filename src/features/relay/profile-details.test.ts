@@ -19,6 +19,61 @@ import {
   unsignedProfiles,
 } from "./testing";
 const user = keypair();
+it.each([
+  [" Alice ", "Alice"],
+  ["\u00a0Alice\u3000", "Alice"],
+  ["\tAlice\n", "Alice"],
+  ["\ufeffAlice\ufeff", "Alice"],
+  ["Al\u200bice", "Al\u200bice"],
+  ["Alice\u200d", "Alice\u200d"],
+  ["Alice\ufe0f", "Alice\ufe0f"],
+  ["Alice\u202e", undefined],
+  ["\u202eecilA\u202c", undefined],
+  ["\u2066Alice\u2069", undefined],
+  ["Alice\ufff9", undefined],
+  ["Alice\ufffa", undefined],
+  ["Alice\ufffb", undefined],
+  ["Al\u0000ice", undefined],
+  ["Al\u001bice", undefined],
+  ["Al\nIce", undefined],
+  ["Al\u2028ice", undefined],
+  ["Al\u2029ice", undefined],
+  ["Al\u00adice", "Al\u00adice"],
+  ["Al\u034fice", "Al\u034fice"],
+  ["Alice\u{e0061}", "Alice\u{e0061}"],
+  ["علی\u200cرضا", "علی\u200cرضا"],
+  ["葛\u{e0100}", "葛\u{e0100}"],
+  ["\u1820\u180b", "\u1820\u180b"],
+  ["Alice 👩🏽‍💻", "Alice 👩🏽‍💻"],
+  ["Zoë 愛麗絲", "Zoë 愛麗絲"],
+  ["Alice  Smith", "Alice  Smith"],
+])("projects the public name %j without layout controls", (name, expected) => {
+  const head = profile(user, { display_name: name, name, about: "Kept" });
+  const original = JSON.stringify(head);
+  const parsed = foldProfiles([head]).get(user.pubkey);
+  expect(parsed?.name).toBe(expected ?? user.pubkey.slice(0, 10));
+  expect(parsed?.nameIsFallback).toBe(expected ? undefined : true);
+  expect(parsed?.username).toBeUndefined();
+  expect(parsed?.about).toBe("Kept");
+  expect(JSON.stringify(head)).toBe(original);
+});
+
+it("falls back to a safe handle without exposing a control-bearing username", () => {
+  expect(
+    foldProfiles([
+      profile(user, {
+        display_name: "\u202eecilA\u202c",
+        name: " alice-helper ",
+      }),
+    ]).get(user.pubkey),
+  ).toEqual({ name: "alice-helper" });
+  expect(
+    foldProfiles([
+      profile(user, { display_name: "Alice Helper", name: "Al\nIce" }),
+    ]).get(user.pubkey),
+  ).toEqual({ name: "Alice Helper" });
+});
+
 it("projects about safely and publishes an about-only replacement/removal", () => {
   const wire = scriptedTransport(user.pubkey, keypair().pubkey);
   const reader = createRelayReader(wire.transport);

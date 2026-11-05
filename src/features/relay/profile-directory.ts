@@ -69,6 +69,11 @@ export interface ProfileQueries {
  * may have left out authors who do have a profile. */
 const PROFILE_PAGE = 500;
 
+// Hidden characters must not defeat verified-name qualification. Strip them
+// before trimming so e.g. "Alice \u200b" still matches "Alice". Display text stays intact.
+const collisionName = (name: string) =>
+  name.replace(/\p{Default_Ignorable_Code_Point}/gu, "").trim();
+
 /** One bounded source of signed profile events. Display values are derived from it. */
 export function createProfileDirectory(
   reader: RelayReader,
@@ -243,7 +248,7 @@ export function createProfileDirectory(
     const verifiedUsernames = new Map<string | undefined, number>();
     for (const [, { verified, username }] of next)
       if (verified) {
-        const name = verified.displayName;
+        const name = collisionName(verified.displayName);
         verifiedNames.set(name, (verifiedNames.get(name) ?? 0) + 1);
         verifiedUsernames.set(
           username,
@@ -253,8 +258,9 @@ export function createProfileDirectory(
     for (const [id, profile] of next) {
       const own = profile.verified ? 1 : 0;
       const duplicate =
-        (verifiedNames.get(profile.verified?.displayName ?? profile.name) ??
-          0) > own ||
+        (verifiedNames.get(
+          collisionName(profile.verified?.displayName ?? profile.name),
+        ) ?? 0) > own ||
         (!!profile.verified &&
           (verifiedUsernames.get(profile.username) ?? 0) > own);
       if (duplicate)

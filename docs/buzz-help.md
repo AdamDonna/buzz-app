@@ -86,6 +86,9 @@ the interface unless an available tool actually supports that action.
   name beside it. Search finds people by their profile names; once found, a
   verified full name also matches as you refine. Search and new direct messages
   also find people already verified by a matching verified name or username.
+- Profile names omit surrounding whitespace. Names with layout or directional
+  controls fall back to a safe handle or public-key fragment. Names that match
+  a loaded verified name after ignoring hidden characters gain a public-key suffix.
 
 ## Connect an external app
 

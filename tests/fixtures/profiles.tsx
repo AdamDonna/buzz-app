@@ -94,7 +94,12 @@ let releaseReply = () => {};
 let replyPending = false;
 let data = [
   profile(viewer, { name: "Viewer", about: "Human profile", picture }),
-  profile(mic, { name: "Mic", about: "Mic biography" }),
+  profile(mic, {
+    name: new URLSearchParams(location.search).has("name-collision")
+      ? "Viewer "
+      : "Mic",
+    about: "Mic biography",
+  }),
   signed(pinky, {
     kind: 0,
     content: JSON.stringify({

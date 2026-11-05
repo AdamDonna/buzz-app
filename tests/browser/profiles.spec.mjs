@@ -1,6 +1,46 @@
 import { test, expect } from "./source-fixture.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
 
+// Real Members -> Profiles wiring must retain a visible distinction after the
+// browser collapses trailing whitespace, without changing the clicked key.
+test("qualifies a whitespace namesake in Members and opens its exact profile", async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await page.goto("/tests/fixtures/profiles.html?verified-name&name-collision");
+  await page.waitForFunction(() => !!window.profilesFixture);
+  const { key, npub } = await page.evaluate(() => ({
+    key: window.profilesFixture.keys.mic,
+    npub: window.profilesFixture.npubs.mic,
+  }));
+  const name = `Viewer (${key.slice(0, 10)})`;
+  await page
+    .getByRole("button", { name: "Manage members", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Manage members",
+    exact: true,
+  });
+  const label = dialog.getByText(name, { exact: true });
+  await expect(label).toBeVisible();
+  const row = dialog.getByRole("button", {
+    name: new RegExp(`^Open profile for Viewer \\(${key.slice(0, 10)}\\)`),
+  });
+  await row.focus();
+  await row.press("Enter");
+  const panel = page.getByRole("complementary", {
+    name: "Profile",
+    exact: true,
+  });
+  await expect(panel.getByRole("heading", { name, exact: true })).toBeVisible();
+  await expect(panel.locator("code")).toHaveText(npub);
+  await expect(panel.getByText("Mic biography", { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => window.profilesFixture.report.publications),
+  ).toBe(0);
+  expect(errors.unexplained()).toEqual([]);
+});
+
 test("transient profiles replace without retiring Back/Forward return paths", async ({
   page,
 }) => {
